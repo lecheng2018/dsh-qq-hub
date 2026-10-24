@@ -214,12 +214,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
   background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 60' preserveAspectRatio='none'%3E%3Cpath d='M0 30c150-26 300 26 450 0s300-26 450 0 225 18 300 8v22H0z' fill='%233d7fd6' fill-opacity='.10'/%3E%3Cpath d='M0 42c180-20 330 18 520 2s340-16 480 2 150 8 200 4v10H0z' fill='%233d7fd6' fill-opacity='.08'/%3E%3C/svg%3E") bottom/100% 100% no-repeat}
 .ab-hero h1{font-size:22px}
 .ab-pill{background:var(--ab-card);box-shadow:0 1px 1px rgba(15,40,80,.04)}
-.ab-tabs{margin:16px 0 14px;padding:5px;border-radius:14px;background:color-mix(in srgb,var(--ab-card-2) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:var(--ab-shadow);flex-wrap:wrap}
-.ab-tab{padding:6px 11px;border-radius:10px;transition:background .12s,color .12s}
-.ab-tab .ic{font-size:14px;line-height:1;filter:saturate(.85)}
-.ab-tab.on{background:var(--ab-sea);color:#fff;box-shadow:0 2px 8px color-mix(in srgb,var(--ab-sea) 35%,transparent)}
-.ab-tab.on .ic{filter:none}
-.ab-tab.on .ab-dot{background:#fff;opacity:.85}
 .ab-grid{gap:14px}
 .ab-card{border-radius:var(--ab-radius);padding:18px 20px;box-shadow:var(--ab-shadow);transition:box-shadow .15s}
 .ab-card h3{font-size:15px;font-weight:650;color:var(--ab-text)}
@@ -262,7 +256,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 .ab-check.done{color:var(--ab-text);border-color:color-mix(in srgb,var(--ab-ok) 30%,transparent);background:color-mix(in srgb,var(--ab-ok) 7%,var(--ab-card))}
 .ab-check.done i{background:var(--ab-ok)}
 .ab-drop{border-radius:14px;background:var(--ab-card-2)}
-@media (max-width:640px){.ab-row .ab-label{flex:none}.ab-row .ab-label small{max-width:none}.ab-tab .ic{display:none}}
+@media (max-width:640px){.ab-row .ab-label{flex:none}.ab-row .ab-label small{max-width:none}}
 @media (prefers-reduced-motion:reduce){.ab-root *{transition:none!important;animation:none!important}}
 `
     function useStyle() {
@@ -395,20 +389,20 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 
     // ---------------- 标签页 ----------------
     const TABS = [
-      { id: 'overview', icon: '🏠', label: '概览' },
-      { id: 'connect', icon: '🔌', label: '连接' },
-      { id: 'persona', icon: '🎭', label: '人格' },
-      { id: 'access', icon: '🔐', label: '权限' },
-      { id: 'group', icon: '💬', label: '聊天', flag: 'group' },
-      { id: 'model', icon: '🧠', label: '模型' },
-      { id: 'voice', icon: '🎙️', label: '语音', flag: 'voice.enabled' },
-      { id: 'stickers', icon: '😺', label: '表情包', flag: 'stickers.enabled' },
-      { id: 'imagegen', icon: '🎨', label: '生图', flag: 'imageGen.enabled' },
-      { id: 'diary', icon: '📔', label: '空间日记', flag: 'diary.enabled' },
-      { id: 'speakup', icon: '👋', label: '主动搭话', flag: 'speakUp.enabled' },
-      { id: 'mood', icon: '💗', label: '心情与记忆', flag: 'mood.enabled' },
-      { id: 'song', icon: '🎵', label: '翻唱', flag: 'song.enabled' },
-      { id: 'logs', icon: '📜', label: '日志' },
+      { id: 'overview', label: '概览' },
+      { id: 'connect', label: '连接' },
+      { id: 'persona', label: '人格' },
+      { id: 'access', label: '权限' },
+      { id: 'group', label: '聊天', flag: 'group' },
+      { id: 'model', label: '模型' },
+      { id: 'voice', label: '语音', flag: 'voice.enabled' },
+      { id: 'stickers', label: '表情包', flag: 'stickers.enabled' },
+      { id: 'imagegen', label: '生图', flag: 'imageGen.enabled' },
+      { id: 'diary', label: '空间日记', flag: 'diary.enabled' },
+      { id: 'speakup', label: '主动搭话', flag: 'speakUp.enabled' },
+      { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
+      { id: 'song', label: '翻唱', flag: 'song.enabled' },
+      { id: 'logs', label: '日志' },
     ]
 
     /** 更新提示：GitHub 上有新版本时给更新命令；刚更新完显示一次这次更新了什么。 */
@@ -1365,7 +1359,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           showWizard ? null : h('div', { className: 'ab-tabs', role: 'tablist' }, TABS.map((t) => {
             const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : t.flag ? getPath(cfg, t.flag) : null
             return h('button', { key: t.id, type: 'button', role: 'tab', 'aria-selected': tab === t.id, className: cx('ab-tab', tab === t.id && 'on'), onClick: () => go(t.id) },
-              h('span', { className: 'ic', 'aria-hidden': true }, t.icon), t.label,
+              t.label,
               tabDirty(t.id) ? h('i', { className: 'dirty', title: '有没保存的改动' }) : t.flag ? h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' }) : null)
           })),
           showWizard ? null : h(body, props),
