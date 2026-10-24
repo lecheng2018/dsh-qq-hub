@@ -74,7 +74,7 @@ test('群聊：插话受概率、冷却、上限、静默、冷群约束', () =>
   assert.equal(decideGroupReply(base({ rand: () => 0.5, relevance: 0.3 })).reply, false)
   assert.equal(decideGroupReply(base({ interjectTimes: [10_000_000 - 30_000] })).reason, '插话冷却中')
   const six = [1, 2, 3, 4, 5, 6].map((i) => 10_000_000 - 100_000 * i - 200_000)
-  assert.equal(decideGroupReply(base({ interjectTimes: six })).reason, '这小时说得够多了')
+  assert.equal(decideGroupReply(base({ interjectTimes: six })).reason, '这小时插话够多了')
   assert.equal(decideGroupReply(base({ hour: 3 })).reason, '静默时段')
   assert.equal(decideGroupReply(base({ recentTimes: [1] })).reason, '群里没在聊')
 })
@@ -84,30 +84,23 @@ test('群聊：话题无关不插话，越相关越容易插，加入话题后�
   assert.equal(decideGroupReply(base({ relevance: 0.3, rand: () => 0.3 })).mode, 'interject')
   assert.equal(decideGroupReply(base({ relevance: 0.3, rand: () => 0.4 })).reply, false)
   assert.equal(decideGroupReply(base({ relevance: 0.9, rand: () => 0.65 })).mode, 'interject')
-  // 已经在聊这个话题：不受插话冷却限制，可以接着聊
-  assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, interjectTimes: [10_000_000 - 30_000], botReplyTimes: [10_000_000 - 30_000] })).mode, 'engaged')
-  // 但刚说完不会马上又说，也不是每段都接
-  assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, botReplyTimes: [10_000_000 - 5_000] })).reason, '刚说过，先听听')
-  assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, rand: () => 0.9 })).reply, false)
-  // 每小时上限照样管着接话
-  const six = [1, 2, 3, 4, 5, 6].map((i) => 10_000_000 - 100_000 * i)
-  assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, interjectTimes: six })).reply, false)
+  // 已经在聊这个话题：冷却和上限都不拦，每段都接（一段一回由攒消息保证）
+  const six = [1, 2, 3, 4, 5, 6].map((i) => 10_000_000 - 10_000 * i)
+  assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, interjectTimes: six, rand: () => 0.99 })).mode, 'engaged')
   // 话题跑偏了就不接着聊
   assert.notEqual(decideGroupReply(base({ relevance: 0.1, engagedUntil: 10_100_000 })).mode, 'engaged')
 })
 
-test('群聊防炸群：刹车、单字唤醒词、和别的号对叫', () => {
+test('群聊安全刹车：短时间说太多就歇着，主人 @ 能叫动', () => {
   const now = 10_000_000
-  const four = [1, 2, 3, 4].map((i) => now - 10_000 * i)
-  // 两分钟里说了 4 次：@ 也不回，只有主人 @ 能叫动
-  assert.match(decideGroupReply(base({ mentioned: true, botReplyTimes: four })).reason, /歇一会儿/)
-  assert.equal(decideGroupReply(base({ mentioned: true, fromOwner: true, botReplyTimes: four })).mode, 'must')
-  // 单个字的唤醒词只加分，不算必回
-  const p = policyFor({ wakeWords: ['鱼', '大肥鱼'] }, {}, 1)
-  assert.notEqual(decideGroupReply(base({ policy: p, text: '这鱼真大', rand: () => 0.99 })).mode, 'must')
-  assert.equal(decideGroupReply(base({ policy: p, text: '大肥鱼你好', rand: () => 0.99 })).mode, 'must')
-  // 刚说过话又被叫到：不算必回（防止和名字里带「大肥鱼」的号来回对叫）
-  assert.notEqual(decideGroupReply(base({ policy: p, text: '大肥鱼你好', rand: () => 0.99, botReplyTimes: [now - 5_000] })).mode, 'must')
+  const eight = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => now - 10_000 * i)
+  assert.match(decideGroupReply(base({ mentioned: true, botReplyTimes: eight })).reason, /歇一会儿/)
+  assert.equal(decideGroupReply(base({ mentioned: true, fromOwner: true, botReplyTimes: eight })).mode, 'must')
+  // 没到刹车线照常回
+  assert.equal(decideGroupReply(base({ mentioned: true, botReplyTimes: eight.slice(0, 7) })).mode, 'must')
+  // 单个字的唤醒词也算必回
+  const p = policyFor({ wakeWords: ['鱼'] }, {}, 1)
+  assert.equal(decideGroupReply(base({ policy: p, text: '这鱼真大', rand: () => 0.99 })).mode, 'must')
 })
 
 test('topicRelevance', async () => {

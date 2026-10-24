@@ -163,10 +163,7 @@ export function normalize(raw) {
   c.merge.maxSec = Math.max(c.merge.waitSec, num(c.merge.maxSec, 8, 0, 60))
   c.merge.groupWaitSec = num(c.merge.groupWaitSec, 5, 0, 60)
   c.merge.groupMaxSec = Math.max(c.merge.groupWaitSec, num(c.merge.groupMaxSec, 15, 0, 120))
-  g.engagedChance = num(g.engagedChance, 0.5, 0, 1)
-  g.engagedGapSec = num(g.engagedGapSec, 20, 0, 600)
-  g.wakeCooldownSec = num(g.wakeCooldownSec, 20, 0, 600)
-  g.burstMax = num(g.burstMax, 4, 1, 50)
+  g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
   if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
   c.voice.cosyvoice.sampleRate = num(c.voice.cosyvoice.sampleRate, 22050, 8000, 48000)

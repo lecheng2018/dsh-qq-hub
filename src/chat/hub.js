@@ -42,7 +42,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const groupInterjects = new Map() // groupId → [t]  她主动开口（插话、接话）的时间
   const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
   const groupFedAt = new Map() // groupId → 上次把群消息交给她的时间
-  const groupTurnMode = new Map() // groupId → 这一轮是怎么来的（must / interject / engaged）
   const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
@@ -374,8 +373,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const said = (groupSaid.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
       said.push(Date.now())
       groupSaid.set(gid, said)
-      // 被叫到或自己插话之后算加入了话题；接话那一轮不再续期，免得越聊越停不下来
-      if (groupTurnMode.get(gid) !== 'engaged') groupEngaged.set(gid, Date.now() + ENGAGE_MS)
+      groupEngaged.set(gid, Date.now() + ENGAGE_MS) // 在群里说了话 = 加入了话题
     }
     logChat(chatId, 'bot', items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' '))
     lastChatAt = Date.now()
@@ -690,20 +688,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let content
     if (p.chat.kind === 'group') {
       const gid = p.chat.groupId
-      const pol = policyFor(getConfig().group, getConfig().group.overrides, gid)
-      const said = groupSaid.get(gid) || []
-      const lastSaid = said.length ? Math.max(...said) : 0
-      // 攒的时候她刚说过话：不是被点名的就不接了，免得刚说完又说
-      if (p.mode !== 'must' && Date.now() - lastSaid < (pol.engagedGapSec ?? 20) * 1000) {
-        log.debug(`群 ${gid}：她刚说过，这段（${p.mode}）不接了`)
-        return
-      }
-      if (p.mode !== 'must') {
+      if (p.mode === 'interject') {
         const arr = (groupInterjects.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
         arr.push(Date.now())
         groupInterjects.set(gid, arr)
       }
-      groupTurnMode.set(gid, p.mode)
       content = [{ type: 'text', text: await groupPrompt(p.chat, p.mode) }, ...p.images]
     } else {
       content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
