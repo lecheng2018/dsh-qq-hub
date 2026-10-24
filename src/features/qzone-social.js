@@ -50,7 +50,9 @@ export function pickFeeds(feeds, selfId, now = Date.now()) {
   return (feeds || []).filter((f) => f && f.appid === 311 && Number(f.uin) > 0 && String(f.uin) !== String(selfId) && f.key && now / 1000 - Number(f.time || 0) < 86400)
 }
 
-export function createQzoneSocial({ getConfig, onebot, hub, log }) {
+export function createQzoneSocial({ getConfig, onebot, hub, log, memory }) {
+  // 空间里看到的东西记进流水（chatId = qzone），每次整理记忆时从里面提炼关于好友的事
+  const remember = (who, uin, text) => { try { hub.logChat?.('qzone', who, text, uin) } catch (error) {} }
   const file = () => dataDir('qzone-social.json')
   const load = () => readJson(file(), () => ({ day: '', count: 0, lastRun: 0, replied: {}, seen: [], history: [] }))
   const save = (s) => writeJson(file(), s)
@@ -95,6 +97,7 @@ export function createQzoneSocial({ getConfig, onebot, hub, log }) {
         const t = pendingInThread(c, self(), handled)
         if (!t.pending.length) continue
         for (const id of t.pending.map((x) => x.id)) handled.add(id) // 这一串新消息只回一次，回不回都不再看
+        for (const x of t.pending) remember(x.name, x.uin, `在你的说说「${String(m.content).slice(0, 30)}」下面说：${String(x.content).slice(0, 200)}`)
         const last = t.pending[t.pending.length - 1]
         const name = (u) => (String(u.uin) === self() ? '你' : u.name + (String(u.uin) === String(getConfig().ownerQQ) ? `（你的${owner()}）` : ''))
         const thread = t.thread.map((x) => `${name(x)}：${String(x.content).slice(0, 150)}`).join('\n')
@@ -105,6 +108,7 @@ export function createQzoneSocial({ getConfig, onebot, hub, log }) {
           `你要回的是这一串：\n${thread}\n\n${last.name} 刚刚说了新的话，结合说说内容和上面的评论，用你的口气接着回 TA 一句。`)
         if (!text) continue
         await sendComment(m.tid, `回复 ${last.name}：${text}`)
+        memory?.addEvent({ text: `在空间回复了${last.name}的评论：${text}`, about: String(last.uin), aboutName: last.name, tags: ['空间'], importance: 0.35 })
         record(s, { kind: 'reply', who: last.name, post: String(m.content).slice(0, 30), text })
         done++
       }
@@ -126,6 +130,8 @@ export function createQzoneSocial({ getConfig, onebot, hub, log }) {
       if (done >= budget) break
       if (seen.has(f.key)) continue
       seen.add(f.key)
+      const brief = String(f.html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+      remember(f.nickname, f.uin, '发了说说：' + brief.slice(0, 300))
       const isOwner = String(f.uin) === String(getConfig().ownerQQ)
       const chance = isOwner ? Math.max(c.friendChance, c.ownerChance) : c.friendChance
       if (Math.random() >= chance) continue
@@ -151,6 +157,7 @@ export function createQzoneSocial({ getConfig, onebot, hub, log }) {
         continue
       }
       await sendComment(f.key, text, f.uin)
+      memory?.addEvent({ text: `在空间评论了${isOwner ? owner() : f.nickname}的说说「${content.slice(0, 24)}」：${text}`, about: String(f.uin), aboutName: f.nickname, tags: ['空间'] })
       record(s, { kind: 'comment', who: f.nickname, post: content.slice(0, 30), text })
       done++
     }

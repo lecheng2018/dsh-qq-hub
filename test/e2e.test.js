@@ -228,6 +228,11 @@ test('群聊一段一回：好几个人连着 @ 她，她看完整段只回一�
   assert.equal(mine.length, 1, '只交给她一次')
   for (const w of ['第一个人', '第二个人', '第三个人', '第四个人']) assert.ok(mine[0].userText.includes(w), w)
   assert.match(mine[0].userText, /不要一条一条地挨个回/)
+  // 检索记忆用的只是大家说的话，不带提示词里的说明；也记下了这一段是谁在说
+  const sid = api.hub.sessions()['group:558'].sessionId
+  assert.doesNotMatch(api.hub.lastTextOf(sid), /挨个回|引用回复/)
+  assert.match(api.hub.lastTextOf(sid), /第一个人说话/)
+  assert.deepEqual(api.hub.speakersOf(sid).sort(), ['701', '702', '703', '704'])
 })
 
 test('群聊：她还在回上一段时新来的消息先攒着，回完再一起看（不会一条一轮）', async () => {
@@ -283,6 +288,8 @@ test('空间互动：回复自己说说下的新评论、评论好友说说并�
   assert.equal(mock.sent('comment_qzone').length, 2, '同一条评论、同一条说说不会再评')
   const st = (await fake.call('/qzone/social/state')).json()
   assert.equal(st.count, 2)
+  // 她在空间评论过谁，记成了自己的经历
+  assert.ok(api.memory.recentEvents(24, 10).some((m) => m.text.includes('评论了') && m.about === OWNER))
 })
 
 test('空间互动：别人在她的评论下面接着回她，她会接着回（一串只回一次）', async () => {

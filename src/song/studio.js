@@ -391,7 +391,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       await sendVoiceFile(job.chatId, r.file, `[翻唱] ${job.title || job.query}`)
       history.unshift({ at: Date.now(), title: job.title || job.query, voice: r.voice, pitch: r.pitch, ok: true, message: `用时 ${Math.round((Date.now() - current.startedAt) / 1000)} 秒` })
       log.info(`翻唱完成：「${job.title || job.query}」`)
-      onSung?.(job.title || job.query)
+      onSung?.(job.title || job.query, job.chatId)
       if (!cfg().keepWork) try { rmSync(r.dir, { recursive: true, force: true }) } catch (error) {}
     } catch (error) {
       history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, message: error.message })

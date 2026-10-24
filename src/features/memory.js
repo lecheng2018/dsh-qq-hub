@@ -53,11 +53,13 @@ export function buildIndex(items) {
  * 检索。
  * @param idx buildIndex() 的结果
  * @param {string} query
- * @param {{about?:string, now?:number, limit?:number, minScore?:number}} [o]
+ * @param {{about?:string|string[], now?:number, limit?:number, minScore?:number}} [o]
+ *   about：关于这些人（QQ 号）的记忆加分；群里可以传这一段里所有说话的人
  */
 export function search(idx, query, o = {}) {
   const q = [...new Set(tokenize(query))]
   const now = o.now ?? Date.now()
+  const aboutSet = new Set((Array.isArray(o.about) ? o.about : o.about ? [o.about] : []).map(String))
   const k1 = 1.4
   const b = 0.7
   const scored = []
@@ -71,7 +73,7 @@ export function search(idx, query, o = {}) {
       s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / idx.avgLen))
     }
     const it = d.it
-    const aboutHit = o.about && it.about && String(it.about) === String(o.about)
+    const aboutHit = Boolean(it.about) && aboutSet.has(String(it.about))
     if (s <= 0 && !aboutHit) continue
     const ageDays = Math.max(0, (now - (it.at || now)) / 86400_000)
     const recency = 1 / (1 + ageDays / 30) // 一个月前的记忆权重减半
@@ -81,6 +83,25 @@ export function search(idx, query, o = {}) {
   }
   scored.sort((x, y) => y.score - x.score)
   return scored.filter((x) => x.score >= (o.minScore ?? 0.35)).slice(0, o.limit ?? 6)
+}
+
+/** 「刚才」「3 小时前」「昨天」这样的说法。 */
+export function agoText(at, now = Date.now()) {
+  const m = Math.max(0, Math.round((now - at) / 60000))
+  if (m < 30) return '刚才'
+  if (m < 60 * 20) return `${Math.max(1, Math.round(m / 60))} 小时前`
+  return '昨天'
+}
+
+/**
+ * 该不该忘掉：每日整理自动提炼出来的、不太重要、两个月没被想起过的，忘掉。
+ * 她自己记的、你加的、经历和日记不自动忘。
+ */
+export function shouldForget(m, now = Date.now()) {
+  if (m.source !== 'auto') return false
+  if ((Number(m.importance) || 0) >= 0.6) return false
+  const last = Math.max(m.at || 0, m.lastHit || 0)
+  return now - last > 60 * 86400_000
 }
 
 // ---------------- 记忆库 ----------------
@@ -139,6 +160,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
     save(s)
     return { ok: true, message: '✓', id: item.id }
+  }
+
+  /** 她自己做过的事（唱了歌、在空间评论了谁……）：记成「经历」，最近一天的会常驻在上下文里。 */
+  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45 }) {
+    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event' })
+  }
+
+  /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。 */
+  function recentEvents(hours = 24, limit = 4) {
+    const since = Date.now() - hours * 3600_000
+    return load().items.filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since).sort((a, b) => b.at - a.at).slice(0, limit)
   }
 
   function update(id, patch) {
@@ -211,9 +243,15 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     if (sty.length || self.length) {
       parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人。）')
     }
+    // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）
+    const recent = recentEvents()
+    if (recent.length) parts.push('（你最近做过的事：' + recent.map((m) => `${agoText(m.at)}${m.text}`).join('；') + '。聊到了可以自然提起。）')
     const q = hub?.lastTextOf?.(sessionId) || ''
     if (q) {
-      const hits = recall(q, { about: chat.userId })
+      // 群里这一段谁在说话，关于这些人的记忆优先想起
+      const about = chat.kind === 'group' ? hub?.speakersOf?.(sessionId) || [] : chat.userId
+      const shown = new Set(recent.map((m) => m.id))
+      const hits = recall(q, { about }).filter((h) => !shown.has(h.it.id))
       if (hits.length) parts.push('（你记得这些事，聊到相关的就自然用上，别说「根据记忆」：' + hits.map((h) => (h.it.aboutName ? `[${h.it.aboutName}] ` : '') + h.it.text).join('；') + '）')
     }
     return parts.join('\n')
@@ -252,18 +290,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   /** 从一段聊天里提炼长期记忆，并回顾相处经验。lines：[{who, text}] */
   async function extractLines(chatId, lines) {
     const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
-    if (talk.filter((l) => l.who !== 'bot').length < 3) return { ok: false, message: '聊天太少', added: 0, insights: 0 }
+    const isQzone = chatId === 'qzone'
+    // 空间动态一条就可能有料；聊天至少要几句
+    if (talk.filter((l) => l.who !== 'bot').length < (isQzone ? 1 : 3)) return { ok: false, message: '内容太少', added: 0, insights: 0 }
+    // 带上 QQ 号，模型才能把事记到人头上（群聊、空间里说话的人很多）
+    const line = (l) => (l.who === 'bot' ? '我' : l.uid ? `${l.who}(${l.uid})` : l.who) + '：' + l.text
     try {
       // 太长就分段，每段最多 80 行
       const chunks = []
       for (let i = 0; i < talk.length; i += 80) chunks.push(talk.slice(i, i + 80))
       let n = 0
-      let transcript = ''
-      for (const part of chunks.slice(-3)) {
-        transcript = part.map((l) => `${l.who === 'bot' ? '我' : l.who}：${l.text}`).join('\n')
-        n += await extractFacts(chatId, transcript)
-      }
-      log.info(`从 ${chatId} 的聊天里提炼了 ${n} 条新记忆`)
+      for (const part of chunks.slice(-3)) n += await extractFacts(chatId, part.map(line).join('\n'))
+      log.info(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${n} 条新记忆`)
+      if (isQzone) return { ok: true, added: n, insights: 0 }
       // 顺便回顾一次相处经验（用全天的聊天，最多最近 120 行）
       let ins = 0
       try {
@@ -281,9 +320,11 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   async function extractFacts(chatId, transcript) {
+    const cfg = getConfig()
+    const source = chatId === 'qzone' ? '下面是 QQ 空间里的动态（好友发的说说、别人给你的评论、你的回复）' : '下面是一段聊天'
     const out = await askModel(dsh, {
-      cfg: getConfig(),
-      system: '你帮一个叫「大肥鱼」的聊天角色整理长期记忆。从对话里挑出以后值得记住的事实：对方的名字/称呼、喜好、讨厌的东西、身份、约定、重要经历、你们之间的关系变化。不要记寒暄、日常琐事、一次性的问答；不要记大肥鱼自己的人设和喜好（她本来就知道），只记关于别人、以及你们之间的事。每条一句话，主语写清楚是谁。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]，没有值得记的就输出 []。',
+      cfg,
+      system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。挑出以后值得记住的事实：别人的名字/称呼、喜好、讨厌的东西、身份、近况和重要经历、约定、你们之间的关系变化。不要记寒暄、日常琐事、一次性的问答；不要记大肥鱼自己的人设和喜好（她本来就知道），只记关于别人、以及你们之间的事。每条一句话，主语写清楚是谁。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","about_qq":"12345","importance":0.6}]（about_qq 写这件事是关于谁的 QQ 号，不知道就不写），没有值得记的就输出 []。`,
       text: transcript,
       maxTokens: 1500,
       temperature: 0.2,
@@ -294,7 +335,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     for (const x of arr.slice(0, 10)) {
       if (!x || !x.text) continue
       if (/^(我|大肥鱼)/.test(String(x.about || '')) || String(x.about || '') === '大肥鱼') continue
-      const about = chatId.startsWith('private:') ? chatId.slice(8) : ''
+      // 关于谁：模型给了 QQ 号就用（群聊、空间里也能记到人头上），私聊默认是对方
+      const qq = String(x.about_qq ?? '').replace(/\D/g, '')
+      const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
       const r = add({ text: x.text, aboutName: x.about || '', about, importance: x.importance ?? 0.5, source: 'auto', chatId })
       if (r.ok && r.id) n++
     }
@@ -345,10 +388,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       }
       if (days) await learnSelfStyle()
       const s = load()
-      s.lastConsolidate = { day: today, at: Date.now(), added, insights, days }
+      // 遗忘：不重要、很久没被想起的自动记忆清掉，记忆库不会越堆越乱
+      const before = s.items.length
+      s.items = s.items.filter((m) => !shouldForget(m))
+      const forgot = before - s.items.length
+      s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot }
       save(s)
-      log.info(`整理临时记忆：处理了 ${days} 天，新增 ${added} 条长期记忆，更新了 ${insights} 份相处经验`)
-      return { ok: true, added, insights, days, message: `整理好了：新增 ${added} 条记忆，更新 ${insights} 份相处经验` }
+      log.info(`整理临时记忆：处理了 ${days} 天，新增 ${added} 条长期记忆，更新了 ${insights} 份相处经验${forgot ? `，忘掉 ${forgot} 条不重要的旧记忆` : ''}`)
+      return { ok: true, added, insights, days, forgot, message: `整理好了：新增 ${added} 条记忆，更新 ${insights} 份相处经验${forgot ? `，忘掉 ${forgot} 条旧的` : ''}` }
     } catch (error) {
       log.warn('整理临时记忆失败：', error.message)
       return { ok: false, message: error.message }
@@ -409,7 +456,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   return {
-    add, update, remove, recall, contextFor, consolidate, tick, topicScore,
+    add, addEvent, recentEvents, update, remove, recall, contextFor, consolidate, tick, topicScore,
     styles: () => load().styles || {},
     setStyle: (key, list) => setStyle(key, (list || []).map(String)),
     lastConsolidate: () => load().lastConsolidate || null,
@@ -425,7 +472,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     },
     stats: () => {
       const items = load().items
-      return { count: items.length, auto: items.filter((m) => m.source === 'auto').length }
+      return { count: items.length, auto: items.filter((m) => m.source === 'auto').length, events: items.filter((m) => m.source === 'event').length }
     },
   }
 }

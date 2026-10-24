@@ -183,6 +183,7 @@ export function buildTools(deps, { chat, level, sessionId }) {
         if (getConfig().imageGen.ownerOnly && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '画图只给主人画哦' }
         const buf = await deps.imageGen.generate(String(prompt || ''))
         await hub.sendSegments(current, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[生图] ${String(prompt).slice(0, 30)}`)
+        memory?.addEvent?.({ text: `画了一张图：${String(prompt).slice(0, 40)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4 })
         return { ok: true, message: '画好发出去了' }
       },
     }))

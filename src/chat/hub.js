@@ -62,13 +62,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   // ---------- 聊天流水（给空间日记、主动搭话、面板用） ----------
-  function logChat(chatId, who, text) {
+  function logChat(chatId, who, text, uid = '') {
     try {
       const d = new Date()
       const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
       const dir = dataDir('chatlog')
       mkdirSync(dir, { recursive: true })
-      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
+      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, ...(uid ? { uid: String(uid) } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
     } catch (error) {}
   }
 
@@ -575,7 +575,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
     if (isMuted?.(msg.chatId)) {
       log.debug(`${msg.chatId}：主人让她闭嘴中，不回`)
-      logChat(msg.chatId, msg.nickname, msg.text)
+      logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
       return
     }
 
@@ -604,7 +604,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       })
       if (!decision.reply) {
         log.debug(`群 ${msg.groupId}：不回（${decision.reason}）`)
-        logChat(msg.chatId, msg.nickname, msg.text)
+        logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
         // 已经有一段在等她回：这条也算进去（她回的时候能看到），但不单独再触发一次
         if (pending.has(msg.chatId)) await addGroupImages(msg)
         return
@@ -628,7 +628,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (imgs.length) {
       for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
     }
-    logChat(msg.chatId, msg.nickname, text)
+    logChat(msg.chatId, msg.nickname, text, msg.userId)
     lastChatAt = now
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
     onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
@@ -662,13 +662,16 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       return `[${i + 1}] ${line(x)}`
     })
     groupRefs.set(chat.groupId, refs)
+    const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
+    const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
       : '（有人在叫你，看完这一段再回）'
-    return (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
+    const text = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
       '大多数时候直接说就行。只有想专门接其中某一条、而直接说别人会看不出你在回谁时（比如那条已经被后面的话刷上去了、或者你在回某个人随口一提的事），才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。'
+    return { text, query, speakers }
   }
 
   // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------
@@ -722,14 +725,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         arr.push(Date.now())
         groupInterjects.set(gid, arr)
       }
-      content = [{ type: 'text', text: await groupPrompt(p.chat, p.mode) }, ...p.images]
+      const gp = await groupPrompt(p.chat, p.mode)
+      content = [{ type: 'text', text: gp.text }, ...p.images]
+      p.query = gp.query
+      p.speakers = gp.speakers
     } else {
       content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
     }
     busy.set(chatId, Date.now())
     try {
       const [first, ...rest] = [...p.senders]
-      await pushToSession(p.chat, content, first, { wantVoice: p.wantVoice, extraSenders: rest })
+      // 私聊：检索记忆时去掉「【私聊】某某(QQ)：」这个头
+      const query = p.query ?? p.texts.map((t) => t.replace(/^【私聊】[^：]*：/, '')).join('\n')
+      await pushToSession(p.chat, content, first, { wantVoice: p.wantVoice, extraSenders: rest, queryText: query, speakers: p.speakers })
     } catch (error) {
       release(chatId)
       bump('errors')
@@ -787,7 +795,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
     if (senderId) st.senders.add(String(senderId))
     for (const s of opts.extraSenders || []) st.senders.add(String(s))
-    st.lastText = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').slice(-600)
+    st.lastText = String(opts.queryText ?? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')).slice(-600)
+    st.speakers = opts.speakers || (senderId ? [String(senderId), ...(opts.extraSenders || []).map(String)] : [])
     if (opts.wantVoice) st.wantVoice = true
     turnState.set(key, st)
     const admitted = await admit(agent, content)
@@ -901,6 +910,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     chatOfSession,
     resetSessions,
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
+    speakersOf: (sessionId) => turnState.get(sessionKey(sessionId))?.speakers || [],
+    logChat,
     localTranscribe,
     ensureWorkspace,
     chatLogOf,

@@ -902,7 +902,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
       )
     }
 
-    const SOURCE = { tool: '她自己记的', auto: '每日整理', diary: '空间日记', panel: '你加的' }
+    const SOURCE = { tool: '她自己记的', auto: '每日整理', diary: '空间日记', panel: '你加的', event: '她的经历' }
 
     function Mood({ st, draft, setDraft, toast }) {
       const f = useField(draft, setDraft)

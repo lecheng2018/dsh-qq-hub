@@ -106,7 +106,13 @@ export function apply(ctx) {
     log: logger.child('song'),
     sendVoiceFile: (chatId, file, note) => hub.sendVoiceFile(chatId, file, note),
     sendText: (chatId, text) => hub.sendText(chatId, text),
-    onSung: (title) => mood.nudge(8, `唱完了「${title}」`),
+    onSung: (title, chatId) => {
+      mood.nudge(8, `唱完了「${title}」`)
+      // 唱过的歌记成她的经历：私聊记到对方头上
+      const uid = String(chatId).startsWith('private:') ? String(chatId).slice(8) : ''
+      const who = uid === String(cfg.ownerQQ) ? cfg.ownerName || '主人' : uid ? '对方' : '群里'
+      memory?.addEvent({ text: `给${who}唱了《${title}》`, about: uid, tags: ['唱歌'], importance: 0.5 })
+    },
   })
   const imageGen = createImageGen({ getConfig, log: logger.child('imagegen') })
   const tts = { speak: (text) => textToSpeech(text, cfg.voice, logger.child('voice')) }
@@ -160,7 +166,7 @@ export function apply(ctx) {
     // 写过的空间日记也进记忆库：以后聊到相关的事，她会想起自己那天写过什么
     onDiary: (text) => memory.add({ text: `我在 QQ 空间写过：${text}`, importance: 0.55, tags: ['空间日记'], source: 'diary' }),
   })
-  const qzoneSocial = createQzoneSocial({ getConfig, onebot, hub, log: logger.child('qzone') })
+  const qzoneSocial = createQzoneSocial({ getConfig, onebot, hub, memory, log: logger.child('qzone') })
   const speakUp = createSpeakUp({ getConfig, hub, log: logger.child('speakup'), isMuted: (chatId) => mutes.muted(chatId) })
 
   // ---------- 盯会话：一轮结束就发回 QQ ----------
