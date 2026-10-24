@@ -66,6 +66,13 @@ export function pickForReply(items, replyText) {
   return items[Math.floor(Math.random() * items.length)]
 }
 
+/** 超过上限时该清掉哪张：只看偷来的，最少被发过的里最老的那张。 */
+export function pickEvict(items) {
+  const pool = items.filter((i) => i.from !== 'manual' && i.from !== 'panel')
+  if (!pool.length) return null
+  return pool.slice().sort((a, b) => (a.uses || 0) - (b.uses || 0) || (a.lastUsed || a.at || 0) - (b.lastUsed || b.at || 0))[0]
+}
+
 export function createStickerStore({ dsh, getConfig, onebot, log }) {
   const recent = [] // 每小时限额
 
@@ -128,6 +135,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     lib.items.push(item)
     saveLibrary(lib)
     log.info(`收了一张表情 ${md5.slice(0, 8)}（${width}x${height}）`)
+    await trim()
     // 后台起备注，写回 QQ 和本地
     if (getConfig().stickers.caption) {
       caption(buf, mime, item.summary).then(async ({ name, tags }) => {
@@ -173,6 +181,29 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     return { ok: true, item }
   }
 
+  /** 表情库超过上限就清掉最少用的（QQ 收藏表情有数量上限，满了就收不进去了）。 */
+  async function trim() {
+    const max = getConfig().stickers.maxLibrary
+    for (let guard = 0; guard < 20; guard++) {
+      const items = loadLibrary().items
+      if (items.length <= max) return
+      const out = pickEvict(items)
+      if (!out) return
+      log.info(`表情库满了（上限 ${max}），清掉一张不常用的：${out.name || out.md5.slice(0, 8)}`)
+      await remove(out.md5)
+    }
+  }
+
+  /** 发出去一次：记下来，常用的不会被清掉。 */
+  function markUsed(md5) {
+    const lib = loadLibrary()
+    const it = lib.items.find((i) => i.md5 === md5)
+    if (!it) return
+    it.uses = (it.uses || 0) + 1
+    it.lastUsed = Date.now()
+    saveLibrary(lib)
+  }
+
   async function remove(md5, { fromQQ = true } = {}) {
     const lib = loadLibrary()
     const it = lib.items.find((i) => i.md5 === md5)
@@ -204,5 +235,5 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     return { type: 'image', data: { file: 'base64://' + readFileSync(p).toString('base64'), sub_type: 1, summary: `[${item.name || '表情'}]` } }
   }
 
-  return { collect, addFromBuffer, remove, rename, segmentFor, library: loadLibrary, match: (q) => matchSticker(loadLibrary().items, q), pickForReply: (t) => pickForReply(loadLibrary().items, t) }
+  return { collect, addFromBuffer, remove, rename, segmentFor, markUsed, trim, library: loadLibrary, match: (q) => matchSticker(loadLibrary().items, q), pickForReply: (t) => pickForReply(loadLibrary().items, t) }
 }

@@ -143,5 +143,17 @@ test('安装：报错翻译成人话、安装位置检查、列出各个盘', ()
   assert.ok(studio.checkRoot('C:\\Aurabot\\rvc').freeGB > 0)
   const drives = studio.listDrives()
   assert.ok(drives.some((d) => d.drive === 'C:' && d.root === 'C:\\Aurabot\\rvc' && d.totalGB > 0))
-  assert.equal(studio.INSTALL_STEPS.length, 5)
+  assert.equal(studio.INSTALL_STEPS.length, 6)
+})
+
+test('翻唱缓存只留最新的几个', async () => {
+  const { utimesSync } = await import('node:fs')
+  const dir = mkdtempSync(join(tmpdir(), 'cache-'))
+  for (let i = 0; i < 5; i++) {
+    writeFileSync(join(dir, i + '.mp3'), 'x')
+    utimesSync(join(dir, i + '.mp3'), new Date(1000 * i), new Date(1000 * i))
+  }
+  assert.equal(studio.pruneCache(dir, 2), 3)
+  const { readdirSync } = await import('node:fs')
+  assert.deepEqual(readdirSync(dir).sort(), ['3.mp3', '4.mp3'])
 })

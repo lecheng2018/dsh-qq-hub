@@ -60,6 +60,7 @@ export const DEFAULTS = {
     fromGroups: true,
     fromPrivate: true,
     maxPerHour: 20,
+    maxLibrary: 300, // 表情库最多存多少张（QQ 收藏表情有上限），超了就清掉最少用的
     caption: true, // 用视觉模型起备注
   },
   diary: {
@@ -156,6 +157,7 @@ export function normalize(raw) {
   c.voice.autoMaxChars = num(c.voice.autoMaxChars, 80, 1, 500)
   c.stickers.autoChance = num(c.stickers.autoChance, 0.35, 0, 1)
   c.stickers.maxPerHour = num(c.stickers.maxPerHour, 20, 0, 200)
+  c.stickers.maxLibrary = num(c.stickers.maxLibrary, 300, 20, 2000)
   c.diary.timesPerDay = num(c.diary.timesPerDay, 2, 0, 6)
   c.diary.windowStart = hhmm(c.diary.windowStart, '10:00')
   c.diary.windowEnd = hhmm(c.diary.windowEnd, '23:30')

@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, statSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { buildWav } from './wav.js'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { dataDir } from '../core/store.js'
@@ -16,13 +16,13 @@ const LEGACY_PYENV = 'C:\\Aurabot\\pyenv'
 export const PYENV_DIR = process.env.AURABOT_PYENV || (existsSync(LEGACY_PYENV) ? LEGACY_PYENV : join(homedir(), 'Aurabot', 'pyenv'))
 const pyExe = () => join(PYENV_DIR, 'Scripts', 'python.exe')
 
-function run(cmd, args, { timeoutMs = 60000, input } = {}) {
+function run(cmd, args, { timeoutMs = 60000, input, env } = {}) {
   return new Promise((resolve) => {
     let out = ''
     let err = ''
     let child
     try {
-      child = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } })
+      child = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', ...(env || {}) } })
     } catch (error) {
       resolve({ code: -1, out, err: error.message })
       return
@@ -65,17 +65,47 @@ export function edgeInstalled() {
 export async function installEdge(log) {
   mkdirSync(PYENV_DIR, { recursive: true })
   if (!existsSync(pyExe())) {
+    // 电脑上有 Python 就直接用；没有就用 uv 下一个私有的 Python（不用用户自己装）
     let r = await run('py', ['-3', '-m', 'venv', PYENV_DIR], { timeoutMs: 180000 })
     if (r.code !== 0) r = await run('python', ['-m', 'venv', PYENV_DIR], { timeoutMs: 180000 })
-    if (r.code !== 0) return { ok: false, message: '建 Python 虚拟环境失败：电脑上需要 Python 3.10 以上。' + r.err.slice(-300) }
+    if (r.code !== 0) {
+      log?.info('电脑上没有可用的 Python，用 uv 准备一个私有的')
+      const uv = await findOrFetchUv(log)
+      if (!uv) return { ok: false, message: '准备 Python 失败：下载安装工具 uv 没成功，检查一下网络（开代理或换个网络）再试' }
+      const env = { UV_PYTHON_INSTALL_DIR: join(dirname(PYENV_DIR), 'python'), UV_PYTHON_INSTALL_MIRROR: 'https://registry.npmmirror.com/-/binary/python-build-standalone' }
+      r = await run(uv, ['venv', '-q', PYENV_DIR, '--python', '3.12'], { timeoutMs: 600000, env })
+      if (r.code !== 0) return { ok: false, message: '准备 Python 失败：' + r.err.slice(-300) }
+    }
   }
   log?.info('正在安装 edge-tts …')
   let r = await run(pyExe(), ['-m', 'pip', 'install', '-q', 'edge-tts'], { timeoutMs: 300000 })
   if (r.code !== 0) {
     r = await run(pyExe(), ['-m', 'pip', 'install', '-q', '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple', 'edge-tts'], { timeoutMs: 300000 })
   }
-  if (r.code !== 0) return { ok: false, message: 'pip 安装 edge-tts 失败：' + r.err.slice(-300) }
+  // uv 建的环境里没有 pip：改用 uv 装
+  if (r.code !== 0 && /No module named pip/.test(r.err)) {
+    const uv = await findOrFetchUv(log)
+    if (uv) {
+      r = await run(uv, ['pip', 'install', '-q', '--python', pyExe(), 'edge-tts'], { timeoutMs: 300000 })
+      if (r.code !== 0) r = await run(uv, ['pip', 'install', '-q', '--python', pyExe(), '--default-index', 'https://pypi.tuna.tsinghua.edu.cn/simple', 'edge-tts'], { timeoutMs: 300000 })
+    }
+  }
+  if (r.code !== 0) return { ok: false, message: '安装 edge-tts 失败：' + r.err.slice(-300) }
   return { ok: true, message: '语音组件装好了' }
+}
+
+/** 找 uv：电脑上有就用，翻唱装过的也能用，都没有就下一个（走系统代理）。 */
+async function findOrFetchUv(log) {
+  if (process.env.AURABOT_UV) return process.env.AURABOT_UV
+  if ((await run('uv', ['--version'], { timeoutMs: 15000 })).code === 0) return 'uv'
+  const local = join(dirname(PYENV_DIR), 'bin', 'uv.exe')
+  for (const p of [local, join('C:\\Aurabot', 'rvc', 'bin', 'uv.exe'), join(homedir(), 'Aurabot', 'rvc', 'bin', 'uv.exe')]) if (existsSync(p)) return p
+  log?.info('下载 uv …')
+  const zip = join(dirname(PYENV_DIR), 'bin', 'uv.zip')
+  mkdirSync(dirname(zip), { recursive: true })
+  const ps = "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec 600; Expand-Archive -LiteralPath $env:AB_OUT -DestinationPath (Split-Path $env:AB_OUT) -Force; Remove-Item $env:AB_OUT"
+  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 900000, env: { AB_OUT: zip } })
+  return existsSync(local) ? local : ''
 }
 
 async function edgeSynth(text, voice, rate, pitch) {

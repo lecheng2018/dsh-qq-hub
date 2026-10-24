@@ -32,8 +32,20 @@ const FETCH_SCRIPT = fileURLToPath(new URL('./fetch_file.py', import.meta.url))
  * 断了从断点接着下，卡住 30 秒就换下一个源，几轮都不行才算失败。
  */
 async function downloadWithMirror(python, rel, dest, note, log, onProgress) {
+  return fetchFile(python, dest, HF_HOSTS.map((host) => `${host}/IAHispano/Applio/resolve/main/Resources/${rel}`), note, log, onProgress, rel)
+}
+
+/** 默认分离模型的文件都在不在。 */
+export function separatorReady(dir, model) {
+  const files = SEPARATOR_FILES[model]
+  if (!files) return existsSync(join(dir, model))
+  return files.every(([name]) => existsSync(join(dir, name)) && statSync(join(dir, name)).size > 0)
+}
+
+/** 下载一个文件：已经有了就跳过；地址按顺序轮流试，断了接着下，走系统代理。 */
+async function fetchFile(python, dest, urls, note, log, onProgress, label = basename(dest)) {
+  const rel = label
   if (existsSync(dest) && statSync(dest).size > 0) return
-  const urls = HF_HOSTS.map((host) => `${host}/IAHispano/Applio/resolve/main/Resources/${rel}`)
   note?.(`下载 ${rel}`)
   let lastPct = -1
   await run(python, [FETCH_SCRIPT, dest, ...urls], {
@@ -89,7 +101,19 @@ export function explainInstallError(msg) {
 }
 
 /** 安装的几步（面板按这个画步骤条）。 */
-export const INSTALL_STEPS = ['下载 Applio（RVC 推理引擎）', '创建 Python 环境', '安装 PyTorch、RVC 和人声分离（最大的一步）', '准备 ffmpeg', '下载 RVC 需要的预训练文件（音高、音色特征）']
+export const INSTALL_STEPS = ['下载 Applio（RVC 推理引擎）', '创建 Python 环境', '安装 PyTorch、RVC 和人声分离（最大的一步）', '准备 ffmpeg', '下载 RVC 需要的预训练文件（音高、音色特征）', '下载人声分离模型']
+
+// 默认人声分离模型要的文件：[文件名, 下载地址（按顺序试）]。提前下好，免得第一次点歌时卡着不动
+const GH_UVR = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models'
+const GH_AS = 'https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs'
+export const SEPARATOR_FILES = {
+  'model_bs_roformer_ep_317_sdr_12.9755.ckpt': [
+    ['model_bs_roformer_ep_317_sdr_12.9755.ckpt', [`${GH_UVR}/model_bs_roformer_ep_317_sdr_12.9755.ckpt`, `${GH_AS}/model_bs_roformer_ep_317_sdr_12.9755.ckpt`]],
+    ['model_bs_roformer_ep_317_sdr_12.9755.yaml', [`${GH_AS}/model_bs_roformer_ep_317_sdr_12.9755.yaml`]],
+  ],
+}
+// 分离工具每次运行都要的模型清单（缺了会去 raw.githubusercontent.com 拉，国内常常连不上）
+const SEPARATOR_LIST = ['download_checks.json', ['https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json', 'https://cdn.jsdelivr.net/gh/TRvlvr/application_data@main/filelists/download_checks.json']]
 
 /** 电脑上的盘和剩余空间，给面板「装到哪个盘」用：[{drive, root, freeGB, totalGB}] */
 export function listDrives() {
@@ -199,6 +223,15 @@ export function deleteVoice(modelsDir, id) {
   return { ok: true, message: `删掉了「${id}」` }
 }
 
+/** 缓存目录只留最新的 keep 个文件。 */
+export function pruneCache(dir, keep) {
+  let files = []
+  try { files = readdirSync(dir).map((n) => ({ n, t: statSync(join(dir, n)).mtimeMs })) } catch (error) { return 0 }
+  const old = files.sort((a, b) => b.t - a.t).slice(keep)
+  for (const f of old) rmSync(join(dir, f.n), { force: true })
+  return old.length
+}
+
 /** 截一段：歌比上限长时从「大约副歌」的位置开始（全曲 30% 处），否则从头。 */
 export function clipWindow(durationSec, maxSec, start = 'auto') {
   if (!(durationSec > maxSec)) return { start: 0, length: durationSec }
@@ -256,6 +289,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       separator: existsSync(p.separatorExe),
       ffmpeg: existsSync(p.ffmpeg),
       weights: existsSync(p.rmvpe) && existsSync(p.contentvec),
+      separatorModel: separatorReady(p.separatorModels, cfg().separatorModel),
     }
     const ready = Object.values(parts).every(Boolean) && voices.length > 0
     return {
@@ -341,6 +375,14 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
         for (const [rel, dest] of PREREQS) {
           await downloadWithMirror(p.python, rel, join(p.applio, dest), note, log, (done, total) => {
             install.progress = { kind: 'file', name: rel.split('/').pop(), done, total }
+          })
+        }
+      })
+      await step('下载人声分离模型', '约 640 MB，看网速几分钟；下好以后第一次点歌就不用再等', async () => {
+        const files = [...(SEPARATOR_FILES[cfg().separatorModel] || []), SEPARATOR_LIST]
+        for (const [name, urls] of files) {
+          await fetchFile(p.python, join(p.separatorModels, name), urls, note, log, (done, total) => {
+            install.progress = { kind: 'file', name, done, total }
           })
         }
       })
@@ -549,6 +591,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     const out = part.cut ? await fade(mixed, dir, part.length) : mixed
     mkdirSync(join(work(), 'cache'), { recursive: true })
     copyFileSync(out, cached)
+    pruneCache(join(work(), 'cache'), 40)
     return { file: cached, voice: voice.id, pitch, dir }
   }
 

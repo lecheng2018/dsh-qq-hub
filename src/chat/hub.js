@@ -330,6 +330,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const seg = stickers.segmentFor(item)
     if (!seg) return false
     await sendSegments(chatId, [...quote(replyId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    stickers.markUsed?.(item.md5)
     bump('stickers')
     return true
   }

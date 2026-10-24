@@ -123,3 +123,15 @@ test('心情：对她说的话、主人的话影响更大；心情明显时每�
     process.env.AURABOT_DATA_DIR = prev
   }
 })
+
+test('表情库上限：只清偷来的、最少用的、最老的', async () => {
+  const { pickEvict } = await import('../src/features/stickers.js')
+  const items = [
+    { md5: 'a', from: 'group:1', uses: 3, at: 1 },
+    { md5: 'b', from: 'group:1', uses: 0, at: 5 },
+    { md5: 'c', from: 'group:1', uses: 0, at: 2 },
+    { md5: 'd', from: 'manual', uses: 0, at: 0 },
+  ]
+  assert.equal(pickEvict(items).md5, 'c')
+  assert.equal(pickEvict([{ md5: 'd', from: 'manual' }]), null, '你自己加的不清')
+})

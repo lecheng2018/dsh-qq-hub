@@ -428,7 +428,11 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   /** 每分钟调一次：一天几个整理时间点（默认 04:00 / 16:00），到点且这个点今天还没跑过就整理。 */
   async function tick() {
     const cfg = getConfig().memory
-    if (!cfg.enabled || !cfg.dailyConsolidate) return
+    if (!cfg.enabled || !cfg.dailyConsolidate) {
+      const cutoff = dayKey(new Date(Date.now() - 14 * 86400_000))
+      for (const day of hub.chatLogDays?.() || []) if (day < cutoff) hub.deleteChatLog(day)
+      return
+    }
     const s = load()
     const today = dayKey()
     const now = new Date()
