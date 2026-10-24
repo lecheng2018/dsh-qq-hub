@@ -204,6 +204,66 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-range{display:flex;align-items:center;gap:10px;min-width:240px}
 .ab-range input[type=range]{flex:1;accent-color:var(--ab-sea)}
 .ab-range .val{min-width:48px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ab-deep);font-weight:600}
+/* ---------- 美化 ---------- */
+.ab-root{--ab-shadow:0 1px 2px rgba(15,40,80,.04),0 4px 16px rgba(15,40,80,.05);--ab-radius:16px}
+body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25)}
+.ab-hero{padding:20px 22px;border-radius:20px;box-shadow:var(--ab-shadow);background:
+  radial-gradient(120% 140% at 0% 0%,var(--ab-foam-2),transparent 55%),
+  linear-gradient(120deg,var(--ab-foam),transparent 70%),var(--ab-card)}
+.ab-hero:before{content:"";position:absolute;left:0;right:0;bottom:-1px;height:46px;pointer-events:none;opacity:.55;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 60' preserveAspectRatio='none'%3E%3Cpath d='M0 30c150-26 300 26 450 0s300-26 450 0 225 18 300 8v22H0z' fill='%233d7fd6' fill-opacity='.10'/%3E%3Cpath d='M0 42c180-20 330 18 520 2s340-16 480 2 150 8 200 4v10H0z' fill='%233d7fd6' fill-opacity='.08'/%3E%3C/svg%3E") bottom/100% 100% no-repeat}
+.ab-hero h1{font-size:22px}
+.ab-pill{background:var(--ab-card);box-shadow:0 1px 1px rgba(15,40,80,.04)}
+.ab-tabs{margin:16px 0 14px;padding:5px;border-radius:14px;background:color-mix(in srgb,var(--ab-card-2) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);box-shadow:var(--ab-shadow);flex-wrap:wrap}
+.ab-tab{padding:6px 11px;border-radius:10px;transition:background .12s,color .12s}
+.ab-tab .ic{font-size:14px;line-height:1;filter:saturate(.85)}
+.ab-tab.on{background:var(--ab-sea);color:#fff;box-shadow:0 2px 8px color-mix(in srgb,var(--ab-sea) 35%,transparent)}
+.ab-tab.on .ic{filter:none}
+.ab-tab.on .ab-dot{background:#fff;opacity:.85}
+.ab-grid{gap:14px}
+.ab-card{border-radius:var(--ab-radius);padding:18px 20px;box-shadow:var(--ab-shadow);transition:box-shadow .15s}
+.ab-card h3{font-size:15px;font-weight:650;color:var(--ab-text)}
+.ab-card h3:before{content:"";width:4px;height:15px;border-radius:2px;background:linear-gradient(var(--ab-sky),var(--ab-sea));flex:none}
+.ab-card .ab-desc{margin:4px 0 14px;line-height:1.65}
+.ab-stat{position:relative;overflow:hidden;padding:16px 18px;background:linear-gradient(150deg,var(--ab-foam),transparent 60%),var(--ab-card)}
+.ab-stat .ic{position:absolute;right:14px;top:12px;font-size:22px;opacity:.9}
+.ab-stat .n{font-size:28px;line-height:1.2}
+.ab-row{padding:12px 0;gap:20px}
+.ab-row .ab-label{flex:0 0 200px}
+.ab-row .ab-label small{max-width:200px}
+.ab-range{max-width:440px}
+.ab-range .val{min-width:0;padding:1px 9px;border-radius:999px;background:var(--ab-foam);font-size:12px;white-space:nowrap}
+.ab-range input[type=range]{height:4px}
+.ab-input,.ab-select,.ab-textarea,.ab-sel-btn{border-radius:10px;transition:border-color .12s,box-shadow .12s}
+.ab-input:hover,.ab-textarea:hover{border-color:var(--ab-sky)}
+.ab-textarea{font-family:inherit;font-size:13px}
+.ab-btn{border-radius:10px;transition:background .12s,border-color .12s,box-shadow .12s,filter .12s}
+.ab-btn:focus-visible,.ab-tab:focus-visible,.ab-switch:focus-visible,.ab-choice:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ab-foam-2)}
+.ab-btn.primary{box-shadow:0 2px 8px color-mix(in srgb,var(--ab-sea) 30%,transparent)}
+.ab-btn.danger:hover{background:rgba(207,34,46,.07);border-color:rgba(207,34,46,.3)}
+.ab-switch{width:40px;height:23px}.ab-switch:after{width:17px;height:17px}.ab-switch.on:after{left:20px}
+.ab-note{border-radius:12px;padding:11px 14px;line-height:1.6}
+.ab-choice{border-radius:14px;padding:12px 14px}
+.ab-choice.on b{color:var(--ab-deep)}
+.ab-li{padding:11px 4px;border-radius:8px}
+.ab-li:hover{background:var(--ab-hover)}
+.ab-sticker{border-radius:14px;transition:transform .12s,box-shadow .12s}
+.ab-sticker:hover{transform:translateY(-2px);box-shadow:var(--ab-shadow)}
+.ab-pitem{border-radius:12px;transition:border-color .12s,box-shadow .12s}
+.ab-mood{height:12px}
+.ab-mood > i{background:linear-gradient(90deg,#9ad0ff,var(--ab-sea) 60%,#7a6cf0)}
+.ab-logs{border-radius:12px;border:1px solid var(--ab-line)}
+.ab-savebar{border-radius:14px;backdrop-filter:blur(8px)}
+.ab-table th{font-size:12px;letter-spacing:.02em}
+.ab-table tr:hover td{background:var(--ab-hover)}
+.ab-checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.ab-check{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:12px;border:1px solid var(--ab-line);background:var(--ab-card-2);color:var(--ab-sub);font-size:12.5px}
+.ab-check i{font-style:normal;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;background:var(--ab-line-2);color:#fff;flex:none}
+.ab-check.done{color:var(--ab-text);border-color:color-mix(in srgb,var(--ab-ok) 30%,transparent);background:color-mix(in srgb,var(--ab-ok) 7%,var(--ab-card))}
+.ab-check.done i{background:var(--ab-ok)}
+.ab-drop{border-radius:14px;background:var(--ab-card-2)}
+@media (max-width:640px){.ab-row .ab-label{flex:none}.ab-row .ab-label small{max-width:none}.ab-tab .ic{display:none}}
+@media (prefers-reduced-motion:reduce){.ab-root *{transition:none!important;animation:none!important}}
 `
     function useStyle() {
       useEffect(() => {
@@ -335,20 +395,20 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 
     // ---------------- 标签页 ----------------
     const TABS = [
-      { id: 'overview', label: '概览' },
-      { id: 'connect', label: '连接' },
-      { id: 'persona', label: '人格' },
-      { id: 'access', label: '权限' },
-      { id: 'group', label: '聊天', flag: 'group' },
-      { id: 'model', label: '模型' },
-      { id: 'voice', label: '语音', flag: 'voice.enabled' },
-      { id: 'stickers', label: '表情包', flag: 'stickers.enabled' },
-      { id: 'imagegen', label: '生图', flag: 'imageGen.enabled' },
-      { id: 'diary', label: '空间日记', flag: 'diary.enabled' },
-      { id: 'speakup', label: '主动搭话', flag: 'speakUp.enabled' },
-      { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
-      { id: 'song', label: '翻唱', flag: 'song.enabled' },
-      { id: 'logs', label: '日志' },
+      { id: 'overview', icon: '🏠', label: '概览' },
+      { id: 'connect', icon: '🔌', label: '连接' },
+      { id: 'persona', icon: '🎭', label: '人格' },
+      { id: 'access', icon: '🔐', label: '权限' },
+      { id: 'group', icon: '💬', label: '聊天', flag: 'group' },
+      { id: 'model', icon: '🧠', label: '模型' },
+      { id: 'voice', icon: '🎙️', label: '语音', flag: 'voice.enabled' },
+      { id: 'stickers', icon: '😺', label: '表情包', flag: 'stickers.enabled' },
+      { id: 'imagegen', icon: '🎨', label: '生图', flag: 'imageGen.enabled' },
+      { id: 'diary', icon: '📔', label: '空间日记', flag: 'diary.enabled' },
+      { id: 'speakup', icon: '👋', label: '主动搭话', flag: 'speakUp.enabled' },
+      { id: 'mood', icon: '💗', label: '心情与记忆', flag: 'mood.enabled' },
+      { id: 'song', icon: '🎵', label: '翻唱', flag: 'song.enabled' },
+      { id: 'logs', icon: '📜', label: '日志' },
     ]
 
     /** 更新提示：GitHub 上有新版本时给更新命令；刚更新完显示一次这次更新了什么。 */
@@ -386,7 +446,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
         cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。') : null,
         cfg.enabled && !conn ? h('div', { className: 'ab-note err' }, '还没连上 QQ 网关。去「连接」标签看看 SnowLuma 有没有装好、启动没有。 ', h('a', { href: '#', onClick: (e) => { e.preventDefault(); go('connect') } }, '去连接 →')) : null,
         h('div', { className: 'ab-grid ab-g4' },
-          [['今天收到', s.received], ['今天发出', s.sent], ['语音条', s.voice], ['表情包', s.stickers]].map(([l, n]) => h('div', { key: l, className: 'ab-card ab-stat' }, h('div', { className: 'n' }, n || 0), h('div', { className: 'l' }, l))),
+          [['今天收到', s.received, '📥'], ['今天发出', s.sent, '📤'], ['语音条', s.voice, '🎙️'], ['表情包', s.stickers, '😺']].map(([l, n, ic]) => h('div', { key: l, className: 'ab-card ab-stat' }, h('span', { className: 'ic', 'aria-hidden': true }, ic), h('div', { className: 'n' }, n || 0), h('div', { className: 'l' }, l))),
         ),
         h('div', { className: 'ab-grid ab-g2' },
           h(Card, { title: '她现在', desc: '心情会随聊天起伏，过一阵子慢慢回到平常。' },
@@ -773,7 +833,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
             h('input', { className: 'ab-input', value: txt, onChange: (e) => setTxt(e.target.value) }),
             h(Btn, { small: true, onClick: async () => { const r = await post('/voice/test', { text: txt }); if (r.ok) setSrc('data:' + r.mime + ';base64,' + r.data); else toast(r.message) } }, '生成'),
             src ? h('audio', { src, controls: true, autoPlay: true, style: { height: 32 } }) : null),
-          h('div', { className: 'ab-note', style: { marginTop: 10 } }, '变声（RVC）预留了位置：以后装好 RVC，这里会多出「音色模型」选项，语音会先变声再发。'),
         ),
         h(Card, { title: '听语音（语音转文字）', right: f.sw('voice.asr'), desc: '别人发来的语音会先转成文字再交给她：优先用 QQ 自带的转文字，不行再用 DSH 自带的语音识别（要在 DSH「插件」里开启「语音输入」）。' },
           h(AsrStatus, { toast })),
@@ -1053,10 +1112,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
       return h('div', { className: 'ab-grid' },
         h(Card, { title: '翻唱', right: f.sw('song.enabled'), desc: '让她用自己的声音唱歌：点歌 → 从网易云下载 → 分离人声和伴奏 → 用 RVC 换成她的声音 → 混音 → 发语音条。主人在 QQ 里说「唱首歌」，或者发 /sing 歌名 都行。' },
           h('div', { className: cx('ab-note', s.ready ? '' : 'warn') }, s.message),
-          h('div', { className: 'ab-steps', style: { marginTop: 12 } },
-            SONG_PARTS.map(([k, label]) => h('div', { key: k, className: cx('ab-step', s.parts[k] && 'done') }, h('div', null, h('b', null, label)))),
-            h('div', { className: cx('ab-step', s.voices.length && 'done') }, h('div', null, h('b', null, '音色模型'),
-              h('div', { className: 'ab-muted ab-small' }, s.voices.length ? '有 ' + s.voices.length + ' 个：' + s.voices.map((v) => v.id).join('、') : '在下面「音色模型」里导入')))),
+          h('div', { className: 'ab-checks', style: { marginTop: 12 } },
+            SONG_PARTS.map(([k, label]) => h('div', { key: k, className: cx('ab-check', s.parts[k] && 'done') }, h('i', null, s.parts[k] ? '✓' : '·'), label)),
+            h('div', { className: cx('ab-check', s.voices.length && 'done'), title: s.voices.map((v) => v.id).join('、') }, h('i', null, s.voices.length ? '✓' : '·'), s.voices.length ? '音色模型 ×' + s.voices.length : '音色模型（在下面导入）')),
           h('div', { className: 'ab-flex', style: { marginTop: 12 } },
             h(Btn, { kind: 'primary', small: true, disabled: s.install.running, onClick: async () => { const r = await post('/song/install'); toast(r.message); setTimeout(load, 800) } },
               s.install.running ? '正在安装：' + s.install.step : Object.values(s.parts).every(Boolean) ? '重新检查 / 修复安装' : '一键安装'),
@@ -1307,7 +1365,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
           showWizard ? null : h('div', { className: 'ab-tabs', role: 'tablist' }, TABS.map((t) => {
             const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : t.flag ? getPath(cfg, t.flag) : null
             return h('button', { key: t.id, type: 'button', role: 'tab', 'aria-selected': tab === t.id, className: cx('ab-tab', tab === t.id && 'on'), onClick: () => go(t.id) },
-              t.label,
+              h('span', { className: 'ic', 'aria-hidden': true }, t.icon), t.label,
               tabDirty(t.id) ? h('i', { className: 'dirty', title: '有没保存的改动' }) : t.flag ? h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' }) : null)
           })),
           showWizard ? null : h(body, props),

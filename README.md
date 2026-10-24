@@ -26,7 +26,13 @@ QQ ⇄ SnowLuma（OneBot v11，你自己安装）⇄ Aurabot 插件 ⇄ DSH 会�
 4. 登录机器人号，点「接入机器人号」
 5. 先试运行，或直接上线
 
-**更新**：再运行一次上面的命令，然后重启 DSH。设置、人格、记忆都会保留；有新版本时面板里会提示。
+## 升级
+
+在 PowerShell 里运行下面这行（拉取 GitHub 上的最新版），然后重启 DSH。设置、人格、记忆都会保留；有新版本时面板里也会提示。
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:accomplish07zrh-eng/dsh-aurabot-qq
+```
 
 ## 设计要点
 
