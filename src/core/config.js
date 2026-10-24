@@ -107,6 +107,7 @@ export const DEFAULTS = {
     instVolume: 0.8,
     ownerOnly: true, // 只有主人能点歌
     keepWork: false, // 留着中间文件（调试用）
+    pypiMirror: '', // 安装时下 Python 包用的镜像：'' = 官方，tuna = 清华镜像（国内快）
   },
   tabs: {}, // 面板记住的小偏好
 }
@@ -210,6 +211,8 @@ export function normalize(raw) {
   c.song.vocalVolume = num(c.song.vocalVolume, 1, 0.2, 2)
   c.song.instVolume = num(c.song.instVolume, 0.8, 0.1, 2)
   if (!['auto', 'head'].includes(c.song.clipStart)) c.song.clipStart = 'auto'
+  if (!['', 'tuna'].includes(c.song.pypiMirror)) c.song.pypiMirror = ''
+  c.song.root = String(c.song.root || '').trim()
   return c
 }
 

@@ -131,3 +131,17 @@ test('导入音色：单个 .pth 直接导入；不是模型、不支持的格�
   assert.equal(studio.importModels(dir, '..\\..\\evil.pth', fakePth()).ok, true)
   assert.deepEqual(studio.listVoices(dir).map((x) => x.id), ['evil'])
 })
+
+test('安装：报错翻译成人话、安装位置检查、列出各个盘', () => {
+  assert.match(studio.explainInstallError('spawn uv ENOENT'), /找不到需要的程序（uv）/)
+  assert.match(studio.explainInstallError('error sending request for url ... connection reset'), /国内镜像/)
+  assert.match(studio.explainInstallError('30 秒没进度'), /超时/)
+  assert.match(studio.explainInstallError('No space left on device'), /磁盘空间/)
+  assert.equal(studio.checkRoot('rvc').ok, false)
+  assert.equal(studio.checkRoot('').ok, true)
+  assert.match(studio.checkRoot('C:\\我的 文件\\rvc').warn, /中文或空格/)
+  assert.ok(studio.checkRoot('C:\\Aurabot\\rvc').freeGB > 0)
+  const drives = studio.listDrives()
+  assert.ok(drives.some((d) => d.drive === 'C:' && d.root === 'C:\\Aurabot\\rvc' && d.totalGB > 0))
+  assert.equal(studio.INSTALL_STEPS.length, 5)
+})

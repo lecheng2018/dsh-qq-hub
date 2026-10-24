@@ -19,7 +19,7 @@ import { createStickerStore, stickerPath } from './features/stickers.js'
 import { createQzone } from './features/qzone.js'
 import { createQzoneSocial } from './features/qzone-social.js'
 import { createMood, createSpeakUp } from './features/companion.js'
-import { createSongStudio } from './song/studio.js'
+import { createSongStudio, checkRoot, listDrives } from './song/studio.js'
 import { createMemoryStore } from './features/memory.js'
 import { createImageGen } from './features/imagegen.js'
 import { textToSpeech, edgeInstalled, installEdge } from './voice/tts.js'
@@ -334,6 +334,8 @@ export function apply(ctx) {
   // 翻唱
   route('/song/status', async () => ({ ok: true, ...song.status() }))
   route('/song/install', async () => song.install())
+  route('/song/root/check', async (req) => ({ ok: true, ...checkRoot(query(req).path || '') }))
+  route('/song/drives', async () => ({ ok: true, list: listDrives() }))
   route('/song/search', async (req) => {
     const q = new URL(req.url, 'http://x').searchParams.get('q') || ''
     try { return { ok: true, list: await song.search(q) } } catch (error) { return { ok: false, message: error.message, list: [] } }

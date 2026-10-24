@@ -2,8 +2,8 @@
 // 推理引擎用 Applio（MIT，固定版本），人声分离用 audio-separator，都装在一个独立的 Python 环境里，不碰系统环境。
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync, readFileSync, rmSync, copyFileSync } from 'node:fs'
-import { join, basename } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, statSync, statfsSync, writeFileSync, readFileSync, rmSync, copyFileSync, renameSync } from 'node:fs'
+import { join, basename, dirname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
@@ -31,7 +31,7 @@ const FETCH_SCRIPT = fileURLToPath(new URL('./fetch_file.py', import.meta.url))
  * 下载一个预训练文件：已经有了就跳过。用翻唱环境里的 Python 下（会走系统代理），
  * 断了从断点接着下，卡住 30 秒就换下一个源，几轮都不行才算失败。
  */
-async function downloadWithMirror(python, rel, dest, note, log) {
+async function downloadWithMirror(python, rel, dest, note, log, onProgress) {
   if (existsSync(dest) && statSync(dest).size > 0) return
   const urls = HF_HOSTS.map((host) => `${host}/IAHispano/Applio/resolve/main/Resources/${rel}`)
   note?.(`下载 ${rel}`)
@@ -43,6 +43,7 @@ async function downloadWithMirror(python, rel, dest, note, log) {
     onLine: (line) => {
       const m = line.match(/^progress (\d+) (\d+)/)
       if (m && Number(m[2])) {
+        onProgress?.(Number(m[1]), Number(m[2]))
         const pct = Math.floor((Number(m[1]) / Number(m[2])) * 10) * 10
         if (pct !== lastPct) { lastPct = pct; note?.(`  ${rel}：${pct}%`) }
       } else if (/^retry /.test(line)) note?.('  ' + line.replace(/^retry /, '断了，换个源接着下：'))
@@ -50,9 +51,76 @@ async function downloadWithMirror(python, rel, dest, note, log) {
   })
 }
 
+/** 一个目录（含子目录）有多大，字节。目录不存在算 0。 */
+export function dirSize(dir) {
+  let total = 0
+  const stack = [dir]
+  while (stack.length) {
+    const d = stack.pop()
+    let names
+    try { names = readdirSync(d, { withFileTypes: true }) } catch (error) { continue }
+    for (const e of names) {
+      const full = join(d, e.name)
+      if (e.isDirectory()) stack.push(full)
+      else try { total += statSync(full).size } catch (error) {}
+    }
+  }
+  return total
+}
+
 /** 翻唱环境的根目录：老安装沿用 C:\Aurabot\rvc，新安装放用户目录下。 */
 export function defaultRoot() {
   return existsSync(LEGACY_ROOT) ? LEGACY_ROOT : join(homedir(), 'Aurabot', 'rvc')
+}
+
+/**
+ * 检查安装位置：要绝对路径；中文、空格可能让一些工具出问题，提醒一下；顺便看看那个盘还剩多少空间（装完约 8 GB）。
+ * @returns {{ok: boolean, path: string, message: string, warn: string, freeGB: number|null}}
+ */
+/** 把安装时的报错翻译成人话，并告诉用户接下来怎么办。 */
+export function explainInstallError(msg) {
+  const m = String(msg || '')
+  if (/ENOENT/.test(m)) return `找不到需要的程序（${(m.match(/spawn (\S+)/) || [])[1] || '?'}）。点「重新检查 / 修复安装」再试一次；还不行就把报错发给作者`
+  if (/ENOSPC|No space|磁盘空间|not enough space/i.test(m)) return '磁盘空间不够了。换一个空间大的盘（上面「装到哪里」），保存后再装'
+  if (/timed? ?out|超时|30 秒没进度|operation timed/i.test(m)) return '网络太慢、超时了。打开「用国内镜像下载」或者开着代理，再点安装（已下好的不会重下）'
+  if (/connection|connect|reset|TLS|SSL|dns|resolve|Failed to fetch|Failed to download|error sending request|无法连接|网络/i.test(m)) return '网络连接断了。打开「用国内镜像下载」或者开着代理，再点安装（已下好的不会重下）'
+  if (/CUDA|nvidia|GPU/i.test(m)) return '和显卡驱动有关，可能需要更新 NVIDIA 驱动。' + m.slice(0, 160)
+  return m.slice(0, 300)
+}
+
+/** 安装的几步（面板按这个画步骤条）。 */
+export const INSTALL_STEPS = ['下载 Applio（RVC 推理引擎）', '创建 Python 环境', '安装 PyTorch、RVC 和人声分离（最大的一步）', '准备 ffmpeg', '下载 RVC 需要的预训练文件（音高、音色特征）']
+
+/** 电脑上的盘和剩余空间，给面板「装到哪个盘」用：[{drive, root, freeGB, totalGB}] */
+export function listDrives() {
+  const out = []
+  for (const L of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+    const d = `${L}:\\`
+    try {
+      if (!existsSync(d)) continue
+      const s = statfsSync(d)
+      const gb = (n) => Math.round((Number(n) * Number(s.bsize)) / 1024 ** 3 * 10) / 10
+      if (!s.blocks) continue
+      out.push({ drive: `${L}:`, root: `${L}:\\Aurabot\\rvc`, freeGB: gb(s.bavail), totalGB: gb(s.blocks) })
+    } catch (error) {}
+  }
+  return out
+}
+
+export function checkRoot(path) {
+  const p = String(path || '').trim()
+  if (!p) return { ok: true, path: '', message: '', warn: '', freeGB: null }
+  if (!isAbsolute(p) || !/^[A-Za-z]:\\/.test(p.replace(/\//g, '\\'))) return { ok: false, path: p, message: '要写完整路径，比如 D:\\Aurabot\\rvc', warn: '', freeGB: null }
+  const warn = /[^\x21-\x7e]/.test(p) ? '路径里有中文或空格，个别工具可能出问题，最好换成全英文、不带空格的路径' : ''
+  let freeGB = null
+  try {
+    // 往上找到第一个存在的目录来量剩余空间
+    let probe = p
+    while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe)
+    const s = statfsSync(probe)
+    freeGB = Math.round((Number(s.bavail) * Number(s.bsize)) / 1024 ** 3 * 10) / 10
+  } catch (error) {}
+  return { ok: true, path: p, message: '', warn: warn || (freeGB !== null && freeGB < 10 ? `这个盘只剩 ${freeGB} GB，装完要 8 GB 左右，安装时还要临时多占几 GB` : ''), freeGB }
 }
 
 export function pathsOf(root) {
@@ -194,6 +262,9 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       enabled: cfg().enabled,
       ready,
       root: p.root,
+      defaultRoot: defaultRoot(),
+      rootCheck: checkRoot(p.root),
+      pypiMirror: cfg().pypiMirror || '',
       parts,
       voices: voices.map((v) => ({ id: v.id, hasIndex: Boolean(v.index) })),
       voice: cfg().voice,
@@ -209,36 +280,137 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   async function runInstall() {
     if (install.running) return { ok: false, message: '已经在装了' }
     const p = P()
-    install = { running: true, step: '', log: [], ok: null, message: '' }
+    install = { running: true, step: '', stepIndex: -1, steps: INSTALL_STEPS, stepHint: '', stepAt: 0, startedAt: Date.now(), progress: null, log: [], ok: null, message: '' }
     const note = (s) => { install.log.push(s); if (install.log.length > 200) install.log.shift() }
-    const step = async (name, fn) => { install.step = name; note('▶ ' + name); log.info('翻唱安装：' + name); await fn() }
-    const uv = process.env.AURABOT_UV || 'uv'
+    const step = async (name, hint, fn) => {
+      Object.assign(install, { step: name, stepIndex: INSTALL_STEPS.indexOf(name), stepHint: hint, stepAt: Date.now(), progress: null })
+      note('▶ ' + name)
+      log.info('翻唱安装：' + name)
+      await fn()
+    }
+    // 这次安装的下载缓存放在安装目录里：一来能统计下载了多少（给面板看进度），二来装完删掉不占地方
+    const cacheDir = join(p.root, 'uv-cache')
+    const tuna = cfg().pypiMirror === 'tuna'
+    const uvEnv = {
+      UV_CACHE_DIR: cacheDir,
+      UV_HTTP_TIMEOUT: '300',
+      UV_HTTP_RETRIES: '6',
+      UV_PYTHON_INSTALL_DIR: join(p.root, 'python'), // Python 也装在选的位置里，不偷偷占 C 盘
+      ...(tuna ? { UV_PYTHON_INSTALL_MIRROR: 'https://registry.npmmirror.com/-/binary/python-build-standalone' } : {}),
+    }
+    const mirror = tuna ? ['--default-index', 'https://pypi.tuna.tsinghua.edu.cn/simple'] : []
+    let uv = 'uv'
     try {
       mkdirSync(p.root, { recursive: true })
       mkdirSync(p.models, { recursive: true })
-      await step('下载 Applio（RVC 推理引擎）', async () => {
-        if (!existsSync(join(p.applio, '.git'))) await run('git', ['clone', '-q', APPLIO_REPO, p.applio], { log, onLine: note })
-        await run('git', ['-C', p.applio, 'fetch', '-q', '--depth', '1', 'origin', APPLIO_COMMIT], { log, onLine: note }).catch(() => {})
-        await run('git', ['-C', p.applio, 'checkout', '-q', APPLIO_COMMIT], { log, onLine: note })
+      await step('下载 Applio（RVC 推理引擎）', '要下载几十 MB，一般 1~3 分钟', async () => {
+        if (existsSync(join(p.applio, 'core.py'))) return note('  已经有了，跳过')
+        // 直接下代码压缩包（固定版本），不需要电脑上装 git
+        const zip = join(p.root, 'downloads', 'applio.zip')
+        await fetchWithProgress(`https://github.com/IAHispano/Applio/archive/${APPLIO_COMMIT}.zip`, zip)
+        const tmp = join(p.root, 'downloads', 'applio-src')
+        rmSync(tmp, { recursive: true, force: true })
+        await expandZip(zip, tmp)
+        const inner = readdirSync(tmp).find((n) => existsSync(join(tmp, n, 'core.py')))
+        if (!inner) throw new Error('下载的 Applio 压缩包不完整')
+        rmSync(p.applio, { recursive: true, force: true })
+        renameSync(join(tmp, inner), p.applio)
+        rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
       })
-      await step('创建 Python 环境', async () => {
-        if (!existsSync(p.python)) await run(uv, ['venv', '-q', join(p.root, 'env'), '--python', '3.12'], { log, onLine: note })
+      await step('创建 Python 环境', '第一次要下载 Python 3.12（约 30 MB）和安装工具，一般 1~3 分钟', async () => {
+        uv = await ensureUv(note)
+        if (existsSync(p.python)) return note('  已经有了，跳过')
+        const stop = watchDownload(join(p.root, 'python'))
+        try {
+          await run(uv, ['venv', '-q', join(p.root, 'env'), '--python', '3.12'], { log, onLine: note, env: uvEnv, timeoutMs: 30 * 60_000 })
+        } finally {
+          stop()
+        }
       })
-      await step('安装 PyTorch、RVC 和人声分离（最大的一步）', async () => {
-        await run(uv, ['pip', 'install', '--python', p.python, '-r', join(p.applio, 'requirements-engine.txt'), 'audio-separator[gpu]', 'imageio-ffmpeg',
-          '--extra-index-url', TORCH_INDEX, '--index-strategy', 'unsafe-best-match'], { log, onLine: note, env: { UV_HTTP_TIMEOUT: '300', UV_HTTP_RETRIES: '6' }, timeoutMs: 90 * 60_000 })
+      await step('安装 PyTorch、RVC 和人声分离（最大的一步）', '要下载约 3~4 GB，看网速一般 10~40 分钟；下面的「已下载」在涨就说明没卡住', async () => {
+        const stop = watchDownload(cacheDir)
+        try {
+          await run(uv, ['pip', 'install', '--python', p.python, '-r', join(p.applio, 'requirements-engine.txt'), 'audio-separator[gpu]', 'imageio-ffmpeg',
+            ...mirror, '--extra-index-url', TORCH_INDEX, '--index-strategy', 'unsafe-best-match'], { log, onLine: note, env: uvEnv, timeoutMs: 120 * 60_000 })
+        } finally {
+          stop()
+        }
       })
-      await step('准备 ffmpeg', async () => setupFfmpeg())
-      await step('下载 RVC 需要的预训练文件（音高、音色特征）', async () => {
-        for (const [rel, dest] of PREREQS) await downloadWithMirror(p.python, rel, join(p.applio, dest), note, log)
+      await step('准备 ffmpeg', '几秒钟', async () => setupFfmpeg())
+      await step('下载 RVC 需要的预训练文件（音高、音色特征）', '约 560 MB，看网速几分钟', async () => {
+        for (const [rel, dest] of PREREQS) {
+          await downloadWithMirror(p.python, rel, join(p.applio, dest), note, log, (done, total) => {
+            install.progress = { kind: 'file', name: rel.split('/').pop(), done, total }
+          })
+        }
       })
-      install = { ...install, running: false, ok: true, message: '装好了' }
+      // 下载缓存用完删掉（几个 GB）；环境里的文件是硬链接 / 复制过去的，删缓存不影响
+      try { rmSync(cacheDir, { recursive: true, force: true }) } catch (error) {}
+      install = { ...install, running: false, ok: true, step: '', progress: null, message: `装好了，用时 ${Math.round((Date.now() - install.startedAt) / 60000)} 分钟` }
       log.info('翻唱环境装好了')
     } catch (error) {
-      install = { ...install, running: false, ok: false, message: `「${install.step}」这步失败了：${error.message}` }
+      install = { ...install, running: false, ok: false, progress: null, message: `「${install.step}」这步失败了：${explainInstallError(error.message)}`, error: String(error.message).slice(0, 2000) }
       log.warn('翻唱安装失败：', install.message)
     }
     return { ok: install.ok, message: install.message }
+  }
+
+  /**
+   * 用 PowerShell 下载一个文件（会走系统代理，不依赖电脑上装了别的工具），下载中显示已下载多少、网速。
+   */
+  async function fetchWithProgress(url, dest) {
+    mkdirSync(dirname(dest), { recursive: true })
+    rmSync(dest, { force: true })
+    const stop = watchDownload(dirname(dest))
+    try {
+      await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri $env:AB_URL -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec 600"],
+      { log, env: { AB_URL: url, AB_OUT: dest }, timeoutMs: 30 * 60_000 })
+    } finally {
+      stop()
+    }
+    if (!existsSync(dest) || !statSync(dest).size) throw new Error('下载失败：' + url)
+  }
+
+  /** 解压 zip（用 Windows 自带的 Expand-Archive）。 */
+  async function expandZip(zip, dir) {
+    mkdirSync(dir, { recursive: true })
+    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:AB_ZIP -DestinationPath $env:AB_DIR -Force'],
+      { log, env: { AB_ZIP: zip, AB_DIR: dir }, timeoutMs: 10 * 60_000 })
+  }
+
+  /** 准备 uv（装 Python 和各种包的工具）：电脑上有就用，没有就下一个放进安装目录。 */
+  async function ensureUv(note) {
+    if (process.env.AURABOT_UV) return process.env.AURABOT_UV
+    const p = P()
+    const local = join(p.bin, 'uv.exe')
+    if (existsSync(local)) return local
+    try {
+      await run('uv', ['--version'], { log, timeoutMs: 15_000 })
+      return 'uv'
+    } catch (error) {}
+    note('  电脑上没有 uv，下载一个放进安装目录')
+    const zip = join(p.root, 'downloads', 'uv.zip')
+    await fetchWithProgress('https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip', zip)
+    await expandZip(zip, p.bin)
+    rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
+    if (!existsSync(local)) throw new Error('uv 下载下来了，但没找到 uv.exe')
+    return local
+  }
+
+  /** 每 4 秒统计一次下载缓存有多大，算出已下载多少、网速多少，给面板看。返回停止函数。 */
+  function watchDownload(dir) {
+    let last = { at: Date.now(), bytes: dirSize(dir) }
+    const base = last.bytes
+    const t = setInterval(() => {
+      const bytes = dirSize(dir)
+      const now = Date.now()
+      const speed = Math.max(0, (bytes - last.bytes) / ((now - last.at) / 1000))
+      install.progress = { kind: 'download', done: bytes - base, speed }
+      last = { at: now, bytes }
+    }, 4000)
+    t.unref?.()
+    return () => clearInterval(t)
   }
 
   /** 把 imageio-ffmpeg 带的 ffmpeg 复制成 bin\ffmpeg.exe（人声分离要在 PATH 里找到 ffmpeg）。 */
