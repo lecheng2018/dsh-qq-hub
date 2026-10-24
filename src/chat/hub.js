@@ -1,0 +1,813 @@
+// 消息中枢：QQ 会话 ↔ DSH 会话。
+//   收：OneBot 事件 → 白名单 / 群聊策略 → 拼好文案（带发言人、群上下文、图片、语音转写）→ 喂进对应 DSH 会话
+//   发：DSH 会话一轮结束 → 取最终正文 → 拆条 / 语音 / 表情 → 发回原来的 QQ 会话
+// 每个 QQ 会话一个 DSH 会话，统一放在「Aurabot · QQ」工作区，主人可以在 DSH 侧栏点开看、插手。
+
+import { randomUUID } from 'node:crypto'
+import { appendFileSync, mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { dataDir, readJson, writeJson } from '../core/store.js'
+import { parseMessageEvent } from './inbound.js'
+import { parseReply, bubbleDelay, wantsVoice } from './reply.js'
+import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
+import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
+import { fetchImage, segmentBytes } from '../core/net.js'
+import { toMono16k } from '../voice/wav.js'
+import { mimeOf } from './inbound.js'
+import { redact } from '../core/redact.js'
+import { defaultModel } from '../core/llm.js'
+
+// QQ 会话的工作区目录，第一次收到消息时自动创建。老安装沿用 C:\Aurabot\qq-chats；新安装放在用户目录下（不用往 C 盘根目录写）
+const LEGACY_WORKSPACE = 'C:\\Aurabot\\qq-chats'
+export const WORKSPACE_DIR = process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
+export const WORKSPACE_TITLE = 'Aurabot · QQ'
+const SOURCE_KIND = 'aurabot'
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const sessionKey = (id) => {
+  const s = String(id ?? '')
+  return s.startsWith('session-') ? s.slice(8) : s
+}
+
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted }) {
+  const mapFile = () => dataDir('sessions.json')
+  const map = () => readJson(mapFile(), () => ({ chats: {} }))
+  const saveMap = (m) => writeJson(mapFile(), m)
+
+  const mounted = new WeakMap() // agent → { off: fn[] , chatId }
+  const sessionToChat = new Map() // sessionKey → chatId
+  const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
+  const groupBuf = new Map() // groupId → [{t, uid, nick, text}]
+  const groupInterjects = new Map() // groupId → [t]
+  const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
+  const ENGAGE_MS = 3 * 60_000
+  const groupNames = new Map()
+  const sentIds = new Set()
+  const stats = { received: 0, sent: 0, voice: 0, stickers: 0, errors: 0, day: new Date().toDateString() }
+  let selfId = ''
+  let lastChatAt = 0
+  let lastOwnerChatAt = 0
+  let lastBotToOwner = { at: 0, text: '' } // 她在主人私聊里最后说的话
+
+  function bump(k) {
+    const d = new Date().toDateString()
+    if (stats.day !== d) Object.assign(stats, { received: 0, sent: 0, voice: 0, stickers: 0, errors: 0, day: d })
+    stats[k]++
+  }
+
+  // ---------- 聊天流水（给空间日记、主动搭话、面板用） ----------
+  function logChat(chatId, who, text) {
+    try {
+      const d = new Date()
+      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const dir = dataDir('chatlog')
+      mkdirSync(dir, { recursive: true })
+      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
+    } catch (error) {}
+  }
+
+  /** 有聊天流水的日期（升序）。 */
+  function chatLogDays() {
+    try {
+      return readdirSync(dataDir('chatlog')).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).map((n) => n.slice(0, 10)).sort()
+    } catch (error) {
+      return []
+    }
+  }
+
+  function deleteChatLog(day) {
+    try { unlinkSync(join(dataDir('chatlog'), `${day}.jsonl`)) } catch (error) {}
+  }
+
+  function chatLogOf(day) {
+    try {
+      const f = join(dataDir('chatlog'), `${day}.jsonl`)
+      if (!existsSync(f)) return []
+      return readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    } catch (error) {
+      return []
+    }
+  }
+
+  // ---------- 工作区与会话 ----------
+  async function ensureWorkspace() {
+    const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+    if (!reg) throw new Error('宿主没有 workspaceRegistry')
+    mkdirSync(WORKSPACE_DIR, { recursive: true })
+    const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+    let ws = reg.list().find((w) => norm(w.path) === norm(WORKSPACE_DIR))
+    if (!ws) {
+      ws = await reg.create(WORKSPACE_DIR, WORKSPACE_TITLE)
+      log.info('建好了工作区「' + WORKSPACE_TITLE + '」')
+    }
+    return ws
+  }
+
+  function controller() {
+    const c = dsh.get('sessionController')
+    if (!c) throw new Error('宿主没有 sessionController（需要 DSH 桌面版 / Web 组合）')
+    return c
+  }
+
+  function titleFor(chat) {
+    const owner = getConfig().ownerName || '主人'
+    if (chat.kind === 'system') return `QQ · ${chat.title || '后台'}`
+    if (chat.kind === 'group') return `QQ 群 · ${groupNames.get(chat.groupId) || chat.groupId}`
+    return chat.userId === getConfig().ownerQQ ? `QQ · ${owner}私聊` : `QQ 私聊 · ${chat.nickname || chat.userId}`
+  }
+
+  async function createSession(chat, level) {
+    const ws = await ensureWorkspace()
+    const preset = presetFor(level)
+    const r = await controller().create({ workspaceId: ws.id, agentPreset: preset })
+    const sid = String(r.sessionId)
+    try {
+      await controller().rename({ sessionId: sid, title: titleFor(chat) })
+    } catch (error) {
+      log.debug('改会话标题失败：', error.message)
+    }
+    const m = map()
+    m.chats[chat.chatId] = { sessionId: sid, preset, level, createdAt: Date.now(), title: titleFor(chat) }
+    saveMap(m)
+    log.info(`为 ${chat.chatId} 新建了 DSH 会话 ${sid.slice(-8)}（${preset}）`)
+    return sid
+  }
+
+  async function resolveAgent(sid) {
+    const live = dsh.agents.get(sid) || dsh.agents.get('session-' + sid)
+    if (live) return live
+    const r = await controller().resolveAgent(sid)
+    if (r && r.agent) return r.agent
+    const e = r && r.error
+    throw Object.assign(new Error(e?.message || '恢复会话失败'), { code: e?.code })
+  }
+
+  /** 拿到这个 QQ 会话对应的活 agent（没有就建，权限档位变了就换新会话）。 */
+  async function agentFor(chat) {
+    const cfg = getConfig()
+    const level = chat.kind === 'system' ? 'social' : levelFor(cfg, chat)
+    const preset = presetFor(level)
+    const entry = map().chats[chat.chatId]
+    let sid = entry && entry.preset === preset && entry.level === level ? entry.sessionId : ''
+    let agent = null
+    if (sid) {
+      try {
+        agent = await resolveAgent(sid)
+      } catch (error) {
+        log.warn(`会话 ${sid.slice(-8)} 恢复不了（${error.message}），换一个新的`)
+        sid = ''
+      }
+      const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+      if (sid && reg && (reg.archivedSessionIds || []).includes(sid)) {
+        log.info(`会话 ${sid.slice(-8)} 被归档了，换一个新的`)
+        sid = ''
+        agent = null
+      }
+    }
+    if (!sid) {
+      sid = await createSession(chat, level)
+      agent = await resolveAgent(sid)
+    }
+    // 模型 / 思考强度和设置不一致就切过去（面板改了模型，下一条消息起生效）
+    const want = modelKey()
+    const m = map()
+    if (want && m.chats[chat.chatId] && m.chats[chat.chatId].model !== want) {
+      if (applyModel(agent)) {
+        m.chats[chat.chatId].model = want
+        saveMap(m)
+        log.info(`${chat.chatId} 的模型切到 ${want}`)
+      }
+    }
+    sessionToChat.set(sessionKey(sid), chat.chatId)
+    mount(agent, chat, level)
+    return { agent, sessionId: sid, level }
+  }
+
+  function modelKey() {
+    const cfg = getConfig()
+    const t = defaultModel(dsh, cfg)
+    return t ? `${t.provider}::${t.model}::${cfg.model.reasoningEffort || ''}` : ''
+  }
+
+  /** 让聊天会话用面板里选的模型和思考强度；只改这个会话，不改 DSH 的默认模型。 */
+  function applyModel(agent) {
+    try {
+      const cfg = getConfig()
+      const t = defaultModel(dsh, cfg)
+      if (!t) return false
+      const sel = { provider: t.provider, model: t.model }
+      if (cfg.model.reasoningEffort) sel.reasoningEffort = cfg.model.reasoningEffort
+      // 活着的会话只认会话控制器内存里的选择：用它的 selectForNextRequest（selectModel 也是调它，
+      // 但 selectModel 还会顺手改掉 DSH 的全局默认模型，我们不要）。拿不到就只写持久事件（重启恢复时生效）。
+      const agents = controller().agents
+      if (agents && typeof agents.selectForNextRequest === 'function') agents.selectForNextRequest(agent, sel)
+      else agent.session.append('model/selection', sel)
+      return true
+    } catch (error) {
+      log.debug('设置会话模型失败（用默认）：', error.message)
+      return false
+    }
+  }
+
+  function mount(agent, chat, level) {
+    const sid = sessionKey(agent.session?.id ?? agent.id)
+    const tools = level !== 'chat' && typeof buildTools === 'function' ? buildTools({ chat, level, sessionId: sid }) : []
+    const toolsKey = tools.map((t) => t.name).sort().join(',')
+    const prev = mounted.get(agent)
+    // 工具清单变了（比如面板里开了生图）就整套重挂；没变就别动（改工具会让前缀缓存失效）
+    if (prev && prev.chatId === chat.chatId && prev.toolsKey === toolsKey) return
+    if (prev) for (const off of prev.offs) { try { if (typeof off === 'function') off() } catch (error) {} }
+    const offs = []
+    {
+      for (const tool of tools) {
+        try {
+          offs.push(agent.ctx.tools.register(tool))
+        } catch (error) {
+          log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+        }
+      }
+    }
+    try {
+      offs.push(agent.ctx.systemPrompt.context({
+        name: 'aurabot-context',
+        order: 905,
+        text: () => {
+          const parts = []
+          for (const p of contextProviders || []) {
+            try {
+              const t = p({ chat, sessionId: sid })
+              if (t) parts.push(t)
+            } catch (error) {}
+          }
+          return parts.join('\n\n')
+        },
+      }))
+    } catch (error) {
+      log.debug('挂上下文失败：', error.message)
+    }
+    mounted.set(agent, { chatId: chat.chatId, offs, toolsKey })
+  }
+
+  // ---------- 发到 QQ ----------
+  function targetOf(chatId) {
+    const [kind, id] = String(chatId).split(':')
+    return kind === 'group' ? { kind: 'group', id } : kind === 'private' ? { kind: 'private', id } : null
+  }
+
+  async function sendSegments(chatId, message, note, { force = false } = {}) {
+    const cfg = getConfig()
+    const tgt = targetOf(chatId)
+    if (!tgt) return null
+    if (force) {}
+    else if (!cfg.enabled) {
+      log.info(`总开关关着，没发 → ${chatId}：${note}`)
+      return null
+    }
+    else if (cfg.dryRun) {
+      log.info(`试运行（没真发）→ ${chatId}：${note}`)
+      return null
+    }
+    const action = tgt.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
+    const params = tgt.kind === 'group' ? { group_id: Number(tgt.id), message } : { user_id: Number(tgt.id), message }
+    try {
+      const r = await onebot.call(action, params)
+      if (r && r.message_id !== undefined) {
+        sentIds.add(String(r.message_id))
+        if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
+      }
+      bump('sent')
+      return r
+    } catch (error) {
+      bump('errors')
+      log.warn(`发到 ${chatId} 失败：`, error.message)
+      return null
+    }
+  }
+
+  async function sendText(chatId, text) {
+    return sendSegments(chatId, [{ type: 'text', data: { text } }], text.slice(0, 60))
+  }
+
+  async function sendVoice(chatId, text) {
+    try {
+      const { file, engine } = await tts.speak(text)
+      const b64 = readFileSync(file).toString('base64')
+      const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`)
+      if (r || getConfig().dryRun || !getConfig().enabled) bump('voice')
+      if (!r && getConfig().enabled && !getConfig().dryRun) throw new Error('网关没接受语音')
+      return true
+    } catch (error) {
+      log.warn('语音没发出去，改发文字：', error.message)
+      await sendText(chatId, text)
+      return false
+    }
+  }
+
+  async function sendSticker(chatId, query) {
+    const item = query && typeof query === 'object' ? query : stickers.match(query)
+    if (!item) {
+      log.debug(`没找到「${query}」这张表情，跳过`)
+      return false
+    }
+    const seg = stickers.segmentFor(item)
+    if (!seg) return false
+    await sendSegments(chatId, [seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    bump('stickers')
+    return true
+  }
+
+  async function sendImage(chatId, src) {
+    try {
+      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024 })
+      return sendSegments(chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${src.slice(-40)}`)
+    } catch (error) {
+      log.warn('图片发不出去：', error.message)
+      return null
+    }
+  }
+
+  /** 一轮回复落地：拆条、语音、表情。 */
+  async function deliver(chatId, text, opts = {}) {
+    const cfg = getConfig()
+    const r = parseReply(text)
+    if (r.silent) {
+      log.info(`${chatId}：她选择不说话`)
+      if (chatId.startsWith('group:')) groupEngaged.delete(chatId.slice(6)) // 不想聊就退出这个话题
+      return
+    }
+    let items = r.items
+    // 对方明确要语音、她却只打了字：整段改成语音发（模型偶尔会忘，这里兜底）
+    if (opts.wantVoice && cfg.voice.enabled && !items.some((i) => i.kind === 'voice')) {
+      const spoken = items.filter((i) => i.kind === 'text').map((i) => i.value).join('，')
+      if (spoken && spoken.length <= 300) items = [{ kind: 'voice', value: spoken }, ...items.filter((i) => i.kind !== 'text')]
+    }
+    // 短回复按概率整条变语音
+    const texts = items.filter((i) => i.kind === 'text')
+    if (cfg.voice.enabled && items.length === texts.length && texts.length > 0) {
+      const all = texts.map((t) => t.value).join('，')
+      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
+    }
+    // 按概率补一张表情
+    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && Math.random() < cfg.stickers.autoChance) {
+      const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
+      if (pick) items.push({ kind: 'sticker', value: pick })
+    }
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      if (it.kind === 'text') await sendText(chatId, it.value)
+      else if (it.kind === 'voice') {
+        if (cfg.voice.enabled) await sendVoice(chatId, it.value)
+        else await sendText(chatId, it.value)
+      } else if (it.kind === 'sticker') await sendSticker(chatId, it.value)
+      else if (it.kind === 'image') await sendImage(chatId, it.value)
+      if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
+    }
+    if (chatId.startsWith('group:')) groupEngaged.set(chatId.slice(6), Date.now() + ENGAGE_MS) // 在群里说了话 = 加入了话题
+    logChat(chatId, 'bot', items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' '))
+    lastChatAt = Date.now()
+    if (chatId === `private:${cfg.ownerQQ}`) lastBotToOwner = { at: Date.now(), text: items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => i.value).join('\n') }
+    onActivity?.({ kind: 'out', chatId })
+  }
+
+  // ---------- 盯 DSH 会话：一轮结束就发 ----------
+  function textOf(message) {
+    if (!message || !Array.isArray(message.content)) return ''
+    return message.content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n').trim()
+  }
+
+  function onSessionEvent(session, event) {
+    const key = sessionKey(session && session.id)
+    const chatId = sessionToChat.get(key)
+    if (!chatId || !event) return
+    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+    turnState.set(key, st)
+    if (event.type === 'assistant/message') {
+      const d = event.data || {}
+      if (d.interrupted) return
+      const t = textOf(d.message)
+      if (t) {
+        st.lastTurn = d.turn
+        st.text = t
+      }
+      return
+    }
+    if (event.type === 'turn/end') {
+      stopTyping(key)
+      const d = event.data || {}
+      const completed = d.reason && d.reason.kind === 'completed'
+      const text = st.lastTurn === d.turn ? st.text : ''
+      const sys = st.system
+      const wantVoice = Boolean(st.wantVoice)
+      st.text = ''
+      st.senders = new Set()
+      st.system = null
+      st.wantVoice = false
+      if (sys) {
+        if (completed) sys.resolve(text)
+        else sys.reject(new Error('这一轮没正常结束：' + (d.reason?.kind || '?')))
+        return
+      }
+      if (!completed) {
+        log.warn(`${chatId} 这一轮没正常结束（${d.reason?.kind || '?'}），不发`)
+        return
+      }
+      if (!text) return
+      deliver(chatId, text, { wantVoice }).catch((error) => log.warn('发送出错：', error.message))
+    }
+  }
+
+  // ---------- 收 QQ ----------
+  async function groupName(gid) {
+    if (groupNames.has(gid)) return groupNames.get(gid)
+    try {
+      const info = await onebot.call('get_group_info', { group_id: Number(gid) })
+      if (info?.group_name) groupNames.set(gid, info.group_name)
+    } catch (error) {}
+    return groupNames.get(gid) || gid
+  }
+
+  async function repliedToBot(replyId) {
+    if (!replyId) return false
+    if (sentIds.has(replyId)) return true
+    try {
+      const m = await onebot.call('get_msg', { message_id: Number(replyId) || replyId }, { timeoutMs: 5000 })
+      return String(m?.sender?.user_id ?? m?.user_id ?? '') === String(selfId || getConfig().botQQ)
+    } catch (error) {
+      return false
+    }
+  }
+
+  async function transcribe(msg) {
+    for (const rec of msg.records) {
+      try {
+        const r = await onebot.call('fetch_ptt_text', { message_id: Number(msg.messageId) || msg.messageId }, { timeoutMs: 20000 })
+        if (r?.text) return `[语音] ${r.text}`
+      } catch (error) {
+        log.debug('QQ 语音转文字失败：', error.message)
+      }
+      try {
+        const text = await localTranscribe(rec)
+        if (text) return `[语音] ${text}`
+      } catch (error) {
+        log.debug('本地语音识别失败：', error.message)
+      }
+      return '[发来一条语音，没听清]'
+    }
+    return ''
+  }
+
+  /**
+   * DSH 自带识别（SenseVoice）：resolve({audio}) → transcribe(spec, signal)，音频必须是 16kHz 单声道 PCM16 WAV。
+   * QQ 语音是 silk：先让网关 get_record 转成 wav，再重采样。
+   */
+  async function localTranscribe(rec) {
+    const stt = dsh.get('speechToText')
+    if (!stt || typeof stt.resolve !== 'function' || typeof stt.transcribe !== 'function') throw new Error('DSH 没开启语音输入')
+    // 模型还没下载好：顺手开始准备（下载一次，之后常驻），这一条先算没听清
+    const snap = typeof stt.snapshot === 'function' ? stt.snapshot() : null
+    const pid = snap?.selection?.providerId
+    const prov = snap?.providers?.find((p) => p.id === pid)
+    if (prov && prov.preparation && !['ready', 'standby'].includes(prov.preparation.phase)) {
+      try { stt.prepare(pid) } catch (error) {}
+      throw new Error(`识别模型还在准备（${prov.preparation.phase}）`)
+    }
+    const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
+    const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024 })
+    const spec = stt.resolve({ audio: new Uint8Array(toMono16k(raw)) })
+    const r = await stt.transcribe(spec, AbortSignal.timeout(60000))
+    const text = typeof r === 'string' ? r : r?.text || r?.transcript
+    return text ? String(text).trim() : ''
+  }
+
+  async function imagesOf(msg) {
+    const out = []
+    for (const seg of [...msg.stickers, ...msg.images].slice(0, 4)) {
+      try {
+        const buf = await segmentBytes(seg, onebot, { maxBytes: 8 * 1024 * 1024 })
+        const mime = mimeOf(buf)
+        if (!mime.startsWith('image/')) continue
+        out.push({ data: buf.toString('base64'), mediaType: mime })
+      } catch (error) {
+        log.debug('图片下载失败：', error.message)
+      }
+    }
+    return out
+  }
+
+  async function onMessage(event) {
+    selfId = String(event.self_id || selfId || getConfig().botQQ)
+    const cfg = getConfig()
+    const msg = parseMessageEvent(event, selfId)
+    if (msg.userId === selfId) return
+    bump('received')
+    const now = Date.now()
+
+    // 群里的每条消息都记进缓冲（给上下文和「群里在不在聊」用）
+    if (msg.kind === 'group') {
+      const buf = groupBuf.get(msg.groupId) || []
+      buf.push({ t: now, uid: msg.userId, nick: msg.nickname, text: msg.text })
+      while (buf.length > 40) buf.shift()
+      groupBuf.set(msg.groupId, buf)
+    }
+
+    const allowed = checkAllowed(cfg, msg)
+    // 偷表情：只从白名单里的会话偷
+    if (allowed.allowed && msg.stickers.length && cfg.stickers.collect) {
+      const okSrc = msg.kind === 'group' ? cfg.stickers.fromGroups : cfg.stickers.fromPrivate
+      if (okSrc) for (const s of msg.stickers) stickers.collect(s, msg.chatId).then((r) => { if (!r.ok) log.debug('没收这张表情：', r.reason) }).catch(() => {})
+    }
+    if (!allowed.allowed) {
+      log.debug(`忽略 ${msg.chatId}（${allowed.reason}）`)
+      return
+    }
+    // 主人命令（/silent /active …）：总开关关着也处理，回复直接发
+    if (onCommand && isOwner(cfg, msg.userId) && /^\s*[/／]/.test(msg.text)) {
+      try {
+        const reply = await onCommand(msg)
+        if (reply) {
+          log.info(`主人命令 ${msg.text.trim().slice(0, 30)} → ${reply.split('\n')[0]}`)
+          await sendSegments(msg.chatId, [{ type: 'text', data: { text: reply } }], reply.slice(0, 60), { force: true })
+          return
+        }
+      } catch (error) {
+        log.warn('执行命令出错：', error.message)
+        await sendSegments(msg.chatId, [{ type: 'text', data: { text: '命令没执行成功：' + error.message } }], '命令出错', { force: true })
+        return
+      }
+    }
+    if (!getConfig().enabled) {
+      log.info(`总开关关着，收到 ${msg.chatId} 的消息但不处理：${msg.text.slice(0, 30)}`)
+      return
+    }
+
+    if (isMuted?.(msg.chatId)) {
+      log.debug(`${msg.chatId}：主人让她闭嘴中，不回`)
+      logChat(msg.chatId, msg.nickname, msg.text)
+      return
+    }
+
+    let mode = 'must'
+    if (msg.kind === 'group') {
+      const pol = policyFor(cfg.group, cfg.group.overrides, msg.groupId)
+      // 群里最近在聊的（窗口内最后几条）和她有多相关
+      const recentTexts = (groupBuf.get(msg.groupId) || []).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
+      let memScore = 0
+      try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' ')) : 0 } catch (error) {}
+      const decision = decideGroupReply({
+        policy: pol,
+        relevance: topicRelevance(recentTexts, pol.interests, memScore),
+        engagedUntil: groupEngaged.get(msg.groupId) || 0,
+        mentioned: msg.mentioned,
+        repliedToBot: await repliedToBot(msg.replyId),
+        text: msg.text,
+        now,
+        hour: new Date().getHours(),
+        recentTimes: (groupBuf.get(msg.groupId) || []).map((x) => x.t),
+        interjectTimes: groupInterjects.get(msg.groupId) || [],
+      })
+      if (!decision.reply) {
+        log.debug(`群 ${msg.groupId}：不回（${decision.reason}）`)
+        logChat(msg.chatId, msg.nickname, msg.text)
+        return
+      }
+      mode = decision.mode
+      if (mode === 'interject') {
+        const arr = groupInterjects.get(msg.groupId) || []
+        arr.push(now)
+        groupInterjects.set(msg.groupId, arr.filter((t) => now - t < 3600_000))
+      }
+      log.info(`群 ${msg.groupId}：${decision.reason} → 交给她`)
+    }
+
+    // 拼文案
+    let text = msg.text
+    const voiceText = cfg.voice.asr && msg.records.length ? await transcribe(msg) : msg.records.length ? '[发来一条语音]' : ''
+    if (voiceText) text = (text ? text + ' ' : '') + voiceText
+    let header
+    if (msg.kind === 'group') {
+      const name = await groupName(msg.groupId)
+      const ctxLines = (groupBuf.get(msg.groupId) || []).slice(-13, -1).map((x) => `${x.nick}(${x.uid})：${x.text}`)
+      header = (ctxLines.length ? `【群聊 ${name}】刚才群里在聊：\n${ctxLines.join('\n')}\n\n` : '') +
+        (mode === 'interject' ? `【群聊 ${name}】（没人叫你。群里正在聊上面这些——只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题，也别只回最后一句；接不上就只回 [沉默]）` : mode === 'engaged' ? `【群聊 ${name}】（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）` : `【群聊 ${name}】`) +
+        `${msg.nickname}(${msg.userId})${msg.mentioned ? '@了你' : ''}：`
+    } else {
+      header = `【私聊】${msg.nickname}(${msg.userId})：`
+    }
+    const content = [{ type: 'text', text: header + (text || '（没有文字）') }]
+    const imgs = await imagesOf(msg)
+    if (imgs.length) {
+      for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
+    }
+    logChat(msg.chatId, msg.nickname, text)
+    lastChatAt = now
+    if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
+    onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text })
+
+    enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text))
+  }
+
+  // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------
+  const pending = new Map() // chatId → { chat, texts, images, senders, wantVoice, timer, firstAt }
+  function enqueue(chat, content, senderId, wantVoice) {
+    const m = getConfig().merge
+    const p = pending.get(chat.chatId) || { chat, texts: [], images: [], senders: new Set(), wantVoice: false, timer: null, firstAt: Date.now() }
+    p.chat = chat
+    for (const c of content) {
+      if (c.type === 'text') p.texts.push(c.text)
+      else if (c.type === 'image' && p.images.length < 4) p.images.push(c)
+    }
+    if (senderId) p.senders.add(String(senderId))
+    p.wantVoice = p.wantVoice || wantVoice
+    pending.set(chat.chatId, p)
+    clearTimeout(p.timer)
+    if (!m.enabled) return flush(chat.chatId)
+    const left = Math.max(0, m.maxSec * 1000 - (Date.now() - p.firstAt))
+    p.timer = setTimeout(() => flush(chat.chatId), Math.min(m.waitSec * 1000, left))
+    p.timer.unref?.()
+  }
+
+  async function flush(chatId) {
+    const p = pending.get(chatId)
+    if (!p) return
+    pending.delete(chatId)
+    clearTimeout(p.timer)
+    if (p.texts.length > 1) log.info(`${chatId}：合并了 ${p.texts.length} 条连发的消息`)
+    const content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+    try {
+      const [first, ...rest] = [...p.senders]
+      await pushToSession(p.chat, content, first, { wantVoice: p.wantVoice, extraSenders: rest })
+    } catch (error) {
+      bump('errors')
+      log.error(`转进 DSH 失败（${chatId}）：`, error.message)
+    }
+  }
+
+  async function admit(agent, content) {
+    if (content.length === 1) return content
+    const att = dsh.attachments || dsh.get('attachments')
+    if (att && typeof att.admitPromptContent === 'function') {
+      try {
+        return await att.admitPromptContent(content)
+      } catch (error) {
+        log.warn('图片交给 DSH 没成功（这轮只给文字）：', error.message)
+      }
+    }
+    return content.filter((c) => c.type === 'text')
+  }
+
+  // 私聊里等她回复时，在 QQ 上显示「对方正在输入…」（模型慢的时候让人知道她在想）
+  const typing = new Map() // sessionKey → timer
+  function startTyping(key, chat) {
+    const cfg = getConfig()
+    if (chat.kind !== 'private' || !cfg.enabled || cfg.dryRun || typing.has(key)) return
+    const ping = () => onebot.call('set_input_status', { user_id: Number(chat.userId), event_type: 1 }, { timeoutMs: 5000 }).catch(() => {})
+    ping()
+    const started = Date.now()
+    const t = setInterval(() => {
+      if (Date.now() - started > 6 * 60_000) return stopTyping(key)
+      ping()
+    }, 15_000)
+    t.unref?.()
+    typing.set(key, t)
+  }
+  function stopTyping(key) {
+    const t = typing.get(key)
+    if (t) clearInterval(t)
+    typing.delete(key)
+  }
+
+  async function pushToSession(chat, content, senderId, opts = {}) {
+    const { agent, sessionId } = await agentFor(chat)
+    const key = sessionKey(sessionId)
+    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+    if (senderId) st.senders.add(String(senderId))
+    for (const s of opts.extraSenders || []) st.senders.add(String(s))
+    st.lastText = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').slice(-600)
+    if (opts.wantVoice) st.wantVoice = true
+    turnState.set(key, st)
+    const admitted = await admit(agent, content)
+    startTyping(key, chat)
+    await agent.followup({ id: randomUUID(), role: 'user', content: admitted, source: { kind: SOURCE_KIND } })
+    try {
+      if (dsh.sessions && typeof dsh.sessions.flush === 'function') await dsh.sessions.flush(agent.session)
+    } catch (error) {}
+  }
+
+  /** 后台任务（写日记、主动搭话的草稿）：在专用会话里跑一轮，拿到正文但不自动转发。 */
+  async function runSystemTurn(name, title, prompt, { timeoutMs = 180000 } = {}) {
+    const chat = { chatId: `system:${name}`, kind: 'system', title }
+    const { agent, sessionId } = await agentFor(chat)
+    const key = sessionKey(sessionId)
+    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+    turnState.set(key, st)
+    let timer
+    const result = new Promise((resolve, reject) => {
+      st.system = { resolve, reject }
+      timer = setTimeout(() => {
+        st.system = null
+        reject(new Error('等太久了'))
+      }, timeoutMs)
+    }).finally(() => clearTimeout(timer))
+    await agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: prompt }], source: { kind: SOURCE_KIND } })
+    return result
+  }
+
+  /** 这一轮里说话的人是不是全是主人（群管等敏感工具用）。 */
+  /** 这一轮里主人说过话（群里常有别人插话，不要求每条都是主人）。 */
+  function turnHasOwner(sessionId) {
+    const st = turnState.get(sessionKey(sessionId))
+    return Boolean(st && [...st.senders].some((u) => isOwner(getConfig(), u)))
+  }
+
+  function turnSendersAllOwner(sessionId) {
+    const st = turnState.get(sessionKey(sessionId))
+    if (!st || !st.senders.size) return false
+    return [...st.senders].every((u) => isOwner(getConfig(), u))
+  }
+
+  function chatOfSession(sessionId) {
+    return sessionToChat.get(sessionKey(sessionId)) || ''
+  }
+
+  /** 只让一个聊天重新开始：归档它的会话，下一条消息开新会话。 */
+  function resetChat(chatId) {
+    const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+    const m = map()
+    const e = m.chats[chatId]
+    if (!e) return false
+    Promise.resolve(reg?.archiveSession?.(e.sessionId)).catch((error) => log.debug('归档会话失败：', error.message))
+    sessionToChat.delete(sessionKey(e.sessionId))
+    turnState.delete(sessionKey(e.sessionId))
+    delete m.chats[chatId]
+    saveMap(m)
+    log.info(`${chatId} 重新开始`)
+    return true
+  }
+
+  /** 重新开始：把现有的 QQ 会话都归档（侧栏里还能找回），下一条消息起开新会话。 */
+  function resetSessions() {
+    const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+    const m = map()
+    let n = 0
+    for (const [chatId, e] of Object.entries(m.chats)) {
+      try {
+        // 可能返回 Promise：必须接住 rejection，未处理的 rejection 会让 DSH 宿主退出
+        Promise.resolve(reg?.archiveSession?.(e.sessionId)).catch((error) => log.debug('归档会话失败：', error.message))
+      } catch (error) {
+        log.debug('归档会话失败：', error.message)
+      }
+      sessionToChat.delete(sessionKey(e.sessionId))
+      turnState.delete(sessionKey(e.sessionId))
+      delete m.chats[chatId]
+      n++
+    }
+    // 专用工作区里其他零散的会话（比如手动点「新会话」留下的空白会话）也一起归档
+    try {
+      const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+      const ws = (reg?.list?.() || []).find((w) => norm(w.path) === norm(WORKSPACE_DIR))
+      for (const sid of ws?.sessionIds || []) {
+        if ((reg.archivedSessionIds || []).includes(sid)) continue
+        Promise.resolve(reg.archiveSession(sid)).catch(() => {})
+        n++
+      }
+    } catch (error) {}
+    saveMap(m)
+    log.info(`重新开始：归档了 ${n} 个 QQ 会话`)
+    return n
+  }
+
+  return {
+    onMessage,
+    onSessionEvent,
+    deliver,
+    sendText,
+    sendVoice,
+    sendSticker,
+    sendImage,
+    sendSegments,
+    pushToSession,
+    runSystemTurn,
+    turnSendersAllOwner,
+    turnHasOwner,
+    resetChat,
+    joinTopic: (gid) => groupEngaged.set(String(gid), Date.now() + ENGAGE_MS),
+    leaveTopic: (gid) => groupEngaged.delete(String(gid)),
+    chatOfSession,
+    resetSessions,
+    lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
+    localTranscribe,
+    ensureWorkspace,
+    chatLogOf,
+    chatLogDays,
+    deleteChatLog,
+    sessions: () => map().chats,
+    groupName,
+    stats: () => ({ ...stats }),
+    get lastChatAt() { return lastChatAt },
+    get lastOwnerChatAt() { return lastOwnerChatAt },
+    get lastBotToOwner() { return lastBotToOwner },
+    get selfId() { return selfId },
+    groupNames,
+  }
+}

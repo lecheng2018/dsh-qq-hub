@@ -1,0 +1,339 @@
+// SnowLuma 管理：检测主人装好的副本、在后台（不弹窗）启停它、读它的 OneBot 配置、只给机器人号注入。
+//
+// ⚠ SnowLuma 的 EULA 第 5.4 条：把它「并入第三方安装包或通过自动化脚本部署」需要作者书面授权。
+//   所以这里**不下载、不解压、不替主人同意协议**——只管理主人自己下载解压、并在 WebUI 里同意过协议的那一份。
+// ⚠ 永远不开 hookAutoLoad；注入前按 /api/processes 返回的 account.uin 核对，只注入机器人号。
+
+import { spawn, execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { existsSync, readFileSync, unlinkSync } from 'node:fs'
+import { join } from 'node:path'
+import { registerSecret } from '../core/redact.js'
+
+export const DOWNLOAD_PAGE = 'https://github.com/SnowLuma/SnowLuma/releases/latest'
+
+function readJsonSafe(file) {
+  try {
+    let t = readFileSync(file, 'utf8')
+    if (t.charCodeAt(0) === 0xfeff) t = t.slice(1)
+    return JSON.parse(t)
+  } catch (error) {
+    return null
+  }
+}
+
+/** 主人装好的 SnowLuma 在不在、是什么版本。 */
+export function detectInstall(dir) {
+  const d = String(dir || '').trim()
+  if (!d) return { installed: false, reason: '还没填 SnowLuma 目录' }
+  if (/[^\x00-\x7f]/.test(d)) return { installed: false, reason: '目录里有中文，请换成纯英文路径（例如 C:\\Aurabot\\snowluma）' }
+  const entry = join(d, 'index.mjs')
+  if (!existsSync(entry)) return { installed: false, reason: `在 ${d} 里没找到 index.mjs，请确认解压位置` }
+  const nodeExe = join(d, 'node.exe')
+  const release = readJsonSafe(join(d, 'release.json')) || {}
+  return {
+    installed: true,
+    dir: d,
+    entry,
+    nodeExe: existsSync(nodeExe) ? nodeExe : '',
+    version: release.version || readJsonSafe(join(d, 'package.json'))?.version || '?',
+  }
+}
+
+/**
+ * 从 SnowLuma 的配置里读出机器人号的 OneBot HTTP / WS 地址和 token。
+ * onebot_<uin>.json 是单号覆盖；mode=snapshot 时不叠全局。
+ */
+export function readOneBotEndpoint(dir, uin) {
+  const cfgDir = join(dir, 'config')
+  const global = readJsonSafe(join(cfgDir, 'onebot.json'))
+  const per = readJsonSafe(join(cfgDir, `onebot_${uin}.json`))
+  const sources = per?.mode === 'snapshot' ? [per] : [global, per].filter(Boolean)
+  let http = null
+  let ws = null
+  for (const s of sources) {
+    const nets = s?.networks || {}
+    const h = (nets.httpServers || []).find((x) => x && x.enable !== false) || (nets.httpServers || [])[0]
+    const w = (nets.wsServers || []).find((x) => x && x.enable !== false) || (nets.wsServers || [])[0]
+    if (h) http = h
+    if (w) ws = w
+  }
+  const host = (h) => (!h || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h)
+  const out = {
+    httpUrl: http ? `http://${host(http.host)}:${http.port}${http.path && http.path !== '/' ? http.path : ''}` : '',
+    httpToken: http?.accessToken || '',
+    wsUrl: ws ? `ws://${host(ws.host)}:${ws.port}${ws.path && ws.path !== '/' ? ws.path : ''}` : '',
+    wsToken: ws?.accessToken || '',
+    found: Boolean(http || ws),
+  }
+  registerSecret(out.httpToken)
+  registerSecret(out.wsToken)
+  return out
+}
+
+/** 只挑机器人号所在的那个 QQ 进程。识别不出来就返回 null（宁可不注入）。 */
+export function pickBotProcess(list, botUin) {
+  const bot = String(botUin)
+  const mine = (list || []).filter((p) => String(p?.account?.uin ?? '') === bot || String(p?.uin ?? '') === bot)
+  if (mine.length !== 1) return { proc: null, reason: mine.length === 0 ? '没找到登录机器人号的 QQ 进程' : '有多个进程声称是机器人号，为安全起见不注入' }
+  return { proc: mine[0], reason: '' }
+}
+
+/** 生成满足 SnowLuma 规则的强密码：≥10 位、有大小写和符号、无空格。 */
+export function generatePassword() {
+  const b = randomBytes(18).toString('base64url').replace(/[-_]/g, '')
+  return `Ab${b.slice(0, 16)}#9!`
+}
+
+export function createSnowLumaManager({ getConfig, log, savePassword }) {
+  let child = null
+  let childPid = 0
+  let token = ''
+  let tokenAt = 0
+  let tokenPw = ''
+  let lastAttach = { at: 0, ok: false, message: '' }
+
+  const cfg = () => getConfig().snowluma
+  const base = () => `http://127.0.0.1:${cfg().webuiPort}`
+
+  async function api(path, { method = 'GET', body, auth = true } = {}) {
+    const headers = { 'content-type': 'application/json' }
+    if (auth) {
+      const t = await login()
+      headers['x-snowluma-token'] = t
+    }
+    const r = await fetch(base() + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(20000) })
+    const j = await r.json().catch(() => ({}))
+    if (r.status === 401 && auth) token = ''
+    if (!r.ok) {
+      const e = new Error(j.message || `HTTP ${r.status}`)
+      e.status = r.status
+      e.body = j
+      throw e
+    }
+    return j
+  }
+
+  async function login() {
+    const pw = cfg().webuiPassword
+    // 密码换了（比如刚重置）就作废旧令牌重新登录
+    if (token && tokenPw === pw && Date.now() - tokenAt < 30 * 60_000) return token
+    if (!pw) throw Object.assign(new Error('还没在面板里填 SnowLuma 控制台密码'), { status: 0, code: 'no-password' })
+    registerSecret(pw)
+    const r = await fetch(base() + '/api/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: pw }), signal: AbortSignal.timeout(15000),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!j.success || !j.token) throw Object.assign(new Error(j.message || '登录 SnowLuma 控制台失败'), { status: r.status })
+    if (j.mustChangePassword) throw Object.assign(new Error('SnowLuma 要求先在它的控制台里改一次密码'), { status: 403 })
+    registerSecret(j.token)
+    token = j.token
+    tokenPw = pw
+    tokenAt = Date.now()
+    return token
+  }
+
+  async function running() {
+    try {
+      const r = await fetch(base() + '/api/status', { signal: AbortSignal.timeout(3000) })
+      return r.status > 0
+    } catch (error) {
+      return false
+    }
+  }
+
+  async function start() {
+    const inst = detectInstall(cfg().dir)
+    if (!inst.installed) return { ok: false, message: inst.reason }
+    if (await running()) return { ok: true, message: 'SnowLuma 已经在运行' }
+    const exe = inst.nodeExe || process.execPath
+    const env = { ...process.env, SNOWLUMA_HOOK_AUTOLOAD: '0', SNOWLUMA_UPDATE_CHECK: '0' }
+    delete env.SNOWLUMA_HOOK_AUTOLOAD_ALL
+    delete env.ELECTRON_RUN_AS_NODE
+    delete env.NODE_OPTIONS
+    delete env.SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD
+    if (!inst.nodeExe) env.ELECTRON_RUN_AS_NODE = '1'
+    // 控制台密码全自动：还没有凭据文件（第一次启动 / 刚重置）时，由插件生成强密码交给 SnowLuma 作为初始密码，并自己记住
+    if (!existsSync(join(inst.dir, 'config', 'webui.json'))) {
+      let pw = cfg().webuiPassword
+      if (!pw) {
+        pw = generatePassword()
+        savePassword?.(pw)
+        log.info('已为 SnowLuma 控制台自动生成密码（存在本机配置里，不显示）')
+      }
+      registerSecret(pw)
+      env.SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD = pw
+      token = ''
+    }
+    try {
+      child = spawn(exe, ['./index.mjs'], { cwd: inst.dir, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], detached: false })
+    } catch (error) {
+      return { ok: false, message: `启动失败：${error.message}` }
+    }
+    childPid = child.pid || 0
+    const relay = (buf) => {
+      // 首次启动 SnowLuma 会在控制台打印初始密码：凭据相关的行一律不进日志
+      for (const line of String(buf).split(/\r?\n/)) {
+        if (!line.trim() || /密码|password|credential|凭据|token/i.test(line)) continue
+        if (line.includes('[Event]') || line.includes('[Bridge.Action]')) continue // 别人的聊天内容和接口调用明细不进日志
+        log.debug(line.slice(0, 400))
+      }
+    }
+    child.stdout?.on('data', relay)
+    child.stderr?.on('data', relay)
+    const me = child
+    me.on('exit', (code) => {
+      log.warn(`SnowLuma 退出了（code ${code}）`)
+      // 重置密码时旧进程晚一步退出：别把刚启动的新进程也当成退出了
+      if (child !== me) return
+      child = null
+      childPid = 0
+    })
+    log.info(`已在后台启动 SnowLuma（pid ${childPid}，不弹窗口）`)
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      if (await running()) return { ok: true, message: '已启动' }
+      if (!child) return { ok: false, message: 'SnowLuma 启动后马上退出了（看日志里的 SnowLuma 段）' }
+    }
+    return { ok: false, message: '等了 30 秒控制台还没起来' }
+  }
+
+  function stop() {
+    if (!child) return { ok: false, message: '不是插件启动的 SnowLuma（或已经停了），请在它自己的窗口里关' }
+    try {
+      child.kill()
+    } catch (error) {}
+    return { ok: true, message: '已停止' }
+  }
+
+  async function processes() {
+    const j = await api('/api/processes')
+    return (j.list || []).map((p) => ({
+      pid: p.pid,
+      name: p.name,
+      injected: Boolean(p.injected),
+      connected: Boolean(p.connected),
+      loggedIn: Boolean(p.loggedIn),
+      status: p.status,
+      error: p.error || '',
+      uin: String(p.account?.uin ?? p.uin ?? ''),
+      nickname: p.account?.nickname || '',
+      isBot: String(p.account?.uin ?? p.uin ?? '') === String(getConfig().botQQ),
+    }))
+  }
+
+  /** 只给机器人号注入；别的号（主人的主号）碰都不碰。 */
+  async function attachBot() {
+    const bot = getConfig().botQQ
+    let list
+    try {
+      const j = await api('/api/processes')
+      list = j.list || []
+    } catch (error) {
+      lastAttach = { at: Date.now(), ok: false, message: error.message }
+      return lastAttach
+    }
+    const { proc, reason } = pickBotProcess(list, bot)
+    if (!proc) {
+      lastAttach = { at: Date.now(), ok: false, message: reason }
+      return lastAttach
+    }
+    if (proc.injected && proc.connected) {
+      lastAttach = { at: Date.now(), ok: true, message: `机器人号（pid ${proc.pid}）已接入` }
+      return lastAttach
+    }
+    try {
+      const r = await api(`/api/processes/${proc.pid}/load`, { method: 'POST' })
+      const ok = Boolean(r.success)
+      lastAttach = { at: Date.now(), ok, message: ok ? `已给机器人号的 QQ 进程（pid ${proc.pid}）注入` : r.message || '注入失败' }
+      log.info(lastAttach.message)
+    } catch (error) {
+      lastAttach = { at: Date.now(), ok: false, message: `注入失败：${error.message}` }
+    }
+    return lastAttach
+  }
+
+  /** SnowLuma 的用户协议和隐私说明（全文 + 版本 + 是否还需要同意）。 */
+  async function agreements() {
+    const j = await api('/api/agreements')
+    return {
+      version: j.version,
+      consentRequired: Boolean(j.consentRequired),
+      documents: (j.documents || []).map((d) => ({ id: d.id, title: d.title, version: d.declaredVersion, date: d.effectiveDate, text: d.text })),
+    }
+  }
+
+  /** 用户在面板里读完协议、点了「我同意」：把同意记到 SnowLuma。 */
+  async function consent(version) {
+    const r = await api('/api/agreements/record-consent', { method: 'POST', body: { version: String(version || '') } })
+    if (r.success) log.info('主人已在面板里同意 SnowLuma 的用户协议和隐私说明')
+    return { ok: Boolean(r.success), message: r.success ? '已同意' : r.message || '没记上' }
+  }
+
+  /** 找出占着控制台端口、且确实是配置目录里那份 SnowLuma 的进程。 */
+  async function findRunningPid() {
+    const inst = detectInstall(cfg().dir)
+    if (!inst.installed) return 0
+    const out = await new Promise((res) => execFile('netstat', ['-ano', '-p', 'TCP'], { windowsHide: true }, (e, so) => res(String(so || ''))))
+    const line = out.split(/\r?\n/).find((l) => new RegExp(`127\\.0\\.0\\.1:${cfg().webuiPort}\\s+\\S+\\s+LISTENING`).test(l))
+    const pid = Number(line ? line.trim().split(/\s+/).pop() : 0)
+    if (!pid) return 0
+    const path = await new Promise((res) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).Path`], { windowsHide: true }, (e, so) => res(String(so || '').trim())))
+    return path.toLowerCase().startsWith(inst.dir.toLowerCase()) ? pid : 0
+  }
+
+  /** 重置为自动密码：停掉 SnowLuma → 删掉旧凭据 → 生成新密码 → 重新启动。用于之前手动设过密码、插件不知道的情况。 */
+  async function resetPassword() {
+    const inst = detectInstall(cfg().dir)
+    if (!inst.installed) return { ok: false, message: inst.reason }
+    if (child) {
+      try { child.kill() } catch (error) {}
+    } else if (await running()) {
+      const pid = await findRunningPid()
+      if (!pid) return { ok: false, message: '有一个 SnowLuma 在运行，但不是配置目录里那份，没法替你重置' }
+      try { process.kill(pid) } catch (error) { return { ok: false, message: '停不掉正在运行的 SnowLuma：' + error.message } }
+    }
+    for (let i = 0; i < 20 && (await running()); i++) await new Promise((r) => setTimeout(r, 500))
+    try { unlinkSync(join(inst.dir, 'config', 'webui.json')) } catch (error) {}
+    savePassword?.(generatePassword())
+    token = ''
+    const r = await start()
+    return r.ok ? { ok: true, message: '控制台密码已改成自动管理，SnowLuma 已重新启动' } : r
+  }
+
+  /** 插件能不能登录控制台（密码对不对）。 */
+  async function canLogin() {
+    try {
+      await login()
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, message: error.message, code: error.code || '' }
+    }
+  }
+
+  return {
+    detect: () => detectInstall(cfg().dir),
+    endpoint: () => readOneBotEndpoint(cfg().dir, getConfig().botQQ),
+    running,
+    start,
+    stop,
+    processes,
+    attachBot,
+    agreements,
+    consent,
+    resetPassword,
+    canLogin,
+    get ownsProcess() {
+      return Boolean(child)
+    },
+    get lastAttach() {
+      return lastAttach
+    },
+    webuiUrl: () => base() + '/',
+    dispose() {
+      // DSH 退出时连带停掉自己启动的 SnowLuma
+      try { child?.kill() } catch (error) {}
+    },
+  }
+}
