@@ -17,7 +17,9 @@ import { createSnowLumaManager, DOWNLOAD_PAGE } from './snowluma/manager.js'
 import { createHub, WORKSPACE_DIR } from './chat/hub.js'
 import { createStickerStore, stickerPath } from './features/stickers.js'
 import { createQzone } from './features/qzone.js'
-import { createMood, createSpeakUp, createSong } from './features/companion.js'
+import { createQzoneSocial } from './features/qzone-social.js'
+import { createMood, createSpeakUp } from './features/companion.js'
+import { createSongStudio } from './song/studio.js'
 import { createMemoryStore } from './features/memory.js'
 import { createImageGen } from './features/imagegen.js'
 import { textToSpeech, edgeInstalled, installEdge } from './voice/tts.js'
@@ -26,6 +28,7 @@ import { createGroupRoles } from './chat/group-roles.js'
 import { defaultModel } from './core/llm.js'
 import { mimeOf } from './chat/inbound.js'
 import { dataDir, ensureDir } from './core/store.js'
+import { createUpdateChecker, changelogSection } from './core/update.js'
 import { parseCommand, runCommand, createMutes, commandList } from './chat/commands.js'
 import { listPersonas, readPersona, savePersona, deletePersona, currentPersonaText, rulesText, seedPersonas } from './persona/personas.js'
 
@@ -33,9 +36,10 @@ export const name = 'aurabot'
 export const inject = ['agents', 'sessions', 'webServer', 'timer', 'workspaceRegistry', 'attachments', 'systemPrompt', 'llm']
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const VERSION = (() => {
-  try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version } catch (error) { return '?' }
+const PKG = (() => {
+  try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) } catch (error) { return { version: '?' } }
 })()
+const VERSION = PKG.version
 const PREFIX = '/aurabot/api'
 
 export function apply(ctx) {
@@ -97,7 +101,13 @@ export function apply(ctx) {
   const stickers = createStickerStore({ dsh: ctx, getConfig, onebot, log: logger.child('sticker') })
   const mood = createMood({ getConfig })
   let memory = null
-  const song = createSong({ getConfig })
+  const song = createSongStudio({
+    getConfig,
+    log: logger.child('song'),
+    sendVoiceFile: (chatId, file, note) => hub.sendVoiceFile(chatId, file, note),
+    sendText: (chatId, text) => hub.sendText(chatId, text),
+    onSung: (title) => mood.nudge(8, `唱完了「${title}」`),
+  })
   const imageGen = createImageGen({ getConfig, log: logger.child('imagegen') })
   const tts = { speak: (text) => textToSpeech(text, cfg.voice, logger.child('voice')) }
   let qzone = null
@@ -132,16 +142,17 @@ export function apply(ctx) {
       },
 ({ chat }) => (chat.kind === 'system' ? '' : mood.contextLine()), ({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId))],
     onActivity: (a) => {
-      if (a.kind === 'in' && a.text) mood.observe(a.text, a.nickname)
+      if (a.kind === 'in' && a.text) mood.observe(a.text, a.nickname, { direct: a.direct, owner: a.owner })
     },
     // 群聊话题和她的记忆有多相关（插话判断用）
     memoryScore: (text) => (memory ? memory.topicScore(text) : 0),
     // QQ 里的主人命令
     onCommand: async (msg) => {
       const cmd = parseCommand(msg.text)
-      return cmd ? runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood, memory, qzone, listModels, defaultModel: () => defaultModel(ctx, { model: {} }) }) : null
+      return cmd ? runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood, memory, qzone, song, listModels, defaultModel: () => defaultModel(ctx, { model: {} }) }) : null
     },
     isMuted: (chatId) => mutes.muted(chatId),
+    moodEffects: () => mood.effects(),
   })
   memory = createMemoryStore({ dsh: ctx, getConfig, hub, log: logger.child('memory') })
   qzone = createQzone({
@@ -149,6 +160,7 @@ export function apply(ctx) {
     // 写过的空间日记也进记忆库：以后聊到相关的事，她会想起自己那天写过什么
     onDiary: (text) => memory.add({ text: `我在 QQ 空间写过：${text}`, importance: 0.55, tags: ['空间日记'], source: 'diary' }),
   })
+  const qzoneSocial = createQzoneSocial({ getConfig, onebot, hub, log: logger.child('qzone') })
   const speakUp = createSpeakUp({ getConfig, hub, log: logger.child('speakup'), isMuted: (chatId) => mutes.muted(chatId) })
 
   // ---------- 盯会话：一轮结束就发回 QQ ----------
@@ -187,6 +199,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'aurabot: 看门狗')
   ctx.effect(() => ctx.interval(safe(() => qzone.tick(), '空间日记'), 60_000), 'aurabot: 空间日记')
   ctx.effect(() => ctx.interval(safe(() => speakUp.tick(), '主动搭话'), 60_000), 'aurabot: 主动搭话')
+  ctx.effect(() => ctx.interval(safe(() => qzoneSocial.tick(), '空间互动'), 60_000), 'aurabot: 空间互动')
   ctx.effect(() => ctx.interval(safe(() => memory.tick(), '整理记忆'), 60_000), 'aurabot: 每日整理记忆')
   setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   ctx.effect(() => () => {
@@ -207,6 +220,18 @@ export function apply(ctx) {
     let s = ''
     try { for await (const c of req) s += c } catch (error) {}
     try { return JSON.parse(s || '{}') } catch (error) { return {} }
+  }
+  /** 原样读请求体（上传大文件用），超过 max 字节就报错。 */
+  const readRaw = async (req, max) => {
+    const parts = []
+    let n = 0
+    for await (const c of req) {
+      const b = Buffer.isBuffer(c) ? c : Buffer.from(c)
+      n += b.length
+      if (n > max) throw new Error(`文件太大了（最多 ${Math.round(max / 1024 / 1024)}MB）`)
+      parts.push(b)
+    }
+    return Buffer.concat(parts)
   }
   const query = (req) => {
     try { return Object.fromEntries(new URL(req.url, 'http://x').searchParams) } catch (error) { return {} }
@@ -256,6 +281,7 @@ export function apply(ctx) {
       mood: mood.state(),
       stickers: { count: lib.items.length },
       diary: { next: qzone.nextTime(), last: qzone.history()[0] || null },
+      qzoneSocial: qzoneSocial.state(),
       speakUp: speakUp.state(),
       memory: { lastConsolidate: memory.lastConsolidate() },
       avatar: avatarInfo(),
@@ -291,6 +317,41 @@ export function apply(ctx) {
   route('/snowluma/stop', async () => snowluma.stop())
   route('/snowluma/attach', async () => snowluma.attachBot())
   route('/commands', async () => ({ ok: true, list: commandList() }))
+  // 更新：检查 GitHub 上有没有新版本；这次更新了什么
+  const checkUpdate = createUpdateChecker({ pkg: PKG, log })
+  route('/update/check', async (req) => checkUpdate({ force: new URL(req.url, 'http://x').searchParams.get('force') === '1' }))
+  route('/changelog', async () => {
+    let text = ''
+    try { text = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8') } catch (error) {}
+    return { ok: true, version: VERSION, notes: changelogSection(text, VERSION) }
+  })
+  // 翻唱
+  route('/song/status', async () => ({ ok: true, ...song.status() }))
+  route('/song/install', async () => song.install())
+  route('/song/search', async (req) => {
+    const q = new URL(req.url, 'http://x').searchParams.get('q') || ''
+    try { return { ok: true, list: await song.search(q) } } catch (error) { return { ok: false, message: error.message, list: [] } }
+  })
+  route('/song/account', async () => song.account())
+  // 导入音色：面板把文件原样传上来（.zip / .pth / .index），文件名放在 ?name= 里
+  route('/song/import', async (req) => {
+    const name = query(req).name || ''
+    try {
+      const buf = await readRaw(req, 1024 * 1024 * 1024)
+      if (!buf.length) return { ok: false, message: '文件是空的' }
+      const r = song.importModels(name, buf)
+      if (r.ok) log.info('导入音色：' + r.message)
+      return r
+    } catch (error) {
+      return { ok: false, message: '导入失败：' + error.message }
+    }
+  })
+  route('/song/voice/delete', async (req) => song.deleteVoice(String((await readBody(req)).id || '')))
+  route('/song/request', async (req) => {
+    const b = await readBody(req)
+    // 面板里试唱：发到主人私聊
+    return song.request({ song: b.song, songId: b.songId, pitch: b.pitch, voice: b.voice, chatId: b.chatId || `private:${cfg.ownerQQ}` })
+  })
   route('/groups/roles', async () => {
     const list = await Promise.all(cfg.allow.groups.map(async (gid) => {
       const role = await groupRoles.get(gid, { fresh: true })
@@ -397,6 +458,8 @@ export function apply(ctx) {
     return qzone.writeDiary({ visibility: b.visibility })
   })
   route('/diary/history', async () => ({ ok: true, items: qzone.history(), next: qzone.nextTime() }))
+  route('/qzone/social/run', async () => qzoneSocial.run({ force: true }))
+  route('/qzone/social/state', async () => ({ ok: true, ...qzoneSocial.state() }))
   route('/qzone/delete', async (req) => {
     const b = await readBody(req)
     await qzone.remove(b.tid)

@@ -87,3 +87,39 @@ test('记忆检索：切词、相关度、去重', async () => {
   assert.equal(search(idx, '量子力学').length, 0)
   assert.ok(similarity('主人最爱吃白米饭', '主人最爱吃白米饭了') > 0.6)
 })
+
+test('心情：对她说的话、主人的话影响更大；心情明显时每轮都带上说话方式；影响表情和插话', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const prev = process.env.AURABOT_DATA_DIR
+  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-mood-'))
+  try {
+    const { createMood, moodEffects } = await import('../src/features/companion.js')
+    const { normalize } = await import('../src/core/config.js')
+    const m = createMood({ getConfig: () => normalize({}) })
+    const v0 = m.current()
+    m.observe('你好可爱', '路人', { direct: false })
+    const vIndirect = m.current() - v0
+    m.observe('你好可爱', '主人', { direct: true, owner: true })
+    const vOwner = m.current() - v0 - vIndirect
+    assert.ok(vOwner > vIndirect * 3, '主人对她说的比群里顺带的影响大得多')
+    for (let i = 0; i < 4; i++) m.observe('好可爱 爱你 抱抱', '主人', { direct: true, owner: true })
+    assert.equal(m.label(), '超开心')
+    const line = m.contextLine()
+    assert.match(line, /超开心/)
+    assert.match(line, /话多/)
+    assert.equal(m.contextLine(), line, '不是只提醒一次，每轮都在')
+    assert.ok(m.effects().sticker > 1 && m.effects().chatty > 1)
+    assert.equal(m.state().history.length, 6)
+    m.nudge(-80, '被凶了')
+    assert.match(m.contextLine(), /小脾气/)
+    assert.ok(m.effects().sticker < 1 && m.effects().delay > 1)
+    // 平平常常时什么都不说
+    assert.equal(moodEffects(60).sticker, 1)
+    const m2 = createMood({ getConfig: () => normalize({ mood: { enabled: false } }) })
+    assert.equal(m2.contextLine(), '')
+  } finally {
+    process.env.AURABOT_DATA_DIR = prev
+  }
+})

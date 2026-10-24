@@ -21,6 +21,7 @@ const ALIASES = {
   多说: 'chatty', 话多: 'chatty',
   正常: 'normal',
   模型: 'model', 换模型: 'model',
+  唱: 'sing', 点歌: 'sing', 翻唱: 'sing',
   状态: 'status', 心情: 'mood', 日记: 'diary', 记住: 'remember', 记一下: 'remember',
   重开: 'reset', 开机: 'on', 关机: 'off', 帮助: 'help', 命令: 'help', h: 'help',
 }
@@ -33,6 +34,7 @@ const COMMANDS = {
   chatty: '这个群里话多一点，更爱插话',
   normal: '这个群恢复默认的插话频率',
   model: '看或换她用的模型：/model 看列表，/model 2 或 /model 名字 换，/model 默认 跟随 DSH',
+  sing: '让她翻唱一首：/sing 小幸运 田馥甄；后面加 +12 / -3 之类可以变调（原唱是男声一般 +12）',
   status: '看她现在的状态',
   mood: '看她现在的心情',
   diary: '马上写一篇空间日记',
@@ -96,11 +98,13 @@ export async function runCommand(cmd, msg, deps) {
     case 'silent': {
       const min = Math.max(0, Math.min(7 * 24 * 60, Number.parseInt(cmd.arg, 10) || 0))
       mutes.set(msg.chatId, min)
+      mood.nudge?.(-6, '主人让她闭嘴') // 有点委屈
       if (inGroup) hub.leaveTopic?.(msg.groupId)
       return min ? `好，我在${here}安静 ${min} 分钟` : `好，我在${here}先不说话了，想我了发 /active`
     }
     case 'active':
       mutes.clear(msg.chatId)
+      mood.nudge?.(4, '主人让她回来说话')
       if (inGroup) hub.joinTopic?.(msg.groupId)
       return inGroup ? '我回来啦' : '在呢'
     case 'quiet':
@@ -151,6 +155,14 @@ export async function runCommand(cmd, msg, deps) {
       if (!hit) return `没找到「${cmd.arg}」这个模型，发 /model 看列表`
       setConfig({ ...cfg, model: { ...cfg.model, provider: hit.provider, model: hit.model } })
       return `好，换成 ${label(hit)} 了，下一句起生效`
+    }
+    case 'sing': {
+      if (!deps.song) return '翻唱功能不可用'
+      // 末尾的 +12 / -3 是变调
+      const m = cmd.arg.match(/^(.*?)\s+([+-]\d{1,2})$/)
+      const name = (m ? m[1] : cmd.arg).trim()
+      if (!name) return '唱哪首？比如 /sing 小幸运 田馥甄'
+      return deps.song.request({ song: name, pitch: m ? Number(m[2]) : undefined, chatId: msg.chatId }).message
     }
     case 'mood':
       return `现在${mood.label()}`

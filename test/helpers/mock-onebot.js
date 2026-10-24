@@ -73,6 +73,10 @@ export async function startMockOneBot({ selfId = '20000002', token = 'mock-token
         return { tid }
       }
       case 'delete_qzone_msg': qzone.delete(params.tid); return null
+      case 'get_qzone_msg_list': return { total: (state.qzoneList || []).length, msglist: state.qzoneList || [] }
+      case 'get_qzone_msg_detail': return (state.qzoneDetail || {})[params.tid] || { tid: params.tid, content: '', comment_num: 0, comments: [] }
+      case 'get_qzone_feeds': return { feeds: state.feeds || [], has_more: false }
+      case 'comment_qzone': case 'like_qzone': return null
       case 'fetch_ptt_text': return { text: '今天想吃白米饭' }
       case 'set_group_ban': case 'set_group_kick': case 'set_group_special_title': case '_send_group_notice': return null
       default: return null

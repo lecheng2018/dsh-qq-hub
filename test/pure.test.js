@@ -220,3 +220,88 @@ test('引用回复：<reply:编号> 挂到下一条气泡上，一轮最多一�
   assert.deepEqual(parseReply('<reply:x>坏标签').items, [{ kind: 'text', value: '坏标签' }])
   assert.equal(parseReply('正常说话').items[0].replyTo, undefined)
 })
+
+test('规则：画画、唱歌只在功能真的能用时告诉她', async () => {
+  const { rulesText } = await import('../src/persona/personas.js')
+  const { normalize } = await import('../src/core/config.js')
+  const off = rulesText('social', normalize({ imageGen: { enabled: true } }))
+  assert.doesNotMatch(off, /你会画画|你会唱歌/, '没配生图服务就不说会画')
+  const on = rulesText('social', normalize({ imageGen: { enabled: true, baseUrl: 'https://x/v1', model: 'm' }, song: { enabled: true } }))
+  assert.match(on, /你会画画：只给主人画/)
+  assert.match(on, /你会唱歌/)
+})
+
+test('空间互动：评论清洗、好友动态筛选', async () => {
+  const { cleanComment, pickFeeds } = await import('../src/features/qzone-social.js')
+  assert.equal(cleanComment('**好看**\n第二句\n第三句'), '好看 第二句')
+  assert.equal(cleanComment('[沉默]'), '')
+  assert.equal(cleanComment('x'.repeat(100)).length, 60)
+  const now = Date.now()
+  const feeds = [
+    { appid: 311, uin: 1, key: 'a', time: now / 1000 - 60 },
+    { appid: 6600, uin: 0, key: 'ad', time: now / 1000 },
+    { appid: 311, uin: 9, key: 'mine', time: now / 1000 },
+    { appid: 311, uin: 2, key: 'old', time: now / 1000 - 2 * 86400 },
+  ]
+  assert.deepEqual(pickFeeds(feeds, '9', now).map((f) => f.key), ['a'])
+})
+
+test('空间互动：一串评论里没回的新消息', async () => {
+  const { pendingInThread } = await import('../src/features/qzone-social.js')
+  const me = '9'
+  assert.deepEqual(pendingInThread({ uin: 1, time: 1, comment_id: 'c1', replies: [] }, me).pending.map((x) => x.id), ['c1'])
+  // 她自己的评论下面别人接着回她
+  const mine = { uin: 9, time: 1, comment_id: 'c2', replies: [{ uin: 1, time: 2, comment_id: 'r1' }, { uin: 1, time: 3, comment_id: 'r2' }] }
+  assert.deepEqual(pendingInThread(mine, me).pending.map((x) => x.id), ['c2/r1', 'c2/r2'])
+  // 她已经在串里说了最后一句
+  assert.equal(pendingInThread({ uin: 1, time: 1, comment_id: 'c3', replies: [{ uin: 9, time: 2, comment_id: 'r1' }] }, me).pending.length, 0)
+  // 处理过的不再算
+  assert.equal(pendingInThread(mine, me, new Set(['c2/r1', 'c2/r2'])).pending.length, 0)
+})
+
+test('更新：版本比较、仓库名、更新命令、更新说明', async () => {
+  const u = await import('../src/core/update.js')
+  assert.ok(u.compareVersions('0.3.0', '0.2.9') > 0)
+  assert.ok(u.compareVersions('0.10.0', '0.9.0') > 0)
+  assert.equal(u.compareVersions('1.0.0', '1.0.0'), 0)
+  assert.equal(u.repoOf({ repository: { url: 'https://github.com/a/b.git' } }), 'a/b')
+  assert.match(u.updateCommand('a/b'), /plugin --profile desktop add github:a\/b$/)
+  const log = '# 更新记录\n\n## 0.3.0\n\n- 新的\n\n## 0.2.0\n\n- 旧的'
+  assert.equal(u.changelogSection(log, '0.3.0'), '- 新的')
+  assert.equal(u.changelogSection(log, '0.2.0'), '- 旧的')
+  assert.equal(u.changelogSection(log, '9.9.9'), '')
+  const check = u.createUpdateChecker({ pkg: { version: '0.2.0', repository: 'https://github.com/a/b' }, fetchImpl: async () => ({ ok: true, json: async () => ({ version: '0.3.0' }) }) })
+  const r = await check()
+  assert.equal(r.newer, true)
+  assert.equal(r.latest, '0.3.0')
+})
+
+test('更新后：会公开发东西的新功能，老用户先关着，新安装照常默认开', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'aurabot-upd-'))
+  const prev = process.env.AURABOT_DATA_DIR
+  process.env.AURABOT_DATA_DIR = dir
+  try {
+    const { loadConfig } = await import('../src/core/config.js')
+    assert.equal(loadConfig().qzoneSocial.enabled, true, '新安装（还没走完向导）默认开')
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ setupDone: true, botQQ: '1', ownerQQ: '2' }))
+    assert.equal(loadConfig().qzoneSocial.enabled, false, '老用户更新：先关着')
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ setupDone: true, qzoneSocial: { enabled: true } }))
+    assert.equal(loadConfig().qzoneSocial.enabled, true, '自己打开过的保持打开')
+  } finally {
+    process.env.AURABOT_DATA_DIR = prev
+  }
+})
+
+test('空间互动：说说下的评论整理成上下文', async () => {
+  const { summarizeComments } = await import('../src/features/qzone-social.js')
+  const comments = [
+    { uin: 1, name: 'A', content: '好看', comment_id: 'c1', replies: [{ uin: 9, name: '大肥鱼', content: '谢谢' }] },
+    { uin: 2, name: '小明', content: '在哪拍的', comment_id: 'c2', replies: [] },
+  ]
+  assert.deepEqual(summarizeComments(comments, { selfId: '9', ownerQQ: '2', ownerName: '主人' }), ['A：好看', '  └ 你：谢谢', '小明（你的主人）：在哪拍的'])
+  assert.deepEqual(summarizeComments(comments, { selfId: '9', exclude: 'c1' }), ['小明：在哪拍的'])
+  assert.equal(summarizeComments(comments, { selfId: '9', max: 1 }).at(-1), '……还有 2 条')
+})

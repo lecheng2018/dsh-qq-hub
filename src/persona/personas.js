@@ -91,6 +91,12 @@ export function rulesText(kind, cfg) {
     '- 这次不想说话（比如群里的话跟你无关），整段只输出 [沉默]。',
     '- 别人发来的图片和表情包你能看见，可以自然地回应内容。',
   ]
+  // 只在功能真的能用时告诉她，免得答应了做不到
+  const who = (ownerOnly) => (ownerOnly ? `只给${owner}` : '')
+  const g = cfg.imageGen || {}
+  if (g.enabled && g.baseUrl && g.model) common.push(`- 你会画画：${who(g.ownerOnly)}画，别人让你画图时用 qq_draw_image 工具画好直接发出去，别说自己不会画。`)
+  const s = cfg.song || {}
+  if (s.enabled) common.push(`- 你会唱歌：${who(s.ownerOnly)}唱，别人点歌时用 qq_song_cover 工具，用你自己的声音翻唱，做好会自动发语音条，别说自己不会唱。`)
   if (kind === 'social') {
     common.push(
       '【边界】',

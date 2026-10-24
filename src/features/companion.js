@@ -1,14 +1,14 @@
-// 陪伴类小功能：心情、长期记忆、主动搭话、翻唱（预留）。
+// 陪伴类小功能：心情、主动搭话。
 
-import { randomUUID } from 'node:crypto'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 
 // ---------------- 心情 ----------------
 // 0~100，基线 60。聊天里的话按关键词推一推，随时间按半衰期回到基线。
-// 只在变化明显时告诉她，并且每天有上限——每轮都念会把性格念「定」住（dsh-feiyu-mood 踩过的坑）。
+// 心情明显偏离平常时，每一轮都告诉她现在的状态和具体的说话方式；平平常常时不说（免得把性格念「定」住）。
+// 心情还会实际影响行为：发表情包 / 语音的概率、回复快慢、群里插话的积极程度。
 
-const UP = ['喜欢你', '爱你', '想你', '好可爱', '真棒', '厉害', '谢谢', '辛苦', '晚安', '早安', '抱抱', '摸摸', '乖', '白米饭', '好吃']
-const DOWN = ['讨厌', '滚', '烦', '闭嘴', '笨', '傻', '无聊', '走开', '别理我', '不理你', '生气', '难过']
+const UP = ['喜欢你', '爱你', '想你', '可爱', '好看', '漂亮', '聪明', '真棒', '厉害', '牛', '谢谢', '辛苦', '晚安', '早安', '抱抱', '摸摸', '贴贴', '乖', '宝贝', '爱了', '哈哈哈', '白米饭', '好吃', '请你吃']
+const DOWN = ['讨厌', '滚', '烦死', '闭嘴', '笨', '蠢', '傻', '丑', '垃圾', '废物', '恶心', '无聊', '走开', '别理我', '不理你', '别说话', '生气', '难过', '烦人']
 
 export function moodLabel(v) {
   if (v >= 85) return '超开心'
@@ -16,6 +16,24 @@ export function moodLabel(v) {
   if (v >= 50) return '平平常常'
   if (v >= 35) return '有点低落'
   return '不太开心'
+}
+
+/** 每种心情下具体怎么说话（给她的提示），平平常常时为空。 */
+export const MOOD_STYLE = {
+  超开心: '话多一点、语气活泼，爱用语气词和感叹，更愿意发表情包、发语音，会主动接话、开玩笑',
+  心情不错: '语气轻快，爱开点小玩笑，回得积极一些',
+  平平常常: '',
+  有点低落: '话少一点、句子短，回得有点懒，少发表情；有人关心你会慢慢好起来',
+  不太开心: '有点小脾气、带点委屈，回得简短，可能会怼一句（但别伤人）；被哄、被夸会消气',
+}
+
+/** 心情对行为的影响倍数：表情包 / 语音概率、回复间隔、群里插话。 */
+export function moodEffects(v) {
+  if (v >= 85) return { sticker: 1.6, voice: 1.5, delay: 0.85, chatty: 1.5 }
+  if (v >= 70) return { sticker: 1.25, voice: 1.2, delay: 0.92, chatty: 1.2 }
+  if (v >= 50) return { sticker: 1, voice: 1, delay: 1, chatty: 1 }
+  if (v >= 35) return { sticker: 0.5, voice: 0.6, delay: 1.3, chatty: 0.6 }
+  return { sticker: 0.3, voice: 0.4, delay: 1.5, chatty: 0.4 }
 }
 
 export function scoreText(text) {
@@ -33,40 +51,48 @@ export function decayed(value, at, halfLifeHours, now = Date.now(), base = 60) {
 
 export function createMood({ getConfig }) {
   const file = () => dataDir('mood.json')
-  const load = () => readJson(file(), () => ({ value: 65, at: Date.now(), reason: '', told: [], toldValue: 65 }))
+  const load = () => readJson(file(), () => ({ value: 65, at: Date.now(), reason: '', history: [] }))
   const save = (s) => writeJson(file(), s)
   const current = () => {
     const s = load()
     return Math.round(decayed(s.value, s.at, getConfig().mood.halfLifeHours))
   }
+  /** 推一下心情（d 可正可负），记下原因。 */
+  function nudge(d, reason) {
+    if (!getConfig().mood.enabled || !d) return
+    const s = load()
+    const before = current()
+    s.value = Math.max(5, Math.min(100, before + d))
+    s.at = Date.now()
+    s.reason = reason
+    s.history = [{ at: Date.now(), from: before, to: Math.round(s.value), reason }, ...(s.history || [])].slice(0, 20)
+    save(s)
+  }
   return {
     current,
     label: () => moodLabel(current()),
     state: () => ({ ...load(), value: current(), label: moodLabel(current()) }),
-    observe(text, who) {
-      if (!getConfig().mood.enabled) return
-      const d = scoreText(text)
-      if (!d) return
-      const s = load()
-      s.value = Math.max(5, Math.min(100, current() + d))
-      s.at = Date.now()
-      s.reason = `${who || '有人'}说「${String(text).slice(0, 20)}」`
-      save(s)
+    effects: () => (getConfig().mood.enabled ? moodEffects(current()) : moodEffects(60)),
+    nudge,
+    /**
+     * 聊天里的一句话。direct = 是对她说的（私聊、@她、叫她）；owner = 主人说的。
+     * 不是对她说的群聊只算三成，主人的话算 1.5 倍。
+     */
+    observe(text, who, { direct = true, owner = false } = {}) {
+      const d0 = scoreText(text)
+      if (!d0) return
+      const d = Math.round(d0 * (direct ? 1 : 0.3) * (owner ? 1.5 : 1))
+      nudge(d, `${who || '有人'}说「${String(text).slice(0, 20)}」`)
     },
-    /** 给系统提示词上下文用：只在和上次告诉她时差得多才说，而且每天有上限。 */
+    /** 给每一轮的上下文：心情明显偏离平常时，告诉她现在的状态和该怎么说话。 */
     contextLine() {
-      const cfg = getConfig().mood
-      if (!cfg.enabled) return ''
+      if (!getConfig().mood.enabled) return ''
       const s = load()
       const v = current()
-      if (Math.abs(v - (s.toldValue ?? 65)) < 12) return ''
-      const today = new Date().toDateString()
-      s.told = (s.told || []).filter((t) => new Date(t).toDateString() === today)
-      if (s.told.length >= cfg.maxInjectPerDay) return ''
-      s.told.push(Date.now())
-      s.toldValue = v
-      save(s)
-      return `（你现在的心情：${moodLabel(v)}${s.reason ? '，因为' + s.reason : ''}。让它自然地影响语气就好，不用说出来。）`
+      const label = moodLabel(v)
+      const style = MOOD_STYLE[label]
+      if (!style) return ''
+      return `（你现在${label}${s.reason ? '，因为' + s.reason : ''}。这会自然地影响你说话：${style}。不用说出来自己心情如何。）`
     },
   }
 }
@@ -143,18 +169,4 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
   }
 
   return { tick, fire, state: load }
-}
-
-// ---------------- 翻唱（预留） ----------------
-// 以后的流水线：点歌 → 下载（网易云）→ 人声分离 → 90 秒切片 RVC 变声 → 混音 → 缓存 → 发回原会话。
-// 现在只留接口：面板显示「未启用」，工具返回说明。
-
-export function createSong({ getConfig }) {
-  return {
-    status: () => ({ enabled: false, ready: false, message: '翻唱还没启用：需要先装 RVC（以后的版本提供）' }),
-    async request({ song }) {
-      if (!getConfig().song.enabled) return { ok: false, message: `翻唱功能还没开放（想唱的是「${song}」，先记下了）` }
-      return { ok: false, message: '翻唱流水线尚未实现' }
-    },
-  }
 }

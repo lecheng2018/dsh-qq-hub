@@ -72,6 +72,16 @@ export const DEFAULTS = {
     maxChars: 140,
     visibility: 'all', // all | self（仅自己可见）
   },
+  qzoneSocial: {
+    enabled: true,
+    replyOwn: true, // 回复自己说说下别人的新评论
+    commentFriends: true, // 逛好友动态，偶尔评论
+    friendChance: 0.3, // 看到一条好友说说时互动（点赞 + 可能评论）的概率
+    ownerChance: 0.7, // 主人的说说互动概率
+    like: true, // 互动时顺手点赞
+    maxPerDay: 8, // 每天最多评论几条（点赞不算）
+    intervalMin: 30, // 多久逛一次空间
+  },
   speakUp: {
     enabled: true, // 只在和主人的私聊里主动找你，群里不会
     idleMinutes: 40,
@@ -82,9 +92,22 @@ export const DEFAULTS = {
     awakeFrom: 8,
     awakeTo: 23,
   },
-  mood: { enabled: true, halfLifeHours: 3, maxInjectPerDay: 6 },
+  mood: { enabled: true, halfLifeHours: 3 },
   memory: { enabled: true, recallCount: 6, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
-  song: { enabled: false },
+  song: {
+    enabled: false,
+    root: '', // 翻唱环境目录，留空 = 自动（老安装 C:\Aurabot\rvc，新安装在用户目录下）
+    voice: '', // 用哪个音色（models 目录里的 .pth 文件名），留空 = 第一个
+    pitch: 0, // 默认变调（半音）；她点歌时会按原唱是男声还是女声自己定
+    neteaseCookie: '', // 网易云 Cookie（MUSIC_U），下会员歌用
+    separatorModel: 'model_bs_roformer_ep_317_sdr_12.9755.ckpt', // 人声分离模型
+    maxVoiceSec: 120, // 语音条最长多少秒，歌更长就截一段
+    clipStart: 'auto', // auto = 从副歌附近截；head = 从头截
+    vocalVolume: 1,
+    instVolume: 0.8,
+    ownerOnly: true, // 只有主人能点歌
+    keepWork: false, // 留着中间文件（调试用）
+  },
   tabs: {}, // 面板记住的小偏好
 }
 
@@ -144,8 +167,17 @@ export function normalize(raw) {
   c.speakUp.minIntervalMinutes = num(c.speakUp.minIntervalMinutes, 90, 5, 1440)
   c.speakUp.maxIntervalMinutes = Math.max(c.speakUp.minIntervalMinutes, num(c.speakUp.maxIntervalMinutes, 240, 5, 2880))
   c.speakUp.maxPerDay = num(c.speakUp.maxPerDay, 3, 0, 20)
+  const q = c.qzoneSocial
+  q.enabled = bool(q.enabled, true)
+  q.replyOwn = bool(q.replyOwn, true)
+  q.commentFriends = bool(q.commentFriends, true)
+  q.like = bool(q.like, true)
+  q.friendChance = num(q.friendChance, 0.3, 0, 1)
+  q.ownerChance = num(q.ownerChance, 0.7, 0, 1)
+  q.maxPerDay = num(q.maxPerDay, 8, 0, 50)
+  q.intervalMin = num(q.intervalMin, 30, 5, 1440)
   c.mood.halfLifeHours = num(c.mood.halfLifeHours, 3, 0.25, 72)
-  c.mood.maxInjectPerDay = num(c.mood.maxInjectPerDay, 6, 0, 50)
+  delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
   if (!Array.isArray(raw?.memory?.consolidateTimes) && raw?.memory?.consolidateAt) {
@@ -171,18 +203,30 @@ export function normalize(raw) {
   c.imageGen.enabled = bool(c.imageGen.enabled, false)
   c.imageGen.ownerOnly = bool(c.imageGen.ownerOnly, true)
   if (!/^\d{3,4}x\d{3,4}$/.test(String(c.imageGen.size))) c.imageGen.size = '1024x1024'
+  c.song.enabled = bool(c.song.enabled, false)
+  c.song.ownerOnly = bool(c.song.ownerOnly, true)
+  c.song.pitch = num(c.song.pitch, 0, -24, 24)
+  c.song.maxVoiceSec = num(c.song.maxVoiceSec, 120, 15, 600)
+  c.song.vocalVolume = num(c.song.vocalVolume, 1, 0.2, 2)
+  c.song.instVolume = num(c.song.instVolume, 0.8, 0.1, 2)
+  if (!['auto', 'head'].includes(c.song.clipStart)) c.song.clipStart = 'auto'
   return c
 }
 
 // 面板里不回传原文的字段：[分组, 字段]
-const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey']]
+const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie']]
 
 const FILE = () => dataDir('config.json')
+
+/** 在某次更新里新增、会替她公开发东西的功能。以后再加这类功能，把配置键名加到这里。 */
+export const OPT_IN_ON_UPDATE = ['qzoneSocial']
 
 export function loadConfig() {
   const raw = readJson(FILE(), {})
   // 老配置（向导上线前就填好了两个号）直接算向导已完成
   if (raw && raw.setupDone === undefined && raw.botQQ && raw.ownerQQ) raw.setupDone = true
+  // 更新插件后新增的、会公开发东西的功能：老用户先关着，等他们自己在面板里打开（新安装照常默认开）
+  if (raw && raw.setupDone) for (const k of OPT_IN_ON_UPDATE) if (raw[k] === undefined) raw[k] = { enabled: false }
   return normalize(raw)
 }
 

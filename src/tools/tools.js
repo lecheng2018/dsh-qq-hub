@@ -188,13 +188,14 @@ export function buildTools(deps, { chat, level, sessionId }) {
     }))
   }
 
-  tools.push(defineTool({
+  // 翻唱：面板里打开了才给她（没开就别让她答应唱歌）
+  if (song && getConfig().song.enabled && !isSystem) tools.push(defineTool({
     name: 'qq_song_cover',
-    description: '翻唱 / 点歌（预留功能）。只有主人能点。',
-    properties: { song: str('歌名'), pitch: int('变调半音，默认 +2') },
+    description: '用你自己的声音翻唱一首歌，做好后自动以语音条发到当前聊天（要两三分钟，调用后先简单回一句「等我一下」就好）。song 写歌名，最好带上歌手，比如「小幸运 田馥甄」。pitch 是变调半音：你是女声，原唱是男声时一般 +12，原唱是女声时 0。',
+    properties: { song: str('歌名（可以带歌手）'), pitch: int('变调半音：原唱男声 +12，女声 0') },
     required: ['song'],
     execute: async ({ song: name, pitch }) => {
-      if (!hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '只有主人能点歌' }
+      if (getConfig().song.ownerOnly && !hub.turnHasOwner(sessionId)) return { ok: false, message: '只有主人能点歌' }
       return song.request({ song: name, pitch, chatId: current })
     },
   }))

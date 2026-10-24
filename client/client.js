@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     var module = { exports: {} }
     var exports = module.exports
     const React = require('react')
-    const { useState, useEffect, useRef, useCallback, useMemo } = React
+    const { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React
     const h = React.createElement
     const inject = ['slots']
     const PANEL_ID = 'aurabot'
@@ -188,6 +188,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-kbd{font-family:var(--dsh-font-family-code,monospace);font-size:11px;padding:0 5px;border:1px solid var(--ab-line-2);border-radius:5px;color:var(--ab-dim)}
 .ab-spin{display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:abSpin .7s linear infinite;vertical-align:-2px}
 @keyframes abSpin{to{transform:rotate(360deg)}}
+.ab-drop{border:2px dashed var(--ab-line-2);border-radius:12px;padding:22px 16px;text-align:center;color:var(--ab-sub);cursor:pointer;transition:border-color .15s,background .15s}
+.ab-drop:hover,.ab-drop:focus-visible{border-color:var(--ab-sky);outline:none}
+.ab-drop.over{border-color:var(--ab-sea);background:var(--ab-foam);color:var(--ab-deep)}
 .ab-avatar-btn{position:relative;padding:0;border:0;background:none;cursor:pointer;border-radius:50%;flex:none}
 .ab-avatar-btn .ab-avatar-tip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(15,40,80,.45);color:#fff;font-size:12px;opacity:0;transition:opacity .15s}
 .ab-avatar-btn:hover .ab-avatar-tip,.ab-avatar-btn:focus-visible .ab-avatar-tip{opacity:1}
@@ -348,12 +351,37 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
       { id: 'logs', label: '日志' },
     ]
 
+    /** 更新提示：GitHub 上有新版本时给更新命令；刚更新完显示一次这次更新了什么。 */
+    function UpdateNotes({ st, toast }) {
+      const [upd, setUpd] = useState(null)
+      const [notes, setNotes] = useState(null)
+      useEffect(() => {
+        get('/update/check').then(setUpd).catch(() => {})
+        let seen = null
+        try { seen = localStorage.getItem('aurabot.seenVersion') } catch (e) {}
+        if (seen && seen !== st.version) get('/changelog').then((r) => r.notes && setNotes(r.notes))
+        // 第一次打开（新安装）不弹更新说明，直接记下当前版本
+        else if (!seen) { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} }
+      }, [st.version])
+      const dismiss = () => { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} setNotes(null) }
+      return h(Fragment, null,
+        notes ? h('div', { className: 'ab-note' },
+          h('div', { className: 'ab-flex' }, h('b', null, '已更新到 v' + st.version), h('div', { className: 'ab-spacer' }), h(Btn, { small: true, kind: 'ghost', onClick: dismiss }, '知道了')),
+          h('div', { style: { whiteSpace: 'pre-wrap', marginTop: 6 } }, notes)) : null,
+        upd && upd.newer ? h('div', { className: 'ab-note warn' },
+          h('div', null, h('b', null, '有新版本 v' + upd.latest), '（现在是 v' + upd.current + '）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。'),
+          h('div', { className: 'ab-flex', style: { marginTop: 6 } },
+            h('code', { style: { flex: '1 1 300px', fontSize: 11.5, wordBreak: 'break-all' } }, upd.command),
+            h(Btn, { small: true, onClick: () => { try { navigator.clipboard.writeText(upd.command); toast('复制好了', 'ok') } catch (e) { toast('复制失败，手动选中复制吧', 'err') } } }, '复制'))) : null)
+    }
+
     function Overview({ st, toast, go }) {
       const cfg = st.config
       const s = st.stats || {}
       const conn = st.onebot.state === 'connected'
       const quick = (p, body) => async () => { const r = await post(p, body); toast(r.message || (r.ok ? '好了' : '没成功')) }
       return h('div', { className: 'ab-grid' },
+        h(UpdateNotes, { st, toast }),
         !cfg.enabled ? h('div', { className: 'ab-note warn' }, '总开关是关着的：大肥鱼现在不会收也不会发任何 QQ 消息。准备好了就在右上角打开。') : null,
         cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。') : null,
         cfg.enabled && !conn ? h('div', { className: 'ab-note err' }, '还没连上 QQ 网关。去「连接」标签看看 SnowLuma 有没有装好、启动没有。 ', h('a', { href: '#', onClick: (e) => { e.preventDefault(); go('connect') } }, '去连接 →')) : null,
@@ -827,6 +855,33 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
               h('div', { className: 'body' }, d.text, d.error ? h('div', { className: 'ab-small', style: { color: 'var(--ab-err)' } }, d.error) : null),
               d.tid ? h(Btn, { small: true, kind: 'ghost', onClick: async () => { if (!confirm('从 QQ 空间删除这条说说？')) return; const r = await post('/qzone/delete', { tid: d.tid }); toast(r.message) } }, '从空间删除') : null))),
         ),
+        h(QzoneSocial, { draft, setDraft, toast }),
+      )
+    }
+
+    const SOCIAL_KIND = { reply: '回复评论', comment: '评论', like: '点赞' }
+
+    /** 空间互动：回复自己说说下的评论、逛好友动态。 */
+    function QzoneSocial({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [s, setS] = useState(null)
+      const load = () => get('/qzone/social/state').then(setS)
+      useEffect(() => { load() }, [])
+      return h(Card, { title: '空间互动', right: f.sw('qzoneSocial.enabled'), desc: '她会定期逛 QQ 空间：有人评论她的说说就回一句；刷到好友的说说，偶尔点个赞、评一句（你的说说她更爱评）。评论按她的人格现写；试运行时只记日志不发。' },
+        h(Row, { label: '回复自己说说下的评论' }, f.sw('qzoneSocial.replyOwn')),
+        h(Row, { label: '评论好友的说说' }, f.sw('qzoneSocial.commentFriends')),
+        h(Row, { label: '顺手点赞' }, f.sw('qzoneSocial.like')),
+        h(Row, { label: '好友说说互动概率', hint: '每条说说只判断一次' }, f.percent('qzoneSocial.friendChance')),
+        h(Row, { label: '你的说说互动概率' }, f.percent('qzoneSocial.ownerChance')),
+        h(Row, { label: '每天最多评论', hint: '点赞不算' }, f.range('qzoneSocial.maxPerDay', 0, 30, 1, (v) => v + ' 条')),
+        h(Row, { label: '多久逛一次', hint: '只在「主动搭话」里设的醒着时间内' }, f.range('qzoneSocial.intervalMin', 10, 240, 10, (v) => v + ' 分钟')),
+        h('div', { className: 'ab-flex', style: { marginTop: 10 } },
+          h('span', { className: 'ab-muted ab-small' }, s ? '今天评论了 ' + s.count + ' 条' + (s.lastRun ? '，上次逛是 ' + timeAgo(s.lastRun) : '') : ''),
+          h('div', { className: 'ab-spacer' }),
+          h(Btn, { small: true, onClick: async () => { toast('她去逛空间了…'); const r = await post('/qzone/social/run'); toast(r.message, r.ok ? 'ok' : 'err'); load() } }, '现在逛一次')),
+        s && s.history.length ? h('div', { className: 'ab-list', style: { marginTop: 10 } }, s.history.map((x, i) => h('div', { key: i, className: 'ab-li' },
+          h('div', { className: 'meta' }, timeAgo(x.at), h('br'), SOCIAL_KIND[x.kind] || x.kind),
+          h('div', { className: 'body' }, h('b', null, x.who), x.post ? h('span', { className: 'ab-muted' }, ' 的「' + x.post + '」') : null, x.text ? h('div', null, x.text) : null)))) : null,
       )
     }
 
@@ -865,12 +920,14 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
       useEffect(() => { const t = setTimeout(() => load(q), 250); return () => clearTimeout(t) }, [q])
       const last = st.memory && st.memory.lastConsolidate
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '心情', right: f.sw('mood.enabled'), desc: '聊天里被夸、被凶都会影响她的心情，过一阵子会慢慢回到平常。心情只在变化明显时悄悄告诉她，不会每句都提。' },
+        h(Card, { title: '心情', right: f.sw('mood.enabled'), desc: '被夸、被哄、被凶都会影响她的心情（对她说的话、主人的话影响更大），过一阵子慢慢回到平常。心情好时她话多、更爱发表情和语音、回得快、群里更爱插话；心情差时话少、回得慢、少发表情，还会带点小脾气。' },
           h('div', { className: 'ab-flex', style: { marginBottom: 8 } }, h('b', null, st.mood.label), h('span', { className: 'ab-muted' }, st.mood.value + ' / 100'), st.mood.reason ? h('span', { className: 'ab-muted ab-small' }, '· 因为' + st.mood.reason) : null),
           h('div', { className: 'ab-mood' }, h('i', { style: { width: Math.max(4, st.mood.value) + '%' } })),
           h('div', { style: { marginTop: 10 } },
-            h(Row, { label: '多久回到平常', hint: '半衰期' }, f.range('mood.halfLifeHours', 0.5, 24, 0.5, (v) => v + ' 小时')),
-            h(Row, { label: '每天最多提醒她几次' }, f.range('mood.maxInjectPerDay', 0, 20, 1, (v) => v + ' 次'))),
+            h(Row, { label: '多久回到平常', hint: '半衰期' }, f.range('mood.halfLifeHours', 0.5, 24, 0.5, (v) => v + ' 小时'))),
+          (st.mood.history || []).length ? h('div', { className: 'ab-list', style: { marginTop: 8 } }, st.mood.history.slice(0, 6).map((x, i) => h('div', { key: i, className: 'ab-li' },
+            h('div', { className: 'meta' }, timeAgo(x.at)),
+            h('div', { className: 'body' }, (x.to >= x.from ? '↑ ' : '↓ ') + x.from + ' → ' + x.to, h('span', { className: 'ab-muted ab-small' }, '  ' + x.reason))))) : null,
         ),
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
@@ -935,16 +992,112 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
         h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '忘掉'))
     }
 
-    function Song({ st }) {
+    /** 导入音色：把 .zip / .pth / .index 拖进来或点选，自动识别；下面列出已有的音色，可以删。 */
+    function VoiceImport({ s, toast, onChange }) {
+      const [over, setOver] = useState(false)
+      const [busy, setBusy] = useState('')
+      const upload = async (files) => {
+        for (const file of [...files]) {
+          if (!/\.(zip|pth|index)$/i.test(file.name)) { toast('「' + file.name + '」不是 .zip / .pth / .index', 'err'); continue }
+          setBusy('正在导入「' + file.name + '」（' + Math.round(file.size / 1024 / 1024) + 'MB）…')
+          const r = await fetch(API + '/song/import?name=' + encodeURIComponent(file.name), { method: 'POST', body: file })
+            .then((x) => x.json()).catch((e) => ({ ok: false, message: '上传失败：' + e.message }))
+          toast(r.message, r.ok ? 'ok' : 'err')
+        }
+        setBusy('')
+        onChange()
+      }
+      const pick = () => {
+        const inp = document.createElement('input')
+        inp.type = 'file'
+        inp.multiple = true
+        inp.accept = '.zip,.pth,.index'
+        inp.onchange = () => inp.files && upload(inp.files)
+        inp.click()
+      }
+      return h(Card, { title: '音色模型', desc: '插件不自带音色。把你有权使用的 RVC 模型导进来：.pth（可以带 .index），或者装着它们的 zip。只存在本机。' },
+        h('div', {
+          className: 'ab-drop' + (over ? ' over' : ''), role: 'button', tabIndex: 0,
+          onClick: pick, onKeyDown: (e) => (e.key === 'Enter' || e.key === ' ') && pick(),
+          onDragOver: (e) => { e.preventDefault(); setOver(true) }, onDragLeave: () => setOver(false),
+          onDrop: (e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files) },
+        }, busy ? h('span', null, h('i', { className: 'ab-spin' }), ' ' + busy) : h('span', null, '把 .zip / .pth / .index 拖到这里，或者点击选择文件')),
+        s.voices.length === 0 ? h('div', { className: 'ab-muted ab-small', style: { marginTop: 8 } }, '还没有音色。') :
+          h('div', { className: 'ab-list', style: { marginTop: 10 } }, s.voices.map((v) => h('div', { key: v.id, className: 'ab-li' },
+            h('div', { className: 'body' }, h('b', null, v.id), v.hasIndex ? h('span', { className: 'ab-muted ab-small' }, ' · 带 index') : null),
+            h(Btn, { small: true, kind: 'ghost', onClick: async () => { if (!confirm('删掉音色「' + v.id + '」？')) return; const r = await post('/song/voice/delete', { id: v.id }); toast(r.message, r.ok ? 'ok' : 'err'); onChange() } }, '删除')))))
+    }
+
+    const SONG_PARTS = [['python', 'Python 环境'], ['applio', 'Applio（RVC 推理引擎）'], ['separator', '人声分离'], ['ffmpeg', 'ffmpeg（混音）'], ['weights', '预训练文件（音高、音色特征）']]
+
+    function Song({ st, draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [s, setS] = useState(st.song)
+      const [q, setQ] = useState('')
+      const [found, setFound] = useState(null)
+      const [pitch, setPitch] = useState(0)
+      const [acct, setAcct] = useState(null)
+      const load = () => get('/song/status').then((r) => r.ok && setS(r))
+      // 安装中 / 正在唱的时候每 3 秒刷新一次进度
+      useEffect(() => {
+        load()
+        const busy = s && (s.install.running || s.current || s.queue.length)
+        if (!busy) return
+        const t = setInterval(load, 3000)
+        return () => clearInterval(t)
+      }, [s && s.install.running, s && Boolean(s.current), s && s.queue.length])
+      if (!s) return h(Empty, { icon: '⏳', text: '加载中…' })
+      const search = async () => { if (!q.trim()) return; setFound(null); const r = await get('/song/search?q=' + encodeURIComponent(q)); setFound(r.list || []); if (!r.ok) toast(r.message, 'err') }
+      const sing = async (song) => { const r = await post('/song/request', { songId: song.id, song: song.name, pitch }); toast(r.message, r.ok ? 'ok' : 'err'); load() }
+      const voices = s.voices.map((v) => ({ value: v.id, label: v.id, desc: v.hasIndex ? '带 .index' : '' }))
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '翻唱', desc: '让她用自己的声音唱歌：点歌 → 下载 → 分离人声 → 变声 → 混音 → 发回聊天。' },
-          h('div', { className: 'ab-note warn' }, '还没启用。', st.song.message),
-          h('div', { className: 'ab-steps', style: { marginTop: 14 } },
-            h('div', { className: 'ab-step' }, h('div', null, h('b', null, '安装 RVC 变声'), h('div', { className: 'ab-muted ab-small' }, '需要一块 NVIDIA 显卡。'))),
-            h('div', { className: 'ab-step' }, h('div', null, h('b', null, '放入音色模型（.pth）'))),
-            h('div', { className: 'ab-step' }, h('div', null, h('b', null, '登录网易云（扫码）'))),
-          ),
-          h('div', { className: 'ab-flex', style: { marginTop: 14 } }, h('button', { className: 'ab-btn primary', disabled: true, type: 'button' }, '一键启用（即将推出）')),
+        h(Card, { title: '翻唱', right: f.sw('song.enabled'), desc: '让她用自己的声音唱歌：点歌 → 从网易云下载 → 分离人声和伴奏 → 用 RVC 换成她的声音 → 混音 → 发语音条。主人在 QQ 里说「唱首歌」，或者发 /sing 歌名 都行。' },
+          h('div', { className: cx('ab-note', s.ready ? '' : 'warn') }, s.message),
+          h('div', { className: 'ab-steps', style: { marginTop: 12 } },
+            SONG_PARTS.map(([k, label]) => h('div', { key: k, className: cx('ab-step', s.parts[k] && 'done') }, h('div', null, h('b', null, label)))),
+            h('div', { className: cx('ab-step', s.voices.length && 'done') }, h('div', null, h('b', null, '音色模型'),
+              h('div', { className: 'ab-muted ab-small' }, s.voices.length ? '有 ' + s.voices.length + ' 个：' + s.voices.map((v) => v.id).join('、') : '在下面「音色模型」里导入')))),
+          h('div', { className: 'ab-flex', style: { marginTop: 12 } },
+            h(Btn, { kind: 'primary', small: true, disabled: s.install.running, onClick: async () => { const r = await post('/song/install'); toast(r.message); setTimeout(load, 800) } },
+              s.install.running ? '正在安装：' + s.install.step : Object.values(s.parts).every(Boolean) ? '重新检查 / 修复安装' : '一键安装'),
+            h('span', { className: 'ab-muted ab-small' }, '需要 NVIDIA 显卡；要下载好几个 GB，第一次装可能要十几分钟。装在 ' + s.root)),
+          s.install.log.length ? h('div', { className: 'ab-logs', style: { maxHeight: 160, marginTop: 10 } }, s.install.log.slice(-12).join('\n')) : null,
+          s.install.ok === false ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, s.install.message) : null,
+        ),
+        h(VoiceImport, { s, toast, onChange: load }),
+        h(Card, { title: '声音', desc: '用哪个音色唱、默认变调和语音条的长度。' },
+          h(Row, { label: '音色' }, voices.length ? h(Select, { value: draft.song.voice || (voices[0] && voices[0].value), options: voices, onChange: (v) => setDraft(setPath(draft, 'song.voice', v)) }) : h('span', { className: 'ab-muted' }, '还没有模型')),
+          h(Row, { label: '默认变调', hint: '她自己点歌时会按原唱男声 / 女声定，这里是你在面板里试唱时的默认值' }, f.range('song.pitch', -12, 12, 1, (v) => (v > 0 ? '+' : '') + v + ' 半音')),
+          h(Row, { label: '语音条最长', hint: '歌比这个长就截一段' }, f.range('song.maxVoiceSec', 30, 300, 10, (v) => v + ' 秒')),
+          h(Row, { label: '截哪一段' }, f.choices('song.clipStart', [{ value: 'auto', label: '副歌附近', desc: '从全曲大约 30% 的地方开始' }, { value: 'head', label: '从头开始' }])),
+          h(Row, { label: '人声音量' }, f.range('song.vocalVolume', 0.2, 2, 0.05, (v) => Math.round(v * 100) + '%')),
+          h(Row, { label: '伴奏音量' }, f.range('song.instVolume', 0.1, 2, 0.05, (v) => Math.round(v * 100) + '%')),
+          h(Row, { label: '只有主人能点歌' }, f.sw('song.ownerOnly')),
+        ),
+        h(Card, { title: '网易云', desc: '不登录也能唱免费歌；会员歌、版权歌要填网易云的 Cookie。' },
+          h(Row, { label: 'Cookie（MUSIC_U）', hint: '电脑浏览器登录 music.163.com → F12 → 应用 / 存储 → Cookie → 复制 MUSIC_U 的值。只存在本机，不显示' },
+            f.text('song.neteaseCookie', { type: 'password', size: 'wide', placeholder: draft.song.neteaseCookieSet ? '已保存（不改就留空）' : '没有就留空' })),
+          h('div', { className: 'ab-flex', style: { marginTop: 6 } },
+            h(Btn, { small: true, onClick: async () => { const r = await get('/song/account'); setAcct(r) } }, '检查登录'),
+            acct ? h('span', { className: 'ab-small', style: { color: acct.ok ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.ok ? '已登录：' + acct.nickname + (acct.vip ? '（会员）' : '（不是会员，只能下免费歌）') : acct.message) : null),
+        ),
+        h(Card, { title: '试唱', desc: '搜一首歌让她唱，做好会发到你的 QQ 私聊。' },
+          h('div', { className: 'ab-flex' },
+            h('input', { className: 'ab-input', style: { flex: '1 1 260px' }, placeholder: '歌名，可以带歌手：小幸运 田馥甄', value: q, onChange: (e) => setQ(e.target.value), onKeyDown: (e) => e.key === 'Enter' && search() }),
+            h(Btn, { small: true, onClick: search, disabled: !q.trim() }, '搜索'),
+            h('span', { className: 'ab-muted ab-small' }, '变调'),
+            h('input', { className: 'ab-input sm', type: 'number', min: -24, max: 24, value: pitch, onChange: (e) => setPitch(Number(e.target.value) || 0) })),
+          found === null ? null : found.length === 0 ? h('div', { className: 'ab-muted', style: { marginTop: 8 } }, '没搜到') :
+            h('table', { className: 'ab-table', style: { marginTop: 10 } }, h('tbody', null, found.map((x) => h('tr', { key: x.id },
+              h('td', null, x.name, x.vip ? h('span', { className: 'ab-badge', style: { marginLeft: 6 } }, '会员') : null),
+              h('td', { className: 'ab-muted' }, x.artists),
+              h('td', { className: 'ab-muted' }, Math.floor(x.durationSec / 60) + ':' + String(x.durationSec % 60).padStart(2, '0')),
+              h('td', null, h(Btn, { small: true, kind: 'primary', disabled: !s.ready || !draft.song.enabled, onClick: () => sing(x) }, '唱给我听')))))),
+          !draft.song.enabled ? h('div', { className: 'ab-muted ab-small', style: { marginTop: 8 } }, '先打开上面的「翻唱」开关并保存。') : null,
+          s.current ? h('div', { className: 'ab-note', style: { marginTop: 10 } }, h('i', { className: 'ab-spin' }), ' 正在唱「' + s.current.title + '」：' + s.current.stage + (s.queue.length ? '（后面还有 ' + s.queue.length + ' 首）' : '')) : null,
+          s.history.length ? h('div', { className: 'ab-list', style: { marginTop: 10 } }, s.history.map((x, i) => h('div', { key: i, className: 'ab-li' },
+            h('div', { className: 'meta' }, timeAgo(x.at)),
+            h('div', { className: 'body' }, (x.ok ? '✓ ' : '✗ ') + x.title + (x.voice ? ' · ' + x.voice + (x.pitch ? ' ' + (x.pitch > 0 ? '+' : '') + x.pitch : '') : ''), h('div', { className: 'ab-muted ab-small' }, x.message))))) : null,
         ),
       )
     }
@@ -1134,7 +1287,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, logs: Logs,
       }[tab] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary'], speakup: ['speakUp'], mood: ['mood', 'memory'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'] }
       const tabDirty = (id) => dirty && (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
       return h('div', { className: 'ab-root' },
         h('div', { className: 'ab-wrap' },

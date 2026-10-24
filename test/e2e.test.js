@@ -30,6 +30,7 @@ function fakePng(w, h, salt = 0) {
 
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
+  if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
   if (text.includes('引用测试') && text.startsWith('【群聊')) { const n = (text.match(/\[(\d+)\][^\n]*引用测试/) || [])[1]; return n ? `<reply:${n}>收到这条啦\n别的我就不挨个回了` : '没看到编号' }
   if (text.includes('第一句') && text.includes('第二句')) return '两句我都看到啦'
@@ -49,6 +50,7 @@ async function brain({ preset, text, images, callTool }) {
 }
 
 let mock
+const qzonePrompts = []
 let fake
 let api
 let dataDir
@@ -72,6 +74,7 @@ before(async () => {
     // 大多数用例要的是「每次都回」，刹车放宽；558/559 专门测一段一回和刹车
     group: { interjectChance: 0, burstMax: 50, overrides: { 557: { interjectChance: 1, minRelevance: 0, minRecentMessages: 0, cooldownSec: 0, quietHours: [0, 0] }, 559: { burstMax: 2 } } },
     diary: { enabled: true },
+    qzoneSocial: { friendChance: 1, ownerChance: 1, intervalMin: 1440 },
     merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
   }))
   fake = createFakeDsh({ brain })
@@ -254,6 +257,47 @@ test('群聊引用回复：她写 <reply:编号>，发出去的那条带上对�
   assert.deepEqual(quoted.params.message[0], { type: 'reply', data: { id: String(target.message_id) } })
   assert.equal(quoted.params.message[1].data.text, '收到这条啦')
   assert.equal(plain.params.message[0].type, 'text', '其余的照常发，不引用')
+})
+
+test('空间互动：回复自己说说下的新评论、评论好友说说并点赞，不重复', async () => {
+  const now = Math.floor(Date.now() / 1000)
+  mock.state.qzoneList = [{ tid: 't1', content: '今天吃了白米饭', time: now - 600, comment_num: 1, is_private: false, images: [] }]
+  mock.state.qzoneDetail = {
+    t1: { tid: 't1', content: '今天吃了白米饭', comment_num: 1, comments: [{ uin: 777, name: '群友', time: now - 300, content: '好可爱', comment_id: 'c1', replies: [] }] },
+    f1: { tid: 'f1', content: '周末去看海了', comment_num: 1, comments: [{ uin: 888, name: '路人甲', time: now - 50, content: '真羡慕', comment_id: 'x1', replies: [] }] },
+  }
+  mock.state.feeds = [
+    { uin: Number(OWNER), nickname: 'xiaoming', time: now - 100, appid: 311, key: 'f1', html: '<div>周末去看海了</div>' },
+    { uin: 0, nickname: '', time: now, appid: 6600, key: 'advertisement_outlink_0', html: '广告' },
+    { uin: Number(BOT), nickname: '大肥鱼', time: now - 50, appid: 311, key: 't1', html: '今天吃了白米饭' },
+  ]
+  const r = (await fake.call('/qzone/social/run')).json()
+  assert.equal(r.ok, true, r.message)
+  const comments = mock.sent('comment_qzone').map((c) => c.params)
+  assert.deepEqual(comments.find((c) => c.tid === 't1'), { tid: 't1', content: '回复 群友：哈哈好看' })
+  assert.deepEqual(comments.find((c) => c.tid === 'f1'), { tid: 'f1', content: '哈哈好看', target_uin: Number(OWNER) })
+  assert.equal(comments.length, 2, '广告和她自己的说说不碰')
+  assert.equal(mock.sent('like_qzone')[0].params.tid, 'f1')
+  assert.ok(qzonePrompts.some((p) => p.includes('周末去看海了') && p.includes('已经有这些评论') && p.includes('真羡慕')), '评好友说说时带上了说说内容和楼里的评论')
+  await fake.call('/qzone/social/run')
+  assert.equal(mock.sent('comment_qzone').length, 2, '同一条评论、同一条说说不会再评')
+  const st = (await fake.call('/qzone/social/state')).json()
+  assert.equal(st.count, 2)
+})
+
+test('空间互动：别人在她的评论下面接着回她，她会接着回（一串只回一次）', async () => {
+  const now = Math.floor(Date.now() / 1000)
+  const before = mock.sent('comment_qzone').length
+  mock.state.feeds = []
+  mock.state.qzoneDetail.t1.comments.push({
+    uin: Number(BOT), name: '大肥鱼', time: now - 200, content: '回复 群友：哈哈好看', comment_id: 'c2',
+    replies: [{ uin: 777, name: '群友', time: now - 100, content: '你也好看', comment_id: 'r1' }, { uin: 777, name: '群友', time: now - 90, content: '真的', comment_id: 'r2' }],
+  })
+  await fake.call('/qzone/social/run')
+  const added = mock.sent('comment_qzone').slice(before).map((c) => c.params)
+  assert.deepEqual(added, [{ tid: 't1', content: '回复 群友：哈哈好看' }], '两条新回复合起来只回一次')
+  await fake.call('/qzone/social/run')
+  assert.equal(mock.sent('comment_qzone').length, before + 1, '回过的不再回')
 })
 
 test('群聊刹车：短时间说够次数就歇着，主人 @ 还能叫动', async () => {

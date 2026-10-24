@@ -30,7 +30,9 @@ const sessionKey = (id) => {
   return s.startsWith('session-') ? s.slice(8) : s
 }
 
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects }) {
+  // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
+  const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
   const map = () => readJson(mapFile(), () => ({ chats: {} }))
   const saveMap = (m) => writeJson(mapFile(), m)
@@ -310,6 +312,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
+  /** 把一个音频文件当语音条发出去（翻唱用）。 */
+  async function sendVoiceFile(chatId, file, note) {
+    const b64 = readFileSync(file).toString('base64')
+    const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], note || '[语音]')
+    if (r || getConfig().dryRun || !getConfig().enabled) bump('voice')
+    if (!r && getConfig().enabled && !getConfig().dryRun) throw new Error('网关没接受这条语音')
+    return r
+  }
+
   async function sendSticker(chatId, query, replyId) {
     const item = query && typeof query === 'object' ? query : stickers.match(query)
     if (!item) {
@@ -352,13 +363,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const texts = items.filter((i) => i.kind === 'text')
     if (cfg.voice.enabled && items.length === texts.length && texts.length > 0) {
       const all = texts.map((t) => t.value).join('，')
-      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
+      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance * mood().voice) items = [{ kind: 'voice', value: all }]
     }
     const inGroup = chatId.startsWith('group:')
     // 群里别刷屏：一段最多 3 条
     if (inGroup && items.length > 3) items = items.slice(0, 3)
     // 按概率补一张表情（群里已经有两条以上就不补了）
-    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance) {
+    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
@@ -374,7 +385,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         else await sendText(chatId, it.value, replyId)
       } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId)
       else if (it.kind === 'image') await sendImage(chatId, it.value)
-      if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
+      if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
     }
     if (inGroup) {
       const gid = chatId.slice(6)
@@ -570,7 +581,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
     let mode = 'must'
     if (msg.kind === 'group') {
-      const pol = policyFor(cfg.group, cfg.group.overrides, msg.groupId)
+      const pol0 = policyFor(cfg.group, cfg.group.overrides, msg.groupId)
+      // 心情好更爱插话，心情差少插话
+      const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * mood().chatty) }
       // 群里最近在聊的（窗口内最后几条）和她有多相关
       const recentTexts = (groupBuf.get(msg.groupId) || []).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0
@@ -618,7 +631,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     logChat(msg.chatId, msg.nickname, text)
     lastChatAt = now
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
-    onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text })
+    onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
 
     enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode)
   }
@@ -874,6 +887,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     deliver,
     sendText,
     sendVoice,
+    sendVoiceFile,
     sendSticker,
     sendImage,
     sendSegments,
