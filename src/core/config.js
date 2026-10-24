@@ -26,7 +26,7 @@ export const DEFAULTS = {
     wsToken: '',
   },
   model: { provider: '', model: '', reasoningEffort: 'low' }, // 留空 = 跟随 DSH 默认
-  merge: { enabled: true, waitSec: 2.5, maxSec: 8 }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒
+  merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒；群里等得久一点，把一段话攒齐
   imageGen: {
     enabled: false,
     provider: 'openai', // openai = 兼容 OpenAI /v1/images/generations 的服务（硅基流动、通义、本地 ComfyUI 代理……）
@@ -161,6 +161,13 @@ export function normalize(raw) {
   c.merge.enabled = bool(c.merge.enabled, true)
   c.merge.waitSec = num(c.merge.waitSec, 2.5, 0, 30)
   c.merge.maxSec = Math.max(c.merge.waitSec, num(c.merge.maxSec, 8, 0, 60))
+  c.merge.groupWaitSec = num(c.merge.groupWaitSec, 5, 0, 60)
+  c.merge.groupMaxSec = Math.max(c.merge.groupWaitSec, num(c.merge.groupMaxSec, 15, 0, 120))
+  g.engagedChance = num(g.engagedChance, 0.5, 0, 1)
+  g.engagedGapSec = num(g.engagedGapSec, 20, 0, 600)
+  g.wakeCooldownSec = num(g.wakeCooldownSec, 20, 0, 600)
+  g.burstMax = num(g.burstMax, 4, 1, 50)
+  g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
   if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
   c.voice.cosyvoice.sampleRate = num(c.voice.cosyvoice.sampleRate, 22050, 8000, 48000)
   if (!['sft', 'instruct'].includes(c.voice.cosyvoice.mode)) c.voice.cosyvoice.mode = 'sft'

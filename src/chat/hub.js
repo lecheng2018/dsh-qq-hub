@@ -38,8 +38,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const mounted = new WeakMap() // agent → { off: fn[] , chatId }
   const sessionToChat = new Map() // sessionKey → chatId
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
-  const groupBuf = new Map() // groupId → [{t, uid, nick, text}]
-  const groupInterjects = new Map() // groupId → [t]
+  const groupBuf = new Map() // groupId → [{t, uid, nick, text, at}]
+  const groupInterjects = new Map() // groupId → [t]  她主动开口（插话、接话）的时间
+  const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
+  const groupFedAt = new Map() // groupId → 上次把群消息交给她的时间
+  const groupTurnMode = new Map() // groupId → 这一轮是怎么来的（must / interject / engaged）
   const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
@@ -348,8 +351,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const all = texts.map((t) => t.value).join('，')
       if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
     }
-    // 按概率补一张表情
-    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && Math.random() < cfg.stickers.autoChance) {
+    const inGroup = chatId.startsWith('group:')
+    // 群里别刷屏：一段最多 3 条
+    if (inGroup && items.length > 3) items = items.slice(0, 3)
+    // 按概率补一张表情（群里已经有两条以上就不补了）
+    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
@@ -363,7 +369,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       else if (it.kind === 'image') await sendImage(chatId, it.value)
       if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
     }
-    if (chatId.startsWith('group:')) groupEngaged.set(chatId.slice(6), Date.now() + ENGAGE_MS) // 在群里说了话 = 加入了话题
+    if (inGroup) {
+      const gid = chatId.slice(6)
+      const said = (groupSaid.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
+      said.push(Date.now())
+      groupSaid.set(gid, said)
+      // 被叫到或自己插话之后算加入了话题；接话那一轮不再续期，免得越聊越停不下来
+      if (groupTurnMode.get(gid) !== 'engaged') groupEngaged.set(gid, Date.now() + ENGAGE_MS)
+    }
     logChat(chatId, 'bot', items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' '))
     lastChatAt = Date.now()
     if (chatId === `private:${cfg.ownerQQ}`) lastBotToOwner = { at: Date.now(), text: items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => i.value).join('\n') }
@@ -410,10 +423,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       if (!completed) {
         log.warn(`${chatId} 这一轮没正常结束（${d.reason?.kind || '?'}），不发`)
+        release(chatId)
         return
       }
-      if (!text) return
-      deliver(chatId, text, { wantVoice }).catch((error) => log.warn('发送出错：', error.message))
+      if (!text) return release(chatId)
+      // 发完再放开：发送期间来的消息也攒到下一段
+      deliver(chatId, text, { wantVoice }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
     }
   }
 
@@ -506,7 +521,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 群里的每条消息都记进缓冲（给上下文和「群里在不在聊」用）
     if (msg.kind === 'group') {
       const buf = groupBuf.get(msg.groupId) || []
-      buf.push({ t: now, uid: msg.userId, nick: msg.nickname, text: msg.text })
+      buf.push({ t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned })
       while (buf.length > 40) buf.shift()
       groupBuf.set(msg.groupId, buf)
     }
@@ -560,23 +575,22 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         engagedUntil: groupEngaged.get(msg.groupId) || 0,
         mentioned: msg.mentioned,
         repliedToBot: await repliedToBot(msg.replyId),
+        fromOwner: isOwner(cfg, msg.userId),
         text: msg.text,
         now,
         hour: new Date().getHours(),
         recentTimes: (groupBuf.get(msg.groupId) || []).map((x) => x.t),
         interjectTimes: groupInterjects.get(msg.groupId) || [],
+        botReplyTimes: groupSaid.get(msg.groupId) || [],
       })
       if (!decision.reply) {
         log.debug(`群 ${msg.groupId}：不回（${decision.reason}）`)
         logChat(msg.chatId, msg.nickname, msg.text)
+        // 已经有一段在等她回：这条也算进去（她回的时候能看到），但不单独再触发一次
+        if (pending.has(msg.chatId)) await addGroupImages(msg)
         return
       }
       mode = decision.mode
-      if (mode === 'interject') {
-        const arr = groupInterjects.get(msg.groupId) || []
-        arr.push(now)
-        groupInterjects.set(msg.groupId, arr.filter((t) => now - t < 3600_000))
-      }
       log.info(`群 ${msg.groupId}：${decision.reason} → 交给她`)
     }
 
@@ -584,17 +598,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let text = msg.text
     const voiceText = cfg.voice.asr && msg.records.length ? await transcribe(msg) : msg.records.length ? '[发来一条语音]' : ''
     if (voiceText) text = (text ? text + ' ' : '') + voiceText
-    let header
-    if (msg.kind === 'group') {
-      const name = await groupName(msg.groupId)
-      const ctxLines = (groupBuf.get(msg.groupId) || []).slice(-13, -1).map((x) => `${x.nick}(${x.uid})：${x.text}`)
-      header = (ctxLines.length ? `【群聊 ${name}】刚才群里在聊：\n${ctxLines.join('\n')}\n\n` : '') +
-        (mode === 'interject' ? `【群聊 ${name}】（没人叫你。群里正在聊上面这些——只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题，也别只回最后一句；接不上就只回 [沉默]）` : mode === 'engaged' ? `【群聊 ${name}】（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）` : `【群聊 ${name}】`) +
-        `${msg.nickname}(${msg.userId})${msg.mentioned ? '@了你' : ''}：`
-    } else {
-      header = `【私聊】${msg.nickname}(${msg.userId})：`
+    if (voiceText && msg.kind === 'group') {
+      // 群消息的文字在 groupBuf 里，语音转出来的字补进去，拼提示词时才看得到
+      const last = (groupBuf.get(msg.groupId) || []).findLast?.((x) => x.uid === msg.userId)
+      if (last) last.text = text
     }
-    const content = [{ type: 'text', text: header + (text || '（没有文字）') }]
+    // 群聊：不在这里拼文案。等这段消息攒齐了（或她回完上一段），flush 时把群里新来的话一次性交给她
+    const content = msg.kind === 'group' ? [] : [{ type: 'text', text: `【私聊】${msg.nickname}(${msg.userId})：` + (text || '（没有文字）') }]
     const imgs = await imagesOf(msg)
     if (imgs.length) {
       for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
@@ -604,15 +614,50 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
     onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text })
 
-    enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text))
+    enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode)
+  }
+
+  /** 没触发回复的群消息带的图：如果正有一段在等她回，把图也带上（最多 4 张）。 */
+  async function addGroupImages(msg) {
+    const p = pending.get(msg.chatId)
+    if (!p || p.images.length >= 4) return
+    try {
+      const imgs = await imagesOf(msg)
+      for (let i = 0; i < imgs.length && p.images.length < 4; i++) p.images.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
+    } catch (error) {}
+  }
+
+  /** 群聊这一段的提示词：之前的几句当背景，上次交给她之后群里新说的话全部列出来，让她看完整段再回。 */
+  async function groupPrompt(chat, mode) {
+    const name = await groupName(chat.groupId)
+    const buf = groupBuf.get(chat.groupId) || []
+    const since = groupFedAt.get(chat.groupId) || 0
+    const fresh = buf.filter((x) => x.t > since).slice(-20)
+    const older = buf.filter((x) => x.t <= since).slice(-8)
+    groupFedAt.set(chat.groupId, Date.now())
+    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}`
+    const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
+      : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
+      : '（有人在叫你，看完这一段再回）'
+    return (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${fresh.map(line).join('\n')}\n\n` +
+      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。'
   }
 
   // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------
-  const pending = new Map() // chatId → { chat, texts, images, senders, wantVoice, timer, firstAt }
-  function enqueue(chat, content, senderId, wantVoice) {
+  // 群聊再加一层：她正在回上一段时，新消息先攒着，等她说完再一起交给她（不会一条消息一轮、挨个回）
+  const pending = new Map() // chatId → { chat, texts, images, senders, wantVoice, timer, firstAt, mode, count }
+  const busy = new Map() // chatId → 这一轮开始的时间（她正在想 / 正在发）
+  const BUSY_MAX_MS = 4 * 60_000 // 卡住保护：超过这么久就当她已经回完了
+  const RANK = { engaged: 1, interject: 2, must: 3 }
+  const isBusy = (chatId) => busy.has(chatId) && Date.now() - busy.get(chatId) < BUSY_MAX_MS
+
+  function enqueue(chat, content, senderId, wantVoice, mode = 'must') {
     const m = getConfig().merge
-    const p = pending.get(chat.chatId) || { chat, texts: [], images: [], senders: new Set(), wantVoice: false, timer: null, firstAt: Date.now() }
+    const p = pending.get(chat.chatId) || { chat, texts: [], images: [], senders: new Set(), wantVoice: false, timer: null, firstAt: Date.now(), mode, count: 0 }
     p.chat = chat
+    p.count++
+    if ((RANK[mode] || 3) > (RANK[p.mode] || 3)) p.mode = mode
     for (const c of content) {
       if (c.type === 'text') p.texts.push(c.text)
       else if (c.type === 'image' && p.images.length < 4) p.images.push(c)
@@ -622,24 +667,65 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     pending.set(chat.chatId, p)
     clearTimeout(p.timer)
     if (!m.enabled) return flush(chat.chatId)
-    const left = Math.max(0, m.maxSec * 1000 - (Date.now() - p.firstAt))
-    p.timer = setTimeout(() => flush(chat.chatId), Math.min(m.waitSec * 1000, left))
+    // 群里大家一来一回说得慢，多等一会儿把一段话攒齐
+    const group = chat.kind === 'group'
+    const wait = (group ? m.groupWaitSec : m.waitSec) * 1000
+    const max = (group ? m.groupMaxSec : m.maxSec) * 1000
+    const left = Math.max(0, max - (Date.now() - p.firstAt))
+    p.timer = setTimeout(() => flush(chat.chatId), Math.min(wait, left))
     p.timer.unref?.()
   }
 
   async function flush(chatId) {
     const p = pending.get(chatId)
     if (!p) return
-    pending.delete(chatId)
     clearTimeout(p.timer)
-    if (p.texts.length > 1) log.info(`${chatId}：合并了 ${p.texts.length} 条连发的消息`)
-    const content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+    // 她还在回上一段：先攒着，回完了再交（release 会叫 flush）
+    if (isBusy(chatId)) {
+      p.waiting = true
+      return
+    }
+    pending.delete(chatId)
+    if (p.count > 1) log.info(`${chatId}：合并了 ${p.count} 条消息一起交给她`)
+    let content
+    if (p.chat.kind === 'group') {
+      const gid = p.chat.groupId
+      const pol = policyFor(getConfig().group, getConfig().group.overrides, gid)
+      const said = groupSaid.get(gid) || []
+      const lastSaid = said.length ? Math.max(...said) : 0
+      // 攒的时候她刚说过话：不是被点名的就不接了，免得刚说完又说
+      if (p.mode !== 'must' && Date.now() - lastSaid < (pol.engagedGapSec ?? 20) * 1000) {
+        log.debug(`群 ${gid}：她刚说过，这段（${p.mode}）不接了`)
+        return
+      }
+      if (p.mode !== 'must') {
+        const arr = (groupInterjects.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
+        arr.push(Date.now())
+        groupInterjects.set(gid, arr)
+      }
+      groupTurnMode.set(gid, p.mode)
+      content = [{ type: 'text', text: await groupPrompt(p.chat, p.mode) }, ...p.images]
+    } else {
+      content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+    }
+    busy.set(chatId, Date.now())
     try {
       const [first, ...rest] = [...p.senders]
       await pushToSession(p.chat, content, first, { wantVoice: p.wantVoice, extraSenders: rest })
     } catch (error) {
+      release(chatId)
       bump('errors')
       log.error(`转进 DSH 失败（${chatId}）：`, error.message)
+    }
+  }
+
+  /** 她这一轮说完了（或者没说）：放开，把这期间攒下的消息交给她。 */
+  function release(chatId) {
+    busy.delete(chatId)
+    const p = pending.get(chatId)
+    if (p && p.waiting) {
+      p.waiting = false
+      flush(chatId).catch(() => {})
     }
   }
 

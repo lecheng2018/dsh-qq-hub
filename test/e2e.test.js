@@ -30,6 +30,7 @@ function fakePng(w, h, salt = 0) {
 
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
+  if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
   if (text.includes('第一句') && text.includes('第二句')) return '两句我都看到啦'
   if (text.includes('画一只')) { const r = await callTool('qq_draw_image', { prompt: '一只蓝色小鲸鱼' }); return r && r.ok ? '画好啦' : '画不了' }
   if (text.includes('【写空间日记】')) return '今天主人夸我可爱，开心得尾巴甩来甩去。晚饭吃了一大碗白米饭，满足～明天也要元气满满地陪大家聊天呀'
@@ -63,13 +64,14 @@ before(async () => {
     setupDone: true,
     botQQ: BOT,
     ownerQQ: OWNER,
-    allow: { private: [OWNER], groups: ['555', '557'] },
+    allow: { private: [OWNER], groups: ['555', '557', '558', '559'] },
     snowluma: { autoStart: false, autoAttach: false, httpUrl: mock.httpUrl, wsUrl: mock.wsUrl, httpToken: mock.token, wsToken: mock.token, dir: join(dataDir, 'no-snowluma') },
     voice: { engine: 'windows', autoChance: 0 },
     stickers: { autoChance: 0 },
-    group: { interjectChance: 0, overrides: { 557: { interjectChance: 1, minRelevance: 0, minRecentMessages: 0, cooldownSec: 0, quietHours: [0, 0] } } },
+    // 大多数用例要的是「每次都回」，刹车和间隔放宽；558/559 专门测防刷屏
+    group: { interjectChance: 0, burstMax: 50, wakeCooldownSec: 0, overrides: { 557: { interjectChance: 1, minRelevance: 0, minRecentMessages: 0, cooldownSec: 0, quietHours: [0, 0] }, 559: { burstMax: 2 } } },
     diary: { enabled: true },
-    merge: { waitSec: 0.4, maxSec: 3 },
+    merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
   }))
   fake = createFakeDsh({ brain })
   const host = await import('../src/host.js')
@@ -206,6 +208,52 @@ test('QQ 命令：主人 /silent 后群里 @ 她也不回，/active 恢复；群
   mock.push(grp('555', OWNER, text('/active'), 'xiaoming'))
   await until(() => sentTo('group', '555').length > n)
   mock.push(grp('555', '778', at('在吗')))
+  await until(() => fake.turns.length > turns)
+})
+
+test('群聊一段一回：好几个人连着 @ 她，她看完整段只回一次，提示词里有每个人的话', async () => {
+  const before = fake.turns.length
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  mock.push(grp('558', '701', at('第一个人说话'), '甲'))
+  mock.push(grp('558', '702', at('第二个人说话'), '乙'))
+  mock.push(grp('558', '703', text('第三个人没叫她'), '丙'))
+  mock.push(grp('558', '704', at('第四个人说话'), '丁'))
+  await until(() => fake.turns.length > before)
+  await sleep(1500)
+  const mine = fake.turns.slice(before).filter((t) => t.userText.includes('群聊'))
+  assert.equal(mine.length, 1, '只交给她一次')
+  for (const w of ['第一个人', '第二个人', '第三个人', '第四个人']) assert.ok(mine[0].userText.includes(w), w)
+  assert.match(mine[0].userText, /不要一条一条地挨个回/)
+})
+
+test('群聊：她还在回上一段时新来的消息先攒着，回完再一起看（不会一条一轮）', async () => {
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  const before = fake.turns.length
+  mock.push(grp('558', '720', at('慢慢想一下这个问题'), '戊'))
+  await sleep(1200) // 已经交给她了，她正在想
+  mock.push(grp('558', '721', at('补充一句A'), '己'))
+  mock.push(grp('558', '722', at('补充一句B'), '庚'))
+  mock.push(grp('558', '723', at('补充一句C'), '辛'))
+  await until(() => fake.turns.length >= before + 2, 12000)
+  await sleep(1500)
+  const mine = fake.turns.slice(before).filter((t) => t.userText.includes('群聊'))
+  assert.equal(mine.length, 2, '第一段一轮，她想的时候来的三条合成第二轮')
+  assert.ok(['补充一句A', '补充一句B', '补充一句C'].every((w) => mine[1].userText.includes(w)))
+})
+
+test('群聊刹车：短时间说够次数就歇着，主人 @ 还能叫动', async () => {
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  for (let i = 0; i < 2; i++) {
+    const n = sentTo('group', '559').length
+    mock.push(grp('559', '710', at('在吗' + i)))
+    await until(() => sentTo('group', '559').length > n)
+    await sleep(600)
+  }
+  const turns = fake.turns.length
+  mock.push(grp('559', '711', at('在吗 再来')))
+  await sleep(1500)
+  assert.equal(fake.turns.length, turns, '说够 2 次了，群友 @ 也先不回')
+  mock.push(grp('559', OWNER, at('在吗 主人来了'), 'xiaoming'))
   await until(() => fake.turns.length > turns)
 })
 

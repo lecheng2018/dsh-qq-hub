@@ -11,6 +11,11 @@ export const DEFAULT_GROUP_POLICY = {
   // 话题相关度：群里正在聊的东西和她有关（碰到她感兴趣的话题、或者她记得相关的事），才可能插话
   interests: ['白米饭', '米饭', '吃饭', '好吃', '饿了', '游戏', '追剧', '番剧', '动漫', '猫', '狗', '鲸鱼', '鱼', '睡觉', '熬夜', '困', '天气', '下雨', '表情包', '女仆', '可爱', '奶茶', '甜品'],
   minRelevance: 0.25, // 相关度低于这个就不插话（0 = 不看话题，纯随机）
+  engagedChance: 0.5, // 加入话题后，群里每来一段新消息她接话的概率
+  engagedGapSec: 20, // 加入话题后，两次接话至少隔这么久
+  wakeCooldownSec: 20, // 被唤醒词叫到时，距离她上次说话不到这么久就不算「必回」（防止和别的号对叫）
+  burstMax: 4, // 刹车：burstWindowSec 秒内她最多说这么多次，超了就歇着（主人 @ 除外）
+  burstWindowSec: 120,
 }
 
 /**
@@ -41,47 +46,60 @@ export function inQuietHours(hour, quiet) {
 }
 
 /**
- * 决定这条群消息要不要回。
+ * 决定这段群消息要不要回。
  * @param {object} p
  * @param {object} p.policy  policyFor() 的结果
  * @param {boolean} p.mentioned  被 @
  * @param {boolean} p.repliedToBot  引用了机器人的消息
+ * @param {boolean} [p.fromOwner]  是主人说的
  * @param {string} p.text  消息正文
  * @param {number} p.now  毫秒时间戳
  * @param {number[]} p.recentTimes  本群最近消息的时间戳（毫秒）
- * @param {number[]} p.interjectTimes  本群最近插话的时间戳（毫秒）
+ * @param {number[]} p.interjectTimes  本群最近主动开口（插话、接话）的时间戳（毫秒）
+ * @param {number[]} [p.botReplyTimes]  她在本群最近每次说话的时间戳（毫秒）
  * @param {number} p.hour  当前小时
  * @param {() => number} [p.rand]
- * @returns {{reply: boolean, mode: 'must'|'interject'|'none', reason: string}}
+ * @returns {{reply: boolean, mode: 'must'|'interject'|'engaged'|'none', reason: string}}
  */
 export function decideGroupReply(p) {
   const pol = p.policy || DEFAULT_GROUP_POLICY
   const text = String(p.text || '')
+  const rand = p.rand || Math.random
+  const said = p.botReplyTimes || []
+  const lastSaid = said.length ? Math.max(...said) : 0
+  // 刹车：短时间里说太多了就歇一会儿，只有主人 @ 能叫动
+  const burst = said.filter((t) => p.now - t < (pol.burstWindowSec ?? 120) * 1000).length
+  if (burst >= (pol.burstMax ?? 4) && !(p.fromOwner && (p.mentioned || p.repliedToBot))) {
+    return { reply: false, mode: 'none', reason: `刚说了太多（${burst} 次），歇一会儿` }
+  }
   if (p.mentioned) return { reply: true, mode: 'must', reason: '被 @' }
   if (p.repliedToBot) return { reply: true, mode: 'must', reason: '引用了她的消息' }
-  const hit = (pol.wakeWords || []).find((w) => w && text.includes(w))
-  if (hit) return { reply: true, mode: 'must', reason: `叫到了「${hit}」` }
+  const rel0 = typeof p.relevance === 'number' ? p.relevance : 1
+  // 唤醒词：单个字太容易误触（比如「鱼」），只当话题加分；刚说过话又被叫到，也不算必回
+  const hit = (pol.wakeWords || []).find((w) => w && w.length >= 2 && text.includes(w))
+  if (hit && p.now - lastSaid >= (pol.wakeCooldownSec ?? 20) * 1000) return { reply: true, mode: 'must', reason: `叫到了「${hit}」` }
+  const soft = (pol.wakeWords || []).some((w) => w && text.includes(w))
+  const rel = Math.min(1, rel0 + (soft ? 0.3 : 0))
 
   if (!(pol.interjectChance > 0)) return { reply: false, mode: 'none', reason: '插话关着' }
   if (inQuietHours(p.hour, pol.quietHours)) return { reply: false, mode: 'none', reason: '静默时段' }
-  const rel0 = typeof p.relevance === 'number' ? p.relevance : 1
-  // 已经加入了这个话题（刚插过话、话题还在她感兴趣的范围里）：接着聊，不受冷却和每小时上限限制
-  if (p.engagedUntil && p.now < p.engagedUntil && rel0 >= (Number(pol.minRelevance) || 0)) {
-    return { reply: true, mode: 'engaged', reason: `正聊得起劲，接着说（相关度 ${rel0.toFixed(2)}）` }
-  }
   const times = p.interjectTimes || []
+  const lastHour = times.filter((t) => p.now - t < 3600_000).length
+  if (lastHour >= pol.maxPerHour) return { reply: false, mode: 'none', reason: '这小时说得够多了' }
+  const minRel = Number(pol.minRelevance) || 0
+  // 已经加入了这个话题：可以接着聊，但要隔一会儿、也不是每段都接
+  if (p.engagedUntil && p.now < p.engagedUntil && rel >= minRel) {
+    if (p.now - lastSaid < (pol.engagedGapSec ?? 20) * 1000) return { reply: false, mode: 'none', reason: '刚说过，先听听' }
+    if (rand() < (pol.engagedChance ?? 0.5)) return { reply: true, mode: 'engaged', reason: `正聊得起劲，接着说（相关度 ${rel.toFixed(2)}）` }
+    return { reply: false, mode: 'none', reason: '这段先不接' }
+  }
   const last = times.length ? Math.max(...times) : 0
   if (p.now - last < pol.cooldownSec * 1000) return { reply: false, mode: 'none', reason: '插话冷却中' }
-  const lastHour = times.filter((t) => p.now - t < 3600_000).length
-  if (lastHour >= pol.maxPerHour) return { reply: false, mode: 'none', reason: '这小时插话够多了' }
   const recent = (p.recentTimes || []).filter((t) => p.now - t < pol.activeWindowSec * 1000).length
   if (recent < pol.minRecentMessages) return { reply: false, mode: 'none', reason: '群里没在聊' }
   // 话题和她有关才插，越相关越容易插（不传 relevance 时按「不看话题」处理，兼容旧调用）
-  const rel = typeof p.relevance === 'number' ? p.relevance : 1
-  const minRel = Number(pol.minRelevance) || 0
   if (minRel > 0 && rel < minRel) return { reply: false, mode: 'none', reason: `话题和她关系不大（相关度 ${rel.toFixed(2)}）` }
   const chance = minRel > 0 ? Math.min(0.8, pol.interjectChance * (1 + 4 * rel)) : pol.interjectChance
-  const r = (p.rand || Math.random)()
-  if (r < chance) return { reply: true, mode: 'interject', reason: `话题相关，插一句（相关度 ${rel.toFixed(2)}）` }
+  if (rand() < chance) return { reply: true, mode: 'interject', reason: `话题相关，插一句（相关度 ${rel.toFixed(2)}）` }
   return { reply: false, mode: 'none', reason: '这次不插话' }
 }
