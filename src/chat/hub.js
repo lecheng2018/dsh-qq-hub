@@ -42,6 +42,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const groupInterjects = new Map() // groupId → [t]  她主动开口（插话、接话）的时间
   const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
   const groupFedAt = new Map() // groupId → 上次把群消息交给她的时间
+  const groupRefs = new Map() // groupId → { 编号: QQ 消息 ID }  上一段提示词里的编号，引用回复用
   const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
@@ -287,8 +288,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
-  async function sendText(chatId, text) {
-    return sendSegments(chatId, [{ type: 'text', data: { text } }], text.slice(0, 60))
+  /** replyId：要引用回复的那条 QQ 消息（可选）。 */
+  const quote = (replyId) => (replyId ? [{ type: 'reply', data: { id: String(replyId) } }] : [])
+
+  async function sendText(chatId, text, replyId) {
+    return sendSegments(chatId, [...quote(replyId), { type: 'text', data: { text } }], (replyId ? '[引用] ' : '') + text.slice(0, 60))
   }
 
   async function sendVoice(chatId, text) {
@@ -306,7 +310,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
-  async function sendSticker(chatId, query) {
+  async function sendSticker(chatId, query, replyId) {
     const item = query && typeof query === 'object' ? query : stickers.match(query)
     if (!item) {
       log.debug(`没找到「${query}」这张表情，跳过`)
@@ -314,7 +318,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     const seg = stickers.segmentFor(item)
     if (!seg) return false
-    await sendSegments(chatId, [seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    await sendSegments(chatId, [...quote(replyId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
     bump('stickers')
     return true
   }
@@ -358,13 +362,17 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
+    // 引用回复：她写的编号换成那条群消息的 QQ 消息 ID（语音条不能带引用，就不引用了）
+    const refs = inGroup ? groupRefs.get(chatId.slice(6)) || {} : {}
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
-      if (it.kind === 'text') await sendText(chatId, it.value)
+      const replyId = it.replyTo ? refs[it.replyTo] : undefined
+      if (it.replyTo && !replyId) log.debug(`${chatId}：引用的编号 ${it.replyTo} 对不上，正常发`)
+      if (it.kind === 'text') await sendText(chatId, it.value, replyId)
       else if (it.kind === 'voice') {
         if (cfg.voice.enabled) await sendVoice(chatId, it.value)
-        else await sendText(chatId, it.value)
-      } else if (it.kind === 'sticker') await sendSticker(chatId, it.value)
+        else await sendText(chatId, it.value, replyId)
+      } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId)
       else if (it.kind === 'image') await sendImage(chatId, it.value)
       if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
     }
@@ -519,7 +527,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 群里的每条消息都记进缓冲（给上下文和「群里在不在聊」用）
     if (msg.kind === 'group') {
       const buf = groupBuf.get(msg.groupId) || []
-      buf.push({ t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned })
+      buf.push({ t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned, mid: msg.messageId })
       while (buf.length > 40) buf.shift()
       groupBuf.set(msg.groupId, buf)
     }
@@ -634,12 +642,20 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const older = buf.filter((x) => x.t <= since).slice(-8)
     groupFedAt.set(chat.groupId, Date.now())
     const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}`
+    // 新消息带编号，她想专门回某一条时可以引用；编号 → QQ 消息 ID 记下来，发的时候换成引用
+    const refs = {}
+    const numbered = fresh.map((x, i) => {
+      if (x.mid) refs[i + 1] = x.mid
+      return `[${i + 1}] ${line(x)}`
+    })
+    groupRefs.set(chat.groupId, refs)
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
       : '（有人在叫你，看完这一段再回）'
     return (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
-      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${fresh.map(line).join('\n')}\n\n` +
-      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。'
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
+      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
+      '大多数时候直接说就行。只有想专门接其中某一条、而直接说别人会看不出你在回谁时（比如那条已经被后面的话刷上去了、或者你在回某个人随口一提的事），才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。'
   }
 
   // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------

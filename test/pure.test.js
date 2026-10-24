@@ -208,3 +208,15 @@ test('wantsVoice：明确要语音才算', async () => {
   for (const t of ['用语音跟我发晚安', '发个语音呗', '语音说一下', '给我来段语音', '录个语音']) assert.equal(wantsVoice(t), true, t)
   for (const t of ['晚安', '你的语音好好听', '不要语音', '刚才那条语音是啥']) assert.equal(wantsVoice(t), false, t)
 })
+
+test('引用回复：<reply:编号> 挂到下一条气泡上，一轮最多一条，写坏的标签去掉', async () => {
+  const { parseReply } = await import('../src/chat/reply.js')
+  assert.deepEqual(parseReply('<reply:3>粮收到 省着花\n刷视频那摊我少刷两条').items, [
+    { kind: 'text', value: '粮收到 省着花', replyTo: '3' },
+    { kind: 'text', value: '刷视频那摊我少刷两条' },
+  ])
+  assert.equal(parseReply('哈哈\n<reply:2>你说的那个|||<reply:5>还有这个').items.filter((i) => i.replyTo).length, 1)
+  assert.equal(parseReply('<reply:1><sticker:开心>').items[0].replyTo, '1')
+  assert.deepEqual(parseReply('<reply:x>坏标签').items, [{ kind: 'text', value: '坏标签' }])
+  assert.equal(parseReply('正常说话').items[0].replyTo, undefined)
+})

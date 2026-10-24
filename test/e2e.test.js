@@ -31,6 +31,7 @@ function fakePng(w, h, salt = 0) {
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
   if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
+  if (text.includes('引用测试') && text.startsWith('【群聊')) { const n = (text.match(/\[(\d+)\][^\n]*引用测试/) || [])[1]; return n ? `<reply:${n}>收到这条啦\n别的我就不挨个回了` : '没看到编号' }
   if (text.includes('第一句') && text.includes('第二句')) return '两句我都看到啦'
   if (text.includes('画一只')) { const r = await callTool('qq_draw_image', { prompt: '一只蓝色小鲸鱼' }); return r && r.ok ? '画好啦' : '画不了' }
   if (text.includes('【写空间日记】')) return '今天主人夸我可爱，开心得尾巴甩来甩去。晚饭吃了一大碗白米饭，满足～明天也要元气满满地陪大家聊天呀'
@@ -239,6 +240,20 @@ test('群聊：她还在回上一段时新来的消息先攒着，回完再一�
   const mine = fake.turns.slice(before).filter((t) => t.userText.includes('群聊'))
   assert.equal(mine.length, 2, '第一段一轮，她想的时候来的三条合成第二轮')
   assert.ok(['补充一句A', '补充一句B', '补充一句C'].every((w) => mine[1].userText.includes(w)))
+})
+
+test('群聊引用回复：她写 <reply:编号>，发出去的那条带上对应消息的引用', async () => {
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  const first = grp('558', '730', text('先随便说一句'), '壬')
+  const target = grp('558', '731', at('引用测试 这条要被引用'), '癸')
+  mock.push(first)
+  mock.push(target)
+  const n = sentTo('group', '558').length
+  await until(() => sentTo('group', '558').length >= n + 2)
+  const [quoted, plain] = sentTo('group', '558').slice(n)
+  assert.deepEqual(quoted.params.message[0], { type: 'reply', data: { id: String(target.message_id) } })
+  assert.equal(quoted.params.message[1].data.text, '收到这条啦')
+  assert.equal(plain.params.message[0].type, 'text', '其余的照常发，不引用')
 })
 
 test('群聊刹车：短时间说够次数就歇着，主人 @ 还能叫动', async () => {

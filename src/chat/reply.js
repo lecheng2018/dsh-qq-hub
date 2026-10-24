@@ -4,6 +4,7 @@
 //   - `|||` 分隔多条气泡
 //   - `<voice>…</voice>` 包住的内容发成语音
 //   - `<sticker:标签>` 发一张表情（可写 `<sticker:标签></sticker>`）
+//   - `<reply:编号>` 写在某句前面 = 这句以「引用回复」发出（群聊里引用提示词中带编号的那条消息）
 //   - 整轮只输出 `[沉默]`（或空）= 这次不说话（群聊插话用）
 // 另外顺手把模型偶尔漏出来的 Markdown 洗掉——QQ 不渲染 Markdown。
 
@@ -35,33 +36,55 @@ export function isSilence(text) {
 /**
  * 解析一轮回复。
  * @param {string} text 模型这一轮的最终正文
- * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string}>}}
+ * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
 export function parseReply(text) {
   const raw = String(text || '').trim()
   if (isSilence(raw)) return { silent: true, items: [] }
   const items = []
+  let replyTo = '' // 等着挂到下一条气泡上的「引用回复」编号
+  const attach = (from) => {
+    if (replyTo && items.length > from) {
+      items[from].replyTo = replyTo
+      replyTo = ''
+    }
+  }
   for (const bubble of raw.split('|||')) {
     const part = bubble.trim()
     if (!part) continue
-    // 依次切出 voice / sticker / markdown 图片，其余是文字
-    const re = /<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
+    // 依次切出 reply / voice / sticker / markdown 图片，其余是文字
+    const re = /<reply:\s*(\d+)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
     let last = 0
     let m
     while ((m = re.exec(part)) !== null) {
+      let from = items.length
       pushText(items, part.slice(last, m.index))
+      attach(from)
+      from = items.length
       if (m[1] !== undefined) {
-        const v = stripMarkdown(m[1])
-        if (v) items.push({ kind: 'voice', value: v })
+        replyTo = m[1]
       } else if (m[2] !== undefined) {
-        const v = m[2].trim()
-        if (v) items.push({ kind: 'sticker', value: v })
+        const v = stripMarkdown(m[2])
+        if (v) items.push({ kind: 'voice', value: v })
       } else if (m[3] !== undefined) {
-        items.push({ kind: 'image', value: m[3] })
+        const v = m[3].trim()
+        if (v) items.push({ kind: 'sticker', value: v })
+      } else if (m[4] !== undefined) {
+        items.push({ kind: 'image', value: m[4] })
       }
+      attach(from)
       last = re.lastIndex
     }
+    const from = items.length
     pushText(items, part.slice(last))
+    attach(from)
+  }
+  // 一轮最多引用一次，多的去掉（大多数时候正常发就好）
+  let quoted = false
+  for (const it of items) {
+    if (!it.replyTo) continue
+    if (quoted) delete it.replyTo
+    quoted = true
   }
   if (items.length === 0) return { silent: true, items: [] }
   return { silent: false, items: capBubbles(items) }
@@ -102,7 +125,7 @@ export function splitLines(text) {
 }
 
 function pushText(items, s) {
-  const t = stripMarkdown(s)
+  const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
   if (!t || isSilence(t)) return
   for (const line of splitLines(t)) if (!isSilence(line)) items.push({ kind: 'text', value: line })
 }
