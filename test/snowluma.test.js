@@ -27,6 +27,9 @@ http.createServer(async (req, res) => {
     const t = 'tok' + Math.random(); tokens.add(t); return send(200, { success: true, token: t, mustChangePassword: false })
   }
   if (!tokens.has(req.headers['x-snowluma-token'])) return send(401, { message: 'Unauthorized' })
+  if (req.url === '/api/processes') return send(200, { list: [{ pid: 19224, name: 'QQ.exe', injected: fs.existsSync('injected'), connected: false, account: null }] })
+  if (req.url === '/api/processes/19224/load') { fs.writeFileSync('injected', '1'); return send(200, { success: true }) }
+  if (req.url === '/api/processes/19224/unload') { fs.rmSync('injected', { force: true }); return send(200, { success: true }) }
   if (req.url === '/api/agreements') return send(200, { version: 'v1', consentRequired: !consented, documents: [{ id: 'eula', title: '用户协议', declaredVersion: '1.1', effectiveDate: '2026-07-21', text: '# 协议正文' }] })
   if (req.url === '/api/agreements/record-consent') { const v = JSON.parse(b).version; if (v !== 'v1') return send(409, { success: false, message: '版本不对' }); consented = true; fs.writeFileSync('consented', '1'); return send(200, { success: true, version: v }) }
   send(404, {})
@@ -87,4 +90,23 @@ test('密码对不上时可以一键重置为自动密码', async () => {
   assert.equal((await mgr.canLogin()).ok, true)
   assert.equal(JSON.parse(readFileSync(join(dir, 'config', 'webui.json'), 'utf8')).pw, cfg.snowluma.webuiPassword)
   assert.ok(existsSync(join(dir, 'consented')))
+})
+
+test('认不出号时先注入，连上后核对：是机器人号就通过，不是就撤销并不再碰', async () => {
+  const r = await mgr.attachBot()
+  assert.equal(r.ok, true, r.message)
+  assert.match(r.message, /核对/)
+  assert.ok(existsSync(join(dir, 'injected')))
+  // 连上的不是机器人号
+  assert.equal(await mgr.confirmLogin('10000001'), false)
+  assert.ok(!existsSync(join(dir, 'injected')), '应该撤销注入')
+  assert.match(mgr.lastAttach.message, /不是机器人号/)
+  // 被拒过的进程不再注入
+  const again = await mgr.attachBot()
+  assert.equal(again.ok, false)
+  // 主人手动重试：清掉记录后再注入，这次核对通过
+  mgr.clearRejected()
+  assert.equal((await mgr.attachBot()).ok, true)
+  assert.equal(await mgr.confirmLogin('20000002'), true)
+  assert.match(mgr.lastAttach.message, /已核对/)
 })
