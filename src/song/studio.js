@@ -233,6 +233,18 @@ export function pruneCache(dir, keep) {
 }
 
 /** 截一段：歌比上限长时从「大约副歌」的位置开始（全曲 30% 处），否则从头。 */
+/** 分出来的人声轨平均音量低于这个就当没有人声。正常人声在 -15 ~ -30 dB，纯音乐分出来是 -80 以下。 */
+export const VOCAL_MIN_DB = -50
+
+const INSTRUMENTAL = /纯音乐|伴奏|钢琴|吉他|八音盒|音乐盒|古筝|琵琶|二胡|笛子|葫芦丝|小提琴|大提琴|口琴|萨克斯|instrumental|off ?vocal|karaoke|\binst\b|\bbgm\b|music box|piano/i
+
+/** 搜索结果排序：标题像纯音乐（钢琴版、伴奏……）的放到最后，除非点歌时本来就这么说。其余保持网易云的顺序。 */
+export function rankCandidates(list, query = '') {
+  const want = INSTRUMENTAL.test(query)
+  const bad = (s) => !want && INSTRUMENTAL.test(`${s.name} ${s.alias || ''}`)
+  return [...list.filter((s) => !bad(s)), ...list.filter(bad)]
+}
+
 export function clipWindow(durationSec, maxSec, start = 'auto') {
   if (!(durationSec > maxSec)) return { start: 0, length: durationSec }
   if (start === 'head') return { start: 0, length: maxSec }
@@ -485,12 +497,26 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     })
   }
 
+  /** 人声轨的平均音量（dB）；纯音乐分出来的人声几乎是静音。 */
+  async function meanVolume(file) {
+    return new Promise((resolve) => {
+      const c = spawn(P().ffmpeg, ['-hide_banner', '-i', file, '-af', 'volumedetect', '-f', 'null', '-'], { windowsHide: true })
+      let s = ''
+      c.stderr.on('data', (b) => { s += b })
+      c.on('exit', () => { const m = s.match(/mean_volume:\s*(-?[\d.]+|-inf)/); resolve(m ? (m[1] === '-inf' ? -200 : Number(m[1])) : 0) })
+      c.on('error', () => resolve(0))
+    })
+  }
+
   async function download(job, dir) {
     const c = cfg()
     let pick = job.songId ? { id: job.songId, name: job.query, artists: '' } : null
     if (!pick) {
-      const list = await searchSongs(job.query, { cookie: c.neteaseCookie, limit: 8 })
-      if (!list.length) throw new Error(`网易云上没搜到「${job.query}」`)
+      const found = await searchSongs(job.query, { cookie: c.neteaseCookie, limit: 10 })
+      if (!found.length) throw new Error(`网易云上没搜到「${job.query}」`)
+      // 试过、确认没人声的跳过；看着像纯音乐的排到最后
+      const list = rankCandidates(found, job.query).filter((s) => !(job.skip || []).includes(String(s.id)))
+      if (!list.length) throw new Error(`搜到的「${job.query}」都是没有人声的版本`)
       // 按顺序找第一首拿得到完整音频的
       for (const s of list) {
         const u = await songUrl(s.id, { cookie: c.neteaseCookie })
@@ -584,6 +610,17 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     const part = await cutFirst(song, dir)
     current.stage = '分离人声和伴奏'
     const { vocals, inst } = await separate(part.file, dir)
+    // 纯音乐 / 伴奏版分不出人声：换下一首候选重做，不然发出去只有伴奏
+    const vol = await meanVolume(vocals)
+    if (vol < VOCAL_MIN_DB) {
+      log.info(`翻唱：「${job.title}」几乎没有人声（${vol.toFixed(0)} dB），像是纯音乐`)
+      try { rmSync(dir, { recursive: true, force: true }) } catch (error) {}
+      if (job.file || job.songId) throw new Error('这首没有人声（像是纯音乐或伴奏版），换一首吧')
+      job.skip = [...(job.skip || []), job.songKey]
+      if (job.skip.length >= 3) throw new Error(`搜到的几版「${job.query}」都没有人声，换个说法试试（比如带上歌手名）`)
+      current.stage = '换一版重下'
+      return process1(job)
+    }
     current.stage = '换成她的声音'
     const converted = await convert(vocals, dir, voice, pitch)
     current.stage = '混音'

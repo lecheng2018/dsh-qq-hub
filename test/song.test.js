@@ -26,6 +26,13 @@ test('截一段：歌比上限长就从副歌附近截，短歌整首', () => {
   assert.deepEqual(studio.clipWindow(130, 120), { start: 10, length: 120 })
 })
 
+test('挑歌：钢琴版、伴奏这类排到最后，点歌时本来就要钢琴版就不排', () => {
+  const list = [{ id: 1, name: '稻香 (钢琴版)' }, { id: 2, name: '稻香', alias: '伴奏' }, { id: 3, name: '稻香(治愈版)' }, { id: 4, name: '稻香' }]
+  assert.deepEqual(studio.rankCandidates(list, '稻香').map((x) => x.id), [3, 4, 1, 2])
+  assert.deepEqual(studio.rankCandidates(list, '稻香 钢琴版').map((x) => x.id), [1, 2, 3, 4])
+  assert.ok(studio.VOCAL_MIN_DB < -40)
+})
+
 test('音色列表：models 目录里的 .pth，配同名 .index', () => {
   const dir = mkdtempSync(join(tmpdir(), 'voices-'))
   for (const n of ['voiceB.pth', 'voiceA.pth', 'added_IVF_voiceA.index', 'readme.txt']) writeFileSync(join(dir, n), 'x')

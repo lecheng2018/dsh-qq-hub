@@ -69,6 +69,7 @@ export async function searchSongs(keyword, { cookie, limit = 5 } = {}) {
   return (j.result?.songs || []).map((s) => ({
     id: s.id,
     name: s.name,
+    alias: (s.alia || []).join(" "),
     artists: (s.ar || []).map((a) => a.name).join(' / '),
     durationSec: Math.round((s.dt || 0) / 1000),
     vip: s.fee === 1 || s.fee === 4,
