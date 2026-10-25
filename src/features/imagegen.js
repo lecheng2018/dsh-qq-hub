@@ -3,9 +3,17 @@
 
 import { fetchImage } from '../core/net.js'
 
-export function createImageGen({ getConfig, log }) {
+export function createImageGen({ getConfig, log, local }) {
   async function generate(prompt) {
     const c = getConfig().imageGen
+    // 本地接口接管：用用户自己电脑上的画图服务
+    if (local?.active('image')) {
+      const { toImageBuffer } = await import('../local/local.js')
+      const t = Date.now()
+      const buf = await toImageBuffer(await local.call('image', { prompt: [c.stylePrompt, prompt].filter(Boolean).join('，'), size: c.size }))
+      log.info(`本地画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)
+      return buf
+    }
     if (!c.enabled) throw new Error('生图还没开启')
     const base = String(c.baseUrl || '').replace(/\/+$/, '')
     if (!base || !c.model) throw new Error('还没填生图服务地址或模型')
@@ -29,5 +37,5 @@ export function createImageGen({ getConfig, log }) {
     log.info(`画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)
     return buf
   }
-  return { generate, enabled: () => Boolean(getConfig().imageGen.enabled && getConfig().imageGen.baseUrl && getConfig().imageGen.model) }
+  return { generate, enabled: () => Boolean(local?.active('image') || (getConfig().imageGen.enabled && getConfig().imageGen.baseUrl && getConfig().imageGen.model)) }
 }

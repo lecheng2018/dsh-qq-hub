@@ -426,6 +426,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
       { id: 'song', label: '翻唱', flag: 'song.enabled' },
       { id: 'bili', label: 'B站', flag: 'bili.enabled' },
+      { id: 'local', label: '本地接口' },
       { id: 'logs', label: '日志' },
     ]
 
@@ -1181,7 +1182,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         inp.onchange = () => inp.files && upload(inp.files)
         inp.click()
       }
-      return h(Card, { title: '音色模型', desc: '插件不自带音色。把你有权使用的 RVC 模型导进来：.pth（可以带 .index），或者装着它们的 zip。只存在本机。' },
+      return h(Card, { title: '音色模型', desc: '插件不自带音色。把你有权使用的 RVC 模型导进来：.pth（可以带 .index），或者装着它们的 zip。只存在本机。自己训练的是 so-vits-svc 之类别的模型、或者想用自己的推理参数？去「本地接口」页接「翻唱换声」。' },
         h('div', {
           className: 'ab-drop' + (over ? ' over' : ''), role: 'button', tabIndex: 0,
           onClick: pick, onKeyDown: (e) => (e.key === 'Enter' || e.key === ' ') && pick(),
@@ -1194,6 +1195,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           (s.separatorLinks || []).map((u) => h('div', { key: u, className: 'ab-flex', style: { marginTop: 4 } },
             h('code', { className: 'ab-small', style: { wordBreak: 'break-all', flex: 1 } }, u),
             h(Btn, { small: true, kind: 'ghost', onClick: () => { navigator.clipboard.writeText(u); toast('复制了', 'ok') } }, '复制')))) : null,
+        s.voices.length && !s.enabled ? h('div', { className: 'ab-note warn', style: { marginTop: 10 } }, '音色导入好了，但翻唱开关还没开（这一页最上面），打开并保存后她才会唱。') : null,
         s.voices.length === 0 ? h('div', { className: 'ab-muted ab-small', style: { marginTop: 8 } }, '还没有音色。') :
           h('div', { className: 'ab-list', style: { marginTop: 10 } }, s.voices.map((v) => h('div', { key: v.id, className: 'ab-li' },
             h('div', { className: 'body' }, h('b', null, v.id), v.hasIndex ? h('span', { className: 'ab-muted ab-small' }, ' · 带 index') : null),
@@ -1353,6 +1355,33 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             h('span', { className: 'ab-muted ab-small' }, '「显示」看的是正在填的内容；保存过的出于安全不回传，只显示结尾几位'))))
     }
 
+/** 本地接口：数据目录 local/ 里的脚本接管语音合成、生图、翻唱换声、语音识别。 */
+    function LocalApi({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [st, setSt] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [img, setImg] = useState('')
+      const load = () => get('/local/status').then(setSt)
+      useEffect(() => { load() }, [])
+      const act = async (path, slot, label) => { setBusy(slot + label); const r = await post(path, { slot }); setBusy(''); toast(r.message, r.ok ? 'ok' : 'err'); if (r.image) setImg(r.image); load() }
+      return h('div', { className: 'ab-grid' },
+        h(Card, { title: '本地接口', desc: '想用自己电脑上的模型或服务（GPT-SoVITS 语音、SD WebUI / ComfyUI 画图、自己训练的 so-vits-svc 音色、本地语音识别……）？在这里生成一个脚本模板，照注释改，或者点「复制给 DSH 的话」粘给 DSH，让它帮你改。脚本放在插件数据目录的 local 文件夹里，插件升级不会覆盖；改完保存就生效，不用重启。每一项要打开开关才会用，出错时语音和识别会自动退回内置方式。' },
+          h('div', { className: 'ab-flex' },
+            h('code', { className: 'ab-small', style: { wordBreak: 'break-all', flex: 1 } }, st ? st.dir : '…'),
+            h(Btn, { small: true, onClick: () => post('/local/open').then((r) => toast(r.message)) }, '打开文件夹'))),
+        !st ? h(Empty, { icon: '⏳', text: '加载中…' }) : st.list.map((x) => h(Card, { key: x.slot, title: x.title + '（' + x.file + '）', right: f.sw('local.' + x.slot) },
+          h('div', { className: 'ab-flex', style: { marginBottom: 8 } },
+            h('span', { className: 'ab-small', style: { color: x.active ? 'var(--ab-ok)' : 'var(--ab-muted)' } },
+              x.active ? '● 正在由本地脚本接管' : !x.exists ? '还没有这个脚本' : !x.enabled ? '脚本已经有了，开关没开（用内置方式）' : '用内置方式'),
+            x.last ? h('span', { className: 'ab-small', style: { color: x.last.ok ? 'var(--ab-ok)' : 'var(--ab-err)' } }, ' · 上次' + (x.last.ok ? '成功，' + x.last.message : '出错：' + x.last.message)) : null),
+          h('div', { className: 'ab-flex' },
+            x.exists ? null : h(Btn, { small: true, kind: 'primary', disabled: !!busy, onClick: () => act('/local/template', x.slot, 't') }, '生成模板'),
+            h(Btn, { small: true, onClick: () => { navigator.clipboard.writeText(x.prompt); toast('复制好了，粘给 DSH，再把【】里那句换成你的情况', 'ok') } }, '复制给 DSH 的话'),
+            x.exists && (x.slot === 'tts' || x.slot === 'image') ? h(Btn, { small: true, disabled: !!busy, onClick: () => act('/local/test', x.slot, 'x') }, busy === x.slot + 'x' ? '正在试…' : '试一下') : null),
+          x.slot === 'image' && img ? h('img', { src: 'data:image/png;base64,' + img, style: { marginTop: 10, maxWidth: 240, borderRadius: 8 } }) : null)),
+      )
+    }
+
     const BILI_KIND = { watch: '看了', comment: '评论', reply: '回复', share: '分享给你', error: '没成功' }
 
     /** B 站：登录、定时刷、评论 / 回复、分享给主人，以及她刷过什么。 */
@@ -1403,7 +1432,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const f = useField(draft, setDraft)
       const c = draft.imageGen
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '让她画图', right: f.sw('imageGen.enabled'), desc: '接上一个生图服务后，聊天里让她「画一张……」，她会画好直接发出来。支持兼容 OpenAI 生图接口（/v1/images/generations）的服务：硅基流动、各家大模型平台，或本地 ComfyUI / SD WebUI 的 OpenAI 兼容代理。' },
+        h(Card, { title: '让她画图', right: f.sw('imageGen.enabled'), desc: '接上一个生图服务后，聊天里让她「画一张……」，她会画好直接发出来。支持兼容 OpenAI 生图接口（/v1/images/generations）的服务：硅基流动、各家大模型平台，或本地 ComfyUI / SD WebUI 的 OpenAI 兼容代理。想直接用本地的 SD WebUI / ComfyUI API？去「本地接口」页接「生图」，这里可以不填。' },
           h(Row, { label: '服务地址', hint: '一般以 /v1 结尾' }, f.text('imageGen.baseUrl', { size: 'wide', placeholder: 'https://api.siliconflow.cn/v1' })),
           h(Row, { label: 'API Key', hint: '只存在本机，不会显示出来' }, f.text('imageGen.apiKey', { type: 'password', placeholder: c.apiKeySet ? '已保存（不改就留空）' : '没有就留空' })),
           h(Row, { label: '模型' }, f.text('imageGen.model', { size: 'wide', placeholder: '例如 Kwai-Kolors/Kolors' })),
@@ -1581,10 +1610,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const showWizard = !cfg.setupDone || wizardOpen
       const body = {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, local: LocalApi, logs: Logs,
       }[tab] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], local: ['local'] }
       const tabDirty = (id) => dirty && (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
       return h('div', { className: 'ab-root' },
         h('div', { className: 'ab-wrap' },

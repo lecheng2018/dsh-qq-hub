@@ -363,7 +363,16 @@ function run(cmd, args, { cwd, env, log, onLine, timeoutMs = 30 * 60_000 } = {})
  * @param {(chatId: string, file: string, note: string) => Promise<any>} deps.sendVoiceFile  把做好的语音发到聊天
  * @param {(chatId: string, text: string) => Promise<any>} [deps.sendText]
  */
-export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSung }) {
+/** 翻唱出错翻译成人话（给点歌的人看）。 */
+export function explainSongError(message) {
+  const m = String(message || '')
+  if (/size mismatch|Error\(s\) in loading state_dict|unexpected key|Missing key|KeyError: '(weight|config|params)'/i.test(m)) return '这个音色模型和内置的 RVC 不兼容（可能是 so-vits-svc 之类训练的，或者不是完整的模型文件）。可以在面板「本地接口」里接你自己的推理'
+  if (/CUDA out of memory|OutOfMemoryError|not enough memory/i.test(m)) return '显卡显存不够，关掉别的占显存的程序（游戏、别的 AI）再试'
+  if (/No module named|ModuleNotFoundError/i.test(m)) return '翻唱环境不完整，在面板「翻唱」页点「重新检查 / 修复安装」'
+  return m
+}
+
+export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSung, local }) {
   const cfg = () => getConfig().song
   const P = () => pathsOf(cfg().root || defaultRoot())
   const work = () => dataDir('songs')
@@ -387,7 +396,9 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       weights: existsSync(p.rmvpe) && existsSync(p.contentvec),
       separatorModel: separatorReady(p.separatorModels, cfg().separatorModel),
     }
-    const ready = Object.values(parts).every(Boolean) && voices.length > 0
+    // 换声交给本地脚本时，不需要内置的 Applio / 预训练文件 / 音色模型（下载、分离、混音还是插件做）
+    const localSong = Boolean(local?.active('song'))
+    const ready = localSong ? ['python', 'separator', 'ffmpeg', 'separatorModel'].every((k) => parts[k]) : Object.values(parts).every(Boolean) && voices.length > 0
     return {
       enabled: cfg().enabled,
       ready,
@@ -668,6 +679,13 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   async function convert(vocals, dir, voice, pitch) {
     const p = P()
     const out = join(dir, 'vocals_rvc.wav')
+    if (local?.active('song')) {
+      const { fileOf } = await import('../local/local.js')
+      const r = await local.call('song', { input: vocals, output: out, pitch, voice: voice?.id || '', voiceFile: voice?.pth || '', indexFile: voice?.index || '' })
+      const file = fileOf(r) || out
+      if (!existsSync(file)) throw new Error('本地换声脚本没写出文件：' + file)
+      return file
+    }
     await run(p.python, ['core.py', 'infer', '--input-path', vocals, '--output-path', out, '--pth-path', voice.pth, '--index-path', voice.index || '',
       '--pitch', String(pitch), '--index-rate', voice.index ? '0.5' : '0', '--protect', '0.33', '--f0-method', 'rmvpe', '--export-format', 'WAV'],
     { cwd: p.applio, log, env: pyEnv(), timeoutMs: 20 * 60_000 })
@@ -707,7 +725,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   async function process1(job) {
     const c = cfg()
     const voice = listVoices(P().models).find((v) => v.id === (job.voice || c.voice)) || listVoices(P().models)[0]
-    if (!voice) throw new Error('还没有可用的音色模型')
+    if (!voice && !local?.active('song')) throw new Error('还没有可用的音色模型')
     const pitch = Number.isFinite(Number(job.pitch)) ? Math.max(-24, Math.min(24, Math.round(Number(job.pitch)))) : Number(c.pitch) || 0
     const dir = join(work(), Date.now().toString(36))
     mkdirSync(dir, { recursive: true })
@@ -715,7 +733,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     const song = job.file || (await download(job, dir))
     // 同一首歌、同一个音色、音高和截取方式做过的，直接复用
     // v2：0.6.2 起才检查有没有人声，之前缓存的可能是只有伴奏的成品，一律不用
-    const key = createHash('md5').update(['v2', job.songKey || song, voice.id, pitch, c.maxVoiceSec, c.clipStart].join('|')).digest('hex').slice(0, 16)
+    const key = createHash('md5').update(['v2', job.songKey || song, local?.active('song') ? 'local:' + (voice?.id || '') : voice.id, pitch, c.maxVoiceSec, c.clipStart].join('|')).digest('hex').slice(0, 16)
     const cached = join(work(), 'cache', key + '.mp3')
     if (existsSync(cached)) {
       log.info(`翻唱：「${job.title}」做过了，直接用缓存`)
@@ -762,9 +780,10 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       onSung?.(job.title || job.query, job.chatId)
       if (!cfg().keepWork) try { rmSync(r.dir, { recursive: true, force: true }) } catch (error) {}
     } catch (error) {
-      history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, message: error.message })
+      const why = explainSongError(error.message)
+      history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, message: why })
       log.warn(`翻唱失败：「${job.query}」：`, error.message)
-      sendText?.(job.chatId, `唱不了「${job.title || job.query}」：${error.message}`).catch(() => {})
+      sendText?.(job.chatId, `唱不了「${job.title || job.query}」：${why}`).catch(() => {})
     } finally {
       history = history.slice(0, 20)
       current = null

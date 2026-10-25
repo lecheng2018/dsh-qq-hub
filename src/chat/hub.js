@@ -30,7 +30,7 @@ const sessionKey = (id) => {
   return s.startsWith('session-') ? s.slice(8) : s
 }
 
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -489,6 +489,24 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   async function transcribe(msg) {
     for (const rec of msg.records) {
+      // 本地接口接管：用用户自己的识别服务（最先试）
+      if (localApi?.active('asr')) {
+        try {
+          const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
+          const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024 })
+          const { writeFileSync, mkdirSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const dir = localApi.dir() + '/out'
+          mkdirSync(dir, { recursive: true })
+          const file = join(dir, `asr-${Date.now()}.wav`)
+          writeFileSync(file, toMono16k(raw))
+          const r = await localApi.call('asr', { file })
+          const text = String(typeof r === 'string' ? r : r?.text || '').trim()
+          if (text) return `[语音] ${text}`
+        } catch (error) {
+          log.debug('本地接口语音识别失败：', error.message)
+        }
+      }
       try {
         const r = await onebot.call('fetch_ptt_text', { message_id: Number(msg.messageId) || msg.messageId }, { timeoutMs: 20000 })
         if (r?.text) return `[语音] ${r.text}`

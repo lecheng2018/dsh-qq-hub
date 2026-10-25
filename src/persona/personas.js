@@ -96,7 +96,7 @@ export function rulesText(kind, cfg) {
   // 只在功能真的能用时告诉她，免得答应了做不到
   const who = (ownerOnly) => (ownerOnly ? `只给${owner}` : '')
   const g = cfg.imageGen || {}
-  if (g.enabled && g.baseUrl && g.model) common.push(`- 你会画画：${who(g.ownerOnly)}画，别人让你画图时用 qq_draw_image 工具画好直接发出去，别说自己不会画。`)
+  if ((g.enabled && g.baseUrl && g.model) || cfg.local?.image) common.push(`- 你会画画：${who(g.ownerOnly)}画，别人让你画图时用 qq_draw_image 工具画好直接发出去，别说自己不会画。`)
   if (cfg.bili?.enabled) common.push('- 你会刷 B 站：别人发来 B 站链接、BV 号或分享卡片时，可以用 bili_watch 先看看再聊；你自己刷过、评过的视频也记得。')
   const s = cfg.song || {}
   if (s.enabled) common.push(`- 你会唱歌：${who(s.ownerOnly)}唱，别人点歌时用 qq_song_cover 工具，用你自己的声音翻唱，做好会自动发语音条，别说自己不会唱。`)

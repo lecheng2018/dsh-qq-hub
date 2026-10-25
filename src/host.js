@@ -19,6 +19,7 @@ import { createStickerStore, stickerPath } from './features/stickers.js'
 import { createQzone } from './features/qzone.js'
 import { createQzoneSocial } from './features/qzone-social.js'
 import { createBili } from './bili/duty.js'
+import { createLocal, fileOf } from './local/local.js'
 import { createMood, createSpeakUp } from './features/companion.js'
 import { createSongStudio, checkRoot, listDrives } from './song/studio.js'
 import { createMemoryStore } from './features/memory.js'
@@ -104,7 +105,9 @@ export function apply(ctx) {
   const stickers = createStickerStore({ dsh: ctx, getConfig, onebot, log: logger.child('sticker') })
   const mood = createMood({ getConfig, dsh: ctx })
   let memory = null
+  const local = createLocal({ getConfig, log: logger })
   const song = createSongStudio({
+    local,
     getConfig,
     log: logger.child('song'),
     sendVoiceFile: (chatId, file, note) => hub.sendVoiceFile(chatId, file, note),
@@ -117,8 +120,19 @@ export function apply(ctx) {
       memory?.addEvent({ text: `给${who}唱了《${title}》`, about: uid, tags: ['唱歌'], importance: 0.5 })
     },
   })
-  const imageGen = createImageGen({ getConfig, log: logger.child('imagegen') })
-  const tts = { speak: (text) => textToSpeech(text, cfg.voice, logger.child('voice')) }
+  const imageGen = createImageGen({ getConfig, log: logger.child('imagegen'), local })
+  const tts = {
+    speak: async (text) => {
+      // 本地接口接管语音合成；出错退回内置
+      if (local.active('tts')) {
+        try {
+          const file = fileOf(await local.call('tts', { text }))
+          if (file && existsSync(file)) return { file, engine: 'local' }
+        } catch (error) {}
+      }
+      return textToSpeech(text, cfg.voice, logger.child('voice'))
+    },
+  }
   let qzone = null
   const mutes = createMutes()
   /** DSH 里能用的所有模型：[{provider, model, name}] */
@@ -134,6 +148,7 @@ export function apply(ctx) {
     return out
   }
   hub = createHub({
+    localApi: local,
     dsh: ctx,
     getConfig,
     log: logger.child('chat'),
@@ -477,6 +492,38 @@ export function apply(ctx) {
   })
   route('/diary/history', async () => ({ ok: true, items: qzone.history(), next: qzone.nextTime() }))
   route('/qzone/social/run', async () => qzoneSocial.run({ force: true }))
+  // 本地接口
+  route('/local/status', async () => ({ ok: true, dir: local.dir(), list: local.status() }))
+  route('/local/template', async (req) => {
+    const slot = String((await readBody(req)).slot || '')
+    if (!local.pathOf || !['tts', 'image', 'song', 'asr'].includes(slot)) return { ok: false, message: '没有这一项' }
+    return local.template(slot)
+  })
+  route('/local/open', async () => {
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(local.dir(), { recursive: true })
+    const { spawn } = await import('node:child_process')
+    spawn('explorer.exe', [local.dir()], { detached: true, stdio: 'ignore' }).unref()
+    return { ok: true, message: '打开了' }
+  })
+  route('/local/test', async (req) => {
+    const slot = String((await readBody(req)).slot || '')
+    try {
+      if (slot === 'tts') {
+        const file = fileOf(await local.call('tts', { text: '你好呀，我是大肥鱼，这是本地语音测试。' }))
+        if (!file || !existsSync(file)) return { ok: false, message: '脚本没返回音频文件' }
+        return { ok: true, message: `念好了：${file}` }
+      }
+      if (slot === 'image') {
+        const { toImageBuffer } = await import('./local/local.js')
+        const buf = await toImageBuffer(await local.call('image', { prompt: '一条胖乎乎的蓝色小鱼，可爱，插画', size: cfg.imageGen.size || '1024x1024' }))
+        return { ok: true, message: `画好了（${Math.round(buf.length / 1024)} KB）`, image: buf.toString('base64') }
+      }
+      return { ok: false, message: '这一项没法单独试：翻唱换声去 QQ 里点首歌，语音识别发条语音条试试' }
+    } catch (error) {
+      return { ok: false, message: '出错了：' + error.message }
+    }
+  })
   // B 站
   route('/bili/state', async () => ({ ok: true, ...bili.state(), account: await bili.account() }))
   route('/bili/account', async () => bili.account(true))
