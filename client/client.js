@@ -1400,7 +1400,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       )
     }
 
-    // ---------------- 扩展：模块和联动 ----------------
+    // ---------------- 扩展：模块 ----------------
     const MOD_STATE = (m) => {
       if (m.safeSkipped) return { cls: 'dim', text: '安全模式，没加载' }
       if (!m.enabled) return { cls: 'dim', text: '关着' }
@@ -1452,52 +1452,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           m.builtin && m.hasUser ? h('label', { className: 'ab-small ab-muted', style: { display: 'flex', alignItems: 'center', gap: 6 } }, '用内置的', h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null))
     }
 
-    /** 联动：DSH 别的会话的工具、别的插件、开放 HTTP 接口。 */
-    function BridgeCard({ st, toast, reload }) {
-      const b = st.bridge || {}
-      const cfgB = st.config.bridge || {}
-      const [token, setToken] = useState('')
-      const [ex, setEx] = useState(null)
-      const [show, setShow] = useState(false)
-      const base = location.origin
-      useEffect(() => {
-        get('/bridge/examples?base=' + encodeURIComponent(base)).then(setEx)
-        if (!cfgB.http) { setToken(''); return }
-        get('/bridge/token').then((r) => setToken(r.token || ''))
-      }, [cfgB.http, b.hasToken])
-      const save = async (patch) => {
-        const r = await post('/save', { bridge: patch })
-        toast(r.ok === false ? r.message : '好了', r.ok === false ? 'err' : 'ok')
-        reload()
-      }
-      const masked = token ? token.slice(0, 6) + '••••••••' + token.slice(-4) : '<密钥>'
-      const shown = (s) => (token ? (show ? s.split('<密钥>').join(token) : s.split(token).join(masked)) : s)
-      return h(Card, { title: '联动', desc: '让 DSH 里别的会话、别的插件，还有电脑上别的程序也能用她：让她发 QQ、问她、调她的模块。能发给谁受下面的设置限制，总开关和试运行照常管着。' },
-        h(Row, { label: 'DSH 别的会话能用', hint: '打开后 DSH 里所有会话（比如你写代码的会话）都多几个工具：aurabot_qq_send 让她发 QQ、aurabot_status 看状态、aurabot_call 调模块。她自己的 QQ 会话里不会有。' },
-          h(Switch, { on: cfgB.dshTools, onChange: (v) => save({ dshTools: v }) })),
-        cfgB.dshTools && !b.toolsService ? h('div', { className: 'ab-note warn' }, '这个 DSH 没提供全局工具注册，联动工具挂不上（另外两种联动不受影响）。') : null,
-        cfgB.dshTools && b.tools && b.tools.length ? h('div', { className: 'ab-small ab-muted', style: { margin: '0 0 8px' } }, '已挂上：' + b.tools.join('、')) : null,
-        h(Row, { label: '能发给谁', hint: '外面让她发消息时的范围' },
-          h(Seg, { value: cfgB.allowTargets, options: [{ value: 'whitelist', label: '白名单里的人和群' }, { value: 'owner', label: '只能发给我' }], onChange: (v) => save({ allowTargets: v }) })),
-        h(Row, { label: '开放 HTTP 接口', hint: '别的程序（脚本、自动化工具、别的电脑上的 DSH）带着密钥调用 /aurabot/api/open/*' },
-          h(Switch, { on: cfgB.http, onChange: (v) => save({ http: v }) })),
-        cfgB.http ? h('div', null,
-          h('div', { className: 'ab-flex', style: { marginTop: 6 } },
-            h('span', { className: 'ab-small ab-muted' }, '密钥'),
-            h('code', { className: 'ab-small', style: { flex: 1, wordBreak: 'break-all' } }, show ? token : masked),
-            h(Btn, { small: true, kind: 'ghost', onClick: () => setShow(!show) }, show ? '隐藏' : '显示'),
-            h(Btn, { small: true, onClick: () => copy(token, toast, '密钥复制好了') }, '复制'),
-            h(Btn, { small: true, kind: 'ghost', onClick: async () => { if (!confirm('换一个新密钥？用旧密钥的程序要跟着改。')) return; const r = await post('/bridge/token/reset'); setToken(r.token); toast(r.message, 'ok') } }, '换一个')),
-          ex ? ['powershell', 'curl', 'python'].map((k) => h('div', { key: k, style: { marginTop: 10 } },
-            h('div', { className: 'ab-flex' }, h('span', { className: 'ab-small ab-muted' }, { powershell: 'PowerShell', curl: 'curl', python: 'Python' }[k] + '：让她给你发一句「下班啦」'), h('div', { className: 'ab-spacer' }), h(Btn, { small: true, kind: 'ghost', onClick: () => copy(ex[k].split('<密钥>').join(token), toast, '复制好了（带着完整密钥）') }, '复制')),
-            h('div', { className: 'ab-code' }, shown(ex[k])))) : null) : null,
-        h('div', { style: { marginTop: 14 } },
-          h('div', { className: 'ab-flex' }, h('span', { className: 'ab-small ab-muted' }, '别的 DSH 插件里（不用打开上面的开关）'), h('div', { className: 'ab-spacer' }), ex ? h(Btn, { small: true, kind: 'ghost', onClick: () => copy(ex.plugin, toast, '复制好了') }, '复制') : null),
-          h('div', { className: 'ab-code' }, ex ? ex.plugin : '')),
-        h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '全部接口见数据目录 modules/API.md 的「联动」一节。'))
-    }
-
-    /** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式、联动。 */
+    /** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式。 */
     function Modules({ st, draft, toast, reload }) {
       const [data, setData] = useState(null)
       const [newId, setNewId] = useState('')
@@ -1537,7 +1492,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         mine.length ? h(Card, { title: '自己写的（' + mine.length + '）' }, h('div', null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
         h(Card, { title: '内置模块（' + builtin.length + '）', desc: '关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。' },
           h('div', null, builtin.map((m) => h(ModuleRow, { key: m.id, m, ...props })))),
-        h(BridgeCard, { st, toast, reload }),
       )
     }
 
