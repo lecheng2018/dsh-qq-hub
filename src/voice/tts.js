@@ -1,7 +1,7 @@
 // 文字 → 语音文件。
 //   首选：edge-tts（微软在线朗读，音色好），装在插件自己的 Python 虚拟环境 C:\Aurabot\pyenv 里，不污染系统。
 //   兜底：Windows 自带的中文语音（System.Speech / Huihui），什么都不装也能用。
-// 管线：文字 → TTS → [变声插槽，RVC 预留] → 文件路径。任何一步失败由调用方退回发文字。
+// 管线：文字 → TTS → 文件路径。任何一步失败由调用方退回发文字。（RVC 音色目前用在翻唱上，见 src/song/）
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, statSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -188,7 +188,7 @@ async function httpSynth(text, c) {
   return saveAudio(await fetchAudio(tpl.split('{text}').join(encodeURIComponent(text)), { method: 'GET' }), 24000)
 }
 
-/** 变声插槽：RVC 就绪后在这里换音色。现在原样返回。 */
+/** 说话语音的后处理：目前原样返回（RVC 换音色只用在翻唱上，语音条直接用 TTS 的声音）。 */
 export const voiceConverters = []
 
 /**

@@ -1,12 +1,12 @@
 # Aurabot · 住在 QQ 里的大肥鱼
 
-DeepSeek Harness（DSH）插件。DSH 里的 AI 以独立 QQ 号「大肥鱼」的身份住进 QQ：有人格、心情和记忆，能看图、发语音、听语音、发和收表情包、写 QQ 空间日记，还会主动找你聊天。
+DeepSeek Harness（DSH）插件。DSH 里的 AI 以独立 QQ 号「大肥鱼」的身份住进 QQ：有人格、心情和记忆，能看图、发语音、听语音、发和收表情包、用自己的声音翻唱、写 QQ 空间日记、逛空间回评论，还会主动找你聊天。
 
 ```
 QQ ⇄ SnowLuma（OneBot v11，你自己安装）⇄ Aurabot 插件 ⇄ DSH 会话（Aurabot 自带的 preset + 人格）
 ```
 
-- **入口**：DSH 左侧栏「自动化任务」下面的「Aurabot」。整页面板用标签分功能：概览、连接、人格、权限、群聊、模型、语音、表情包、空间日记、主动搭话、心情与记忆、翻唱、日志。
+- **入口**：DSH 左侧栏「自动化任务」下面的「Aurabot」。整页面板用标签分功能：概览、连接、人格、权限、聊天、模型、语音、表情包、生图、空间日记、主动搭话、心情与记忆、翻唱、日志。
 - **会话**：每个 QQ 私聊或群各对应一个 DSH 会话，都放在侧栏的「Aurabot · QQ」工作区里，可以点开看她想了什么、调了什么工具，也可以直接插话。
 - **安全默认**：总开关关、试运行开。不手动打开，一句都不会发到 QQ。
 
@@ -40,14 +40,17 @@ QQ ⇄ SnowLuma（OneBot v11，你自己安装）⇄ Aurabot 插件 ⇄ DSH 会�
 |---|---|
 | 人格注入 | 插件在 `cordis.patch.yml` 里自带两个 agent preset：`aurabot-private`（主人私聊，完整工具）和 `aurabot-social`（群聊和其他人私聊，没有任何本地工具）。人格通过 `@deepseek-ai/dsh-persona` 放在系统提示词最前，文本来自插件注册的提示词变量 `{{aurabot_persona}}`，切换人格无需重建 preset。 |
 | 每轮变化的内容 | 心情、记忆用 `agent.ctx.systemPrompt.context()`，追加在对话末尾，不破坏前缀缓存。 |
-| 群聊上下文 | 发言人、群里刚才在聊什么，直接写在交给她的那条消息里。 |
+| 群聊上下文 | 群里停顿几秒算一段，她回上一段时新消息先攒着，看完整段再回（不会一条一回）；交给她的是这一段谁说了什么、之前在聊什么，新消息带编号，想专门接某一条时可以引用回复。被叫必回，没人叫时按话题相关度插话，加入话题后接着聊；有防刷屏的刹车。 |
+| 记忆 | 本地索引记忆库（中文二元切词 + BM25，再按「关于当前说话人」「重要程度」「新近程度」加权）。来源：她自己记的、每天两次从聊天和空间动态里整理出来的、她自己的经历（唱了什么、评论了谁）、空间日记、你手动加的。每个人 / 群还有概括的「相处经验」和「说话方式」。不重要、很久没被想起的自动记忆会忘掉。 |
+| 心情 | 被夸、被凶会推动心情，按半衰期回到平常；心情明显时每轮告诉她该怎么说话，并实际影响发表情 / 语音的概率、回复快慢、插话积极程度。 |
+| QQ 命令 | 主人在 QQ 里直接发 `/silent` `/active` `/quiet` `/chatty` `/model` `/sing` `/remember` `/status` 等管她，总开关关着也能用。 |
 | 工具 | 按会话注册（`agent.ctx.tools.register`），只出现在 Aurabot 的会话里。群管在工具层校验这一轮有主人下令、对象不是主人、她在群里有管理权限；点歌、生图校验「这一轮说话的人全是主人」，不只靠人格约束。 |
 | QQ 网关 | SnowLuma 的 OneBot v11：WS 收事件（实时），HTTP 调接口。插件从 SnowLuma 配置文件自动读取端口和令牌。 |
 | SnowLuma 管理 | SnowLuma 的 EULA 第 5.4 条不允许「通过自动化脚本部署」，所以插件不下载，也不替你同意协议：协议全文显示在面板里，由你本人勾选同意。插件只启停你自己装好的那一份（后台运行，不弹窗口）；第一次启动时用 `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` 设一个自己生成的控制台密码。注入前用 `/api/processes` 核对每个 QQ 进程登录的号，只注入机器人号；`hookAutoLoad` 永远关。 |
-| 语音 | TTS 用 edge-tts（装在插件自己的 Python 虚拟环境里），也可以接本地的 CosyVoice、GPT-SoVITS，装不上时用 Windows 自带中文语音兜底。管线里留了 RVC 变声插槽。ASR 先用 QQ 自带的语音转文字（`fetch_ptt_text`），再试 DSH 的 `speechToText`。 |
+| 语音 | TTS 用 edge-tts（装在插件自己的 Python 虚拟环境里），也可以接本地的 CosyVoice、GPT-SoVITS，装不上时用 Windows 自带中文语音兜底。ASR 先用 QQ 自带的语音转文字（`fetch_ptt_text`），再试 DSH 的 `speechToText`。 |
 | 表情包 | 只收真正的表情（`sub_type=1`、mface、带 `emoji_id` 的），再过尺寸、宽高比、体积、MD5 去重、每小时限额几道关。收下后 `add_custom_face`，视觉模型起备注后 `modify_custom_face`。 |
-| 空间日记 | `send_qzone_msg`。在专用的后台会话里写，结合当天聊天流水；那一轮不转发到聊天。 |
-| 翻唱 | 只预留：`qq_song_cover` 工具、面板标签和变声插槽。 |
+| 空间 | 空间日记用 `send_qzone_msg`，在专用的后台会话里写，结合当天聊天流水。空间互动：定期看自己说说下的新评论和回复（按整串评论来回，一串只回一次），逛好友动态按概率点赞、评论；评论时结合说说内容和楼里已有的评论。 |
+| 翻唱 | 点歌（`qq_song_cover` 工具或 `/sing`）→ 网易云下载（weapi，可填 Cookie 下会员歌）→ 先截要发的那一段 → audio-separator 分离人声和伴奏 → Applio（RVC，固定版本）换成她的音色 → ffmpeg 混音 → 发语音条。插件不带音色，用户在面板里导入自己有权使用的 .pth / zip。一键安装不依赖电脑上的 Python / git / uv，可以选装到哪个盘，进度可见，下载走系统代理并能断点续传。 |
 
 ## 目录
 
@@ -56,8 +59,9 @@ src/host.js            插件入口（宿主半边）+ 面板接口 /aurabot/api
 src/chat/              消息中枢、群聊策略、回复解析、白名单与权限
 src/onebot/client.js   OneBot v11 客户端（HTTP + WS，自动重连）
 src/snowluma/          SnowLuma 管理（检测、启停、只注入机器人号）
-src/features/          表情包、空间日记、心情、记忆、主动搭话、翻唱（预留）
-src/voice/tts.js       文字转语音
+src/features/          表情包、空间日记和空间互动、心情、记忆、主动搭话、生图
+src/song/              翻唱：网易云、安装器、分离 / 变声 / 混音流水线、音色导入
+src/voice/             文字转语音、WAV 处理
 src/tools/tools.js     挂给会话的工具
 src/persona/           人格卡与规则
 client/client.js       网页半边：侧栏入口 + 面板
