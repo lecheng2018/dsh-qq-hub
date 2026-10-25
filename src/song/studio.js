@@ -7,7 +7,7 @@ import { join, basename, dirname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
-import { dataDir } from '../core/store.js'
+import { dataDir, readJson, writeJson } from '../core/store.js'
 import { searchSongs, songUrl, account } from './netease.js'
 import { readZip } from './zip.js'
 
@@ -287,6 +287,10 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   const cfg = () => getConfig().song
   const P = () => pathsOf(cfg().root || defaultRoot())
   const work = () => dataDir('songs')
+  // 确认过没有人声的歌（网易云 id），下次直接跳过，不用再花几分钟分离一遍
+  const noVocalFile = () => join(work(), 'no-vocals.json')
+  const noVocals = () => readJson(noVocalFile(), () => [])
+  const markNoVocals = (id) => { if (id && !noVocals().includes(String(id))) writeJson(noVocalFile(), [...noVocals(), String(id)].slice(-500)) }
   const queue = []
   let current = null // 正在做的翻唱
   let history = [] // 最近做过的 [{at, title, voice, ok, message, file}]
@@ -510,12 +514,14 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
 
   async function download(job, dir) {
     const c = cfg()
+    if (job.songId && noVocals().includes(String(job.songId))) throw new Error('这首没有人声（像是纯音乐或伴奏版），换一首吧')
     let pick = job.songId ? { id: job.songId, name: job.query, artists: '' } : null
     if (!pick) {
       const found = await searchSongs(job.query, { cookie: c.neteaseCookie, limit: 10 })
       if (!found.length) throw new Error(`网易云上没搜到「${job.query}」`)
       // 试过、确认没人声的跳过；看着像纯音乐的排到最后
-      const list = rankCandidates(found, job.query).filter((s) => !(job.skip || []).includes(String(s.id)))
+      const known = noVocals()
+      const list = rankCandidates(found, job.query).filter((s) => !(job.skip || []).includes(String(s.id)) && !known.includes(String(s.id)))
       if (!list.length) throw new Error(`搜到的「${job.query}」都是没有人声的版本`)
       // 按顺序找第一首拿得到完整音频的
       for (const s of list) {
@@ -616,6 +622,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     if (vol < VOCAL_MIN_DB) {
       log.info(`翻唱：「${job.title}」几乎没有人声（${vol.toFixed(0)} dB），像是纯音乐`)
       try { rmSync(dir, { recursive: true, force: true }) } catch (error) {}
+      if (!job.file) markNoVocals(job.songKey)
       if (job.file || job.songId) throw new Error('这首没有人声（像是纯音乐或伴奏版），换一首吧')
       job.skip = [...(job.skip || []), job.songKey]
       if (job.skip.length >= 3) throw new Error(`搜到的几版「${job.query}」都没有人声，换个说法试试（比如带上歌手名）`)

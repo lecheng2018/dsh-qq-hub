@@ -870,6 +870,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
     if (senderId) st.senders.add(String(senderId))
     for (const s of opts.extraSenders || []) st.senders.add(String(s))
+    // 上一句也留着：这一句太短（「嗯嗯」「然后呢」）时一起拿去想起相关的事
+    if (st.lastText) st.prevText = st.lastText
     st.lastText = String(opts.queryText ?? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')).slice(-600)
     st.speakers = opts.speakers || (senderId ? [String(senderId), ...(opts.extraSenders || []).map(String)] : [])
     if (opts.wantVoice) st.wantVoice = true
@@ -986,6 +988,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     chatOfSession,
     resetSessions,
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
+    prevTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.prevText || '',
     speakersOf: (sessionId) => turnState.get(sessionKey(sessionId))?.speakers || [],
     logChat,
     localTranscribe,

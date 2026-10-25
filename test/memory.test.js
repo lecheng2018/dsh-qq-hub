@@ -17,7 +17,11 @@ const dsh = {
       const text = messages[0].content[0].text
       asked.push({ system, text })
       let out = '[]'
-      if (system.includes('整理长期记忆')) out = text.includes('看海') ? '[{"text":"阿花周末去看海了","about":"阿花","about_qq":"30000003","importance":0.5}]' : text.includes('辣') ? '[{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]' : '[]'
+      if (system.includes('整理长期记忆') && text.includes('戒辣')) {
+        const id = (text.match(/#(\w+) [^\n]*喜欢吃辣/) || [])[1]
+        out = JSON.stringify([{ op: 'outdated', id, text: '小明戒辣了', about: '小明', importance: 0.6 }])
+      } else if (system.includes('人物小档案')) out = '小明是主人，最近戒辣了，爱钓鱼'
+      else if (system.includes('整理长期记忆')) out = text.includes('看海') ? '[{"text":"阿花周末去看海了","about":"阿花","about_qq":"30000003","importance":0.5}]' : text.includes('辣') ? '[{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]' : '[]'
       else if (system.includes('{"insights"')) out = '{"insights":["他喜欢被吐槽"],"style":["消息很短，常一句话分几条发","爱用 hhh"]}'
       else if (system.includes('自然会被带上')) out = '["偶尔用 hhh"]'
       else if (system.includes('旧档案')) out = '[{"text":"阿强喜欢钓鱼","about":"阿强","importance":0.7},{"text":"阿花周末去看海了","about":"阿花"}]'
@@ -35,6 +39,7 @@ const hub = {
   deleteChatLog: (day) => logs.delete(day),
   lastTextOf: () => hubState.text,
   speakersOf: () => hubState.speakers,
+  prevTextOf: () => hubState.prev || '',
 }
 const line = (text, who = '小明') => ({ chatId: 'private:10000001', who, text })
 const day = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -162,4 +167,70 @@ test('导入旧档案：挑出候选、去掉已经记过的，勾选后存进�
   assert.deepEqual(c.map((x) => x.text), ['阿强喜欢钓鱼'], '阿花看海已经记过，去掉')
   assert.equal(mem.importCommit(c), 1)
   assert.equal(mem.list('钓鱼')[0].source, 'import')
+})
+
+test('遗忘曲线：没被想起的两个月左右淡掉；隔几天就被想起的记得久', async () => {
+  const { retention, shouldForget } = await import('../src/features/memory.js')
+  const now = Date.now()
+  const base = { source: 'auto', importance: 0.5, at: now - 60 * 86400_000 }
+  assert.ok(retention(base, now) < 0.06)
+  assert.equal(shouldForget(base, now), true)
+  const often = { ...base, hitDays: 5, lastHit: now - 30 * 86400_000 }
+  assert.ok(retention(often, now) > 0.7)
+  assert.equal(shouldForget(often, now), false)
+  assert.equal(shouldForget({ ...base, invalidAt: now - 10 * 86400_000 }, now), false, '过时的先留着')
+  assert.equal(shouldForget({ ...base, invalidAt: now - 200 * 86400_000 }, now), true)
+})
+
+test('整理时比对旧记忆：新事实说明旧的过时了，旧的标过时（不删），想起来的是新的', async () => {
+  const old = mem.list('喜欢吃辣').find((m) => m.text === '小明喜欢吃辣')
+  assert.ok(old)
+  const today = day(new Date())
+  logs.get(today).push(line('我最近戒辣了'), line('胃不好'), line('医生让我少吃'))
+  await mem.consolidate({ includeToday: true })
+  const asked1 = asked.filter((a) => a.system.includes('整理长期记忆')).at(-1)
+  assert.ok(asked1.text.includes('#' + old.id), '旧记忆带着编号交给模型比对')
+  const all = mem.list('')
+  const was = all.find((m) => m.id === old.id)
+  assert.ok(was.invalidAt, '旧的标成过时')
+  const now = all.find((m) => m.text === '小明戒辣了')
+  assert.ok(now && !now.invalidAt)
+  assert.equal(was.supersededBy, now.id)
+  assert.equal(was.supersededText, '小明戒辣了')
+  assert.equal(all.at(-1).id, old.id, '过时的排在最后')
+  hubState.text = '吃辣'
+  const ctx = mem.contextFor({ kind: 'private', userId: '10000001', chatId: 'private:10000001' }, 's5')
+  assert.ok(ctx.includes('小明戒辣了') && !ctx.includes('小明喜欢吃辣'), ctx)
+  assert.equal(mem.stats().outdated, 1)
+  assert.equal(mem.restore(old.id).ok, true)
+  assert.ok(!mem.list('').find((m) => m.id === old.id).invalidAt)
+  mem.remove(old.id)
+  hubState.text = ''
+})
+
+test('人物小档案：按这个人的记忆写，聊天时常驻；群里带上正在说话的人', async () => {
+  mem.add({ text: '小明爱钓鱼', about: '10000001', aboutName: '小明', source: 'tool' })
+  mem.add({ text: '小明是程序员', about: '10000001', aboutName: '小明', source: 'tool' })
+  mem.add({ text: '小明养了一只狗', about: '10000001', aboutName: '小明', source: 'tool' })
+  assert.equal(await mem.buildProfile('10000001'), true)
+  assert.equal(mem.profiles()[0].qq, '10000001')
+  hubState.text = '在干嘛'
+  const p = mem.contextFor({ kind: 'private', userId: '10000001', chatId: 'private:10000001' }, 's6')
+  assert.match(p, /你对对方的印象：小明是主人/)
+  hubState.speakers = ['10000001']
+  const g = mem.contextFor({ kind: 'group', groupId: '7', chatId: 'group:7' }, 's7')
+  assert.match(g, /你对正在说话的人的印象：小明——小明是主人/)
+  assert.equal(await mem.buildProfile('99999999'), false, '记忆太少不写')
+  hubState.speakers = []
+  hubState.text = ''
+})
+
+test('短句（「嗯嗯」）想不起东西时，连上一句一起找', () => {
+  hubState.text = '嗯嗯'
+  hubState.prev = '你还记得阿强喜欢干啥吗 钓鱼'
+  const ctx = mem.contextFor({ kind: 'group', groupId: '8', chatId: 'group:8' }, 's8')
+  assert.match(ctx, /阿强喜欢钓鱼/)
+  assert.ok(mem.recalls()[0].hits.some((h) => h.why.includes('（上一句）')))
+  hubState.text = ''
+  hubState.prev = ''
 })

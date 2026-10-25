@@ -1008,6 +1008,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             h('div', { className: 'meta' }, timeAgo(x.at)),
             h('div', { className: 'body' }, (x.to >= x.from ? '↑ ' : '↓ ') + x.from + ' → ' + x.to, h('span', { className: 'ab-muted ab-small' }, '  ' + x.reason))))) : null,
         ),
+        h(ProfilesCard, { toast }),
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
             ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
@@ -1017,7 +1018,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         h(Card, { title: '记忆库', right: f.sw('memory.enabled'), desc: '长期记忆：她聊天时自己记的、每天从聊天里整理出来的、写过的空间日记、你手动加的。每一轮回复前，她会按对方正在说的话翻出最相关的几条。' },
           h('div', { className: 'ab-grid ab-g4', style: { marginBottom: 12 } },
             h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.count : '–'), h('div', { className: 'l' }, '条长期记忆')),
-            h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.auto : '–'), h('div', { className: 'l' }, '条来自每日整理')),
+            h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.auto : '–'), h('div', { className: 'l' }, '条来自每日整理' + (stats && stats.outdated ? '（另有 ' + stats.outdated + ' 条已过时）' : ''))),
             h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n', style: { fontSize: 16, paddingTop: 6 } }, last ? new Date(last.at).toLocaleString() : '还没整理过'), h('div', { className: 'l' }, '上次整理'))),
           h(Row, { label: '每天自动整理两次', hint: '把临时记忆（聊天流水）提炼成长期记忆、相处经验和说话方式；第二次只处理新聊天，过了一天的流水整理完清空；各会话自己的上下文不受影响' },
             f.sw('memory.dailyConsolidate'), h('span', { className: 'ab-muted' }, '每天'),
@@ -1039,6 +1040,28 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         h(RecallLog, null),
         h(MemoryImport, { toast, onDone: () => load() }),
       )
+    }
+
+    /** 人物小档案：她对每个人的一小段印象，聊天时常驻；整理记忆时按新记忆重写，也可以手改。 */
+    function ProfilesCard({ toast }) {
+      const [list, setList] = useState(null)
+      const load = () => get('/profiles').then((r) => setList(r.list || []))
+      useEffect(() => { load() }, [])
+      return h(Card, { title: '人物小档案', desc: '她对每个人的印象：是谁、什么关系、喜好、最近在忙什么。和谁聊天就带上谁的那份（群里带上正在说话的几个人），不用等对方提到关键词她才想起来。每次整理记忆时，记忆有变化的人会按新记忆重写；你也可以直接改。' },
+        list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { icon: '🌱', text: '还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。' }) :
+          h('div', { className: 'ab-list' }, list.map((p) => h(ProfileRow, { key: p.qq, p, toast, onChanged: load }))))
+    }
+
+    function ProfileRow({ p, toast, onChanged }) {
+      const [text, setText] = useState(p.text)
+      const [busy, setBusy] = useState(false)
+      useEffect(() => { setText(p.text) }, [p.text])
+      return h('div', { className: 'ab-li', style: { alignItems: 'flex-start' } },
+        h('div', { className: 'meta' }, h('b', null, p.name || p.qq), h('br'), h('span', { className: 'ab-small' }, p.qq), h('br'), h('span', { className: 'ab-small' }, timeAgo(p.at))),
+        h('textarea', { className: 'ab-input wide', rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: 1 } }),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+          h(Btn, { small: true, kind: 'primary', disabled: text === p.text, onClick: async () => { const r = await post('/profiles/save', { qq: p.qq, text }); toast(r.message, 'ok'); onChanged() } }, '保存'),
+          h(Btn, { small: true, kind: 'ghost', disabled: busy, onClick: async () => { setBusy(true); const r = await post('/profiles/rebuild', { qq: p.qq }); setBusy(false); toast(r.message, r.ok ? 'ok' : 'err'); onChanged() } }, busy ? '重写中…' : '按记忆重写')))
     }
 
     /** 最近几轮她想起了什么、因为哪些词想起来的。 */
@@ -1120,6 +1143,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     function MemoryRow({ m, onChanged, toast }) {
       const [edit, setEdit] = useState(false)
       const [text, setText] = useState(m.text)
+      if (m.invalidAt) {
+        return h('div', { className: 'ab-li', style: { opacity: 0.6 } },
+          h('div', { className: 'meta' }, timeAgo(m.invalidAt), h('br'), h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11 } }, '已过时')),
+          h('div', { className: 'body' }, h('s', null, (m.aboutName ? '[' + m.aboutName + '] ' : '') + m.text), m.supersededText ? h('div', { className: 'ab-muted ab-small' }, '→ 现在是：' + m.supersededText) : null),
+          h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/restore', { id: m.id }); toast('恢复了', 'ok'); onChanged() } }, '恢复'),
+          h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '删掉'))
+      }
       return h('div', { className: 'ab-li' },
         h('div', { className: 'meta' }, timeAgo(m.at), h('br'), h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11 } }, SOURCE[m.source] || '记忆')),
         edit ? h('input', { className: 'ab-input wide', value: text, onChange: (e) => setText(e.target.value), onKeyDown: async (e) => { if (e.key === 'Enter') { await post('/memory/update', { id: m.id, text }); setEdit(false); toast('改好了', 'ok'); onChanged() } if (e.key === 'Escape') setEdit(false) } })

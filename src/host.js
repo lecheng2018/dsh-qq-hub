@@ -575,6 +575,21 @@ export function apply(ctx) {
   })
   route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
   route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
+  route('/memory/restore', async (req) => memory.restore((await readBody(req)).id))
+  route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
+  route('/profiles/save', async (req) => {
+    const b = await readBody(req)
+    memory.setProfile(String(b.qq || ''), String(b.text || ''))
+    return { ok: true, message: b.text ? '小档案已保存' : '小档案已清空' }
+  })
+  route('/profiles/rebuild', async (req) => {
+    const b = await readBody(req)
+    try {
+      return (await memory.buildProfile(String(b.qq || ''))) ? { ok: true, message: '按记忆重写好了' } : { ok: false, message: '关于 TA 的记忆还太少（至少 3 条）' }
+    } catch (error) {
+      return { ok: false, message: error.message }
+    }
+  })
   route('/memory/import', async (req) => {
     const b = await readBody(req)
     try { return { ok: true, list: await memory.importCandidates(String(b.text || '').slice(0, 30000)) } } catch (error) { return { ok: false, message: error.message, list: [] } }
