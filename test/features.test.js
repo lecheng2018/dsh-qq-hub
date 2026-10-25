@@ -45,6 +45,22 @@ test('只挑机器人号的 QQ 进程，识别不了就不注入', () => {
   assert.equal(pickBotProcess([...list, { pid: 5, account: { uin: 20000002 } }], '20000002').proc, null, '两个进程都声称是机器人号时不注入')
 })
 
+test('SnowLuma 认不出号（account: null）：只有一个这样的进程才当候选，且标记要核对', () => {
+  const r = pickBotProcess([{ pid: 19224, account: null }], '20000002')
+  assert.equal(r.proc.pid, 19224)
+  assert.equal(r.unverified, true)
+  // 认出是别的号的进程永远不碰
+  const r2 = pickBotProcess([{ pid: 1, account: { uin: 10000001 } }, { pid: 2, account: null }], '20000002')
+  assert.equal(r2.proc.pid, 2)
+  assert.equal(r2.unverified, true)
+  // 认出了机器人号就不用核对
+  const r3 = pickBotProcess([{ pid: 1, account: null }, { pid: 2, account: { uin: 20000002 } }], '20000002')
+  assert.equal(r3.proc.pid, 2)
+  assert.ok(!r3.unverified)
+  // 核对失败过的进程不再试
+  assert.equal(pickBotProcess([{ pid: 19224, account: null }], '20000002', { exclude: [19224] }).proc, null)
+})
+
 test('从 SnowLuma 配置读出 OneBot 地址和令牌（单号覆盖全局）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sl-'))
   mkdirSync(join(dir, 'config'))
