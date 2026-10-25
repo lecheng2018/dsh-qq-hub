@@ -600,7 +600,8 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     current.stage = '下载歌曲'
     const song = job.file || (await download(job, dir))
     // 同一首歌、同一个音色、音高和截取方式做过的，直接复用
-    const key = createHash('md5').update([job.songKey || song, voice.id, pitch, c.maxVoiceSec, c.clipStart].join('|')).digest('hex').slice(0, 16)
+    // v2：0.6.2 起才检查有没有人声，之前缓存的可能是只有伴奏的成品，一律不用
+    const key = createHash('md5').update(['v2', job.songKey || song, voice.id, pitch, c.maxVoiceSec, c.clipStart].join('|')).digest('hex').slice(0, 16)
     const cached = join(work(), 'cache', key + '.mp3')
     if (existsSync(cached)) {
       log.info(`翻唱：「${job.title}」做过了，直接用缓存`)
