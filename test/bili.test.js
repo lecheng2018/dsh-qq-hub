@@ -44,7 +44,7 @@ test('过滤：播放量、发布时间、看过的', () => {
   assert.deepEqual(duty.filterVideos(list, { minViews: 5000, maxAgeDays: 60, seen: new Set(['d']), now }).map((v) => v.bvid), ['c'])
 })
 
-function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {} } = {}) {
+function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {}, postError = null } = {}) {
   const posted = []
   const sent = []
   const events = []
@@ -56,7 +56,7 @@ function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {} } = 
     view: async ({ bvid }) => ({ bvid: bvid || 'BV1ccccccccc', aid: bvid === 'BV1bbbbbbbbb' ? 2 : 1, cid: 9, title: bvid === 'BV1bbbbbbbbb' ? '猫猫做饭' : '米饭大赛', author: 'UP主', play: 20000, desc: '简介' }),
     subtitle: async () => '大家好今天做饭',
     comments: async () => [{ name: '网友', text: '好香' }],
-    postComment: async (aid, message, o) => { posted.push({ aid, message, ...(o || {}) }); return { rpid: 1 } },
+    postComment: async (aid, message, o) => { if (postError) { posted.push({ failed: true }); throw postError } posted.push({ aid, message, ...(o || {}) }); return { rpid: 1 } },
     likeVideo: async () => {},
     replyFeed: async () => [{ id: 'f1', name: '路人甲', text: '你也爱吃米饭？', myText: '看饿了', oid: 1, root: 100, parent: 101, title: '米饭大赛', type: 1 }],
     resolveShort: async () => 'https://www.bilibili.com/video/BV1bbbbbbbbb',
@@ -77,7 +77,7 @@ function fakes({ decisions, replyText = '是呀 我也觉得', cfgOver = {} } = 
     addEvent: (e) => events.push(e.text),
     add: (m) => facts.push(m.text),
   }
-  const cfg = normalize({ enabled: true, dryRun: false, ownerQQ: '10000001', bili: { enabled: true, perRun: 2, maxCommentsPerDay: 1, ...cfgOver } })
+  const cfg = normalize({ enabled: true, dryRun: false, ownerQQ: '10000001', bili: { enabled: true, cookie: 'SESSDATA=x; bili_jct=y', perRun: 2, maxCommentsPerDay: 1, ...cfgOver } })
   const b = duty.createBili({ getConfig: () => cfg, hub, memory, log: { info() {}, warn() {}, debug() {} }, api: fakeApi })
   return { b, posted, sent, events, facts }
 }
@@ -123,4 +123,40 @@ test('看你发来的视频（短链也行）；主人让她评论才发', async
   assert.equal(c.ok, true)
   assert.deepEqual(posted[0], { aid: 2, message: '太会了' })
   assert.equal((await b.watch('没有链接')).ok, false)
+})
+
+test('没登录不让她写评论；被风控就当天暂停评论和回复', async () => {
+  const d = [{ i: 1, feeling: '好看', comment: '真好', share: '' }, { i: 2, feeling: '可爱', comment: '哈哈', share: '' }]
+  const { dataDir } = await import('../src/core/store.js')
+  const { rmSync } = await import('node:fs')
+  const fresh = () => rmSync(dataDir('bili.json'), { force: true }) // 前面的测试把这几个视频记成看过了
+  fresh()
+  const noLogin = fakes({ decisions: d, cfgOver: { cookie: '' } })
+  await noLogin.b.run({ force: true })
+  assert.equal(noLogin.posted.length, 0)
+  const e = Object.assign(new Error('B 站返回 -352：风控校验失败'), { code: -352 })
+  fresh()
+  const risky = fakes({ decisions: d, cfgOver: { maxCommentsPerDay: 5 }, postError: e })
+  await risky.b.run({ force: true })
+  assert.equal(risky.posted.length, 1, '第一条失败后不再试第二条')
+  assert.match(risky.b.state().pauseReason, /风控/)
+  assert.equal(risky.b.state().canPost, false)
+  assert.equal((await risky.b.checkReplies()).replied, 0)
+  assert.equal(risky.posted.length, 1, '回复也不发了')
+})
+
+test('B 站 Cookie 分两个框填：纯值、带前缀、整串都认；老配置自动拆开；面板只看得到结尾几位', async () => {
+  const { splitBiliCookie, publicConfig, mergeFromPanel } = await import('../src/core/config.js')
+  assert.equal(splitBiliCookie({ sessdata: 'aaa', biliJct: 'bbb' }).cookie, 'SESSDATA=aaa; bili_jct=bbb')
+  assert.equal(splitBiliCookie({ sessdata: 'SESSDATA=aaa', biliJct: 'bili_jct=bbb' }).cookie, 'SESSDATA=aaa; bili_jct=bbb')
+  assert.deepEqual(splitBiliCookie({ sessdata: 'buvid3=z; SESSDATA=a%2C1; bili_jct=b; x=1' }), { sessdata: 'a%2C1', biliJct: 'b', cookie: 'SESSDATA=a%2C1; bili_jct=b' })
+  const cur = normalize({ bili: { cookie: 'SESSDATA=old1234; bili_jct=jct9876' } })
+  assert.equal(cur.bili.sessdata, 'old1234')
+  const pub = publicConfig(cur).bili
+  assert.equal(pub.sessdataHint, '…1234')
+  assert.equal(pub.sessdata + pub.biliJct + pub.cookie, '', '完整值不回传')
+  const next = mergeFromPanel(cur, { bili: { sessdata: '', biliJct: 'new0000' } })
+  assert.equal(next.bili.cookie, 'SESSDATA=old1234; bili_jct=new0000', '只改一个，另一个保留')
+  const cleared = mergeFromPanel(next, { bili: { sessdata: null, biliJct: null, cookie: null } })
+  assert.equal(cleared.bili.cookie, '')
 })

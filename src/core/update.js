@@ -27,9 +27,20 @@ export function createUpdateChecker({ pkg, log, fetchImpl = fetch }) {
     if (!repo) return { ok: false, current: pkg.version, message: '不知道从哪检查更新' }
     if (!force && cache && Date.now() - cache.at < 6 * 3600_000) return cache.value
     try {
-      const r = await fetchImpl(`https://raw.githubusercontent.com/${repo}/main/package.json`, { signal: AbortSignal.timeout(10000) })
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      const latest = (await r.json()).version
+      // raw.githubusercontent.com 国内常连不上，不行就走 jsDelivr
+      let latest = ''
+      let lastError = null
+      for (const url of [`https://raw.githubusercontent.com/${repo}/main/package.json`, `https://cdn.jsdelivr.net/gh/${repo}@main/package.json`]) {
+        try {
+          const r = await fetchImpl(url, { signal: AbortSignal.timeout(8000) })
+          if (!r.ok) throw new Error('HTTP ' + r.status)
+          latest = (await r.json()).version
+          if (latest) break
+        } catch (error) {
+          lastError = error
+        }
+      }
+      if (!latest) throw lastError || new Error('拿不到版本号')
       const value = { ok: true, current: pkg.version, latest, newer: compareVersions(latest, pkg.version) > 0, repo, command: updateCommand(repo) }
       cache = { at: Date.now(), value }
       return value

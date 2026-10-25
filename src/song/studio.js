@@ -14,6 +14,27 @@ import { readZip } from './zip.js'
 export const APPLIO_REPO = 'https://github.com/IAHispano/Applio.git'
 export const APPLIO_COMMIT = 'c817f1f83f689ef72e0dfeb1c17ae990b9248506'
 const TORCH_INDEX = 'https://download.pytorch.org/whl/cu128'
+// 国内镜像：PyPI 和 PyTorch 都用阿里云（PyTorch 那边是文件列表，用 --find-links；Applio 固定了 torch 版本，挑得到 cu128 的），Python 本体用 npmmirror
+const CN_PYPI = 'https://mirrors.aliyun.com/pypi/simple'
+const CN_TORCH = 'https://mirrors.aliyun.com/pytorch-wheels/cu128/'
+const CN_PYTHON = 'https://registry.npmmirror.com/-/binary/python-build-standalone'
+
+/** 自动模式下判断要不要用国内镜像：官方源 4 秒内连不上或者很慢就用。 */
+export async function shouldUseCnMirror(mode, fetchImpl = fetch) {
+  if (mode === 'cn' || mode === 'tuna') return true
+  if (mode === 'off') return false
+  const probe = async (url) => {
+    const t = Date.now()
+    try {
+      const r = await fetchImpl(url, { method: 'HEAD', signal: AbortSignal.timeout(4000) })
+      return r.status < 500 ? Date.now() - t : Infinity
+    } catch (error) {
+      return Infinity
+    }
+  }
+  const times = await Promise.all([probe('https://pypi.org/simple/pip/'), probe(TORCH_INDEX + '/torch/'), probe('https://github.com/')])
+  return times.some((t) => t > 2500)
+}
 const LEGACY_ROOT = 'C:\\Aurabot\\rvc'
 
 // RVC 推理要的预训练文件（Applio 放在 HuggingFace 上）：[远端相对路径, 本地相对 Applio 的路径]
@@ -22,8 +43,8 @@ const PREREQS = [
   ['embedders/contentvec/config.json', 'rvc/models/embedders/contentvec/config.json'],
   ['embedders/contentvec/pytorch_model.bin', 'rvc/models/embedders/contentvec/pytorch_model.bin'],
 ]
-// 国内直连 HuggingFace 常常很慢，卡住就换镜像
-const HF_HOSTS = ['https://huggingface.co', 'https://hf-mirror.com']
+// 国内直连 HuggingFace 常常很慢：先试镜像，太慢或卡住再换官方
+const HF_HOSTS = ['https://hf-mirror.com', 'https://huggingface.co']
 
 const FETCH_SCRIPT = fileURLToPath(new URL('./fetch_file.py', import.meta.url))
 
@@ -35,6 +56,30 @@ async function downloadWithMirror(python, rel, dest, note, log, onProgress) {
   return fetchFile(python, dest, HF_HOSTS.map((host) => `${host}/IAHispano/Applio/resolve/main/Resources/${rel}`), note, log, onProgress, rel)
 }
 
+// uv 的下载源：PyPI 上的 uv 安装包（固定版本，里面带 uv.exe）走国内镜像，最后才试 GitHub。
+const UV_WHEEL = 'packages/32/ea/771744a784b16aa21d195cb5d5d5a2878d72fa00fc26f11ea3f9646994fe/uv-0.13.5-py3-none-win_amd64.whl'
+export const UV_SOURCES = [
+  { url: `https://mirrors.aliyun.com/pypi/${UV_WHEEL}`, sha256: '1fb29fc46ba12033e2ef95a95ac79d649e71bbb1358419bbbcbd19d86026ef2f' },
+  { url: `https://files.pythonhosted.org/${UV_WHEEL}`, sha256: '1fb29fc46ba12033e2ef95a95ac79d649e71bbb1358419bbbcbd19d86026ef2f' },
+  { url: 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' },
+]
+
+/** 在目录里（含子目录）找一个文件名。 */
+function findFile(dir, name) {
+  const stack = [dir]
+  while (stack.length) {
+    const d = stack.pop()
+    let names
+    try { names = readdirSync(d, { withFileTypes: true }) } catch (error) { continue }
+    for (const e of names) {
+      const full = join(d, e.name)
+      if (e.isDirectory()) stack.push(full)
+      else if (e.name.toLowerCase() === name) return full
+    }
+  }
+  return ''
+}
+
 /** 默认分离模型的文件都在不在。 */
 export function separatorReady(dir, model) {
   const files = SEPARATOR_FILES[model]
@@ -43,12 +88,14 @@ export function separatorReady(dir, model) {
 }
 
 /** 下载一个文件：已经有了就跳过；地址按顺序轮流试，断了接着下，走系统代理。 */
-async function fetchFile(python, dest, urls, note, log, onProgress, label = basename(dest)) {
+async function fetchFile(python, dest, urls, note, log, onProgress, label = basename(dest), sha256 = '') {
   const rel = label
   if (existsSync(dest) && statSync(dest).size > 0) return
-  note?.(`下载 ${rel}`)
+  // 上次没下完的（.download）会接着下
+  const part = dest + '.download'
+  note?.(existsSync(part) ? `接着下 ${rel}（上次下到 ${Math.round(statSync(part).size / 1048576)} MB）` : `下载 ${rel}`)
   let lastPct = -1
-  await run(python, [FETCH_SCRIPT, dest, ...urls], {
+  await run(python, [FETCH_SCRIPT, ...(sha256 ? ['--sha256', sha256] : []), dest, ...urls], {
     log,
     env: { PYTHONIOENCODING: 'utf-8' },
     timeoutMs: 2 * 3600_000,
@@ -101,16 +148,49 @@ export function explainInstallError(msg) {
 }
 
 /** 安装的几步（面板按这个画步骤条）。 */
-export const INSTALL_STEPS = ['下载 Applio（RVC 推理引擎）', '创建 Python 环境', '安装 PyTorch、RVC 和人声分离（最大的一步）', '准备 ffmpeg', '下载 RVC 需要的预训练文件（音高、音色特征）', '下载人声分离模型']
+export const INSTALL_STEPS = ['创建 Python 环境', '下载 Applio（RVC 推理引擎）', '安装 PyTorch、RVC 和人声分离（最大的一步）', '准备 ffmpeg', '下载 RVC 需要的预训练文件（音高、音色特征）', '下载人声分离模型']
 
-// 默认人声分离模型要的文件：[文件名, 下载地址（按顺序试）]。提前下好，免得第一次点歌时卡着不动
+// 默认人声分离模型要的文件：[文件名, 下载地址（按顺序试）, sha256]。提前下好，免得第一次点歌时卡着不动。
+// 模型 640 MB，GitHub 在国内经常下不动：先走 HuggingFace 镜像（有人转存了同一个文件，校验值一样），再试官方。
+// 下完核对 sha256，哪个源给的文件不对就换下一个；配置文件很小，随插件带着（src/song/separator/）。
 const GH_UVR = 'https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models'
 const GH_AS = 'https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs'
+const HF_SEP = ['Politrees/UVR_resources/resolve/main/models/Roformer/BandSplit', 'datasets/SayanoAI/RVC-Studio/resolve/main/UVR']
+const BS_ROFORMER = 'model_bs_roformer_ep_317_sdr_12.9755'
 export const SEPARATOR_FILES = {
-  'model_bs_roformer_ep_317_sdr_12.9755.ckpt': [
-    ['model_bs_roformer_ep_317_sdr_12.9755.ckpt', [`${GH_UVR}/model_bs_roformer_ep_317_sdr_12.9755.ckpt`, `${GH_AS}/model_bs_roformer_ep_317_sdr_12.9755.ckpt`]],
-    ['model_bs_roformer_ep_317_sdr_12.9755.yaml', [`${GH_AS}/model_bs_roformer_ep_317_sdr_12.9755.yaml`]],
+  [`${BS_ROFORMER}.ckpt`]: [
+    [`${BS_ROFORMER}.ckpt`, [
+      ...HF_SEP.map((p) => `https://hf-mirror.com/${p}/${BS_ROFORMER}.ckpt`),
+      `${GH_UVR}/${BS_ROFORMER}.ckpt`,
+      `https://huggingface.co/${HF_SEP[0]}/${BS_ROFORMER}.ckpt`,
+      `${GH_AS}/${BS_ROFORMER}.ckpt`,
+    ], '5b84f37e8d444c8cb30c79d77f613a41c05868ff9c9ac6c7049c00aefae115aa'],
+    [`${BS_ROFORMER}.yaml`, [`${GH_AS}/${BS_ROFORMER}.yaml`], '2bfdd16c656bd9519aba757cc4f8834b7ede675eb1e00ec4772d74ae1c41af7f'],
   ],
+}
+const BUNDLED_SEP = fileURLToPath(new URL('./separator/', import.meta.url))
+
+/** 手动下载用的地址（面板里给用户复制，用浏览器或下载工具下好再拖进来）。 */
+export function separatorLinks(model) {
+  return (SEPARATOR_FILES[model] || []).slice(0, 1).flatMap(([, urls]) => urls.slice(0, 3))
+}
+
+/**
+ * 导入手动下好的分离模型：核对 sha256，对得上才放进去。
+ * @returns {{ok:boolean, message:string}}
+ */
+export function importSeparator(dir, filename, buf) {
+  const sha = createHash('sha256').update(buf).digest('hex')
+  for (const files of Object.values(SEPARATOR_FILES)) {
+    const hit = files.find(([, , want]) => want === sha)
+    if (hit) {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, hit[0]), buf)
+      rmSync(join(dir, hit[0] + '.download'), { force: true })
+      return { ok: true, message: `人声分离模型导入好了（${hit[0]}）` }
+    }
+  }
+  return { ok: false, message: `「${filename}」不是插件要的人声分离模型（校验对不上），要下 ${BS_ROFORMER}.ckpt` }
 }
 // 分离工具每次运行都要的模型清单（缺了会去 raw.githubusercontent.com 拉，国内常常连不上）
 const SEPARATOR_LIST = ['download_checks.json', ['https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json', 'https://cdn.jsdelivr.net/gh/TRvlvr/application_data@main/filelists/download_checks.json']]
@@ -314,9 +394,10 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       root: p.root,
       defaultRoot: defaultRoot(),
       rootCheck: checkRoot(p.root),
-      pypiMirror: cfg().pypiMirror || '',
+      pypiMirror: cfg().pypiMirror || 'auto',
       parts,
       voices: voices.map((v) => ({ id: v.id, hasIndex: Boolean(v.index) })),
+      separatorLinks: parts.separatorModel ? [] : separatorLinks(cfg().separatorModel),
       voice: cfg().voice,
       install: { ...install, log: install.log.slice(-30) },
       current: current ? { ...current } : null,
@@ -340,33 +421,20 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     }
     // 这次安装的下载缓存放在安装目录里：一来能统计下载了多少（给面板看进度），二来装完删掉不占地方
     const cacheDir = join(p.root, 'uv-cache')
-    const tuna = cfg().pypiMirror === 'tuna'
+    const cn = await shouldUseCnMirror(cfg().pypiMirror)
+    if (cn) note(cfg().pypiMirror === 'cn' ? '用国内镜像下载' : '官方源连得慢，自动改用国内镜像下载')
     const uvEnv = {
       UV_CACHE_DIR: cacheDir,
       UV_HTTP_TIMEOUT: '300',
       UV_HTTP_RETRIES: '6',
       UV_PYTHON_INSTALL_DIR: join(p.root, 'python'), // Python 也装在选的位置里，不偷偷占 C 盘
-      ...(tuna ? { UV_PYTHON_INSTALL_MIRROR: 'https://registry.npmmirror.com/-/binary/python-build-standalone' } : {}),
+      ...(cn ? { UV_PYTHON_INSTALL_MIRROR: CN_PYTHON } : {}),
     }
-    const mirror = tuna ? ['--default-index', 'https://pypi.tuna.tsinghua.edu.cn/simple'] : []
+    const mirror = cn ? ['--default-index', CN_PYPI] : []
     let uv = 'uv'
     try {
       mkdirSync(p.root, { recursive: true })
       mkdirSync(p.models, { recursive: true })
-      await step('下载 Applio（RVC 推理引擎）', '要下载几十 MB，一般 1~3 分钟', async () => {
-        if (existsSync(join(p.applio, 'core.py'))) return note('  已经有了，跳过')
-        // 直接下代码压缩包（固定版本），不需要电脑上装 git
-        const zip = join(p.root, 'downloads', 'applio.zip')
-        await fetchWithProgress(`https://github.com/IAHispano/Applio/archive/${APPLIO_COMMIT}.zip`, zip)
-        const tmp = join(p.root, 'downloads', 'applio-src')
-        rmSync(tmp, { recursive: true, force: true })
-        await expandZip(zip, tmp)
-        const inner = readdirSync(tmp).find((n) => existsSync(join(tmp, n, 'core.py')))
-        if (!inner) throw new Error('下载的 Applio 压缩包不完整')
-        rmSync(p.applio, { recursive: true, force: true })
-        renameSync(join(tmp, inner), p.applio)
-        rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
-      })
       await step('创建 Python 环境', '第一次要下载 Python 3.12（约 30 MB）和安装工具，一般 1~3 分钟', async () => {
         uv = await ensureUv(note)
         if (existsSync(p.python)) return note('  已经有了，跳过')
@@ -377,11 +445,33 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
           stop()
         }
       })
+      await step('下载 Applio（RVC 推理引擎）', '要下载几十 MB，一般 1~3 分钟', async () => {
+        if (existsSync(join(p.applio, 'core.py'))) return note('  已经有了，跳过')
+        // 直接下代码压缩包（固定版本），不需要电脑上装 git
+        const zip = join(p.root, 'downloads', 'applio.zip')
+        // 用环境里的 Python 下（断了能接着下、走系统代理）；万一不行再用 PowerShell 下
+        try {
+          await fetchFile(p.python, zip, [`https://github.com/IAHispano/Applio/archive/${APPLIO_COMMIT}.zip`, `https://codeload.github.com/IAHispano/Applio/zip/${APPLIO_COMMIT}`], note, log, (done, total) => {
+            install.progress = { kind: 'file', name: 'Applio', done, total }
+          })
+        } catch (error) {
+          note('  换个方式再下一次')
+          await fetchWithProgress(`https://github.com/IAHispano/Applio/archive/${APPLIO_COMMIT}.zip`, zip)
+        }
+        const tmp = join(p.root, 'downloads', 'applio-src')
+        rmSync(tmp, { recursive: true, force: true })
+        await expandZip(zip, tmp)
+        const inner = readdirSync(tmp).find((n) => existsSync(join(tmp, n, 'core.py')))
+        if (!inner) throw new Error('下载的 Applio 压缩包不完整')
+        rmSync(p.applio, { recursive: true, force: true })
+        renameSync(join(tmp, inner), p.applio)
+        rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
+      })
       await step('安装 PyTorch、RVC 和人声分离（最大的一步）', '要下载约 3~4 GB，看网速一般 10~40 分钟；下面的「已下载」在涨就说明没卡住', async () => {
         const stop = watchDownload(cacheDir)
         try {
           await run(uv, ['pip', 'install', '--python', p.python, '-r', join(p.applio, 'requirements-engine.txt'), 'audio-separator[gpu]', 'imageio-ffmpeg',
-            ...mirror, '--extra-index-url', TORCH_INDEX, '--index-strategy', 'unsafe-best-match'], { log, onLine: note, env: uvEnv, timeoutMs: 120 * 60_000 })
+            ...mirror, ...(cn ? ['--find-links', CN_TORCH] : ['--extra-index-url', TORCH_INDEX]), '--index-strategy', 'unsafe-best-match'], { log, onLine: note, env: uvEnv, timeoutMs: 120 * 60_000 })
         } finally {
           stop()
         }
@@ -395,11 +485,14 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
         }
       })
       await step('下载人声分离模型', '约 640 MB，看网速几分钟；下好以后第一次点歌就不用再等', async () => {
+        // 配置文件插件自带，先放进去
+        mkdirSync(p.separatorModels, { recursive: true })
+        for (const n of readdirSync(BUNDLED_SEP)) if (!existsSync(join(p.separatorModels, n))) copyFileSync(join(BUNDLED_SEP, n), join(p.separatorModels, n))
         const files = [...(SEPARATOR_FILES[cfg().separatorModel] || []), SEPARATOR_LIST]
-        for (const [name, urls] of files) {
+        for (const [name, urls, sha] of files) {
           await fetchFile(p.python, join(p.separatorModels, name), urls, note, log, (done, total) => {
             install.progress = { kind: 'file', name, done, total }
-          })
+          }, name, sha || '')
         }
       })
       // 下载缓存用完删掉（几个 GB）；环境里的文件是硬链接 / 复制过去的，删缓存不影响
@@ -416,14 +509,14 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   /**
    * 用 PowerShell 下载一个文件（会走系统代理，不依赖电脑上装了别的工具），下载中显示已下载多少、网速。
    */
-  async function fetchWithProgress(url, dest) {
+  async function fetchWithProgress(url, dest, timeoutSec = 600) {
     mkdirSync(dirname(dest), { recursive: true })
     rmSync(dest, { force: true })
     const stop = watchDownload(dirname(dest))
     try {
       await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri $env:AB_URL -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec 600"],
-      { log, env: { AB_URL: url, AB_OUT: dest }, timeoutMs: 30 * 60_000 })
+        "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri $env:AB_URL -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec $env:AB_TIMEOUT"],
+      { log, env: { AB_URL: url, AB_OUT: dest, AB_TIMEOUT: String(timeoutSec) }, timeoutMs: (timeoutSec + 60) * 1000 })
     } finally {
       stop()
     }
@@ -449,11 +542,26 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     } catch (error) {}
     note('  电脑上没有 uv，下载一个放进安装目录')
     const zip = join(p.root, 'downloads', 'uv.zip')
-    await fetchWithProgress('https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip', zip)
-    await expandZip(zip, p.bin)
-    rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
-    if (!existsSync(local)) throw new Error('uv 下载下来了，但没找到 uv.exe')
-    return local
+    const tmp = join(p.root, 'downloads', 'uv')
+    let lastError = null
+    for (const src of UV_SOURCES) {
+      try {
+        await fetchWithProgress(src.url, zip, 5 * 60)
+        if (src.sha256 && createHash('sha256').update(readFileSync(zip)).digest('hex') !== src.sha256) throw new Error('下载的文件校验对不上')
+        rmSync(tmp, { recursive: true, force: true })
+        await expandZip(zip, tmp)
+        const exe = findFile(tmp, 'uv.exe')
+        if (!exe) throw new Error('里面没找到 uv.exe')
+        mkdirSync(p.bin, { recursive: true })
+        copyFileSync(exe, local)
+        rmSync(join(p.root, 'downloads'), { recursive: true, force: true })
+        return local
+      } catch (error) {
+        lastError = error
+        note(`  从 ${new URL(src.url).host} 下 uv 没成功（${error.message.slice(0, 80)}），换一个源`)
+      }
+    }
+    throw new Error('uv 下载失败：' + (lastError?.message || ''))
   }
 
   /** 每 4 秒统计一次下载缓存有多大，算出已下载多少、网速多少，给面板看。返回停止函数。 */
@@ -685,7 +793,9 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     search: (q) => searchSongs(q, { cookie: cfg().neteaseCookie, limit: 8 }),
     account: () => account(cfg().neteaseCookie),
     voices: () => listVoices(P().models).map((v) => v.id),
-    importModels: (filename, buf) => importModels(P().models, filename, buf),
+    // .ckpt 是手动下好的人声分离模型，其余是音色
+    importModels: (filename, buf) => (/\.ckpt$/i.test(filename) ? importSeparator(P().separatorModels, filename, buf) : importModels(P().models, filename, buf)),
+    separatorLinks: () => separatorLinks(cfg().separatorModel),
     deleteVoice: (id) => deleteVoice(P().models, id),
   }
 }

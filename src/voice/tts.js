@@ -80,14 +80,14 @@ export async function installEdge(log) {
   log?.info('正在安装 edge-tts …')
   let r = await run(pyExe(), ['-m', 'pip', 'install', '-q', 'edge-tts'], { timeoutMs: 300000 })
   if (r.code !== 0) {
-    r = await run(pyExe(), ['-m', 'pip', 'install', '-q', '-i', 'https://pypi.tuna.tsinghua.edu.cn/simple', 'edge-tts'], { timeoutMs: 300000 })
+    r = await run(pyExe(), ['-m', 'pip', 'install', '-q', '-i', 'https://mirrors.aliyun.com/pypi/simple', 'edge-tts'], { timeoutMs: 300000 })
   }
   // uv 建的环境里没有 pip：改用 uv 装
   if (r.code !== 0 && /No module named pip/.test(r.err)) {
     const uv = await findOrFetchUv(log)
     if (uv) {
       r = await run(uv, ['pip', 'install', '-q', '--python', pyExe(), 'edge-tts'], { timeoutMs: 300000 })
-      if (r.code !== 0) r = await run(uv, ['pip', 'install', '-q', '--python', pyExe(), '--default-index', 'https://pypi.tuna.tsinghua.edu.cn/simple', 'edge-tts'], { timeoutMs: 300000 })
+      if (r.code !== 0) r = await run(uv, ['pip', 'install', '-q', '--python', pyExe(), '--default-index', 'https://mirrors.aliyun.com/pypi/simple', 'edge-tts'], { timeoutMs: 300000 })
     }
   }
   if (r.code !== 0) return { ok: false, message: '安装 edge-tts 失败：' + r.err.slice(-300) }
@@ -102,9 +102,16 @@ async function findOrFetchUv(log) {
   for (const p of [local, join('C:\\Aurabot', 'rvc', 'bin', 'uv.exe'), join(homedir(), 'Aurabot', 'rvc', 'bin', 'uv.exe')]) if (existsSync(p)) return p
   log?.info('下载 uv …')
   const zip = join(dirname(PYENV_DIR), 'bin', 'uv.zip')
+  const tmp = join(dirname(PYENV_DIR), 'bin', 'uv-src')
   mkdirSync(dirname(zip), { recursive: true })
-  const ps = "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec 600; Expand-Archive -LiteralPath $env:AB_OUT -DestinationPath (Split-Path $env:AB_OUT) -Force; Remove-Item $env:AB_OUT"
-  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 900000, env: { AB_OUT: zip } })
+  // 和翻唱安装用同一组下载源：国内镜像上的 uv 安装包优先，最后才试 GitHub；有校验值的核对一下
+  const { UV_SOURCES } = await import('../song/studio.js')
+  const ps = "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri $env:AB_URL -OutFile $env:AB_OUT -UseBasicParsing -TimeoutSec 300; if ($env:AB_SHA -and (Get-FileHash $env:AB_OUT -Algorithm SHA256).Hash.ToLower() -ne $env:AB_SHA) { throw 'sha256 mismatch' }; if (Test-Path $env:AB_TMP) { Remove-Item $env:AB_TMP -Recurse -Force }; Expand-Archive -LiteralPath $env:AB_OUT -DestinationPath $env:AB_TMP -Force; $e = Get-ChildItem $env:AB_TMP -Recurse -Filter uv.exe | Select-Object -First 1; Copy-Item $e.FullName $env:AB_DEST -Force; Remove-Item $env:AB_OUT; Remove-Item $env:AB_TMP -Recurse -Force"
+  for (const src of UV_SOURCES) {
+    const r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 400000, env: { AB_URL: src.url, AB_OUT: zip, AB_TMP: tmp, AB_DEST: local, AB_SHA: src.sha256 || '' } })
+    if (r.code === 0 && existsSync(local)) return local
+    log?.info(`从 ${new URL(src.url).host} 下 uv 没成功，换一个源`)
+  }
   return existsSync(local) ? local : ''
 }
 

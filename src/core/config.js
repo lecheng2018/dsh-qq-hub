@@ -75,7 +75,9 @@ export const DEFAULTS = {
   },
   bili: {
     enabled: false,
-    cookie: '', // B 站 Cookie（要有 SESSDATA 和 bili_jct；只看不发的话可以不填）
+    sessdata: '', // B 站 Cookie 里的 SESSDATA（登录凭证）
+    biliJct: '', // B 站 Cookie 里的 bili_jct（发评论要用）。两个都不填也能看视频，只是不能评论
+    cookie: '', // 由上面两个拼出来给接口用；老配置的整串会自动拆到上面两个里
     autoBrowse: true, // 定时自己去刷
     intervalHours: 4, // 多久刷一轮
     maxRunsPerDay: 3,
@@ -125,7 +127,7 @@ export const DEFAULTS = {
     instVolume: 0.8,
     ownerOnly: true, // 只有主人能点歌
     keepWork: false, // 留着中间文件（调试用）
-    pypiMirror: '', // 安装时下 Python 包用的镜像：'' = 官方，tuna = 清华镜像（国内快）
+    pypiMirror: 'auto', // 安装时用的下载源：auto = 先测一下，官方源慢就用国内镜像；cn = 一直用国内镜像；off = 只用官方源
   },
   tabs: {}, // 面板记住的小偏好
 }
@@ -199,6 +201,7 @@ export function normalize(raw) {
   c.mood.halfLifeHours = num(c.mood.halfLifeHours, 3, 0.25, 72)
   c.mood.judge = bool(c.mood.judge, false)
   const b = c.bili
+  Object.assign(b, splitBiliCookie(b))
   for (const k of ['enabled', 'autoBrowse', 'comment', 'reply', 'shareToOwner', 'like']) b[k] = bool(b[k], DEFAULTS.bili[k])
   b.intervalHours = num(b.intervalHours, 4, 1, 48)
   b.maxRunsPerDay = num(b.maxRunsPerDay, 3, 0, 24)
@@ -241,13 +244,49 @@ export function normalize(raw) {
   c.song.vocalVolume = num(c.song.vocalVolume, 1, 0.2, 2)
   c.song.instVolume = num(c.song.instVolume, 0.8, 0.1, 2)
   if (!['auto', 'head'].includes(c.song.clipStart)) c.song.clipStart = 'auto'
-  if (!['', 'tuna'].includes(c.song.pypiMirror)) c.song.pypiMirror = ''
+  // 老配置：'' 是以前的默认（没开），改成自动；tuna 是以前的「用镜像」
+  c.song.pypiMirror = { '': 'auto', tuna: 'cn' }[c.song.pypiMirror] ?? c.song.pypiMirror
+  if (!['auto', 'cn', 'off'].includes(c.song.pypiMirror)) c.song.pypiMirror = 'auto'
   c.song.root = String(c.song.root || '').trim()
   return c
 }
 
 // 面板里不回传原文的字段：[分组, 字段]
-const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie']]
+const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct']]
+// 这些密钥在面板里显示结尾几位（「已保存（结尾 …a1b2）」），方便认出存的是哪一份；完整值不回传
+const HINTED = [['bili', 'sessdata'], ['bili', 'biliJct']]
+
+/** 从一串 Cookie 里取某个值（「SESSDATA=xxx; bili_jct=yyy」）。 */
+export function cookieValue(raw, key) {
+  for (const part of String(raw || '').split(/;\s*/)) {
+    const i = part.indexOf('=')
+    if (i > 0 && part.slice(0, i).trim() === key) return part.slice(i + 1).trim()
+  }
+  return ''
+}
+
+/**
+ * B 站 Cookie 整理成两个值：粘了整串 / 带了「SESSDATA=」前缀的都认得；老配置只有整串的拆开。
+ * 返回 {sessdata, biliJct, cookie}，cookie 是拼好给接口用的。
+ */
+export function splitBiliCookie({ sessdata = '', biliJct = '', cookie = '' } = {}) {
+  const a = String(sessdata || '').trim()
+  const b = String(biliJct || '').trim()
+  // 框里粘的是「xxx=…」这种整串或带前缀的：从里面取；纯值原样用
+  const isRaw = (v) => /(^|;\s*)(SESSDATA|bili_jct)=/.test(v)
+  let s = isRaw(a) ? '' : a
+  let j = isRaw(b) ? '' : b
+  for (const v of [a, b]) {
+    if (!isRaw(v)) continue
+    s = cookieValue(v, 'SESSDATA') || s
+    j = cookieValue(v, 'bili_jct') || j
+  }
+  if (!s && !j && cookie) {
+    s = cookieValue(cookie, 'SESSDATA')
+    j = cookieValue(cookie, 'bili_jct')
+  }
+  return { sessdata: s, biliJct: j, cookie: [s && `SESSDATA=${s}`, j && `bili_jct=${j}`].filter(Boolean).join('; ') }
+}
 
 const FILE = () => dataDir('config.json')
 
@@ -272,6 +311,7 @@ export function saveConfig(cfg) {
 /** 给面板看的版本：密码 / token 不回传原文，只告诉有没有填。 */
 export function publicConfig(cfg) {
   const c = structuredClone(cfg)
+  for (const [g, k] of HINTED) c[g][`${k}Hint`] = c[g][k] ? '…' + String(c[g][k]).slice(-4) : ''
   for (const [g, k] of SECRETS) {
     c[g][`${k}Set`] = Boolean(c[g][k])
     c[g][k] = ''
@@ -287,7 +327,10 @@ export function mergeFromPanel(current, incoming) {
     if (v === null) next[g][k] = '' // 明确传 null = 清空
     else if (v === undefined || v === '') next[g][k] = current[g][k]
     delete next[g][`${k}Set`]
+    delete next[g][`${k}Hint`]
   }
+  // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开
+  if (incoming?.bili && (incoming.bili.sessdata || incoming.bili.biliJct)) next.bili.cookie = ''
   if (incoming?.group?.overrides) next.group.overrides = incoming.group.overrides
   if (incoming?.allow) next.allow = { ...current.allow, ...incoming.allow }
   return normalize(next)

@@ -164,3 +164,40 @@ test('翻唱缓存只留最新的几个', async () => {
   const { readdirSync } = await import('node:fs')
   assert.deepEqual(readdirSync(dir).sort(), ['3.mp3', '4.mp3'])
 })
+
+test('人声分离模型：手动导入要核对校验值；下载地址先给国内能下的', async () => {
+  const { createHash } = await import('node:crypto')
+  const { existsSync } = await import('node:fs')
+  const dir = mkdtempSync(join(tmpdir(), 'aurabot-sep-'))
+  assert.equal(studio.importSeparator(dir, 'x.ckpt', Buffer.from('不是模型')).ok, false)
+  const buf = Buffer.from('假的模型内容')
+  studio.SEPARATOR_FILES['fake.ckpt'] = [['fake.ckpt', [], createHash('sha256').update(buf).digest('hex')]]
+  const r = studio.importSeparator(dir, '随便叫啥.ckpt', buf)
+  assert.equal(r.ok, true, r.message)
+  assert.ok(existsSync(join(dir, 'fake.ckpt')), '按模型要的文件名存')
+  delete studio.SEPARATOR_FILES['fake.ckpt']
+  const links = studio.separatorLinks('model_bs_roformer_ep_317_sdr_12.9755.ckpt')
+  assert.match(links[0], /^https:\/\/hf-mirror\.com\//)
+  assert.ok(studio.UV_SOURCES[0].url.includes('mirrors.aliyun.com') && studio.UV_SOURCES[0].sha256)
+})
+
+test('下载源：自动模式下官方源慢就用国内镜像；老配置自动迁移', async () => {
+  const fast = async () => ({ status: 200 })
+  const down = async (url) => { if (url.includes('pytorch')) throw new Error('timeout'); return { status: 200 } }
+  assert.equal(await studio.shouldUseCnMirror('auto', fast), false)
+  assert.equal(await studio.shouldUseCnMirror('auto', down), true)
+  assert.equal(await studio.shouldUseCnMirror('cn', fast), true)
+  assert.equal(await studio.shouldUseCnMirror('off', down), false)
+  assert.equal(normalize({}).song.pypiMirror, 'auto')
+  assert.equal(normalize({ song: { pypiMirror: '' } }).song.pypiMirror, 'auto')
+  assert.equal(normalize({ song: { pypiMirror: 'tuna' } }).song.pypiMirror, 'cn')
+})
+
+test('检查更新：GitHub 连不上就走 jsDelivr', async () => {
+  const u = await import('../src/core/update.js')
+  const seen = []
+  const check = u.createUpdateChecker({ pkg: { version: '0.2.0', repository: 'https://github.com/a/b' }, fetchImpl: async (url) => { seen.push(url); if (url.includes('raw.githubusercontent')) throw new Error('reset'); return { ok: true, json: async () => ({ version: '0.3.0' }) } } })
+  const r = await check({ force: true })
+  assert.equal(r.newer, true)
+  assert.ok(seen[1].includes('cdn.jsdelivr.net'))
+})

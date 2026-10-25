@@ -2,7 +2,10 @@
 // 定时看别人回她的评论并接着回；你在 QQ 里发链接，她也能点进去看完再聊。看过的、评过的都记成她的经历。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
-import { createBiliApi, findVideoId } from './api.js'
+import { createBiliApi, findVideoId, parseCookie } from './api.js'
+
+// 这些错误说明今天别再发了：没登录 / Cookie 过期、csrf 不对、风控、要验证码、太频繁
+const PAUSE_CODES = { '-101': 'B 站没登录或 Cookie 过期了', '-111': 'Cookie 里的 bili_jct 不对', '-352': '被 B 站风控了', '-509': '发得太频繁', '12015': 'B 站要求验证码' }
 import { isSilence } from '../chat/reply.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -42,6 +45,15 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
   let login = { at: 0, value: { isLogin: false, uname: '' } }
 
   const owner = () => getConfig().ownerName || '主人'
+  // 能不能发评论 / 回复：Cookie 里要有 bili_jct，今天也没因为风控之类暂停
+  const canPost = (s) => Boolean(parseCookie(cfg().cookie).bili_jct) && s.pauseDay !== dayKey()
+  const pauseIf = (s, error) => {
+    const why = PAUSE_CODES[String(error.code)]
+    if (!why) return
+    s.pauseDay = dayKey()
+    s.pauseReason = why
+    log.warn(`今天先不在 B 站发评论了：${why}`)
+  }
   const record = (s, item) => { s.history.unshift({ at: Date.now(), ...item }); s.history = s.history.slice(0, 40) }
 
   async function account(force = false) {
@@ -110,7 +122,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
       }
       s.seen = [...seen].slice(-500)
       if (!looked.length) return { ok: false, message: '视频都打不开' }
-      const commentLeft = c.comment ? Math.max(0, c.maxCommentsPerDay - s.comments) : 0
+      const commentLeft = c.comment && canPost(s) ? Math.max(0, c.maxCommentsPerDay - s.comments) : 0
       const out = await think(`你在 B 站刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${x.digest}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", "share":"想私聊分享给${owner()}的话（觉得${owner()}会喜欢才写，不然空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
         `这次最多评论 ${commentLeft} 个。只输出 JSON 数组。`)
@@ -125,7 +137,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
         memory?.addEvent({ text: `在B站看了《${v.title}》（UP主 ${v.author}）${feeling ? '：' + feeling.slice(0, 60) : ''}`, tags: ['B站'], importance: 0.4 })
         if (d.remember && !isSilence(d.remember)) memory?.add({ text: String(d.remember).slice(0, 200), tags: ['B站'], importance: 0.5, source: 'event' })
         const comment = String(d.comment || '').trim()
-        if (comment && !isSilence(comment) && commented < commentLeft) {
+        if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
             if (getConfig().dryRun) log.info(`试运行：本来要在 B 站《${v.title}》下评论：${comment}`)
             else await api.postComment(v.aid, comment.slice(0, 200))
@@ -135,6 +147,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
             record(s, { kind: 'comment', title: v.title, bvid: v.bvid, text: comment })
           } catch (error) {
             log.warn('B 站评论失败：', error.message)
+            pauseIf(s, error)
             record(s, { kind: 'error', title: v.title, bvid: v.bvid, text: '评论没发出去：' + error.message })
           }
         }
@@ -174,7 +187,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
         done.add(x.id)
         // 记下来：整理记忆时能知道 B 站上谁跟她聊过什么
         hub.logChat?.('bili', x.name, `在 B 站《${x.title}》下回复你：${x.text}`, '')
-        if (s.replies >= c.maxRepliesPerDay) continue
+        if (s.replies >= c.maxRepliesPerDay || !canPost(s)) continue
         const out = await think(`你在 B 站视频《${x.title}》下发过评论：「${x.myText}」\n${x.name} 回复你：「${x.text}」\n想回就用你的口气回一句（像普通网友聊天，别太长），不想回就只输出 [沉默]。只输出回复正文。`)
         const reply = String(out || '').trim().split(/\n+/)[0]
         if (!reply || isSilence(reply)) continue
@@ -187,6 +200,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
           record(s, { kind: 'reply', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
         } catch (error) {
           log.warn('B 站回复失败：', error.message)
+          pauseIf(s, error)
         }
       }
       s.repliedFeed = [...done].slice(-300)
@@ -237,6 +251,6 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
 
   return {
     run, checkReplies, watch, comment, tick, account,
-    state: () => { const s = today(load()); return { runs: s.runs, comments: s.comments, replies: s.replies, lastRun: s.lastRun, history: s.history.slice(0, 20) } },
+    state: () => { const s = today(load()); return { runs: s.runs, comments: s.comments, replies: s.replies, lastRun: s.lastRun, history: s.history.slice(0, 20), canPost: canPost(s), pauseReason: s.pauseDay === dayKey() ? s.pauseReason : '' } },
   }
 }
