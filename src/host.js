@@ -88,16 +88,45 @@ export function apply(ctx) {
     }
   }
   let onebotState = 'stopped'
+  // 连上后先核对登录的是不是机器人号，核对通过前不处理任何消息；不是就断开，不再自动重连
+  let loginOk = false
+  let wrongAccount = ''
   let hub = null
+  async function checkLogin() {
+    let uin = ''
+    try {
+      const info = await onebot.call('get_login_info', {}, { timeoutMs: 10000 })
+      uin = String(info?.user_id ?? '')
+    } catch (error) {
+      logger.child('onebot').warn('核对登录的 QQ 号失败：', error.message)
+    }
+    if (onebotState !== 'connected') return
+    if (!uin) {
+      // 核对不了就别用，断开后由看门狗重试
+      onebot.stop()
+      return
+    }
+    if (await snowluma.confirmLogin(uin)) {
+      loginOk = true
+      wrongAccount = ''
+    } else {
+      wrongAccount = uin
+      onebot.stop()
+    }
+  }
   const onebot = createOneBotClient({
     endpoint,
     log: logger.child('onebot'),
     onState: (s, d) => {
       onebotState = s
+      if (s !== 'connected') loginOk = false
+      else checkLogin().catch((error) => log.warn('核对登录号出错：', error.message))
       logger.child('onebot').info(`QQ 网关：${s}${d ? '（' + d + '）' : ''}`)
       mods?.emit('onebot/state', s)
     },
     onEvent: (ev) => {
+      // 还没核对是机器人号：什么都不处理
+      if (!loginOk) return
       // 模块能看到所有原始事件（加群、撤回、好友申请……），只看不拦
       mods?.emit('onebot', ev)
       if (ev.post_type === 'message' || ev.post_type === 'message_sent') {
@@ -268,6 +297,8 @@ export function apply(ctx) {
       const r = await snowluma.start()
       log.info('SnowLuma：', r.message)
     }
+    // 上次连上的不是机器人号：等主人手动点「接入机器人号」或改设置再连
+    if (wrongAccount) return
     if (onebot.state === 'stopped') onebot.start()
     if (cfg.snowluma.autoAttach && cfg.snowluma.webuiPassword && onebotState !== 'connected' && (await snowluma.running())) {
       const last = snowluma.lastAttach
@@ -342,6 +373,7 @@ export function apply(ctx) {
     const before = cfg
     setConfig(mergeFromPanel(cfg, body))
     const changedConn = ['httpUrl', 'wsUrl', 'httpToken', 'wsToken', 'dir'].some((k) => before.snowluma[k] !== cfg.snowluma[k])
+    if (changedConn || before.botQQ !== cfg.botQQ) wrongAccount = ''
     if (changedConn && onebot.state !== 'stopped') onebot.restart()
     if (!before.enabled && cfg.enabled) setTimeout(safe(watchdog, '看门狗'), 100)
     if (before.enabled && !cfg.enabled) onebot.stop()
@@ -358,7 +390,13 @@ export function apply(ctx) {
   // SnowLuma
   route('/snowluma/start', async () => snowluma.start())
   route('/snowluma/stop', async () => snowluma.stop())
-  route('/snowluma/attach', async () => snowluma.attachBot())
+  route('/snowluma/attach', async () => {
+    wrongAccount = ''
+    snowluma.clearRejected()
+    const r = await snowluma.attachBot()
+    if (cfg.enabled && onebot.state === 'stopped') onebot.start()
+    return r
+  })
   route('/commands', async () => ({ ok: true, list: commandList(mods.commands()) }))
   // 更新：检查 GitHub 上有没有新版本；这次更新了什么
   const checkUpdate = createUpdateChecker({ pkg: PKG, log })
