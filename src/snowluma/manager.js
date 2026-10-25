@@ -71,12 +71,26 @@ export function readOneBotEndpoint(dir, uin) {
   return out
 }
 
-/** 只挑机器人号所在的那个 QQ 进程。识别不出来就返回 null（宁可不注入）。 */
-export function pickBotProcess(list, botUin) {
+const uinOf = (p) => String(p?.account?.uin ?? p?.uin ?? '').trim()
+
+/**
+ * 只挑机器人号所在的那个 QQ 进程。识别不出来就返回 null（宁可不注入）。
+ *
+ * 有的机器上 SnowLuma 的进程列表认不出登录的号（account: null）。这时如果**只有一个**认不出号的 QQ 进程，
+ * 就把它当候选返回，并标 `unverified: true`：注入后必须用 OneBot 的 get_login_info 核对是不是机器人号，
+ * 不是就撤销、断开（见 host.js 的核对）。已经认出是别的号的进程永远不碰；核对失败过的进程（exclude）也不再试。
+ */
+export function pickBotProcess(list, botUin, { exclude = [] } = {}) {
   const bot = String(botUin)
-  const mine = (list || []).filter((p) => String(p?.account?.uin ?? '') === bot || String(p?.uin ?? '') === bot)
-  if (mine.length !== 1) return { proc: null, reason: mine.length === 0 ? '没找到登录机器人号的 QQ 进程' : '有多个进程声称是机器人号，为安全起见不注入' }
-  return { proc: mine[0], reason: '' }
+  const all = list || []
+  const mine = all.filter((p) => uinOf(p) === bot)
+  if (mine.length > 1) return { proc: null, reason: '有多个进程声称是机器人号，为安全起见不注入' }
+  if (mine.length === 1) return { proc: mine[0], reason: '' }
+  const skip = new Set(exclude.map(Number))
+  const unknown = all.filter((p) => !uinOf(p) && !skip.has(Number(p?.pid)))
+  if (unknown.length === 1) return { proc: unknown[0], reason: '', unverified: true }
+  if (unknown.length > 1) return { proc: null, reason: 'SnowLuma 认不出这几个 QQ 进程登录的是哪个号，为安全起见不注入。只开着机器人号那个 QQ 再点一次「接入机器人号」' }
+  return { proc: null, reason: '没找到登录机器人号的 QQ 进程' }
 }
 
 /** 生成满足 SnowLuma 规则的强密码：≥10 位、有大小写和符号、无空格。 */
@@ -92,6 +106,9 @@ export function createSnowLumaManager({ getConfig, log, savePassword }) {
   let tokenAt = 0
   let tokenPw = ''
   let lastAttach = { at: 0, ok: false, message: '' }
+  // 认不出号、靠事后核对才注入的进程：{ pid, at }；核对发现不是机器人号的进程 pid 记进 rejected，以后不再碰
+  let pendingVerify = null
+  const rejected = new Set()
 
   const cfg = () => getConfig().snowluma
   const base = () => `http://127.0.0.1:${cfg().webuiPort}`
@@ -234,24 +251,59 @@ export function createSnowLumaManager({ getConfig, log, savePassword }) {
       lastAttach = { at: Date.now(), ok: false, message: error.message }
       return lastAttach
     }
-    const { proc, reason } = pickBotProcess(list, bot)
+    const { proc, reason, unverified } = pickBotProcess(list, bot, { exclude: [...rejected] })
     if (!proc) {
       lastAttach = { at: Date.now(), ok: false, message: reason }
       return lastAttach
     }
+    if (unverified) pendingVerify = { pid: proc.pid, at: Date.now() }
+    const note = unverified ? '（SnowLuma 没报账号，连上后会核对是不是机器人号，不是就立刻断开）' : ''
     if (proc.injected && proc.connected) {
-      lastAttach = { at: Date.now(), ok: true, message: `机器人号（pid ${proc.pid}）已接入` }
+      lastAttach = { at: Date.now(), ok: true, message: `机器人号（pid ${proc.pid}）已接入${note}` }
       return lastAttach
     }
     try {
       const r = await api(`/api/processes/${proc.pid}/load`, { method: 'POST' })
       const ok = Boolean(r.success)
-      lastAttach = { at: Date.now(), ok, message: ok ? `已给机器人号的 QQ 进程（pid ${proc.pid}）注入` : r.message || '注入失败' }
+      lastAttach = { at: Date.now(), ok, message: ok ? `已给 QQ 进程（pid ${proc.pid}）注入${note}` : r.message || '注入失败' }
       log.info(lastAttach.message)
     } catch (error) {
       lastAttach = { at: Date.now(), ok: false, message: `注入失败：${error.message}` }
     }
     return lastAttach
+  }
+
+  /**
+   * OneBot 连上后核对登录的号。uin 是机器人号：核对通过。不是：撤销那次注入（SnowLuma 支持的话），
+   * 记住这个进程以后不再碰。返回 true 表示可以用。
+   */
+  async function confirmLogin(uin) {
+    const bot = String(getConfig().botQQ)
+    const pend = pendingVerify
+    if (String(uin) === bot) {
+      if (pend) {
+        pendingVerify = null
+        lastAttach = { at: Date.now(), ok: true, message: `已核对：pid ${pend.pid} 登录的就是机器人号 ${bot}` }
+        log.info(lastAttach.message)
+      }
+      return true
+    }
+    pendingVerify = null
+    let undone = false
+    if (pend) {
+      rejected.add(Number(pend.pid))
+      try {
+        const r = await api(`/api/processes/${pend.pid}/unload`, { method: 'POST' })
+        undone = Boolean(r.success)
+      } catch (error) {}
+    }
+    lastAttach = {
+      at: Date.now(),
+      ok: false,
+      message: `连上的是 ${uin || '未知号'}，不是机器人号 ${bot}，已断开不用${pend ? (undone ? '，并撤销了注入' : `；pid ${pend.pid} 的注入撤不掉，重启那个 QQ 就没了`) : ''}`,
+    }
+    log.warn(lastAttach.message)
+    return false
   }
 
   /** SnowLuma 的用户协议和隐私说明（全文 + 版本 + 是否还需要同意）。 */
@@ -320,6 +372,9 @@ export function createSnowLumaManager({ getConfig, log, savePassword }) {
     stop,
     processes,
     attachBot,
+    confirmLogin,
+    /** 手动点「接入机器人号」时清掉之前核对失败的记录，让主人能重试 */
+    clearRejected: () => rejected.clear(),
     agreements,
     consent,
     resetPassword,
