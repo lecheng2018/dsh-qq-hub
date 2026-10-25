@@ -2,6 +2,8 @@
 // 工具定义一旦确定尽量别改：改一次，DeepSeek 的前缀缓存就失效一次。
 
 import { fetchImage } from '../core/net.js'
+import { memoryLine } from '../features/memory.js'
+import { parseMessageEvent } from '../chat/inbound.js'
 
 /** 和 @deepseek-ai/dsh-tools 的 defineTool 产物同形：parameters / output.schema 是 JSON Schema。 */
 export function defineTool({ name, description, properties = {}, required = [], execute }) {
@@ -59,6 +61,54 @@ export function buildTools(deps, { chat, level, sessionId }) {
         const q = String(query || '').trim()
         const hit = (q ? items.filter((i) => (i.name || '').includes(q) || (i.tags || []).some((t) => t.includes(q))) : items).slice(-60)
         return { ok: true, count: items.length, message: hit.length ? hit.map((i) => `${i.name || '未命名'}${i.tags?.length ? '（' + i.tags.join('/') + '）' : ''}`).join('、') : '没有符合的表情', items: hit.map((i) => ({ name: i.name, tags: i.tags })) }
+      },
+    }))
+
+    tools.push(defineTool({
+      name: 'qq_edit_sticker',
+      description: '整理表情库：给一张表情改名字、改标签，或者删掉。名字不贴切、别人建议改名、标签不对的时候用；不喜欢、重复、发不出去的表情可以删。sticker 写现在的名字或标签（模糊匹配）。',
+      properties: {
+        sticker: str('要改的那张表情现在的名字或标签'),
+        new_name: str('新名字（12 字以内，不改就不填）'),
+        tags: { type: 'array', items: { type: 'string' }, description: '新标签（情绪 / 用途，比如 开心、委屈、嘲讽；不改就不填）' },
+        delete: { type: 'boolean', description: 'true = 删掉这张表情' },
+      },
+      required: ['sticker'],
+      execute: async ({ sticker, new_name, tags, delete: del }) => {
+        const item = stickers.match(String(sticker || ''))
+        if (!item) return { ok: false, message: '表情库里没找到这张' }
+        const label = item.name || item.md5.slice(0, 8)
+        if (del) {
+          // 主人亲手加的表情，主人开口才删
+          if ((item.from === 'manual' || item.from === 'panel') && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
+          const r = await stickers.remove(item.md5)
+          return r.ok ? { ok: true, message: `删掉了「${label}」` } : { ok: false, message: r.reason || '没删成' }
+        }
+        if (!new_name && !(Array.isArray(tags) && tags.length)) return { ok: false, message: '要说改成什么' }
+        const r = stickers.rename(item.md5, new_name ? String(new_name).trim().slice(0, 12) : undefined, Array.isArray(tags) && tags.length ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 5) : undefined)
+        return r.ok ? { ok: true, message: `改好了：「${label}」→「${r.item.name}」${r.item.tags?.length ? '（' + r.item.tags.join('/') + '）' : ''}` } : { ok: false, message: '没改成' }
+      },
+    }))
+
+    tools.push(defineTool({
+      name: 'qq_chat_history',
+      description: '翻翻当前这个聊天之前的聊天记录（只读，最多 50 条）。想不起前面聊过什么、别人问「刚才谁说的」、要回顾一段对话时用。',
+      properties: { count: int('要翻多少条，默认 20，最多 50') },
+      execute: async ({ count }) => {
+        const n = Math.max(1, Math.min(50, Number(count) || 20))
+        const r = chat.kind === 'group'
+          ? await onebot.call('get_group_msg_history', { group_id: Number(chat.groupId), count: n }, { timeoutMs: 15000 })
+          : await onebot.call('get_friend_msg_history', { user_id: Number(chat.userId), count: n }, { timeoutMs: 15000 })
+        const msgs = (r?.messages || []).slice(-n)
+        if (!msgs.length) return { ok: true, message: '没翻到聊天记录' }
+        const self = String(getConfig().botQQ)
+        const lines = msgs.map((m) => {
+          const p = parseMessageEvent({ ...m, message_type: m.message_type || (chat.kind === 'group' ? 'group' : 'private') }, self)
+          const who = String(m.user_id ?? m.sender?.user_id) === self ? '你' : (m.sender?.card || m.sender?.nickname || String(m.user_id ?? ''))
+          const t = m.time ? new Date(m.time * 1000).toTimeString().slice(0, 5) : ''
+          return `${t} ${who}：${(p.text || '（图片/表情）').slice(0, 150)}`
+        })
+        return { ok: true, message: lines.join('\n') }
       },
     }))
   }
@@ -167,8 +217,8 @@ export function buildTools(deps, { chat, level, sessionId }) {
       properties: { query: str('想找什么') },
       required: ['query'],
       execute: async ({ query }) => {
-        const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8 })
-        return hits.length ? { ok: true, message: hits.map((h) => h.it.text).join('；') } : { ok: true, message: '没想起相关的事' }
+        const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）' })
+        return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
       },
     }))
   }
@@ -185,6 +235,27 @@ export function buildTools(deps, { chat, level, sessionId }) {
         await hub.sendSegments(current, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[生图] ${String(prompt).slice(0, 30)}`)
         memory?.addEvent?.({ text: `画了一张图：${String(prompt).slice(0, 40)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4 })
         return { ok: true, message: '画好发出去了' }
+      },
+    }))
+  }
+
+  // B 站：看视频（谁发的链接都能看），评论要主人开口
+  if (deps.bili && getConfig().bili.enabled && !isSystem) {
+    tools.push(defineTool({
+      name: 'bili_watch',
+      description: '打开一个 B 站视频看看：读标题、简介、字幕和热评，看完再跟大家聊。别人发来 B 站链接、BV 号或分享卡片时用。link 填链接或 BV 号。',
+      properties: { link: str('B 站链接、b23.tv 短链或 BV 号') },
+      required: ['link'],
+      execute: async ({ link }) => deps.bili.watch(String(link || '')),
+    }))
+    tools.push(defineTool({
+      name: 'bili_comment',
+      description: '在一个 B 站视频下发评论（只有主人让你发的时候才用）。link 填链接或 BV 号，text 是评论内容。',
+      properties: { link: str('B 站链接或 BV 号'), text: str('评论内容') },
+      required: ['link', 'text'],
+      execute: async ({ link, text }) => {
+        if (!hub.turnHasOwner(sessionId)) return { ok: false, message: '只有主人能让我去发评论' }
+        return deps.bili.comment(String(link || ''), String(text || ''))
       },
     }))
   }

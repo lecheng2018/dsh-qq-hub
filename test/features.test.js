@@ -135,3 +135,33 @@ test('表情库上限：只清偷来的、最少用的、最老的', async () =>
   assert.equal(pickEvict(items).md5, 'c')
   assert.equal(pickEvict([{ md5: 'd', from: 'manual' }]), null, '你自己加的不清')
 })
+
+test('模型判心情：解析结果，没把握的不算，开了就不再按关键词', async () => {
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const prev = process.env.AURABOT_DATA_DIR
+  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-judge-'))
+  try {
+    const { createMood, parseMoodJudge } = await import('../src/features/companion.js')
+    const { normalize } = await import('../src/core/config.js')
+    assert.deepEqual(parseMoodJudge('好的 {"delta": 30, "reason": "被夸了", "confidence": 0.9}'), { delta: 15, reason: '被夸了', confidence: 0.9 })
+    assert.equal(parseMoodJudge('不是 JSON'), null)
+    let answer = '{"delta": 8, "reason": "主人惦记她", "confidence": 0.9}'
+    const asked = []
+    const dsh = { get: () => null, llm: { async *stream({ system }) { asked.push(system); yield { type: 'text-delta', text: answer }; yield { type: 'finish', reason: { kind: 'completed' } } } } }
+    const cfg = normalize({ mood: { judge: true }, model: { provider: 'p', model: 'm' } })
+    const m = createMood({ getConfig: () => cfg, dsh })
+    const v0 = m.current()
+    m.observe('讨厌 滚', '路人', { direct: true })
+    assert.equal(m.current(), v0, '开了模型判断，关键词不再起作用')
+    await m.judge({ userText: '想你了', reply: '我也想你', who: '主人', origin: 'speak-up' })
+    assert.equal(m.current(), v0 + 8)
+    assert.match(asked[0], /主动去找/)
+    answer = '{"delta": -10, "reason": "猜的", "confidence": 0.3}'
+    await m.judge({ userText: '嗯', reply: '哦' })
+    assert.equal(m.current(), v0 + 8, '没把握的不算')
+  } finally {
+    process.env.AURABOT_DATA_DIR = prev
+  }
+})

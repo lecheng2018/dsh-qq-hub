@@ -414,7 +414,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     logChat(chatId, 'bot', items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' '))
     lastChatAt = Date.now()
     if (chatId === `private:${cfg.ownerQQ}`) lastBotToOwner = { at: Date.now(), text: items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => i.value).join('\n') }
-    onActivity?.({ kind: 'out', chatId })
+    onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
   }
 
   // ---------- 盯 DSH 会话：一轮结束就发 ----------
@@ -462,7 +462,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       if (!text) return release(chatId)
       // 发完再放开：发送期间来的消息也攒到下一段
-      deliver(chatId, text, { wantVoice }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
+      deliver(chatId, text, { wantVoice, userText: st.lastText || '' }).catch((error) => log.warn('发送出错：', error.message)).finally(() => release(chatId))
     }
   }
 

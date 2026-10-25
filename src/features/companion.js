@@ -1,6 +1,7 @@
 // 陪伴类小功能：心情、主动搭话。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
+import { askModel } from '../core/llm.js'
 
 // ---------------- 心情 ----------------
 // 0~100，基线 60。聊天里的话按关键词推一推，随时间按半衰期回到基线。
@@ -49,7 +50,21 @@ export function decayed(value, at, halfLifeHours, now = Date.now(), base = 60) {
   return base + (value - base) * Math.pow(0.5, h / halfLifeHours)
 }
 
-export function createMood({ getConfig }) {
+/** 解析模型判心情的结果：{delta, reason, confidence}；解析不了返回 null。 */
+export function parseMoodJudge(out) {
+  const m = String(out || '').match(/\{[\s\S]*\}/)
+  if (!m) return null
+  try {
+    const j = JSON.parse(m[0])
+    const delta = Math.max(-15, Math.min(15, Math.round(Number(j.delta) || 0)))
+    const confidence = Math.max(0, Math.min(1, Number(j.confidence) || 0))
+    return { delta, reason: String(j.reason || '').slice(0, 40), confidence }
+  } catch (error) {
+    return null
+  }
+}
+
+export function createMood({ getConfig, dsh }) {
   const file = () => dataDir('mood.json')
   const load = () => readJson(file(), () => ({ value: 65, at: Date.now(), reason: '', history: [] }))
   const save = (s) => writeJson(file(), s)
@@ -79,10 +94,36 @@ export function createMood({ getConfig }) {
      * 不是对她说的群聊只算三成，主人的话算 1.5 倍。
      */
     observe(text, who, { direct = true, owner = false } = {}) {
+      if (getConfig().mood.judge && dsh) return // 开了模型判断就不用关键词
       const d0 = scoreText(text)
       if (!d0) return
       const d = Math.round(d0 * (direct ? 1 : 0.3) * (owner ? 1.5 : 1))
       nudge(d, `${who || '有人'}说「${String(text).slice(0, 20)}」`)
+    },
+    /**
+     * 模型判心情（可选）：一轮聊完，看「对方说的 + 她回的」判断心情往哪走。没把握的（confidence < 0.6）不算。
+     * origin：user = 有人在跟她说话；speak-up = 她自己主动找人（判她自己的心意，不是被叫来干活）。
+     */
+    async judge({ userText, reply, who = '对方', origin = 'user' }) {
+      const cfg = getConfig().mood
+      if (!cfg.enabled || !cfg.judge || !dsh) return null
+      const v = current()
+      const scene = origin === 'speak-up' ? `这一轮是她自己想${who}了、主动去找${who}说话（不是被叫来干活）` : `这一轮是${who}在跟她说话`
+      try {
+        const out = await askModel(dsh, {
+          cfg: getConfig(),
+          system: '你在判断聊天角色「大肥鱼」聊完一轮后的心情变化。她现在心情 ' + v + '/100（60 是平常）。' + scene + '。只看这一轮真正影响她心情的东西：被夸、被关心、被惦记会开心；被凶、被冷落、被嫌弃会难过；开玩笑的「讨厌~」「笨蛋」不算真骂。只输出 JSON：{"delta": -15~15 的整数, "reason": "十几个字的理由", "confidence": 0~1 你有多确定}。没什么影响就 delta 为 0。',
+          text: `${origin === 'speak-up' ? '她主动说' : who + '说'}：${String(userText || '').slice(0, 600)}\n她回：${String(reply || '').slice(0, 600)}`,
+          maxTokens: 400,
+          temperature: 0.2,
+        })
+        const r = parseMoodJudge(out)
+        if (!r) return null
+        if (r.confidence >= 0.6 && Math.abs(r.delta) >= 2) nudge(r.delta, r.reason || '刚才那一下')
+        return r
+      } catch (error) {
+        return null
+      }
     },
     /** 给每一轮的上下文：心情明显偏离平常时，告诉她现在的状态和该怎么说话。 */
     contextLine() {

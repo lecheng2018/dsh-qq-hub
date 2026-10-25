@@ -18,6 +18,7 @@ import { createHub, WORKSPACE_DIR } from './chat/hub.js'
 import { createStickerStore, stickerPath } from './features/stickers.js'
 import { createQzone } from './features/qzone.js'
 import { createQzoneSocial } from './features/qzone-social.js'
+import { createBili } from './bili/duty.js'
 import { createMood, createSpeakUp } from './features/companion.js'
 import { createSongStudio, checkRoot, listDrives } from './song/studio.js'
 import { createMemoryStore } from './features/memory.js'
@@ -101,7 +102,7 @@ export function apply(ctx) {
 
   // ---------- 功能 ----------
   const stickers = createStickerStore({ dsh: ctx, getConfig, onebot, log: logger.child('sticker') })
-  const mood = createMood({ getConfig })
+  const mood = createMood({ getConfig, dsh: ctx })
   let memory = null
   const song = createSongStudio({
     getConfig,
@@ -139,7 +140,7 @@ export function apply(ctx) {
     onebot,
     stickers,
     tts,
-    buildTools: (where) => buildTools({ hub, getConfig, stickers, qzone, memory, song, onebot, imageGen, groupRoles }, where),
+    buildTools: (where) => buildTools({ hub, getConfig, stickers, qzone, memory, song, onebot, imageGen, groupRoles, bili }, where),
     contextProviders: [
       // 她在这个群的身份：没管理权限就别答应禁言踢人
       ({ chat }) => {
@@ -151,6 +152,11 @@ export function apply(ctx) {
 ({ chat }) => (chat.kind === 'system' ? '' : mood.contextLine()), ({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId))],
     onActivity: (a) => {
       if (a.kind === 'in' && a.text) mood.observe(a.text, a.nickname, { direct: a.direct, owner: a.owner })
+      // 模型判心情（开了才判）：系统提醒开头的是她自己主动找人
+      if (a.kind === 'out' && a.reply && !String(a.chatId).startsWith('system:')) {
+        const speakUp = String(a.userText).startsWith('【系统提醒')
+        mood.judge({ userText: a.userText, reply: a.reply, who: String(a.chatId).startsWith('group:') ? '群里的人' : String(a.chatId) === `private:${cfg.ownerQQ}` ? cfg.ownerName || '主人' : '对方', origin: speakUp ? 'speak-up' : 'user' }).catch(() => {})
+      }
     },
     // 群聊话题和她的记忆有多相关（插话判断用）
     memoryScore: (text) => (memory ? memory.topicScore(text) : 0),
@@ -168,6 +174,7 @@ export function apply(ctx) {
     // 写过的空间日记也进记忆库：以后聊到相关的事，她会想起自己那天写过什么
     onDiary: (text) => memory.add({ text: `我在 QQ 空间写过：${text}`, importance: 0.55, tags: ['空间日记'], source: 'diary' }),
   })
+  const bili = createBili({ getConfig, hub, memory, log: logger.child('bili') })
   const qzoneSocial = createQzoneSocial({ getConfig, onebot, hub, memory, log: logger.child('qzone') })
   const speakUp = createSpeakUp({ getConfig, hub, log: logger.child('speakup'), isMuted: (chatId) => mutes.muted(chatId) })
 
@@ -208,6 +215,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.interval(safe(() => qzone.tick(), '空间日记'), 60_000), 'aurabot: 空间日记')
   ctx.effect(() => ctx.interval(safe(() => speakUp.tick(), '主动搭话'), 60_000), 'aurabot: 主动搭话')
   ctx.effect(() => ctx.interval(safe(() => qzoneSocial.tick(), '空间互动'), 60_000), 'aurabot: 空间互动')
+  ctx.effect(() => ctx.interval(safe(() => bili.tick(), '刷B站'), 60_000), 'aurabot: 刷B站')
   ctx.effect(() => ctx.interval(safe(() => memory.tick(), '整理记忆'), 60_000), 'aurabot: 每日整理记忆')
   setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   ctx.effect(() => () => {
@@ -469,6 +477,11 @@ export function apply(ctx) {
   })
   route('/diary/history', async () => ({ ok: true, items: qzone.history(), next: qzone.nextTime() }))
   route('/qzone/social/run', async () => qzoneSocial.run({ force: true }))
+  // B 站
+  route('/bili/state', async () => ({ ok: true, ...bili.state(), account: await bili.account() }))
+  route('/bili/account', async () => bili.account(true))
+  route('/bili/run', async () => bili.run({ force: true }))
+  route('/bili/replies', async () => bili.checkReplies())
   route('/qzone/social/state', async () => ({ ok: true, ...qzoneSocial.state() }))
   route('/qzone/delete', async (req) => {
     const b = await readBody(req)
@@ -561,6 +574,15 @@ export function apply(ctx) {
     return memory.remove(b.id)
   })
   route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
+  route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
+  route('/memory/import', async (req) => {
+    const b = await readBody(req)
+    try { return { ok: true, list: await memory.importCandidates(String(b.text || '').slice(0, 30000)) } } catch (error) { return { ok: false, message: error.message, list: [] } }
+  })
+  route('/memory/import/commit', async (req) => {
+    const n = memory.importCommit((await readBody(req)).items || [])
+    return { ok: true, message: `存进记忆库 ${n} 条` }
+  })
   route('/style/save', async (req) => {
     const b = await readBody(req)
     memory.setStyle(String(b.key || ''), (b.list || []).map((t) => String(t).trim()).filter(Boolean))

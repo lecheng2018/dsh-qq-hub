@@ -65,12 +65,15 @@ export function search(idx, query, o = {}) {
   const scored = []
   for (const d of idx.docs) {
     let s = 0
+    const why = []
     for (const t of q) {
       const f = d.tf.get(t)
       if (!f) continue
       const n = idx.df.get(t) || 0
       const idf = Math.log(1 + (idx.N - n + 0.5) / (n + 0.5))
-      s += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / idx.avgLen))
+      const part = idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / idx.avgLen))
+      s += part
+      why.push([t, part])
     }
     const it = d.it
     const aboutHit = Boolean(it.about) && aboutSet.has(String(it.about))
@@ -79,7 +82,7 @@ export function search(idx, query, o = {}) {
     const recency = 1 / (1 + ageDays / 30) // 一个月前的记忆权重减半
     const importance = 0.6 + 0.8 * (Number(it.importance) || 0.5)
     const score = (s + (aboutHit ? 0.8 : 0)) * importance * (0.6 + 0.4 * recency)
-    scored.push({ it, score })
+    scored.push({ it, score, why: why.sort((x, y) => y[1] - x[1]).slice(0, 3).map((w) => w[0]).concat(aboutHit ? ['（关于这个人）'] : []) })
   }
   scored.sort((x, y) => y.score - x.score)
   return scored.filter((x) => x.score >= (o.minScore ?? 0.35)).slice(0, o.limit ?? 6)
@@ -91,6 +94,27 @@ export function agoText(at, now = Date.now()) {
   if (m < 30) return '刚才'
   if (m < 60 * 20) return `${Math.max(1, Math.round(m / 60))} 小时前`
   return '昨天'
+}
+
+/** 一条记忆是什么时候的：今天 / 昨天 / 3 天前 / 09-17 / 去年 03-02 / 2024-05-01。 */
+export function whenText(at, now = Date.now()) {
+  if (!at) return ''
+  const d = new Date(at)
+  const n = new Date(now)
+  const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((day0(n) - day0(d)) / 86400_000)
+  const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (days <= 0) return '今天'
+  if (days === 1) return '昨天'
+  if (days < 7) return `${days} 天前`
+  if (d.getFullYear() === n.getFullYear()) return md
+  if (d.getFullYear() === n.getFullYear() - 1) return '去年 ' + md
+  return `${d.getFullYear()}-${md}`
+}
+
+/** 想起来的一条记忆怎么写给她：[什么时候] [关于谁] 内容。 */
+export function memoryLine(it, now = Date.now()) {
+  return `[${whenText(it.at, now)}] ` + (it.aboutName ? `[${it.aboutName}] ` : '') + it.text
 }
 
 /**
@@ -162,6 +186,38 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return { ok: true, message: '✓', id: item.id }
   }
 
+  /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
+  async function importCandidates(text) {
+    const src = String(text || '').trim()
+    if (!src) return []
+    const chunks = []
+    for (let i = 0; i < src.length && chunks.length < 6; i += 5000) chunks.push(src.slice(i, i + 5000))
+    const out = []
+    for (const part of chunks) {
+      const r = await askModel(dsh, {
+        cfg: getConfig(),
+        system: '你帮一个叫「大肥鱼」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
+        text: part,
+        maxTokens: 2500,
+        temperature: 0.2,
+      })
+      const m = String(r).match(/\[[\s\S]*\]/)
+      try { for (const x of m ? JSON.parse(m[0]) : []) if (x && x.text) out.push({ text: String(x.text).slice(0, 200), aboutName: String(x.about || ''), importance: Math.max(0, Math.min(1, Number(x.importance) || 0.5)) }) } catch (error) {}
+    }
+    // 和已有记忆、彼此之间去重
+    const have = load().items
+    const uniq = []
+    for (const c of out) if (!have.some((m) => similarity(m.text, c.text) >= 0.6) && !uniq.some((u) => similarity(u.text, c.text) >= 0.6)) uniq.push(c)
+    return uniq.slice(0, 80)
+  }
+
+  /** 导入旧档案第二步：把勾选的候选存进记忆库。 */
+  function importCommit(items) {
+    let n = 0
+    for (const c of items || []) if (add({ text: c.text, aboutName: c.aboutName || '', importance: c.importance ?? 0.5, source: 'import' }).id) n++
+    return n
+  }
+
   /** 她自己做过的事（唱了歌、在空间评论了谁……）：记成「经历」，最近一天的会常驻在上下文里。 */
   function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45 }) {
     return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event' })
@@ -191,8 +247,11 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return { ok: true }
   }
 
-  function recall(query, { about, limit } = {}) {
+  const recallLog = [] // 最近几次想起了什么（给面板看）
+  function recall(query, { about, limit, where = '' } = {}) {
     const hits = search(index(), query, { about, limit: limit ?? getConfig().memory.recallCount })
+    recallLog.unshift({ at: Date.now(), where, query: String(query).slice(0, 120), hits: hits.map((h) => ({ id: h.it.id, text: h.it.text, score: Number(h.score.toFixed(2)), why: h.why || [] })) })
+    recallLog.length = Math.min(recallLog.length, 20)
     if (hits.length) {
       const s = load()
       for (const h of hits) {
@@ -251,8 +310,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       // 群里这一段谁在说话，关于这些人的记忆优先想起
       const about = chat.kind === 'group' ? hub?.speakersOf?.(sessionId) || [] : chat.userId
       const shown = new Set(recent.map((m) => m.id))
-      const hits = recall(q, { about }).filter((h) => !shown.has(h.it.id))
-      if (hits.length) parts.push('（你记得这些事，聊到相关的就自然用上，别说「根据记忆」：' + hits.map((h) => (h.it.aboutName ? `[${h.it.aboutName}] ` : '') + h.it.text).join('；') + '）')
+      const hits = recall(q, { about, where: chat.chatId || '' }).filter((h) => !shown.has(h.it.id))
+      if (hits.length) parts.push('（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + hits.map((h) => memoryLine(h.it)).join('；') + '）')
     }
     return parts.join('\n')
   }
@@ -460,7 +519,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   return {
-    add, addEvent, recentEvents, update, remove, recall, contextFor, consolidate, tick, topicScore,
+    add, addEvent, recentEvents, update, remove, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
+    recalls: () => recallLog.slice(),
     styles: () => load().styles || {},
     setStyle: (key, list) => setStyle(key, (list || []).map(String)),
     lastConsolidate: () => load().lastConsolidate || null,

@@ -73,6 +73,23 @@ export const DEFAULTS = {
     maxChars: 140,
     visibility: 'all', // all | self（仅自己可见）
   },
+  bili: {
+    enabled: false,
+    cookie: '', // B 站 Cookie（要有 SESSDATA 和 bili_jct；只看不发的话可以不填）
+    autoBrowse: true, // 定时自己去刷
+    intervalHours: 4, // 多久刷一轮
+    maxRunsPerDay: 3,
+    perRun: 3, // 一轮看几个视频
+    keywords: [], // 额外想让她搜的方向（另外还会参考她的兴趣和记忆里你喜欢的东西）
+    minViews: 5000, // 播放量门槛
+    maxAgeDays: 60, // 只看最近多少天发的
+    comment: true, // 自己发评论
+    maxCommentsPerDay: 3,
+    reply: true, // 回别人回她的评论
+    maxRepliesPerDay: 6,
+    shareToOwner: true, // 看到好玩的私聊分享给主人
+    like: false, // 顺手点赞
+  },
   qzoneSocial: {
     enabled: true,
     replyOwn: true, // 回复自己说说下别人的新评论
@@ -93,7 +110,7 @@ export const DEFAULTS = {
     awakeFrom: 8,
     awakeTo: 23,
   },
-  mood: { enabled: true, halfLifeHours: 3 },
+  mood: { enabled: true, halfLifeHours: 3, judge: false }, // judge：每轮聊完用模型判一次心情（更准，每轮多一次很短的调用）；关着用关键词
   memory: { enabled: true, recallCount: 6, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
   song: {
     enabled: false,
@@ -180,6 +197,17 @@ export function normalize(raw) {
   q.maxPerDay = num(q.maxPerDay, 8, 0, 50)
   q.intervalMin = num(q.intervalMin, 30, 5, 1440)
   c.mood.halfLifeHours = num(c.mood.halfLifeHours, 3, 0.25, 72)
+  c.mood.judge = bool(c.mood.judge, false)
+  const b = c.bili
+  for (const k of ['enabled', 'autoBrowse', 'comment', 'reply', 'shareToOwner', 'like']) b[k] = bool(b[k], DEFAULTS.bili[k])
+  b.intervalHours = num(b.intervalHours, 4, 1, 48)
+  b.maxRunsPerDay = num(b.maxRunsPerDay, 3, 0, 24)
+  b.perRun = num(b.perRun, 3, 1, 8)
+  b.minViews = num(b.minViews, 5000, 0, 1e8)
+  b.maxAgeDays = num(b.maxAgeDays, 60, 0, 3650)
+  b.maxCommentsPerDay = num(b.maxCommentsPerDay, 3, 0, 50)
+  b.maxRepliesPerDay = num(b.maxRepliesPerDay, 6, 0, 100)
+  b.keywords = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[\n,，]+/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)
   delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
@@ -219,12 +247,12 @@ export function normalize(raw) {
 }
 
 // 面板里不回传原文的字段：[分组, 字段]
-const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie']]
+const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie']]
 
 const FILE = () => dataDir('config.json')
 
 /** 在某次更新里新增、会替她公开发东西的功能。以后再加这类功能，把配置键名加到这里。 */
-export const OPT_IN_ON_UPDATE = ['qzoneSocial']
+export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili']
 
 export function loadConfig() {
   const raw = readJson(FILE(), {})

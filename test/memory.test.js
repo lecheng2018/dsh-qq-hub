@@ -20,6 +20,7 @@ const dsh = {
       if (system.includes('整理长期记忆')) out = text.includes('看海') ? '[{"text":"阿花周末去看海了","about":"阿花","about_qq":"30000003","importance":0.5}]' : text.includes('辣') ? '[{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]' : '[]'
       else if (system.includes('{"insights"')) out = '{"insights":["他喜欢被吐槽"],"style":["消息很短，常一句话分几条发","爱用 hhh"]}'
       else if (system.includes('自然会被带上')) out = '["偶尔用 hhh"]'
+      else if (system.includes('旧档案')) out = '[{"text":"阿强喜欢钓鱼","about":"阿强","importance":0.7},{"text":"阿花周末去看海了","about":"阿花"}]'
       yield { type: 'text-delta', text: out }
       yield { type: 'finish', reason: { kind: 'completed' } }
     },
@@ -135,4 +136,30 @@ test('遗忘：不重要、两个月没想起过的自动记忆忘掉，自己�
   assert.equal(shouldForget({ source: 'auto', importance: 0.8, at: old }), false, '重要的不忘')
   assert.equal(shouldForget({ source: 'tool', importance: 0.3, at: old }), false)
   assert.equal(shouldForget({ source: 'event', importance: 0.3, at: old }), false)
+})
+
+test('想起来的记忆带时间；最近想起了什么有记录（含想不起来的那次）', async () => {
+  const { whenText } = await import('../src/features/memory.js')
+  const now = new Date(2026, 9, 25, 12).getTime()
+  assert.equal(whenText(now, now), '今天')
+  assert.equal(whenText(now - 86400_000, now), '昨天')
+  assert.equal(whenText(now - 3 * 86400_000, now), '3 天前')
+  assert.equal(whenText(now - 400 * 86400_000, now).startsWith('去年'), true)
+  hubState.text = '阿花最近怎么样'
+  const ctx = mem.contextFor({ kind: 'private', userId: '30000003', chatId: 'private:30000003' }, 's3')
+  assert.ok(ctx.includes('[今天] [阿花] 阿花'), ctx)
+  const log = mem.recalls()[0]
+  assert.equal(log.where, 'private:30000003')
+  assert.ok(log.hits.length && log.hits[0].why.length)
+  hubState.text = '完全无关的量子力学'
+  mem.contextFor({ kind: 'group', groupId: '9', chatId: 'group:9' }, 's4')
+  assert.equal(mem.recalls()[0].hits.length, 0)
+  hubState.text = ''
+})
+
+test('导入旧档案：挑出候选、去掉已经记过的，勾选后存进去', async () => {
+  const c = await mem.importCandidates('一大段旧档案：阿强喜欢钓鱼。阿花周末去看海了。')
+  assert.deepEqual(c.map((x) => x.text), ['阿强喜欢钓鱼'], '阿花看海已经记过，去掉')
+  assert.equal(mem.importCommit(c), 1)
+  assert.equal(mem.list('钓鱼')[0].source, 'import')
 })

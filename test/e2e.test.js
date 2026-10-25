@@ -32,6 +32,9 @@ function fakePng(w, h, salt = 0) {
 async function brain({ preset, text, images, callTool }) {
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
+  if (/^【私聊/.test(text) && text.includes('表情改名测试')) { const m = text.match(/把「(.+?)」/); const r = await callTool('qq_edit_sticker', { sticker: m[1], new_name: '改过的名字', tags: ['开心'] }); return r.message }
+  if (/^【私聊/.test(text) && text.includes('表情删除测试')) { const r = await callTool('qq_edit_sticker', { sticker: '改过的名字', delete: true }); return r.message }
+  if (/^【私聊/.test(text) && text.includes('翻聊天记录')) { const r = await callTool('qq_chat_history', { count: 5 }); return r.message.split('\n')[0] }
   if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
   if (text.includes('引用测试') && text.startsWith('【群聊')) { const n = (text.match(/\[(\d+)\][^\n]*引用测试/) || [])[1]; return n ? `<reply:${n}>收到这条啦\n别的我就不挨个回了` : '没看到编号' }
   if (text.includes('第一句') && text.includes('第二句')) return '两句我都看到啦'
@@ -534,4 +537,30 @@ test('每日整理：往日的临时流水整理后清空，今天的保留；�
   assert.equal(existsSync(join(dir, key + '.jsonl')), true, '今天的流水保留')
   const mem = (await fake.call('/memories')).json()
   assert.ok(mem.items.some((m) => m.source === 'diary' && m.text.includes('白米饭')), '空间日记进了记忆库')
+})
+
+test('表情包她自己整理：改名、改标签（同步到 QQ 收藏备注）、删掉', async () => {
+  const up = (await fake.call('/sticker/upload', { data: fakePng(200, 200, 9).toString('base64'), name: '测试猫猫' })).json()
+  assert.equal(up.ok, true)
+  const target = (await fake.call('/stickers')).json().items.find((i) => i.name === '测试猫猫')
+  assert.ok(target)
+  const mods = mock.sent('modify_custom_face').length
+  mock.push(priv(OWNER, text(`表情改名测试 把「${target.name}」改个名`)))
+  await until(() => fake.turns.at(-1)?.userText.includes('表情改名测试') && fake.turns.at(-1).toolCalls.length)
+  assert.match(fake.turns.at(-1).toolCalls[0].result.message, /改好了/)
+  const after = (await fake.call('/stickers')).json().items.find((i) => i.md5 === target.md5)
+  assert.equal(after.name, '改过的名字')
+  assert.deepEqual(after.tags, ['开心'])
+  if (target.emojiId) await until(() => mock.sent('modify_custom_face').length > mods)
+  mock.push(priv(OWNER, text('表情删除测试')))
+  await until(() => fake.turns.at(-1)?.userText.includes('表情删除测试') && fake.turns.at(-1).toolCalls.length)
+  assert.match(fake.turns.at(-1).toolCalls[0].result.message, /删掉了/)
+  assert.equal((await fake.call('/stickers')).json().items.some((i) => i.md5 === target.md5), false)
+})
+
+test('翻聊天记录：读当前聊天更早的消息', async () => {
+  mock.state.history = [{ time: 1700000000, user_id: 777, sender: { user_id: 777, nickname: '老张' }, message: [{ type: 'text', data: { text: '上周说好去吃火锅' } }] }]
+  mock.push(priv(OWNER, text('翻聊天记录看看')))
+  await until(() => fake.turns.at(-1)?.userText.includes('翻聊天记录') && fake.turns.at(-1).toolCalls.length)
+  assert.match(fake.turns.at(-1).toolCalls[0].result.message, /老张：上周说好去吃火锅/)
 })

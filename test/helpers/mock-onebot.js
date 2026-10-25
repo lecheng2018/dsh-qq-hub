@@ -79,6 +79,7 @@ export async function startMockOneBot({ selfId = '20000002', token = 'mock-token
       case 'comment_qzone': case 'like_qzone': return null
       case 'get_forward_msg': return { messages: (state.forwards || {})[params.id] || [] }
       case 'send_poke': return null
+      case 'get_group_msg_history': case 'get_friend_msg_history': return { messages: state.history || [] }
       case 'get_stranger_info': return { user_id: params.user_id, nickname: '路人' + params.user_id }
       case 'fetch_ptt_text': return { text: '今天想吃白米饭' }
       case 'set_group_ban': case 'set_group_kick': case 'set_group_special_title': case '_send_group_notice': return null
