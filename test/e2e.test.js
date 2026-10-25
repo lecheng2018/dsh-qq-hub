@@ -31,6 +31,7 @@ function fakePng(w, h, salt = 0) {
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
+  if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
   if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
   if (text.includes('引用测试') && text.startsWith('【群聊')) { const n = (text.match(/\[(\d+)\][^\n]*引用测试/) || [])[1]; return n ? `<reply:${n}>收到这条啦\n别的我就不挨个回了` : '没看到编号' }
   if (text.includes('第一句') && text.includes('第二句')) return '两句我都看到啦'
@@ -305,6 +306,37 @@ test('空间互动：别人在她的评论下面接着回她，她会接着回�
   assert.deepEqual(added, [{ tid: 't1', content: '回复 群友：哈哈好看' }], '两条新回复合起来只回一次')
   await fake.call('/qzone/social/run')
   assert.equal(mock.sent('comment_qzone').length, before + 1, '回过的不再回')
+})
+
+test('戳一戳：主人戳她，她会回话，还会戳回去；20 秒内重复戳只算一次', async () => {
+  const turns = fake.turns.length
+  const poke = { post_type: 'notice', notice_type: 'notify', sub_type: 'poke', self_id: Number(BOT), user_id: Number(OWNER), sender_id: Number(OWNER), target_id: Number(BOT) }
+  mock.push(poke)
+  await until(() => mock.sent('send_poke').length === 1)
+  assert.match(fake.turns.at(-1).userText, /戳了戳你/)
+  assert.equal(mock.sent('send_poke')[0].params.user_id, Number(OWNER))
+  assert.equal(sentTo('private', OWNER).at(-1).params.message[0].data.text, '干嘛戳我')
+  mock.push(poke)
+  await sleep(1200)
+  assert.equal(fake.turns.length, turns + 1, '连着戳只算一次')
+  // 戳的不是她就不管
+  mock.push({ ...poke, target_id: 12345 })
+  await sleep(800)
+  assert.equal(fake.turns.length, turns + 1)
+})
+
+test('合并转发：她能看到转发里的聊天记录', async () => {
+  mock.state.forwards = { fw1: [
+    { sender: { user_id: 801, nickname: '转发甲' }, message: [{ type: 'text', data: { text: '转发里的话甲' } }] },
+    { sender: { user_id: 802, nickname: '转发乙' }, message: [{ type: 'text', data: { text: '转发里的话乙' } }] },
+  ] }
+  const before = fake.turns.length
+  mock.push(grp('558', '805', [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' 你看看这个' } }, { type: 'forward', data: { id: 'fw1' } }], '寄件人'))
+  await until(() => fake.turns.length > before)
+  const t = fake.turns.at(-1).userText
+  assert.match(t, /合并转发的聊天记录（2 条）/)
+  assert.match(t, /转发甲：转发里的话甲/)
+  assert.match(t, /转发乙：转发里的话乙/)
 })
 
 test('群聊刹车：短时间说够次数就歇着，主人 @ 还能叫动', async () => {

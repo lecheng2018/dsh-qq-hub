@@ -40,6 +40,7 @@ export function parseMessageEvent(event, selfId) {
   const images = []
   const stickers = []
   const records = []
+  const forwards = [] // 合并转发的 id
   for (const seg of segmentsOf(event)) {
     const d = seg.data || {}
     switch (seg.type) {
@@ -82,6 +83,13 @@ export function parseMessageEvent(event, selfId) {
       case 'poke':
         texts.push('[戳一戳]')
         break
+      case 'forward': {
+        // 合并转发：先放个占位，收到后再去拉里面的聊天记录展开
+        const id = String(d.id ?? d.res_id ?? d.forward_id ?? '')
+        if (id) forwards.push(id)
+        texts.push('[合并转发]')
+        break
+      }
       default:
         break
     }
@@ -101,6 +109,7 @@ export function parseMessageEvent(event, selfId) {
     images,
     stickers,
     records,
+    forwards,
   }
 }
 

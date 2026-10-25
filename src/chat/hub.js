@@ -312,6 +312,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
+  /** 戳回去：私聊戳对方，群里戳最近戳她的人（没人戳过就戳这一段最后说话的人）。 */
+  async function pokeBack(chatId) {
+    const cfg = getConfig()
+    const group = chatId.startsWith('group:') ? chatId.slice(6) : ''
+    const target = group ? lastPoker.get(chatId) || lastSpeaker.get(chatId) : chatId.slice(8)
+    if (!target) return
+    if (!cfg.enabled || cfg.dryRun) return log.info(`试运行（没真戳）→ ${chatId}：戳了戳 ${target}`)
+    try {
+      await onebot.call('send_poke', { user_id: Number(target), ...(group ? { group_id: Number(group) } : {}) }, { timeoutMs: 10000 })
+      log.info(`${chatId}：她戳了戳 ${target}`)
+    } catch (error) {
+      log.debug('戳一戳失败：', error.message)
+    }
+  }
+
   /** 把一个音频文件当语音条发出去（翻唱用）。 */
   async function sendVoiceFile(chatId, file, note) {
     const b64 = readFileSync(file).toString('base64')
@@ -385,6 +400,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         if (cfg.voice.enabled) await sendVoice(chatId, it.value)
         else await sendText(chatId, it.value, replyId)
       } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId)
+      else if (it.kind === 'poke') await pokeBack(chatId)
       else if (it.kind === 'image') await sendImage(chatId, it.value)
       if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
     }
@@ -616,6 +632,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
     // 拼文案
     let text = msg.text
+    if (msg.forwards?.length) {
+      text = await expandForwards(msg, text)
+      if (msg.kind === 'group') {
+        const last = (groupBuf.get(msg.groupId) || []).findLast?.((x) => x.uid === msg.userId)
+        if (last) last.text = text
+      }
+    }
     const voiceText = cfg.voice.asr && msg.records.length ? await transcribe(msg) : msg.records.length ? '[发来一条语音]' : ''
     if (voiceText) text = (text ? text + ' ' : '') + voiceText
     if (voiceText && msg.kind === 'group') {
@@ -635,6 +658,56 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
 
     enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode)
+  }
+
+  /** 把消息里的「[合并转发]」换成里面的聊天记录（最多 40 条，嵌套的转发不再展开）。 */
+  async function expandForwards(msg, text) {
+    let out = text
+    for (const id of msg.forwards.slice(0, 2)) {
+      let lines = []
+      try {
+        const r = await onebot.call('get_forward_msg', { id }, { timeoutMs: 15000 })
+        for (const node of (r?.messages || []).slice(0, 40)) {
+          const who = node.sender?.card || node.sender?.nickname || String(node.sender?.user_id ?? node.user_id ?? '某人')
+          const m = parseMessageEvent({ message_type: 'private', user_id: node.sender?.user_id ?? node.user_id, message: node.message ?? node.content ?? [] }, selfId)
+          lines.push(`  ${who}：${(m.text || '（图片/表情）').slice(0, 120)}`)
+        }
+      } catch (error) {
+        log.debug('拉合并转发失败：', error.message)
+      }
+      const body = lines.length ? `[合并转发的聊天记录（${lines.length} 条）]\n${lines.join('\n').slice(0, 2000)}\n[转发结束]` : '[合并转发（内容没拉到）]'
+      out = out.replace('[合并转发]', body)
+    }
+    return out
+  }
+
+  // ---------- 戳一戳 ----------
+  const lastPoker = new Map() // chatId → 最近戳她的人（她戳回去用）
+  const lastSpeaker = new Map() // chatId → 群里最近一段最后说话的人
+  const pokeAt = new Map() // chatId → 上次处理戳一戳的时间
+  /** 有人戳了她：当成一条对她说的话交给她（群里也一定回），同一个聊天 20 秒内只算一次。 */
+  async function onPoke(ev) {
+    const self = String(ev.self_id || selfId || getConfig().botQQ)
+    if (String(ev.target_id) !== self) return
+    const group = ev.group_id ? String(ev.group_id) : ''
+    const poker = String(group ? ev.user_id : ev.sender_id ?? ev.user_id)
+    if (!poker || poker === self) return
+    const chatId = group ? `group:${group}` : `private:${poker}`
+    lastPoker.set(chatId, poker)
+    if (Date.now() - (pokeAt.get(chatId) || 0) < 20_000) return
+    pokeAt.set(chatId, Date.now())
+    let nickname = poker
+    try {
+      const info = group ? await onebot.call('get_group_member_info', { group_id: Number(group), user_id: Number(poker) }, { timeoutMs: 5000 }) : await onebot.call('get_stranger_info', { user_id: Number(poker) }, { timeoutMs: 5000 })
+      nickname = info?.card || info?.nickname || poker
+    } catch (error) {}
+    log.info(`${chatId}：${nickname} 戳了戳她`)
+    await onMessage({
+      post_type: 'message', message_type: group ? 'group' : 'private', sub_type: group ? 'normal' : 'friend',
+      self_id: Number(self), user_id: Number(poker), ...(group ? { group_id: Number(group) } : {}), message_id: 0,
+      sender: { user_id: Number(poker), nickname, card: nickname },
+      message: [{ type: 'at', data: { qq: self } }, { type: 'text', data: { text: ` [戳了戳你${ev.action ? '：' + ev.action + (ev.suffix || '') : ''}]` } }],
+    })
   }
 
   /** 没触发回复的群消息带的图：如果正有一段在等她回，把图也带上（最多 4 张）。 */
@@ -727,6 +800,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         groupInterjects.set(gid, arr)
       }
       const gp = await groupPrompt(p.chat, p.mode)
+      if (gp.speakers.length) lastSpeaker.set(chatId, [...p.senders].pop() || gp.speakers.at(-1))
       content = [{ type: 'text', text: gp.text }, ...p.images]
       p.query = gp.query
       p.speakers = gp.speakers
@@ -893,6 +967,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   return {
     onMessage,
+    onPoke,
     onSessionEvent,
     deliver,
     sendText,

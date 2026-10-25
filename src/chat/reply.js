@@ -4,6 +4,7 @@
 //   - `|||` 分隔多条气泡
 //   - `<voice>…</voice>` 包住的内容发成语音
 //   - `<sticker:标签>` 发一张表情（可写 `<sticker:标签></sticker>`）
+//   - `<poke>` = 戳一戳对方
 //   - `<reply:编号>` 写在某句前面 = 这句以「引用回复」发出（群聊里引用提示词中带编号的那条消息）
 //   - 整轮只输出 `[沉默]`（或空）= 这次不说话（群聊插话用）
 // 另外顺手把模型偶尔漏出来的 Markdown 洗掉——QQ 不渲染 Markdown。
@@ -53,7 +54,7 @@ export function parseReply(text) {
     const part = bubble.trim()
     if (!part) continue
     // 依次切出 reply / voice / sticker / markdown 图片，其余是文字
-    const re = /<reply:\s*(\d+)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
+    const re = /<poke\s*\/?>|<reply:\s*(\d+)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
     let last = 0
     let m
     while ((m = re.exec(part)) !== null) {
@@ -61,7 +62,9 @@ export function parseReply(text) {
       pushText(items, part.slice(last, m.index))
       attach(from)
       from = items.length
-      if (m[1] !== undefined) {
+      if (m[0].startsWith('<poke')) {
+        if (!items.some((i) => i.kind === 'poke')) items.push({ kind: 'poke', value: '' })
+      } else if (m[1] !== undefined) {
         replyTo = m[1]
       } else if (m[2] !== undefined) {
         const v = stripMarkdown(m[2])

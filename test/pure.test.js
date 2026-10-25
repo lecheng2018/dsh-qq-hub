@@ -305,3 +305,13 @@ test('空间互动：说说下的评论整理成上下文', async () => {
   assert.deepEqual(summarizeComments(comments, { selfId: '9', exclude: 'c1' }), ['小明：在哪拍的'])
   assert.equal(summarizeComments(comments, { selfId: '9', max: 1 }).at(-1), '……还有 2 条')
 })
+
+test('解析：合并转发记下 id，回复里的 <poke> 变成戳一戳', async () => {
+  const { parseMessageEvent } = await import('../src/chat/inbound.js')
+  const { parseReply } = await import('../src/chat/reply.js')
+  const m = parseMessageEvent({ message_type: 'group', group_id: 1, user_id: 2, message: [{ type: 'forward', data: { id: 'abc' } }] }, '9')
+  assert.deepEqual(m.forwards, ['abc'])
+  assert.match(m.text, /合并转发/)
+  assert.deepEqual(parseReply('干嘛<poke>').items.map((i) => i.kind), ['text', 'poke'])
+  assert.equal(parseReply('<poke><poke>').items.filter((i) => i.kind === 'poke').length, 1, '一轮最多戳一次')
+})
