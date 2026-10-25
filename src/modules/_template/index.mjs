@@ -50,7 +50,7 @@ export default {
     // 4. 定时任务（毫秒）。模块关掉 / 重新加载时自动停
     api.every(60 * 60_000, () => api.log.info('「__NAME__」还活着'))
 
-    // 返回的东西别的模块能用 api.use('__ID__') 拿到，别的 DSH 插件和程序也能通过联动接口调用
+    // 返回的东西别的模块能用 api.use('__ID__') 拿到
     return { table }
   },
 }

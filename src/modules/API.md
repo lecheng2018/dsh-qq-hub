@@ -21,10 +21,9 @@
 6. [面板](#面板)
 7. [内置模块和它们导出的东西](#内置模块和它们导出的东西)
 8. [替换内置模块](#替换内置模块)
-9. [联动：别的程序、DSH 会话和插件](#联动别的程序dsh-会话和插件)
-10. [内部源码](#内部源码)
-11. [升级会不会坏](#升级会不会坏)
-12. [排查问题](#排查问题)
+9. [内部源码](#内部源码)
+10. [升级会不会坏](#升级会不会坏)
+11. [排查问题](#排查问题)
 
 ## 最小的模块
 
@@ -68,12 +67,12 @@ export default {
   panel: 'panel.js',          // 可选：自己画面板（见「面板」）
   setup(api) {                // 必填：启动时调用一次，可以是 async
     // 在这里注册事件、工具、命令、定时任务……
-    return { /* 导出给别的模块 / 联动接口用的东西 */ }
+    return { /* 导出给别的模块用的东西 */ }
   },
 }
 ```
 
-`setup` 返回的对象就是这个模块的**导出**。别的模块 `api.use('weather')` 拿到它；别的程序走联动接口 `call` 也调的是它。
+`setup` 返回的对象就是这个模块的**导出**。别的模块 `api.use('weather')` 拿到它。
 导出里有 `dispose()` 的话，模块停下时会调用。
 
 ## api：模块能用的东西
@@ -113,7 +112,7 @@ export default {
 | | |
 |---|---|
 | `api.on(事件, fn)` | 听事件（见下一节） |
-| `api.emit(事件, ...参数)` | 发事件给别的模块；发 `open/event` 的会进联动接口的事件流 |
+| `api.emit(事件, ...参数)` | 发事件给别的模块 |
 | `api.tool(fn 或 工具)` | 给她加工具（见「工具」） |
 | `api.defineTool({ name, description, properties, required, execute })` | 做一个工具 |
 | `api.context(({ chat, sessionId }) => '文字')` | 每轮聊天前塞进她上下文的话（比如「现在北京 20 度」）；返回空串就不塞 |
@@ -122,7 +121,6 @@ export default {
 | `api.every(毫秒, fn)` | 定时任务 |
 | `api.later(毫秒, fn)` | 过一会儿做一次 |
 | `api.route('/路径', async (req, res) => 返回值)` | 加一个网页接口：地址是 `/aurabot/api/ext/<id>/路径`；返回对象就当 JSON 回；要自己回（比如图片）就用 `api.core.http.send(res, 200, buf, 'image/png')` |
-| `api.dshTool(工具)` | 给 **DSH 里别的会话**加工具（面板「联动」里打开才挂，见「联动」） |
 | `api.onDispose(fn)` | 模块停下时要做的收尾 |
 
 **别的模块和插件内部**（全开放）
@@ -151,7 +149,6 @@ export default {
 | `http` | 写接口用的小工具：`body(req)` 读 JSON、`raw(req, 最大字节)` 读原始内容、`query(req)` 读网址参数、`send(res, 状态码, 内容, 类型)` |
 | `personas` | 人格：`list()` `read(id)` `current()` |
 | `modules` | 模块内核本身（`status()` `reload(id)` ……） |
-| `bridge` | 联动层（`ops.send / think / call / events`） |
 | `getConfig()` / `setConfig(cfg)` | 同 `api.config` / 整份替换配置 |
 
 ## 事件
@@ -274,39 +271,6 @@ return function Panel({ settings, save, toast }) {
 复制出来的文件里，原来指向插件其他文件的 `import`，改成了 `const { … } = __lib('core/store.js')` 的写法（`globalThis.aurabot.lib`），所以放在 `modules/` 里也能找到插件的源码。
 
 **你的版本加载失败时，会先自动用回内置的**（面板上能看到报错），所以写坏了不会让她突然少一项本事。
-
-## 联动：别的程序、DSH 会话和插件
-
-面板「扩展」页最下面的「联动」：
-
-**DSH 里别的会话**（打开「DSH 会话能用」）：DSH 里所有会话都会多几个工具——
-`aurabot_qq_send`（让她发 QQ）、`aurabot_status`（看她状态）、`aurabot_call`（调任意模块导出的函数）。
-比如你在 DSH 里写代码时说「编译完了用 QQ 告诉我」。她自己的 QQ 会话里不会有这些工具。
-模块可以用 `api.dshTool(工具)` 再加。
-
-**别的 DSH 插件**：同一个 DSH 里的插件 `ctx.get('aurabot')` 拿到服务对象（不用写进 inject）：
-
-```js
-const aurabot = ctx.get('aurabot')
-await aurabot?.send({ text: '构建完成啦' })              // 不填 target 就发给主人
-await aurabot?.send({ target: 'group:123', text: '…' })
-const { reply } = await aurabot.think({ prompt: '用一句话夸夸主人' })
-await aurabot.call({ module: 'memory', method: 'recall', args: ['香菜'] })
-aurabot.use('memory')                                   // 直接拿模块导出（同进程）
-const off = aurabot.on('activity', (a) => { … })        // 听她的事件
-```
-
-**别的程序**（打开「开放 HTTP 接口」，面板上有密钥）：请求头带 `Authorization: Bearer 密钥`
-
-| | 请求体 / 参数 | 返回 |
-|---|---|---|
-| `GET /aurabot/api/open/info` | | 在不在线、心情、模块列表 |
-| `POST /aurabot/api/open/send` | `{ target?, text }` | 让她发出去（会拆条、能带语音和表情） |
-| `POST /aurabot/api/open/think` | `{ prompt, to? }` | 让她想一想，返回 `{ reply }`；填了 `to` 就顺便发过去 |
-| `POST /aurabot/api/open/call` | `{ module, method, args: [] }` | 调某个模块导出的函数，返回 `{ result }` |
-| `GET /aurabot/api/open/events?after=序号` | | 最近发生的事（收到的消息、她发的话、模块 `emit('open/event', 类型, 数据)` 的），轮询用 |
-
-能发给谁：默认白名单里的人和群；面板里能改成「只能发给主人」。总开关、试运行照常管着。
 
 ## 内部源码
 
