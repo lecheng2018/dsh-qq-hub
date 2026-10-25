@@ -4,6 +4,7 @@
 // 每个 QQ 会话一个 DSH 会话，统一放在「Aurabot · QQ」工作区，主人可以在 DSH 侧栏点开看、插手。
 
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync, mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -35,7 +36,15 @@ const sessionKey = (id) => {
  *   message(msg) → true 表示这条消息被模块接管了，她不再处理
  *   reply(text, {chatId}) → 改写她要发的话；返回 null 表示这次不发
  *   deniedTools() → 不许出现在她 QQ 会话里的全局工具名（给其他 DSH 会话用的联动工具）
+ *   groupDecide(decision, info) → 改群聊「回不回、怎么回」的决定 { reply, mode, reason }
+ *   prompt(content, info) → 改交给她的内容（文字 / 图片块）；返回 null 表示这次不交给她
+ *   items(items, info) → 改拆好的回复（每条 { kind: text|voice|sticker|poke|image, value, replyTo }）
+ *   send(message, info) → 改最终发出去的 OneBot 消息段；返回 null 表示不发
+ *   model(selection, chat) → 这个聊天用哪个模型 { provider, model, reasoningEffort }（同步）
+ *   poke(event) → true 表示戳一戳被模块接管了
  */
+// 模拟测试：这里面发出去的消息只记下来，不真发
+const captureStore = new AsyncLocalStorage()
 export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
@@ -181,10 +190,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       agent = await resolveAgent(sid)
     }
     // 模型 / 思考强度和设置不一致就切过去（面板改了模型，下一条消息起生效）
-    const want = modelKey()
+    const want = modelKey(chat)
     const m = map()
     if (want && m.chats[chat.chatId] && m.chats[chat.chatId].model !== want) {
-      if (applyModel(agent)) {
+      if (applyModel(agent, chat)) {
         m.chats[chat.chatId].model = want
         saveMap(m)
         log.info(`${chat.chatId} 的模型切到 ${want}`)
@@ -195,20 +204,31 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return { agent, sessionId: sid, level }
   }
 
-  function modelKey() {
+  /** 这个聊天要用的模型：面板里选的（或 DSH 默认），扩展模块可以按聊天改。 */
+  function targetModel(chat) {
     const cfg = getConfig()
     const t = defaultModel(dsh, cfg)
-    return t ? `${t.provider}::${t.model}::${cfg.model.reasoningEffort || ''}` : ''
+    let sel = t ? { provider: t.provider, model: t.model, reasoningEffort: cfg.model.reasoningEffort || '' } : null
+    if (hooks?.model && chat) {
+      try {
+        const r = hooks.model(sel, chat)
+        if (r && r.provider && r.model) sel = { reasoningEffort: '', ...r }
+      } catch (error) {}
+    }
+    return sel
+  }
+  function modelKey(chat) {
+    const t = targetModel(chat)
+    return t ? `${t.provider}::${t.model}::${t.reasoningEffort || ''}` : ''
   }
 
   /** 让聊天会话用面板里选的模型和思考强度；只改这个会话，不改 DSH 的默认模型。 */
-  function applyModel(agent) {
+  function applyModel(agent, chat) {
     try {
-      const cfg = getConfig()
-      const t = defaultModel(dsh, cfg)
+      const t = targetModel(chat)
       if (!t) return false
       const sel = { provider: t.provider, model: t.model }
-      if (cfg.model.reasoningEffort) sel.reasoningEffort = cfg.model.reasoningEffort
+      if (t.reasoningEffort) sel.reasoningEffort = t.reasoningEffort
       // 活着的会话只认会话控制器内存里的选择：用它的 selectForNextRequest（selectModel 也是调它，
       // 但 selectModel 还会顺手改掉 DSH 的全局默认模型，我们不要）。拿不到就只写持久事件（重启恢复时生效）。
       const agents = controller().agents
@@ -275,6 +295,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const cfg = getConfig()
     const tgt = targetOf(chatId)
     if (!tgt) return null
+    // 扩展模块最后改一次（加签名、过滤敏感词、转发到别处……）；返回 null 就不发
+    if (hooks?.send) {
+      try {
+        const next = await hooks.send(message, { chatId, note, force })
+        if (next === null) { log.info(`扩展模块拦下了 → ${chatId}：${note}`); return null }
+        if (Array.isArray(next)) message = next
+      } catch (error) {
+        log.warn('扩展模块改写发送内容出错：', error.message)
+      }
+    }
+    const cap = captureStore.getStore()
+    if (cap) {
+      cap.push({ chatId, note, message })
+      return { message_id: 'sim-' + cap.length }
+    }
     if (force) {}
     else if (!cfg.enabled) {
       log.info(`总开关关着，没发 → ${chatId}：${note}`)
@@ -409,6 +444,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
+    if (hooks?.items) {
+      try {
+        const next = await hooks.items(items, { chatId, text, userText: opts.userText || '' })
+        if (next === null) return log.info(`${chatId}：扩展模块拦下了这次回复`)
+        if (Array.isArray(next)) items = next
+      } catch (error) {
+        log.warn('扩展模块改写回复出错：', error.message)
+      }
+    }
     // 引用回复：她写的编号换成那条群消息的 QQ 消息 ID（语音条不能带引用，就不引用了）
     const refs = inGroup ? groupRefs.get(chatId.slice(6)) || {} : {}
     for (let i = 0; i < items.length; i++) {
@@ -420,10 +464,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         if (cfg.voice.enabled) await sendVoice(chatId, it.value)
         else await sendText(chatId, it.value, replyId)
       } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId)
-      else if (it.kind === 'poke') await pokeBack(chatId)
+      else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
       else if (it.kind === 'image') await sendImage(chatId, it.value)
-      if (i < items.length - 1) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
+      if (i < items.length - 1 && !opts.simulate) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
     }
+    if (opts.simulate) return items
     if (inGroup) {
       const gid = chatId.slice(6)
       const said = (groupSaid.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
@@ -669,6 +714,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         interjectTimes: groupInterjects.get(msg.groupId) || [],
         botReplyTimes: groupSaid.get(msg.groupId) || [],
       })
+      if (hooks?.groupDecide) {
+        try {
+          const next = await hooks.groupDecide(decision, { msg, policy: pol, recentTexts, memScore })
+          if (next && typeof next === 'object') Object.assign(decision, next)
+        } catch (error) {
+          log.warn('扩展模块改群聊决定出错：', error.message)
+        }
+      }
       if (!decision.reply) {
         log.debug(`群 ${msg.groupId}：不回（${decision.reason}）`)
         logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
@@ -739,6 +792,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   async function onPoke(ev) {
     const self = String(ev.self_id || selfId || getConfig().botQQ)
     if (String(ev.target_id) !== self) return
+    if (hooks?.poke) {
+      try { if (await hooks.poke(ev)) return } catch (error) {}
+    }
     const group = ev.group_id ? String(ev.group_id) : ''
     const poker = String(group ? ev.user_id : ev.sender_id ?? ev.user_id)
     if (!poker || poker === self) return
@@ -915,6 +971,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   async function pushToSession(chat, content, senderId, opts = {}) {
+    if (hooks?.prompt) {
+      try {
+        const next = await hooks.prompt(content, { chat, senderId, ...opts })
+        if (next === null) {
+          log.info(`${chat.chatId}：扩展模块决定这次不交给她`)
+          release(chat.chatId)
+          return
+        }
+        if (Array.isArray(next)) content = next
+      } catch (error) {
+        log.warn('扩展模块改提示词出错：', error.message)
+      }
+    }
     const { agent, sessionId } = await agentFor(chat)
     const key = sessionKey(sessionId)
     const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
@@ -1017,7 +1086,20 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return n
   }
 
+  /** 模拟测试：fn 里发出去的消息都记下来不真发，返回 { result, sent }。 */
+  async function capture(fn) {
+    const sent = []
+    const result = await captureStore.run(sent, fn)
+    return { result, sent }
+  }
+  /** 模拟测试：假装这个会话这一轮是谁在说话（工具里的「主人才能用」靠它判断）。 */
+  function simulateTurn(sessionId, senders) {
+    turnState.set(sessionKey(sessionId), { lastTurn: -1, text: '', senders: new Set(senders.map(String)) })
+  }
+
   return {
+    capture,
+    simulateTurn,
     onMessage,
     onPoke,
     onSessionEvent,

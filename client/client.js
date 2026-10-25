@@ -1452,6 +1452,49 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           m.builtin && m.hasUser ? h('label', { className: 'ab-small ab-muted', style: { display: 'flex', alignItems: 'center', gap: 6 } }, '用内置的', h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null))
     }
 
+    /** 模拟测试：不上 QQ 试模块。发出去的只截下来看，不真发。 */
+    function Simulate({ toast }) {
+      const [as, setAs] = useState('owner')
+      const [kind, setKind] = useState('private')
+      const [text, setText] = useState('')
+      const [reply, setReply] = useState('')
+      const [out, setOut] = useState(null)
+      const [tools, setTools] = useState([])
+      const [tool, setTool] = useState('')
+      const [args, setArgs] = useState('{}')
+      const [tout, setTout] = useState(null)
+      useEffect(() => { get('/modules/tools?as=' + as + '&kind=' + kind).then((r) => { const l = r.list || []; setTools(l); if (!l.some((t) => t.name === tool)) setTool(l[0] ? l[0].name : '') }) }, [as, kind])
+      const cur = tools.find((t) => t.name === tool)
+      const run = async () => { const r = await post('/modules/simulate', { as, kind, text, reply }); if (r.ok === false) return toast(r.message, 'err'); setOut(r) }
+      const call = async () => {
+        let a
+        try { a = JSON.parse(args || '{}') } catch (e) { return toast('参数要是 JSON，比如 {"city":"北京"}', 'err') }
+        const r = await post('/modules/tool', { as, kind, name: tool, args: a })
+        if (r.ok === false) return toast(r.message, 'err')
+        setTout(r)
+      }
+      const sentList = (sent) => (sent && sent.length ? h('div', { className: 'ab-code' }, sent.map((s) => '→ ' + s.chatId + '：' + s.text).join('\n')) : h('div', { className: 'ab-small ab-muted', style: { marginTop: 6 } }, '没有发出任何消息'))
+      return h(Card, { title: '模拟测试', desc: '不用上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。（模块直接调 api.onebot 的操作，比如禁言、发空间，是真的会执行的；会改设置的内置命令不执行。）' },
+        h(Row, { label: '假装是', hint: '谁在说话、在哪儿说' },
+          h('div', { className: 'ab-flex' },
+            h(Seg, { value: as, options: [{ value: 'owner', label: '主人' }, { value: 'other', label: '别人' }], onChange: setAs }),
+            h(Seg, { value: kind, options: [{ value: 'private', label: '私聊' }, { value: 'group', label: '群聊' }], onChange: setKind }))),
+        h(Row, { label: '发一条消息', hint: '看哪个模块接管、命令回什么（/开头是命令）' },
+          h('input', { className: 'ab-input', value: text, placeholder: '比如：早安，或 /weather 北京', onChange: (e) => setText(e.target.value) })),
+        h(Row, { label: '她的回复', hint: '可选：假设她这样回，看经过各个模块改写后最后发出去什么（可以用 ||| 分条、<voice>…</voice>）' },
+          h('input', { className: 'ab-input', value: reply, placeholder: '比如：早呀|||今天也要加油', onChange: (e) => setReply(e.target.value) })),
+        h('div', { className: 'ab-flex' }, h(Btn, { kind: 'primary', small: true, disabled: !text.trim() && !reply.trim(), onClick: run }, '模拟')),
+        out ? h('div', { style: { marginTop: 8 } }, out.steps.map((s, i) => h('div', { key: i, className: 'ab-small' }, '· ' + s)), sentList(out.sent)) : null,
+        h('div', { className: 'ab-section-title' }, '调用工具'),
+        tools.length ? h('div', null,
+          h(Row, { label: '工具', hint: cur ? cur.description : '' }, h(Select, { value: tool, options: tools.map((t) => ({ value: t.name, label: t.name })), onChange: (v) => { setTool(v); setArgs('{}'); setTout(null) } })),
+          cur && cur.parameters && Object.keys(cur.parameters.properties || {}).length ? h('div', { className: 'ab-small ab-muted', style: { margin: '0 0 6px' } }, '参数：' + Object.entries(cur.parameters.properties).map(([k, v]) => k + (v.description ? '（' + v.description + '）' : '')).join('；')) : null,
+          h('textarea', { className: 'ab-textarea', style: { minHeight: 50, fontFamily: 'ui-monospace,Consolas,monospace' }, value: args, onChange: (e) => setArgs(e.target.value) }),
+          h('div', { className: 'ab-flex', style: { marginTop: 6 } }, h(Btn, { small: true, onClick: call, disabled: !tool }, '调用')),
+          tout ? h('div', null, h('div', { className: 'ab-code' }, JSON.stringify(tout.result, null, 2)), sentList(tout.sent)) : null)
+          : h('div', { className: 'ab-small ab-muted' }, '这个场合没有工具'))
+    }
+
     /** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式。 */
     function Modules({ st, draft, toast, reload }) {
       const [data, setData] = useState(null)
@@ -1492,6 +1535,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         mine.length ? h(Card, { title: '自己写的（' + mine.length + '）' }, h('div', null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
         h(Card, { title: '内置模块（' + builtin.length + '）', desc: '关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。' },
           h('div', null, builtin.map((m) => h(ModuleRow, { key: m.id, m, ...props })))),
+        h(Simulate, { toast }),
       )
     }
 
@@ -1520,7 +1564,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const save = async (patch) => { const r = await post('/save', { ext: { [m.id]: patch } }); toast(r.ok === false ? r.message : '保存好了', r.ok === false ? 'err' : 'ok'); reload() }
       return h(PanelBoundary, null, h(Comp, { settings, save, toast, reload }))
     }
-    function ExtPage({ st, draft, setDraft, toast, reload, mod }) {
+    function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
       const m = (st.modules || []).find((x) => x.id === mod)
       const f = useField(draft, setDraft)
       if (!m) return h(Empty, { icon: '🧩', text: '这个模块没在跑了' })
@@ -1536,7 +1580,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         return f.text(p, { placeholder: s.placeholder })
       }
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: m.name, desc: m.description, right: h('span', { className: 'ab-badge mine' }, m.id) },
+        h(Card, { title: m.name, desc: m.description, right: h('span', { className: 'ab-badge mine' }, embedded ? '扩展模块 · ' + m.id : m.id) },
           (m.settings || []).map((s) => h(Row, { key: s.key, label: s.label || s.key, hint: s.hint }, field(s))),
           (m.settings || []).length ? h('div', { className: 'ab-small ab-muted' }, '改完点下面的「保存设置」。') : null,
           (m.errors || []).length ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, '最近的报错：' + m.errors[0].message) : null),
@@ -1782,7 +1826,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       // 标签页：内置的按模块在不在跑决定显示；自己写的模块有设置或面板的各占一页
       const mods = st.modules || []
       const running = (id) => { const m = mods.find((x) => x.id === id); return Boolean(m && m.running) }
-      const extTabs = mods.filter((m) => m.running === 'user' && !m.builtin && ((m.settings || []).length || m.panel)).map((m) => ({ id: 'ext:' + m.id, label: m.name, ext: m.id }))
+      const hasUi = (m) => m.running === 'user' && !m.builtin && ((m.settings || []).length || m.panel)
+      // 写了 tab 的模块嵌进那个内置标签页；没写（或写的页不存在）的单独一页
+      const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === m.tab))
+      const extTabs = mods.filter((m) => hasUi(m) && !intoTab(m)).map((m) => ({ id: 'ext:' + m.id, label: m.name, ext: m.id }))
       const tabs = TABS.filter((t) => !TAB_MODS[t.id] || TAB_MODS[t.id].some(running))
       tabs.splice(tabs.findIndex((t) => t.id === 'logs'), 0, ...extTabs)
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
@@ -1819,6 +1866,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
               tabDirty(t.id) ? h('i', { className: 'dirty', title: '有没保存的改动' }) : t.flag ? h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' }) : null)
           })),
           showWizard ? null : h(body, { ...props, key: curTab.id, mod: curTab.ext }),
+          showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && m.tab === curTab.id).map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
           dirty && !showWizard ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
             h('span', { className: 'ab-muted ab-small' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
             h(Btn, { kind: 'ghost', onClick: () => setDraft(clone(st.config)) }, '撤销'),

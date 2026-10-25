@@ -64,9 +64,11 @@ export function apply(ctx) {
   // ---------- 人格与规则：通过提示词变量注入到 Aurabot 的两个 preset ----------
   const variable = (n, fn) => ctx.effect(() => ctx.systemPrompt.variable(n, fn), `aurabot: 变量 ${n}`)
   const rulesOpts = (kind) => (mods ? { off: mods.builtinOff(), extra: mods.rules(kind) } : {})
-  variable('aurabot_persona', () => currentPersonaText(cfg.persona.current))
-  variable('aurabot_rules_private', () => rulesText('private', cfg, rulesOpts('private')))
-  variable('aurabot_rules_social', () => rulesText('social', cfg, rulesOpts('social')))
+  // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
+  const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
+  variable('aurabot_persona', () => rewrite('persona', currentPersonaText(cfg.persona.current)))
+  variable('aurabot_rules_private', () => rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private'))
+  variable('aurabot_rules_social', () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'))
 
   // ---------- QQ 网关 ----------
   const snowluma = createSnowLumaManager({
@@ -166,6 +168,12 @@ export function apply(ctx) {
       message: (msg) => mods.claim('message', msg),
       reply: (text, info) => mods.filter('reply', text, info),
       deniedTools: () => bridge?.deniedTools() || [],
+      groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
+      prompt: (content, info) => mods.filter('prompt', content, info),
+      items: (items, info) => mods.filter('reply/items', items, info),
+      send: (message, info) => mods.filter('send', message, info),
+      model: (sel, chat) => mods.filterSync('model', sel, chat),
+      poke: (ev) => mods.claim('poke', ev),
     },
   })
 
@@ -485,6 +493,61 @@ export function apply(ctx) {
   route('/modules/open', async (req) => {
     const id = String(query(req).id || '')
     return openFolder(id ? join(mods.dir(), id) : mods.dir())
+  })
+  // 模拟测试：不用上 QQ 就能试模块。发出去的消息只截下来给面板看，不真发
+  // （模块直接调 api.onebot(...) 的操作不在此列，是真的会执行的）
+  const simChat = (b) => {
+    const owner = b.as !== 'other'
+    const userId = owner ? cfg.ownerQQ : '10001'
+    const group = b.kind === 'group'
+    const groupId = String(b.groupId || cfg.allow.groups[0] || '10002')
+    return { owner, userId, chat: group ? { chatId: `group:${groupId}`, kind: 'group', groupId, userId } : { chatId: `private:${userId}`, kind: 'private', userId } }
+  }
+  // 没有文字的（语音条、表情、图片）显示发送备注，比如「[语音·edge] 早呀」
+  const sentLines = (sent) => sent.map((s) => ({ chatId: s.chatId, note: s.note, text: s.message.some((seg) => seg.type === 'text') ? s.message.map((seg) => (seg.type === 'text' ? seg.data.text : seg.type === 'reply' ? '' : `[${seg.type}]`)).join('') : s.note }))
+  route('/modules/simulate', async (req) => {
+    const b = await readBody(req)
+    const { owner, userId, chat } = simChat(b)
+    const text = String(b.text || '')
+    const steps = []
+    const msg = { ...chat, nickname: owner ? cfg.ownerName || '主人' : '路人', role: '', messageId: 'sim', text, mentioned: Boolean(b.mentioned), replyId: '', images: [], stickers: [], records: [], forwards: [], raw: { simulated: true } }
+    const { sent } = await hub.capture(async () => {
+      if (text) {
+        const cmd = owner && /^\s*[/／]/.test(text) ? parseCommand(text, mods.commands()) : null
+        if (cmd && cmd.ext) {
+          const reply = String((await cmd.ext.run(cmd.arg, msg)) ?? '')
+          steps.push(`命令 /${cmd.name}（模块「${cmd.ext.module}」）回：${reply || '（空）'}`)
+          if (reply) await hub.sendText(chat.chatId, reply)
+        } else if (cmd) {
+          steps.push(`这是内置命令 /${cmd.name}，模拟里不执行（会真的改设置）`)
+        } else if (await mods.claim('message', msg)) {
+          steps.push('有模块接管了这条消息，她不会再回')
+        } else {
+          steps.push('没有模块接管，这条会交给她（模拟里不会真的让她想）')
+        }
+      }
+      if (b.reply) {
+        const items = await hub.deliver(chat.chatId, String(b.reply), { simulate: true })
+        steps.push(items ? `她的回复经过模块改写后拆成 ${items.length} 条` : '她的回复被模块拦下了，不发')
+      }
+    })
+    return { ok: true, steps, sent: sentLines(sent) }
+  })
+  route('/modules/tools', async (req) => {
+    const q = query(req)
+    const { owner, chat } = simChat(q)
+    const level = owner && chat.kind === 'private' ? 'full' : 'social'
+    return { ok: true, level, list: mods.buildTools({ chat, level, sessionId: 'sim' }).map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }
+  })
+  route('/modules/tool', async (req) => {
+    const b = await readBody(req)
+    const { owner, userId, chat } = simChat(b)
+    const level = owner && chat.kind === 'private' ? 'full' : 'social'
+    const tool = mods.buildTools({ chat, level, sessionId: 'sim' }).find((t) => t.name === b.name)
+    if (!tool) return { ok: false, message: `这个场合没有 ${b.name} 这个工具` }
+    hub.simulateTurn('sim', [userId])
+    const { result, sent } = await hub.capture(() => tool.execute(b.args && typeof b.args === 'object' ? b.args : {}, {}))
+    return { ok: true, result, sent: sentLines(sent) }
   })
   route('/modules/panel', async (req, res) => {
     const src = mods.panelSource(String(query(req).id || ''))

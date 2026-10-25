@@ -1,7 +1,7 @@
 // 模块系统 + 联动：自己写的模块、替换 / 关掉内置模块、热重载、安全模式、复制内置模块、开放接口、DSH 联动工具。
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOneBot } from './helpers/mock-onebot.js'
@@ -45,6 +45,8 @@ const mod = async (id) => (await fake.call('/modules')).json().list.find((m) => 
 
 async function brain({ text }) {
   if (text.includes('联动测试')) return '收到联动'
+  if (text.includes('[附加背景]')) return '钩子收到|||第二条'
+  if (text.includes('强制回')) return '群里收到'
   if (text.includes('在吗')) return '在呢'
   return '嗯'
 }
@@ -56,7 +58,8 @@ before(async () => {
   mock = await startMockOneBot({ selfId: BOT })
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
     enabled: true, dryRun: false, setupDone: true, botQQ: BOT, ownerQQ: OWNER,
-    allow: { private: [OWNER], groups: [] },
+    allow: { private: [OWNER], groups: ['777'] },
+    group: { interjectChance: 0 },
     snowluma: { autoStart: false, autoAttach: false, httpUrl: mock.httpUrl, wsUrl: mock.wsUrl, httpToken: mock.token, wsToken: mock.token, dir: join(dataDir, 'no-snowluma') },
     voice: { engine: 'windows', autoChance: 0 }, stickers: { autoChance: 0 },
     merge: { waitSec: 0.2, maxSec: 2 },
@@ -166,7 +169,7 @@ test('复制内置模块来改：复制出来的能直接跑（连翻唱这种�
   for (const id of ['speakup', 'song']) {
     const r = (await fake.call('/modules/fork', { id })).json()
     assert.equal(r.ok, true, r.message)
-    const code = readdirSync(modDir(id)).map((f) => readFileSync(join(modDir(id), f), 'utf8')).join('\n')
+    const code = readdirSync(modDir(id), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => readFileSync(join(modDir(id), e.name), 'utf8')).join('\n')
     assert.match(code, /globalThis\.aurabot\.lib/)
     assert.doesNotMatch(code, /from '\.\.\//, '没有指回插件目录的相对路径')
     assert.equal((await mod(id)).running, 'user', (await mod(id)).error)
@@ -239,4 +242,98 @@ test('联动：别的 DSH 插件能 ctx.get(aurabot)；打开后 DSH 会话有�
   await until(() => agent.denied.has('aurabot_qq_send'))
   await fake.call('/save', { bridge: { dshTools: false } })
   assert.equal(fake.ctx.globalTools.size, 0)
+})
+
+test('改她怎么想、怎么说：群聊决定、提示词、拆条、最终发送、模型、人格、规则、戳一戳都能改', async () => {
+  writeMod('hooks-demo', `export default { id: 'hooks-demo', api: 1, setup(api) {
+    api.on('group/decide', (d, { msg }) => (msg.text.includes('强制回') ? { reply: true, mode: 'must', reason: '模块说要回' } : undefined))
+    api.on('prompt', (content) => (content[0] && content[0].text.includes('钩子测试') ? [{ type: 'text', text: content[0].text + ' [附加背景]' }, ...content.slice(1)] : undefined))
+    api.on('reply/items', (items) => (items.some((i) => i.value === '钩子收到') ? [...items, { kind: 'text', value: '尾巴' }] : undefined))
+    api.on('send', (message) => message.map((s) => (s.type === 'text' && s.data.text === '第二条' ? { type: 'text', data: { text: '第二条!' } } : s)))
+    api.on('model', (sel, chat) => (chat.kind === 'private' ? { provider: 'fake', model: 'hooked' } : undefined))
+    api.on('persona', (t) => t + ' 【模块人格】')
+    api.on('rules', (t, kind) => t + ' 【模块规则 ' + kind + '】')
+    api.on('poke', async (ev) => { await api.sendText('private:' + ev.user_id, '别戳'); return true })
+  } }`)
+  await until(async () => (await mod('hooks-demo'))?.running === 'user')
+  assert.match(fake.variables.get('aurabot_persona')(), /【模块人格】/)
+  assert.match(fake.variables.get('aurabot_rules_social')(), /【模块规则 social】/)
+
+  mock.push(priv('钩子测试'))
+  await until(() => sentTo(OWNER).includes('尾巴'))
+  assert.ok(sentTo(OWNER).includes('第二条!'), '最终发送被改写')
+  const agent = [...fake.agents.values()].find((a) => a.preset === 'aurabot-private')
+  assert.ok(agent.events.some((e) => e.type === 'model/selection' && e.data.model === 'hooked'), '私聊换成了模块指定的模型')
+
+  mock.push({ message_type: 'group', sub_type: 'normal', group_id: 777, user_id: 123456, message_id: 99, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '强制回一下' } }] })
+  await until(() => mock.calls.some((c) => c.action === 'send_group_msg' && String(c.params.group_id) === '777' && c.params.message.some((s) => s.data?.text === '群里收到')))
+
+  mock.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', target_id: Number(BOT), user_id: Number(OWNER), self_id: Number(BOT) })
+  await until(() => sentTo(OWNER).includes('别戳'))
+  rmSync(modDir('hooks-demo'), { recursive: true, force: true })
+  await until(async () => !(await mod('hooks-demo')))
+  assert.doesNotMatch(fake.variables.get('aurabot_persona')(), /【模块人格】/, '模块删掉后改写也撤掉了')
+})
+
+test('多文件模块：改了哪个文件都重新加载；模块自己装的 npm 包找得到', async () => {
+  const d = modDir('multi')
+  mkdirSync(join(d, 'lib'), { recursive: true })
+  mkdirSync(join(d, 'node_modules', 'fakepkg'), { recursive: true })
+  writeFileSync(join(d, 'node_modules', 'fakepkg', 'package.json'), JSON.stringify({ name: 'fakepkg', type: 'module', main: 'index.js' }))
+  writeFileSync(join(d, 'node_modules', 'fakepkg', 'index.js'), "export const x = 'pkg'")
+  writeFileSync(join(d, 'lib', 'val.mjs'), "export const v = 'v1'")
+  writeFileSync(join(d, 'index.mjs'), `import { v } from './lib/val.mjs'
+import { x } from 'fakepkg'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+export default { id: 'multi', api: 1, setup(api) {
+  api.route('/val', async () => ({ ok: true, v: v + '-' + x + '-' + readFileSync(join(api.dir, 'data.txt'), 'utf8') }))
+} }`)
+  writeFileSync(join(d, 'data.txt'), 'd1')
+  await until(async () => (await fake.call('/ext/multi/val')).json().v === 'v1-pkg-d1', 15000)
+  await sleep(1100) // 文件修改时间按毫秒取整，隔开一点
+  writeFileSync(join(d, 'lib', 'val.mjs'), "export const v = 'v2'")
+  await until(async () => (await fake.call('/ext/multi/val')).json().v === 'v2-pkg-d1', 15000)
+  assert.ok(!existsSync(join(d, '.aurabot-cache', 'node_modules')), '依赖不拍进快照')
+})
+
+test('模拟测试：消息、命令、她的回复都走一遍模块，但不真发到 QQ；工具能直接调', async () => {
+  const before = mock.calls.length
+  const r = (await fake.call('/modules/simulate', { as: 'owner', kind: 'private', text: 'ping', reply: '在呢' })).json()
+  assert.equal(r.ok, true)
+  assert.match(r.steps.join('\n'), /接管/)
+  assert.ok(r.sent.some((s) => s.text === 'pong2'))
+  assert.ok(r.sent.some((s) => s.text === '在呢～'), '她的回复经过了模块改写')
+  const c = (await fake.call('/modules/simulate', { as: 'owner', kind: 'private', text: '/echo 你好' })).json()
+  assert.ok(c.sent.some((s) => s.text === 'echo: 你好'))
+  assert.match((await fake.call('/modules/simulate', { as: 'owner', text: '/off' })).json().steps[0], /不执行/)
+  assert.equal(api.getConfig().enabled, true)
+  const tools = (await fake.call('/modules/tools?as=owner&kind=private')).json()
+  assert.equal(tools.level, 'full')
+  assert.ok(tools.list.some((t) => t.name === 'echo_tool'))
+  const t = (await fake.call('/modules/tool', { as: 'owner', kind: 'private', name: 'echo_tool', args: {} })).json()
+  assert.equal(t.result.ok, true)
+  assert.equal(mock.calls.filter((x) => /^send_/.test(x.action)).length, mock.calls.slice(0, before).filter((x) => /^send_/.test(x.action)).length, '没有真的发消息')
+  assert.ok(existsSync(join(dataDir, 'modules', 'aurabot.d.ts')), '类型提示放好了')
+})
+
+test('只看 API.md 从零写出来的模块（查天气）能直接加载：命令、工具、设置都挂上了', async () => {
+  mkdirSync(modDir('weather'), { recursive: true })
+  writeFileSync(join(modDir('weather'), 'index.mjs'), readFileSync(new URL('./fixtures/weather/index.mjs', import.meta.url)))
+  const m = await until(async () => { const x = await mod('weather'); return x?.running === 'user' ? x : null }, 15000)
+  assert.deepEqual(m.commands, ['天气'])
+  assert.deepEqual(m.tools, ['weather_now'])
+  assert.equal(m.settings.length, 3)
+  assert.equal(api.getConfig().ext.weather.city, '北京', '默认值写进了配置')
+  assert.match(fake.variables.get('aurabot_rules_private')(), /你会查天气/)
+})
+
+test('api.reply 在群里以引用回复发出；api.isOwner 认得主人', async () => {
+  writeMod('reply-demo', `export default { id: 'reply-demo', api: 1, setup(api) {
+    api.on('message', async (msg) => { if (msg.text !== '引用我') return false; await api.reply(msg, api.isOwner(msg.userId) ? '主人好' : '你好'); return true })
+  } }`)
+  await until(async () => (await mod('reply-demo'))?.running === 'user')
+  mock.push({ message_type: 'group', sub_type: 'normal', group_id: 777, user_id: 123456, message_id: 4242, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '引用我' } }] })
+  const c = await until(() => mock.calls.find((x) => x.action === 'send_group_msg' && x.params.message.some((s) => s.data?.text === '你好')))
+  assert.ok(c.params.message.some((s) => s.type === 'reply' && String(s.data.id) === '4242'))
 })

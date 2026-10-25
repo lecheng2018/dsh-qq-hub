@@ -8,7 +8,7 @@
 //
 // 接口说明给写模块的人看：src/modules/API.md（每次启动复制到数据目录 modules/ 里）。
 
-import { existsSync, readdirSync, statSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname, relative, resolve, sep } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { dataDir } from './store.js'
@@ -24,6 +24,7 @@ const BUILTIN_DIR = join(SRC, 'modules')
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/
 const ENTRY = ['index.mjs', 'index.js']
 const DOC = 'API.md'
+const TYPES = 'aurabot.d.ts'
 
 export const userDir = () => dataDir('modules')
 
@@ -54,15 +55,28 @@ export function lib(key) {
 }
 export const libKeys = () => [...libCache.keys()].sort()
 
-/** 模块文件的修改时间（入口和同目录的 .js/.mjs，子目录不算）。 */
+// 加载自己写的模块时跳过的目录：依赖、加载快照、版本库
+const SKIP_DIRS = new Set(['node_modules', '.aurabot-cache', '.git'])
+const SNAP = '.aurabot-cache'
+
+/** 模块文件夹里所有文件（含子目录，不含依赖和快照）。 */
+function filesOf(dir, base = dir, out = []) {
+  let list = []
+  try { list = readdirSync(dir, { withFileTypes: true }) } catch (error) { return out }
+  for (const e of list) {
+    const full = join(dir, e.name)
+    if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) filesOf(full, base, out) }
+    else if (e.isFile()) out.push(relative(base, full))
+  }
+  return out
+}
+
+/** 模块的「版本戳」：任何文件改了、加了、删了都会变。 */
 function stampOf(dir) {
   let t = 0
-  try {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      if (e.isFile() && /\.(m?js|json)$/.test(e.name)) t = Math.max(t, statSync(join(dir, e.name)).mtimeMs)
-    }
-  } catch (error) {}
-  return t
+  const files = filesOf(dir)
+  for (const f of files) { try { t = Math.max(t, statSync(join(dir, f)).mtimeMs) } catch (error) {} }
+  return Math.round(t) + files.length / 1000
 }
 const entryOf = (dir) => ENTRY.map((n) => join(dir, n)).find((p) => existsSync(p)) || ''
 
@@ -177,6 +191,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     const api = {
       id,
       source,
+      // 模块自己的文件夹（读自己带的数据文件用这个；import.meta.url 指向的是加载快照）
+      dir: rec.dir || join(BUILTIN_DIR, id),
       apiVersion: API_VERSION,
       version,
       log: mlog,
@@ -239,6 +255,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       // ---- 常用操作的捷径（都是 core 里的东西包了一层）----
       send: (chatId, text) => core.hub.deliver(String(chatId), String(text ?? '')),
       sendText: (chatId, text) => core.hub.sendText(String(chatId), String(text ?? '')),
+      // 回某一条消息：群里以「引用回复」发出，私聊直接发
+      reply: (msg, text) => core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
+      isOwner: (userId) => String(userId) === String(getConfig().ownerQQ),
       sendImage: (chatId, src) => core.hub.sendImage(String(chatId), src),
       sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),
       ask: (opts) => core.ask(typeof opts === 'string' ? { text: opts } : opts),
@@ -328,9 +347,24 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   }
 
   /** 加载一个自己写的模块（按修改时间重新 import，改了就是新的）。 */
+  /**
+   * 加载自己写的模块：先把整个文件夹拍一份快照（modules/<id>/.aurabot-cache/<版本戳>/）再加载快照。
+   * Node 会缓存加载过的文件，快照路径每次不同，所以改了模块里任何一个文件都会重新加载；
+   * 快照在模块文件夹里面，模块自己 npm install 的依赖（modules/<id>/node_modules）照样找得到。
+   */
   async function importUser(u) {
     const stamp = stampOf(u.dir)
-    const mod = await import(pathToFileURL(u.file).href + '?v=' + stamp)
+    const root = join(u.dir, SNAP)
+    const snap = join(root, String(stamp).replace('.', '-'))
+    if (!existsSync(snap)) {
+      for (const f of filesOf(u.dir)) {
+        mkdirSync(dirname(join(snap, f)), { recursive: true })
+        copyFileSync(join(u.dir, f), join(snap, f))
+      }
+    }
+    // 旧快照删掉（加载过的代码已经在内存里，删文件不影响）
+    try { for (const n of readdirSync(root)) if (join(root, n) !== snap) rmSync(join(root, n), { recursive: true, force: true }) } catch (error) {}
+    const mod = await import(pathToFileURL(join(snap, relative(u.dir, u.file))).href)
     return { def: mod.default, stamp }
   }
 
@@ -350,7 +384,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     userSeen.set(u.id, { ...u, stamp })
     // 替换内置模块：记下替换时内置模块的版本，以后内置的更新了提醒一声
     const b = builtinDefs.get(u.id)
-    const extra = {}
+    const extra = { dir: u.dir }
     if (b) {
       extra.replaces = b.version
       const m = modCfg(u.id)
@@ -459,6 +493,19 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     }
     return v
   }
+  /** 同步版（人格、规则、模型选择这些地方不能等）：监听函数返回 Promise 的不算。 */
+  function filterSync(event, value, ...args) {
+    let v = value
+    for (const { fn } of listeners.get(event) || []) {
+      try {
+        const r = fn(v, ...args)
+        if (r && typeof r.then === 'function') continue
+        if (r === null) return null
+        if (r !== undefined) v = r
+      } catch (error) {}
+    }
+    return v
+  }
 
   // ---------- 汇总给插件其他部分用 ----------
   function buildTools(where) {
@@ -510,7 +557,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   // ---------- 面板 ----------
   function status() {
     const users = isUserOn() ? scanUser() : scanUser().map((u) => ({ ...u, safe: true }))
-    const ids = [...builtinDefs.keys(), ...users.map((u) => u.id).filter((id) => !builtinDefs.has(id)).sort()]
+    // 文件夹刚删掉、还没来得及停的模块也列出来（下一轮检查就停）
+    const ids = [...builtinDefs.keys(), ...[...new Set([...users.map((u) => u.id), ...live.keys()])].filter((id) => !builtinDefs.has(id)).sort()]
     return ids.map((id) => {
       const b = builtinDefs.get(id)
       const u = users.find((x) => x.id === id)
@@ -610,9 +658,13 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   function installDocs() {
     try {
       mkdirSync(userDir(), { recursive: true })
-      const doc = readFileSync(join(BUILTIN_DIR, DOC), 'utf8').replace('{{VERSION}}', version).replace('{{API}}', String(API_VERSION)).replace('{{LIB}}', libKeys().map((k) => '- `' + k + '`').join('\n'))
+      const doc = readFileSync(join(BUILTIN_DIR, DOC), 'utf8').replaceAll('{{VERSION}}', version).replaceAll('{{API}}', String(API_VERSION)).replace('{{LIB}}', libKeys().map((k) => '- `' + k + '`').join('\n'))
       const dest = join(userDir(), DOC)
       if (!existsSync(dest) || readFileSync(dest, 'utf8') !== doc) writeFileSync(dest, doc, 'utf8')
+      // 类型提示：模块开头写 /** @type {import('../aurabot').AurabotModule} */，编辑器就有补全
+      const types = readFileSync(join(BUILTIN_DIR, TYPES), 'utf8')
+      const tdest = join(userDir(), TYPES)
+      if (!existsSync(tdest) || readFileSync(tdest, 'utf8') !== types) writeFileSync(tdest, types, 'utf8')
     } catch (error) {}
   }
 
@@ -629,7 +681,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   return {
     boot, sync, reload, stop, dispose, status, create, fork, promptFor, panelSource,
     use: exportsOf, has: (id) => live.has(id), running: (id) => live.get(id)?.source || null,
-    emit, claim, filter, buildTools,
+    emit, claim, filter, filterSync, buildTools,
     // 插件核心自己听事件（不属于任何模块，不会被撤掉）
     listen: (event, fn) => { const item = { id: '@core', fn }; listeners.set(event, [...(listeners.get(event) || []), item]); return () => listeners.set(event, (listeners.get(event) || []).filter((x) => x !== item)) }, contextFor, rules, commands, dshTools, builtinOff, handle,
     hasRoute: (path) => routes.has(path),

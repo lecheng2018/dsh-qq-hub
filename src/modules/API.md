@@ -21,15 +21,17 @@
 6. [面板](#面板)
 7. [内置模块和它们导出的东西](#内置模块和它们导出的东西)
 8. [替换内置模块](#替换内置模块)
-9. [内部源码](#内部源码)
-10. [升级会不会坏](#升级会不会坏)
-11. [排查问题](#排查问题)
+9. [测试](#测试)
+10. [内部源码](#内部源码)
+11. [升级会不会坏](#升级会不会坏)
+12. [排查问题](#排查问题)
 
 ## 最小的模块
 
 `modules/hello/index.mjs`：
 
 ```js
+/** @type {import('../aurabot').AurabotModule} */   // 有这一行，编辑器就有补全（类型在 modules/aurabot.d.ts）
 export default {
   id: 'hello',          // 和文件夹名一样
   name: '打招呼',
@@ -48,8 +50,22 @@ export default {
 
 - 入口文件叫 `index.mjs`（或 `index.js`，但要是 ES 模块写法）
 - 文件夹名以 `_` 或 `.` 开头的不加载（可以拿来放草稿）
-- 只有入口文件和同一层的 `.js / .mjs / .json` 改了会触发重新加载；
-  入口以外的文件被 Node 缓存了，**改了 index.mjs 以外的文件要在面板点「重新加载」还不够，得重启 DSH**。最省事的是全写在 index.mjs 里
+- **可以拆成多个文件**：`import { x } from './util.mjs'`、子文件夹都行。模块文件夹里**任何文件**改了、加了、删了，几秒内整个模块重新加载
+  （插件每次把文件夹拍一份快照到 `modules/<id>/.aurabot-cache/` 再加载；这个文件夹别动，也别往里写东西）
+- 读模块自带的数据文件用 `join(api.dir, 'data.json')`（`api.dir` 是模块文件夹；`import.meta.url` 指向的是快照）。要写的数据放 `api.dataDir()`
+
+### 用 npm 包
+
+在模块文件夹里装，和普通 Node 项目一样：
+
+```powershell
+cd "$env:USERPROFILE\.dsh\plugins-data\aurabot\modules\weather"
+npm init -y
+npm install cheerio
+```
+
+然后 `import * as cheerio from 'cheerio'` 就能用（`node_modules` 不会被拍进快照，但快照在模块文件夹里面，Node 往上找得到）。
+Node 自带的 `fetch`、`node:fs` 这些直接用，不用装。
 
 ## 模块定义
 
@@ -65,6 +81,7 @@ export default {
     { key: 'city', label: '城市', type: 'text' },
   ],
   panel: 'panel.js',          // 可选：自己画面板（见「面板」）
+  tab: 'song',                // 可选：设置和面板放进哪个内置标签页（不写就单独一页，见「面板」）
   setup(api) {                // 必填：启动时调用一次，可以是 async
     // 在这里注册事件、工具、命令、定时任务……
     return { /* 导出给别的模块用的东西 */ }
@@ -77,6 +94,8 @@ export default {
 
 ## api：模块能用的东西
 
+另外 `api.id`（模块 id）、`api.source`（`builtin` / `user`）、`api.version`（插件版本）、`api.apiVersion`（扩展接口版本）可以直接读。
+
 **配置**
 
 | | |
@@ -85,6 +104,7 @@ export default {
 | `api.setConfig(patch)` | 改配置：传对象就深合并，传函数 `(cfg) => 新cfg` 就整个换 |
 | `api.settings()` | 这个模块的设置（`defaults` + 面板里填的） |
 | `api.saveSettings(patch)` | 改这个模块的设置 |
+| `api.dir` | 模块自己的文件夹（读自带的数据文件用） |
 | `api.dataDir(...路径)` | 这个模块专用的数据文件夹（`plugins-data/aurabot/modules-data/<id>/`），自动建好 |
 | `api.log.info / warn / error / debug(...)` | 写日志（面板「日志」页能看，自动脱敏） |
 
@@ -94,18 +114,23 @@ export default {
 |---|---|
 | `api.send(chatId, text)` | 用她平时的方式发：会拆条，能带 `<voice>…</voice>`、`<sticker:名字>`、`<poke>`，会经过 `reply` 事件 |
 | `api.sendText(chatId, text)` | 原样发一条文字 |
+| `api.reply(msg, text)` | **回某一条消息**：群里以「引用回复」发出（大家能看出在回谁），私聊直接发 |
 | `api.sendImage(chatId, 图片路径或网址)` | 发图 |
 | `api.sendSegments(chatId, [OneBot 消息段], 日志备注)` | 发任意 OneBot 消息段 |
 | `api.onebot(action, params)` | 直接调 OneBot（SnowLuma）的任意 API，比如 `api.onebot('get_group_member_list', { group_id: 123 })` |
 
-`chatId` 的格式：`private:QQ号`、`group:群号`。
+`chatId` 的格式：`private:QQ号`、`group:群号`（她后台自己想事情用的会话是 `system:名字`，工具生成函数里可能见到，发不了消息）。
+
+判断是不是主人：`api.isOwner(msg.userId)`。
 
 **用模型**
 
 | | |
 |---|---|
 | `api.ask({ system, text, maxTokens })` 或 `api.ask('一句话')` | 直接问一次模型（不带人格、不进会话），返回文字 |
-| `api.think(prompt, { title })` | 让**她**（带人格、记忆）想一想，返回她的回答（不会自动发出去） |
+| `api.think(prompt, { title, timeoutMs })` | 让**她**（带人格、记忆）想一想，返回她的回答（不会自动发出去；默认最多等 3 分钟） |
+
+**联网**：直接用 Node 自带的 `fetch`（会走系统代理），记得加超时：`fetch(url, { signal: AbortSignal.timeout(8000) })`。插件不另外提供代理设置。
 
 **往插件里加东西**（模块停下时自动撤掉，都返回一个「撤掉」函数）
 
@@ -116,9 +141,9 @@ export default {
 | `api.tool(fn 或 工具)` | 给她加工具（见「工具」） |
 | `api.defineTool({ name, description, properties, required, execute })` | 做一个工具 |
 | `api.context(({ chat, sessionId }) => '文字')` | 每轮聊天前塞进她上下文的话（比如「现在北京 20 度」）；返回空串就不塞 |
-| `api.rule((kind) => '一条规则')` | 补一条她的规则（会放进系统提示词；kind 是 `private` 主人私聊 / `social` 群聊和别人）。告诉她「你会查天气，用 xxx 工具」就写在这里 |
-| `api.command({ name, aliases, desc, run(arg, msg) })` | 主人在 QQ 里发 `/name 参数` 时调用，`run` 返回的文字直接回给主人。和内置命令同名时你的优先 |
-| `api.every(毫秒, fn)` | 定时任务 |
+| `api.rule((kind, cfg) => '一条规则')` | 补一条她的规则（会放进系统提示词；kind 是 `private` 主人私聊 / `social` 群聊和别人）。告诉她「你会查天气，用 xxx 工具」就写在这里。可以直接给字符串、也可以返回多条（数组）；函数**每一轮都会重新调用**，所以里面可以拼当前设置 |
+| `api.command({ name, aliases, desc, run(arg, msg) })` | 主人在 QQ 里发 `/name 参数` 时调用，`run` 返回的文字直接回到**发命令的那个聊天**（群里发就回群里）。名字可以是中文（`name: '天气'`），中文命令后面可以不加空格（`/天气北京`）；`arg` 是命令名后面剩下的全部文字，已经去掉首尾空格。**只认主人**：别人发 `/xxx` 当普通消息处理。和内置命令同名时你的优先 |
+| `api.every(毫秒, fn, 名字?)` | 定时任务（名字用在出错日志里） |
 | `api.later(毫秒, fn)` | 过一会儿做一次 |
 | `api.route('/路径', async (req, res) => 返回值)` | 加一个网页接口：地址是 `/aurabot/api/ext/<id>/路径`；返回对象就当 JSON 回；要自己回（比如图片）就用 `api.core.http.send(res, 200, buf, 'image/png')` |
 | `api.onDispose(fn)` | 模块停下时要做的收尾 |
@@ -150,6 +175,8 @@ export default {
 | `personas` | 人格：`list()` `read(id)` `current()` |
 | `modules` | 模块内核本身（`status()` `reload(id)` ……） |
 | `getConfig()` / `setConfig(cfg)` | 同 `api.config` / 整份替换配置 |
+| `logger` | 插件的日志器（`logger.child('名字')` 拿一个分类） |
+| `root` | 插件自己的安装目录 |
 
 ## 事件
 
@@ -157,8 +184,34 @@ export default {
 
 | 事件 | 参数 | 说明 |
 |---|---|---|
-| `message` | `msg` | 收到一条**她会处理的**消息（白名单内、不是命令、总开关开着、没闭嘴）。**返回 true = 你接管了**，她不再处理；多个模块按加载顺序问，第一个返回 true 的接管 |
+| `message` | `msg` | 收到一条**她会处理的**消息（白名单内、不是主人命令、总开关开着、没闭嘴）。**群里每一条都会来，在「回不回」的决定之前**——所以没人 @ 她的消息你也能接管。**返回 true = 你接管了**，她不再处理；返回 false 或不返回 = 不管；多个模块按加载顺序问，第一个返回 true 的接管 |
+| `poke` | 原始戳一戳事件 | 有人戳她。返回 true = 你接管了 |
 | `reply` | `text, { chatId, userText }` | 她要发一段话之前。**返回新文字 = 改写**；返回 `null` = 这次不发；不返回 = 不改 |
+
+**改她怎么想、怎么说**（下面这些都是「改写」：返回新值就换掉，返回 `null` 就拦下，不返回就不改；多个模块按顺序一个接一个改）：
+
+| 事件 | 参数 | 改的是什么 |
+|---|---|---|
+| `group/decide` | `decision, { msg, policy, recentTexts, memScore }` | 群里这条消息（没被 `message` 接管的）她**回不回、怎么回**。返回 `null` 在这里无效（等于不改）。`decision` 是 `{ reply, mode, reason }`，mode 是 `must`（被叫到）/ `engaged`（正在参与话题）/ `interject`（插话）。返回 `{ reply: true, mode: 'must' }` 就让她必回，`{ reply: false }` 就让她不理。想整套换掉插话策略就在这里写 |
+| `prompt` | `content, { chat, senderId, queryText }` | **交给她的内容**：`[{ type: 'text', text }, { type: 'image', … }]`。可以加背景信息、改格式、去掉图片；返回 `null` 这次不交给她 |
+| `reply/items` | `items, { chatId, text, userText }` | 她的回复**拆好之后**（哪条发语音、配不配表情都已经决定了）：每条 `{ kind: 'text' \| 'voice' \| 'sticker' \| 'poke' \| 'image', value, replyTo }`。可以改顺序、全部变语音、去掉表情、加图片 |
+| `send` | `message, { chatId, note, force }` | **最终发给 QQ 的消息段**（OneBot 格式）。所有发出去的消息都经过这里：她的回复、命令回复、模块发的。加签名、过滤词、抄送到别处都在这里 |
+| `model` | `selection, chat` | **这个聊天用哪个模型**（同步，不能 async）：返回 `{ provider, model, reasoningEffort }`。比如群里用便宜的、私聊用好的。`selection` 是面板选的（没选时是 DSH 默认，拿不到时是 `null`）。换了之后从这个聊天的下一条消息起生效 |
+| `persona` | `text` | **她的人格**全文（同步）：返回新文字就换掉 |
+| `rules` | `text, kind` | **她的规则**全文（同步，kind 是 `private` / `social`） |
+
+例子：群里只在被 @ 时说话，私聊用另一个模型，所有回复末尾加个尾巴：
+
+```js
+api.on('group/decide', (d, { msg }) => (msg.mentioned ? { reply: true, mode: 'must' } : { reply: false, reason: '只在被 @ 时说话' }))
+api.on('model', (sel, chat) => (chat.kind === 'private' ? { provider: 'deepseek', model: 'deepseek-chat' } : undefined))
+api.on('reply/items', (items) => [...items, { kind: 'text', value: '—— 大肥鱼' }])
+```
+
+**只看不改的**：
+
+| 事件 | 参数 | 说明 |
+|---|---|---|
 | `activity` | `{ kind: 'in' \| 'out', chatId, userId, nickname, text, reply, direct, owner }` | 收到的消息 / 她发出去的话（只看不拦） |
 | `onebot` | 原始 OneBot 事件 | **所有**事件：消息、加群、退群、撤回、好友申请、戳一戳……（只看不拦；不管白名单） |
 | `onebot/state` | `'connected'` 等 | QQ 网关连上 / 断开 |
@@ -167,7 +220,7 @@ export default {
 | `song/sung` | `{ title, chatId }` | 翻唱模块唱完一首 |
 | 你自己 `api.emit` 的 | 随你 | 模块之间互相通知 |
 
-`msg` 长这样：
+`msg` 长这样（`text` 是纯文字：@ 她的那段去掉了，@ 别人的写成「@昵称」，图片 / 表情 / 文件写成「[图片]」这类占位；引用的那条消息的文字**不在**里面，要的话用 `replyId` 去 `api.onebot('get_msg', { message_id })` 拿）：
 
 ```js
 {
@@ -202,7 +255,10 @@ api.tool(({ chat, level, sessionId }) => {
 })
 ```
 
-- 可以返回一个工具或一组工具
+- 可以返回一个工具或一组工具；不给就返回 `[]`（`null` 也行）
+- `required` 不写就是都可选；`execute` 的第二个参数是 DSH 传来的执行信息（一般用不到）
+- 返回 `{ ok: false, message: '原因' }` 时，她会看到失败原因，通常会用自己的话告诉对方没成功；抛出的错误也会变成这样
+- 工具的生成函数每次挂工具时调用（会话第一次用到、工具清单变化时），不是每次调用工具都调
 - 只想给主人用：在 `execute` 里判断 `api.core.hub.turnHasOwner(sessionId)`
 - 工具的名字和描述尽量别经常改：改一次，DeepSeek 的缓存就失效一次
 - 想让她**知道**自己有这个本事，再加一条 `api.rule(() => '你会查天气：别人问天气时用 weather_now')`
@@ -210,19 +266,22 @@ api.tool(({ chat, level, sessionId }) => {
 ## 面板
 
 **自动表单**：写了 `settings`，面板会多一个这个模块的标签页，自动生成设置表单，用户改完点保存。
+定义里写了 `tab: '内置标签页'`（`voice` `stickers` `imagegen` `diary` `speakup` `mood` `song` `bili` `local` `group` `model` `persona` `access` `connect` `overview`），设置和面板就放进那一页的最下面，不单独占一页。比如给翻唱加功能的模块写 `tab: 'song'`。
 
 ```js
 settings: [
   { key: 'city', label: '城市', type: 'text', hint: '下面的小字说明', placeholder: '北京' },
-  { key: 'times', label: '每天几次', type: 'number', min: 0, max: 10 },
+  { key: 'times', label: '每天几次', type: 'number', min: 0, max: 10, step: 1 },
   { key: 'on', label: '开关', type: 'switch' },
-  { key: 'mode', label: '模式', type: 'select', options: [{ value: 'a', label: '模式 A' }, { value: 'b', label: '模式 B' }] },
+  { key: 'mode', label: '模式', type: 'select', options: [{ value: 'a', label: '模式 A' }, { value: 'b', label: '模式 B' }] },   // 也可以直接 ['a', 'b']
   { key: 'list', label: '多行', type: 'textarea' },
   { key: 'apiKey', label: 'API Key', type: 'password' },   // 密码：面板不回显，日志里自动打码
 ]
 ```
 
-**自己画面板**：模块文件夹里放 `panel.js`，定义里写 `panel: 'panel.js'`。它是一段函数体，面板会这样执行：
+存下来的类型：`number` 是数字、`switch` 是 `true / false`，其余是字符串。改了设置**不用重载模块**，`api.settings()` 每次读的都是最新的（别在 setup 里读一次存着）。
+
+**自己画面板**：模块文件夹里放 `panel.js`，定义里写 `panel: 'panel.js'`（写 `true` 也是找 `panel.js`；不写就没有自定义面板）。它是一段函数体，面板会这样执行：
 
 ```js
 // panel.js —— 拿到 React、h（React.createElement）、ui（面板自带的组件）、call（调你的接口）
@@ -271,6 +330,16 @@ return function Panel({ settings, save, toast }) {
 复制出来的文件里，原来指向插件其他文件的 `import`，改成了 `const { … } = __lib('core/store.js')` 的写法（`globalThis.aurabot.lib`），所以放在 `modules/` 里也能找到插件的源码。
 
 **你的版本加载失败时，会先自动用回内置的**（面板上能看到报错），所以写坏了不会让她突然少一项本事。
+
+## 测试
+
+不用上 QQ 也能试：面板「扩展」页的「模拟测试」——
+
+- **模拟一条消息**：选你是主人还是别人、私聊还是群聊，写一句话，看它会被哪个模块接管、命令回了什么；再写一句「她的回复」，看经过各个模块改写后最后会发出去什么
+- 你的模块加的 `/命令` 在模拟里**会执行**（看 `run` 回了什么）
+- **调用工具**：选一个工具、填参数（JSON），直接调用，看返回值
+- 这期间**发出去的消息只截下来显示，不会真发到 QQ**。但模块直接调 `api.onebot(...)` 的操作（禁言、发空间……）不在此列，是真的会执行的
+- 内置命令（`/off` 这些会改设置的）模拟里不执行
 
 ## 内部源码
 
