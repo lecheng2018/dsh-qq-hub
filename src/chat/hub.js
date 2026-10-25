@@ -30,7 +30,13 @@ const sessionKey = (id) => {
   return s.startsWith('session-') ? s.slice(8) : s
 }
 
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi }) {
+/**
+ * hooks（扩展模块用，都可以不传）：
+ *   message(msg) → true 表示这条消息被模块接管了，她不再处理
+ *   reply(text, {chatId}) → 改写她要发的话；返回 null 表示这次不发
+ *   deniedTools() → 不许出现在她 QQ 会话里的全局工具名（给其他 DSH 会话用的联动工具）
+ */
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -218,12 +224,17 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   function mount(agent, chat, level) {
     const sid = sessionKey(agent.session?.id ?? agent.id)
     const tools = level !== 'chat' && typeof buildTools === 'function' ? buildTools({ chat, level, sessionId: sid }) : []
-    const toolsKey = tools.map((t) => t.name).sort().join(',')
+    const denied = (() => { try { return hooks?.deniedTools?.() || [] } catch (error) { return [] } })()
+    const toolsKey = tools.map((t) => t.name).sort().join(',') + '|' + denied.join(',')
     const prev = mounted.get(agent)
     // 工具清单变了（比如面板里开了生图）就整套重挂；没变就别动（改工具会让前缀缓存失效）
     if (prev && prev.chatId === chat.chatId && prev.toolsKey === toolsKey) return
     if (prev) for (const off of prev.offs) { try { if (typeof off === 'function') off() } catch (error) {} }
     const offs = []
+    // 联动工具是给 DSH 其他会话用的，她自己的 QQ 会话里不该有（陌生人的会话更不行）
+    if (denied.length) {
+      try { offs.push(agent.ctx.tools.restrict({ deny: denied })) } catch (error) { log.debug('屏蔽联动工具：', error.message) }
+    }
     {
       for (const tool of tools) {
         try {
@@ -363,6 +374,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   /** 一轮回复落地：拆条、语音、表情。 */
   async function deliver(chatId, text, opts = {}) {
     const cfg = getConfig()
+    if (hooks?.reply) {
+      try {
+        const next = await hooks.reply(text, { chatId, userText: opts.userText || '' })
+        if (next === null) return log.info(`${chatId}：扩展模块拦下了这次回复`)
+        if (typeof next === 'string') text = next
+      } catch (error) {
+        log.warn('扩展模块改写回复出错：', error.message)
+      }
+    }
     const r = parseReply(text)
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
@@ -612,6 +632,18 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       log.debug(`${msg.chatId}：主人让她闭嘴中，不回`)
       logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
       return
+    }
+
+    // 扩展模块可以先接管这条消息（关键词回复、转给自己的服务……）
+    if (hooks?.message) {
+      try {
+        if (await hooks.message({ ...msg, raw: event })) {
+          logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+          return
+        }
+      } catch (error) {
+        log.warn('扩展模块处理消息出错：', error.message)
+      }
     }
 
     let mode = 'must'
