@@ -506,6 +506,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       return
     }
     if (event.type === 'turn/end') {
+      running.delete(chatId)
       stopTyping(key)
       const d = event.data || {}
       const completed = d.reason && d.reason.kind === 'completed'
@@ -867,6 +868,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const busy = new Map() // chatId → 这一轮开始的时间（她正在想 / 正在发）
   const BUSY_MAX_MS = 4 * 60_000 // 卡住保护：超过这么久就当她已经回完了
   const RANK = { engaged: 1, interject: 2, must: 3 }
+  const running = new Set() // chatId → 这一轮还在跑（模型 / 工具还没结束，turn/end 之前）；私聊此时新消息直接 steer 进去
   const isBusy = (chatId) => busy.has(chatId) && Date.now() - busy.get(chatId) < BUSY_MAX_MS
 
   function enqueue(chat, content, senderId, wantVoice, mode = 'must') {
@@ -897,6 +899,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const p = pending.get(chatId)
     if (!p) return
     clearTimeout(p.timer)
+    // 私聊：她这一轮还在跑（想 / 调工具），新消息直接 steer 进当前这一轮，像在 DSH 界面里插话一样（#7）
+    if (isBusy(chatId) && p.chat.kind === 'private' && running.has(chatId)) {
+      pending.delete(chatId)
+      if (p.count > 1) log.info(`${chatId}：合并了 ${p.count} 条消息一起插给她`)
+      const content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+      const query = p.texts.map((t) => t.replace(/^【私聊】[^：]*：/, '')).join('\n')
+      const [first, ...rest] = [...p.senders]
+      try {
+        await pushToSession(p.chat, content, first, { wantVoice: p.wantVoice, extraSenders: rest, queryText: query, steer: true })
+      } catch (error) {
+        bump('errors')
+        log.error(`插话进 DSH 失败（${chatId}）：`, error.message)
+      }
+      return
+    }
     // 她还在回上一段：先攒着，回完了再交（release 会叫 flush）
     if (isBusy(chatId)) {
       p.waiting = true
@@ -936,6 +953,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   /** 她这一轮说完了（或者没说）：放开，把这期间攒下的消息交给她。 */
   function release(chatId) {
     busy.delete(chatId)
+    running.delete(chatId)
     const p = pending.get(chatId)
     if (p && p.waiting) {
       p.waiting = false
@@ -983,7 +1001,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         const next = await hooks.prompt(content, { chat, senderId, ...opts })
         if (next === null) {
           log.info(`${chat.chatId}：扩展模块决定这次不交给她`)
-          release(chat.chatId)
+          if (!opts.steer) release(chat.chatId) // 插话被拦下时，当前这一轮还在跑，不能放开
           return
         }
         if (Array.isArray(next)) content = next
@@ -1004,7 +1022,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     turnState.set(key, st)
     const admitted = await admit(agent, content)
     startTyping(key, chat)
-    await agent.followup({ id: randomUUID(), role: 'user', content: admitted, source: { kind: SOURCE_KIND } })
+    const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: SOURCE_KIND } }
+    // 正在跑的这一轮：steer = 下一步就看到这句（DSH 界面插话走的也是它）；空闲时照旧 followup 开新一轮
+    if (opts.steer && typeof agent.steer === 'function') {
+      log.info(`${chat.chatId}：她还在忙，这句直接插进当前这一轮（steer）`)
+      await agent.steer(message)
+    } else {
+      running.add(chat.chatId)
+      await agent.followup(message)
+    }
     try {
       if (dsh.sessions && typeof dsh.sessions.flush === 'function') await dsh.sessions.flush(agent.session)
     } catch (error) {}
