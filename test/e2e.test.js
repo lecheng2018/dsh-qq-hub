@@ -44,6 +44,8 @@ async function brain({ preset, text, images, callTool }) {
     const r = await callTool('qq_group_admin', { action: 'ban', user_id: '999', minutes: 5 })
     return r && r.ok ? '好 禁了' : '你谁啊 我只听主人的'
   }
+  if (text.includes('跑个慢任务')) { await new Promise((r) => setTimeout(r, 1500)); return '慢任务跑完了' }
+  if (text.includes('改成快的')) return '好 改成快的'
   if (text.includes('语音说你好')) return '你好呀'
   if (text.includes('晚安')) return '<voice>晚安啦 做个好梦</voice>'
   if (text.includes('没人叫你')) return '[沉默]'
@@ -121,6 +123,18 @@ test('主人私聊「在吗」：建会话（完整权限 preset）、按 ||| �
   const agent = fake.agents.get(ws.sessionIds[0])
   assert.ok(agent.tools.has('qq_send_qzone'))
   assert.ok(agent.tools.has('qq_group_admin'))
+})
+
+test('#7 主人私聊：她这一轮还在跑时再发消息，直接 steer 进去，不等整轮结束', async () => {
+  const agent = fake.agents.get(fake.workspaces[0].sessionIds[0])
+  const before = agent.steered.length
+  mock.push(priv(OWNER, text('跑个慢任务')))
+  await new Promise((r) => setTimeout(r, 700)) // 过了合并等待，这一轮已经在跑
+  mock.push(priv(OWNER, text('改成快的')))
+  await until(() => agent.steered.length > before)
+  const steered = agent.steered.at(-1).content.filter((c) => c.type === 'text').map((c) => c.text).join('')
+  assert.match(steered, /改成快的/)
+  await until(() => sentTo('private', OWNER).some((c) => c.params.message[0].data.text === '好 改成快的'))
 })
 
 test('不在白名单的私聊：不理', async () => {
