@@ -71,7 +71,11 @@ export function readOneBotEndpoint(dir, uin) {
   return out
 }
 
-const uinOf = (p) => String(p?.account?.uin ?? p?.uin ?? '').trim()
+// SnowLuma 认不出号时 uin 可能是 null、'' 或 '0'（注入后才会有真号），都当「认不出」
+const uinOf = (p) => {
+  const u = String(p?.account?.uin ?? p?.uin ?? '').trim()
+  return u === '0' ? '' : u
+}
 
 /**
  * 只挑机器人号所在的那个 QQ 进程。识别不出来就返回 null（宁可不注入）。
