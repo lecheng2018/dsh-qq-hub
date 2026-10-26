@@ -12,6 +12,7 @@ export const DEFAULTS = {
   ownerQQ: '', // 主人 QQ 号（向导里填）
   ownerName: '主人',
   ownerLevel: 'full', // full | social | chat
+  longTasks: false, // 长任务模式：主人私聊（完整权限）额外挂 dsh-tool-jobs + dsh-tool-schedule，会多一点工具定义、稍慢
   allow: { private: [], groups: [] }, // 主人永远能私聊，不用写进白名单
   snowluma: {
     dir: 'C:\\Aurabot\\snowluma', // 主人自己下载解压到这里（EULA 不允许自动部署）
@@ -175,6 +176,7 @@ export function normalize(raw) {
   c.ownerQQ = qq(c.ownerQQ)
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
+  c.longTasks = bool(c.longTasks, false)
   c.allow = { private: qqList(c.allow.private), groups: qqList(c.allow.groups) }
   const g = c.group
   g.wakeWords = (Array.isArray(g.wakeWords) ? g.wakeWords : String(g.wakeWords || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)

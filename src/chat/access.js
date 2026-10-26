@@ -33,8 +33,9 @@ export function levelFor(cfg, chat) {
 }
 
 /** 档位 → agent preset id。 */
-export function presetFor(level) {
-  return level === 'full' ? 'aurabot-private' : 'aurabot-social'
+export function presetFor(level, cfg) {
+  if (level !== 'full') return 'aurabot-social'
+  return cfg && cfg.longTasks ? 'aurabot-private-long' : 'aurabot-private'
 }
 
 /** 只有主人能做的事（群管、点歌、写文件……）。 */
