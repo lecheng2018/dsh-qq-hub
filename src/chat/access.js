@@ -42,3 +42,24 @@ export function presetFor(level, cfg) {
 export function isOwner(cfg, userId) {
   return String(userId || '') !== '' && String(userId) === String(cfg.ownerQQ || '')
 }
+
+/** 改资料类操作（改昵称 / 签名 / 头像、改 B 站签名）的三档权限。 */
+export const PROFILE_PERM_LEVELS = ['off', 'owner', 'all']
+export const PROFILE_PERM_KEYS = ['qqNickname', 'qqSignature', 'qqAvatar', 'biliSign', 'biliAvatar']
+
+/** 这一档在这个会话里要不要挂工具。owner = 只在主人私聊里挂；all = 哪都挂；off = 不挂。 */
+export function profileToolVisible(cfg, key, chat) {
+  const p = cfg?.profilePerms?.[key] || 'owner'
+  if (p === 'all') return chat.kind === 'private' || chat.kind === 'group'
+  if (p === 'owner') return chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
+  return false
+}
+
+/** 执行时再查一遍（面板可能刚改过）。allOwner = 这一轮说话的人全是主人。 */
+export function profilePermits(cfg, key, chat, allOwner) {
+  const p = cfg?.profilePerms?.[key] || 'owner'
+  if (p === 'off') return { ok: false, message: '这个操作在面板里关掉了' }
+  if (!profileToolVisible(cfg, key, chat)) return { ok: false, message: '这里不能做这个操作' }
+  if (p === 'owner' && !allOwner) return { ok: false, message: '只有主人私聊让我改才行' }
+  return { ok: true }
+}

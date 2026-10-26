@@ -237,6 +237,32 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
     return { ok: true, message: `评论发出去了（《${w.title}》）` }
   }
 
+  /** 改自己的 B 站签名（权限在模块里查）。 */
+  async function setSign(text) {
+    const sign = String(text || '').trim()
+    if (!sign) return { ok: false, message: '签名不能是空的' }
+    if ([...sign].length > 70) return { ok: false, message: 'B 站签名最多 70 个字' }
+    if (getConfig().dryRun) return { ok: true, message: `试运行：本来要把 B 站签名改成：${sign}` }
+    if (!parseCookie(cfg().cookie).bili_jct) return { ok: false, message: '没登录 B 站，改不了签名' }
+    await api.setSign(sign)
+    memory?.addEvent?.({ text: `把B站签名改成了：${sign.slice(0, 70)}`, tags: ['B站'], importance: 0.35 })
+    return { ok: true, message: `B 站签名改好了：${sign}` }
+  }
+
+  /** 换 B 站头像。file 是已经过 avatarSource 校验的 http(s) 网址。 */
+  async function setAvatar(file) {
+    if (!/^https?:\/\//i.test(String(file || ''))) return { ok: false, message: '头像只能用网址图片，或者刚才发的那张图' }
+    if (getConfig().dryRun) return { ok: true, message: `试运行：本来要把 B 站头像换成：${file}` }
+    if (!parseCookie(cfg().cookie).bili_jct) return { ok: false, message: '没登录 B 站，换不了头像' }
+    try {
+      await api.setFace(file)
+    } catch (error) {
+      return { ok: false, message: `B 站头像没换成：${error.message}` }
+    }
+    memory?.addEvent?.({ text: '换了B站头像', tags: ['B站'], importance: 0.35 })
+    return { ok: true, message: 'B 站头像换好了（B 站可能要审核一会儿才显示）' }
+  }
+
   /** 每分钟调一次：醒着的时候按间隔刷、看回复。 */
   async function tick() {
     const g = getConfig()
@@ -250,7 +276,7 @@ export function createBili({ getConfig, hub, memory, log, api: injected }) {
   }
 
   return {
-    run, checkReplies, watch, comment, tick, account,
+    run, checkReplies, watch, comment, setSign, setAvatar, tick, account,
     state: () => { const s = today(load()); return { runs: s.runs, comments: s.comments, replies: s.replies, lastRun: s.lastRun, history: s.history.slice(0, 20), canPost: canPost(s), pauseReason: s.pauseDay === dayKey() ? s.pauseReason : '' } },
   }
 }
