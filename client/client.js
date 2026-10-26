@@ -752,12 +752,32 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
               { value: 'on', label: '开', desc: '挂上后台任务（jobs）+ 定时任务（schedule）' },
             ] })),
         ),
+        h(ProfilePerms, { draft, setDraft }),
         h(Card, { title: '白名单', desc: '只有名单里的人和群，她才会理。一行一个号码。' },
           h(Row, { label: '私聊白名单', hint: '主人默认就在里面。' }, f.list('allow.private', { placeholder: '每行一个 QQ 号', numbers: true })),
           h(Row, { label: '群白名单', hint: '把机器人拉进群后，把群号加到这里。' }, f.list('allow.groups', { placeholder: '每行一个群号', numbers: true })),
         ),
         h(GroupRoles, null),
         h(CommandList, null),
+      )
+    }
+
+    /** 改资料类操作的权限：关 / 仅主人私聊 / 所有人。 */
+    function ProfilePerms({ draft, setDraft }) {
+      const perms = draft.profilePerms || {}
+      const opts = [
+        { value: 'off', label: '关', desc: '谁说都不改' },
+        { value: 'owner', label: '仅主人私聊', desc: '只有你私聊让她改才改（默认）' },
+        { value: 'all', label: '所有人', desc: '白名单里的人、群里的人都能让她改' },
+      ]
+      const row = (key, label, hint) => h(Row, { label, hint },
+        h(Choices, { value: perms[key] || 'owner', onChange: (v) => setDraft(setPath(draft, 'profilePerms.' + key, v)), options: opts }))
+      return h(Card, { title: '改资料', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。' },
+        row('qqNickname', 'QQ 昵称'),
+        row('qqSignature', 'QQ 个性签名'),
+        row('qqAvatar', 'QQ 头像', '只用网址图片，或「刚才发的那张图」。'),
+        row('biliSign', 'B 站签名', '要先在 B 站页登录并打开 B 站。'),
+        row('biliAvatar', 'B 站头像', '要先在 B 站页登录并打开 B 站。图片网址或刚才发的图，最大 2MB。'),
       )
     }
 
@@ -1896,7 +1916,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge'], model: ['model'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
