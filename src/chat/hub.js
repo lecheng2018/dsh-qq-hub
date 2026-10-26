@@ -140,7 +140,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   async function createSession(chat, level) {
     const ws = await ensureWorkspace()
-    const preset = presetFor(level)
+    const preset = presetFor(level, getConfig())
     const r = await controller().create({ workspaceId: ws.id, agentPreset: preset })
     const sid = String(r.sessionId)
     try {
@@ -168,7 +168,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   async function agentFor(chat) {
     const cfg = getConfig()
     const level = chat.kind === 'system' ? 'social' : levelFor(cfg, chat)
-    const preset = presetFor(level)
+    const preset = presetFor(level, cfg)
     const entry = map().chats[chat.chatId]
     let sid = entry && entry.preset === preset && entry.level === level ? entry.sessionId : ''
     let agent = null
