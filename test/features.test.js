@@ -57,6 +57,10 @@ test('SnowLuma 认不出号（account: null）：只有一个这样的进程才�
   const r3 = pickBotProcess([{ pid: 1, account: null }, { pid: 2, account: { uin: 20000002 } }], '20000002')
   assert.equal(r3.proc.pid, 2)
   assert.ok(!r3.unverified)
+  // 重登 QQ 后 SnowLuma 报 uin: "0"（issue #2），也当认不出
+  const r4 = pickBotProcess([{ pid: 12345, uin: '0', account: null }], '20000002')
+  assert.equal(r4.proc.pid, 12345)
+  assert.equal(r4.unverified, true)
   // 核对失败过的进程不再试
   assert.equal(pickBotProcess([{ pid: 19224, account: null }], '20000002', { exclude: [19224] }).proc, null)
 })
