@@ -791,6 +791,35 @@ test('浏览器登录：假驱动返回面板 QR；轮询 isLogin；过期可刷
   assert.equal(gate.ok, true)
 })
 
+test('浏览器登录：markVerify 后页面恢复 / clearVerify，poll 不再卡 verification_required', async () => {
+  const drv = cdp.createFakeDriver({ needLogin: true, qrDataUrl: 'data:image/png;base64,YnJxdXI=' })
+  await drv.startLoginQr()
+  drv.markVerify('页面要验证')
+  assert.equal(drv.paused, true)
+  let poll = await drv.pollLoginQr()
+  assert.equal(poll.phase, 'verification_required')
+  assert.equal(poll.loggedIn, false)
+
+  // 显式 clear：仍未登录 → 回到扫码，不再卡 verify
+  drv.clearVerify()
+  poll = await drv.pollLoginQr()
+  assert.equal(poll.phase, 'waiting_scan')
+  assert.equal(drv.paused, false)
+
+  // 再撞验证墙，然后「页面文案已无验证」→ checkGate 自动 clear
+  drv.markVerify('滑块')
+  assert.equal((await drv.checkGate()).verify, true)
+  drv._state.pageText = '推荐 关注 消息'
+  drv._state.needLogin = false
+  const auto = await drv.checkGate()
+  assert.equal(auto.ok, true)
+  assert.equal(drv.paused, false)
+
+  poll = await drv.pollLoginQr()
+  assert.equal(poll.loggedIn, true)
+  assert.equal(poll.phase, 'logged_in')
+})
+
 test('浏览器登录：duty.startBrowserLogin / browserLoginStatus 成功仅在 isLogin', async () => {
   const { d, drv } = fakes({ decisions: [], script: { needLogin: true } })
   const start = await d.startBrowserLogin()

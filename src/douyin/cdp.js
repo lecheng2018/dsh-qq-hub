@@ -120,6 +120,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
   let offNet = null
 
   const markVerify = (why) => { caps.verify = true; caps.reason = why || '要验证' }
+  const clearVerify = () => { caps.verify = false; caps.reason = '' }
 
   async function attachPage() {
     const list = await getJson(`http://127.0.0.1:${port}/json/list`)
@@ -326,8 +327,9 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       return { ...browserLoginSnapshot(false), ok: false, started: false, loggedIn: false }
     }
     await moveOffscreen()
-    const gate = await checkGate().catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
+    const gate = await checkGate({ ignoreCaps: true }).catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
     if (gate.ok) {
+      clearVerify()
       const self = await selfInfo().catch(() => null)
       browserLogin.phase = 'logged_in'
       browserLogin.qrDataUrl = ''
@@ -369,8 +371,9 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       }
       return browserLoginSnapshot(true)
     }
-    const gate = await checkGate().catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
+    const gate = await checkGate({ ignoreCaps: true }).catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
     if (gate.ok) {
+      clearVerify()
       const self = await selfInfo().catch(() => null)
       browserLogin.phase = 'logged_in'
       browserLogin.qrDataUrl = ''
@@ -437,10 +440,19 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     return String(await evalJs(`(document.body && (document.body.innerText||'')).slice(0,4000)`) || '')
   }
 
-  async function checkGate() {
-    if (caps.verify) return { ok: false, verify: true, reason: caps.reason || '要验证' }
+  /**
+   * 闸门：以当前 pageText 为准。
+   * caps.verify 只是缓存；页面已无验证文案时自动 clearVerify，避免登录轮询永久卡在 verification_required。
+   * opts.ignoreCaps：登录路径可强制只看当前页（仍会同步 caps）。
+   */
+  async function checkGate(opts = {}) {
     const t = await pageText().catch(() => '')
-    if (looksLikeVerify(t)) { markVerify('页面要验证'); return { ok: false, verify: true, reason: '页面要验证' } }
+    if (looksLikeVerify(t)) {
+      markVerify(caps.reason || '页面要验证')
+      return { ok: false, verify: true, reason: caps.reason || '页面要验证' }
+    }
+    // 验证墙已消失：清 sticky 标记（写操作 drv.paused 随之恢复；日级 pauseDay 仍由 duty 管）
+    if (caps.verify || opts.ignoreCaps) clearVerify()
     if (/扫码登录|短信登录|密码登录|登录后免费畅享|立即登录/.test(t) && !/消息|私信|关注/.test(t)) {
       return { ok: false, needLogin: true, reason: '还没登录抖音' }
     }
@@ -701,6 +713,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     get paused() { return caps.verify },
     get pauseReason() { return caps.reason },
     markVerify,
+    clearVerify,
   }
 }
 
@@ -729,8 +742,19 @@ export function createFakeDriver(script = {}) {
       error: '',
     },
   }
-  const gate = async () => {
-    if (state.verify) return { ok: false, verify: true, reason: state.reason || '要验证' }
+  const clearVerify = () => { state.verify = false; state.reason = ''; state.pageText = null }
+  const readPageText = () => {
+    if (state.pageText != null) return String(state.pageText)
+    return state.verify ? '请完成安全验证' : (state.needLogin ? '扫码登录' : '推荐 关注 消息')
+  }
+  const gate = async (opts = {}) => {
+    // 与真驱动一致：以当前 pageText 为准；验证文案消失则清 sticky
+    const t = readPageText()
+    if (looksLikeVerify(t)) {
+      if (!state.verify) { state.verify = true; state.reason = state.reason || '要验证' }
+      return { ok: false, verify: true, reason: state.reason || '要验证' }
+    }
+    if (state.verify || opts.ignoreCaps) clearVerify()
     if (state.needLogin) return { ok: false, needLogin: true, reason: '还没登录抖音' }
     return { ok: true }
   }
@@ -777,12 +801,13 @@ export function createFakeDriver(script = {}) {
       return { ok: false, message: '认不出这个抖音号 / 链接' }
     },
     selfInfo: async () => state.self,
-    pageText: async () => (state.verify ? '请完成安全验证' : state.needLogin ? '扫码登录' : '推荐 关注'),
+    pageText: async () => readPageText(),
     evalJs: async () => null,
     recentFeed: () => state.feed.slice(),
     get paused() { return state.verify },
     get pauseReason() { return state.reason },
     markVerify: (why) => { state.verify = true; state.reason = why || '要验证' },
+    clearVerify,
     editNickname: async (text) => {
       await gate()
       if (script.profileFail) throw new Error(script.profileFailMessage || '改昵称失败')
@@ -813,7 +838,10 @@ export function createFakeDriver(script = {}) {
     },
     async startLoginQr() {
       state.log.push(['startLoginQr'])
-      if (!state.needLogin && !script.forceLoginQr) {
+      const g = await gate({ ignoreCaps: true })
+      if (g.ok && !script.forceLoginQr) {
+        clearVerify()
+        state.needLogin = false
         state.loginQr = {
           phase: 'logged_in',
           qrDataUrl: '',
@@ -826,6 +854,24 @@ export function createFakeDriver(script = {}) {
           qrDataUrl: '', message: state.loginQr.message, verifyHint: '', error: '',
           nickname: state.self.nickname || '', uid: '',
         }
+      }
+      if (g.verify) {
+        state.loginQr = {
+          phase: 'verification_required',
+          qrDataUrl: '',
+          message: '需要安全验证',
+          verifyHint: g.reason || '页面要验证（滑块等）。请完成后再点刷新状态。',
+          error: '',
+        }
+        return {
+          ok: true, started: true, loggedIn: false, phase: 'verification_required',
+          qrDataUrl: '', message: state.loginQr.message,
+          verifyHint: state.loginQr.verifyHint, error: '', nickname: '', uid: '',
+        }
+      }
+      if (!state.needLogin && !script.forceLoginQr) {
+        // fallthrough safety
+        state.needLogin = true
       }
       state.loginQr = {
         phase: 'waiting_scan',
@@ -841,7 +887,10 @@ export function createFakeDriver(script = {}) {
       }
     },
     async pollLoginQr() {
-      if (!state.needLogin) {
+      const g = await gate({ ignoreCaps: true })
+      if (g.ok) {
+        state.needLogin = false
+        clearVerify()
         state.loginQr = {
           phase: 'logged_in',
           qrDataUrl: '',
@@ -855,11 +904,23 @@ export function createFakeDriver(script = {}) {
           nickname: state.self.nickname || '', uid: '',
         }
       }
-      if (state.verify) {
+      if (g.verify) {
         state.loginQr.phase = 'verification_required'
         state.loginQr.message = '需要安全验证'
-        state.loginQr.verifyHint = state.reason || '页面要验证（滑块等）。请完成后再点刷新状态。'
+        state.loginQr.verifyHint = g.reason || state.reason || '页面要验证（滑块等）。请完成后再点刷新状态。'
         state.loginQr.qrDataUrl = ''
+        return {
+          ok: true, started: true, loggedIn: false, phase: 'verification_required',
+          qrDataUrl: '', message: state.loginQr.message,
+          verifyHint: state.loginQr.verifyHint, error: '', nickname: '', uid: '',
+        }
+      }
+      // needLogin：保持 / 回到等待扫码
+      if (state.loginQr.phase === 'idle' || state.loginQr.phase === 'logged_in' || state.loginQr.phase === 'verification_required') {
+        state.loginQr.phase = 'waiting_scan'
+        state.loginQr.qrDataUrl = state.loginQr.qrDataUrl || script.qrDataUrl || FAKE_BROWSER_QR
+        state.loginQr.message = '请用抖音 App 扫码'
+        state.loginQr.verifyHint = ''
       }
       return {
         ok: state.loginQr.phase !== 'error',
