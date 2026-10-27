@@ -440,12 +440,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'mood', label: '心情与记忆', flag: 'mood.enabled' },
       { id: 'song', label: '翻唱', flag: 'song.enabled' },
       { id: 'bili', label: 'B站', flag: 'bili.enabled' },
+      { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
       { id: 'local', label: '本地接口' },
       { id: 'modules', label: '扩展' },
       { id: 'logs', label: '日志' },
     ]
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
-    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'] }
+    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
     function ModOff({ name }) {
       return h(Card, { title: name }, h('div', { className: 'ab-muted ab-small' }, '「' + name + '」模块关着，这部分用不了。要用的话去「扩展」页把它打开。'))
@@ -772,7 +773,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       ]
       const row = (key, label, hint) => h(Row, { label, hint },
         h(Choices, { value: perms[key] || 'owner', onChange: (v) => setDraft(setPath(draft, 'profilePerms.' + key, v)), options: opts }))
-      return h(Card, { title: '改资料与名单', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，以及处理好友申请、改白名单。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。' },
+      return h(Card, { title: '改资料与名单', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，处理好友申请、改白名单，以及抖音上的各项操作。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。抖音 8 项默认仅主人，要放开自己在这里开。' },
         row('qqNickname', 'QQ 昵称'),
         row('qqSignature', 'QQ 个性签名'),
         row('qqAvatar', 'QQ 头像', '只用网址图片，或「刚才发的那张图」。'),
@@ -780,6 +781,14 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         row('biliAvatar', 'B 站头像', '要先在 B 站页登录并打开 B 站。图片网址或刚才发的图，最大 2MB。'),
         row('qqFriendRequest', '处理好友申请', '让她通过 / 拒绝别人加她为好友的申请。她自己主动加别人暂不支持（SnowLuma 没有这个接口）。'),
         row('whitelist', '改白名单', '让她把 QQ 号 / 群号加进或移出下面的白名单。主人不会被移出。开成「所有人」前请想清楚。'),
+        row('douyinBrowse', '刷抖音 / 看视频', '定时刷推荐、点开别人发来的抖音链接。默认仅主人。'),
+        row('douyinLike', '抖音点赞', '刷到视频时顺手点赞。'),
+        row('douyinComment', '抖音评论', '刷到视频时发评论。'),
+        row('douyinReplyComment', '回抖音评论', '别人回她评论时接着回。'),
+        row('douyinFollow', '抖音关注', '刷到感兴趣的人时关注。'),
+        row('douyinDm', '私信任何人', '建议用小号。别人让她发私信时用。'),
+        row('douyinShareOwner', '分享给主人抖音', '好玩的视频私信分享到你的抖音。要先在「抖音」页核对你的号。'),
+        row('douyinReplyOwnerDm', '回主人抖音私信', '只回已核对 sec_uid 的你；认不出对方绝不回。'),
       )
     }
 
@@ -1748,6 +1757,71 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       )
     }
 
+    const DOUYIN_KIND = { watch: '看了', like: '点赞', comment: '评论', replyComment: '回评论', follow: '关注', share: '分享给你', dm: '私信', dmReply: '回你私信', error: '没成功' }
+
+    /** 抖音：专用 Edge 登录、定时刷、点赞 / 评论 / 关注 / 私信、分享给主人、回主人私信。 */
+    function Douyin({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [s, setS] = useState(null)
+      const [busy, setBusy] = useState('')
+      const load = () => get('/douyin/state').then(setS)
+      useEffect(() => { load() }, [])
+      const act = (path, label, body) => async () => { setBusy(label); const r = body !== undefined ? await post(path, body) : await post(path); setBusy(''); toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); load() }
+      const acct = s && s.account
+      const owner = (draft.douyin && draft.douyin.owner) || {}
+      return h('div', { className: 'ab-grid' },
+        h(Card, { title: '刷抖音', right: f.sw('douyin.enabled'), desc: '用一个专用的 Edge 窗口（独立登录资料，不碰你平时的浏览器）刷抖音推荐：看几个视频、按性格决定点不点赞、评不评论、关不关注；好玩的可以私信分享到你的抖音；你在抖音给她发的私信她也能回。总开关默认关——先点「打开登录窗口」扫码，再打开开关。' },
+          h(Row, { label: '浏览器路径', hint: '留空 = 自动找 Edge（找不到再找 Chrome）' }, f.text('douyin.browserPath', { size: 'wide', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })),
+          h(Row, { label: '登录完最小化窗口' }, f.sw('douyin.minimize')),
+          h('div', { className: 'ab-flex', style: { marginTop: 4 } },
+            h(Btn, { small: true, onClick: act('/douyin/open-login', 'login') }, busy === 'login' ? '正在打开…' : '打开登录窗口'),
+            h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/account'); setS({ ...(s || {}), account: r }) } }, '检查登录'),
+            acct ? h('span', { className: 'ab-small', style: { color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.verify ? '要验证：' + (acct.reason || '') : acct.needLogin ? '还没登录' : acct.isLogin ? '已登录：' + (acct.nickname || acct.secUid || '') : (acct.reason || acct.error || '未知')) : null),
+        ),
+        h(Card, { title: '主人抖音', desc: '填你的抖音号或主页链接，点「核对」后她才认你（只认 sec_uid，不认昵称）。改了输入要重新核对。' },
+          h(Row, { label: '你的抖音号 / 主页链接' }, f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })),
+          h('div', { className: 'ab-flex', style: { marginTop: 4 } },
+            h(Btn, { small: true, kind: 'primary', onClick: act('/douyin/confirm-owner', 'confirm', { input: owner.input }), disabled: !!busy }, busy === 'confirm' ? '核对中…' : '核对'),
+            s && s.ownerConfirmed ? h('span', { className: 'ab-small', style: { color: 'var(--ab-ok)' } }, '已核对：' + (s.owner && (s.owner.nickname || s.owner.secUid) || '')) : h('span', { className: 'ab-small ab-muted' }, '还没核对')),
+        ),
+        h(Card, { title: '怎么刷', desc: '只在「主动搭话」里设的醒着时间内刷。' },
+          h(Row, { label: '定时自己去刷' }, f.sw('douyin.autoBrowse')),
+          h(Row, { label: '多久刷一轮' }, f.range('douyin.intervalHours', 1, 24, 1, (v) => v + ' 小时')),
+          h(Row, { label: '每天最多刷' }, f.range('douyin.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')),
+          h(Row, { label: '一轮看几个' }, f.range('douyin.perRun', 1, 10, 1, (v) => v + ' 个')),
+          h(Row, { label: '每天最多看' }, f.num('douyin.maxWatchPerDay', { min: 0, max: 200 }), h('span', { className: 'ab-muted' }, '个（含手动）')),
+          h(Row, { label: '每个视频停留' }, f.num('douyin.dwellMin', { min: 3 }), h('span', { className: 'ab-muted' }, '～'), f.num('douyin.dwellMax', { min: 3 }), h('span', { className: 'ab-muted' }, '秒')),
+        ),
+        h(Card, { title: '每天上限', desc: '各项操作的日上限。权限在「权限」页单独设（默认仅主人）。试运行开着时只记日志不真动。' },
+          h(Row, { label: '点赞' }, f.num('douyin.caps.like', { min: 0, max: 300 })),
+          h(Row, { label: '评论' }, f.num('douyin.caps.comment', { min: 0, max: 30 })),
+          h(Row, { label: '回评论' }, f.num('douyin.caps.replyComment', { min: 0, max: 60 })),
+          h(Row, { label: '关注' }, f.num('douyin.caps.follow', { min: 0, max: 50 })),
+          h(Row, { label: '私信任何人', hint: '建议用小号' }, f.num('douyin.caps.dm', { min: 0, max: 30 })),
+          h(Row, { label: '分享给你' }, f.num('douyin.caps.shareOwner', { min: 0, max: 30 })),
+          h(Row, { label: '回你的私信' }, f.num('douyin.caps.dmReply', { min: 0, max: 200 })),
+          h(Row, { label: '看私信间隔' }, f.num('douyin.dmPollMinutes', { min: 2 }), h('span', { className: 'ab-muted' }, '分钟')),
+          h(Row, { label: '看回评论间隔' }, f.num('douyin.replyPollMinutes', { min: 5 }), h('span', { className: 'ab-muted' }, '分钟')),
+        ),
+        h(Card, { title: '她刷过什么', right: h('div', { className: 'ab-flex' },
+          h(Btn, { small: true, onClick: act('/douyin/dms', 'dms'), disabled: !!busy }, busy === 'dms' ? '正在看…' : '看看主人私信'),
+          h(Btn, { small: true, onClick: act('/douyin/replies', 'replies'), disabled: !!busy }, busy === 'replies' ? '正在看…' : '看看回评论'),
+          h(Btn, { small: true, kind: 'primary', onClick: act('/douyin/run', 'run'), disabled: !!busy }, busy === 'run' ? h(Fragment, null, h('i', { className: 'ab-spin' }), ' 正在刷…') : '现在刷一轮')) },
+          s && s.pauseReason ? h('div', { className: 'ab-note warn', style: { marginBottom: 8 } }, '今天先不动手了：' + s.pauseReason + '（明天自动恢复；要验证就去 Edge 窗口里过一下）') : null,
+          s ? h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
+            '今天自动刷了 ' + s.runs + ' 轮 · 看了 ' + s.watched + ' · 赞 ' + s.like + ' · 评 ' + s.comment + ' · 关 ' + s.follow + ' · 私信 ' + s.dm + ' · 分享 ' + s.shareOwner + ' · 回你 ' + s.dmReply +
+            (s.lastRun ? ' · 上次 ' + timeAgo(s.lastRun) : '') +
+            (s.nextDueAt ? ' · 下次 ' + timeAgo(s.nextDueAt) : '') +
+            (s.lastSkipReason ? ' · 上次跳过：' + s.lastSkipReason : '') +
+            '（手动刷不占轮数）') : null,
+          !s ? h(Empty, { icon: '⏳', text: '加载中…' }) : s.history.length === 0 ? h(Empty, { icon: '📱', text: '还没刷过。先登录，再点「现在刷一轮」。' }) :
+            h('div', { className: 'ab-list' }, s.history.map((x, i) => h('div', { key: i, className: 'ab-li' },
+              h('div', { className: 'meta' }, timeAgo(x.at), h('br'), DOUYIN_KIND[x.kind] || x.kind),
+              h('div', { className: 'body' }, x.awemeId ? h('a', { href: 'https://www.douyin.com/video/' + x.awemeId, target: '_blank', rel: 'noreferrer' }, x.author ? x.author + ' 的视频' : x.awemeId) : h('b', null, x.author || x.secUid || ''), x.text ? h('div', { className: 'ab-muted' }, x.text) : null)))),
+        ),
+      )
+    }
+
     function ImageGen({ draft, setDraft }) {
       const f = useField(draft, setDraft)
       const c = draft.imageGen
@@ -1950,10 +2024,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
       const body = curTab.ext ? ExtPage : {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, local: LocalApi, modules: Modules, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, douyin: Douyin, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
