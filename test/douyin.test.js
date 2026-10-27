@@ -31,11 +31,14 @@ test('工具：认抖音号 / 主页链接 / 短链 / 视频链接', () => {
   assert.ok(util.looksLimited('操作过于频繁，请稍后再试'))
 })
 
-test('配置：抖音总开关默认关；8 项权限默认仅主人；写闸默认；面板改不了 secUid', () => {
+test('配置：抖音总开关默认关；权限默认仅主人；写闸默认；改资料日上限；面板改不了 secUid', () => {
   const c = normalize({})
   assert.equal(c.douyin.enabled, false)
   assert.equal(c.douyin.caps.like, 30)
   assert.equal(c.douyin.caps.comment, 3)
+  assert.equal(c.douyin.caps.sign, 2)
+  assert.equal(c.douyin.caps.nickname, 2)
+  assert.equal(c.douyin.caps.avatar, 1)
   assert.equal(c.douyin.perRun, 5)
   assert.equal(c.douyin.gate.maxWritesPerDay, 60)
   assert.equal(c.douyin.gate.minWriteGapSec, 20)
@@ -383,3 +386,105 @@ test('feed 整理：广告 / 直播丢掉', () => {
   assert.equal(v.likes, 9)
   assert.deepEqual(util.awemesFromResponse({ aweme_list: [{ aweme_id: '3', desc: 'hi', author: {}, statistics: {} }] }).map((x) => x.awemeId), ['3'])
 })
+
+test('过滤器：昵称 / 签名拒链接、手机、广告、超长', () => {
+  assert.equal(util.filterNickname('肥鱼').ok, true)
+  assert.equal(util.filterNickname('').ok, false)
+  assert.equal(util.filterNickname('https://x.com').ok, false)
+  assert.equal(util.filterNickname('加微信领券').ok, false)
+  assert.equal(util.filterNickname('1'.repeat(21)).ok, false)
+  assert.equal(util.filterSignature('今天心情好').ok, true)
+  assert.equal(util.filterSignature('加v私聊').ok, false)
+  assert.equal(util.filterSignature('a'.repeat(101)).ok, false)
+})
+
+test('头像来源：last / http / 白名单本地；域外本地拒', () => {
+  const root = process.env.AURABOT_DATA_DIR
+  const inside = join(root, 'pic.png')
+  assert.equal(util.resolveAvatarSource('last', '').ok, false)
+  assert.equal(util.resolveAvatarSource('last', 'https://cdn/a.jpg').url, 'https://cdn/a.jpg')
+  assert.equal(util.resolveAvatarSource('https://cdn/b.png', '').url, 'https://cdn/b.png')
+  assert.equal(util.resolveAvatarSource(inside, '', [root]).path, inside)
+  assert.equal(util.resolveAvatarSource('/tmp/evil.png', '', [root]).ok, false)
+  const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  assert.equal(util.sniffImageType(png), 'image/png')
+})
+
+test('改签名 / 昵称：过写闸、日上限、同日重复拒、试运行不计次', async () => {
+  const { d, drv, events, cfg } = fakes({
+    decisions: [],
+    cfgOver: { caps: { like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0, sign: 2, nickname: 2, avatar: 1 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const a = await d.setSign('今天开心')
+  assert.equal(a.ok, true, a.message)
+  assert.equal(drv._state.signature, '今天开心')
+  assert.ok(events.some((t) => t.includes('签名')))
+  const dup = await d.setSign('今天开心')
+  assert.equal(dup.ok, false)
+  assert.match(dup.message, /已经改成/)
+  const b = await d.setSign('换一句')
+  assert.equal(b.ok, true, b.message)
+  const c = await d.setSign('第三句')
+  assert.equal(c.ok, false)
+  assert.match(c.message, /用完|次数/)
+
+  const n1 = await d.setNickname('小肥鱼')
+  assert.equal(n1.ok, true, n1.message)
+  assert.equal(drv._state.self.nickname, '小肥鱼')
+  const n2 = await d.setNickname('小肥鱼')
+  assert.equal(n2.ok, false)
+  const n3 = await d.setNickname('大肥鱼')
+  assert.equal(n3.ok, true, n3.message)
+  const n4 = await d.setNickname('超肥鱼')
+  assert.equal(n4.ok, false)
+
+  // dryRun 不计次
+  const { d: d2, drv: drv2 } = fakes({
+    decisions: [], dryRun: true,
+    cfgOver: { caps: { sign: 1, nickname: 1, avatar: 1, like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const dry = await d2.setSign('试运行签名')
+  assert.equal(dry.ok, true)
+  assert.match(dry.message, /试运行/)
+  assert.equal(drv2._state.signature, '')
+  const st = d2.state()
+  assert.equal(st.sign, 0)
+})
+
+test('换头像：MIME 嗅探、日上限 1、验证码 pauseAll', async () => {
+  const root = process.env.AURABOT_DATA_DIR
+  const pngPath = join(root, 'avatar-ok.png')
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3]))
+  const { d, drv } = fakes({
+    decisions: [],
+    cfgOver: { caps: { avatar: 1, sign: 0, nickname: 0, like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const a = await d.setAvatar(pngPath)
+  assert.equal(a.ok, true, a.message)
+  assert.equal(drv._state.avatarPath, pngPath)
+  const b = await d.setAvatar(pngPath)
+  assert.equal(b.ok, false)
+  assert.match(b.message, /用完|次数/)
+
+  const bad = join(root, 'not-img.bin')
+  writeFileSync(bad, Buffer.from('hello'))
+  const { d: d3 } = fakes({
+    decisions: [],
+    cfgOver: { caps: { avatar: 1, like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const rBad = await d3.setAvatar(bad)
+  assert.equal(rBad.ok, false)
+  assert.match(rBad.message, /图片/)
+
+  const { d: d4, drv: drv4, sent } = fakes({
+    decisions: [],
+    script: { profileFail: true, profileFailMessage: '请完成安全验证' },
+    cfgOver: { caps: { avatar: 1, like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const rV = await d4.setAvatar(pngPath)
+  assert.equal(rV.ok, false)
+  assert.ok(d4.state().pauseReason)
+  assert.equal(sent.length, 1)
+})
+
