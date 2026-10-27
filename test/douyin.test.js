@@ -1,7 +1,7 @@
 // 抖音：认号 / 主页链接、推荐页判定、假驱动刷一轮、日上限、试运行不计次、写操作总闸、主人私信（只认 sec_uid）、#4 相关回归。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -1122,4 +1122,92 @@ test('CDP launch：spawn 后端口仍起不来 → 文案含 profile 与 port', 
   assert.match(r.message, /profile=/)
   assert.match(r.message, /port=60123/)
   assert.match(r.message, /fetch failed/)
+})
+
+
+test('CDP：Windows 扫进程走 -EncodedCommand，能解析 msedge+remote-debugging-port', () => {
+  const profile = '/home/u/data/edge-profile'
+  const script = cdp.buildWindowsBrowserScanScript(profile)
+  // 整段脚本，Where-Object 块不被 join(' ') 拆坏；含 -replace 反斜杠规则
+  assert.match(script, /\$want = '/)
+  assert.match(script, /Where-Object \{[\s\S]*-and[\s\S]*Contains\(\$want\)[\s\S]*\}/)
+  assert.ok(!script.includes('Get-CimInstance Win32_Process | Where-Object {  $_.Name'), '不应是单行空格拼接')
+  const encoded = cdp.encodePowerShellEncodedCommand(script)
+  assert.equal(Buffer.from(encoded, 'base64').toString('utf16le'), script)
+
+  const wantNorm = cdp.normalizeProfilePath(profile)
+  // 模拟 WMI 输出：反斜杠路径 + remote-debugging-port
+  const winLine = `4242\tC:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe --user-data-dir=${profile.replace(/\//g, '\\\\')} --remote-debugging-port=59900 about:blank`
+  const parsed = cdp.parseBrowserProcessScanLine(winLine, profile)
+  assert.ok(parsed)
+  assert.equal(parsed.pid, 4242)
+  assert.equal(parsed.port, 59900)
+
+  let sawEncoded = false
+  const procs = cdp.findBrowserProcessesForProfile(profile, {
+    platform: 'win32',
+    execFile: (bin, args) => {
+      assert.equal(bin, 'powershell.exe')
+      assert.ok(args.includes('-EncodedCommand'), '必须用 -EncodedCommand，禁止手拼 -Command')
+      assert.ok(!args.includes('-Command'))
+      const i = args.indexOf('-EncodedCommand')
+      const dec = Buffer.from(args[i + 1], 'base64').toString('utf16le')
+      assert.equal(dec, script)
+      assert.ok(dec.includes(wantNorm.replace(/'/g, "''")) || dec.toLowerCase().includes('edge-profile'))
+      sawEncoded = true
+      return winLine + '\r\n9999\tC:\\chrome.exe --user-data-dir=C:\\other --remote-debugging-port=9222\r\n'
+    },
+  })
+  assert.equal(sawEncoded, true)
+  assert.equal(procs.length, 1)
+  assert.equal(procs[0].pid, 4242)
+  assert.equal(procs[0].port, 59900)
+})
+
+test('CDP：ensureDevToolsActivePort 缺失时自写 port+path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-dtap-'))
+  assert.equal(cdp.readDevToolsActivePort(dir), 0)
+  assert.equal(cdp.ensureDevToolsActivePort(dir, 60123), true)
+  assert.equal(cdp.readDevToolsActivePort(dir), 60123)
+  const body = readFileSync(join(dir, 'DevToolsActivePort'), 'utf8')
+  assert.match(body, /^60123\n\/devtools\//)
+  // 已是同端口 → 不再写
+  assert.equal(cdp.ensureDevToolsActivePort(dir, 60123), false)
+})
+
+test('CDP launch：spawn 成功且无 DevToolsActivePort 时自写，供重启 attach', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-write-port-'))
+  assert.equal(cdp.readDevToolsActivePort(dir), 0)
+  let versionOk = false
+  const drv = cdp.createBrowserDriver({
+    profileDir: dir,
+    browserPath: '/fake/msedge',
+    minimize: false,
+    wsFactory: FakeWs,
+    hooks: {
+      findBrowser: () => '/fake/msedge',
+      freePort: async () => 60123,
+      spawn: () => { versionOk = true; return { pid: 555, unref() {} } },
+      getJson: async (url) => {
+        if (url.includes('/json/version')) {
+          if (!versionOk) throw new Error('fetch failed')
+          return { Browser: 'Edge', webSocketDebuggerUrl: 'ws://127.0.0.1:60123/devtools/browser/x' }
+        }
+        if (url.includes('/json/list')) {
+          return [{ type: 'page', webSocketDebuggerUrl: 'ws://127.0.0.1:60123/devtools/page/1' }]
+        }
+        throw new Error('unexpected ' + url)
+      },
+      findBrowserProcessesForProfile: () => [],
+      sleep: async () => {},
+      resolveLaunchTarget: async () => ({ mode: 'spawn', killPids: [] }),
+      probeDebugPort: async () => null,
+    },
+  })
+  const r = await drv.launch()
+  assert.equal(r.ok, true)
+  assert.equal(r.attached, false)
+  assert.equal(r.port, 60123)
+  assert.equal(cdp.readDevToolsActivePort(dir), 60123, 'spawn 后应自写 DevToolsActivePort')
+  drv.close()
 })

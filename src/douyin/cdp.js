@@ -4,7 +4,7 @@
 
 import { createServer } from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve as pathResolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { looksLikeVerify, looksLimited, awemesFromResponse, isRecommendUrl, extractOwnerProfile, normalizeOwnerUid } from './util.js'
@@ -101,51 +101,101 @@ function portFromCmdline(cmdline) {
 }
 
 /**
+ * Windows 扫进程用的 PowerShell 脚本正文（整段，不手工拼接 -Command）。
+ * 由 encodePowerShellEncodedCommand 编成 -EncodedCommand，避免 `\` / -replace / Where-Object 被 JS↔PS 转义弄坏。
+ */
+export function buildWindowsBrowserScanScript(profileDir) {
+  const want = normalizeProfilePath(profileDir).replace(/'/g, "''")
+  return [
+    `$want = '${want}'`,
+    'Get-CimInstance Win32_Process | Where-Object {',
+    "  $_.Name -match '^(msedge|chrome|chromium)\\.exe$' -and $_.CommandLine -and",
+    "  ($_.CommandLine -replace '\\\\','/').ToLower().Contains($want)",
+    '} | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }',
+  ].join('\n')
+}
+
+/** PowerShell -EncodedCommand：UTF-16LE → Base64（不要用手拼长 -Command）。 */
+export function encodePowerShellEncodedCommand(script) {
+  return Buffer.from(String(script ?? ''), 'utf16le').toString('base64')
+}
+
+/** 解析扫进程输出行：`pid\\tcmdline`（Windows）或 `pid cmdline`（ps）。 */
+export function parseBrowserProcessScanLine(line, profileDir) {
+  const raw = String(line || '').trim()
+  if (!raw) return null
+  let pid
+  let cmdline
+  const tab = raw.indexOf('\t')
+  if (tab >= 0) {
+    pid = raw.slice(0, tab)
+    cmdline = raw.slice(tab + 1)
+  } else {
+    const m = raw.match(/^(\d+)\s+(.*)$/)
+    if (!m) return null
+    pid = m[1]
+    cmdline = m[2]
+  }
+  const n = Number(pid)
+  if (!Number.isInteger(n) || n <= 0) return null
+  if (!cmdlineHasProfile(cmdline, profileDir)) return null
+  if (!/msedge|chrome|chromium|microsoft-edge/i.test(String(cmdline))) return null
+  return { pid: n, port: portFromCmdline(cmdline) }
+}
+
+/**
  * 找出占用本 profile（user-data-dir）的本机 Edge/Chrome 进程。
  * 返回 [{ pid, port }]；port 来自命令行 --remote-debugging-port（可能为 0）。
+ * Windows 走 -EncodedCommand，禁止 join(' ') / 手拼 -Command。
  */
 export function findBrowserProcessesForProfile(profileDir, { execFile = execFileSync, platform = process.platform } = {}) {
   const out = []
-  const push = (pid, cmdline) => {
-    const n = Number(pid)
-    if (!Number.isInteger(n) || n <= 0) return
-    if (!cmdlineHasProfile(cmdline, profileDir)) return
-    if (!/msedge|chrome|chromium|microsoft-edge/i.test(String(cmdline))) return
-    out.push({ pid: n, port: portFromCmdline(cmdline) })
-  }
   try {
+    let text = ''
     if (platform === 'win32') {
-      const want = normalizeProfilePath(profileDir).replace(/'/g, "''")
-      const ps = [
-        '$want = \'' + want + '\'',
-        "Get-CimInstance Win32_Process | Where-Object {",
-        "  $_.Name -match '^(msedge|chrome|chromium)\\.exe$' -and $_.CommandLine -and",
-        "  ($_.CommandLine -replace '\\\\','/').ToLower().Contains($want)",
-        '} | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }',
-      ].join(' ')
-      const text = String(execFile('powershell.exe', ['-NoProfile', '-Command', ps], {
+      const script = buildWindowsBrowserScanScript(profileDir)
+      const encoded = encodePowerShellEncodedCommand(script)
+      text = String(execFile('powershell.exe', ['-NoProfile', '-EncodedCommand', encoded], {
         encoding: 'utf8', timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
       }) || '')
-      for (const line of text.split(/\r?\n/)) {
-        const i = line.indexOf('\t')
-        if (i < 0) continue
-        push(line.slice(0, i), line.slice(i + 1))
-      }
     } else {
-      const text = String(execFile('ps', ['-ao', 'pid=,args='], {
+      text = String(execFile('ps', ['-ao', 'pid=,args='], {
         encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024,
       }) || '')
-      for (const line of text.split('\n')) {
-        const m = line.trim().match(/^(\d+)\s+(.*)$/)
-        if (m) push(m[1], m[2])
-      }
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const row = parseBrowserProcessScanLine(line, profileDir)
+      if (row) out.push(row)
     }
   } catch (error) {
     return out
   }
-  // 去重 pid
   const seen = new Set()
   return out.filter((x) => (seen.has(x.pid) ? false : (seen.add(x.pid), true)))
+}
+
+/**
+ * Edge 常不写 DevToolsActivePort；spawn 成功后若缺失则自写 port + 路径，
+ * 供 Harness 重启后 attach。
+ */
+export function ensureDevToolsActivePort(profileDir, port, {
+  exists = existsSync,
+  readFile = readFileSync,
+  writeFile = writeFileSync,
+} = {}) {
+  const p = Number(port)
+  if (!Number.isInteger(p) || p <= 0 || p >= 65536) return false
+  const dir = String(profileDir || '')
+  if (!dir) return false
+  const current = readDevToolsActivePort(dir, { exists, readFile })
+  if (current === p) return false
+  const file = join(dir, 'DevToolsActivePort')
+  try {
+    writeFile(file, `${p}\n/devtools/browser/aurabot\n`, 'utf8')
+    return true
+  } catch (error) {
+    return false
+  }
 }
 
 /** 温和结束占用本 profile 的浏览器进程（只动匹配到的 pid）。 */
@@ -274,6 +324,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     readDevToolsActivePort,
     probeDebugPort,
     findBrowserProcessesForProfile,
+    ensureDevToolsActivePort,
     killPid: (pid, sig) => { try { process.kill(pid, sig) } catch (error) { /* gone */ } },
     resolveLaunchTarget,
     ...hooks,
@@ -445,6 +496,8 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       }
     }
     await attachPage()
+    // Edge 常不落 DevToolsActivePort：自写，Harness 重启才能 attach
+    try { h.ensureDevToolsActivePort(profileDir, port) } catch (error) { log?.debug?.('写 DevToolsActivePort 失败', error?.message || error) }
     if (offscreen) await moveOffscreen()
     else if (minimize) await evalJs(`try{window.moveTo(0,0);window.resizeTo(900,700)}catch(e){}`).catch(() => {})
     return { ok: true, attached: false, port, killed }
