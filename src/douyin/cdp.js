@@ -107,6 +107,7 @@ function portFromCmdline(cmdline) {
 export function buildWindowsBrowserScanScript(profileDir) {
   const want = normalizeProfilePath(profileDir).replace(/'/g, "''")
   return [
+    "$ProgressPreference='SilentlyContinue'",
     `$want = '${want}'`,
     'Get-CimInstance Win32_Process | Where-Object {',
     "  $_.Name -match '^(msedge|chrome|chromium)\\.exe$' -and $_.CommandLine -and",
@@ -342,37 +343,55 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     await session.send('Page.enable')
     await session.send('Runtime.enable')
     await session.send('Network.enable')
-    offNet = session.on('Network.responseReceived', async (p) => {
+    await session.send('Page.setMuted', { muted: true }).catch(() => {})
+    const pendingNet = new Map()
+    const ingestResponse = async (url, requestId) => {
+      let body = null
+      for (let i = 0; i < 8; i++) {
+        body = await session.send('Network.getResponseBody', { requestId }).catch(() => null)
+        if (body?.body) break
+        await h.sleep(120 + i * 80)
+      }
+      if (!body?.body) return
+      const text = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf8') : body.body
+      if (looksLikeVerify(text) || looksLimited(text)) { markVerify(looksLikeVerify(text) ? '页面要验证' : '账号被限制'); return }
+      let json
+      try { json = JSON.parse(text) } catch (error) { return }
+      if (/user\/profile\/(other|self)|web\/user\/profile/i.test(url)) {
+        const u = json?.user || json?.user_info || json?.data?.user || json?.data?.user_info || json?.data || json
+        const sec = String(u?.sec_uid || u?.secUid || '')
+        const id = normalizeOwnerUid(u?.uid || u?.user_id || u?.userId || '')
+        if (sec || id) {
+          lastUserProfile = {
+            secUid: sec,
+            uid: id,
+            nickname: String(u?.nickname || u?.nick_name || '').slice(0, 40),
+            avatar: String(u?.avatar_thumb?.url_list?.[0] || u?.avatarUrl || u?.avatar || ''),
+          }
+        }
+      }
+      const list = awemesFromResponse(json)
+      for (const a of list) {
+        if (!feed.some((x) => x.awemeId === a.awemeId)) feed.push(a)
+      }
+      if (feed.length > 80) feed.splice(0, feed.length - 80)
+    }
+    offNet = session.on('Network.responseReceived', (p) => {
       try {
         const url = p?.response?.url || ''
         if (!/douyin\.com|amemv\.com|snssdk\.com/.test(url)) return
         if (!/aweme|feed|recommend|comment|message|im\/|user\/profile/i.test(url)) return
-        const body = await session.send('Network.getResponseBody', { requestId: p.requestId }).catch(() => null)
-        if (!body?.body) return
-        const text = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf8') : body.body
-        if (looksLikeVerify(text) || looksLimited(text)) { markVerify(looksLikeVerify(text) ? '页面要验证' : '账号被限制'); return }
-        let json
-        try { json = JSON.parse(text) } catch (error) { return }
-        if (/user\/profile\/(other|self)|web\/user\/profile/i.test(url)) {
-          const u = json?.user || json?.user_info || json?.data?.user || json?.data?.user_info || json?.data || json
-          const sec = String(u?.sec_uid || u?.secUid || '')
-          const id = normalizeOwnerUid(u?.uid || u?.user_id || u?.userId || '')
-          if (sec || id) {
-            lastUserProfile = {
-              secUid: sec,
-              uid: id,
-              nickname: String(u?.nickname || u?.nick_name || '').slice(0, 40),
-              avatar: String(u?.avatar_thumb?.url_list?.[0] || u?.avatarUrl || u?.avatar || ''),
-            }
-          }
-        }
-        const list = awemesFromResponse(json)
-        for (const a of list) {
-          if (!feed.some((x) => x.awemeId === a.awemeId)) feed.push(a)
-        }
-        if (feed.length > 80) feed.splice(0, feed.length - 80)
-      } catch (error) { /* 单条响应失败不挡主流程 */ }
+        pendingNet.set(p.requestId, url)
+      } catch (error) { /* ignore */ }
     })
+    const offLoad = session.on('Network.loadingFinished', (p) => {
+      const url = pendingNet.get(p.requestId)
+      if (!url) return
+      pendingNet.delete(p.requestId)
+      ingestResponse(url, p.requestId).catch(() => {})
+    })
+    const prevOffNet = offNet
+    offNet = () => { try { prevOffNet?.() } catch (e) {} try { offLoad?.() } catch (e) {} }
   }
 
   const browserLogin = {
@@ -680,7 +699,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
   async function navigate(url) {
     if (!session || session.closed) throw new Error('浏览器没连上')
     await session.send('Page.navigate', { url })
-    await sleep(1500)
+    await h.sleep(1500)
   }
 
   async function currentUrl() {
@@ -748,6 +767,33 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
 
   /** 从最近截获的 feed 里取还没看过的；不够就在页面上「下滑」再等一会儿。 */
   async function nextAwemes({ seen = new Set(), want = 1 } = {}) {
+    // attach 后 Network 监听才挂上，旧页面 feed 为空：先回到推荐页灌一遍；仍空则 DOM 解析 aweme_id
+    if (!feed.length) {
+      try {
+        await navigate('https://www.douyin.com/?recommend=1&from_nav=1')
+        await h.sleep(3500)
+        await evalJs(`document.querySelectorAll('video,audio').forEach(v=>{try{v.muted=true;v.volume=0}catch(e){}})`).catch(() => {})
+      } catch (error) { /* ignore */ }
+    }
+    if (!feed.length) {
+      try {
+        const seeded = await evalJs(`(() => {
+          const ids = new Set();
+          const html = document.documentElement.innerHTML;
+          for (const m of html.matchAll(/"aweme_id"\\s*:\\s*"(\\d{15,})"/g)) ids.add(m[1]);
+          for (const m of html.matchAll(/\\/video\\/(\\d{15,})/g)) ids.add(m[1]);
+          return [...ids].slice(0, 12).map(id => ({ aweme_id: id, desc: '', author: { nickname: '' }, statistics: {} }));
+        })()`)
+        if (Array.isArray(seeded) && seeded.length) {
+          for (const raw of seeded) {
+            const list = awemesFromResponse({ aweme_list: [raw] })
+            for (const a of list) {
+              if (!feed.some((x) => x.awemeId === a.awemeId)) feed.push(a)
+            }
+          }
+        }
+      } catch (error) { /* ignore */ }
+    }
     const out = []
     for (let try_ = 0; try_ < 6 && out.length < want; try_++) {
       for (const a of feed) {
@@ -758,7 +804,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       if (out.length >= want) break
       // 模拟下滑：滚一下 + 方向键
       await evalJs(`window.scrollBy(0, Math.floor(window.innerHeight*0.85)); document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}))`).catch(() => {})
-      await sleep(1200 + Math.random() * 800)
+      await h.sleep(1200 + Math.random() * 800)
     }
     return out
   }

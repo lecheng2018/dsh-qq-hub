@@ -168,7 +168,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   /** 拿到这个 QQ 会话对应的活 agent（没有就建，权限档位变了就换新会话）。 */
   async function agentFor(chat) {
     const cfg = getConfig()
-    const level = chat.kind === 'system' ? 'social' : levelFor(cfg, chat)
+    const level = chat.kind === 'system' ? (chat.noTools ? 'chat' : 'social') : levelFor(cfg, chat)
     const preset = presetFor(level, cfg)
     const entry = map().chats[chat.chatId]
     let sid = entry && entry.preset === preset && entry.level === level ? entry.sessionId : ''
@@ -1043,8 +1043,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   /** 后台任务（写日记、主动搭话的草稿）：在专用会话里跑一轮，拿到正文但不自动转发。 */
-  async function runSystemTurn(name, title, prompt, { timeoutMs = 180000 } = {}) {
-    const chat = { chatId: `system:${name}`, kind: 'system', title }
+  async function runSystemTurn(name, title, prompt, { timeoutMs = 180000, noTools = false } = {}) {
+    const chat = { chatId: `system:${name}`, kind: 'system', title, noTools: !!noTools }
     const { agent, sessionId } = await agentFor(chat)
     const key = sessionKey(sessionId)
     const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }

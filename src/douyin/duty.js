@@ -194,8 +194,33 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
     return { ok: true }
   }
 
+  function turnText(out) {
+    if (out == null) return ''
+    if (typeof out === 'string') return out
+    if (typeof out?.text === 'string') return out.text
+    return String(out)
+  }
+
+  /** 刷流 think：可调 shareBias（stingy|normal|proactive）。 */
+  function shareBiasHint() {
+    const bias = String(cfg().shareBias || 'proactive').toLowerCase()
+    if (bias === 'stingy' || bias === 'off') return '觉得主人一定会喜欢再写 share，拿不准就空着。'
+    if (bias === 'normal') return '觉得主人会喜欢才写 share，不然空。'
+    return '分享要积极：好看、有趣、值得主人一看的就填 share，别空着；今天额度没用完就尽量推。'
+  }
+
   async function think(prompt) {
-    return hub.runSystemTurn('douyin', 'QQ · 刷抖音', `【刷抖音，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs: 180000 })
+    return turnText(await hub.runSystemTurn('douyin', 'QQ · 刷抖音', `【刷抖音，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs: 180000 }))
+  }
+
+  /** 抖音 IM 私信：同 QQ 走 hub.runSystemTurn，但关工具；正文经 IM 发出。 */
+  async function thinkImReply(prompt) {
+    return turnText(await hub.runSystemTurn(
+      'douyin-im',
+      '抖音 · 私信',
+      `【抖音私信，用你的口气回；这一轮没有工具，回复会经抖音 IM 发给对方】\n${prompt}`,
+      { timeoutMs: 180000, noTools: true },
+    ))
   }
 
   async function boot() {
@@ -358,8 +383,8 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
       const shareLeft = ownerConfirmed(getConfig()) ? left(s, 'shareOwner') : 0
       const out = await think(
         `你在抖音刷到了这几个视频：\n\n${looked.map((v, i) => `【${i + 1}】${digestOf(v)}`).join('\n\n')}\n\n` +
-        `看完说说你的想法。对每个视频给一个对象：{"i":序号,"feeling":"一句真实感受","like":true/false,"comment":"想发的评论（不想就空字符串）","share":"想私信分享给${ownerName()}的话（觉得${ownerName()}会喜欢才写，不然空）","remember":"值得记住的（没有就空）"}。` +
-        `（关注不在刷流里做，有人让你关注再用工具。）这次最多点赞 ${likeLeft}、评论 ${commentLeft}、分享 ${shareLeft}。只输出 JSON 数组。`)
+        `看完说说你的想法。对每个视频给一个对象：{"i":序号,"feeling":"一句真实感受","like":true/false,"comment":"想发的评论（不想就空字符串）","share":"想私信分享给${ownerName()}的话","remember":"值得记住的（没有就空）"}。` +
+        `（关注不在刷流里做，有人让你关注再用工具。）这次最多点赞 ${likeLeft}、评论 ${commentLeft}、分享 ${shareLeft}。${shareBiasHint()}只输出 JSON 数组。`)
       const decisions = pickJson(out, [])
       const byI = new Map((Array.isArray(decisions) ? decisions : []).map((d) => [Number(d.i) || 0, d]))
 
@@ -430,7 +455,8 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
           if ((s.ownerDmStreak || 0) >= 3) break
           done.add(`${m.secUid || m.uid}:${m.text}`)
           hub.logChat?.('douyin', m.nickname || '主人抖音', `抖音私信你：${m.text}`, '')
-          const out = await think(`这是${ownerName()}在抖音给你发的私信：「${m.text}」
+          // 不 silent log-only：走 thinkImReply → hub.runSystemTurn（无工具），再 doWrite/IM 发出
+          const out = await thinkImReply(`这是${ownerName()}在抖音给你发的私信：「${m.text}」
 用你的口气回一句（像平时私聊，别太长）；不想回就只输出 [沉默]。只输出回复正文。`)
           const reply = cleanText(String(out || '').split(/\n+/)[0], 100)
           if (!reply || isSilence(reply)) continue
