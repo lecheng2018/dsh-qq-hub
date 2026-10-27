@@ -50,5 +50,11 @@
     "type": "git",
     "url": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq.git"
   },
-  "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq"
+  "homepage": "https://github.com/accomplish07zrh-eng/dsh-aurabot-qq",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "optionalDependencies": {
+    "douyin-im": "1.1.0"
+  }
 }

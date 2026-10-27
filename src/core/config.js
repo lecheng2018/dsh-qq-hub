@@ -113,7 +113,8 @@ export const DEFAULTS = {
     minimize: true, // 登录完把窗口最小化
     dmPollMinutes: 7, // 看私信的频率（分钟，实际在 0.7~1.4 倍之间随机）
     replyPollMinutes: 25, // 看别人回她评论的频率（分钟）
-    owner: { input: '', secUid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人的抖音号 / 主页链接；secUid 由「核对」确认后写入，面板不能直接改
+    owner: { input: '', secUid: '', uid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人抖音；secUid/uid 由「核对」写入，面板不能直接改
+    socialInterruptBrowse: true, // 社交（私信/分享）进行中时打断刷流，原因写入 lastSkipReason
     caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20, sign: 2, nickname: 2, avatar: 1 }, // 每天上限（登录后前 3 天减半；改资料三项仅工具）
     gate: {
       maxWritesPerDay: 60, // 所有写操作合计上限
@@ -260,6 +261,7 @@ export function normalize(raw) {
   d.enabled = bool(d.enabled, false)
   d.autoBrowse = bool(d.autoBrowse, true)
   d.minimize = bool(d.minimize, true)
+  d.socialInterruptBrowse = bool(d.socialInterruptBrowse, true)
   d.intervalHours = num(d.intervalHours, 4, 1, 48)
   d.maxRunsPerDay = num(d.maxRunsPerDay, 3, 0, 24)
   d.perRun = num(d.perRun, 5, 1, 10)
@@ -430,7 +432,7 @@ export function mergeFromPanel(current, incoming) {
   // 主人的抖音 secUid / 昵称 / 头像只能由「核对」路由写入，面板存配置时保留原值
   if (!next.douyin) next.douyin = {}
   if (!next.douyin.owner) next.douyin.owner = {}
-  for (const k of ['secUid', 'nickname', 'avatar', 'confirmedInput']) next.douyin.owner[k] = current.douyin?.owner?.[k] ?? ''
+  for (const k of ['secUid', 'uid', 'nickname', 'avatar', 'confirmedInput']) next.douyin.owner[k] = current.douyin?.owner?.[k] ?? ''
   // 联动密钥只由插件生成，面板不能改
   next.bridge.token = current.bridge?.token || ''
   // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开

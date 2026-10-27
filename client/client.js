@@ -1771,15 +1771,23 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       useEffect(() => { load() }, [])
       const act = (path, label, body) => async () => { setBusy(label); const r = body !== undefined ? await post(path, body) : await post(path); setBusy(''); toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); load() }
       const acct = s && s.account
+      const im = s && s.im
       const owner = (draft.douyin && draft.douyin.owner) || {}
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '刷抖音', right: f.sw('douyin.enabled'), desc: '用一个专用的 Edge 窗口（独立登录资料，不碰你平时的浏览器）刷抖音推荐：看几个视频、按性格决定点不点赞、评不评论；好玩的可以私信分享到你的抖音；你在抖音给她发的私信她也能回。关注不会在刷流里自动做，只有用 douyin_follow 工具（或别人明确让她关注）时才关注。总开关默认关——先点「打开登录窗口」扫码，再打开开关。' },
+        h(Card, { title: '刷抖音', right: f.sw('douyin.enabled'), desc: '内容（刷流/点赞/评论/关注/改资料）用专用 Edge（CDP）；社交（私信、分享给你、回你私信）走 douyin-im，不经浏览器。关注不会在刷流里自动做。总开关默认关——先分别登录浏览器和 IM，再打开开关。' },
           h(Row, { label: '浏览器路径', hint: '留空 = 自动找 Edge（找不到再找 Chrome）' }, f.text('douyin.browserPath', { size: 'wide', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })),
           h(Row, { label: '登录完最小化窗口' }, f.sw('douyin.minimize')),
-          h('div', { className: 'ab-flex', style: { marginTop: 4 } },
-            h(Btn, { small: true, onClick: act('/douyin/open-login', 'login') }, busy === 'login' ? '正在打开…' : '打开登录窗口'),
-            h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/account'); setS({ ...(s || {}), account: r }) } }, '检查登录'),
-            acct ? h('span', { className: 'ab-small', style: { color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.verify ? '要验证：' + (acct.reason || '') : acct.needLogin ? '还没登录' : acct.isLogin ? '已登录：' + (acct.nickname || acct.secUid || '') : (acct.reason || acct.error || '未知')) : null),
+          h(Row, { label: '社交打断刷流', hint: '私信/分享进行中时中断刷流，原因写入「上次跳过」' }, f.sw('douyin.socialInterruptBrowse')),
+          h(Row, { label: '浏览器登录' },
+            h('div', { className: 'ab-flex' },
+              h(Btn, { small: true, onClick: act('/douyin/open-login', 'login') }, busy === 'login' ? '正在打开…' : '打开登录窗口'),
+              h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/account'); setS({ ...(s || {}), account: r }) } }, '检查'),
+              acct ? h('span', { className: 'ab-small', style: { color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.verify ? '要验证：' + (acct.reason || '') : acct.needLogin ? '还没登录' : acct.isLogin ? '已登录：' + (acct.nickname || acct.secUid || '') : (acct.reason || acct.error || '未知')) : h('span', { className: 'ab-small ab-muted' }, '未检查'))),
+          h(Row, { label: 'IM 登录', hint: '私信 / 分享 / 回主人私信需要 IM 登录；会话在本机 data/douyin/im' },
+            h('div', { className: 'ab-flex' },
+              h(Btn, { small: true, onClick: act('/douyin/im-login', 'imlogin') }, busy === 'imlogin' ? '正在登录…' : '开始 IM 登录'),
+              h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/im'); setS({ ...(s || {}), im: r }) } }, '检查'),
+              im ? h('span', { className: 'ab-small', style: { color: im.loggedIn ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, im.loggedIn ? ('已登录：' + (im.nickname || im.uid || '')) : (im.reason || '还没登录 IM')) : h('span', { className: 'ab-small ab-muted' }, '未检查'))),
         ),
         h(Card, { title: '主人抖音', desc: '填你的抖音号或主页链接，点「核对」后她才认你（只认 sec_uid，不认昵称）。改了输入要重新核对。' },
           h(Row, { label: '你的抖音号 / 主页链接' }, f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })),
