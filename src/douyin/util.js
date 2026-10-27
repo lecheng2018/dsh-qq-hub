@@ -1,0 +1,125 @@
+// 刷抖音用到的纯函数：日期、随机、认主页链接 / 抖音号、头像对比、feed 整理、验证码识别。不碰浏览器，好测。
+
+export const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+/** [lo, hi] 之间随机一个整数；rand 方便测试替换。 */
+export const between = (lo, hi, rand = Math.random) => Math.floor(lo + rand() * (Math.max(lo, hi) - lo + 1))
+
+/** 从模型输出里取 JSON（对象或数组），取不到返回 fallback。 */
+export function pickJson(out, fallback) {
+  const s = String(out || '')
+  const m = s.match(/\[[\s\S]*\]/) || s.match(/\{[\s\S]*\}/)
+  if (!m) return fallback
+  try { return JSON.parse(m[0]) } catch (error) { return fallback }
+}
+
+/**
+ * 主人填的「抖音号 / 主页链接」认成什么。
+ * 主页链接（douyin.com/user/<sec_uid>）直接拿到 secUid；短链（v.douyin.com/xxx）要先跟随跳转；其余当抖音号（字母数字下划线点，4~24 位）。
+ */
+export function parseUserInput(input) {
+  const t = String(input ?? '').trim()
+  if (!t) return null
+  const prof = t.match(/douyin\.com\/user\/([A-Za-z0-9_-]{20,})/i)
+  if (prof) return { secUid: prof[1] }
+  const iesProf = t.match(/[?&]sec_uid=([A-Za-z0-9_-]{20,})/i)
+  if (iesProf) return { secUid: iesProf[1] }
+  const short = t.match(/https?:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/?/i)
+  if (short) return { short: short[0] }
+  const id = t.replace(/^@/, '').match(/^[A-Za-z0-9_.-]{2,40}$/)
+  if (id) return { uniqueId: id[0] }
+  return null
+}
+
+/** 从一段文字里找视频：抖音视频链接、/video/<id>、modal_id=<id>、纯数字 aweme_id。 */
+export function findAwemeId(text) {
+  const t = String(text ?? '')
+  const a = t.match(/douyin\.com\/(?:video|note)\/(\d{8,25})/i) || t.match(/[?&]modal_id=(\d{8,25})/i) || t.match(/iesdouyin\.com\/share\/video\/(\d{8,25})/i)
+  if (a) return { awemeId: a[1] }
+  const short = t.match(/https?:\/\/v\.douyin\.com\/[A-Za-z0-9_-]+\/?/i)
+  if (short) return { short: short[0] }
+  const n = t.trim().match(/^\d{15,25}$/)
+  return n ? { awemeId: n[0] } : null
+}
+
+export const videoLink = (id) => `https://www.douyin.com/video/${id}`
+
+/** 当前网址是不是「推荐」信息流（不是精选 / 关注 / 搜索 / 个人页）。 */
+export function isRecommendUrl(url) {
+  let u
+  try { u = new URL(String(url)) } catch (error) { return false }
+  if (!/(^|\.)douyin\.com$/.test(u.hostname)) return false
+  if (u.pathname !== '/' && u.pathname !== '') return false
+  return u.searchParams.get('recommend') === '1'
+}
+
+/** 头像网址去掉大小 / 签名参数，只比图片本体：路径最后一段去掉 ~ 之后的缩放后缀。 */
+export function avatarKey(url) {
+  const s = String(url || '').trim()
+  if (!s) return ''
+  let path = s
+  try { path = new URL(s.startsWith('//') ? 'https:' + s : s).pathname } catch (error) { path = s.split('?')[0] }
+  const last = path.split('/').filter(Boolean).pop() || ''
+  return last.split('~')[0].replace(/\.(jpe?g|png|webp|image|awebp)$/i, '')
+}
+export const sameAvatar = (a, b) => { const x = avatarKey(a); return x !== '' && x === avatarKey(b) }
+
+/** 主人在抖音上是不是「确认过的那个人」：只认 secUid，并且面板里的输入没被改过。 */
+export function ownerConfirmed(cfg) {
+  const o = cfg?.douyin?.owner || {}
+  return Boolean(o.secUid && o.input && o.confirmedInput === o.input)
+}
+export const isOwnerSec = (cfg, secUid) => ownerConfirmed(cfg) && Boolean(secUid) && String(secUid) === cfg.douyin.owner.secUid
+
+/** 页面上出现这些字样 = 要验证 / 要滑块 / 风控，立刻停手。 */
+const VERIFY_RE = /验证码|滑块|拖动.{0,6}完成|请完成安全验证|安全验证|身份验证|captcha|verify/i
+export const looksLikeVerify = (text) => VERIFY_RE.test(String(text || ''))
+/** 这些响应码 / 文案说明账号被限制了（操作频繁、被风控），也当风控处理。 */
+const LIMIT_RE = /操作过于频繁|行为异常|账号.{0,6}(异常|限制)|频繁操作|稍后再试/
+export const looksLimited = (text) => LIMIT_RE.test(String(text || ''))
+
+const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+
+/** 把 feed 响应里的一条整理成她看的样子；广告 / 直播 / 没 id 的返回 null。 */
+export function normalizeAweme(a) {
+  const x = a?.aweme_info || a
+  if (!x || typeof x !== 'object') return null
+  const id = String(x.aweme_id || x.awemeId || '')
+  if (!id || x.is_ads || x.is_live || x.cell_room || x.live_reason) return null
+  const st = x.statistics || {}
+  const au = x.author || {}
+  return {
+    awemeId: id,
+    desc: String(x.desc || '').slice(0, 300),
+    author: String(au.nickname || ''),
+    authorSecUid: String(au.sec_uid || ''),
+    authorId: String(au.unique_id || au.short_id || ''),
+    likes: num(st.digg_count),
+    comments: num(st.comment_count),
+    shares: num(st.share_count),
+    duration: num(x.duration || x.video?.duration) / 1000,
+    tags: (x.text_extra || []).map((t) => t?.hashtag_name).filter(Boolean).slice(0, 8),
+    createdAt: num(x.create_time) * 1000,
+    isImages: Array.isArray(x.images) && x.images.length > 0,
+  }
+}
+
+/** 从一次响应的 JSON 里捞所有视频（recommend feed: aweme_list；搜索 / 其它: data[].aweme_info）。 */
+export function awemesFromResponse(json) {
+  const list = json?.aweme_list || (Array.isArray(json?.data) ? json.data : []) || []
+  return list.map(normalizeAweme).filter(Boolean)
+}
+
+/** 一个视频交给她看的样子。 */
+export function digestOf(v, comments = []) {
+  return [
+    `作者：${v.author || '?'}  点赞 ${v.likes || 0}  评论 ${v.comments || 0}${v.duration ? '  时长 ' + Math.round(v.duration) + ' 秒' : ''}`,
+    v.desc ? `文案：${v.desc}` : '（没有文案）',
+    v.tags?.length ? `话题：${v.tags.join('、')}` : '',
+    comments.length ? '热评：\n' + comments.slice(0, 6).map((c) => `  ${c}`).join('\n') : '',
+    `${v.awemeId}`,
+  ].filter(Boolean).join('\n')
+}
+
+/** 评论 / 私信正文：去掉换行和过长部分；空的返回空串。 */
+export const cleanText = (t, max = 100) => [...String(t ?? '').replace(/\s+/g, ' ').trim()].slice(0, max).join('')
