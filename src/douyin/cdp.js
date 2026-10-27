@@ -3,9 +3,9 @@
 // 所有真正点开浏览器的步骤都经「driver」接口，测时注入假驱动，不需要真开 Edge。
 
 import { createServer } from 'node:net'
-import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawn, execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { join, resolve as pathResolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { looksLikeVerify, looksLimited, awemesFromResponse, isRecommendUrl, extractOwnerProfile, normalizeOwnerUid } from './util.js'
 
@@ -41,6 +41,152 @@ export function freePort() {
     s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
   })
 }
+
+/** 规范化资料路径，方便和进程命令行比对（大小写 / 斜杠）。 */
+export function normalizeProfilePath(p) {
+  try {
+    return pathResolve(String(p || '')).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  } catch (error) {
+    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  }
+}
+
+/**
+ * 读 Chromium/Edge 的 DevToolsActivePort：第一行是调试端口。
+ * 进程仍在时 Harness 重启后凭此 attach，避免再 spawn 抢同一 user-data-dir。
+ */
+export function readDevToolsActivePort(profileDir, { readFile = readFileSync, exists = existsSync } = {}) {
+  const file = join(String(profileDir || ''), 'DevToolsActivePort')
+  if (!exists(file)) return 0
+  try {
+    const first = String(readFile(file, 'utf8')).split(/\r?\n/)[0].trim()
+    const n = Number(first)
+    return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
+  } catch (error) {
+    return 0
+  }
+}
+
+/** 探测本机调试端口是否已起来（/json/version）。 */
+export async function probeDebugPort(port, { fetchJson = getJson } = {}) {
+  const p = Number(port)
+  if (!Number.isInteger(p) || p <= 0) return null
+  try {
+    const v = await fetchJson(`http://127.0.0.1:${p}/json/version`)
+    if (v && (v.webSocketDebuggerUrl || v.Browser || v['Protocol-Version'])) return v
+    return v || null
+  } catch (error) {
+    return null
+  }
+}
+
+function cmdlineHasProfile(cmdline, profileDir) {
+  const cmd = String(cmdline || '').replace(/\\/g, '/')
+  const want = normalizeProfilePath(profileDir)
+  if (!want) return false
+  const low = cmd.toLowerCase()
+  if (!/--user-data-dir=/i.test(cmd)) return false
+  if (low.includes(want)) return true
+  // 命令行里的路径可能带引号或未 resolve
+  const m = cmd.match(/--user-data-dir=(?:"([^"]+)"|'([^']+)'|([^\s]+))/i)
+  if (!m) return false
+  return normalizeProfilePath(m[1] || m[2] || m[3] || '') === want
+}
+
+function portFromCmdline(cmdline) {
+  const m = String(cmdline || '').match(/--remote-debugging-port=(\d{2,5})/i)
+  if (!m) return 0
+  const n = Number(m[1])
+  return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
+}
+
+/**
+ * 找出占用本 profile（user-data-dir）的本机 Edge/Chrome 进程。
+ * 返回 [{ pid, port }]；port 来自命令行 --remote-debugging-port（可能为 0）。
+ */
+export function findBrowserProcessesForProfile(profileDir, { execFile = execFileSync, platform = process.platform } = {}) {
+  const out = []
+  const push = (pid, cmdline) => {
+    const n = Number(pid)
+    if (!Number.isInteger(n) || n <= 0) return
+    if (!cmdlineHasProfile(cmdline, profileDir)) return
+    if (!/msedge|chrome|chromium|microsoft-edge/i.test(String(cmdline))) return
+    out.push({ pid: n, port: portFromCmdline(cmdline) })
+  }
+  try {
+    if (platform === 'win32') {
+      const want = normalizeProfilePath(profileDir).replace(/'/g, "''")
+      const ps = [
+        '$want = \'' + want + '\'',
+        "Get-CimInstance Win32_Process | Where-Object {",
+        "  $_.Name -match '^(msedge|chrome|chromium)\\.exe$' -and $_.CommandLine -and",
+        "  ($_.CommandLine -replace '\\\\','/').ToLower().Contains($want)",
+        '} | ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }',
+      ].join(' ')
+      const text = String(execFile('powershell.exe', ['-NoProfile', '-Command', ps], {
+        encoding: 'utf8', timeout: 20000, windowsHide: true, maxBuffer: 8 * 1024 * 1024,
+      }) || '')
+      for (const line of text.split(/\r?\n/)) {
+        const i = line.indexOf('\t')
+        if (i < 0) continue
+        push(line.slice(0, i), line.slice(i + 1))
+      }
+    } else {
+      const text = String(execFile('ps', ['-ao', 'pid=,args='], {
+        encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024,
+      }) || '')
+      for (const line of text.split('\n')) {
+        const m = line.trim().match(/^(\d+)\s+(.*)$/)
+        if (m) push(m[1], m[2])
+      }
+    }
+  } catch (error) {
+    return out
+  }
+  // 去重 pid
+  const seen = new Set()
+  return out.filter((x) => (seen.has(x.pid) ? false : (seen.add(x.pid), true)))
+}
+
+/** 温和结束占用本 profile 的浏览器进程（只动匹配到的 pid）。 */
+export function killBrowserProcessesForProfile(profileDir, { find = findBrowserProcessesForProfile, kill = (pid, sig) => process.kill(pid, sig) } = {}) {
+  const procs = find(profileDir)
+  const killed = []
+  for (const p of procs) {
+    try {
+      kill(p.pid, 'SIGTERM')
+      killed.push(p.pid)
+    } catch (error) { /* 已退出 */ }
+  }
+  return killed
+}
+
+/**
+ * Harness 重启后优先复用已开的调试端口；否则列出需清理的占用进程再 spawn。
+ * @returns {{ mode: 'attach', port: number } | { mode: 'spawn', killPids: number[] }}
+ */
+export async function resolveLaunchTarget(profileDir, {
+  readPort = readDevToolsActivePort,
+  probe = probeDebugPort,
+  findProcs = findBrowserProcessesForProfile,
+} = {}) {
+  const filePort = readPort(profileDir)
+  if (filePort && await probe(filePort)) {
+    return { mode: 'attach', port: filePort }
+  }
+  const procs = findProcs(profileDir)
+  for (const p of procs) {
+    if (p.port && await probe(p.port)) {
+      return { mode: 'attach', port: p.port, pid: p.pid }
+    }
+  }
+  // DevToolsActivePort 过期但进程还在：也要清掉再开
+  if (filePort && !(await probe(filePort))) {
+    /* fallthrough */
+  }
+  return { mode: 'spawn', killPids: procs.map((p) => p.pid) }
+}
+
 
 /** CDP WebSocket：发命令、收事件。wsFactory 方便测时替换。 */
 export function createCdpSession(wsUrl, { wsFactory, log } = {}) {
@@ -110,7 +256,7 @@ async function getJson(url) {
  * 真浏览器驱动。profileDir = 独立用户资料目录；browserPath 可空（自动找）。
  * 返回的对象实现 createFakeDriver 同形接口，duty 只认这些方法。
  */
-export function createBrowserDriver({ profileDir, browserPath = '', minimize = true, log, wsFactory } = {}) {
+export function createBrowserDriver({ profileDir, browserPath = '', minimize = true, log, wsFactory, hooks = {} } = {}) {
   let child = null
   let session = null
   let port = 0
@@ -119,12 +265,25 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
   const caps = { verify: false, reason: '' }
   let lastUserProfile = null // { secUid, uid, nickname, avatar } 来自 profile API / 主页
   let offNet = null
+  const h = {
+    freePort,
+    spawn,
+    getJson,
+    sleep,
+    findBrowser: (p) => findBrowser(p),
+    readDevToolsActivePort,
+    probeDebugPort,
+    findBrowserProcessesForProfile,
+    killPid: (pid, sig) => { try { process.kill(pid, sig) } catch (error) { /* gone */ } },
+    resolveLaunchTarget,
+    ...hooks,
+  }
 
   const markVerify = (why) => { caps.verify = true; caps.reason = why || '要验证' }
   const clearVerify = () => { caps.verify = false; caps.reason = '' }
 
   async function attachPage() {
-    const list = await getJson(`http://127.0.0.1:${port}/json/list`)
+    const list = await h.getJson(`http://127.0.0.1:${port}/json/list`)
     const page = (list || []).find((t) => t.type === 'page' && t.webSocketDebuggerUrl) || list?.[0]
     if (!page?.webSocketDebuggerUrl) throw new Error('浏览器没开出可调试的标签页')
     session = createCdpSession(page.webSocketDebuggerUrl, { wsFactory, log })
@@ -221,9 +380,39 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       if (offscreen) await moveOffscreen()
       return { ok: true }
     }
-    const bin = findBrowser(browserPath)
+
+    // 1) Harness 重启后优先 attach 已存在的 Edge（同 edge-profile + 调试端口）
+    const target = await h.resolveLaunchTarget(profileDir, {
+      readPort: h.readDevToolsActivePort,
+      probe: (p) => h.probeDebugPort(p, { fetchJson: h.getJson }),
+      findProcs: h.findBrowserProcessesForProfile,
+    })
+    if (target.mode === 'attach' && target.port) {
+      port = target.port
+      try {
+        await attachPage()
+        child = null // 不是我们 spawn 的，close 时不要误杀
+        if (offscreen) await moveOffscreen()
+        return { ok: true, attached: true, port }
+      } catch (error) {
+        try { session?.close() } catch (e) {}
+        session = null
+        log?.debug?.('attach 已有浏览器失败，改清资料目录再开', error?.message || error)
+      }
+    }
+
+    const bin = h.findBrowser(browserPath)
     if (!bin) return { ok: false, message: '找不到 Edge / Chrome。请在面板填浏览器路径，或先装好 Microsoft Edge。' }
-    port = await freePort()
+
+    // 2) 必须 spawn：先温和结束占用「本」user-data-dir 的旧 Edge，避免双开抢资料目录导致调试端口起不来
+    const killPids = [...new Set([...(target.killPids || []), ...h.findBrowserProcessesForProfile(profileDir).map((p) => p.pid)])]
+    const killed = []
+    for (const pid of killPids) {
+      try { h.killPid(pid, 'SIGTERM'); killed.push(pid) } catch (error) {}
+    }
+    if (killed.length) await h.sleep(600)
+
+    port = await h.freePort()
     const args = [
       `--user-data-dir=${profileDir}`,
       `--remote-debugging-port=${port}`,
@@ -238,22 +427,27 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       args.push('--window-position=-2400,-2400')
     }
     args.push('https://www.douyin.com/?recommend=1')
-    child = spawn(bin, args, { stdio: 'ignore', detached: true })
-    child.unref()
+    child = h.spawn(bin, args, { stdio: 'ignore', detached: true })
+    child.unref?.()
     // 等调试端口起来
     let last = null
     for (let i = 0; i < 40; i++) {
       try {
-        await getJson(`http://127.0.0.1:${port}/json/version`)
+        await h.getJson(`http://127.0.0.1:${port}/json/version`)
         last = null
         break
-      } catch (error) { last = error; await sleep(250) }
+      } catch (error) { last = error; await h.sleep(250) }
     }
-    if (last) return { ok: false, message: `浏览器开了但调试端口没起来：${last.message}` }
+    if (last) {
+      return {
+        ok: false,
+        message: `浏览器资料目录被占用或调试端口没起来（profile=${profileDir}，port=${port}${killed.length ? `，已尝试结束旧进程 ${killed.join(',')}` : ''}）：${last.message}`,
+      }
+    }
     await attachPage()
     if (offscreen) await moveOffscreen()
     else if (minimize) await evalJs(`try{window.moveTo(0,0);window.resizeTo(900,700)}catch(e){}`).catch(() => {})
-    return { ok: true }
+    return { ok: true, attached: false, port, killed }
   }
 
   /** CDP 截登录二维码区，或取 img/canvas 的 dataURL / src。 */

@@ -1,7 +1,7 @@
 // 抖音：认号 / 主页链接、推荐页判定、假驱动刷一轮、日上限、试运行不计次、写操作总闸、主人私信（只认 sec_uid）、#4 相关回归。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -921,4 +921,205 @@ test('浏览器登录：duty.startBrowserLogin / browserLoginStatus 成功仅在
   assert.equal(done.phase, 'logged_in')
   const acct = await d.account(true)
   assert.equal(acct.isLogin, true)
+})
+
+
+// —— Edge 重启后 attach / 清占用再开 ——
+test('CDP：readDevToolsActivePort 读第一行端口', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-port-'))
+  writeFileSync(join(dir, 'DevToolsActivePort'), '59900\n/devtools/browser/abc\n')
+  assert.equal(cdp.readDevToolsActivePort(dir), 59900)
+  assert.equal(cdp.readDevToolsActivePort(join(dir, 'nope')), 0)
+  writeFileSync(join(dir, 'DevToolsActivePort'), 'not-a-port\n')
+  assert.equal(cdp.readDevToolsActivePort(dir), 0)
+})
+
+test('CDP：resolveLaunchTarget 已有端口可连 → attach', async () => {
+  const probed = []
+  const r = await cdp.resolveLaunchTarget('/tmp/edge-profile-x', {
+    readPort: () => 59900,
+    probe: async (p) => { probed.push(p); return p === 59900 ? { Browser: 'Edge', webSocketDebuggerUrl: 'ws://127.0.0.1:59900/devtools/browser/x' } : null },
+    findProcs: () => [{ pid: 4242, port: 59900 }],
+  })
+  assert.equal(r.mode, 'attach')
+  assert.equal(r.port, 59900)
+  assert.deepEqual(probed, [59900])
+})
+
+test('CDP：resolveLaunchTarget 无文件端口但进程带 remote-debugging → attach', async () => {
+  const r = await cdp.resolveLaunchTarget('/data/edge-profile', {
+    readPort: () => 0,
+    probe: async (p) => (p === 60111 ? { Browser: 'Edge' } : null),
+    findProcs: () => [{ pid: 77, port: 60111 }],
+  })
+  assert.equal(r.mode, 'attach')
+  assert.equal(r.port, 60111)
+  assert.equal(r.pid, 77)
+})
+
+test('CDP：resolveLaunchTarget 占用但端口连不上 → spawn + killPids', async () => {
+  const r = await cdp.resolveLaunchTarget('/data/edge-profile', {
+    readPort: () => 59900,
+    probe: async () => null,
+    findProcs: () => [{ pid: 101, port: 59900 }, { pid: 102, port: 0 }],
+  })
+  assert.equal(r.mode, 'spawn')
+  assert.deepEqual(r.killPids, [101, 102])
+})
+
+test('CDP：findBrowserProcessesForProfile 从 ps 输出解析本 profile', () => {
+  const profile = '/home/u/data/edge-profile'
+  const psOut = [
+    '  1 /sbin/init',
+    ` 4242 /opt/msedge --user-data-dir=${profile} --remote-debugging-port=59900 https://www.douyin.com`,
+    ' 4243 /opt/msedge --type=renderer',
+    ` 9999 /usr/bin/google-chrome --user-data-dir=/other/profile --remote-debugging-port=9222`,
+  ].join('\n')
+  const procs = cdp.findBrowserProcessesForProfile(profile, {
+    platform: 'linux',
+    execFile: () => psOut,
+  })
+  assert.equal(procs.length, 1)
+  assert.equal(procs[0].pid, 4242)
+  assert.equal(procs[0].port, 59900)
+})
+
+test('CDP：killBrowserProcessesForProfile 只杀匹配 pid', () => {
+  const killed = []
+  const out = cdp.killBrowserProcessesForProfile('/p', {
+    find: () => [{ pid: 11, port: 1 }, { pid: 22, port: 0 }],
+    kill: (pid, sig) => { killed.push([pid, sig]) },
+  })
+  assert.deepEqual(out, [11, 22])
+  assert.deepEqual(killed, [[11, 'SIGTERM'], [22, 'SIGTERM']])
+})
+
+/** 极简假 WebSocket：open 后 send 立即回空 result，够 attachPage 的 enable 命令。 */
+function FakeWs(url) {
+  this.url = url
+  this.listeners = {}
+  queueMicrotask(() => {
+    for (const fn of this.listeners.open || []) fn()
+  })
+}
+FakeWs.prototype.addEventListener = function (ev, fn) {
+  ;(this.listeners[ev] ||= []).push(fn)
+}
+FakeWs.prototype.send = function (raw) {
+  let msg
+  try { msg = JSON.parse(raw) } catch { return }
+  if (msg.id == null) return
+  queueMicrotask(() => {
+    for (const fn of this.listeners.message || []) {
+      fn({ data: JSON.stringify({ id: msg.id, result: {} }) })
+    }
+  })
+}
+FakeWs.prototype.close = function () {}
+
+test('CDP launch：已有调试端口可连 → attach，不 spawn', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-attach-'))
+  writeFileSync(join(dir, 'DevToolsActivePort'), '59900\n/devtools/browser/x\n')
+  const spawns = []
+  const drv = cdp.createBrowserDriver({
+    profileDir: dir,
+    browserPath: '/fake/msedge',
+    minimize: false,
+    wsFactory: FakeWs,
+    hooks: {
+      findBrowser: () => '/fake/msedge',
+      freePort: async () => 60123,
+      spawn: (...a) => { spawns.push(a); return { pid: 1, unref() {} } },
+      getJson: async (url) => {
+        if (url.includes('/json/version')) {
+          return { Browser: 'Edge', webSocketDebuggerUrl: 'ws://127.0.0.1:59900/devtools/browser/x' }
+        }
+        if (url.includes('/json/list')) {
+          return [{ type: 'page', webSocketDebuggerUrl: 'ws://127.0.0.1:59900/devtools/page/1' }]
+        }
+        throw new Error('unexpected ' + url)
+      },
+      findBrowserProcessesForProfile: () => [{ pid: 4242, port: 59900 }],
+      sleep: async () => {},
+    },
+  })
+  const r = await drv.launch()
+  assert.equal(r.ok, true)
+  assert.equal(r.attached, true)
+  assert.equal(r.port, 59900)
+  assert.equal(spawns.length, 0)
+  drv.close()
+})
+
+test('CDP launch：占用且端口起不来 → 清本 profile 旧进程再 spawn', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-clear-'))
+  writeFileSync(join(dir, 'DevToolsActivePort'), '59900\n/devtools/browser/x\n')
+  const spawns = []
+  const kills = []
+  let versionOk = false
+  const drv = cdp.createBrowserDriver({
+    profileDir: dir,
+    browserPath: '/fake/msedge',
+    minimize: false,
+    wsFactory: FakeWs,
+    hooks: {
+      findBrowser: () => '/fake/msedge',
+      freePort: async () => 60123,
+      spawn: (bin, args) => {
+        spawns.push({ bin, args })
+        versionOk = true
+        return { pid: 555, unref() {} }
+      },
+      getJson: async (url) => {
+        if (url.includes(':59900/')) throw new Error('fetch failed')
+        if (url.includes('/json/version')) {
+          if (!versionOk) throw new Error('fetch failed')
+          return { Browser: 'Edge', webSocketDebuggerUrl: 'ws://127.0.0.1:60123/devtools/browser/x' }
+        }
+        if (url.includes('/json/list')) {
+          return [{ type: 'page', webSocketDebuggerUrl: 'ws://127.0.0.1:60123/devtools/page/1' }]
+        }
+        throw new Error('unexpected ' + url)
+      },
+      findBrowserProcessesForProfile: () => [{ pid: 4242, port: 59900 }],
+      killPid: (pid, sig) => { kills.push([pid, sig]) },
+      sleep: async () => {},
+      probeDebugPort: async () => null,
+    },
+  })
+  const r = await drv.launch()
+  assert.equal(r.ok, true)
+  assert.equal(r.attached, false)
+  assert.equal(r.port, 60123)
+  assert.ok(kills.some(([pid]) => pid === 4242), '应结束占用本 profile 的旧进程')
+  assert.equal(spawns.length, 1)
+  assert.ok(spawns[0].args.some((a) => a.includes('--user-data-dir=' + dir)))
+  assert.ok(spawns[0].args.some((a) => a === '--remote-debugging-port=60123'))
+  drv.close()
+})
+
+test('CDP launch：spawn 后端口仍起不来 → 文案含 profile 与 port', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-fail-'))
+  const drv = cdp.createBrowserDriver({
+    profileDir: dir,
+    browserPath: '/fake/msedge',
+    minimize: false,
+    hooks: {
+      findBrowser: () => '/fake/msedge',
+      freePort: async () => 60123,
+      spawn: () => ({ pid: 1, unref() {} }),
+      getJson: async () => { throw new Error('fetch failed') },
+      findBrowserProcessesForProfile: () => [{ pid: 9, port: 59900 }],
+      killPid: () => {},
+      sleep: async () => {},
+      resolveLaunchTarget: async () => ({ mode: 'spawn', killPids: [9] }),
+      probeDebugPort: async () => null,
+    },
+  })
+  const r = await drv.launch()
+  assert.equal(r.ok, false)
+  assert.match(r.message, /资料目录被占用|调试端口没起来/)
+  assert.match(r.message, /profile=/)
+  assert.match(r.message, /port=60123/)
+  assert.match(r.message, /fetch failed/)
 })
