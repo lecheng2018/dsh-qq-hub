@@ -2,8 +2,7 @@
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { fetchImage } from '../core/net.js'
-
-const RIGHT = { all: 1, friends: 4, self: 64 }
+import { resolveAudience } from './qzone-audience.js'
 
 const toMin = (hhmm) => {
   const [h, m] = String(hhmm).split(':').map(Number)
@@ -37,11 +36,13 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
     const cfg = getConfig()
     const text = String(content || '').trim()
     if (!text) return { ok: false, message: '说说是空的' }
-    const right = RIGHT[visibility || cfg.diary.visibility] || 1
+    // 面板定的范围说了算；单次请求只能收窄成「仅自己」，不能扩大。
+    let audience
+    try { audience = resolveAudience(cfg, visibility) } catch (error) { return { ok: false, message: error.message } }
     if (!cfg.enabled) return { ok: false, message: '总开关关着' }
     if (cfg.dryRun) {
-      log.info(`试运行：本来要发说说（${visibility || cfg.diary.visibility}）：${text.slice(0, 60)}`)
-      return { ok: true, tid: '', dryRun: true }
+      log.info(`试运行：本来要发说说（${audience.label}）：${text.slice(0, 60)}`)
+      return { ok: true, tid: '', dryRun: true, visibility: audience.visibility, label: audience.label, target_uins: audience.target_uins || [] }
     }
     const imgs = []
     for (const src of images) {
@@ -52,10 +53,14 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
       }
     }
     try {
-      const r = await onebot.call('send_qzone_msg', { content: text, ugc_right: right, ...(imgs.length ? { images: imgs } : {}) }, { timeoutMs: 60000 })
+      // 下载图片可能花几秒，发布前用最新配置再算一次，免得中途改了范围还按旧的发出去。
+      const latest = getConfig()
+      audience = resolveAudience(latest, visibility)
+      if (!latest.enabled || latest.dryRun) return { ok: false, message: '发布前开关已变化，本次未发布。' }
+      const r = await onebot.call('send_qzone_msg', { content: text, ugc_right: audience.ugc_right, ...(audience.target_uins ? { target_uins: audience.target_uins } : {}), ...(imgs.length ? { images: imgs } : {}) }, { timeoutMs: 60000 })
       const tid = String(r?.tid ?? r?.id ?? r ?? '')
-      log.info(`发了一条说说（tid ${tid || '?'}）`)
-      return { ok: true, tid }
+      log.info(`发了一条说说（${audience.label}，tid ${tid || '?'}）`)
+      return { ok: true, tid, visibility: audience.visibility, label: audience.label, target_uins: audience.target_uins || [] }
     } catch (error) {
       log.warn('发说说失败：', error.message)
       return { ok: false, message: error.message }
@@ -80,6 +85,8 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
     busy = true
     try {
       const cfg = getConfig().diary
+      // 名单/范围不合法就别让模型白写一篇再失败
+      try { resolveAudience(getConfig(), visibility) } catch (error) { return { ok: false, message: error.message } }
       const now = new Date()
       const excerpt = todayExcerpt()
       const prompt = [
@@ -94,7 +101,7 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
       if (!text || text === '[沉默]') return { ok: false, message: '她这次没写出来' }
       const r = await post(text, { visibility })
       const s = state()
-      s.history.unshift({ at: Date.now(), text, ok: r.ok, tid: r.tid || '', dryRun: Boolean(r.dryRun), visibility: visibility || cfg.visibility, error: r.ok ? '' : r.message })
+      s.history.unshift({ at: Date.now(), text, ok: r.ok, tid: r.tid || '', dryRun: Boolean(r.dryRun), visibility: r.visibility || visibility || cfg.visibility, target_uins: r.target_uins || [], error: r.ok ? '' : r.message })
       s.history = s.history.slice(0, 100)
       save(s)
       if (r.ok && !r.dryRun) {
