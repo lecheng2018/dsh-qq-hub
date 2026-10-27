@@ -46,6 +46,82 @@ export function findAwemeId(text) {
 
 export const videoLink = (id) => `https://www.douyin.com/video/${id}`
 
+/** 只认 5~20 位纯数字 uid（IM friend 查找用）。 */
+export function normalizeOwnerUid(uid) {
+  const s = String(uid ?? '').trim()
+  return /^\d{5,20}$/.test(s) ? s : ''
+}
+
+/**
+ * 从主页快照抠 secUid + 数字 uid。
+ * RENDER_DATA 在真机上是 URL 编码 JSON，裸 html 正则经常扫不到 "uid"。
+ */
+export function extractOwnerProfile({ href = '', html = '', renderData = '', nickname = '', avatar = '' } = {}) {
+  let secUid = ''
+  const hm = String(href || '').match(/\/user\/([A-Za-z0-9_-]{20,})/)
+  if (hm) secUid = hm[1]
+
+  let uid = ''
+  const preferUid = (cand, sid) => {
+    const n = normalizeOwnerUid(cand)
+    if (!n) return
+    if (!uid || (secUid && sid === secUid)) uid = n
+  }
+
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const x of node) walk(x); return }
+    const sid = String(node.secUid || node.sec_uid || '')
+    preferUid(node.uid ?? node.user_id ?? node.userId, sid)
+    for (const k of Object.keys(node)) walk(node[k])
+  }
+
+  if (renderData) {
+    try {
+      const raw = String(renderData)
+      const decoded = raw.includes('%') ? decodeURIComponent(raw) : raw
+      walk(JSON.parse(decoded))
+    } catch (error) { /* RENDER_DATA 坏了就走 html */ }
+  }
+
+  const blob = String(html || '')
+  const patterns = [
+    /"uid"\s*:\s*"?(\d{5,20})"?/,
+    /"user_id"\s*:\s*"?(\d{5,20})"?/,
+    /"userId"\s*:\s*"?(\d{5,20})"?/,
+    /uid%22%3A%22(\d{5,20})/,
+    /uid%22%3A(\d{5,20})/,
+  ]
+  if (!uid && secUid) {
+    const idx = blob.indexOf(secUid)
+    if (idx >= 0) {
+      const win = blob.slice(Math.max(0, idx - 1200), idx + 1200)
+      for (const re of patterns) {
+        const m = win.match(re)
+        if (m) { preferUid(m[1], secUid); break }
+      }
+    }
+  }
+  if (!uid) {
+    for (const re of patterns) {
+      const m = blob.match(re)
+      if (m) { preferUid(m[1], ''); break }
+    }
+  }
+  if (!secUid) {
+    const sm = blob.match(/"secUid"\s*:\s*"([A-Za-z0-9_-]{20,})"/) || blob.match(/"sec_uid"\s*:\s*"([A-Za-z0-9_-]{20,})"/)
+    if (sm) secUid = sm[1]
+  }
+
+  return {
+    secUid,
+    uid: normalizeOwnerUid(uid),
+    nickname: String(nickname || '').split('\n')[0].slice(0, 40),
+    avatar: String(avatar || ''),
+  }
+}
+
+
 /** 当前网址是不是「推荐」信息流（不是精选 / 关注 / 搜索 / 个人页）。 */
 export function isRecommendUrl(url) {
   let u

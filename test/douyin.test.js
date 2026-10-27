@@ -25,6 +25,8 @@ test('工具：认抖音号 / 主页链接 / 短链 / 视频链接', () => {
   assert.deepEqual(util.findAwemeId('看这个 https://www.douyin.com/video/7123456789012345678'), { awemeId: '7123456789012345678' })
   assert.deepEqual(util.findAwemeId('https://v.douyin.com/xyz123/'), { short: 'https://v.douyin.com/xyz123/' })
   assert.ok(util.isRecommendUrl('https://www.douyin.com/?recommend=1'))
+  assert.ok(util.isRecommendUrl('https://www.douyin.com/?recommend=1&from_nav=1'))
+  assert.equal(util.isRecommendUrl('https://www.douyin.com/jingxuan'), false)
   assert.equal(util.isRecommendUrl('https://www.douyin.com/?tab=home'), false)
   assert.ok(util.sameAvatar('https://cdn/x/abc~tplv-xxx.jpeg', 'https://other/abc~c5_300x300.jpeg'))
   assert.equal(util.sameAvatar('https://cdn/a.jpg', 'https://cdn/b.jpg'), false)
@@ -110,6 +112,44 @@ test('核对主人：resolveUser 带回的 uid 与 secUid 都写入 owner', asyn
   assert.equal(base.douyin.owner.uid, '9876543210')
   assert.equal(util.ownerConfirmed(base), true)
 })
+
+test('核对主人：非数字 uid 不写入 owner.uid；数字 uid 持久化', async () => {
+  let persisted = null
+  const owner = { secUid: 'MS4wLjABAAAAabcdefghijklmnopqrs', uid: 'not-a-uid', nickname: 'x', avatar: '' }
+  const drv = cdp.createFakeDriver({ owner })
+  const base = normalize({
+    enabled: true, dryRun: false, ownerQQ: '10000001', ownerName: '主人',
+    douyin: {
+      enabled: true,
+      owner: { input: '', secUid: '', uid: '', nickname: '', avatar: '', confirmedInput: '' },
+      caps: { like: 30, comment: 1, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 },
+      gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 3 },
+    },
+    profilePerms: Object.fromEntries(DOUYIN_PERM_KEYS.map((k) => [k, 'owner'])),
+  })
+  const getConfig = () => base
+  getConfig._setOwner = (o) => { persisted = { ...o }; Object.assign(base.douyin.owner, o) }
+  const d = duty.createDouyin({
+    getConfig,
+    hub: { runSystemTurn: async () => ({ ok: true, text: '{}' }), chatOfSession: () => 'c' },
+    memory: { recentEvents: () => [], addEvent: () => {}, add: () => {} },
+    log: { info() {}, warn() {}, debug() {} },
+    driver: drv,
+    dataFile: join(process.env.AURABOT_DATA_DIR, `douyin-uid-bad-${Math.random().toString(16).slice(2)}.json`),
+  })
+  const r = await d.confirmOwner('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs')
+  assert.equal(r.ok, true)
+  assert.equal(r.uid, '')
+  assert.equal(persisted.uid, '')
+  assert.equal(persisted.secUid, owner.secUid)
+
+  // 数字 uid：假驱动改 owner 后再核对应写入
+  drv._state.owner.uid = '9988776655'
+  const r2 = await d.confirmOwner('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs')
+  assert.equal(r2.uid, '9988776655')
+  assert.equal(base.douyin.owner.uid, '9988776655')
+})
+
 
 const feed = [
   { awemeId: '1001', author: '阿猫', authorSecUid: 'sec_cat', desc: '猫砂盆测评', likes: 1000, comments: 10, tags: ['猫'] },
@@ -274,6 +314,49 @@ test('回主人私信：连续 3 条后若主人没新话就停', async () => {
   const r = await d.checkOwnerDms()
   assert.equal(r.replied, 3, '最多连回 3 条')
   assert.equal(d.state().dmReply, 3)
+})
+
+test('推荐页：裸 recommend=1 跳 jingxuan 后 from_nav / 点推荐可恢复', async () => {
+  const drv = cdp.createFakeDriver({ redirectRecommendToJingxuan: true })
+  await drv.navigate('https://www.douyin.com/?recommend=1')
+  assert.equal(await drv.currentUrl(), 'https://www.douyin.com/jingxuan')
+  assert.equal(util.isRecommendUrl(await drv.currentUrl()), false)
+
+  const ok = await drv.ensureRecommend()
+  assert.equal(ok.ok, true, ok.message)
+  assert.ok(util.isRecommendUrl(ok.url))
+  assert.match(ok.url, /from_nav=1/)
+  assert.ok(drv._state.log.some((x) => x[0] === 'nav' && String(x[1]).includes('from_nav=1')))
+})
+
+test('推荐页：from_nav 仍 jingxuan 时点侧栏推荐可恢复', async () => {
+  const drv = cdp.createFakeDriver({ redirectRecommendToJingxuan: true, fromNavStaysJingxuan: true })
+  await drv.navigate('https://www.douyin.com/?recommend=1')
+  assert.match(await drv.currentUrl(), /jingxuan/)
+  const ok = await drv.ensureRecommend()
+  assert.equal(ok.ok, true, ok.message)
+  assert.ok(util.isRecommendUrl(ok.url))
+  assert.ok(drv._state.log.some((x) => x[0] === 'clickRecommendTab'))
+})
+
+test('extractOwnerProfile：RENDER_DATA URL 编码与 html 均可抠出数字 uid', () => {
+  const sec = 'MS4wLjABAAAAabcdefghijklmnopqrs'
+  const payload = {
+    app: { user: { userInfo: { secUid: sec, uid: '135990228302301', nickname: '主人号' } } },
+  }
+  const encoded = encodeURIComponent(JSON.stringify(payload))
+  const fromRender = util.extractOwnerProfile({
+    href: `https://www.douyin.com/user/${sec}`,
+    renderData: encoded,
+  })
+  assert.equal(fromRender.secUid, sec)
+  assert.equal(fromRender.uid, '135990228302301')
+
+  const html = `noise "secUid":"${sec}" pad uid%22%3A%2211223344556677 more`
+  const fromHtml = util.extractOwnerProfile({ href: `https://www.douyin.com/user/${sec}`, html })
+  assert.equal(fromHtml.uid, '11223344556677')
+  assert.equal(util.normalizeOwnerUid('abc'), '')
+  assert.equal(util.normalizeOwnerUid('12345'), '12345')
 })
 
 test('#4 卡在精选：ensureRecommend 失败则本轮不刷', async () => {
