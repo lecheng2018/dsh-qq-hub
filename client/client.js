@@ -1767,27 +1767,141 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const f = useField(draft, setDraft)
       const [s, setS] = useState(null)
       const [busy, setBusy] = useState('')
+      const [brLogin, setBrLogin] = useState(null)
+      const [imLogin, setImLogin] = useState(null)
+      const [smsCode, setSmsCode] = useState('')
       const load = () => get('/douyin/state').then(setS)
       useEffect(() => { load() }, [])
+      const loginPhaseText = (p) => ({
+        waiting_scan: '等待扫码',
+        scanned: '已扫待确认',
+        logged_in: '已登录',
+        expired: '过期，点刷新',
+        sms_required: '需要短信验证码',
+        voice_required: '需要语音验证码',
+        verification_required: '需要安全验证',
+        error: '登录失败',
+        idle: '',
+      })[p] || p || ''
+      const toastLogin = (r, okFallback) => {
+        if (r.loggedIn) toast(r.message || okFallback || '已登录', 'ok')
+        else if (r.ok && (r.started || r.qrDataUrl || ['waiting_scan', 'scanned', 'sms_required', 'voice_required', 'verification_required', 'expired'].includes(r.phase))) toast(r.message || loginPhaseText(r.phase) || '请扫码')
+        else toast(r.message || '没成功', 'err')
+      }
       const act = (path, label, body) => async () => { setBusy(label); const r = body !== undefined ? await post(path, body) : await post(path); setBusy(''); toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); load() }
+      useEffect(() => {
+        const active = brLogin && ['waiting_scan', 'scanned', 'verification_required'].includes(brLogin.phase)
+        if (!active) return undefined
+        const t = setInterval(async () => {
+          const r = await get('/douyin/browser-login/status')
+          setBrLogin(r)
+          if (r.loggedIn) { toast(r.message || '浏览器已登录', 'ok'); load() }
+        }, 2000)
+        return () => clearInterval(t)
+      }, [brLogin && brLogin.phase])
+      useEffect(() => {
+        const active = imLogin && ['waiting_scan', 'scanned', 'sms_required', 'voice_required', 'verification_required'].includes(imLogin.phase)
+        if (!active) return undefined
+        const t = setInterval(async () => {
+          const r = await get('/douyin/im-login/status')
+          setImLogin(r)
+          if (r.loggedIn) { toast(r.message || 'IM 已登录', 'ok'); load() }
+        }, 2000)
+        return () => clearInterval(t)
+      }, [imLogin && imLogin.phase])
+      const startBrowserLogin = async () => {
+        setBusy('login')
+        const r = await post('/douyin/browser-login')
+        setBusy('')
+        setBrLogin(r)
+        toastLogin(r, '浏览器已登录')
+        load()
+      }
+      const refreshBrowserLogin = async () => {
+        setBusy('login')
+        const r = await post('/douyin/browser-login/refresh')
+        setBusy('')
+        setBrLogin(r)
+        toastLogin(r, '浏览器已登录')
+        load()
+      }
+      const startImQrLogin = async () => {
+        setBusy('imlogin')
+        const r = await post('/douyin/im-login')
+        setBusy('')
+        setImLogin(r)
+        toastLogin(r, 'IM 已登录')
+        load()
+      }
+      const refreshImQrLogin = async () => {
+        setBusy('imlogin')
+        const r = await post('/douyin/im-login/refresh')
+        setBusy('')
+        setImLogin(r)
+        toastLogin(r, 'IM 已登录')
+        load()
+      }
+      const submitImSms = async () => {
+        setBusy('imsms')
+        const r = await post('/douyin/im-login/sms', { code: smsCode })
+        setBusy('')
+        setImLogin(r)
+        toastLogin(r, 'IM 已登录')
+        if (r.loggedIn) setSmsCode('')
+        load()
+      }
       const acct = s && s.account
       const im = s && s.im
       const owner = (draft.douyin && draft.douyin.owner) || {}
+      const qrBox = (login, kind) => {
+        if (!login || login.phase === 'idle') return null
+        return h('div', { style: { marginTop: 8, display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' } },
+          login.qrDataUrl ? h('img', {
+            src: login.qrDataUrl,
+            alt: kind + ' 登录二维码',
+            width: 168,
+            height: 168,
+            style: { width: 168, height: 168, borderRadius: 8, background: '#fff', border: '1px solid var(--ab-border, #333)', objectFit: 'contain' },
+          }) : null,
+          h('div', { className: 'ab-small', style: { minWidth: 160, flex: 1 } },
+            h('div', { style: { color: login.loggedIn ? 'var(--ab-ok)' : (login.phase === 'error' || login.phase === 'expired' ? 'var(--ab-warn)' : 'inherit') } },
+              login.loggedIn ? (login.message || '已登录') : (loginPhaseText(login.phase) || login.message || '')),
+            login.message && !login.loggedIn ? h('div', { className: 'ab-muted', style: { marginTop: 4 } }, login.message) : null,
+            login.verifyHint ? h('div', { className: 'ab-note warn', style: { marginTop: 6 } }, login.verifyHint) : null,
+            login.error ? h('div', { className: 'ab-note warn', style: { marginTop: 6 } }, login.error) : null,
+          ))
+      }
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '刷抖音', right: f.sw('douyin.enabled'), desc: '内容（刷流/点赞/评论/关注/改资料）用专用 Edge（CDP）；社交（私信、分享给你、回你私信）走 douyin-im，不经浏览器。关注不会在刷流里自动做。总开关默认关——先分别登录浏览器和 IM，再打开开关。' },
+        h(Card, { title: '刷抖音', right: f.sw('douyin.enabled'), desc: '内容（刷流/点赞/评论/关注/改资料）用专用 Edge（CDP）；社交（私信、分享给你、回你私信）走 douyin-im，不经浏览器。关注不会在刷流里自动做。总开关默认关——先分别在面板扫码登录浏览器和 IM，再打开开关。' },
           h(Row, { label: '浏览器路径', hint: '留空 = 自动找 Edge（找不到再找 Chrome）' }, f.text('douyin.browserPath', { size: 'wide', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })),
-          h(Row, { label: '登录完最小化窗口' }, f.sw('douyin.minimize')),
+          h(Row, { label: '登录完最小化窗口', hint: '登录时窗口离屏，二维码在面板显示，不抢前台；登录成功后可最小化' }, f.sw('douyin.minimize')),
           h(Row, { label: '社交打断刷流', hint: '私信/分享进行中时中断刷流，原因写入「上次跳过」' }, f.sw('douyin.socialInterruptBrowse')),
-          h(Row, { label: '浏览器登录' },
-            h('div', { className: 'ab-flex' },
-              h(Btn, { small: true, onClick: act('/douyin/open-login', 'login') }, busy === 'login' ? '正在打开…' : '打开登录窗口'),
-              h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/account'); setS({ ...(s || {}), account: r }) } }, '检查'),
-              acct ? h('span', { className: 'ab-small', style: { color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.verify ? '要验证：' + (acct.reason || '') : acct.needLogin ? '还没登录' : acct.isLogin ? '已登录：' + (acct.nickname || acct.secUid || '') : (acct.reason || acct.error || '未知')) : h('span', { className: 'ab-small ab-muted' }, '未检查'))),
-          h(Row, { label: 'IM 登录', hint: '私信 / 分享 / 回主人私信需要 IM 登录；会话在本机 data/douyin/im' },
-            h('div', { className: 'ab-flex' },
-              h(Btn, { small: true, onClick: act('/douyin/im-login', 'imlogin') }, busy === 'imlogin' ? '正在登录…' : '开始 IM 登录'),
-              h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/im'); setS({ ...(s || {}), im: r }) } }, '检查'),
-              im ? h('span', { className: 'ab-small', style: { color: im.loggedIn ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, im.loggedIn ? ('已登录：' + (im.nickname || im.uid || '')) : (im.reason || '还没登录 IM')) : h('span', { className: 'ab-small ab-muted' }, '未检查'))),
+          h(Row, { label: '浏览器登录', hint: 'Edge 离屏打开，二维码截到本面板；每 2 秒轮询登录态；过期点刷新' },
+            h('div', null,
+              h('div', { className: 'ab-flex' },
+                h(Btn, { small: true, onClick: startBrowserLogin, disabled: !!busy }, busy === 'login' ? '正在获取二维码…' : '开始浏览器登录'),
+                h(Btn, { small: true, onClick: refreshBrowserLogin, disabled: !!busy }, '刷新二维码'),
+                h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/account'); setS({ ...(s || {}), account: r }) } }, '检查'),
+                acct ? h('span', { className: 'ab-small', style: { color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, acct.verify ? '要验证：' + (acct.reason || '') : acct.needLogin ? '还没登录' : acct.isLogin ? '已登录：' + (acct.nickname || acct.secUid || '') : (acct.reason || acct.error || '未知')) : h('span', { className: 'ab-small ab-muted' }, '未检查')),
+              qrBox(brLogin, '浏览器'))),
+          h(Row, { label: 'IM 登录', hint: '私信 / 分享 / 回主人私信需要 IM 登录；二维码在本面板；会话在本机 data/douyin/im' },
+            h('div', null,
+              h('div', { className: 'ab-flex' },
+                h(Btn, { small: true, onClick: startImQrLogin, disabled: !!busy }, busy === 'imlogin' ? '正在获取二维码…' : '开始 IM 登录'),
+                h(Btn, { small: true, onClick: refreshImQrLogin, disabled: !!busy }, '刷新二维码'),
+                h(Btn, { small: true, onClick: async () => { const r = await get('/douyin/im'); setS({ ...(s || {}), im: r }); const st = await get('/douyin/im-login/status'); setImLogin(st) } }, '检查'),
+                im ? h('span', { className: 'ab-small', style: { color: im.loggedIn ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, im.loggedIn ? ('已登录：' + (im.nickname || im.uid || '')) : (im.reason || '还没登录 IM')) : h('span', { className: 'ab-small ab-muted' }, '未检查')),
+              qrBox(imLogin, 'IM'),
+              imLogin && (imLogin.phase === 'sms_required' || imLogin.phase === 'voice_required') ? h('div', { className: 'ab-flex', style: { marginTop: 8 } },
+                h('input', {
+                  className: 'ab-input',
+                  value: smsCode,
+                  placeholder: imLogin.phase === 'voice_required' ? '语音验证码' : '短信验证码',
+                  onChange: (e) => setSmsCode(e.target.value),
+                  style: { maxWidth: 160 },
+                }),
+                h(Btn, { small: true, kind: 'primary', onClick: submitImSms, disabled: !!busy || !smsCode.trim() }, busy === 'imsms' ? '提交中…' : '提交验证码'),
+              ) : null)),
         ),
         h(Card, { title: '主人抖音', desc: '填你的抖音号或主页链接，点「核对」后她才认你（只认 sec_uid，不认昵称）。改了输入要重新核对。' },
           h(Row, { label: '你的抖音号 / 主页链接' }, f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })),
@@ -1823,7 +1937,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Btn, { small: true, onClick: act('/douyin/dms', 'dms'), disabled: !!busy }, busy === 'dms' ? '正在看…' : '看看主人私信'),
           h(Btn, { small: true, onClick: act('/douyin/replies', 'replies'), disabled: !!busy }, busy === 'replies' ? '正在看…' : '看看回评论'),
           h(Btn, { small: true, kind: 'primary', onClick: act('/douyin/run', 'run'), disabled: !!busy }, busy === 'run' ? h(Fragment, null, h('i', { className: 'ab-spin' }), ' 正在刷…') : '现在刷一轮')) },
-          s && s.pauseReason ? h('div', { className: 'ab-note warn', style: { marginBottom: 8 } }, '今天先不动手了：' + s.pauseReason + '（明天自动恢复；要验证就去 Edge 窗口里过一下）') : null,
+          s && s.pauseReason ? h('div', { className: 'ab-note warn', style: { marginBottom: 8 } }, '今天先不动手了：' + s.pauseReason + '（明天自动恢复；要验证请看上方登录区的面板提示）') : null,
           s ? h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
             '今天自动刷了 ' + s.runs + ' 轮 · 看了 ' + s.watched + ' · 赞 ' + s.like + ' · 评 ' + s.comment + ' · 关 ' + s.follow + ' · 私信 ' + s.dm + ' · 分享 ' + s.shareOwner + ' · 回你 ' + s.dmReply + ' · 签名 ' + (s.sign || 0) + ' · 昵称 ' + (s.nickname || 0) + ' · 头像 ' + (s.avatar || 0) +
             (s.lastRun ? ' · 上次 ' + timeAgo(s.lastRun) : '') +

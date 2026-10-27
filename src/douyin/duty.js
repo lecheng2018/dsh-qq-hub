@@ -750,13 +750,105 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
     }
   }
 
-  async function startImLogin(opts = {}) {
+  async function startImLogin() {
     try {
       const client = await ensureIm()
-      if (typeof client.startLogin === 'function') return client.startLogin(opts)
-      return { ok: false, message: '当前 IM 客户端不支持面板登录' }
+      if (typeof client.startQrLogin === 'function') return client.startQrLogin()
+      if (typeof client.startLogin === 'function') return client.startLogin({ method: 'qr' })
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: '当前 IM 客户端不支持面板登录', qrDataUrl: '' }
     } catch (error) {
-      return { ok: false, message: String(error?.message || error) }
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function imLoginStatus() {
+    try {
+      const client = await ensureIm()
+      if (typeof client.getLoginStatus === 'function') return client.getLoginStatus()
+      const st = client.status()
+      return {
+        ok: true,
+        started: false,
+        loggedIn: !!st.loggedIn,
+        phase: st.loggedIn ? 'logged_in' : 'idle',
+        qrDataUrl: '',
+        message: st.loggedIn ? (`已登录：${st.nickname || st.uid}`) : (st.reason || '还没登录 IM'),
+        nickname: st.nickname || '',
+        uid: st.uid || '',
+        verifyHint: '',
+        error: '',
+      }
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function refreshImLogin() {
+    try {
+      const client = await ensureIm()
+      if (typeof client.refreshQrLogin === 'function') return client.refreshQrLogin()
+      return startImLogin()
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function submitImLoginSms(code) {
+    try {
+      const client = await ensureIm()
+      if (typeof client.submitLoginSms === 'function') return client.submitLoginSms(code)
+      return { ok: false, started: true, loggedIn: false, phase: 'sms_required', message: '当前 IM 客户端不支持面板填验证码', qrDataUrl: '' }
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function startBrowserLogin() {
+    try {
+      const d = ensureDriver()
+      if (typeof d.startLoginQr === 'function') return d.startLoginQr()
+      const r = await account(true)
+      return {
+        ok: !r.error,
+        started: !!r.needLogin,
+        loggedIn: !!r.isLogin,
+        phase: r.isLogin ? 'logged_in' : (r.verify ? 'verification_required' : (r.needLogin ? 'waiting_scan' : 'idle')),
+        qrDataUrl: '',
+        message: r.isLogin ? (`已登录：${r.nickname || r.secUid}`) : (r.reason || r.error || '请扫码登录'),
+        verifyHint: r.verify ? (r.reason || '需要安全验证') : '',
+        nickname: r.nickname || '',
+        error: r.error || '',
+      }
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function browserLoginStatus() {
+    try {
+      const d = ensureDriver()
+      if (typeof d.pollLoginQr === 'function') {
+        // 已在登录流程中则只轮询；否则用 account 轻量检查
+        const snap = await d.pollLoginQr()
+        if (snap.loggedIn) {
+          const s = today(load())
+          if (!s.loginAt) { s.loginAt = now(); save(s) }
+        }
+        return snap
+      }
+      return startBrowserLogin()
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
+    }
+  }
+
+  async function refreshBrowserLogin() {
+    try {
+      const d = ensureDriver()
+      if (typeof d.refreshLoginQr === 'function') return d.refreshLoginQr()
+      return startBrowserLogin()
+    } catch (error) {
+      return { ok: false, started: false, loggedIn: false, phase: 'error', message: String(error?.message || error), qrDataUrl: '' }
     }
   }
 
@@ -788,7 +880,7 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
   return {
     run, tick, watch, dmTo, followUser, likeVideo, commentVideo, shareToOwner,
     setSign, setNickname, setAvatar,
-    checkOwnerDms, checkCommentReplies, confirmOwner, account, imStatus, startImLogin, state,
+    checkOwnerDms, checkCommentReplies, confirmOwner, account, imStatus, startImLogin, imLoginStatus, refreshImLogin, submitImLoginSms, startBrowserLogin, browserLoginStatus, refreshBrowserLogin, state,
     setDriver: (d) => { driver = d },
     setIm: (c) => { im = c },
     _setSocialBusy: (v) => { socialBusy = !!v },

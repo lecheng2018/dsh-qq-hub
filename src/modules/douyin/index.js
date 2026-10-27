@@ -174,7 +174,16 @@ export default {
     api.route('/douyin/state', async () => ({ ok: true, ...dy.state(), account: await dy.account(), im: await dy.imStatus() }))
     api.route('/douyin/account', async () => dy.account(true))
     api.route('/douyin/im', async () => dy.imStatus())
-    api.route('/douyin/im-login', async () => dy.startImLogin({ method: 'qr' }))
+    api.route('/douyin/im-login', async () => dy.startImLogin())
+    api.route('/douyin/im-login/status', async () => dy.imLoginStatus())
+    api.route('/douyin/im-login/refresh', async () => dy.refreshImLogin())
+    api.route('/douyin/im-login/sms', async (req) => {
+      const b = await http.body(req).catch(() => ({}))
+      return dy.submitImLoginSms(b?.code ?? b?.sms ?? '')
+    })
+    api.route('/douyin/browser-login', async () => dy.startBrowserLogin())
+    api.route('/douyin/browser-login/status', async () => dy.browserLoginStatus())
+    api.route('/douyin/browser-login/refresh', async () => dy.refreshBrowserLogin())
     api.route('/douyin/run', async () => dy.run({ force: true }))
     api.route('/douyin/dms', async () => dy.checkOwnerDms())
     api.route('/douyin/replies', async () => dy.checkCommentReplies())
@@ -183,10 +192,8 @@ export default {
       const input = b?.input ?? api.config().douyin?.owner?.input ?? ''
       return dy.confirmOwner(input)
     })
-    api.route('/douyin/open-login', async () => {
-      const r = await dy.account(true)
-      return { ok: !r.error, message: r.needLogin ? '已打开抖音，请在弹出的 Edge 窗口里扫码登录' : (r.isLogin ? `已登录：${r.nickname || r.secUid}` : (r.reason || r.error || '请看 Edge 窗口')), ...r }
-    })
+    // 兼容旧路径：改为面板内二维码浏览器登录，不再弹前台扫码窗提示
+    api.route('/douyin/open-login', async () => dy.startBrowserLogin())
 
     return dy
   },

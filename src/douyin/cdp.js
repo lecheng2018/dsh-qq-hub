@@ -150,8 +150,62 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     })
   }
 
-  async function launch() {
-    if (session && !session.closed) return { ok: true }
+  const browserLogin = {
+    phase: 'idle',
+    qrDataUrl: '',
+    message: '',
+    verifyHint: '',
+    error: '',
+  }
+
+  function browserLoginSnapshot(started = false) {
+    const loggedIn = browserLogin.phase === 'logged_in'
+    return {
+      ok: browserLogin.phase !== 'error',
+      started: !!started || (browserLogin.phase !== 'idle' && browserLogin.phase !== 'logged_in' && browserLogin.phase !== 'error'),
+      loggedIn,
+      phase: browserLogin.phase,
+      qrDataUrl: browserLogin.qrDataUrl || '',
+      message: browserLogin.message || '',
+      verifyHint: browserLogin.verifyHint || '',
+      error: browserLogin.error || '',
+      nickname: '',
+      uid: '',
+    }
+  }
+
+  async function moveOffscreen() {
+    if (!session || session.closed) return
+    try {
+      const { windowId } = await session.send('Browser.getWindowForTarget', {})
+      await session.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { left: -32000, top: -32000, width: 1000, height: 800, windowState: 'normal' },
+      })
+    } catch (error) {
+      await evalJs(`try{window.moveTo(-32000,-32000);window.resizeTo(1000,800)}catch(e){}`).catch(() => {})
+    }
+  }
+
+  async function minimizeWindow() {
+    if (!session || session.closed) return
+    try {
+      const { windowId } = await session.send('Browser.getWindowForTarget', {})
+      await session.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { windowState: 'minimized' },
+      })
+    } catch (error) {
+      await evalJs(`try{window.blur()}catch(e){}`).catch(() => {})
+    }
+  }
+
+  async function launch(opts = {}) {
+    const offscreen = !!opts.offscreen
+    if (session && !session.closed) {
+      if (offscreen) await moveOffscreen()
+      return { ok: true }
+    }
     const bin = findBrowser(browserPath)
     if (!bin) return { ok: false, message: '找不到 Edge / Chrome。请在面板填浏览器路径，或先装好 Microsoft Edge。' }
     port = await freePort()
@@ -162,8 +216,13 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-features=Translate,MediaRouter',
-      'https://www.douyin.com/?recommend=1',
+      '--window-size=1000,800',
     ]
+    // 登录用离屏窗口位置，避免抢前台；不用 headless，降低风控差异
+    if (offscreen || minimize) {
+      args.push('--window-position=-2400,-2400')
+    }
+    args.push('https://www.douyin.com/?recommend=1')
     child = spawn(bin, args, { stdio: 'ignore', detached: true })
     child.unref()
     // 等调试端口起来
@@ -177,8 +236,174 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     }
     if (last) return { ok: false, message: `浏览器开了但调试端口没起来：${last.message}` }
     await attachPage()
-    if (minimize) await evalJs(`try{window.moveTo(0,0);window.resizeTo(900,700)}catch(e){}`).catch(() => {})
+    if (offscreen) await moveOffscreen()
+    else if (minimize) await evalJs(`try{window.moveTo(0,0);window.resizeTo(900,700)}catch(e){}`).catch(() => {})
     return { ok: true }
+  }
+
+  /** CDP 截登录二维码区，或取 img/canvas 的 dataURL / src。 */
+  async function captureLoginQr() {
+    await evalJs(`(() => {
+      const nodes = [...document.querySelectorAll('div,span,button,a,p,li')];
+      const tab = nodes.find((n) => {
+        const t = (n.textContent || '').trim();
+        return t === '扫码登录' || t === '二维码登录';
+      });
+      if (tab) try { tab.click(); } catch (e) {}
+    })()`).catch(() => {})
+    await sleep(600)
+    const info = await evalJs(`(() => {
+      const imgs = [...document.querySelectorAll('img')];
+      for (const img of imgs) {
+        const src = img.currentSrc || img.src || '';
+        const meta = (img.alt || '') + ' ' + (img.className || '') + ' ' + (img.id || '') + ' ' + src;
+        if (src.startsWith('data:image') && (img.naturalWidth || img.width) >= 100) {
+          return { type: 'data', data: src };
+        }
+        if (/qrcode|qr-code|login-qr|二维码|qr\./i.test(meta) && src) {
+          return src.startsWith('data:') ? { type: 'data', data: src } : { type: 'url', data: src };
+        }
+      }
+      for (const c of document.querySelectorAll('canvas')) {
+        if (c.width >= 100 && c.width <= 520 && c.height >= 100 && c.height <= 520) {
+          try { return { type: 'data', data: c.toDataURL('image/png') }; } catch (e) {}
+        }
+      }
+      for (const img of imgs) {
+        const r = img.getBoundingClientRect();
+        if (r.width >= 120 && r.width <= 420 && r.height >= 120 && r.height <= 420 && r.bottom > 0 && r.right > 0) {
+          return { type: 'clip', x: r.x, y: r.y, w: r.width, h: r.height };
+        }
+      }
+      return null;
+    })()`).catch(() => null)
+
+    if (info?.type === 'data' && info.data) return String(info.data)
+    if (info?.type === 'url' && info.data) {
+      const data = await evalJs(`fetch(${JSON.stringify(info.data)},{credentials:'include'}).then((r)=>r.blob()).then((b)=>new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(b)})).catch(()=>'')`).catch(() => '')
+      if (data) return String(data)
+    }
+    if (info?.type === 'clip' && info.w > 0 && info.h > 0) {
+      try {
+        const shot = await session.send('Page.captureScreenshot', {
+          format: 'png',
+          clip: { x: info.x, y: info.y, width: info.w, height: info.h, scale: 1 },
+          fromSurface: true,
+          captureBeyondViewport: true,
+        })
+        if (shot?.data) return `data:image/png;base64,${shot.data}`
+      } catch (error) { /* fall through */ }
+    }
+    // 兜底：截视口中部一块（常见登录卡位置）
+    try {
+      const box = await evalJs(`(() => {
+        const w = Math.min(280, window.innerWidth * 0.4);
+        const h = w;
+        const x = Math.max(0, (window.innerWidth - w) / 2);
+        const y = Math.max(0, window.innerHeight * 0.22);
+        return { x, y, w, h };
+      })()`).catch(() => null)
+      if (box?.w) {
+        const shot = await session.send('Page.captureScreenshot', {
+          format: 'png',
+          clip: { x: box.x, y: box.y, width: box.w, height: box.h, scale: 1 },
+          fromSurface: true,
+          captureBeyondViewport: true,
+        })
+        if (shot?.data) return `data:image/png;base64,${shot.data}`
+      }
+    } catch (error) {}
+    return ''
+  }
+
+  async function startLoginQr() {
+    const r = await launch({ offscreen: true })
+    if (!r.ok) {
+      browserLogin.phase = 'error'
+      browserLogin.error = r.message || '打不开浏览器'
+      browserLogin.message = browserLogin.error
+      browserLogin.qrDataUrl = ''
+      return { ...browserLoginSnapshot(false), ok: false, started: false, loggedIn: false }
+    }
+    await moveOffscreen()
+    const gate = await checkGate().catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
+    if (gate.ok) {
+      const self = await selfInfo().catch(() => null)
+      browserLogin.phase = 'logged_in'
+      browserLogin.qrDataUrl = ''
+      browserLogin.message = `已登录：${self?.nickname || self?.secUid || ''}`
+      browserLogin.verifyHint = ''
+      browserLogin.error = ''
+      if (minimize) await minimizeWindow()
+      const snap = browserLoginSnapshot(false)
+      snap.loggedIn = true
+      snap.nickname = self?.nickname || ''
+      return snap
+    }
+    if (gate.verify) {
+      browserLogin.phase = 'verification_required'
+      browserLogin.message = '需要安全验证'
+      browserLogin.verifyHint = gate.reason || '页面要验证（滑块等）。请完成后再点刷新状态。'
+      browserLogin.qrDataUrl = ''
+      return browserLoginSnapshot(true)
+    }
+    // 确保落在登录墙
+    await navigate('https://www.douyin.com/').catch(() => {})
+    await sleep(1200)
+    const qr = await captureLoginQr()
+    browserLogin.phase = 'waiting_scan'
+    browserLogin.qrDataUrl = qr || ''
+    browserLogin.message = qr
+      ? '请用抖音 App 扫码（浏览器已离屏，二维码在本面板）'
+      : '还没抓到二维码，请点刷新'
+    browserLogin.verifyHint = ''
+    browserLogin.error = ''
+    return browserLoginSnapshot(true)
+  }
+
+  async function pollLoginQr() {
+    if (!session || session.closed) {
+      // 未启动时若已有会话资料，account() 路径会 launch；这里保持 idle
+      if (browserLogin.phase === 'idle') {
+        return { ok: true, started: false, loggedIn: false, phase: 'idle', qrDataUrl: '', message: '', verifyHint: '', error: '', nickname: '', uid: '' }
+      }
+      return browserLoginSnapshot(true)
+    }
+    const gate = await checkGate().catch((e) => ({ ok: false, needLogin: true, reason: e.message }))
+    if (gate.ok) {
+      const self = await selfInfo().catch(() => null)
+      browserLogin.phase = 'logged_in'
+      browserLogin.qrDataUrl = ''
+      browserLogin.message = `已登录：${self?.nickname || self?.secUid || ''}`
+      browserLogin.verifyHint = ''
+      browserLogin.error = ''
+      if (minimize) await minimizeWindow()
+      const snap = browserLoginSnapshot(false)
+      snap.loggedIn = true
+      snap.nickname = self?.nickname || ''
+      return snap
+    }
+    if (gate.verify) {
+      browserLogin.phase = 'verification_required'
+      browserLogin.message = '需要安全验证'
+      browserLogin.verifyHint = gate.reason || '页面要验证（滑块等）。请在面板提示下完成，再点刷新状态。'
+      browserLogin.qrDataUrl = ''
+      return browserLoginSnapshot(true)
+    }
+    const qr = await captureLoginQr()
+    if (qr) {
+      browserLogin.qrDataUrl = qr
+      browserLogin.phase = 'waiting_scan'
+      browserLogin.message = '请用抖音 App 扫码'
+      browserLogin.error = ''
+    } else if (browserLogin.phase === 'waiting_scan' && !browserLogin.qrDataUrl) {
+      browserLogin.message = '还没抓到二维码，请点刷新'
+    }
+    return browserLoginSnapshot(true)
+  }
+
+  async function refreshLoginQr() {
+    return startLoginQr()
   }
 
   async function evalJs(expression) {
@@ -470,6 +695,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     clickLike, openComments, typeAndSend, clickFollow, listCommentReplies,
     resolveUser, selfInfo, pageText, evalJs,
     editNickname, editSignature, editAvatar,
+    startLoginQr, pollLoginQr, refreshLoginQr, captureLoginQr, moveOffscreen, minimizeWindow,
     /** 测 / 面板用：最近截到的视频 */
     recentFeed: () => feed.slice(),
     get paused() { return caps.verify },
@@ -480,6 +706,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
 
 /** 测用假驱动：不启浏览器，按脚本吐视频 / 模拟点击。 */
 export function createFakeDriver(script = {}) {
+  const FAKE_BROWSER_QR = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
   const state = {
     url: 'https://www.douyin.com/?recommend=1',
     feed: script.feed || [],
@@ -494,6 +721,13 @@ export function createFakeDriver(script = {}) {
     owner: script.owner || { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a~tplv.jpg' },
     commentReplies: script.commentReplies || [],
     log: [],
+    loginQr: {
+      phase: script.needLogin ? 'idle' : 'logged_in',
+      qrDataUrl: '',
+      message: script.needLogin ? '' : ('已登录：' + (script.self?.nickname || '肥鱼抖音')),
+      verifyHint: '',
+      error: '',
+    },
   }
   const gate = async () => {
     if (state.verify) return { ok: false, verify: true, reason: state.reason || '要验证' }
@@ -576,6 +810,104 @@ export function createFakeDriver(script = {}) {
       state.avatarPath = path
       state.log.push(['editAvatar', path])
       return { ok: true, path }
+    },
+    async startLoginQr() {
+      state.log.push(['startLoginQr'])
+      if (!state.needLogin && !script.forceLoginQr) {
+        state.loginQr = {
+          phase: 'logged_in',
+          qrDataUrl: '',
+          message: `已登录：${state.self.nickname || state.self.secUid || ''}`,
+          verifyHint: '',
+          error: '',
+        }
+        return {
+          ok: true, started: false, loggedIn: true, phase: 'logged_in',
+          qrDataUrl: '', message: state.loginQr.message, verifyHint: '', error: '',
+          nickname: state.self.nickname || '', uid: '',
+        }
+      }
+      state.loginQr = {
+        phase: 'waiting_scan',
+        qrDataUrl: script.qrDataUrl || FAKE_BROWSER_QR,
+        message: '请用抖音 App 扫码（浏览器已离屏，二维码在本面板）',
+        verifyHint: '',
+        error: '',
+      }
+      return {
+        ok: true, started: true, loggedIn: false, phase: 'waiting_scan',
+        qrDataUrl: state.loginQr.qrDataUrl, message: state.loginQr.message,
+        verifyHint: '', error: '', nickname: '', uid: '',
+      }
+    },
+    async pollLoginQr() {
+      if (!state.needLogin) {
+        state.loginQr = {
+          phase: 'logged_in',
+          qrDataUrl: '',
+          message: `已登录：${state.self.nickname || ''}`,
+          verifyHint: '',
+          error: '',
+        }
+        return {
+          ok: true, started: false, loggedIn: true, phase: 'logged_in',
+          qrDataUrl: '', message: state.loginQr.message, verifyHint: '', error: '',
+          nickname: state.self.nickname || '', uid: '',
+        }
+      }
+      if (state.verify) {
+        state.loginQr.phase = 'verification_required'
+        state.loginQr.message = '需要安全验证'
+        state.loginQr.verifyHint = state.reason || '页面要验证（滑块等）。请完成后再点刷新状态。'
+        state.loginQr.qrDataUrl = ''
+      }
+      return {
+        ok: state.loginQr.phase !== 'error',
+        started: state.loginQr.phase !== 'idle' && state.loginQr.phase !== 'logged_in',
+        loggedIn: false,
+        phase: state.loginQr.phase,
+        qrDataUrl: state.loginQr.qrDataUrl || '',
+        message: state.loginQr.message || '',
+        verifyHint: state.loginQr.verifyHint || '',
+        error: state.loginQr.error || '',
+        nickname: '', uid: '',
+      }
+    },
+    async refreshLoginQr() {
+      return this.startLoginQr()
+    },
+    _advanceBrowserLogin(phase, extra = {}) {
+      const p = String(phase || '')
+      if (p === 'logged_in' || p === 'loggedIn') {
+        state.needLogin = false
+        state.verify = false
+        state.loginQr = {
+          phase: 'logged_in',
+          qrDataUrl: '',
+          message: `已登录：${state.self.nickname || ''}`,
+          verifyHint: '',
+          error: '',
+        }
+      } else if (p === 'expired') {
+        state.loginQr.phase = 'expired'
+        state.loginQr.qrDataUrl = ''
+        state.loginQr.message = '二维码已过期，请点刷新'
+      } else if (p === 'verification_required') {
+        state.verify = true
+        state.reason = extra.reason || '页面要验证'
+        state.loginQr.phase = 'verification_required'
+        state.loginQr.qrDataUrl = ''
+        state.loginQr.message = '需要安全验证'
+        state.loginQr.verifyHint = extra.verifyHint || state.reason
+      } else if (p === 'waiting_scan') {
+        state.needLogin = true
+        state.loginQr.phase = 'waiting_scan'
+        state.loginQr.qrDataUrl = script.qrDataUrl || FAKE_BROWSER_QR
+        state.loginQr.message = '请用抖音 App 扫码'
+      } else {
+        state.loginQr.phase = p || 'idle'
+      }
+      return this.pollLoginQr()
     },
     /** 测用：看副作用 */
     _state: state,
