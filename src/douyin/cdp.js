@@ -262,10 +262,60 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     return Boolean(await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button]')].find(el => /关注/.test(el.innerText||'') && !/已关注|取消关注|互相关注/.test(el.innerText||'')); if(!b) return false; b.click(); return true })()`))
   }
   async function openShareTo(secUid) {
-    // 打开分享 → 私信；真正选人依赖页面，测时用假驱动
-    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button],div')].find(el => /分享/.test(el.getAttribute('aria-label')||'') || el.dataset?.e2e==='video-player-share'); if(b) b.click() })()`)
-    await sleep(600)
-    return { ok: true, secUid }
+    // 打开分享 → 选「私信 / 发给朋友」→ 必须按 sec_uid 点中确认对象后才算成功；只点了分享不算 ok
+    const want = String(secUid || '').trim()
+    if (!want) return { ok: false, message: '没有主人的 sec_uid，不能分享' }
+    const clickedShare = await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button],div')].find(el => /分享/.test(el.getAttribute('aria-label')||'') || el.dataset?.e2e==='video-player-share'); if(!b) return false; b.click(); return true })()`)
+    if (!clickedShare) return { ok: false, message: '找不到分享按钮' }
+    await sleep(700)
+    // 点「私信」入口
+    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button],div,span')].find(el => /私信|发给朋友|朋友/.test((el.innerText||el.getAttribute('aria-label')||'').slice(0,12))); if(b) b.click() })()`).catch(() => {})
+    await sleep(800)
+    const esc = JSON.stringify(want)
+    const picked = await evalJs(`(() => {
+      const want = ${esc};
+      const nodes = [...document.querySelectorAll('a[href*="/user/"],[data-sec-uid],li,div')];
+      for (const el of nodes) {
+        const href = el.getAttribute('href') || (el.querySelector && el.querySelector('a')?.href) || '';
+        const m = String(href).match(/user\/([A-Za-z0-9_-]{20,})/);
+        const sid = m && m[1] || el.getAttribute('data-sec-uid') || '';
+        if (sid === want) { (el.closest('a,button,li,div') || el).click(); return true; }
+      }
+      // 再扫一遍文本区的 data / 内嵌链接
+      const html = document.body.innerHTML;
+      if (!html.includes(want)) return false;
+      const hit = [...document.querySelectorAll('*')].find(el => (el.getAttribute('href')||'').includes(want) || (el.dataset&&el.dataset.secUid===want));
+      if (hit) { hit.click(); return true; }
+      return false;
+    })()`)
+    if (!picked) return { ok: false, message: '分享面板里没找到已核对的主人，取消' }
+    await sleep(500)
+    // 确认发送（有的 UI 还要再点一次）
+    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button]')].find(el => /发送|分享|确认/.test(el.innerText||'')); if(b) b.click(); return true })()`).catch(() => {})
+    return { ok: true, secUid: want }
+  }
+
+  /** 消息中心：别人回我评论的列表。返回 [{id,name,text,awemeId,at}]。 */
+  async function listCommentReplies() {
+    await navigate('https://www.douyin.com/notice')
+    await sleep(1200)
+    // 尽量点到「评论」类 tab
+    await evalJs(`(() => { const t=[...document.querySelectorAll('div,span,a,button')].find(el => /评论/.test((el.innerText||'').trim()) && (el.innerText||'').trim().length<=6); if(t) t.click() })()`).catch(() => {})
+    await sleep(800)
+    const raw = await evalJs(`(() => {
+      try {
+        const items = [...document.querySelectorAll('[class*=notice],[class*=message],[class*=comment],li,a')].slice(0,40);
+        return items.map((el, i) => {
+          const text = (el.innerText||'').slice(0,200);
+          if (!/回复了你的评论|回复了你|回了你/.test(text) && !/评论/.test(text)) return null;
+          const href = (el.closest('a')||el.querySelector('a')||el).href||'';
+          const m = href.match(/video\/(\d{15,})/) || href.match(/modal_id=(\d{15,})/);
+          const name = text.split(/\n|回复|：|:/)[0].slice(0,30);
+          return { id: (m&&m[1]||'') + ':' + i + ':' + text.slice(0,40), name, text, awemeId: m&&m[1]||'', at: Date.now() };
+        }).filter(Boolean).slice(0,15);
+      } catch(e){ return []; }
+    })()`).catch(() => [])
+    return Array.isArray(raw) ? raw : []
   }
   async function openDmThread(secUid) {
     await navigate(`https://www.douyin.com/user/${secUid}`)
@@ -313,7 +363,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
 
   return {
     launch, close, navigate, currentUrl, ensureRecommend, checkGate, nextAwemes, activeAwemeId,
-    clickLike, openComments, typeAndSend, clickFollow, openShareTo, openDmThread, listOwnerDms,
+    clickLike, openComments, typeAndSend, clickFollow, openShareTo, openDmThread, listOwnerDms, listCommentReplies,
     resolveUser, selfInfo, pageText, evalJs,
     /** 测 / 面板用：最近截到的视频 */
     recentFeed: () => feed.slice(),
@@ -336,6 +386,7 @@ export function createFakeDriver(script = {}) {
     self: script.self || { secUid: 'self_sec', nickname: '肥鱼抖音' },
     owner: script.owner || { secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a~tplv.jpg' },
     inbox: script.inbox || [],
+    commentReplies: script.commentReplies || [],
     log: [],
   }
   const gate = async () => {
@@ -371,7 +422,12 @@ export function createFakeDriver(script = {}) {
     openComments: async () => true,
     typeAndSend: async (text) => { state.commented.push(text); return true },
     clickFollow: async () => { state.followed.push(state.feed[Math.max(0, state.cursor - 1)]?.authorSecUid); return true },
-    openShareTo: async (secUid) => { state.shared.push(secUid); return { ok: true, secUid } },
+    openShareTo: async (secUid) => {
+      if (!secUid) return { ok: false, message: '没有主人的 sec_uid，不能分享' }
+      state.shared.push(secUid)
+      return { ok: true, secUid }
+    },
+    listCommentReplies: async () => (state.commentReplies || []).slice(),
     openDmThread: async (secUid) => { state.dms.push(secUid); return { ok: true } },
     listOwnerDms: async () => state.inbox.slice(),
     resolveUser: async (input) => {
