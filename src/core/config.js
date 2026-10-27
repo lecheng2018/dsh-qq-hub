@@ -114,7 +114,12 @@ export const DEFAULTS = {
     dmPollMinutes: 7, // 看私信的频率（分钟，实际在 0.7~1.4 倍之间随机）
     replyPollMinutes: 25, // 看别人回她评论的频率（分钟）
     owner: { input: '', secUid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人的抖音号 / 主页链接；secUid 由「核对」确认后写入，面板不能直接改
-    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 }, // 每天上限
+    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 }, // 每天上限（登录后前 3 天减半）
+    gate: {
+      maxWritesPerDay: 60, // 所有写操作合计上限
+      minWriteGapSec: 20, // 任意两次写操作之间至少隔这么多秒
+      newAccountDays: 3, // 首次登录起这么多天内，单项上限和总写次数都减半
+    },
   },
   qzoneSocial: {
     enabled: true,
@@ -268,6 +273,10 @@ export function normalize(raw) {
   for (const k of ['input', 'secUid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
   if (!isObj(d.caps)) d.caps = {}
   for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200]]) d.caps[k] = num(d.caps[k], dv, 0, max)
+  if (!isObj(d.gate)) d.gate = {}
+  d.gate.maxWritesPerDay = num(d.gate.maxWritesPerDay, 60, 1, 500)
+  d.gate.minWriteGapSec = num(d.gate.minWriteGapSec, 20, 0, 600)
+  d.gate.newAccountDays = num(d.gate.newAccountDays, 3, 0, 30)
   delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
