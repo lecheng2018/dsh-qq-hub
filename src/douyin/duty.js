@@ -1,6 +1,5 @@
-// 刷抖音：定时用专用 Edge 去推荐流刷几个视频；按人格决定点赞 / 评论（关注仅工具请求）；
-// 私信主人、回主人私信、回别人回她的评论。看过的、做过的都记成她的经历。
-// 浏览器细节在 cdp.js；这里只认 driver 接口，测时注入 createFakeDriver。
+// 刷抖音：CDP（Edge）管内容——刷流 / 点赞 / 评论 / 回评论 / 关注 / 改资料；
+// 社交（私信、分享主人、回主人私信）走 douyin-im，无浏览器。测时注入 createFakeDriver / createFakeImClient。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { isSilence } from '../chat/reply.js'
@@ -12,6 +11,7 @@ import {
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { createBrowserDriver } from './cdp.js'
+import { IM_NOT_LOGGED_IN, openImClient } from './im.js'
 
 const WRITE_OPS = ['like', 'comment', 'replyComment', 'follow', 'dm', 'shareOwner', 'dmReply', 'sign', 'nickname', 'avatar']
 const emptyDay = () => ({
@@ -37,7 +37,7 @@ const emptyState = () => ({
   loginAt: 0, // 首次确认登录的时间戳；前 newAccountDays 天上限减半
 })
 
-export function createDouyin({ getConfig, hub, memory, log, driver: injected, dataFile, now: nowFn } = {}) {
+export function createDouyin({ getConfig, hub, memory, log, driver: injected, im: injectedIm, dataFile, now: nowFn } = {}) {
   const now = () => (nowFn ? nowFn() : Date.now())
   const cfg = () => getConfig().douyin
   const file = () => dataFile || dataDir('douyin.json')
@@ -53,7 +53,9 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     return s
   }
   let busy = false
+  let socialBusy = false
   let driver = injected || null
+  let im = injectedIm || null
 
   const ownerName = () => getConfig().ownerName || '主人'
   const profileDir = () => dataDir('douyin', 'edge-profile')
@@ -69,6 +71,44 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
       log,
     })
     return driver
+  }
+
+  async function ensureIm() {
+    if (im) return im
+    im = await openImClient({ dataPath: dataDir('douyin', 'im') })
+    return im
+  }
+
+  async function requireIm() {
+    try {
+      const client = await ensureIm()
+      const online = await client.ensureOnline()
+      if (!online.ok) return { ok: false, message: online.message || IM_NOT_LOGGED_IN }
+      return { ok: true, im: client }
+    } catch (error) {
+      return { ok: false, message: String(error?.message || error) }
+    }
+  }
+
+  function ownerImTarget() {
+    const o = cfg().owner || {}
+    return { uid: o.uid || '', secUid: o.secUid || '' }
+  }
+
+  function socialInterruptOn() {
+    return cfg().socialInterruptBrowse !== false // 默认开
+  }
+
+  async function withSocialBusy(fn) {
+    socialBusy = true
+    try { return await fn() }
+    finally { socialBusy = false }
+  }
+
+  function browseInterrupted(s) {
+    if (!socialInterruptOn() || !socialBusy) return false
+    s.lastSkipReason = '社交优先：私信/分享打断了刷流'
+    return true
   }
 
   const record = (s, item) => { s.history.unshift({ at: now(), ...item }); s.history = s.history.slice(0, 40) }
@@ -247,12 +287,14 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     }
     if (cleanText(d.share) && perm('douyinShareOwner') !== 'off' && ownerConfirmed(getConfig()) && !paused(s)) {
       const text = cleanText(d.share, 80)
-      const secUid = getConfig().douyin.owner.secUid
+      const target = ownerImTarget()
       const r = await doWrite(s, 'shareOwner', async () => {
-        const sh = await drv.openShareTo(secUid)
-        if (!sh?.ok) throw new Error(sh?.message || '没选中主人就分享了')
-        await drv.typeAndSend(text).catch(() => {})
-      }, { awemeId: v.awemeId, text, secUid })
+        const need = await requireIm()
+        if (!need.ok) throw new Error(need.message)
+        await need.im.shareWork(target, {
+          itemId: v.awemeId, title: v.desc, author: v.author, authorSecUid: v.authorSecUid,
+        }, text)
+      }, { awemeId: v.awemeId, text, secUid: target.secUid })
       if (r.ok && !r.dryRun) memory?.addEvent?.({ text: `把抖音视频私信分享给${ownerName()}：${text.slice(0, 40)}`, tags: ['抖音'], importance: 0.45 })
     }
   }
@@ -290,6 +332,10 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
 
       const looked = []
       for (const v of list) {
+        if (browseInterrupted(s)) {
+          save(s)
+          return { ok: false, message: s.lastSkipReason, interrupted: true }
+        }
         // 真机按面板停留；假驱动跳过以免拖慢测试
         const waitMs = await dwellMs()
         if (!isFake()) await new Promise((r) => setTimeout(r, waitMs))
@@ -317,6 +363,10 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
 
       for (let i = 0; i < looked.length; i++) {
         if (paused(s)) break
+        if (browseInterrupted(s)) {
+          save(s)
+          return { ok: false, message: s.lastSkipReason, interrupted: true, watched: looked.length }
+        }
         await watchOne(s, looked[i], byI.get(i + 1) || {})
       }
 
@@ -345,56 +395,62 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     const s = today(load())
     if (paused(s)) return { ok: false, message: '今天暂停：' + s.pauseReason }
     s.lastDmCheck = now()
-    const booted = await boot()
-    if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
-    const drv = ensureDriver()
-    let n = 0
-    try {
-      const done = new Set(s.repliedDms || [])
-      const inbox = await drv.listOwnerDms()
-      const ownerSec = getConfig().douyin.owner.secUid
-      if (inbox.length && !inbox.some((x) => x.secUid)) {
-        return { ok: false, message: '私信列表认不出对方 sec_uid，回主人私信先不开' }
-      }
-      const cutoff = now() - 30 * 60_000
-      const fresh = inbox.filter((x) => {
-        if (!isOwnerSec(getConfig(), x.secUid) || !x.text) return false
-        if (done.has(`${x.secUid}:${x.text}`)) return false
-        const at = Number(x.at) || now() // 没带时间的按「刚到」处理（假驱动）
-        if (at < cutoff) return false
-        return true
-      }).slice(0, 5)
-      if (fresh.length) s.ownerDmStreak = 0 // 主人有新话，重新计数
-
-      for (const m of fresh) {
-        if (left(s, 'dmReply') <= 0) break
-        if ((s.ownerDmStreak || 0) >= 3) break
-        done.add(`${m.secUid}:${m.text}`)
-        hub.logChat?.('douyin', m.nickname || '主人抖音', `抖音私信你：${m.text}`, '')
-        const out = await think(`这是${ownerName()}在抖音给你发的私信：「${m.text}」\n用你的口气回一句（像平时私聊，别太长）；不想回就只输出 [沉默]。只输出回复正文。`)
-        const reply = cleanText(String(out || '').split(/\n+/)[0], 100)
-        if (!reply || isSilence(reply)) continue
-        const r = await doWrite(s, 'dmReply', async () => {
-          await drv.openDmThread(ownerSec)
-          const ok = await drv.typeAndSend(reply)
-          if (!ok) throw new Error('私信发送失败')
-        }, { text: `${m.text} → ${reply}`, secUid: ownerSec })
-        if (r.ok) {
-          n++
-          s.ownerDmStreak = (s.ownerDmStreak || 0) + 1
-          if (!r.dryRun) memory?.addEvent?.({ text: `在抖音回了${ownerName()}的私信：${reply.slice(0, 50)}`, tags: ['抖音'], importance: 0.5 })
-          save(s)
+    return withSocialBusy(async () => {
+      const need = await requireIm()
+      if (!need.ok) { save(s); return need }
+      let n = 0
+      try {
+        const done = new Set(s.repliedDms || [])
+        const inbox = await need.im.listInbox()
+        const owner = getConfig().douyin.owner || {}
+        const ownerSec = owner.secUid
+        if (inbox.length && !inbox.some((x) => x.secUid || x.uid)) {
+          return { ok: false, message: '私信列表认不出对方身份，回主人私信先不开' }
         }
-        if (paused(s)) break
-      }
-      s.repliedDms = [...done].slice(-200)
-      return { ok: true, message: `回了 ${n} 条主人私信`, replied: n }
-    } catch (error) {
-      return { ok: false, message: error.message }
-    } finally { save(s) }
+        const isOwnerMsg = (x) => {
+          if (x.secUid && isOwnerSec(getConfig(), x.secUid)) return true
+          if (owner.uid && x.uid && String(x.uid) === String(owner.uid)) return true
+          return false
+        }
+        const cutoff = now() - 30 * 60_000
+        const fresh = inbox.filter((x) => {
+          if (!isOwnerMsg(x) || !x.text) return false
+          const key = `${x.secUid || x.uid}:${x.text}`
+          if (done.has(key)) return false
+          const at = Number(x.at) || now()
+          if (at < cutoff) return false
+          return true
+        }).slice(0, 5)
+        if (fresh.length) s.ownerDmStreak = 0
+
+        for (const m of fresh) {
+          if (left(s, 'dmReply') <= 0) break
+          if ((s.ownerDmStreak || 0) >= 3) break
+          done.add(`${m.secUid || m.uid}:${m.text}`)
+          hub.logChat?.('douyin', m.nickname || '主人抖音', `抖音私信你：${m.text}`, '')
+          const out = await think(`这是${ownerName()}在抖音给你发的私信：「${m.text}」
+用你的口气回一句（像平时私聊，别太长）；不想回就只输出 [沉默]。只输出回复正文。`)
+          const reply = cleanText(String(out || '').split(/\n+/)[0], 100)
+          if (!reply || isSilence(reply)) continue
+          const r = await doWrite(s, 'dmReply', async () => {
+            await need.im.sendText(ownerImTarget(), reply)
+          }, { text: `${m.text} → ${reply}`, secUid: ownerSec })
+          if (r.ok) {
+            n++
+            s.ownerDmStreak = (s.ownerDmStreak || 0) + 1
+            if (!r.dryRun) memory?.addEvent?.({ text: `在抖音回了${ownerName()}的私信：${reply.slice(0, 50)}`, tags: ['抖音'], importance: 0.5 })
+            save(s)
+          }
+          if (paused(s)) break
+        }
+        s.repliedDms = [...done].slice(-200)
+        return { ok: true, message: `回了 ${n} 条主人私信`, replied: n }
+      } catch (error) {
+        return { ok: false, message: error.message }
+      } finally { save(s) }
+    })
   }
 
-  /** 回别人回她的评论：走 driver.listCommentReplies（真机 CDP 翻消息中心；假驱动吐脚本）。 */
   async function checkCommentReplies() {
     if (perm('douyinReplyComment') === 'off') return { ok: false, message: '回评论在权限里关掉了' }
     const s = today(load())
@@ -437,36 +493,42 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     return drv.resolveUser(parsed)
   }
 
-  /** 工具：主动私信（每目标每天最多 1 次）。 */
+  /** 工具：主动私信（每目标每天最多 1 次）。走 IM，不经 CDP。 */
   async function dmTo(target, text) {
     if (perm('douyinDm') === 'off') return { ok: false, message: '私信在权限里关掉了' }
     const s = today(load())
     if (paused(s)) return { ok: false, message: '今天暂停：' + s.pauseReason }
     const msg = cleanText(text, 100)
     if (!msg) return { ok: false, message: '私信内容不能是空的' }
-    const booted = await boot()
-    if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
-    const user = await resolveTarget(target)
-    if (!user.ok) return user
-    if ((s.dmTargets[user.secUid] || 0) >= 1) return { ok: false, message: '今天已经给这个人发过私信了（每人每天最多 1 条）' }
-    const drv = ensureDriver()
-    const r = await doWrite(s, 'dm', async () => {
-      await drv.openDmThread(user.secUid)
-      const ok = await drv.typeAndSend(msg)
-      if (!ok) throw new Error('私信没发出去')
-    }, { secUid: user.secUid, text: msg })
-    if (r.ok) {
-      // 试运行也不记「已对该目标发过」，这样真跑时还能发；但若 dryRun 也不占 dm 计数（doWrite 已处理）
-      if (!r.dryRun) {
-        s.dmTargets[user.secUid] = (s.dmTargets[user.secUid] || 0) + 1
-        memory?.addEvent?.({ text: `在抖音私信了别人：${msg.slice(0, 40)}`, tags: ['抖音'], importance: 0.4 })
-        save(s)
+    return withSocialBusy(async () => {
+      const need = await requireIm()
+      if (!need.ok) return need
+      const parsed = parseUserInput(target) || (String(target).length > 20 ? { secUid: String(target).trim() } : null)
+      let secUid = parsed?.secUid || ''
+      let uid = ''
+      if (!secUid) {
+        // 抖音号 / 短链仍靠 CDP 解析
+        const booted = await boot()
+        if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
+        const user = await resolveTarget(target)
+        if (!user.ok) return user
+        secUid = user.secUid
       }
-    }
-    return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要发私信' : '私信发出去了' } : r
+      if ((s.dmTargets[secUid] || 0) >= 1) return { ok: false, message: '今天已经给这个人发过私信了（每人每天最多 1 条）' }
+      const r = await doWrite(s, 'dm', async () => {
+        await need.im.sendText({ uid, secUid }, msg)
+      }, { secUid, text: msg })
+      if (r.ok) {
+        if (!r.dryRun) {
+          s.dmTargets[secUid] = (s.dmTargets[secUid] || 0) + 1
+          memory?.addEvent?.({ text: `在抖音私信了别人：${msg.slice(0, 40)}`, tags: ['抖音'], importance: 0.4 })
+          save(s)
+        }
+      }
+      return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要发私信' : '私信发出去了' } : r
+    })
   }
 
-  /** 工具：关注某人（仅请求，刷流不自动关注）。 */
   async function followUser(target) {
     if (perm('douyinFollow') === 'off') return { ok: false, message: '关注在权限里关掉了' }
     const s = today(load())
@@ -518,25 +580,25 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
   }
 
   /** 工具：把视频分享到主人抖音。 */
+  /** 工具：把视频分享到主人抖音（IM segment.share；作品页仍可经 CDP watch）。 */
   async function shareToOwner(link, text) {
     if (perm('douyinShareOwner') === 'off') return { ok: false, message: '分享在权限里关掉了' }
     if (!ownerConfirmed(getConfig())) return { ok: false, message: '还没核对主人的抖音号' }
-    const s = today(load())
-    const w = await watch(link)
-    if (!w.ok) return w
-    const msg = cleanText(text || '分享给你', 80)
-    const secUid = getConfig().douyin.owner.secUid
-    const drv = ensureDriver()
-    const r = await doWrite(s, 'shareOwner', async () => {
-      const sh = await drv.openShareTo(secUid)
-      if (!sh?.ok) throw new Error(sh?.message || '没选中主人')
-      await drv.typeAndSend(msg).catch(() => {})
-    }, { awemeId: w.awemeId, text: msg, secUid })
-    return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要分享' : '分享出去了' } : r
+    return withSocialBusy(async () => {
+      const need = await requireIm()
+      if (!need.ok) return need
+      const s = today(load())
+      const w = await watch(link)
+      if (!w.ok) return w
+      const msg = cleanText(text || '分享给你', 80)
+      const target = ownerImTarget()
+      const r = await doWrite(s, 'shareOwner', async () => {
+        await need.im.shareWork(target, { itemId: w.awemeId, title: w.desc, author: w.author }, msg)
+      }, { awemeId: w.awemeId, text: msg, secUid: target.secUid })
+      return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要分享' : '分享出去了' } : r
+    })
   }
 
-
-  /** 工具：改抖音个性签名（日上限默认 2，过写闸）。 */
   async function setSign(text) {
     if (perm('douyinSign') === 'off') return { ok: false, message: '改抖音签名在权限里关掉了' }
     const filtered = filterSignature(text)
@@ -678,6 +740,25 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     runStartedAt = 0
   }
 
+  async function imStatus() {
+    try {
+      const client = await ensureIm()
+      return client.status()
+    } catch (error) {
+      return { loggedIn: false, needLogin: true, reason: String(error?.message || error), uid: '', nickname: '' }
+    }
+  }
+
+  async function startImLogin(opts = {}) {
+    try {
+      const client = await ensureIm()
+      if (typeof client.startLogin === 'function') return client.startLogin(opts)
+      return { ok: false, message: '当前 IM 客户端不支持面板登录' }
+    } catch (error) {
+      return { ok: false, message: String(error?.message || error) }
+    }
+  }
+
   function state() {
     const s = today(load())
     return {
@@ -692,9 +773,11 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
       disabledOps: { ...s.disabledOps },
       newAccount: isNewAccount(s),
       ownerConfirmed: ownerConfirmed(getConfig()),
+      socialBusy,
       owner: {
         input: cfg().owner?.input || '',
         secUid: cfg().owner?.secUid || '',
+        uid: cfg().owner?.uid || '',
         nickname: cfg().owner?.nickname || '',
         hasAvatar: Boolean(cfg().owner?.avatar),
       },
@@ -704,7 +787,9 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
   return {
     run, tick, watch, dmTo, followUser, likeVideo, commentVideo, shareToOwner,
     setSign, setNickname, setAvatar,
-    checkOwnerDms, checkCommentReplies, confirmOwner, account, state,
+    checkOwnerDms, checkCommentReplies, confirmOwner, account, imStatus, startImLogin, state,
     setDriver: (d) => { driver = d },
+    setIm: (c) => { im = c },
+    _setSocialBusy: (v) => { socialBusy = !!v },
   }
 }
