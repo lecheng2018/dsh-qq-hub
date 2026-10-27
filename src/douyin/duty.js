@@ -246,8 +246,9 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
     if (!launched.ok) return launched
     const r = await d.resolveUser(parsed)
     if (!r.ok) return r
-    getConfig._setOwner?.({ input: raw, secUid: r.secUid, nickname: r.nickname || '', avatar: r.avatar || '', confirmedInput: raw })
-    return { ok: true, message: `已核对：${r.nickname || r.secUid}`, secUid: r.secUid, nickname: r.nickname, avatar: r.avatar }
+    const uid = String(r.uid || '').trim()
+    getConfig._setOwner?.({ input: raw, secUid: r.secUid, uid, nickname: r.nickname || '', avatar: r.avatar || '', confirmedInput: raw })
+    return { ok: true, message: `已核对：${r.nickname || r.secUid}`, secUid: r.secUid, uid, nickname: r.nickname, avatar: r.avatar }
   }
 
   async function dwellMs() {
