@@ -353,6 +353,143 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     return info || { secUid: '', nickname: '' }
   }
 
+  async function openEditProfile() {
+    const self = await selfInfo()
+    if (!self?.secUid) throw new Error('认不出自己的抖音主页')
+    await navigate(`https://www.douyin.com/user/${self.secUid}`)
+    await sleep(1200)
+    const clicked = await evalJs(`(() => {
+      const nodes = [...document.querySelectorAll('button,a,div,span')];
+      const t = nodes.find(n => {
+        const tx = (n.innerText || n.getAttribute('aria-label') || '').trim();
+        return /^(编辑资料|编辑个人信息)$/.test(tx) || (n.dataset && n.dataset.e2e === 'user-info-edit');
+      });
+      if (!t) return false;
+      t.click();
+      return true;
+    })()`)
+    if (!clicked) throw new Error('找不到「编辑资料」入口')
+    await sleep(900)
+    return { ok: true, secUid: self.secUid }
+  }
+
+  async function clickSaveProfile() {
+    const ok = await evalJs(`(() => {
+      const b = [...document.querySelectorAll('button,[role=button],div,span')].find(el => {
+        const tx = (el.innerText || el.getAttribute('aria-label') || '').trim();
+        return /^(保存|完成|确定)$/.test(tx);
+      });
+      if (!b) return false;
+      b.click();
+      return true;
+    })()`)
+    if (!ok) throw new Error('找不到保存按钮')
+    await sleep(1000)
+  }
+
+  async function readProfileFields() {
+    return await evalJs(`(() => {
+      const nickEl = document.querySelector('input[placeholder*="昵称"],input[name*=nick],input[name*=name]')
+        || [...document.querySelectorAll('input')].find(i => /昵称/.test((i.getAttribute('aria-label')||'')+(i.placeholder||'')));
+      const signEl = document.querySelector('textarea[placeholder*="签名"],textarea[name*=sign],textarea[name*=desc]')
+        || [...document.querySelectorAll('textarea')].find(t => /签名|简介|介绍/.test((t.getAttribute('aria-label')||'')+(t.placeholder||'')))
+        || document.querySelector('textarea');
+      const nick = nickEl ? String(nickEl.value || nickEl.textContent || '').trim() : '';
+      const sign = signEl ? String(signEl.value || signEl.textContent || '').trim() : '';
+      return { nickname: nick, signature: sign };
+    })()`).catch(() => ({ nickname: '', signature: '' })) || { nickname: '', signature: '' }
+  }
+
+  /** 改昵称：打开编辑资料 → 填昵称 → 保存 → 读回核对。 */
+  async function editNickname(text) {
+    const want = String(text || '').trim()
+    if (!want) throw new Error('昵称不能是空的')
+    await openEditProfile()
+    const esc = JSON.stringify(want)
+    const filled = await evalJs(`(() => {
+      const t = ${esc};
+      const el = document.querySelector('input[placeholder*="昵称"],input[name*=nick],input[name*=name]')
+        || [...document.querySelectorAll('input')].find(i => /昵称/.test((i.getAttribute('aria-label')||'')+(i.placeholder||'')))
+        || document.querySelector('input[type=text],input:not([type])');
+      if (!el) return false;
+      el.focus();
+      el.value = t;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    })()`)
+    if (!filled) throw new Error('找不到昵称输入框')
+    await clickSaveProfile()
+    await openEditProfile().catch(() => {})
+    const back = await readProfileFields()
+    if (back.nickname && back.nickname !== want) throw new Error(`保存后昵称对不上：想改成「${want}」，读到「${back.nickname}」`)
+    return { ok: true, nickname: want }
+  }
+
+  /** 改签名：打开编辑资料 → 填签名 → 保存 → 读回核对。 */
+  async function editSignature(text) {
+    const want = String(text || '').trim()
+    if (!want) throw new Error('签名不能是空的')
+    await openEditProfile()
+    const esc = JSON.stringify(want)
+    const filled = await evalJs(`(() => {
+      const t = ${esc};
+      const el = document.querySelector('textarea[placeholder*="签名"],textarea[name*=sign],textarea[name*=desc]')
+        || [...document.querySelectorAll('textarea')].find(x => /签名|简介|介绍/.test((x.getAttribute('aria-label')||'')+(x.placeholder||'')))
+        || document.querySelector('textarea,[contenteditable=true]');
+      if (!el) return false;
+      el.focus();
+      if (el.isContentEditable) {
+        el.textContent = t;
+        el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      } else {
+        el.value = t;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    })()`)
+    if (!filled) throw new Error('找不到签名输入框')
+    await clickSaveProfile()
+    await openEditProfile().catch(() => {})
+    const back = await readProfileFields()
+    if (back.signature && back.signature !== want) throw new Error(`保存后签名对不上：想改成「${want}」，读到「${back.signature}」`)
+    return { ok: true, signature: want }
+  }
+
+  /** 换头像：打开编辑资料 → 点头像上传 → 设本地文件 → 保存。filePath 必须是本机可读图片。 */
+  async function editAvatar(filePath) {
+    const path = String(filePath || '').trim()
+    if (!path) throw new Error('没有头像文件')
+    await openEditProfile()
+    // 尽量点到头像 / 更换头像
+    await evalJs(`(() => {
+      const b = [...document.querySelectorAll('button,a,div,span,img')].find(el => {
+        const tx = (el.innerText || el.getAttribute('aria-label') || '').trim();
+        return /更换头像|修改头像|上传头像|头像/.test(tx) && tx.length < 20;
+      });
+      if (b) b.click();
+    })()`).catch(() => {})
+    await sleep(600)
+    const inputInfo = await evalJs(`(() => {
+      const inp = document.querySelector('input[type=file][accept*="image"],input[type=file]');
+      if (!inp) return null;
+      if (!inp.id) inp.id = 'aurabot-dy-avatar-input';
+      return { id: inp.id };
+    })()`).catch(() => null)
+    if (!inputInfo?.id) throw new Error('找不到头像上传控件')
+    // CDP Dom.setFileInputFiles
+    if (!session || session.closed) throw new Error('浏览器没连上')
+    await session.send('DOM.enable').catch(() => {})
+    const doc = await session.send('DOM.getDocument', { depth: 1 })
+    const node = await session.send('DOM.querySelector', { nodeId: doc.root.nodeId, selector: `#${inputInfo.id}, input[type=file]` })
+    if (!node?.nodeId) throw new Error('CDP 找不到 file input')
+    await session.send('DOM.setFileInputFiles', { nodeId: node.nodeId, files: [path] })
+    await sleep(1200)
+    await clickSaveProfile()
+    return { ok: true, path }
+  }
+
   async function close() {
     try { offNet?.() } catch (error) {}
     try { session?.close() } catch (error) {}
@@ -365,6 +502,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     launch, close, navigate, currentUrl, ensureRecommend, checkGate, nextAwemes, activeAwemeId,
     clickLike, openComments, typeAndSend, clickFollow, openShareTo, openDmThread, listOwnerDms, listCommentReplies,
     resolveUser, selfInfo, pageText, evalJs,
+    editNickname, editSignature, editAvatar,
     /** 测 / 面板用：最近截到的视频 */
     recentFeed: () => feed.slice(),
     get paused() { return caps.verify },
@@ -384,6 +522,8 @@ export function createFakeDriver(script = {}) {
     needLogin: !!script.needLogin,
     liked: [], commented: [], followed: [], shared: [], dms: [], dmReplies: [],
     self: script.self || { secUid: 'self_sec', nickname: '肥鱼抖音' },
+    signature: script.signature || '',
+    avatarPath: '',
     owner: script.owner || { secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a~tplv.jpg' },
     inbox: script.inbox || [],
     commentReplies: script.commentReplies || [],
@@ -444,6 +584,34 @@ export function createFakeDriver(script = {}) {
     get paused() { return state.verify },
     get pauseReason() { return state.reason },
     markVerify: (why) => { state.verify = true; state.reason = why || '要验证' },
+    editNickname: async (text) => {
+      await gate()
+      if (script.profileFail) throw new Error(script.profileFailMessage || '改昵称失败')
+      if (state.verify) throw new Error(state.reason || '要验证')
+      const want = String(text || '').trim()
+      state.self = { ...state.self, nickname: want }
+      state.log.push(['editNickname', want])
+      return { ok: true, nickname: want }
+    },
+    editSignature: async (text) => {
+      await gate()
+      if (script.profileFail) throw new Error(script.profileFailMessage || '改签名失败')
+      if (state.verify) throw new Error(state.reason || '要验证')
+      const want = String(text || '').trim()
+      state.signature = want
+      state.log.push(['editSignature', want])
+      return { ok: true, signature: want }
+    },
+    editAvatar: async (filePath) => {
+      await gate()
+      if (script.profileFail) throw new Error(script.profileFailMessage || '换头像失败')
+      if (state.verify) throw new Error(state.reason || '要验证')
+      const path = String(filePath || '').trim()
+      if (!path) throw new Error('没有头像文件')
+      state.avatarPath = path
+      state.log.push(['editAvatar', path])
+      return { ok: true, path }
+    },
     /** 测用：看副作用 */
     _state: state,
   }
