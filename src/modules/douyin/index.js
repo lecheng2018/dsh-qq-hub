@@ -1,6 +1,5 @@
-// 内置模块：刷抖音。专用 Edge + CDP 刷推荐流；点赞 / 评论 / 回评论 / 关注 / 私信 / 分享给主人 / 回主人私信。
-// 8 项操作各自一档权限（面板「权限」页）：off 关 / owner 仅主人私聊（默认）/ all 所有人。总开关默认关，先登录再开。
-// 关注仅工具请求（douyin_follow），刷流不自动关注。点赞 / 评论 / 分享既可刷流自主，也可工具请求。
+// 内置模块：刷抖音。CDP（Edge）管内容；douyin-im 管社交（私信 / 分享主人 / 回主人私信）。
+// 权限同前。关注仅工具；点赞/评论可刷流也可工具；分享刷流与工具均走 IM。
 
 import { createDouyin } from '../../douyin/duty.js'
 import { defineTool, str } from '../../tools/tools.js'
@@ -14,9 +13,9 @@ export default {
   id: 'douyin',
   name: '刷抖音',
   version: '1.0.1',
-  description: '用专用 Edge 刷抖音：看推荐、点赞、评论、关注（仅工具）、私信、分享给主人、回主人私信；改签名/昵称/头像（douyin_watch / douyin_dm / douyin_follow / douyin_like / douyin_comment / douyin_share / douyin_set_sign / douyin_set_nickname / douyin_set_avatar）',
+  description: 'CDP 刷抖音内容 + douyin-im 社交：看推荐、点赞、评论、关注（仅工具）、私信、分享给主人、回主人私信；改签名/昵称/头像',
   tab: 'douyin',
-  files: ['douyin/duty.js', 'douyin/cdp.js', 'douyin/util.js'],
+  files: ['douyin/duty.js', 'douyin/cdp.js', 'douyin/im.js', 'douyin/util.js'],
   setup(api) {
     const { hub, http } = api.core
 
@@ -172,8 +171,10 @@ export default {
       return tools
     })
 
-    api.route('/douyin/state', async () => ({ ok: true, ...dy.state(), account: await dy.account() }))
+    api.route('/douyin/state', async () => ({ ok: true, ...dy.state(), account: await dy.account(), im: await dy.imStatus() }))
     api.route('/douyin/account', async () => dy.account(true))
+    api.route('/douyin/im', async () => dy.imStatus())
+    api.route('/douyin/im-login', async () => dy.startImLogin({ method: 'qr' }))
     api.route('/douyin/run', async () => dy.run({ force: true }))
     api.route('/douyin/dms', async () => dy.checkOwnerDms())
     api.route('/douyin/replies', async () => dy.checkCommentReplies())

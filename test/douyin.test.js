@@ -5,13 +5,14 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-let util, duty, cdp, normalize, profilePermDefault, DOUYIN_PERM_KEYS, permOf
+let util, duty, cdp, imMod, normalize, profilePermDefault, DOUYIN_PERM_KEYS, permOf
 
 before(async () => {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-douyin-'))
   util = await import('../src/douyin/util.js')
   duty = await import('../src/douyin/duty.js')
   cdp = await import('../src/douyin/cdp.js')
+  imMod = await import('../src/douyin/im.js')
   ;({ normalize } = await import('../src/core/config.js'))
   ;({ profilePermDefault, DOUYIN_PERM_KEYS, permOf } = await import('../src/chat/access.js'))
 })
@@ -43,6 +44,7 @@ test('配置：抖音总开关默认关；权限默认仅主人；写闸默认�
   assert.equal(c.douyin.gate.maxWritesPerDay, 60)
   assert.equal(c.douyin.gate.minWriteGapSec, 20)
   assert.equal(c.douyin.gate.newAccountDays, 3)
+  assert.equal(c.douyin.socialInterruptBrowse, true)
   for (const k of DOUYIN_PERM_KEYS) {
     assert.equal(profilePermDefault(k), 'owner')
     assert.equal(c.profilePerms[k], 'owner')
@@ -52,10 +54,11 @@ test('配置：抖音总开关默认关；权限默认仅主人；写闸默认�
 
 test('配置：mergeFromPanel 保留核对过的 secUid', async () => {
   const { mergeFromPanel } = await import('../src/core/config.js')
-  const cur = normalize({ douyin: { owner: { input: 'aaa', secUid: 'SEC1', nickname: '主人', avatar: 'http://a', confirmedInput: 'aaa' } } })
-  const next = mergeFromPanel(cur, { douyin: { owner: { input: 'bbb', secUid: 'HACK', nickname: '假的', avatar: 'x', confirmedInput: 'HACK' } } })
+  const cur = normalize({ douyin: { owner: { input: 'aaa', secUid: 'SEC1', uid: 'U1', nickname: '主人', avatar: 'http://a', confirmedInput: 'aaa' } } })
+  const next = mergeFromPanel(cur, { douyin: { owner: { input: 'bbb', secUid: 'HACK', uid: 'HACKU', nickname: '假的', avatar: 'x', confirmedInput: 'HACK' } } })
   assert.equal(next.douyin.owner.input, 'bbb')
   assert.equal(next.douyin.owner.secUid, 'SEC1')
+  assert.equal(next.douyin.owner.uid, 'U1')
   assert.equal(next.douyin.owner.nickname, '主人')
   assert.equal(next.douyin.owner.confirmedInput, 'aaa')
   assert.equal(util.ownerConfirmed(next), false)
@@ -67,11 +70,21 @@ const feed = [
   { awemeId: '1003', author: '阿鸟', authorSecUid: 'sec_bird', desc: '鹦鹉说话', likes: 500, comments: 5, tags: [] },
 ]
 
-function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false } = {}) {
+function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false, imScript = {} } = {}) {
   const events = []
   const facts = []
   const sent = []
   const drv = cdp.createFakeDriver({ feed: feed.map((x) => ({ ...x })), inbox: script.inbox || [], owner: script.owner || { secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a~tplv.jpg' }, commentReplies: script.commentReplies || [], ...script })
+  const im = imMod.createFakeImClient({
+    loggedIn: imScript.loggedIn !== false && !imScript.needLogin,
+    needLogin: !!imScript.needLogin,
+    failSend: !!imScript.failSend,
+    failMessage: imScript.failMessage,
+    inbox: imScript.inbox || script.inbox || [],
+    owner: { uid: 'owner_uid', secUid: 'owner_sec', nickname: '主人' },
+    peers: imScript.peers || [{ uid: 'peer1', secUid: 'MS4wLjABAAAAabcdefghijklmnopqrs', nickname: '路人' }],
+    ...imScript,
+  })
   const hub = {
     runSystemTurn: async (_n, _t, prompt) => {
       if (prompt.includes('看完说说你的想法')) return JSON.stringify(decisions)
@@ -92,25 +105,28 @@ function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false } = {}) {
     enabled: true, dryRun, ownerQQ: '10000001', ownerName: '主人',
     douyin: {
       enabled: true, perRun: 2, maxWatchPerDay: 30, maxRunsPerDay: 3, intervalHours: 4,
-      dwellMin: 8, dwellMax: 40, // 真机用；假驱动跳过 sleep
+      dwellMin: 8, dwellMax: 40,
+      socialInterruptBrowse: true,
       caps: { like: 30, comment: 1, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 },
-      gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 3 }, // 测里关掉间隔
-      owner: { input: 'owner_id', secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a', confirmedInput: 'owner_id' },
+      gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 3 },
+      owner: { input: 'owner_id', secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a', confirmedInput: 'owner_id' },
       ...cfgOver,
     },
     profilePerms: Object.fromEntries(DOUYIN_PERM_KEYS.map((k) => [k, 'owner'])),
   })
   if (cfgOver.gate) base.douyin.gate = { ...base.douyin.gate, ...cfgOver.gate }
   if (cfgOver.caps) base.douyin.caps = { ...base.douyin.caps, ...cfgOver.caps }
+  if (cfgOver.owner) base.douyin.owner = { ...base.douyin.owner, ...cfgOver.owner }
   const dataFile = join(process.env.AURABOT_DATA_DIR, `douyin-${Math.random().toString(16).slice(2)}.json`)
   const d = duty.createDouyin({
     getConfig: () => base,
     hub, memory,
     log: { info() {}, warn() {}, debug() {} },
     driver: drv,
+    im,
     dataFile,
   })
-  return { d, drv, events, facts, sent, cfg: base, dataFile }
+  return { d, drv, im, events, facts, sent, cfg: base, dataFile }
 }
 
 test('刷一轮：看视频、按每天上限评论 / 点赞（关注不在刷流），记成她的经历', async () => {
@@ -134,7 +150,7 @@ test('刷一轮：看视频、按每天上限评论 / 点赞（关注不在刷�
 })
 
 test('试运行：只记日志不真点，且不占真实日上限', async () => {
-  const { d, drv } = fakes({ dryRun: true, decisions: [
+  const { d, drv, im } = fakes({ dryRun: true, decisions: [
     { i: 1, feeling: '好', like: true, comment: '评一下', follow: true, share: '给你看', remember: '' },
   ] })
   const r = await d.run({ force: true })
@@ -142,71 +158,71 @@ test('试运行：只记日志不真点，且不占真实日上限', async () =>
   assert.equal(drv._state.liked.filter(Boolean).length, 0)
   assert.equal(drv._state.commented.length, 0)
   assert.equal(drv._state.followed.length, 0)
-  assert.equal(drv._state.shared.length, 0)
+  assert.equal(im._state.shared.length, 0, '试运行不走 IM 分享')
+  assert.equal(im._state.sent.length, 0)
   assert.equal(d.state().like, 0, '试运行不占 like 计数')
   assert.equal(d.state().comment, 0, '试运行不占 comment 计数')
   assert.equal(d.state().shareOwner, 0)
   assert.equal(d.state().writes, 0, '试运行不占写操作总闸')
 })
 
-test('分享给主人：要已核对 sec_uid；改了输入就不再认；openShareTo 必须选中才 ok', async () => {
-  const { d, drv } = fakes({ decisions: [
+test('分享给主人：要已核对 sec_uid；改了输入就不再认；走 IM shareWork', async () => {
+  const { d, im } = fakes({ decisions: [
     { i: 1, feeling: '好玩', like: false, comment: '', follow: false, share: '主人看这个猫', remember: '' },
   ] })
   await d.run({ force: true })
-  assert.deepEqual(drv._state.shared, ['owner_sec'])
+  assert.equal(im._state.shared.length, 1)
+  assert.equal(im._state.shared[0].secUid, 'owner_sec')
+  assert.equal(im._state.shared[0].itemId, '1001')
 
-  const { d: d2, drv: drv2 } = fakes({
+  const { d: d2, im: im2 } = fakes({
     decisions: [{ i: 1, feeling: '好玩', like: false, comment: '', follow: false, share: '主人看', remember: '' }],
-    cfgOver: { owner: { input: 'changed', secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a', confirmedInput: 'owner_id' } },
+    cfgOver: { owner: { input: 'changed', secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a', confirmedInput: 'owner_id' } },
   })
   await d2.run({ force: true })
-  assert.equal(drv2._state.shared.length, 0, '输入和核对时不一致 → 不分享')
-
-  const sh = await drv.openShareTo('')
-  assert.equal(sh.ok, false, '没 sec_uid 不能算分享成功')
+  assert.equal(im2._state.shared.length, 0, '输入和核对时不一致 → 不分享')
 })
 
-test('回主人私信：只认 confirmed sec_uid；列表没 sec_uid 就不开；超过 30 分钟不理', async () => {
+test('回主人私信：只认 confirmed sec_uid；列表没身份就不开；超过 30 分钟不理', async () => {
   const now = Date.now()
-  const { d, drv } = fakes({
+  const { d, im } = fakes({
     decisions: [],
-    script: { inbox: [
-      { secUid: 'owner_sec', nickname: '主人', text: '在干嘛', at: now },
-      { secUid: 'other', nickname: '路人', text: '嗨', at: now },
+    imScript: { inbox: [
+      { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '在干嘛', at: now },
+      { secUid: 'other', uid: 'other_uid', nickname: '路人', text: '嗨', at: now },
     ] },
   })
   const r = await d.checkOwnerDms()
-  assert.equal(r.replied, 1)
-  assert.deepEqual(drv._state.dms, ['owner_sec'])
-  assert.ok(drv._state.commented.includes('收到啦') || drv._state.commented.length >= 1)
+  assert.equal(r.replied, 1, r.message)
+  assert.equal(im._state.sent.length, 1)
+  assert.equal(im._state.sent[0].text, '收到啦')
 
   const { d: d2 } = fakes({
     decisions: [],
-    script: { inbox: [{ secUid: '', nickname: '？', text: '嗨', at: now }] },
+    imScript: { inbox: [{ secUid: '', uid: '', nickname: '？', text: '嗨', at: now }] },
   })
   const r2 = await d2.checkOwnerDms()
   assert.equal(r2.ok, false)
   assert.match(r2.message, /认不出/)
 
-  const { d: d3, drv: drv3 } = fakes({
+  const { d: d3, im: im3 } = fakes({
     decisions: [],
-    script: { inbox: [{ secUid: 'owner_sec', nickname: '主人', text: '很久以前', at: now - 40 * 60_000 }] },
+    imScript: { inbox: [{ secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '很久以前', at: now - 40 * 60_000 }] },
   })
   const r3 = await d3.checkOwnerDms()
   assert.equal(r3.replied, 0, '超过 30 分钟的私信不理')
-  assert.equal(drv3._state.dms.length, 0)
+  assert.equal(im3._state.sent.length, 0)
 })
 
 test('回主人私信：连续 3 条后若主人没新话就停', async () => {
   const now = Date.now()
   const inbox = [
-    { secUid: 'owner_sec', nickname: '主人', text: '一', at: now },
-    { secUid: 'owner_sec', nickname: '主人', text: '二', at: now },
-    { secUid: 'owner_sec', nickname: '主人', text: '三', at: now },
-    { secUid: 'owner_sec', nickname: '主人', text: '四', at: now },
+    { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '一', at: now },
+    { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '二', at: now },
+    { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '三', at: now },
+    { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '四', at: now },
   ]
-  const { d } = fakes({ decisions: [], script: { inbox } })
+  const { d } = fakes({ decisions: [], imScript: { inbox } })
   const r = await d.checkOwnerDms()
   assert.equal(r.replied, 3, '最多连回 3 条')
   assert.equal(d.state().dmReply, 3)
@@ -274,13 +290,14 @@ test('权限 off：browse 关掉后自动刷拒绝', async () => {
 })
 
 test('主动私信：每人每天最多 1 条；日上限仍生效', async () => {
-  const { d, drv } = fakes({ decisions: [], cfgOver: { caps: { like: 0, comment: 0, replyComment: 0, follow: 0, dm: 5, shareOwner: 0, dmReply: 0 } } })
+  const { d, im } = fakes({ decisions: [], cfgOver: { caps: { like: 0, comment: 0, replyComment: 0, follow: 0, dm: 5, shareOwner: 0, dmReply: 0 } } })
   const a = await d.dmTo('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs', '你好呀')
   assert.equal(a.ok, true, a.message)
   const b = await d.dmTo('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs', '第二句')
   assert.equal(b.ok, false)
   assert.match(b.message, /每人每天|已经给这个人/)
-  assert.equal(drv._state.dms.length, 1)
+  assert.equal(im._state.sent.length, 1)
+  assert.equal(im._state.sent[0].text, '你好呀')
 })
 
 test('关注工具：刷流不关注，douyin_follow 才关注', async () => {
@@ -488,3 +505,109 @@ test('换头像：MIME 嗅探、日上限 1、验证码 pauseAll', async () => {
   assert.equal(sent.length, 1)
 })
 
+
+test('IM：未登录时 douyin_dm / share / 回主人私信明确提示，不静默失败', async () => {
+  const { d } = fakes({ decisions: [], imScript: { needLogin: true } })
+  const a = await d.dmTo('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs', '你好')
+  assert.equal(a.ok, false)
+  assert.match(a.message, /IM|登录/)
+  const b = await d.shareToOwner('https://www.douyin.com/video/1001', '看')
+  assert.equal(b.ok, false)
+  assert.match(b.message, /IM|登录/)
+  const c = await d.checkOwnerDms()
+  assert.equal(c.ok, false)
+  assert.match(c.message, /IM|登录/)
+})
+
+test('IM：dryRun 私信不计次、不真发', async () => {
+  const { d, im } = fakes({
+    decisions: [], dryRun: true,
+    cfgOver: { caps: { dm: 5, like: 0, comment: 0, replyComment: 0, follow: 0, shareOwner: 0, dmReply: 0 } },
+  })
+  const a = await d.dmTo('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs', '试运行私信')
+  assert.equal(a.ok, true)
+  assert.match(a.message, /试运行/)
+  assert.equal(im._state.sent.length, 0)
+  assert.equal(d.state().dm, 0)
+  assert.equal(d.state().writes, 0)
+})
+
+test('IM：主人未核对拒绝分享', async () => {
+  const { d, im } = fakes({
+    decisions: [],
+    cfgOver: { owner: { input: 'x', secUid: '', uid: '', nickname: '', avatar: '', confirmedInput: '' } },
+  })
+  const r = await d.shareToOwner('https://www.douyin.com/video/1001', '看这个')
+  assert.equal(r.ok, false)
+  assert.match(r.message, /核对/)
+  assert.equal(im._state.shared.length, 0)
+})
+
+test('IM：回执失败计入 failStreak', async () => {
+  const { d, im } = fakes({
+    decisions: [],
+    imScript: { failSend: true, failMessage: '发送失败：无回执' },
+    cfgOver: { caps: { dm: 5, like: 0, comment: 0, replyComment: 0, follow: 0, shareOwner: 0, dmReply: 0 }, gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 } },
+  })
+  const target = 'https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs'
+  for (let i = 0; i < 3; i++) {
+    const r = await d.dmTo(target, 'hi' + i)
+    assert.equal(r.ok, false, r.message)
+    assert.match(r.message, /回执|失败/)
+  }
+  assert.equal(d.state().disabledOps.dm, true)
+  assert.equal(im._state.sent.length, 0)
+})
+
+test('IM：socialBusy 打断刷流并写入 lastSkipReason', async () => {
+  const events = []
+  const sent = []
+  const drv = cdp.createFakeDriver({ feed: feed.map((x) => ({ ...x })) })
+  const im = imMod.createFakeImClient({ owner: { uid: 'owner_uid', secUid: 'owner_sec' } })
+  const base = normalize({
+    enabled: true, dryRun: false, ownerQQ: '10000001', ownerName: '主人',
+    douyin: {
+      enabled: true, perRun: 2, maxWatchPerDay: 30, maxRunsPerDay: 3, intervalHours: 4,
+      dwellMin: 8, dwellMax: 40, socialInterruptBrowse: true,
+      caps: { like: 0, comment: 0, replyComment: 0, follow: 0, dm: 5, shareOwner: 0, dmReply: 0 },
+      gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 0 },
+      owner: { input: 'owner_id', secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a', confirmedInput: 'owner_id' },
+    },
+    profilePerms: Object.fromEntries(DOUYIN_PERM_KEYS.map((k) => [k, 'owner'])),
+  })
+  const dataFile = join(process.env.AURABOT_DATA_DIR, `douyin-busy-${Math.random().toString(16).slice(2)}.json`)
+  const d = duty.createDouyin({
+    getConfig: () => base,
+    hub: {
+      runSystemTurn: async (_n, _t, prompt) => {
+        if (prompt.includes('看完说说你的想法')) {
+          d._setSocialBusy(true)
+          return JSON.stringify([
+            { i: 1, feeling: 'a', like: false, comment: '', follow: false, share: '', remember: '' },
+            { i: 2, feeling: 'b', like: false, comment: '', follow: false, share: '', remember: '' },
+          ])
+        }
+        return ''
+      },
+      sendText: async (c, t) => sent.push({ c, t }),
+      logChat() {},
+    },
+    memory: { list: () => [], recentEvents: () => [], addEvent: (e) => events.push(e.text), add() {} },
+    log: { info() {}, warn() {}, debug() {} },
+    driver: drv,
+    im,
+    dataFile,
+  })
+  const r = await d.run({ force: true })
+  assert.equal(r.ok, false)
+  assert.equal(r.interrupted, true)
+  assert.match(r.message, /社交优先|打断/)
+  assert.match(d.state().lastSkipReason, /社交优先|打断/)
+})
+
+test('配置：socialInterruptBrowse 默认开，可关', () => {
+  const c = normalize({})
+  assert.equal(c.douyin.socialInterruptBrowse, true)
+  const c2 = normalize({ douyin: { socialInterruptBrowse: false } })
+  assert.equal(c2.douyin.socialInterruptBrowse, false)
+})
