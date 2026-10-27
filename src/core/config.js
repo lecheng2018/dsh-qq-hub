@@ -115,7 +115,8 @@ export const DEFAULTS = {
     replyPollMinutes: 25, // 看别人回她评论的频率（分钟）
     owner: { input: '', secUid: '', uid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人抖音；secUid/uid 由「核对」写入，面板不能直接改
     socialInterruptBrowse: true, // 社交（私信/分享）进行中时打断刷流，原因写入 lastSkipReason
-    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20, sign: 2, nickname: 2, avatar: 1 }, // 每天上限（登录后前 3 天减半；改资料三项仅工具）
+    shareBias: 'proactive', // stingy|normal|proactive：刷流 think 里 share 的倾向（默认积极推给主人）
+    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 5, dmReply: 20, sign: 2, nickname: 2, avatar: 1 }, // 每天上限（登录后前 3 天减半；改资料三项仅工具）
     gate: {
       maxWritesPerDay: 60, // 所有写操作合计上限
       minWriteGapSec: 20, // 任意两次写操作之间至少隔这么多秒
@@ -274,7 +275,13 @@ export function normalize(raw) {
   if (!isObj(d.owner)) d.owner = {}
   for (const k of ['input', 'secUid', 'uid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
   if (!isObj(d.caps)) d.caps = {}
-  for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200], ['sign', 2, 20], ['nickname', 2, 20], ['avatar', 1, 10]]) d.caps[k] = num(d.caps[k], dv, 0, max)
+  {
+    const rawBias = String(d.shareBias || 'proactive').toLowerCase()
+    d.shareBias = rawBias === 'off' || rawBias === 'stingy' ? 'stingy'
+      : rawBias === 'normal' ? 'normal'
+      : 'proactive'
+  }
+  for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 5, 30], ['dmReply', 20, 200], ['sign', 2, 20], ['nickname', 2, 20], ['avatar', 1, 10]]) d.caps[k] = num(d.caps[k], dv, 0, max)
   if (!isObj(d.gate)) d.gate = {}
   d.gate.maxWritesPerDay = num(d.gate.maxWritesPerDay, 60, 1, 500)
   d.gate.minWriteGapSec = num(d.gate.minWriteGapSec, 20, 0, 600)

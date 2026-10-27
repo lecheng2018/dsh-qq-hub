@@ -172,8 +172,11 @@ function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false, imScript 
     peers: imScript.peers || [{ uid: 'peer1', secUid: 'MS4wLjABAAAAabcdefghijklmnopqrs', nickname: '路人' }],
     ...imScript,
   })
+  const turns = []
   const hub = {
-    runSystemTurn: async (_n, _t, prompt) => {
+    turns,
+    runSystemTurn: async (name, title, prompt, opts) => {
+      turns.push({ name, title, prompt, opts: opts || {} })
       if (prompt.includes('看完说说你的想法')) return JSON.stringify(decisions)
       if (prompt.includes('私信给你') || prompt.includes('发的私信')) return script.dmReplyText || '收到啦'
       if (prompt.includes('回你的评论')) return script.replyText || '哈哈是呀'
@@ -213,7 +216,7 @@ function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false, imScript 
     im,
     dataFile,
   })
-  return { d, drv, im, events, facts, sent, cfg: base, dataFile }
+  return { d, drv, im, hub, events, facts, sent, cfg: base, dataFile }
 }
 
 test('刷一轮：看视频、按每天上限评论 / 点赞（关注不在刷流），记成她的经历', async () => {
@@ -1129,6 +1132,7 @@ test('CDP：Windows 扫进程走 -EncodedCommand，能解析 msedge+remote-debug
   const profile = '/home/u/data/edge-profile'
   const script = cdp.buildWindowsBrowserScanScript(profile)
   // 整段脚本，Where-Object 块不被 join(' ') 拆坏；含 -replace 反斜杠规则
+  assert.match(script, /\$ProgressPreference='SilentlyContinue'/)
   assert.match(script, /\$want = '/)
   assert.match(script, /Where-Object \{[\s\S]*-and[\s\S]*Contains\(\$want\)[\s\S]*\}/)
   assert.ok(!script.includes('Get-CimInstance Win32_Process | Where-Object {  $_.Name'), '不应是单行空格拼接')
@@ -1209,5 +1213,128 @@ test('CDP launch：spawn 成功且无 DevToolsActivePort 时自写，供重启 a
   assert.equal(r.attached, false)
   assert.equal(r.port, 60123)
   assert.equal(cdp.readDevToolsActivePort(dir), 60123, 'spawn 后应自写 DevToolsActivePort')
+  drv.close()
+})
+
+
+test('shareBias：默认 proactive；normalize 认 stingy/normal；刷流 prompt 带对应倾向', async () => {
+  assert.equal(normalize({}).douyin.shareBias, 'proactive')
+  assert.equal(normalize({ douyin: { shareBias: 'stingy' } }).douyin.shareBias, 'stingy')
+  assert.equal(normalize({ douyin: { shareBias: 'normal' } }).douyin.shareBias, 'normal')
+  assert.equal(normalize({ douyin: { shareBias: 'off' } }).douyin.shareBias, 'stingy')
+  assert.equal(normalize({ douyin: { shareBias: 'weird' } }).douyin.shareBias, 'proactive')
+  assert.equal(normalize({}).douyin.caps.shareOwner, 5)
+
+  const proactive = fakes({
+    decisions: [{ i: 1, feeling: '好看', like: false, comment: '', share: '', remember: '' }],
+    cfgOver: { shareBias: 'proactive', perRun: 1 },
+  })
+  await proactive.d.run({ force: true })
+  const pTurn = proactive.hub.turns.find((x) => x.prompt.includes('看完说说你的想法'))
+  assert.ok(pTurn)
+  assert.match(pTurn.prompt, /分享要积极/)
+
+  const stingy = fakes({
+    decisions: [{ i: 1, feeling: '好看', like: false, comment: '', share: '', remember: '' }],
+    cfgOver: { shareBias: 'stingy', perRun: 1 },
+  })
+  await stingy.d.run({ force: true })
+  const sTurn = stingy.hub.turns.find((x) => x.prompt.includes('看完说说你的想法'))
+  assert.ok(sTurn)
+  assert.match(sTurn.prompt, /一定会喜欢再写 share/)
+  assert.ok(!sTurn.prompt.includes('分享要积极'))
+})
+
+test('抖音 IM 私信：假 inbox → hub.runSystemTurn(douyin-im, noTools) → IM 发出，不是 silent log-only', async () => {
+  const now = Date.now()
+  const { d, im, hub } = fakes({
+    decisions: [],
+    imScript: { inbox: [
+      { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', text: '在干嘛', at: now },
+    ] },
+  })
+  const r = await d.checkOwnerDms()
+  assert.equal(r.replied, 1, r.message)
+  assert.equal(im._state.sent.length, 1)
+  assert.equal(im._state.sent[0].text, '收到啦')
+  const imTurn = hub.turns.find((x) => x.name === 'douyin-im')
+  assert.ok(imTurn, '应走 douyin-im 会话')
+  assert.equal(imTurn.opts.noTools, true, '私信轮关工具')
+  assert.match(imTurn.title, /私信/)
+  assert.match(imTurn.prompt, /在干嘛/)
+})
+
+test('CDP nextAwemes：attach 后 feed 空 → 重导航 recommend+from_nav 并用 DOM 种子 aweme_id', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'edge-refill-'))
+  writeFileSync(join(dir, 'DevToolsActivePort'), '59900\n/devtools/browser/x\n')
+  const navigates = []
+  const muted = []
+  function RefillWs(url) {
+    this.url = url
+    this.listeners = {}
+    queueMicrotask(() => { for (const fn of this.listeners.open || []) fn() })
+  }
+  RefillWs.prototype.addEventListener = function (ev, fn) {
+    ;(this.listeners[ev] ||= []).push(fn)
+  }
+  RefillWs.prototype.send = function (raw) {
+    let msg
+    try { msg = JSON.parse(raw) } catch { return }
+    if (msg.id == null) return
+    let result = {}
+    if (msg.method === 'Page.setMuted') muted.push(msg.params)
+    if (msg.method === 'Page.navigate') navigates.push(msg.params?.url || '')
+    if (msg.method === 'Runtime.evaluate') {
+      const expr = String(msg.params?.expression || '')
+      if (expr.includes('matchAll') && expr.includes('aweme_id')) {
+        result = { result: { value: [
+          { aweme_id: '7123456789012345678', desc: '', author: { nickname: '' }, statistics: {} },
+          { aweme_id: '7123456789012345679', desc: '', author: { nickname: '' }, statistics: {} },
+        ] } }
+      } else {
+        result = { result: { value: expr.includes('location.href') ? 'https://www.douyin.com/?recommend=1&from_nav=1' : undefined } }
+      }
+    }
+    queueMicrotask(() => {
+      for (const fn of this.listeners.message || []) {
+        fn({ data: JSON.stringify({ id: msg.id, result }) })
+      }
+    })
+  }
+  RefillWs.prototype.close = function () {}
+
+  const drv = cdp.createBrowserDriver({
+    profileDir: dir,
+    browserPath: '/fake/msedge',
+    minimize: false,
+    wsFactory: RefillWs,
+    hooks: {
+      findBrowser: () => '/fake/msedge',
+      freePort: async () => 60123,
+      spawn: (...a) => { throw new Error('should attach, not spawn: ' + a) },
+      getJson: async (url) => {
+        if (url.includes('/json/version')) {
+          return { Browser: 'Edge', webSocketDebuggerUrl: 'ws://127.0.0.1:59900/devtools/browser/x' }
+        }
+        if (url.includes('/json/list')) {
+          return [{ type: 'page', webSocketDebuggerUrl: 'ws://127.0.0.1:59900/devtools/page/1' }]
+        }
+        throw new Error('unexpected ' + url)
+      },
+      findBrowserProcessesForProfile: () => [{ pid: 4242, port: 59900 }],
+      sleep: async () => {},
+    },
+  })
+  const launched = await drv.launch()
+  assert.equal(launched.ok, true)
+  assert.equal(launched.attached, true)
+  assert.ok(muted.some((m) => m && m.muted === true), 'attach 应 Page.setMuted')
+  assert.equal(drv.recentFeed().length, 0, '刚 attach 时 feed 仍空')
+
+  const list = await drv.nextAwemes({ seen: new Set(), want: 2 })
+  assert.ok(navigates.some((u) => /recommend=1/.test(u) && /from_nav=1/.test(u)), '空 feed 应重导航推荐页: ' + navigates.join(','))
+  assert.equal(list.length, 2)
+  assert.equal(list[0].awemeId, '7123456789012345678')
+  assert.ok(drv.recentFeed().length >= 2, 'DOM 种子应写入 feed')
   drv.close()
 })
