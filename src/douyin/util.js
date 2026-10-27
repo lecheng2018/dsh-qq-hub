@@ -1,5 +1,7 @@
 // 刷抖音用到的纯函数：日期、随机、认主页链接 / 抖音号、头像对比、feed 整理、验证码识别。不碰浏览器，好测。
 
+import { resolve as pathResolve, sep as pathSep } from 'node:path'
+
 export const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 /** [lo, hi] 之间随机一个整数；rand 方便测试替换。 */
@@ -123,3 +125,64 @@ export function digestOf(v, comments = []) {
 
 /** 评论 / 私信正文：去掉换行和过长部分；空的返回空串。 */
 export const cleanText = (t, max = 100) => [...String(t ?? '').replace(/\s+/g, ' ').trim()].slice(0, max).join('')
+
+/** 抖音昵称 / 签名上限（以常见页面为准；超长在保存前拒）。 */
+export const NICK_MAX = 20
+export const SIGN_MAX = 100
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024
+
+const PHONE_RE = /(?:\+?86[-\s]?)?1[3-9]\d{9}/
+const LINK_RE = /https?:\/\/|www\.|v\.douyin\.com|抖音\.com|\.com\/|\.cn\//i
+const AT_RE = /@[\w\u4e00-\u9fff]/
+const AD_RE = /加微|加v|vx|微信|优惠券|免费领|代刷|引流|广告|私聊领取|限时特价/i
+const FORBIDDEN_NICK_RE = /^[\s._\-•·]+$|[<>{}[\]\\|]/
+
+/** 按文件头认图片类型（QQ 图床常标 octet-stream）。 */
+export function sniffImageType(buf) {
+  const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf || [])
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png'
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
+  if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif'
+  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp'
+  return ''
+}
+
+/** 昵称过滤：空 / 超长 / 禁字符 / 链接 / @ / 手机 / 广告。 */
+export function filterNickname(text) {
+  const nick = String(text ?? '').replace(/\s+/g, ' ').trim()
+  if (!nick) return { ok: false, message: '昵称不能是空的' }
+  if ([...nick].length > NICK_MAX) return { ok: false, message: `昵称最多 ${NICK_MAX} 个字` }
+  if (FORBIDDEN_NICK_RE.test(nick) || LINK_RE.test(nick) || AT_RE.test(nick) || PHONE_RE.test(nick) || AD_RE.test(nick)) {
+    return { ok: false, message: '昵称里不能有链接、@、手机号、广告或禁用字符' }
+  }
+  return { ok: true, text: nick }
+}
+
+/** 签名过滤：空 / 超长 / 链接 / @ / 手机 / 广告。 */
+export function filterSignature(text) {
+  const sign = String(text ?? '').replace(/\s+/g, ' ').trim()
+  if (!sign) return { ok: false, message: '签名不能是空的' }
+  if ([...sign].length > SIGN_MAX) return { ok: false, message: `签名最多 ${SIGN_MAX} 个字` }
+  if (LINK_RE.test(sign) || AT_RE.test(sign) || PHONE_RE.test(sign) || AD_RE.test(sign)) {
+    return { ok: false, message: '签名里不能有链接、@、手机号或广告口吻' }
+  }
+  return { ok: true, text: sign }
+}
+
+
+/** 头像来源：last / http(s) / 白名单本地路径（必须落在 allowRoots 下）。 */
+export function resolveAvatarSource(input, lastUrl, allowRoots = []) {
+  const s = String(input || '').trim()
+  if (!s || /^(last|刚才|上一张|最近)/i.test(s)) {
+    const last = String(lastUrl || '').trim()
+    if (!last) return { ok: false, message: '这个聊天里还没人发过图' }
+    if (/^https?:\/\//i.test(last)) return { ok: true, url: last }
+    return resolveAvatarSource(last, '', allowRoots)
+  }
+  if (/^https?:\/\//i.test(s)) return { ok: true, url: s }
+  const resolved = pathResolve(s)
+  const roots = (allowRoots || []).map((r) => pathResolve(String(r || ''))).filter(Boolean)
+  const under = roots.some((r) => resolved === r || resolved.startsWith(r + pathSep))
+  if (!under) return { ok: false, message: '本地头像只能用数据目录里的图' }
+  return { ok: true, path: resolved }
+}

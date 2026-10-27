@@ -7,13 +7,18 @@ import { isSilence } from '../chat/reply.js'
 import {
   dayKey, between, pickJson, parseUserInput, findAwemeId, videoLink,
   ownerConfirmed, isOwnerSec, digestOf, cleanText, looksLikeVerify,
+  filterNickname, filterSignature, sniffImageType, AVATAR_MAX_BYTES,
 } from './util.js'
+import { readFileSync, existsSync } from 'node:fs'
+import { basename } from 'node:path'
 import { createBrowserDriver } from './cdp.js'
 
-const WRITE_OPS = ['like', 'comment', 'replyComment', 'follow', 'dm', 'shareOwner', 'dmReply']
+const WRITE_OPS = ['like', 'comment', 'replyComment', 'follow', 'dm', 'shareOwner', 'dmReply', 'sign', 'nickname', 'avatar']
 const emptyDay = () => ({
   day: '', runs: 0, watched: 0, writes: 0,
   like: 0, comment: 0, replyComment: 0, follow: 0, dm: 0, shareOwner: 0, dmReply: 0,
+  sign: 0, nickname: 0, avatar: 0,
+  lastSignText: '', lastNicknameText: '',
   lastWriteAt: 0,
   failStreak: Object.fromEntries(WRITE_OPS.map((k) => [k, 0])),
   disabledOps: Object.fromEntries(WRITE_OPS.map((k) => [k, false])),
@@ -530,6 +535,88 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
     return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要分享' : '分享出去了' } : r
   }
 
+
+  /** 工具：改抖音个性签名（日上限默认 2，过写闸）。 */
+  async function setSign(text) {
+    if (perm('douyinSign') === 'off') return { ok: false, message: '改抖音签名在权限里关掉了' }
+    const filtered = filterSignature(text)
+    if (!filtered.ok) return filtered
+    const s = today(load())
+    if (paused(s)) return { ok: false, message: '今天暂停：' + s.pauseReason }
+    if (s.lastSignText && s.lastSignText === filtered.text) {
+      return { ok: false, message: '今天已经改成这句签名了，不用再改' }
+    }
+    const booted = await boot()
+    if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
+    const drv = ensureDriver()
+    const r = await doWrite(s, 'sign', async () => {
+      const out = await drv.editSignature(filtered.text)
+      if (!out?.ok) throw new Error(out?.message || '签名没改成')
+    }, { text: filtered.text })
+    if (r.ok && !r.dryRun) {
+      s.lastSignText = filtered.text
+      memory?.addEvent?.({ text: `把抖音签名改成：${filtered.text.slice(0, 60)}`, tags: ['抖音'], importance: 0.45 })
+      save(s)
+    }
+    return r.ok ? { ok: true, message: r.dryRun ? `试运行：本来要把抖音签名改成：${filtered.text}` : `抖音签名改好了：${filtered.text}` } : r
+  }
+
+  /** 工具：改抖音昵称（日上限默认 2，过写闸）。 */
+  async function setNickname(text) {
+    if (perm('douyinNickname') === 'off') return { ok: false, message: '改抖音昵称在权限里关掉了' }
+    const filtered = filterNickname(text)
+    if (!filtered.ok) return filtered
+    const s = today(load())
+    if (paused(s)) return { ok: false, message: '今天暂停：' + s.pauseReason }
+    if (s.lastNicknameText && s.lastNicknameText === filtered.text) {
+      return { ok: false, message: '今天已经改成这个昵称了，不用再改' }
+    }
+    const booted = await boot()
+    if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
+    const drv = ensureDriver()
+    const r = await doWrite(s, 'nickname', async () => {
+      const out = await drv.editNickname(filtered.text)
+      if (!out?.ok) throw new Error(out?.message || '昵称没改成')
+    }, { text: filtered.text })
+    if (r.ok && !r.dryRun) {
+      s.lastNicknameText = filtered.text
+      s.selfNickname = filtered.text
+      memory?.addEvent?.({ text: `把抖音昵称改成：${filtered.text}`, tags: ['抖音'], importance: 0.45 })
+      save(s)
+    }
+    return r.ok ? { ok: true, message: r.dryRun ? `试运行：本来要把抖音昵称改成：${filtered.text}` : `抖音昵称改好了：${filtered.text}` } : r
+  }
+
+  /** 工具：换抖音头像。filePath 为本机可读图片路径（模块侧已解析 last/http/白名单本地）。 */
+  async function setAvatar(filePath) {
+    if (perm('douyinAvatar') === 'off') return { ok: false, message: '换抖音头像在权限里关掉了' }
+    const path = String(filePath || '').trim()
+    if (!path) return { ok: false, message: '没有头像文件' }
+    if (!existsSync(path)) return { ok: false, message: '找不到头像文件' }
+    let buf
+    try { buf = readFileSync(path) } catch (error) {
+      return { ok: false, message: '读不了头像文件：' + (error.message || error) }
+    }
+    if (!buf?.length) return { ok: false, message: '头像文件是空的' }
+    if (buf.length > AVATAR_MAX_BYTES) return { ok: false, message: `头像太大了，最多 ${Math.floor(AVATAR_MAX_BYTES / 1024 / 1024)}MB` }
+    const mime = sniffImageType(buf)
+    if (!mime) return { ok: false, message: '不是能认的图片（要 png / jpg / gif / webp）' }
+    const s = today(load())
+    if (paused(s)) return { ok: false, message: '今天暂停：' + s.pauseReason }
+    const booted = await boot()
+    if (!booted.ok) return { ok: false, message: booted.reason || booted.message }
+    const drv = ensureDriver()
+    const r = await doWrite(s, 'avatar', async () => {
+      const out = await drv.editAvatar(path)
+      if (!out?.ok) throw new Error(out?.message || '头像没换上')
+    }, { text: basename(path) })
+    if (r.ok && !r.dryRun) {
+      memory?.addEvent?.({ text: '换了抖音头像', tags: ['抖音'], importance: 0.45 })
+      save(s)
+    }
+    return r.ok ? { ok: true, message: r.dryRun ? '试运行：本来要换抖音头像' : '抖音头像换好了' } : r
+  }
+
   async function watch(text) {
     const id = findAwemeId(text)
     if (!id) return { ok: false, message: '没认出抖音视频链接' }
@@ -597,6 +684,8 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
       runs: s.runs, watched: s.watched, writes: s.writes || 0,
       like: s.like, comment: s.comment, replyComment: s.replyComment,
       follow: s.follow, dm: s.dm, shareOwner: s.shareOwner, dmReply: s.dmReply,
+      sign: s.sign || 0, nickname: s.nickname || 0, avatar: s.avatar || 0,
+      lastSignText: s.lastSignText || '', lastNicknameText: s.lastNicknameText || '',
       lastRun: s.lastRun, nextDueAt: s.nextDueAt, lastSkipReason: s.lastSkipReason,
       history: (s.history || []).slice(0, 20),
       pauseReason: paused(s) ? s.pauseReason : '',
@@ -614,6 +703,7 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, da
 
   return {
     run, tick, watch, dmTo, followUser, likeVideo, commentVideo, shareToOwner,
+    setSign, setNickname, setAvatar,
     checkOwnerDms, checkCommentReplies, confirmOwner, account, state,
     setDriver: (d) => { driver = d },
   }
