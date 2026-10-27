@@ -45,11 +45,18 @@ export function isOwner(cfg, userId) {
 
 /** 改资料类操作（改昵称 / 签名 / 头像、改 B 站签名），以及处理好友申请、改白名单的三档权限。 */
 export const PROFILE_PERM_LEVELS = ['off', 'owner', 'all']
-export const PROFILE_PERM_KEYS = ['qqNickname', 'qqSignature', 'qqAvatar', 'biliSign', 'biliAvatar', 'qqFriendRequest', 'whitelist']
+export const DOUYIN_PERM_KEYS = ['douyinBrowse', 'douyinLike', 'douyinComment', 'douyinReplyComment', 'douyinFollow', 'douyinDm', 'douyinShareOwner', 'douyinReplyOwnerDm']
+export const PROFILE_PERM_KEYS = ['qqNickname', 'qqSignature', 'qqAvatar', 'biliSign', 'biliAvatar', 'qqFriendRequest', 'whitelist', ...DOUYIN_PERM_KEYS]
+/** 没设过的档位：一律默认仅主人（含抖音 8 项；用户要放开自己在面板开）。 */
+export const profilePermDefault = (key) => 'owner'
+export const permOf = (cfg, key) => {
+  const p = cfg?.profilePerms?.[key]
+  return PROFILE_PERM_LEVELS.includes(p) ? p : profilePermDefault(key)
+}
 
 /** 这一档在这个会话里要不要挂工具。owner = 只在主人私聊里挂；all = 哪都挂；off = 不挂。 */
 export function profileToolVisible(cfg, key, chat) {
-  const p = cfg?.profilePerms?.[key] || 'owner'
+  const p = permOf(cfg, key)
   if (p === 'all') return chat.kind === 'private' || chat.kind === 'group'
   if (p === 'owner') return chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
   return false
@@ -57,7 +64,7 @@ export function profileToolVisible(cfg, key, chat) {
 
 /** 执行时再查一遍（面板可能刚改过）。allOwner = 这一轮说话的人全是主人。 */
 export function profilePermits(cfg, key, chat, allOwner) {
-  const p = cfg?.profilePerms?.[key] || 'owner'
+  const p = permOf(cfg, key)
   if (p === 'off') return { ok: false, message: '这个操作在面板里关掉了' }
   if (!profileToolVisible(cfg, key, chat)) return { ok: false, message: '这里不能做这个操作' }
   if (p === 'owner' && !allOwner) return { ok: false, message: '只有主人私聊让我改才行' }

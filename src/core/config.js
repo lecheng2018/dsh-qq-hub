@@ -2,7 +2,7 @@
 
 import { dataDir, readJson, writeJson } from './store.js'
 import { DEFAULT_GROUP_POLICY } from '../chat/group-policy.js'
-import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS } from '../chat/access.js'
+import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS, profilePermDefault } from '../chat/access.js'
 import { normalizeChatModels } from '../chat/chat-model.js'
 
 export const DEFAULTS = {
@@ -13,7 +13,7 @@ export const DEFAULTS = {
   ownerQQ: '', // 主人 QQ 号（向导里填）
   ownerName: '主人',
   ownerLevel: 'full', // full | social | chat
-  profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner' }, // 改资料类操作的权限：off 关 / owner 仅主人私聊 / all 所有人
+  profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner', douyinBrowse: 'owner', douyinLike: 'owner', douyinComment: 'owner', douyinReplyComment: 'owner', douyinFollow: 'owner', douyinDm: 'owner', douyinShareOwner: 'owner', douyinReplyOwnerDm: 'owner' }, // 改资料类操作（含抖音 8 项）的权限：off 关 / owner 仅主人私聊 / all 所有人。抖音 8 项默认仅主人，总开关默认关
   longTasks: false, // 长任务模式：主人私聊（完整权限）额外挂 dsh-tool-jobs + dsh-tool-schedule，会多一点工具定义、稍慢
   allow: { private: [], groups: [] }, // 主人永远能私聊，不用写进白名单
   snowluma: {
@@ -99,6 +99,23 @@ export const DEFAULTS = {
     shareToOwner: true, // 看到好玩的私聊分享给主人
     like: false, // 顺手点赞
   },
+  // 刷抖音：用专用的 Edge 窗口（独立登录资料，不碰你平时的浏览器），经 CDP 控制。8 项操作各自的权限在 profilePerms.douyin*。
+  douyin: {
+    enabled: false, // 总开关：默认关，先在面板里登录抖音再打开
+    autoBrowse: true, // 定时自己去刷
+    intervalHours: 4,
+    maxRunsPerDay: 3,
+    perRun: 5, // 一轮看几个视频
+    maxWatchPerDay: 30, // 每天最多看几个（手动让她刷也算）
+    dwellMin: 8, // 每个视频停留的秒数（随机取一个）
+    dwellMax: 40,
+    browserPath: '', // 留空 = 自动找 Edge（找不到再找 Chrome）；也可填 msedge.exe 的完整路径
+    minimize: true, // 登录完把窗口最小化
+    dmPollMinutes: 7, // 看私信的频率（分钟，实际在 0.7~1.4 倍之间随机）
+    replyPollMinutes: 25, // 看别人回她评论的频率（分钟）
+    owner: { input: '', secUid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人的抖音号 / 主页链接；secUid 由「核对」确认后写入，面板不能直接改
+    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 }, // 每天上限
+  },
   qzoneSocial: {
     enabled: true,
     replyOwn: true, // 回复自己说说下别人的新评论
@@ -182,7 +199,7 @@ export function normalize(raw) {
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
   c.chatModels = normalizeChatModels(c.chatModels)
-  c.profilePerms = Object.fromEntries(PROFILE_PERM_KEYS.map((k) => [k, PROFILE_PERM_LEVELS.includes(c.profilePerms?.[k]) ? c.profilePerms[k] : 'owner']))
+  c.profilePerms = Object.fromEntries(PROFILE_PERM_KEYS.map((k) => [k, PROFILE_PERM_LEVELS.includes(c.profilePerms?.[k]) ? c.profilePerms[k] : profilePermDefault(k)]))
   c.allow = { private: qqList(c.allow.private), groups: qqList(c.allow.groups) }
   const g = c.group
   g.wakeWords = (Array.isArray(g.wakeWords) ? g.wakeWords : String(g.wakeWords || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
@@ -234,6 +251,23 @@ export function normalize(raw) {
   b.maxCommentsPerDay = num(b.maxCommentsPerDay, 3, 0, 50)
   b.maxRepliesPerDay = num(b.maxRepliesPerDay, 6, 0, 100)
   b.keywords = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[\n,，]+/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)
+  const d = c.douyin
+  d.enabled = bool(d.enabled, false)
+  d.autoBrowse = bool(d.autoBrowse, true)
+  d.minimize = bool(d.minimize, true)
+  d.intervalHours = num(d.intervalHours, 4, 1, 48)
+  d.maxRunsPerDay = num(d.maxRunsPerDay, 3, 0, 24)
+  d.perRun = num(d.perRun, 5, 1, 10)
+  d.maxWatchPerDay = num(d.maxWatchPerDay, 30, 0, 200)
+  d.dwellMin = num(d.dwellMin, 8, 3, 120)
+  d.dwellMax = Math.max(d.dwellMin, num(d.dwellMax, 40, 3, 300))
+  d.dmPollMinutes = num(d.dmPollMinutes, 7, 2, 120)
+  d.replyPollMinutes = num(d.replyPollMinutes, 25, 5, 240)
+  d.browserPath = String(d.browserPath || '').trim()
+  if (!isObj(d.owner)) d.owner = {}
+  for (const k of ['input', 'secUid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
+  if (!isObj(d.caps)) d.caps = {}
+  for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200]]) d.caps[k] = num(d.caps[k], dv, 0, max)
   delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
@@ -340,7 +374,7 @@ export function splitBiliCookie({ sessdata = '', biliJct = '', cookie = '' } = {
 const FILE = () => dataDir('config.json')
 
 /** 在某次更新里新增、会替她公开发东西的功能。以后再加这类功能，把配置键名加到这里。 */
-export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili']
+export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili', 'douyin']
 
 export function loadConfig() {
   const raw = readJson(FILE(), {})
@@ -384,6 +418,10 @@ export function mergeFromPanel(current, incoming) {
     delete p[`${k}Set`]
     delete p[`${k}Hint`]
   }
+  // 主人的抖音 secUid / 昵称 / 头像只能由「核对」路由写入，面板存配置时保留原值
+  if (!next.douyin) next.douyin = {}
+  if (!next.douyin.owner) next.douyin.owner = {}
+  for (const k of ['secUid', 'nickname', 'avatar', 'confirmedInput']) next.douyin.owner[k] = current.douyin?.owner?.[k] ?? ''
   // 联动密钥只由插件生成，面板不能改
   next.bridge.token = current.bridge?.token || ''
   // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开
