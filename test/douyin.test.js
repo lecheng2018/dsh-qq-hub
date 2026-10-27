@@ -52,7 +52,7 @@ test('配置：抖音总开关默认关；权限默认仅主人；写闸默认�
   }
 })
 
-test('配置：mergeFromPanel 保留核对过的 secUid', async () => {
+test('配置：mergeFromPanel 保留核对过的 secUid / uid', async () => {
   const { mergeFromPanel } = await import('../src/core/config.js')
   const cur = normalize({ douyin: { owner: { input: 'aaa', secUid: 'SEC1', uid: 'U1', nickname: '主人', avatar: 'http://a', confirmedInput: 'aaa' } } })
   const next = mergeFromPanel(cur, { douyin: { owner: { input: 'bbb', secUid: 'HACK', uid: 'HACKU', nickname: '假的', avatar: 'x', confirmedInput: 'HACK' } } })
@@ -62,6 +62,53 @@ test('配置：mergeFromPanel 保留核对过的 secUid', async () => {
   assert.equal(next.douyin.owner.nickname, '主人')
   assert.equal(next.douyin.owner.confirmedInput, 'aaa')
   assert.equal(util.ownerConfirmed(next), false)
+})
+
+test('配置：normalize 保留数字 uid', () => {
+  const c = normalize({ douyin: { owner: { input: 'x', secUid: 'SEC', uid: '123456789', nickname: '主', avatar: '', confirmedInput: 'x' } } })
+  assert.equal(c.douyin.owner.uid, '123456789')
+  assert.equal(c.douyin.owner.secUid, 'SEC')
+})
+
+test('核对主人：resolveUser 带回的 uid 与 secUid 都写入 owner', async () => {
+  let persisted = null
+  const owner = { secUid: 'MS4wLjABAAAAabcdefghijklmnopqrs', uid: '9876543210', nickname: '核对昵称', avatar: 'https://x/o.jpg' }
+  const drv = cdp.createFakeDriver({ owner })
+  const im = imMod.createFakeImClient({ owner: { uid: owner.uid, secUid: owner.secUid } })
+  const base = normalize({
+    enabled: true, dryRun: false, ownerQQ: '10000001', ownerName: '主人',
+    douyin: {
+      enabled: true,
+      owner: { input: 'owner_id', secUid: '', uid: '', nickname: '', avatar: '', confirmedInput: '' },
+      caps: { like: 30, comment: 1, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 },
+      gate: { maxWritesPerDay: 60, minWriteGapSec: 0, newAccountDays: 3 },
+    },
+    profilePerms: Object.fromEntries(DOUYIN_PERM_KEYS.map((k) => [k, 'owner'])),
+  })
+  const getConfig = () => base
+  getConfig._setOwner = (o) => {
+    persisted = { ...o }
+    Object.assign(base.douyin.owner, o)
+  }
+  const d = duty.createDouyin({
+    getConfig,
+    hub: { runSystemTurn: async () => ({ ok: true, text: '{}' }), chatOfSession: () => 'c' },
+    memory: { recentEvents: () => [], addEvent: () => {}, add: () => {} },
+    log: { info() {}, warn() {}, debug() {} },
+    driver: drv,
+    im,
+    dataFile: join(process.env.AURABOT_DATA_DIR, `douyin-confirm-${Math.random().toString(16).slice(2)}.json`),
+  })
+  const r = await d.confirmOwner('https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs')
+  assert.equal(r.ok, true, r.message)
+  assert.equal(r.secUid, owner.secUid)
+  assert.equal(r.uid, owner.uid)
+  assert.ok(persisted)
+  assert.equal(persisted.uid, '9876543210')
+  assert.equal(persisted.secUid, owner.secUid)
+  assert.equal(persisted.confirmedInput, 'https://www.douyin.com/user/MS4wLjABAAAAabcdefghijklmnopqrs')
+  assert.equal(base.douyin.owner.uid, '9876543210')
+  assert.equal(util.ownerConfirmed(base), true)
 })
 
 const feed = [
@@ -74,7 +121,7 @@ function fakes({ decisions, cfgOver = {}, script = {}, dryRun = false, imScript 
   const events = []
   const facts = []
   const sent = []
-  const drv = cdp.createFakeDriver({ feed: feed.map((x) => ({ ...x })), inbox: script.inbox || [], owner: script.owner || { secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a~tplv.jpg' }, commentReplies: script.commentReplies || [], ...script })
+  const drv = cdp.createFakeDriver({ feed: feed.map((x) => ({ ...x })), owner: script.owner || { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a~tplv.jpg' }, commentReplies: script.commentReplies || [], ...script })
   const im = imMod.createFakeImClient({
     loggedIn: imScript.loggedIn !== false && !imScript.needLogin,
     needLogin: !!imScript.needLogin,
@@ -173,6 +220,7 @@ test('分享给主人：要已核对 sec_uid；改了输入就不再认；走 IM
   await d.run({ force: true })
   assert.equal(im._state.shared.length, 1)
   assert.equal(im._state.shared[0].secUid, 'owner_sec')
+  assert.equal(im._state.shared[0].uid, 'owner_uid')
   assert.equal(im._state.shared[0].itemId, '1001')
 
   const { d: d2, im: im2 } = fakes({

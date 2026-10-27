@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- **抖音主人 uid**：核对主人时 `resolveUser` / `confirmOwner` 一并写入并持久化数字 `uid`（IM friend 查找）；删掉已无用的 CDP `openShareTo` / `openDmThread` / `listOwnerDms`。相关 #4。
 - **抖音社交改走 douyin-im**：私信 / 分享主人 / 回主人私信改用 `douyin-im`（`friend.sendMsg` / `segment.share`），会话落在本机 `data/douyin/im`；刷流 / 点赞 / 评论 / 关注 / 改资料仍走 Edge + CDP。面板分「浏览器登录」「IM 登录」两行；IM 未登录时社交工具明确提示，不静默失败。`socialInterruptBrowse` 默认开，社交忙时可打断刷流并写入 `lastSkipReason`。`douyin-im@1.1.0` 为 optionalDependency；engines `node >=22.13`。相关 #4。
 - **刷抖音**：内置模块（`src/modules/douyin`），专用 Edge + CDP 刷推荐——点赞 / 评论 / 回评论 / 私信任何人 / 分享到主人抖音 / 回主人私信；**关注仅工具请求**（`douyin_follow`，刷流不自动关注）。写操作总闸（约 60/天、间隔 ≥20s、登录后前 3 天上限减半、同 op 连败 3 次当日禁用、验证码停全部并只通知一次）；试运行不占真实日上限；私信每人每天最多 1 条；回主人私信最多连回 3 条且忽略超过 30 分钟的消息。工具：`douyin_watch` / `douyin_like` / `douyin_comment` / `douyin_follow` / `douyin_dm` / `douyin_share`。8 项权限默认「仅主人」，总开关默认关。相关 #4。
 - **按聊天选模型**：主人可在面板「模型」页（或 `config.json` 的 `chatModels`）让不同聊天用不同模型。顺序：单个私聊（QQ 号）> 单个群（群号）> 所有私聊 / 所有群默认 > 全局模型；没设或模型不存在就退回下一级。只有主人能改。
