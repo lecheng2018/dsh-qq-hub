@@ -13,7 +13,7 @@ export const DEFAULTS = {
   ownerQQ: '', // 主人 QQ 号（向导里填）
   ownerName: '主人',
   ownerLevel: 'full', // full | social | chat
-  profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner', douyinBrowse: 'owner', douyinLike: 'owner', douyinComment: 'owner', douyinReplyComment: 'owner', douyinFollow: 'owner', douyinDm: 'owner', douyinShareOwner: 'owner', douyinReplyOwnerDm: 'owner' }, // 改资料类操作（含抖音 8 项）的权限：off 关 / owner 仅主人私聊 / all 所有人。抖音 8 项默认仅主人，总开关默认关
+  profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner', douyinBrowse: 'owner', douyinLike: 'owner', douyinComment: 'owner', douyinReplyComment: 'owner', douyinFollow: 'owner', douyinDm: 'owner', douyinShareOwner: 'owner', douyinReplyOwnerDm: 'owner', douyinSign: 'owner', douyinNickname: 'owner', douyinAvatar: 'owner' }, // 改资料类操作（含抖音浏览/互动/改资料）的权限：off 关 / owner 仅主人私聊 / all 所有人。抖音项默认仅主人，总开关默认关
   longTasks: false, // 长任务模式：主人私聊（完整权限）额外挂 dsh-tool-jobs + dsh-tool-schedule，会多一点工具定义、稍慢
   allow: { private: [], groups: [] }, // 主人永远能私聊，不用写进白名单
   snowluma: {
@@ -99,7 +99,7 @@ export const DEFAULTS = {
     shareToOwner: true, // 看到好玩的私聊分享给主人
     like: false, // 顺手点赞
   },
-  // 刷抖音：用专用的 Edge 窗口（独立登录资料，不碰你平时的浏览器），经 CDP 控制。8 项操作各自的权限在 profilePerms.douyin*。
+  // 刷抖音：用专用的 Edge 窗口（独立登录资料，不碰你平时的浏览器），经 CDP 控制。浏览/互动/改资料各项权限在 profilePerms.douyin*。
   douyin: {
     enabled: false, // 总开关：默认关，先在面板里登录抖音再打开
     autoBrowse: true, // 定时自己去刷
@@ -114,7 +114,7 @@ export const DEFAULTS = {
     dmPollMinutes: 7, // 看私信的频率（分钟，实际在 0.7~1.4 倍之间随机）
     replyPollMinutes: 25, // 看别人回她评论的频率（分钟）
     owner: { input: '', secUid: '', nickname: '', avatar: '', confirmedInput: '' }, // 主人的抖音号 / 主页链接；secUid 由「核对」确认后写入，面板不能直接改
-    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20 }, // 每天上限（登录后前 3 天减半）
+    caps: { like: 30, comment: 3, replyComment: 6, follow: 5, dm: 5, shareOwner: 3, dmReply: 20, sign: 2, nickname: 2, avatar: 1 }, // 每天上限（登录后前 3 天减半；改资料三项仅工具）
     gate: {
       maxWritesPerDay: 60, // 所有写操作合计上限
       minWriteGapSec: 20, // 任意两次写操作之间至少隔这么多秒
@@ -272,7 +272,7 @@ export function normalize(raw) {
   if (!isObj(d.owner)) d.owner = {}
   for (const k of ['input', 'secUid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
   if (!isObj(d.caps)) d.caps = {}
-  for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200]]) d.caps[k] = num(d.caps[k], dv, 0, max)
+  for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200], ['sign', 2, 20], ['nickname', 2, 20], ['avatar', 1, 10]]) d.caps[k] = num(d.caps[k], dv, 0, max)
   if (!isObj(d.gate)) d.gate = {}
   d.gate.maxWritesPerDay = num(d.gate.maxWritesPerDay, 60, 1, 500)
   d.gate.minWriteGapSec = num(d.gate.minWriteGapSec, 20, 0, 600)

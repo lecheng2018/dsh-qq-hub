@@ -773,7 +773,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       ]
       const row = (key, label, hint) => h(Row, { label, hint },
         h(Choices, { value: perms[key] || 'owner', onChange: (v) => setDraft(setPath(draft, 'profilePerms.' + key, v)), options: opts }))
-      return h(Card, { title: '改资料与名单', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，处理好友申请、改白名单，以及抖音上的各项操作。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。抖音 8 项默认仅主人，要放开自己在这里开。' },
+      return h(Card, { title: '改资料与名单', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，处理好友申请、改白名单，以及抖音上的各项操作（含改签名/昵称/头像）。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。抖音各项默认仅主人，要放开自己在这里开。' },
         row('qqNickname', 'QQ 昵称'),
         row('qqSignature', 'QQ 个性签名'),
         row('qqAvatar', 'QQ 头像', '只用网址图片，或「刚才发的那张图」。'),
@@ -789,6 +789,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         row('douyinDm', '私信任何人', '建议用小号。别人让她发私信时用。'),
         row('douyinShareOwner', '分享给主人抖音', '好玩的视频私信分享到你的抖音。要先在「抖音」页核对你的号。'),
         row('douyinReplyOwnerDm', '回主人抖音私信', '只回已核对 sec_uid 的你；认不出对方绝不回。'),
+        row('douyinSign', '改抖音签名', '工具 douyin_set_sign；每天有次数上限（默认 2）。'),
+        row('douyinNickname', '改抖音昵称', '工具 douyin_set_nickname；每天有次数上限（默认 2）。'),
+        row('douyinAvatar', '换抖音头像', '工具 douyin_set_avatar；每天最多 1 次。图片网址 / 刚才那张图 / 数据目录本地图。'),
       )
     }
 
@@ -1802,6 +1805,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Row, { label: '私信任何人', hint: '建议用小号' }, f.num('douyin.caps.dm', { min: 0, max: 30 })),
           h(Row, { label: '分享给你' }, f.num('douyin.caps.shareOwner', { min: 0, max: 30 })),
           h(Row, { label: '回你的私信' }, f.num('douyin.caps.dmReply', { min: 0, max: 200 })),
+          h(Row, { label: '改签名' }, f.num('douyin.caps.sign', { min: 0, max: 20 })),
+          h(Row, { label: '改昵称' }, f.num('douyin.caps.nickname', { min: 0, max: 20 })),
+          h(Row, { label: '换头像' }, f.num('douyin.caps.avatar', { min: 0, max: 10 })),
           h(Row, { label: '看私信间隔' }, f.num('douyin.dmPollMinutes', { min: 2 }), h('span', { className: 'ab-muted' }, '分钟')),
           h(Row, { label: '看回评论间隔' }, f.num('douyin.replyPollMinutes', { min: 5 }), h('span', { className: 'ab-muted' }, '分钟')),
         ),
@@ -1811,11 +1817,15 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Btn, { small: true, kind: 'primary', onClick: act('/douyin/run', 'run'), disabled: !!busy }, busy === 'run' ? h(Fragment, null, h('i', { className: 'ab-spin' }), ' 正在刷…') : '现在刷一轮')) },
           s && s.pauseReason ? h('div', { className: 'ab-note warn', style: { marginBottom: 8 } }, '今天先不动手了：' + s.pauseReason + '（明天自动恢复；要验证就去 Edge 窗口里过一下）') : null,
           s ? h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
-            '今天自动刷了 ' + s.runs + ' 轮 · 看了 ' + s.watched + ' · 赞 ' + s.like + ' · 评 ' + s.comment + ' · 关 ' + s.follow + ' · 私信 ' + s.dm + ' · 分享 ' + s.shareOwner + ' · 回你 ' + s.dmReply +
+            '今天自动刷了 ' + s.runs + ' 轮 · 看了 ' + s.watched + ' · 赞 ' + s.like + ' · 评 ' + s.comment + ' · 关 ' + s.follow + ' · 私信 ' + s.dm + ' · 分享 ' + s.shareOwner + ' · 回你 ' + s.dmReply + ' · 签名 ' + (s.sign || 0) + ' · 昵称 ' + (s.nickname || 0) + ' · 头像 ' + (s.avatar || 0) +
             (s.lastRun ? ' · 上次 ' + timeAgo(s.lastRun) : '') +
             (s.nextDueAt ? ' · 下次 ' + timeAgo(s.nextDueAt) : '') +
             (s.lastSkipReason ? ' · 上次跳过：' + s.lastSkipReason : '') +
             '（手动刷不占轮数）') : null,
+          s && (s.lastSignText || s.lastNicknameText) ? h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
+            (s.lastSignText ? '最近签名：' + s.lastSignText : '') +
+            (s.lastSignText && s.lastNicknameText ? ' · ' : '') +
+            (s.lastNicknameText ? '最近昵称：' + s.lastNicknameText : '')) : null,
           !s ? h(Empty, { icon: '⏳', text: '加载中…' }) : s.history.length === 0 ? h(Empty, { icon: '📱', text: '还没刷过。先登录，再点「现在刷一轮」。' }) :
             h('div', { className: 'ab-list' }, s.history.map((x, i) => h('div', { key: i, className: 'ab-li' },
               h('div', { className: 'meta' }, timeAgo(x.at), h('br'), DOUYIN_KIND[x.kind] || x.kind),
