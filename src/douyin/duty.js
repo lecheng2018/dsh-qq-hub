@@ -7,6 +7,7 @@ import {
   dayKey, between, pickJson, parseUserInput, findAwemeId, videoLink,
   ownerConfirmed, isOwnerSec, digestOf, cleanText, looksLikeVerify,
   filterNickname, filterSignature, sniffImageType, AVATAR_MAX_BYTES,
+  normalizeOwnerUid,
 } from './util.js'
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -246,7 +247,7 @@ export function createDouyin({ getConfig, hub, memory, log, driver: injected, im
     if (!launched.ok) return launched
     const r = await d.resolveUser(parsed)
     if (!r.ok) return r
-    const uid = String(r.uid || '').trim()
+    const uid = normalizeOwnerUid(r.uid)
     getConfig._setOwner?.({ input: raw, secUid: r.secUid, uid, nickname: r.nickname || '', avatar: r.avatar || '', confirmedInput: raw })
     return { ok: true, message: `已核对：${r.nickname || r.secUid}`, secUid: r.secUid, uid, nickname: r.nickname, avatar: r.avatar }
   }

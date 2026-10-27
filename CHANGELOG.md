@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- **抖音推荐页**：`ensureRecommend` 先走 `/?recommend=1&from_nav=1`，仍精选则点侧栏「推荐」；失败文案带实际 url。相关 #4。
+- **抖音主人 uid**：`resolveUser` 解 RENDER_DATA（URL 编码）并吃 profile API；`confirmOwner` 只持久化纯数字 uid。相关 #4。
 - **抖音验证墙 sticky 修复**：`checkGate` 以当前 pageText 为准，验证文案消失时 `clearVerify`；登录轮询（`start/poll/refreshLoginQr`）不再因 `caps.verify` 永久卡在 `verification_required`。相关 #4。
 - **抖音面板内二维码登录**：IM 与浏览器登录均在面板显示 QR 并每 2 秒轮询（等待扫码 / 已扫待确认 / 已登录 / 过期点刷新）；`startImLogin` 只返回 started+QR，真正 `system.online` / `isLogin` 后才算成功并落盘。Edge 离屏（`--window-position` + CDP bounds）截登录二维码区，会话仍用 `data/douyin/edge-profile`；短信 / 滑块等验证在面板明确提示。相关 #4。
 - **抖音主人 uid**：核对主人时 `resolveUser` / `confirmOwner` 一并写入并持久化数字 `uid`（IM friend 查找）；删掉已无用的 CDP `openShareTo` / `openDmThread` / `listOwnerDms`。相关 #4。

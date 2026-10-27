@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { looksLikeVerify, looksLimited, awemesFromResponse, isRecommendUrl } from './util.js'
+import { looksLikeVerify, looksLimited, awemesFromResponse, isRecommendUrl, extractOwnerProfile, normalizeOwnerUid } from './util.js'
 
 const EDGE_CANDIDATES = [
   process.env.EDGE_PATH,
@@ -117,6 +117,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
   let pageSessionId = ''
   const feed = [] // 最近截到的 aweme
   const caps = { verify: false, reason: '' }
+  let lastUserProfile = null // { secUid, uid, nickname, avatar } 来自 profile API / 主页
   let offNet = null
 
   const markVerify = (why) => { caps.verify = true; caps.reason = why || '要验证' }
@@ -135,13 +136,26 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       try {
         const url = p?.response?.url || ''
         if (!/douyin\.com|amemv\.com|snssdk\.com/.test(url)) return
-        if (!/aweme|feed|recommend|comment|message|im\//i.test(url)) return
+        if (!/aweme|feed|recommend|comment|message|im\/|user\/profile/i.test(url)) return
         const body = await session.send('Network.getResponseBody', { requestId: p.requestId }).catch(() => null)
         if (!body?.body) return
         const text = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf8') : body.body
         if (looksLikeVerify(text) || looksLimited(text)) { markVerify(looksLikeVerify(text) ? '页面要验证' : '账号被限制'); return }
         let json
         try { json = JSON.parse(text) } catch (error) { return }
+        if (/user\/profile\/(other|self)|web\/user\/profile/i.test(url)) {
+          const u = json?.user || json?.user_info || json?.data?.user || json?.data?.user_info || json?.data || json
+          const sec = String(u?.sec_uid || u?.secUid || '')
+          const id = normalizeOwnerUid(u?.uid || u?.user_id || u?.userId || '')
+          if (sec || id) {
+            lastUserProfile = {
+              secUid: sec,
+              uid: id,
+              nickname: String(u?.nickname || u?.nick_name || '').slice(0, 40),
+              avatar: String(u?.avatar_thumb?.url_list?.[0] || u?.avatarUrl || u?.avatar || ''),
+            }
+          }
+        }
         const list = awemesFromResponse(json)
         for (const a of list) {
           if (!feed.some((x) => x.awemeId === a.awemeId)) feed.push(a)
@@ -426,13 +440,39 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     return String(await evalJs('location.href') || '')
   }
 
+  async function clickRecommendTab() {
+    return Boolean(await evalJs(`(() => {
+      const links = [...document.querySelectorAll('a[href]')];
+      const byHref = links.find((a) => {
+        try {
+          const u = new URL(a.href, location.origin);
+          return (u.pathname === '/' || u.pathname === '') && u.searchParams.get('recommend') === '1';
+        } catch (e) { return false; }
+      });
+      if (byHref) { byHref.click(); return true; }
+      const byText = [...document.querySelectorAll('a,div,span,p,li,button')].find((el) => {
+        const tx = (el.innerText || el.getAttribute('aria-label') || '').trim();
+        return tx === '推荐';
+      });
+      if (!byText) return false;
+      (byText.closest('a') || byText).click();
+      return true;
+    })()`).catch(() => false))
+  }
+
   async function ensureRecommend() {
-    const url = await currentUrl()
+    let url = await currentUrl()
     if (isRecommendUrl(url)) return { ok: true, url }
-    await navigate('https://www.douyin.com/?recommend=1')
-    const again = await currentUrl()
-    if (!isRecommendUrl(again)) return { ok: false, message: '打不开推荐页（可能卡在精选 / 登录）', url: again }
-    return { ok: true, url: again }
+    // 真机 /?recommend=1 常被重定向到 /jingxuan；带 from_nav=1 能留在推荐
+    await navigate('https://www.douyin.com/?recommend=1&from_nav=1')
+    url = await currentUrl()
+    if (isRecommendUrl(url)) return { ok: true, url }
+    // 仍卡精选：点侧栏「推荐」（href 含 recommend=1&from_nav=1）
+    const clicked = await clickRecommendTab()
+    if (clicked) await sleep(1500)
+    url = await currentUrl()
+    if (isRecommendUrl(url)) return { ok: true, url }
+    return { ok: false, message: `打不开推荐页（可能卡在精选 / 登录）：${url}`, url }
   }
 
   /** 读页面可见文字，用来判定验证码 / 登录墙。 */
@@ -521,7 +561,8 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     return Array.isArray(raw) ? raw : []
   }
   async function resolveUser(input) {
-    // input: {secUid} | {uniqueId} | {short} — 同时尽量抠数字 uid（IM friend 查找要用）
+    // input: {secUid} | {uniqueId} | {short} — 同时抠数字 uid（IM friend 查找要用）
+    lastUserProfile = null
     if (input.secUid) {
       await navigate(`https://www.douyin.com/user/${input.secUid}`)
     } else if (input.short) {
@@ -533,25 +574,29 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       await evalJs(`(() => { const a=[...document.querySelectorAll('a[href*="/user/"]')].find(x => /user\\/[A-Za-z0-9_-]{20,}/.test(x.href)); if(a) location.href=a.href })()`).catch(() => {})
       await sleep(1200)
     } else return { ok: false, message: '认不出这个抖音号 / 链接' }
-    const info = await evalJs(`(() => {
-      const u = location.href;
-      const m = u.match(/user\\/([A-Za-z0-9_-]{20,})/);
-      const html = document.documentElement.innerHTML || '';
-      const uidM = html.match(/"uid"\\s*:\\s*"?(\\d{5,20})"?/)
-        || html.match(/"user_id"\\s*:\\s*"?(\\d{5,20})"?/)
-        || html.match(/"userId"\\s*:\\s*"?(\\d{5,20})"?/);
+    await sleep(800)
+    const snap = await evalJs(`(() => {
+      const href = location.href;
+      let renderData = '';
+      try { renderData = (document.getElementById('RENDER_DATA') || {}).textContent || ''; } catch (e) {}
+      const html = (document.documentElement.innerHTML || '').slice(0, 600000);
       const name = (document.querySelector('h1,h2,[data-e2e="user-info"]') || {}).innerText || '';
       const img = (document.querySelector('img[src*="avatar"],img[class*=avatar]') || {}).src || '';
-      return {
-        secUid: (m && m[1]) || '',
-        uid: (uidM && uidM[1]) || '',
-        nickname: (name || '').split('\\n')[0].slice(0, 40),
-        avatar: img || '',
-      };
+      return { href, html, renderData, nickname: name, avatar: img };
     })()`).catch(() => null)
-    if (!info?.secUid) return { ok: false, message: '打开主页后还是认不出 sec_uid，请改用主页链接' }
-    return { ok: true, ...info }
+    const scraped = extractOwnerProfile(snap || {})
+    // 网络里的 profile/other 作补全（RENDER_DATA 偶发没有 uid）
+    if ((!scraped.uid || !scraped.secUid) && lastUserProfile) {
+      if (!scraped.secUid && lastUserProfile.secUid) scraped.secUid = lastUserProfile.secUid
+      if (!scraped.uid && lastUserProfile.uid) scraped.uid = normalizeOwnerUid(lastUserProfile.uid)
+      if (!scraped.nickname && lastUserProfile.nickname) scraped.nickname = lastUserProfile.nickname
+      if (!scraped.avatar && lastUserProfile.avatar) scraped.avatar = lastUserProfile.avatar
+    }
+    scraped.uid = normalizeOwnerUid(scraped.uid)
+    if (!scraped.secUid) return { ok: false, message: '打开主页后还是认不出 sec_uid，请改用主页链接' }
+    return { ok: true, ...scraped }
   }
+
   async function selfInfo() {
     const info = await evalJs(`(() => { try { const m=document.documentElement.innerHTML.match(/"secUid"\\s*:\\s*"([A-Za-z0-9_-]{20,})"/)||document.documentElement.innerHTML.match(/"sec_uid"\\s*:\\s*"([A-Za-z0-9_-]{20,})"/); const n=document.documentElement.innerHTML.match(/"nickname"\\s*:\\s*"([^"]{1,40})"/); return { secUid: m&&m[1]||'', nickname: n&&n[1]||'' } } catch(e){ return { secUid:'', nickname:'' } } })()`).catch(() => ({ secUid: '', nickname: '' }))
     return info || { secUid: '', nickname: '' }
@@ -761,12 +806,50 @@ export function createFakeDriver(script = {}) {
   return {
     launch: async () => ({ ok: true }),
     close: async () => {},
-    navigate: async (url) => { state.url = url; state.log.push(['nav', url]) },
+    navigate: async (url) => {
+      state.log.push(['nav', url])
+      const s = String(url || '')
+      const wantsRec = /[?&]recommend=1\b/.test(s)
+      const hasFromNav = /[?&]from_nav=1\b/.test(s)
+      // 真机：裸 recommend=1 常跳 /jingxuan；带 from_nav=1 通常可留在推荐
+      if (script.stuckOnFeatured && wantsRec) {
+        state.url = 'https://www.douyin.com/jingxuan'
+        return
+      }
+      if (script.redirectRecommendToJingxuan && wantsRec) {
+        if (!hasFromNav || script.fromNavStaysJingxuan) {
+          state.url = 'https://www.douyin.com/jingxuan'
+          return
+        }
+      }
+      state.url = s
+    },
     currentUrl: async () => state.url,
     ensureRecommend: async () => {
-      state.url = 'https://www.douyin.com/?recommend=1'
-      if (script.stuckOnFeatured) return { ok: false, message: '打不开推荐页（可能卡在精选 / 登录）', url: 'https://www.douyin.com/?tab=home' }
-      return { ok: true, url: state.url }
+      // stuckOnFeatured：模拟 from_nav + 点推荐都失败
+      if (script.stuckOnFeatured) {
+        state.url = 'https://www.douyin.com/jingxuan'
+        state.log.push(['nav', 'https://www.douyin.com/?recommend=1&from_nav=1'])
+        state.log.push(['clickRecommendTab'])
+        return { ok: false, message: `打不开推荐页（可能卡在精选 / 登录）：${state.url}`, url: state.url }
+      }
+      let url = state.url
+      if (isRecommendUrl(url)) return { ok: true, url }
+      // 与真驱动同序：先 from_nav，再点侧栏「推荐」
+      const target = 'https://www.douyin.com/?recommend=1&from_nav=1'
+      state.log.push(['nav', target])
+      if (script.redirectRecommendToJingxuan && script.fromNavStaysJingxuan) {
+        state.url = 'https://www.douyin.com/jingxuan'
+      } else {
+        state.url = target
+      }
+      url = state.url
+      if (isRecommendUrl(url)) return { ok: true, url }
+      state.log.push(['clickRecommendTab'])
+      state.url = 'https://www.douyin.com/?recommend=1&from_nav=1'
+      url = state.url
+      if (isRecommendUrl(url)) return { ok: true, url }
+      return { ok: false, message: `打不开推荐页（可能卡在精选 / 登录）：${url}`, url }
     },
     checkGate: gate,
     nextAwemes: async ({ seen = new Set(), want = 1 } = {}) => {
@@ -789,11 +872,20 @@ export function createFakeDriver(script = {}) {
     listCommentReplies: async () => (state.commentReplies || []).slice(),
     resolveUser: async (input) => {
       if (script.resolveFail) return { ok: false, message: '认不出' }
+      if (script.resolveNoUid) {
+        return {
+          ok: true,
+          secUid: state.owner.secUid,
+          uid: '',
+          nickname: state.owner.nickname,
+          avatar: state.owner.avatar,
+        }
+      }
       if (input.secUid === state.owner.secUid || input.uniqueId || input.short || input.secUid) {
         return {
           ok: true,
           secUid: state.owner.secUid,
-          uid: String(state.owner.uid || ''),
+          uid: normalizeOwnerUid(state.owner.uid) || String(state.owner.uid || ''),
           nickname: state.owner.nickname,
           avatar: state.owner.avatar,
         }
