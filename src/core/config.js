@@ -272,7 +272,7 @@ export function normalize(raw) {
   d.replyPollMinutes = num(d.replyPollMinutes, 25, 5, 240)
   d.browserPath = String(d.browserPath || '').trim()
   if (!isObj(d.owner)) d.owner = {}
-  for (const k of ['input', 'secUid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
+  for (const k of ['input', 'secUid', 'uid', 'nickname', 'avatar', 'confirmedInput']) d.owner[k] = String(d.owner[k] ?? '').trim().slice(0, 400)
   if (!isObj(d.caps)) d.caps = {}
   for (const [k, dv, max] of [['like', 30, 300], ['comment', 3, 30], ['replyComment', 6, 60], ['follow', 5, 50], ['dm', 5, 30], ['shareOwner', 3, 30], ['dmReply', 20, 200], ['sign', 2, 20], ['nickname', 2, 20], ['avatar', 1, 10]]) d.caps[k] = num(d.caps[k], dv, 0, max)
   if (!isObj(d.gate)) d.gate = {}

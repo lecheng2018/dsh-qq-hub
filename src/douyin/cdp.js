@@ -261,40 +261,6 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
   async function clickFollow() {
     return Boolean(await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button]')].find(el => /关注/.test(el.innerText||'') && !/已关注|取消关注|互相关注/.test(el.innerText||'')); if(!b) return false; b.click(); return true })()`))
   }
-  async function openShareTo(secUid) {
-    // 打开分享 → 选「私信 / 发给朋友」→ 必须按 sec_uid 点中确认对象后才算成功；只点了分享不算 ok
-    const want = String(secUid || '').trim()
-    if (!want) return { ok: false, message: '没有主人的 sec_uid，不能分享' }
-    const clickedShare = await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button],div')].find(el => /分享/.test(el.getAttribute('aria-label')||'') || el.dataset?.e2e==='video-player-share'); if(!b) return false; b.click(); return true })()`)
-    if (!clickedShare) return { ok: false, message: '找不到分享按钮' }
-    await sleep(700)
-    // 点「私信」入口
-    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button],div,span')].find(el => /私信|发给朋友|朋友/.test((el.innerText||el.getAttribute('aria-label')||'').slice(0,12))); if(b) b.click() })()`).catch(() => {})
-    await sleep(800)
-    const esc = JSON.stringify(want)
-    const picked = await evalJs(`(() => {
-      const want = ${esc};
-      const nodes = [...document.querySelectorAll('a[href*="/user/"],[data-sec-uid],li,div')];
-      for (const el of nodes) {
-        const href = el.getAttribute('href') || (el.querySelector && el.querySelector('a')?.href) || '';
-        const m = String(href).match(/user\/([A-Za-z0-9_-]{20,})/);
-        const sid = m && m[1] || el.getAttribute('data-sec-uid') || '';
-        if (sid === want) { (el.closest('a,button,li,div') || el).click(); return true; }
-      }
-      // 再扫一遍文本区的 data / 内嵌链接
-      const html = document.body.innerHTML;
-      if (!html.includes(want)) return false;
-      const hit = [...document.querySelectorAll('*')].find(el => (el.getAttribute('href')||'').includes(want) || (el.dataset&&el.dataset.secUid===want));
-      if (hit) { hit.click(); return true; }
-      return false;
-    })()`)
-    if (!picked) return { ok: false, message: '分享面板里没找到已核对的主人，取消' }
-    await sleep(500)
-    // 确认发送（有的 UI 还要再点一次）
-    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button]')].find(el => /发送|分享|确认/.test(el.innerText||'')); if(b) b.click(); return true })()`).catch(() => {})
-    return { ok: true, secUid: want }
-  }
-
   /** 消息中心：别人回我评论的列表。返回 [{id,name,text,awemeId,at}]。 */
   async function listCommentReplies() {
     await navigate('https://www.douyin.com/notice')
@@ -317,22 +283,8 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
     })()`).catch(() => [])
     return Array.isArray(raw) ? raw : []
   }
-  async function openDmThread(secUid) {
-    await navigate(`https://www.douyin.com/user/${secUid}`)
-    await sleep(1000)
-    await evalJs(`(() => { const b=[...document.querySelectorAll('button,[role=button]')].find(el => /私信|发私信|消息/.test(el.innerText||'')); if(b) b.click() })()`).catch(() => {})
-    return { ok: true }
-  }
-  async function listOwnerDms() {
-    // 被动：读页面上「私信」列表文本；真机再核对 sec_uid。返回 [{secUid, nickname, text, at}]
-    const raw = await evalJs(`(() => { try { return [...document.querySelectorAll('[data-e2e*="message"],[class*=message-item],[class*=conversation]')].slice(0,20).map(el => ({ text: (el.innerText||'').slice(0,200), href: (el.querySelector('a')||el).href||'' })) } catch(e){ return [] } })()`).catch(() => [])
-    return (Array.isArray(raw) ? raw : []).map((x) => {
-      const m = String(x.href || '').match(/user\/([A-Za-z0-9_-]{20,})/)
-      return { secUid: m?.[1] || '', nickname: String(x.text || '').split('\n')[0] || '', text: String(x.text || '').split('\n').slice(1).join(' ').slice(0, 200), at: Date.now() }
-    }).filter((x) => x.secUid || x.text)
-  }
   async function resolveUser(input) {
-    // input: {secUid} | {uniqueId} | {short}
+    // input: {secUid} | {uniqueId} | {short} — 同时尽量抠数字 uid（IM friend 查找要用）
     if (input.secUid) {
       await navigate(`https://www.douyin.com/user/${input.secUid}`)
     } else if (input.short) {
@@ -344,7 +296,22 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
       await evalJs(`(() => { const a=[...document.querySelectorAll('a[href*="/user/"]')].find(x => /user\\/[A-Za-z0-9_-]{20,}/.test(x.href)); if(a) location.href=a.href })()`).catch(() => {})
       await sleep(1200)
     } else return { ok: false, message: '认不出这个抖音号 / 链接' }
-    const info = await evalJs(`(() => { const u=location.href; const m=u.match(/user\\/([A-Za-z0-9_-]{20,})/); const name=(document.querySelector('h1,h2,[data-e2e="user-info"]')||{}).innerText||''; const img=(document.querySelector('img[src*="avatar"],img[class*=avatar]')||{}).src||''; return { secUid: m&&m[1]||'', nickname: (name||'').split('\\n')[0].slice(0,40), avatar: img||'' } })()`).catch(() => null)
+    const info = await evalJs(`(() => {
+      const u = location.href;
+      const m = u.match(/user\\/([A-Za-z0-9_-]{20,})/);
+      const html = document.documentElement.innerHTML || '';
+      const uidM = html.match(/"uid"\\s*:\\s*"?(\\d{5,20})"?/)
+        || html.match(/"user_id"\\s*:\\s*"?(\\d{5,20})"?/)
+        || html.match(/"userId"\\s*:\\s*"?(\\d{5,20})"?/);
+      const name = (document.querySelector('h1,h2,[data-e2e="user-info"]') || {}).innerText || '';
+      const img = (document.querySelector('img[src*="avatar"],img[class*=avatar]') || {}).src || '';
+      return {
+        secUid: (m && m[1]) || '',
+        uid: (uidM && uidM[1]) || '',
+        nickname: (name || '').split('\\n')[0].slice(0, 40),
+        avatar: img || '',
+      };
+    })()`).catch(() => null)
     if (!info?.secUid) return { ok: false, message: '打开主页后还是认不出 sec_uid，请改用主页链接' }
     return { ok: true, ...info }
   }
@@ -500,7 +467,7 @@ export function createBrowserDriver({ profileDir, browserPath = '', minimize = t
 
   return {
     launch, close, navigate, currentUrl, ensureRecommend, checkGate, nextAwemes, activeAwemeId,
-    clickLike, openComments, typeAndSend, clickFollow, openShareTo, openDmThread, listOwnerDms, listCommentReplies,
+    clickLike, openComments, typeAndSend, clickFollow, listCommentReplies,
     resolveUser, selfInfo, pageText, evalJs,
     editNickname, editSignature, editAvatar,
     /** 测 / 面板用：最近截到的视频 */
@@ -520,12 +487,11 @@ export function createFakeDriver(script = {}) {
     verify: false,
     reason: '',
     needLogin: !!script.needLogin,
-    liked: [], commented: [], followed: [], shared: [], dms: [], dmReplies: [],
+    liked: [], commented: [], followed: [], dmReplies: [],
     self: script.self || { secUid: 'self_sec', nickname: '肥鱼抖音' },
     signature: script.signature || '',
     avatarPath: '',
-    owner: script.owner || { secUid: 'owner_sec', nickname: '主人', avatar: 'https://x/a~tplv.jpg' },
-    inbox: script.inbox || [],
+    owner: script.owner || { secUid: 'owner_sec', uid: 'owner_uid', nickname: '主人', avatar: 'https://x/a~tplv.jpg' },
     commentReplies: script.commentReplies || [],
     log: [],
   }
@@ -562,18 +528,17 @@ export function createFakeDriver(script = {}) {
     openComments: async () => true,
     typeAndSend: async (text) => { state.commented.push(text); return true },
     clickFollow: async () => { state.followed.push(state.feed[Math.max(0, state.cursor - 1)]?.authorSecUid); return true },
-    openShareTo: async (secUid) => {
-      if (!secUid) return { ok: false, message: '没有主人的 sec_uid，不能分享' }
-      state.shared.push(secUid)
-      return { ok: true, secUid }
-    },
     listCommentReplies: async () => (state.commentReplies || []).slice(),
-    openDmThread: async (secUid) => { state.dms.push(secUid); return { ok: true } },
-    listOwnerDms: async () => state.inbox.slice(),
     resolveUser: async (input) => {
       if (script.resolveFail) return { ok: false, message: '认不出' }
       if (input.secUid === state.owner.secUid || input.uniqueId || input.short || input.secUid) {
-        return { ok: true, secUid: state.owner.secUid, nickname: state.owner.nickname, avatar: state.owner.avatar }
+        return {
+          ok: true,
+          secUid: state.owner.secUid,
+          uid: String(state.owner.uid || ''),
+          nickname: state.owner.nickname,
+          avatar: state.owner.avatar,
+        }
       }
       return { ok: false, message: '认不出这个抖音号 / 链接' }
     },
