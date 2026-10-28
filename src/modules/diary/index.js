@@ -37,7 +37,10 @@ export default {
     }) : []))
 
     api.route('/diary/run', async (req) => qzone.writeDiary({ visibility: (await http.body(req)).visibility }))
-    api.route('/diary/history', async () => ({ ok: true, items: qzone.history(), next: qzone.nextTime() }))
+    api.route('/diary/history', async () => {
+      const sync = await qzone.syncHistory()
+      return { ok: true, items: qzone.history(), next: qzone.nextTime(), warning: sync.warning || '' }
+    })
     api.route('/qzone/delete', async (req) => {
       await qzone.remove((await http.body(req)).tid)
       return { ok: true, message: '删掉了' }
