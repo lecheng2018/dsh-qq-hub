@@ -141,6 +141,16 @@ test('#7 主人私聊：她这一轮还在跑时再发消息，直接 steer 进�
   await until(() => sentTo('private', OWNER).some((c) => c.params.message[0].data.text === '好 改成快的'))
 })
 
+test('系统会话超时会及时返回，晚到的回复不会发到 QQ', async () => {
+  const n = mock.sent('send_private_msg').length
+  const start = Date.now()
+  await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '慢慢想', { timeoutMs: 50 }), /等太久/)
+  assert.ok(Date.now() - start < 1500)
+  await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 50 }), /上一轮还没结束/)
+  await sleep(2800)
+  assert.equal(mock.sent('send_private_msg').length, n)
+})
+
 test('不在白名单的私聊：不理', async () => {
   const before = fake.turns.length
   mock.push(priv('123456', text('在吗')))
@@ -160,6 +170,9 @@ test('群聊：没叫她不回；@她必回（群聊 preset，无本地工具）
   assert.equal(turn.preset, 'aurabot-social')
   assert.match(turn.userText, /@了你/)
   assert.match(turn.userText, /今天天气不错/, '带上了群里刚才的聊天')
+  const reply = sentTo('group', '555').at(-1).params.message
+  assert.equal(reply[0].type, 'reply', '回复引用了对方的消息')
+  assert.deepEqual(reply[1], { type: 'at', data: { qq: '777' } }, '回复真实 @ 对方')
   const agent = fake.agents.get(turn.sessionId)
   assert.ok(!agent.tools.has('qq_send_qzone'), '群聊会话没有发空间这类主人工具')
   assert.ok(!agent.tools.has('qq_send_message'))
@@ -255,6 +268,8 @@ test('群聊一段一回：好几个人连着 @ 她，她看完整段只回一�
   assert.doesNotMatch(api.hub.lastTextOf(sid), /挨个回|引用回复/)
   assert.match(api.hub.lastTextOf(sid), /第一个人说话/)
   assert.deepEqual(api.hub.speakersOf(sid).sort(), ['701', '702', '703', '704'])
+  const reply = sentTo('group', '558').at(-1).params.message
+  assert.ok(!reply.some((seg) => seg.type === 'reply' || seg.type === 'at'), '多个人同时叫她时不猜要引用或 @ 谁')
 })
 
 test('群聊：她还在回上一段时新来的消息先攒着，回完再一起看（不会一条一轮）', async () => {
@@ -272,6 +287,18 @@ test('群聊：她还在回上一段时新来的消息先攒着，回完再一�
   assert.ok(['补充一句A', '补充一句B', '补充一句C'].every((w) => mine[1].userText.includes(w)))
 })
 
+test('群聊被引用：引用她的消息后，回复引用并 @ 对方', async () => {
+  const outgoing = await api.hub.sendText('group:555', '前一条测试消息')
+  const sentId = String(outgoing.message_id)
+  const target = grp('555', '779', [{ type: 'reply', data: { id: sentId } }, ...text('谢谢你')])
+  const n = sentTo('group', '555').length
+  mock.push(target)
+  await until(() => sentTo('group', '555').length > n)
+  const segs = sentTo('group', '555').at(-1).params.message
+  assert.deepEqual(segs[0], { type: 'reply', data: { id: String(target.message_id) } })
+  assert.deepEqual(segs[1], { type: 'at', data: { qq: '779' } })
+})
+
 test('群聊引用回复：她写 <reply:编号>，发出去的那条带上对应消息的引用', async () => {
   const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
   const first = grp('558', '730', text('先随便说一句'), '壬')
@@ -282,7 +309,8 @@ test('群聊引用回复：她写 <reply:编号>，发出去的那条带上对�
   await until(() => sentTo('group', '558').length >= n + 2)
   const [quoted, plain] = sentTo('group', '558').slice(n)
   assert.deepEqual(quoted.params.message[0], { type: 'reply', data: { id: String(target.message_id) } })
-  assert.equal(quoted.params.message[1].data.text, '收到这条啦')
+  assert.deepEqual(quoted.params.message[1], { type: 'at', data: { qq: '731' } })
+  assert.equal(quoted.params.message.at(-1).data.text, '收到这条啦')
   assert.equal(plain.params.message[0].type, 'text', '其余的照常发，不引用')
 })
 
@@ -536,6 +564,11 @@ test('生图：主人让她画图，调生图服务并把图发出去', async ()
   srv.close()
   assert.equal(body.model, 'test-model')
   assert.match(body.prompt, /可爱风.*一只蓝色小鲸鱼/)
+  const call = fake.turns.at(-1).toolCalls.find((item) => item.name === 'qq_draw_image')
+  assert.equal(call.content[1].type, 'image', 'DSH 工具结果带图片')
+  assert.ok(call.content[1].attachment.attachmentId, '图片先登记为 DSH 附件')
+  assert.equal(call.content[1].mediaType, 'image/png')
+  assert.ok(api.memory.recentEvents().some((event) => event.text.includes('一只蓝色小鲸鱼') && event.text.includes('不一定')), '跨轮记住提示词，并说明不一定等于画面')
   const st = (await fake.call('/state')).json()
   assert.equal(st.config.imageGen.apiKey, '', '生图密钥不回传')
   assert.equal(st.config.imageGen.apiKeySet, true)
