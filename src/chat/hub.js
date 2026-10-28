@@ -17,7 +17,7 @@ import { fetchImage, segmentBytes } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
-import { defaultModel, pickReasoningEffort, canSeeImages } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, canSeeImages, modelVision } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
@@ -583,7 +583,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         return
       }
       if (!completed) {
-        log.warn(`${chatId} 这一轮没正常结束（${d.reason?.kind || '?'}），不发`)
+        const detail = String(d.reason?.error?.message || d.reason?.failure?.message || '').replace(/\s+/g, ' ').slice(0, 180)
+        log.warn(`${chatId} 这一轮没正常结束（${d.reason?.kind || '?'}${detail ? '：' + redact(detail) : ''}），不发`)
         release(chatId)
         return
       }
@@ -1245,6 +1246,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     joinTopic: (gid) => groupEngaged.set(String(gid), Date.now() + ENGAGE_MS),
     leaveTopic: (gid) => groupEngaged.delete(String(gid)),
     chatOfSession,
+    canSeeImages: async (chat) => {
+      const cfg = getConfig()
+      if (cfg.model?.vision === 'on') return true
+      if (cfg.model?.vision === 'off') return false
+      const selected = targetModel(chat)
+      return selected ? modelVision(dsh, selected.provider, selected.model) : null
+    },
     resetSessions,
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
     prevTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.prevText || '',

@@ -19,6 +19,7 @@ test('drawResultBlocks：有图时文字 + image 块，没图时只有文字', (
 
   // 形状不对（既没 attachment 也没 data）别硬塞 image 块
   assert.deepEqual(drawResultBlocks({}, { ok: true, message: 'x', image: { mediaType: 'image/png' } }), [{ type: 'text', text: 'x' }])
+  assert.deepEqual(drawResultBlocks({}, { ok: true, message: 'x', image: { type: 'image', data: 'AA', mediaType: 'image/png' } }), [{ type: 'text', text: 'x' }], '裸 base64 不能交给 DSH')
 
   const bad = drawResultBlocks({}, { ok: false, message: '生图服务没配' })
   assert.deepEqual(bad, [{ type: 'text', text: '✗ 生图服务没配' }])
@@ -27,7 +28,7 @@ test('drawResultBlocks：有图时文字 + image 块，没图时只有文字', (
 test('drawToolMessage：看不了图时如实说，且不带路径', () => {
   assert.equal(drawToolMessage({ visual: true }), '画好发出去了')
   const blind = drawToolMessage({ visual: false })
-  assert.match(blind, /看不了图/)
+  assert.match(blind, /没能把图片交给你看/)
   assert.doesNotMatch(blind, /存在\s*[A-Za-z]:[\\\\/]|\.png|读它/, '不能给文件路径')
 })
 
@@ -39,6 +40,7 @@ test('imageToolBlock：小图登记成附件块；没附件服务 / 登记失败
     await imageToolBlock({ attachments: admit({ type: 'image', attachment: { attachmentId: 'att-9' } }) }, buf),
     { type: 'image', attachment: { attachmentId: 'att-9' }, mediaType: 'image/png' },
   )
+  assert.equal(await imageToolBlock({ attachments: admit({ type: 'image', data: 'AA' }) }, buf), null, '宿主没登记附件 → 不带图')
   assert.equal(await imageToolBlock({}, buf), null, '没有附件服务 → 不带图')
   assert.equal(await imageToolBlock({ attachments: { admitPromptContent: async () => { throw new Error('nope') } } }, buf), null, '登记失败 → 不带图')
   assert.equal(await imageToolBlock(null, buf), null, '没有 dsh → 不带图')
@@ -47,6 +49,11 @@ test('imageToolBlock：小图登记成附件块；没附件服务 / 登记失败
 test('shrinkImage：没有 ffmpeg 时安静返回 null', async () => {
   const buf = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
   assert.equal(await shrinkImage(buf, 512, 'definitely-not-a-real-ffmpeg', { timeoutMs: 800 }), null)
+})
+
+test('缩图进程提前退出时不让 stdin 错误终止宿主', async () => {
+  const result = await shrinkImage(Buffer.alloc(16 * 1024 * 1024, 1), 512, process.execPath, { timeoutMs: 3000 })
+  assert.equal(result, null)
 })
 
 test('defineTool：自定义 render 生效，默认 render 不变', () => {
