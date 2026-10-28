@@ -107,6 +107,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-seg button{border:0;background:transparent;padding:6px 14px;font:inherit;color:var(--ab-sub);cursor:pointer;border-left:1px solid var(--ab-line)}
 .ab-seg button:first-child{border-left:0}
 .ab-seg button.on{background:var(--ab-foam-2);color:var(--ab-deep);font-weight:600}
+.ab-seg.off{opacity:.45}
+.ab-seg.off button{cursor:not-allowed}
 .ab-note{padding:10px 12px;border-radius:10px;background:var(--ab-foam);color:var(--ab-text);font-size:12.5px;border:1px solid var(--ab-foam-2)}
 .ab-note.warn{background:rgba(191,135,0,.08);border-color:rgba(191,135,0,.25)}
 .ab-note.err{background:rgba(207,34,46,.07);border-color:rgba(207,34,46,.25)}
@@ -392,8 +394,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         h('input', { type: 'range', min, max, step: step || 1, value: value ?? min, onChange: (e) => onChange(Number(e.target.value)) }),
         h('span', { className: 'val' }, fmt ? fmt(value) : value))
     }
-    function Seg({ value, options, onChange }) {
-      return h('div', { className: 'ab-seg' }, options.map((o) => h('button', { key: o.value, type: 'button', className: value === o.value ? 'on' : '', onClick: () => onChange(o.value) }, o.label)))
+    function Seg({ value, options, onChange, disabled }) {
+      return h('div', { className: 'ab-seg' + (disabled ? ' off' : '') }, options.map((o) => h('button', { key: o.value, type: 'button', className: value === o.value ? 'on' : '', disabled: !!disabled, onClick: () => { if (!disabled) onChange(o.value) } }, o.label)))
     }
     function Empty({ icon, text }) {
       return h('div', { className: 'ab-empty' }, h('div', { className: 'big' }, icon || '🐋'), text)
@@ -905,6 +907,20 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       useEffect(() => { get('/models').then((r) => setList(r.list || [])) }, [])
       const key = (m) => m.provider + '::' + m.model
       const cur = draft.model.provider && draft.model.model ? draft.model.provider + '::' + draft.model.model : ''
+      const curModel = cur && list ? list.find((m) => key(m) === cur) : null
+      // reasoning === null 表示 DSH 明确说这个模型不支持思考强度（本地 Ollama 之类）
+      const noReasoning = Boolean(curModel && curModel.reasoning === null)
+      // 视觉能力：自动时把 DSH 的声明显示出来，主人一眼能看出会不会降级
+      const autoVision = curModel ? curModel.vision : undefined
+      const visionHint = draft.model.vision === 'on'
+        ? '强制当「能看图」；模型其实看不了的话，带图的那一轮会报错'
+        : draft.model.vision === 'off'
+          ? '强制当「看不懂」：收到图片只给一行文字提示，不会把图塞给模型'
+          : autoVision === true
+            ? '自动：DSH 说这个模型支持看图'
+            : autoVision === false
+              ? '自动：DSH 说这个模型看不了图，会自动降级成文字提示'
+              : '自动：DSH 没声明，默认照发；真看不了就手动选「不支持」'
       const test = async (m) => {
         setPing({ ...ping, [key(m)]: '测速中…' })
         const r = await post('/model/ping', { provider: m.provider, model: m.model })
@@ -912,7 +928,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       }
       return h('div', { className: 'ab-grid' },
         h(Card, { title: '聊天用的模型', desc: '新建的 QQ 会话按这里的设置来；已有会话也可以在 DSH 里点开单独切换。聊天对速度很敏感，可以先点「测速」挑个快的。' },
-          h(Row, { label: '思考强度', hint: '聊天建议「低」，回得快' }, h(Seg, { value: draft.model.reasoningEffort || 'low', onChange: (v) => setDraft(setPath(draft, 'model.reasoningEffort', v)), options: [{ value: 'low', label: '低' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' }] })),
+          h(Row, { label: '思考强度', hint: noReasoning ? '这个模型不支持思考强度，会自动忽略' : '聊天建议「低」，回得快' }, h(Seg, { value: draft.model.reasoningEffort || 'low', disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, 'model.reasoningEffort', v)), options: [{ value: 'low', label: '低' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' }] })),
+          h(Row, { label: '视觉能力', hint: visionHint }, h(Seg, {
+            value: draft.model.vision || 'auto',
+            onChange: (v) => setDraft(setPath(draft, 'model.vision', v)),
+            options: [{ value: 'auto', label: '自动' }, { value: 'on', label: '支持' }, { value: 'off', label: '不支持' }],
+          })),
           h(Row, { label: '模型' },
             h(Select, {
               value: cur, width: 280,
