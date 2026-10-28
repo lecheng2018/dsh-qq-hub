@@ -2,7 +2,7 @@
 // 工具定义一旦确定尽量别改：改一次，DeepSeek 的前缀缓存就失效一次。
 
 /** 和 @deepseek-ai/dsh-tools 的 defineTool 产物同形：parameters / output.schema 是 JSON Schema。 */
-export function defineTool({ name, description, properties = {}, required = [], execute, render }) {
+export function defineTool({ name, description, properties = {}, required = [], execute }) {
   const parameters = { type: 'object', properties, required, additionalProperties: false }
   return {
     name,
@@ -10,7 +10,7 @@ export function defineTool({ name, description, properties = {}, required = [], 
     parameters,
     output: {
       schema: { type: 'object', additionalProperties: true, properties: {} },
-      render: render || ((_args, value) => [{ type: 'text', text: value && value.ok === false ? '✗ ' + (value.message || '没成功') : (value && value.message) || '✓' }]),
+      render: (_args, value) => [{ type: 'text', text: value && value.ok === false ? '✗ ' + (value.message || '没成功') : (value && value.message) || '✓' }],
     },
     async execute(args, exec) {
       try {

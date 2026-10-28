@@ -59,8 +59,7 @@ export function createFakeDsh({ brain }) {
             const t = tools.get(name)
             if (!t) { calls.push({ name, args, result: { ok: false, message: 'no such tool' } }); return null }
             const result = await t.execute(args, { agent })
-            const content = t.output.render(args, result)
-            calls.push({ name, args, result, content })
+            calls.push({ name, args, result })
             return result
           }
           const reply = await brain({ preset, text, images, ctxText, persona, callTool, toolNames: [...tools.keys()] })
