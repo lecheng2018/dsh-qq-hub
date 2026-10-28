@@ -184,8 +184,9 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     }
     if (g.ownerQQ && (mode === 'qq' || mode === 'both' || !via.length)) {
       try {
-        await hub.sendText(`private:${g.ownerQQ}`, `${text}\n${videoLink(v.awemeId)}`)
-        via.push('qq')
+        const sent = await hub.sendText(`private:${g.ownerQQ}`, `${text}\n${videoLink(v.awemeId)}`)
+        if (sent || g.dryRun) via.push('qq')
+        else log.warn('QQ 上分享抖音视频失败：网关没有确认发送')
       } catch (error) {
         log.warn('QQ 上分享抖音视频失败：', error.message)
       }
@@ -271,9 +272,16 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       const atRule = atLeft
         ? ` 特别想让${owner()}看到的，把 "at" 设成 true 并写 comment：系统会在评论里真的 @${owner()}（${owner()}会收到抖音通知），comment 里别自己打 @。这次最多 @ ${atLeft} 次。`
         : ''
-      const out = await think(`你在抖音刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${digestOf(x.v, x.comments)}`).join('\n\n')}\n\n` +
+      let out = ''
+      try {
+        out = await think(`你在抖音刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${digestOf(x.v, x.comments)}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "like":true/false, "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", ${atLeft ? '"at":true/false, ' : ''}"share":"想分享给${owner()}时说的话（不想分享就空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
         `这次最多点赞 ${likeLeft} 个、评论 ${commentLeft} 个、分享 ${shareLeft} 个。${atRule}${shareLeft ? (ownerAsked ? `${owner()}刚才专门让你找视频给他，这轮至少挑一个最合适的写 share，别全空着。` : shareHint()) : ''}只输出 JSON 数组。`)
+      } catch (error) {
+        if (!ownerAsked || !shareLeft) throw error
+        // 主人明确要视频，模型挑选超时也别让已看完的一轮白费；后面只走已有的单视频兜底。
+        log.warn('挑视频的模型没回，改从已经看过的视频里挑一个：', error.message)
+      }
       const decisions = pickJson(out, [])
       const byI = new Map((Array.isArray(decisions) ? decisions : []).map((d) => [Number(d?.i) || 0, d]))
 
@@ -447,6 +455,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     busy = true
     const s = load()
     let wantBrowse = false
+    let sent = 0
+    let done = () => {}
     try {
       s.lastDmCheck = now()
       const r = await ready(s)
@@ -462,7 +472,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       markSeen(list.map((m) => m.id).filter((id) => !freshIds.has(id)))
       s.dmTries = s.dmTries || {}
       for (const id of freshIds) if ((s.dmTries[id] = (s.dmTries[id] || 0) + 1) > 3) { markSeen([id]); freshIds.delete(id) }
-      const done = () => { markSeen([...freshIds]); for (const id of freshIds) delete s.dmTries[id] }
+      done = () => { markSeen([...freshIds]); for (const id of freshIds) delete s.dmTries[id] }
       if (!s.dmInit) {
         s.dmInit = true
         done()
@@ -483,7 +493,6 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       text = text.replace(/\[去刷抖音\]/g, '').trim()
       if (!text || isSilence(text)) { done(); return { ok: true, replied: 0 } }
       const lines = text.split(/\n+|\|\|\|/).map((x) => clip(x, 300)).filter(Boolean).slice(0, 3)
-      let sent = 0
       for (const msg of lines) {
         if (getConfig().dryRun) log.info('试运行：本来要在抖音私信里回主人：', msg)
         else await site.sendDm(msg)
@@ -496,6 +505,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       memory?.addEvent?.({ text: `在抖音私信里回了${owner()}：${lines.join(' ').slice(0, 60)}`, tags: ['抖音'], importance: 0.4 })
       return { ok: true, replied: sent }
     } catch (error) {
+      // 发过一部分或发送状态不确定时不整轮重试，避免前半句或整句重复。
+      if (sent > 0 || error.code === 'dm_uncertain') done()
       log.warn('看 / 回主人抖音私信出错：', error.message)
       record(s, { kind: 'error', text: '私信没回成：' + error.message })
       return { ok: false, message: error.message }
