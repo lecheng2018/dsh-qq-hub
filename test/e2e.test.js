@@ -569,6 +569,49 @@ test('生图：主人让她画图，调生图服务并把图发出去', async ()
   assert.equal(st.config.imageGen.apiKeySet, true)
 })
 
+test('生图工具结果：能看图时带 image 块，纯文本模型只给文字', async () => {
+  const http = await import('node:http')
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  const srv = http.createServer(async (req, res) => {
+    for await (const _ of req) { /* 读完请求体 */ }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ data: [{ b64_json: png.toString('base64') }] }))
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  const baseUrl = `http://127.0.0.1:${srv.address().port}/v1`
+  // 找准「这次画图」那一轮：别用 sentTo 计数判断，前一个用例的回复可能还在异步发送
+  const drawTurn = () => [...fake.turns].reverse().find((t) => (t.toolCalls || []).some((c) => c.name === 'qq_draw_image'))
+  const draw = async (vision) => {
+    const before = drawTurn()
+    await fake.call('/save', {
+      model: { vision },
+      imageGen: { enabled: true, baseUrl, model: 'test-model', apiKey: 'img-key-123456' },
+    })
+    mock.push(priv(OWNER, text('画一只鲸鱼')))
+    await until(() => drawTurn() && drawTurn() !== before, 15000)
+    return drawTurn().toolCalls.find((c) => c.name === 'qq_draw_image').result
+  }
+
+  // 面板里声明「支持」：工具结果里要有原图（base64 原样回来）
+  // 面板里声明「支持」：工具结果里要有图，而且是登记过的附件块
+  // （直接塞 base64 会让下一轮请求整轮失败，见 imageToolBlock 的注释）
+  const withImg = await draw('on')
+  assert.ok(withImg.image, '能看图的模型应拿到 image')
+  assert.equal(withImg.image.type, 'image')
+  assert.ok(withImg.image.attachment?.attachmentId, '要登记成附件块')
+  assert.equal(withImg.image.data, undefined, '不要裸 base64')
+
+  // 声明「不支持」：纯文本模型，绝不能塞 image 块
+  const noImg = await draw('off')
+  assert.equal(noImg.image, undefined, '纯文本模型不应该拿到 image 块')
+  assert.match(noImg.message || '', /看不了图/, '看不了图时要如实说，别让她编画面')
+  assert.doesNotMatch(noImg.message || '', /存在\s*[A-Za-z]:[\\\\/]|\.png/, '不能给文件路径')
+
+  // 恢复默认
+  await fake.call('/save', { model: { vision: 'auto' } })
+  srv.close()
+})
+
 test('每日整理：往日的临时流水整理后清空，今天的保留；空间日记进了记忆库', async () => {
   const { existsSync } = await import('node:fs')
   const dir = join(dataDir, 'chatlog')

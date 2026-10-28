@@ -2,6 +2,11 @@
 // 地址和密钥由主人在面板里填；生成结果以 base64 交给 QQ 发出。
 
 import { fetchImage } from '../core/net.js'
+import { mimeOf } from '../chat/inbound.js'
+import { findFfmpeg, shrinkImage } from '../core/img.js'
+
+// 工具结果里带的图超过这个大小就先缩一下：2MB 的图直接塞进上下文会把下一轮请求搞挂
+const TOOL_IMAGE_MAX_BYTES = 500 * 1024
 
 export function createImageGen({ getConfig, log, local }) {
   async function generate(prompt) {
@@ -38,4 +43,51 @@ export function createImageGen({ getConfig, log, local }) {
     return buf
   }
   return { generate, enabled: () => Boolean(local?.active('image') || (getConfig().imageGen.enabled && getConfig().imageGen.baseUrl && getConfig().imageGen.model)) }
+}
+
+/**
+ * qq_draw_image 工具结果里那句话。
+ * 看不了图时要如实说，否则她会照着提示词编画面细节 —— 主人以为她看见了，其实全是猜的。
+ * （不带文件路径：知道路径她就会自己去读图，绕开「不给看」的判断。）
+ */
+export function drawToolMessage ({ visual = false } = {}) {
+  return visual ? '画好发出去了' : '画好发出去了。你现在的模型看不了图，别描述画面里有什么'
+}
+
+/**
+ * qq_draw_image 的工具结果怎么渲染：一行文字 +（有图时）image 块。
+ * image 一般是 DSH 附件块（imageToolBlock() 登记过的），原样透传；没图就只回文字。
+ */
+export function drawResultBlocks (_args, value) {
+  const text = value && value.ok === false ? '✗ ' + (value.message || '没成功') : (value && value.message) || '✓'
+  const blocks = [{ type: 'text', text }]
+  const img = value && value.image
+  if (img && (img.attachment || img.data)) blocks.push({ ...img, type: 'image' })
+  return blocks
+}
+
+/**
+ * 工具结果里要带的那张图：太大的先缩图，再交给 DSH 的附件服务登记成附件块。
+ * ⚠ 必须走附件服务：模型适配层只认附件块，把 base64 直接塞进工具结果会让下一轮请求整轮失败
+ * （实测 2MB 的 PNG 直接塞进去 → "DeepSeek Messages transport failed"，重试 5 次全挂）。
+ * 缩图或登记失败都返回 null —— 只给文字，宁可少给也不要崩。
+ */
+export async function imageToolBlock (dsh, buf, { ffmpegPath = '', maxSide = 1024, maxBytes = TOOL_IMAGE_MAX_BYTES } = {}) {
+  if (!dsh) return null
+  let data = buf
+  let mediaType = mimeOf(buf)
+  if (buf.length > maxBytes) {
+    const ffmpeg = findFfmpeg(ffmpegPath)
+    const small = ffmpeg ? await shrinkImage(buf, maxSide, ffmpeg) : null
+    if (!small) return null
+    data = small
+    mediaType = 'image/jpeg'
+  }
+  const att = dsh.attachments || (typeof dsh.get === 'function' ? dsh.get('attachments') : null)
+  if (!att || typeof att.admitPromptContent !== 'function') return null
+  try {
+    const [block] = await att.admitPromptContent([{ type: 'image', data: data.toString('base64'), mediaType }])
+    if (block && block.type === 'image') return block
+  } catch (error) {}
+  return null
 }
