@@ -63,7 +63,59 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
   }
 
   async function remove(tid) {
-    return onebot.call('delete_qzone_msg', { tid: String(tid) })
+    tid = String(tid || '').trim()
+    if (!tid) throw new Error('缺少说说 ID')
+    const result = await onebot.call('delete_qzone_msg', { tid })
+    const s = state()
+    let changed = false
+    for (const entry of s.history) {
+      if (String(entry.tid) === tid) {
+        entry.deletedAt = Date.now()
+        changed = true
+      }
+    }
+    if (changed) save(s)
+    return result
+  }
+
+  // 空间里的删除不一定经过本插件（手机上删、被系统删），所以定期拿空间列表和本地记录对账。
+  // 只有完整读完列表才敢把缺失的记录判成“已删除”，读不全就只返回提示，绝不动数据。
+  let syncingHistory = null
+  function syncHistory() {
+    if (syncingHistory) return syncingHistory
+    syncingHistory = (async () => {
+      if (!state().history.some((d) => d.tid && d.ok && !d.dryRun && !d.deletedAt)) return { ok: true }
+      try {
+        const startedAt = Date.now()
+        const ids = new Set()
+        let total = null
+        let complete = false
+        for (let pos = 0; pos < 1000; pos += 100) {
+          const page = await onebot.call('get_qzone_msg_list', { pos, num: 100 }, { timeoutMs: 12000 })
+          if (!Array.isArray(page?.msglist) || !Number.isInteger(page.total) || page.total < 0) throw new Error('空间列表格式不完整')
+          if (total !== null && total !== page.total) throw new Error('空间列表正在变化，请稍后刷新')
+          total = page.total
+          for (const item of page.msglist) {
+            if (!item?.tid) throw new Error('空间列表缺少说说 ID')
+            ids.add(String(item.tid))
+          }
+          if (ids.size >= total) { complete = true; break }
+          if (page.msglist.length < 100) break
+        }
+        const s = state()
+        const checkedAt = Date.now()
+        for (const entry of s.history) {
+          if (!entry.tid || !entry.ok || entry.dryRun || entry.deletedAt || entry.at > startedAt) continue
+          if (ids.has(String(entry.tid))) entry.remoteCheckedAt = checkedAt
+          else if (complete) { entry.deletedAt = checkedAt; entry.deletedSource = 'space-list' }
+        }
+        save(s)
+        return { ok: true, ...(complete ? {} : { warning: '空间列表未完整读取，未将缺失记录判定为已删除。' }) }
+      } catch (error) {
+        return { ok: false, warning: '未能核对空间状态：' + error.message + '；保留原有记录。' }
+      }
+    })().finally(() => { syncingHistory = null })
+    return syncingHistory
   }
 
   function todayExcerpt(maxLines = 60) {
@@ -137,5 +189,5 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary }) {
     return m === undefined ? '' : `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
   }
 
-  return { post, remove, writeDiary, tick, history: () => state().history, nextTime }
+  return { post, remove, writeDiary, tick, syncHistory, history: () => state().history, nextTime }
 }
