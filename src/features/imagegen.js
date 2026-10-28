@@ -3,7 +3,7 @@
 
 import { fetchImage } from '../core/net.js'
 import { mimeOf } from '../chat/inbound.js'
-import { findFfmpeg, shrinkImage } from '../core/img.js'
+import { findFfmpeg, findSharp, shrinkImage, shrinkWithSharp } from '../core/img.js'
 
 // 工具结果里带的图超过这个大小就先缩一下：2MB 的图直接塞进上下文会把下一轮请求搞挂
 const TOOL_IMAGE_MAX_BYTES = 500 * 1024
@@ -37,7 +37,8 @@ export function createImageGen({ getConfig, log, local }) {
     const item = (j.data || j.images || [])[0] || {}
     let buf
     if (item.b64_json) buf = Buffer.from(item.b64_json, 'base64')
-    else if (item.url) buf = await fetchImage(item.url, { maxBytes: 20 * 1024 * 1024, allowLocal: false })
+    // 有的服务返回 CDN 链接，下载可能要几十秒（实测 22 秒），默认 20 秒会误判成失败
+    else if (item.url) buf = await fetchImage(item.url, { maxBytes: 20 * 1024 * 1024, allowLocal: false, timeoutMs: 120000 })
     else throw new Error('生图服务没有返回图片')
     log.info(`画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)
     return buf
@@ -78,7 +79,9 @@ export async function imageToolBlock (dsh, buf, { ffmpegPath = '', maxSide = 102
   let mediaType = mimeOf(buf)
   if (buf.length > maxBytes) {
     const ffmpeg = findFfmpeg(ffmpegPath)
-    const small = ffmpeg ? await shrinkImage(buf, maxSide, ffmpeg) : null
+    let small = ffmpeg ? await shrinkImage(buf, maxSide, ffmpeg) : null
+    // 没装 ffmpeg 时用 DSH 自带的 sharp（libvips），用户不必额外安装
+    if (!small) small = await shrinkWithSharp(await findSharp(), buf, maxSide)
     if (!small || small.length > maxBytes) return null
     data = small
     mediaType = 'image/jpeg'
