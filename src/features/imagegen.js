@@ -51,7 +51,7 @@ export function createImageGen({ getConfig, log, local }) {
  * （不带文件路径：知道路径她就会自己去读图，绕开「不给看」的判断。）
  */
 export function drawToolMessage ({ visual = false } = {}) {
-  return visual ? '画好发出去了' : '画好发出去了。你现在的模型看不了图，别描述画面里有什么'
+  return visual ? '画好发出去了' : '画好发出去了，但这次没能把图片交给你看；别描述画面里有什么'
 }
 
 /**
@@ -62,7 +62,7 @@ export function drawResultBlocks (_args, value) {
   const text = value && value.ok === false ? '✗ ' + (value.message || '没成功') : (value && value.message) || '✓'
   const blocks = [{ type: 'text', text }]
   const img = value && value.image
-  if (img && (img.attachment || img.data)) blocks.push({ ...img, type: 'image' })
+  if (img && img.attachment) blocks.push({ ...img, type: 'image' })
   return blocks
 }
 
@@ -79,7 +79,7 @@ export async function imageToolBlock (dsh, buf, { ffmpegPath = '', maxSide = 102
   if (buf.length > maxBytes) {
     const ffmpeg = findFfmpeg(ffmpegPath)
     const small = ffmpeg ? await shrinkImage(buf, maxSide, ffmpeg) : null
-    if (!small) return null
+    if (!small || small.length > maxBytes) return null
     data = small
     mediaType = 'image/jpeg'
   }
@@ -87,7 +87,7 @@ export async function imageToolBlock (dsh, buf, { ffmpegPath = '', maxSide = 102
   if (!att || typeof att.admitPromptContent !== 'function') return null
   try {
     const [block] = await att.admitPromptContent([{ type: 'image', data: data.toString('base64'), mediaType }])
-    if (block && block.type === 'image') return block
+    if (block && block.type === 'image' && block.attachment) return block
   } catch (error) {}
   return null
 }

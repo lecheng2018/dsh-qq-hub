@@ -521,6 +521,30 @@ test('主人亲口让她找视频：今天看满了也照样去刷一轮；自�
   assert.ok(fs.calls.watch.length > 0)
 })
 
+test('最近看过的视频可找回真实链接，并可按链接给主人分享', async () => {
+  const { dy, fs } = setup({ owner: OWNER, decisions: [{ i: 1, feeling: '好看' }] })
+  assert.deepEqual(dy.recentVideos(), [])
+  assert.equal((await dy.run({ force: true })).ok, true)
+  const recent = dy.recentVideos()
+  assert.equal(recent.length, 3)
+  assert.match(recent[0].url, /^https:\/\/www\.douyin\.com\/video\/\d+$/)
+  const result = await dy.shareVideo(recent[0].url)
+  assert.equal(result.ok, true, result.message)
+  assert.deepEqual(result.via, ['douyin'])
+  assert.equal(fs.calls.share.length, 1)
+})
+
+test('分享上限用完时不会绕开限制，主人要求刷视频时明确报告原因', async () => {
+  const { dy, fs } = setup({ owner: OWNER, douyinOver: { caps: { like: 30, comment: 1, share: 0 } } })
+  const result = await dy.shareVideo('https://www.douyin.com/video/7000000000000000001')
+  assert.equal(result.ok, false)
+  assert.match(result.message, /次数用完/)
+  assert.equal(fs.calls.share.length, 0)
+  const browse = await dy.run({ force: true, ownerAsked: true })
+  assert.equal(browse.ok, false)
+  assert.match(browse.message, /分享次数用完/)
+})
+
 test('主人要视频但挑选模型超时：仍分享已看过的视频，不点赞评论', async () => {
   const { dy, fs, hub } = setup({ owner: OWNER })
   hub.runSystemTurn = async () => { throw new Error('等太久了') }

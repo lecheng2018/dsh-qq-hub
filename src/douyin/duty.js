@@ -73,7 +73,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     const qq = getConfig().ownerQQ
     if (qq && s.notifiedDay !== s.pauseDay) {
       s.notifiedDay = s.pauseDay
-      Promise.resolve(hub.sendText?.(`private:${qq}`, `抖音那边要验证 / 被限制了，今天我先不点赞评论了：${s.pauseReason}。要验证的话在面板「抖音」页点「显示浏览器窗口」处理一下。`)).catch(() => {})
+      Promise.resolve(hub.sendText?.(`private:${qq}`, `抖音那边要验证 / 被限制了，今天我先不点赞评论了：${s.pauseReason}。请在手机抖音检查账号安全或实名状态；也可以在面板「抖音」页点「显示浏览器窗口」查看。`)).catch(() => {})
     }
   }
 
@@ -342,6 +342,10 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         save(s)
       }
 
+      if (ownerAsked && !shared) {
+        s.lastSkipReason = shareLeft ? '分享未确认成功' : '今天的分享次数用完了，或分享权限已关闭'
+        return { ok: false, message: s.lastSkipReason, watched: looked.length, liked, commented, shared, sharedList }
+      }
       if (!force) {
         s.runs++
         s.nextDueAt = now() + Math.round(c.intervalHours * 3600_000 * (0.8 + Math.random() * 0.5))
@@ -360,6 +364,20 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       save(s)
       busy = false
     }
+  }
+
+  /** 最近真正看过的视频：从已有记录按视频 id 去重；没有 id 的旧记录不编造链接。 */
+  function recentVideos(limit = 10) {
+    const seen = new Set()
+    const out = []
+    for (const item of load().history) {
+      const id = String(item.awemeId || '')
+      if (!['watch', 'look', 'share'].includes(item.kind) || !/^\d{15,}$/.test(id) || seen.has(id)) continue
+      seen.add(id)
+      out.push({ awemeId: id, title: item.title || '', author: item.author || '', url: videoLink(id), at: item.at })
+      if (out.length >= Math.max(1, Math.min(20, Number(limit) || 10))) break
+    }
+    return out
   }
 
   /** 链接 / 短链 / 视频 id → 视频 id。 */
@@ -413,6 +431,29 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     }
   }
 
+  /** 主人明确要求分享指定视频时，复用相同的额度、收件人核对和分享记录。 */
+  async function shareVideo(link) {
+    const id = await idOf(link)
+    if (!id) return { ok: false, message: '没认出抖音视频链接' }
+    if (busy) return { ok: false, message: '正在刷抖音，等这一轮刷完再说' }
+    busy = true
+    const s = load()
+    try {
+      if (left(s, 'share') <= 0) return { ok: false, message: '今天分享次数用完了' }
+      const readyResult = await ready(s)
+      if (!readyResult.ok) return readyResult
+      const v = await site.detail(id)
+      const text = `${owner()}，你要的这个视频`
+      const result = await shareToOwner(s, v, text)
+      if (!result.ok) return { ok: false, message: '分享没有确认成功，请检查抖音私信和 QQ 网关' }
+      s.share++
+      record(s, { kind: getConfig().dryRun ? 'dry:share' : 'share', awemeId: id, title: v.title, author: v.author, text, via: result.via })
+      return { ok: true, message: `${getConfig().dryRun ? '试运行：本来要分享' : '已分享'}《${v.title || id}》`, via: result.via }
+    } catch (error) {
+      return { ok: false, message: '分享没成功：' + error.message }
+    } finally { save(s); busy = false }
+  }
+
   const likeVideo = (link) => act('like', link)
   async function commentVideo(link, text) {
     const t = clip(text, 100)
@@ -425,9 +466,10 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     if (!r.ok) return `【系统消息，不是对方说的】你刚才去刷抖音没刷成：${r.message}。照实跟对方说一声。`
     const where = (via) => via.map((x) => (x === 'douyin' ? '抖音私信' : 'QQ')).join('和')
     const shares = (r.sharedList || []).map((x) => `《${x.title}》（发到了${where(x.via)}）`)
+    const recent = recentVideos(5).map((v) => `《${v.title || '无标题'}》${v.url}`).join('；')
     return `【系统消息，不是对方说的】你刚刷完一轮抖音：看了 ${r.watched} 个，点赞 ${r.liked}，评论 ${r.commented}。` +
       (shares.length ? `分享给${owner()}的：${shares.join('、')}。` : `这轮没有分享给${owner()}的视频。`) +
-      '照实跟对方说一两句，别说没做到的事。'
+      (recent ? `最近看过的视频：${recent}。` : '') + '照实跟对方说一两句，别说没做到的事。'
   }
 
   /**
@@ -625,5 +667,5 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     }
   }
 
-  return { run, browse, watch, likeVideo, commentVideo, confirmOwner, checkOwnerDms, tick, account, loginStep, showWindow, state }
+  return { run, browse, watch, recentVideos, shareVideo, likeVideo, commentVideo, confirmOwner, checkOwnerDms, tick, account, loginStep, showWindow, state }
 }

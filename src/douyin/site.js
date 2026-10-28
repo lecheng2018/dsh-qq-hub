@@ -181,7 +181,7 @@ export function createSite({ browser, log }) {
   function checkWrite(r, what) {
     if (!r) throw new Error(`${what}没发出去（没等到抖音的回应）`)
     const h = Object.fromEntries(Object.entries(r.headers || {}).map(([k, v]) => [k.toLowerCase(), v]))
-    if (h['x-tt-verify-passport-decision']) throw Object.assign(new Error(`抖音要求这个号先做身份验证（为保障账号安全），${what}被拦下了`), { code: 'verify' })
+    if (h['x-tt-verify-passport-decision']) throw Object.assign(new Error(`抖音拦下了${what}并返回账号验证标记，网页不一定会显示验证码。请在手机抖音检查账号安全或实名状态，再在面板显示专用浏览器窗口核对；未确认前不要反复重试`), { code: 'verify' })
     if (!r.json) throw new Error(`${what}没发出去（抖音没返回结果）`)
     if (r.json.status_code !== 0) throw Object.assign(new Error(r.json.status_msg || `${what}失败（${r.json.status_code}）`), { code: r.json.status_code })
   }
@@ -489,7 +489,22 @@ export function createSite({ browser, log }) {
       await sleep(1500)
       const mine = (await readChat()).some((m) => m.mine && m.at >= startedAt - 2000 && dmEqual(m.text, text))
       if (mine) return { ok: true }
-      throw Object.assign(new Error('私信发送状态不确定，已暂停重试，避免重复发送'), { code: 'dm_uncertain' })
+      const remaining = await inBox()
+      // 仍完整留在输入框，且没有新消息：回车没触发发送，可安全点击一次按钮。
+      if (dmEqual(remaining, text)) {
+        const marked = await b.evaluate(`(() => { const s = document.querySelector('[class*="publishBtn"]'); if (!s) return false; s.setAttribute('data-aurabot', 'dm-send'); return true })()`).catch(() => false)
+        if (marked) {
+          const response = b.waitResponse(sent, 8000)
+          await b.press('[data-aurabot="dm-send"]')
+          r = await response
+          if (!r) {
+            await sleep(1500)
+            const confirmed = (await readChat()).some((m) => m.mine && m.at >= startedAt - 2000 && dmEqual(m.text, text))
+            if (confirmed) return { ok: true }
+          }
+        }
+      }
+      if (!r) throw Object.assign(new Error('私信发送状态不确定，已暂停重试，避免重复发送'), { code: 'dm_uncertain' })
     }
     if (r.status !== 200) {
       await b.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(DM_EDIT)}); e && e.focus() })()`).catch(() => {})

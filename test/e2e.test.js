@@ -604,7 +604,7 @@ test('生图工具结果：能看图时带 image 块，纯文本模型只给文�
   // 声明「不支持」：纯文本模型，绝不能塞 image 块
   const noImg = await draw('off')
   assert.equal(noImg.image, undefined, '纯文本模型不应该拿到 image 块')
-  assert.match(noImg.message || '', /看不了图/, '看不了图时要如实说，别让她编画面')
+  assert.match(noImg.message || '', /没能把图片交给你看/, '看不了图时要如实说，别让她编画面')
   assert.doesNotMatch(noImg.message || '', /存在\s*[A-Za-z]:[\\\\/]|\.png/, '不能给文件路径')
 
   // 恢复默认
