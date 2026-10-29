@@ -17,6 +17,15 @@ export default {
     const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
+    // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照
+    api.on('prompt', (content, info) => {
+      try {
+        if (!info || !info.chat || info.chat.kind === 'system' || !Array.isArray(content)) return content
+        const hint = memory.recallHint(info.chat, info.queryText || '', info.prevText || '')
+        if (!hint) return content
+        return [{ type: 'text', text: hint }, ...content]
+      } catch (error) { return content }
+    })
     api.every(60_000, () => memory.tick(), '整理记忆')
 
     api.tool(({ chat }) => {
