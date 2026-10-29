@@ -21,6 +21,7 @@ import { defaultModel, pickReasoningEffort, canSeeImages, modelVision } from '..
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
+import { createTitleFilter } from './title-filter.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
@@ -70,6 +71,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const groupNames = new Map()
   const recentMedia = new Map() // chatId → [{ seg, userId, at, sticker }] 最近发来的图片和表情
   const faces = createFaces({ onebot, log }) // QQ 系统表情：<face:名字> ↔ 编号
+  const titleFilter = createTitleFilter({ getConfig, onebot, log }) // 勾选的群里，头衔是某个词的成员（别的机器人）不理
   const groupMembers = new Map() // groupId → { at, list }  群成员（真 @ 时按名字找人，缓存 10 分钟）
   const saidElsewhere = new Map() // chatId → [{ at, text }]  别处安排她在这里发的话，下次这个聊天交给她时补进去
 
@@ -786,6 +788,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const cfg = getConfig()
     const msg = parseMessageEvent(event, selfId, { faceName: faces.nameOf })
     if (msg.userId === selfId) return
+    // 按群头衔过滤：这条当没看见（不进群聊上下文、不触发回复，@ 她、主人命令也一样）
+    if (msg.kind === 'group' && await titleFilter.shouldIgnore(event)) return
     bump('received')
     const now = Date.now()
 
@@ -968,6 +972,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const group = ev.group_id ? String(ev.group_id) : ''
     const poker = String(group ? ev.user_id : ev.sender_id ?? ev.user_id)
     if (!poker || poker === self) return
+    if (group && await titleFilter.shouldIgnore({ group_id: group, user_id: poker })) return
     const chatId = group ? `group:${group}` : `private:${poker}`
     lastPoker.set(chatId, poker)
     if (Date.now() - (pokeAt.get(chatId) || 0) < 20_000) return
@@ -1332,6 +1337,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     sendImage,
     sendSegments,
     pushToSession,
+    titleFilter,
     runSystemTurn,
     turnSendersAllOwner,
     turnHasOwner,
