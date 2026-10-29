@@ -349,7 +349,28 @@ export function apply(ctx) {
     try { off = ctx.on('tools/pre-execute', (exec, next) => dangerGuard.preExecute(exec, next)) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'aurabot: 危险命令确认')
+
+  // ---------- 桌宠端口注入（破「端口自举死锁」） ----------
+  // pet 模块写 host.json 的 baseUrl 需要真实 Web 端口，而它自己监听不到（端口未知时只能写 null，
+  // 客户端连不上 → 学不到 Host 头 → 死锁）。DSH 的 webServer 服务知道端口（ctx.webServer.port，
+  // 取不到再退 DSH_WEB_URL）。注入时机：pet 每次启动/重载（module/start）+ boot 完成兜底各试一次；
+  // Host 头学习仍保留，作端口漂移纠正。
+  function webPortOf() {
+    let port = Number(ctx?.webServer?.port)
+    if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
+      try { port = Number(new URL(String(process.env.DSH_WEB_URL || '')).port) } catch { port = 0 }
+    }
+    return Number.isInteger(port) && port > 0 && port < 65536 ? port : 0
+  }
+  function injectPetPort() {
+    const port = webPortOf()
+    if (!port) return false
+    try { return Boolean(use('pet')?.setWebPort?.(port)) } catch { return false }
+  }
+  mods.listen('module/start', (id) => { if (id === 'pet') injectPetPort() })
+
   const booted = mods.boot()
+  booted.then(() => injectPetPort()).catch(() => {})
   booted.then(() => bridge.refresh())
 
   // ---------- 盯会话：一轮结束就发回 QQ ----------
@@ -360,6 +381,8 @@ export function apply(ctx) {
       } catch (error) {
         log.warn('会话事件处理出错：', error.message)
       }
+      // 桌宠的「干活状态」动画 / 结束提醒：把同一条事件顺手转给 pet 模块（模块没开就是 null，纯旁路）
+      try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
     })
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'aurabot: 盯会话')
@@ -435,6 +458,7 @@ export function apply(ctx) {
       qzoneSocial: use('qzone-social')?.state?.() ?? null,
       speakUp: use('speakup')?.state?.() ?? { count: 0 },
       purpose: purposeOverview(),
+      pet: petStatus(),
       memory: { lastConsolidate: memory?.lastConsolidate?.() ?? 0 },
       avatar: avatarInfo(),
       voice: { edgeInstalled: use('voice')?.edgeInstalled?.() ?? false },
@@ -447,10 +471,8 @@ export function apply(ctx) {
     }
   }
 
-  route('/state', async () => overview())
-
-  // ---------- 面板：目的引擎聚合 ----------
-  // 面板令牌脱敏：任何 32 位以上的十六进制串（bridge token 等）只留尾 4 位。
+  // ---------- 面板：目的机制 / 桌宠 聚合 ----------
+  // 面板令牌脱敏：任何 32 位以上的十六进制串（pet host-token、bridge token 等）只留尾 4 位。
   const HEX_RE = /[0-9a-f]{32,}/gi
   function redactTokens(value) {
     const walk = (v) => typeof v === 'string' ? v.replace(HEX_RE, (m) => '（已脱敏…' + m.slice(-4) + '）')
@@ -459,7 +481,7 @@ export function apply(ctx) {
       : v
     return walk(value)
   }
-  // 「目的引擎」聚合：purpose 模块（默认关）没开或没提供接口时 available=false，面板显示引导文案，不报错。
+  // 「目的引擎」聚合：purpose 是默认关的独立内置模块，没开时 available=false，面板显示引导文案，不报错。
   // 安静时段真相 = speakUp 醒着窗口（与 purpose/module.js 的 purposeConfig 派生保持一致）。
   function purposeOverview() {
     const pu = use('purpose')
@@ -474,6 +496,8 @@ export function apply(ctx) {
       enabled: ext.enabled === true,
       status: pu?.status?.() ?? null,
       count: pu?.state?.().count ?? 0,
+      carrier: ext.carrier === 'pet' ? 'pet' : 'qq',
+      petFallbackToQQ: ext.petFallbackToQQ !== false,
       pacing: ['conservative', 'default', 'active'].includes(ext.pacing) ? ext.pacing : 'default',
       quietStart: quiet.quietStart,
       quietEnd: quiet.quietEnd,
@@ -482,6 +506,9 @@ export function apply(ctx) {
       awakeTo,
     }
   }
+  const petStatus = () => redactTokens(use('pet')?.status?.() ?? null)
+
+  route('/state', async () => overview())
 
   route('/save', async (req) => {
     const body = await readBody(req)
@@ -506,9 +533,9 @@ export function apply(ctx) {
     return { ...(await overview()), message: '保存好了' + (pw ? '，' + pw.message : '') }
   })
 
-  // ---------- 面板代理：目的引擎 ----------
-  // 统一走 /panel/* 前缀，避免和模块自注册的 /purpose/* 路由撞名；模块缺新接口时降级返回 available:false。
-  route('/panel/purpose/status', async () => ({ ok: true, purpose: purposeOverview() }))
+  // ---------- 面板代理：目的引擎 / 桌宠 ----------
+  // 统一走 /panel/* 前缀，避免和模块自注册的 /purpose/*、/pet/* 路由撞名；模块缺新接口时降级返回 available:false。
+  route('/panel/purpose/status', async () => ({ ok: true, purpose: purposeOverview(), pet: petStatus() }))
   route('/panel/purpose/preview', async () => {
     const pu = use('purpose')
     if (typeof pu?.preview !== 'function') return { ok: false, available: false, message: '目的引擎模块没在跑，没法预览' }
@@ -526,6 +553,8 @@ export function apply(ctx) {
     const patch = {}
     const extPatch = {}
     if (typeof b.enabled === 'boolean') extPatch.enabled = b.enabled
+    if (b.carrier === 'qq' || b.carrier === 'pet') extPatch.carrier = b.carrier
+    if (typeof b.petFallbackToQQ === 'boolean') extPatch.petFallbackToQQ = b.petFallbackToQQ
     if (['conservative', 'default', 'active'].includes(b.pacing)) extPatch.pacing = b.pacing
     if (Object.keys(extPatch).length) patch.ext = { purpose: extPatch }
     const spPatch = {}
@@ -535,6 +564,60 @@ export function apply(ctx) {
     setConfig(mergeFromPanel(cfg, patch))
     log.info(`面板已保存目的引擎设置｜${Object.keys(extPatch).map((k) => k + '=' + extPatch[k]).concat(Object.keys(spPatch).map((k) => k + '=' + spPatch[k])).join(' ')}`)
     return { ok: true, purpose: purposeOverview() }
+  })
+  route('/panel/pet/status', async () => ({ ok: true, pet: petStatus() }))
+  // 桌宠页下方的设置项：碎碎念（桌宠自己的气泡流）+ 干活状态动画/结束提醒
+  route('/panel/pet/config', async (req) => {
+    const b = await readBody(req)
+    const patch = {}
+    for (const k of ['whisperEnabled', 'whisperPauseOnPetCarrier', 'workStatusEnabled', 'workBubble', 'workNotify']) {
+      if (typeof b[k] === 'boolean') patch[k] = b[k]
+    }
+    if (b.whisperSource === 'model' || b.whisperSource === 'pool') patch.whisperSource = b.whisperSource
+    for (const k of ['whisperMinMinutes', 'whisperMaxMinutes', 'whisperMaxPerDay']) {
+      // 面板口径：间隔 1~9999 分钟、每日上限 0~9999 次（0 = 不发）
+      if (Number.isFinite(b[k])) patch[k] = k === 'whisperMaxPerDay' ? Math.min(9999, Math.max(0, Math.floor(b[k]))) : Math.min(9999, Math.max(1, Math.floor(b[k])))
+    }
+    if (typeof b.whisperLines === 'string') patch.whisperLines = b.whisperLines.slice(0, 4000)
+    if (!Object.keys(patch).length) return { ok: false, message: '没有可保存的字段' }
+    setConfig(mergeFromPanel(cfg, { ext: { pet: patch } }))
+    log.info(`面板已保存桌宠设置｜${Object.keys(patch).map((k) => k + '=' + String(patch[k]).slice(0, 20)).join(' ')}`)
+    return { ok: true, pet: petStatus() }
+  })
+  // 「现在碎碎念一句」：绕过排程与开关，但仍尊重专注模式（force 只跳排程类闸门）
+  route('/panel/pet/whisper', async (req) => {
+    const pet = use('pet')
+    if (typeof pet?.whisperNow !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，碎碎念不了' }
+    const r = await pet.whisperNow({ force: true, reason: '面板' })
+    const msg = r && r.ok ? `她嘟囔了一句：${r.text}` : ({ focus: '专注模式开着，先关掉再来', 'pet-offline': '桌宠没在跑，气泡发不出去', 'plugin-off': '插件总开关是关的', thinking: '上一句她还在想（工作区那条会话还没结束），等几秒再来' }[r && r.reason] || '这轮没说出来')
+    return { ok: Boolean(r && r.ok), message: msg, result: redactTokens(r) }
+  })
+  route('/panel/pet/download', async () => {
+    const pet = use('pet')
+    if (typeof pet?.download !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，装不了客户端' }
+    return { ok: true, result: redactTokens(await pet.download()) }
+  })
+  route('/panel/pet/focus', async (req) => {
+    const enabled = Boolean((await readBody(req)).enabled)
+    const pet = use('pet')
+    if (typeof pet?.setFocus !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，改不了专注模式' }
+    return { ok: true, result: redactTokens(await pet.setFocus(enabled)) }
+  })
+  // Electron 三键：安装（npmmirror 镜像）→ 启动（清 ELECTRON_RUN_AS_NODE 分离进程）→ 停止（杀 pid）
+  route('/panel/pet/electron-install', async () => {
+    const pet = use('pet')
+    if (typeof pet?.electronInstall !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，装不了 Electron' }
+    return { ok: true, result: redactTokens(await pet.electronInstall()) }
+  })
+  route('/panel/pet/launch', async () => {
+    const pet = use('pet')
+    if (typeof pet?.launch !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，启动不了桌宠' }
+    return { ok: true, result: redactTokens(await Promise.resolve(pet.launch())) }
+  })
+  route('/panel/pet/stop', async () => {
+    const pet = use('pet')
+    if (typeof pet?.stop !== 'function') return { ok: false, available: false, message: '桌宠模块还没就绪，停不了桌宠' }
+    return { ok: true, result: redactTokens(await Promise.resolve(pet.stop())) }
   })
 
   route('/logs', async (req) => {
