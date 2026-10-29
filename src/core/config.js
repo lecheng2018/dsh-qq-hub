@@ -50,6 +50,7 @@ export const DEFAULTS = {
     apiKey: '',
     model: '',
     size: '1024x1024',
+    shape: 'her', // 工具可选构图；her 时未指定就沿用 size
     stylePrompt: '', // 每次生图自动加在前面的风格描述
     ownerOnly: true, // 只有主人能让她画
     seeOwn: true, // 「让她画完自己看一眼」：开着才把画好的图交给她看
@@ -368,6 +369,7 @@ export function normalize(raw) {
   c.imageGen.seeOwn = bool(c.imageGen.seeOwn, true)
   if (!/^\d{3,4}x\d{3,4}$/.test(String(c.imageGen.size))) c.imageGen.size = '1024x1024'
   c.imageGen.galleryShown = Math.min(50, Math.max(1, Math.round(Number(c.imageGen.galleryShown) || 20)))
+  c.imageGen.shape = ['her', 'square', 'portrait', 'landscape', 'wide'].includes(c.imageGen.shape) ? c.imageGen.shape : 'her'
 
   // provider：custom = 自己填接口（GET/POST + 自定义参数），其它按 OpenAI 兼容
   c.imageGen.provider = c.imageGen.provider === 'custom' ? 'custom' : 'openai'

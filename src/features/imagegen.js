@@ -6,6 +6,7 @@
 import { fetchImage } from '../core/net.js'
 import { mimeOf } from '../chat/inbound.js'
 import { imageToolBlock } from '../core/img.js'
+import { imageSizeFor } from './image-shape.js'
 export { imageToolBlock }
 
 /** 把模板里的 {占位符} 替换掉；不认识的占位符原样留着。 */
@@ -98,8 +99,9 @@ async function valueToBuffer (v) {
 }
 
 export function createImageGen({ getConfig, log, local }) {
-  async function generate(prompt) {
-    const c = getConfig().imageGen
+  async function generate(prompt, { shape } = {}) {
+    const config = getConfig().imageGen
+    const c = { ...config, size: imageSizeFor(shape, config) }
     // 本地接口接管：用用户自己电脑上的画图服务
     if (local?.active('image')) {
       const { toImageBuffer } = await import('../local/local.js')
