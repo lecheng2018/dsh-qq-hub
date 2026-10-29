@@ -32,6 +32,7 @@ function fakePng(w, h, salt = 0) {
 async function brain({ preset, text, images, callTool }) {
   if (text.includes('at+表情测试')) return '<at:10000001> 看这个<sticker:开心>'
   if (text.includes('热重载探针')) { const r = await callTool('probe73', {}); return r ? '探针:' + r.message : '没有探针工具' }
+  if (text.includes('慢工具测试')) { const r = await callTool('slow74', {}); return r ? '慢工具好了' : '没有慢工具' }
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
   if (/^【私聊/.test(text) && text.includes('表情改名测试')) { const m = text.match(/把「(.+?)」/); const r = await callTool('qq_edit_sticker', { sticker: m[1], new_name: '改过的名字', tags: ['开心'] }); return r.message }
@@ -1007,4 +1008,36 @@ test('#77 群里 at 标签和表情包同时出现：at 是真 @，表情包单�
   assert.ok(atMsg.some((s) => s.type === 'at' && String(s.data.qq) === OWNER), 'at 目标是主人：' + JSON.stringify(atMsg))
   assert.ok(sent.some((m) => m.some((s) => s.type === 'image')), '表情包要单独一条：' + JSON.stringify(sent))
   assert.ok(!sent.some((m) => m.some((s) => s.type === 'text' && /@10000001/.test(s.data.text))), '不能把 at 降级成文字：' + JSON.stringify(sent))
+})
+
+test('慢工具卡住超过 1.5 秒先发一条「正在做」提示，不让主人干等整轮（issue #74）', async () => {
+  const modsDir = join(dataDir, 'modules', 'slow74')
+  mkdirSync(modsDir, { recursive: true })
+  writeFileSync(join(modsDir, 'index.mjs'), `export default {
+  id: 'slow74', name: '慢工具探针', api: 1,
+  setup(api) {
+    api.tool(({ chat, level }) => level === 'chat' ? [] : [api.defineTool({
+      name: 'slow74', description: '慢工具探针',
+      slow: '还在忙，稍等一会儿～',
+      properties: {},
+      execute: async () => { await new Promise((r) => setTimeout(r, 1800)); return { ok: true, message: '慢的好了' } },
+    })])
+  },
+}`)
+  const before = mock.calls.length
+  const turn = async () => {
+    const n = fake.turns.length
+    mock.push(priv(OWNER, text('慢工具测试')))
+    await until(() => fake.turns.length > n, 15000)
+    return fake.turns.at(-1)
+  }
+  const t = await until(async () => { const x = await turn(); return x.reply === '慢工具好了' ? x : null }, 25000)
+  assert.equal(t.reply, '慢工具好了')
+  const sent = mock.calls.slice(before).filter((c) => c.action === 'send_private_msg').map((c) => c.params.message)
+  const texts = sent.map((m) => (m || []).filter((s) => s.type === 'text').map((s) => s.data.text).join(''))
+  const noticeAt = texts.findIndex((x) => /还在忙/.test(x))
+  const doneAt = texts.findIndex((x) => /慢工具好了/.test(x))
+  assert.ok(noticeAt >= 0, '慢工具卡住时要先发提示：' + JSON.stringify(texts))
+  assert.ok(doneAt > noticeAt, '提示要比最终回复先到：' + JSON.stringify(texts))
+  rmSync(modsDir, { recursive: true, force: true })
 })
