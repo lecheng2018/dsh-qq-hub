@@ -99,7 +99,7 @@ async function until(fn, ms = 10000) {
   }
   throw new Error('等不到条件成立')
 }
-let mock, fake, dataDir, seq = 0
+let mock, fake, api, dataDir, seq = 0
 const privMsg = (uid, t) => ({ message_type: 'private', sub_type: 'friend', user_id: Number(uid), message_id: ++seq, sender: { user_id: Number(uid), nickname: 'u' + uid }, message: [{ type: 'text', data: { text: t } }] })
 const grpMsg = (gid, t) => ({ message_type: 'group', sub_type: 'normal', group_id: Number(gid), user_id: 123456, message_id: ++seq, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '大肥鱼 ' + t } }] })
 const agentOf = (chatId) => {
@@ -129,7 +129,7 @@ before(async () => {
   }))
   fake = createFakeDsh({ brain: async () => '嗯' })
   const host = await import('../src/host.js')
-  const api = host.apply(fake.ctx)
+  api = host.apply(fake.ctx)
   await api.ready
   await fake.call('/onebot/reconnect')
   await until(() => mock.connected() > 0)
@@ -162,6 +162,13 @@ test('删掉单个设置 → 退回默认；默认也清掉 → 退回全局；�
   await expectModel(`private:${OWNER}`, privMsg(OWNER, '第四句'), 'fake-1')
   await fake.call('/save', { chatModels: { groups: { 777: sel('not-in-dsh') } } })
   await expectModel('group:777', grpMsg(777, '第三句'), 'm-gdef')
+})
+
+test('资料头像查询取得的模型与该私聊实际选模一致', () => {
+  const selected = api.hub.modelFor({ ...priv(OWNER), chatId: `private:${OWNER}` })
+  assert.equal(selected.provider, lastSel(`private:${OWNER}`).provider)
+  assert.equal(selected.model, lastSel(`private:${OWNER}`).model)
+  assert.equal(api.hub.modelFor({ ...grp(888), chatId: 'group:888' }).model, lastSel('group:888').model)
 })
 
 test('聊天里的人说「换模型」换不了：只有主人的设置能改', async () => {
