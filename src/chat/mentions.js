@@ -23,10 +23,14 @@ export function memberNames(members) {
   return byName
 }
 
-/** 名字或 QQ 号 → 唯一的 QQ 号；认不出或有重名就返回空。 */
+/**
+ * 名字或 QQ 号 → 唯一的 QQ 号；名字认不出或有重名返回空。
+ * 数字 QQ 直接信任：群成员列表可能拉取失败/不全（SnowLuma 限流时），
+ * 不能因为列表里没有就把她明确写的 <at:QQ号> 降级成文字（#77）。
+ */
 export function resolveMember(who, byName, qqs) {
   const w = String(who || '').replace(/^@/, '').trim()
-  if (/^\d{5,12}$/.test(w) && (!qqs || qqs.has(w))) return w
+  if (/^\d{5,12}$/.test(w)) return w
   const hit = byName.get(w)
   return hit && hit.size === 1 ? [...hit][0] : ''
 }

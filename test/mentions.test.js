@@ -23,10 +23,10 @@ test('顺手打的 @名字 对上群名片（括号备注去掉也认）就变�
   ], '不带空格也能认，@ 后补个空格')
 })
 
-test('<at:QQ号> 和 <at:名字> 都行；不在群里的号、重名的、不认识的名字原样留成文字', () => {
+test('<at:QQ号> 和 <at:名字> 都行；数字号直接信任，重名/不认识的名字原样留成文字', () => {
   assert.deepEqual(expandMentions(text('<at:10002> 在吗'), members)[0], { type: 'at', data: { qq: '10002' } })
   assert.deepEqual(expandMentions(text('<at:小饭团>'), members), [{ type: 'at', data: { qq: '10002' } }])
-  assert.deepEqual(expandMentions(text('<at:99999> 在吗'), members), text('@99999 在吗'))
+  assert.deepEqual(expandMentions(text('<at:99999> 在吗'), members), [{ type: 'at', data: { qq: '99999' } }, { type: 'text', data: { text: ' 在吗' } }], '数字 QQ 直接信任：群成员列表拉不到/不全时也不能降级成文字（#77）')
   assert.deepEqual(expandMentions(text('@小王 在吗'), members), text('@小王 在吗'), '两个小王，不猜')
   assert.deepEqual(expandMentions(text('@路人甲 在吗'), members), text('@路人甲 在吗'))
 })
@@ -41,7 +41,7 @@ test('别的段（表情、引用）原样保留；没有 @ 就不用拉群成�
 test('没对上的 @ 记下来（让发消息的工具如实告诉她）', () => {
   const missed = []
   expandMentions(text('@张小明 别闷着 <at:99999> @小饭团'), members.slice(1), missed)
-  assert.deepEqual(missed, ['张小明', '99999'])
+  assert.deepEqual(missed, ['张小明'], '数字 QQ 直接信任，不再记进没对上的列表（#77）')
 })
 
 test('名字带标点也能 @（「。Luna」），名字后面紧跟的标点不算进名字', () => {

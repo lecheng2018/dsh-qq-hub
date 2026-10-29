@@ -30,6 +30,7 @@ function fakePng(w, h, salt = 0) {
 
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
+  if (text.includes('at+表情测试')) return '<at:10000001> 看这个<sticker:开心>'
   if (text.includes('热重载探针')) { const r = await callTool('probe73', {}); return r ? '探针:' + r.message : '没有探针工具' }
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
@@ -976,4 +977,18 @@ test('模块热重载后：已有会话下一轮会重挂新实例的工具（is
   const second = await until(async () => { const r = await ask(); return r.includes('v2') ? r : null }, 20000)
   assert.match(second, /v2/, '热重载后会话应重挂新实例的工具，而不是继续用旧闭包')
   rmSync(modsDir, { recursive: true, force: true })
+})
+
+test('#77 群里 at 标签和表情包同时出现：at 是真 @，表情包单独一条', async () => {
+  const up = (await fake.call('/sticker/upload', { data: fakePng(200, 200, 7).toString('base64'), name: '开心' })).json()
+  assert.equal(up.ok, true)
+  const before = mock.calls.length
+  mock.push(grp('557', '999', text('at+表情测试'), 'xiaoming'))
+  await until(() => mock.calls.slice(before).filter((c) => c.action === 'send_group_msg').length >= 2, 12000)
+  const sent = mock.calls.slice(before).filter((c) => c.action === 'send_group_msg').map((c) => c.params.message)
+  const atMsg = sent.find((m) => m.some((s) => s.type === 'at'))
+  assert.ok(atMsg, '要有真 @ 消息：' + JSON.stringify(sent))
+  assert.ok(atMsg.some((s) => s.type === 'at' && String(s.data.qq) === OWNER), 'at 目标是主人：' + JSON.stringify(atMsg))
+  assert.ok(sent.some((m) => m.some((s) => s.type === 'image')), '表情包要单独一条：' + JSON.stringify(sent))
+  assert.ok(!sent.some((m) => m.some((s) => s.type === 'text' && /@10000001/.test(s.data.text))), '不能把 at 降级成文字：' + JSON.stringify(sent))
 })
