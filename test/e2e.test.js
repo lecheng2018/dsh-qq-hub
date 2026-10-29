@@ -35,6 +35,7 @@ async function brain({ preset, text, images, callTool }) {
   if (/^【私聊/.test(text) && text.includes('表情改名测试')) { const m = text.match(/把「(.+?)」/); const r = await callTool('qq_edit_sticker', { sticker: m[1], new_name: '改过的名字', tags: ['开心'] }); return r.message }
   if (/^【私聊/.test(text) && text.includes('表情删除测试')) { const r = await callTool('qq_edit_sticker', { sticker: '改过的名字', delete: true }); return r.message }
   if (/^【私聊/.test(text) && text.includes('翻聊天记录')) { const r = await callTool('qq_chat_history', { count: 5 }); return r.message.split('\n')[0] }
+  if (text.includes('查看QQ资料测试')) { const r = await callTool('qq_get_profile', {}); return r?.ok ? '资料查到了' : r ? r.message : '没这个工具' }
   if (text.includes('改昵称测试')) { const r = await callTool('qq_set_nickname', { name: '小鲸鱼' }); return r ? r.message : '没这个工具' }
   if (text.includes('改签名测试')) { const r = await callTool('qq_set_signature', { text: '今天也要开心' }); return r ? r.message : '没这个工具' }
   if (text.includes('换头像测试')) { const r = await callTool('qq_set_avatar', { image: 'https://example.com/a.png' }); return r ? r.message : '没这个工具' }
@@ -811,3 +812,25 @@ test('#52 发文件：面板关掉「发文件」后，她就没这个工具了'
   }
 })
 
+
+test('主人私聊可以查询最新 QQ 资料，关闭资料模块后查询工具撤销', async () => {
+  const expected = { ...mock.state.selfProfile }
+  mock.push(priv(OWNER, text('查看QQ资料测试')))
+  const c = await lastCall('查看QQ资料测试')
+  assert.equal(c.result.ok, true)
+  assert.equal(c.result.profile.nickname, expected.nickname)
+  assert.equal(c.result.profile.signature, expected.long_nick)
+  assert.equal(mock.sent('get_stranger_info').at(-1).params.no_cache, true)
+  assert.match(fake.variables.get('aurabot_rules_private')(), /qq_get_profile/)
+  assert.doesNotMatch(fake.variables.get('aurabot_rules_social')(), /qq_get_profile/)
+  try {
+    await fake.call('/save', { modules: { profile: { enabled: false } } })
+    await until(() => !api.modules.use('profile'))
+    assert.doesNotMatch(fake.variables.get('aurabot_rules_private')(), /qq_get_profile/)
+    mock.push(priv(OWNER, text('查看QQ资料测试 模块关闭')))
+    const unavailable = await lastCall('模块关闭')
+    assert.equal(unavailable.result.message, 'no such tool')
+  } finally {
+    await fake.call('/save', { modules: { profile: { enabled: true } } })
+  }
+})
