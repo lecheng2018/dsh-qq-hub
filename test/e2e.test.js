@@ -48,6 +48,26 @@ async function brain({ preset, text, images, callTool }) {
     const r = await callTool('qq_group_admin', { action: 'ban', user_id: '999', minutes: 5 })
     return r && r.ok ? '好 禁了' : '你谁啊 我只听主人的'
   }
+  if (text.includes('发文件越界')) {
+    const r = await callTool('qq_send_file', { file: outsideFilePath, name: '外面的文件.txt' })
+    return r && r.ok ? '居然发了' : '发文件失败：' + (r && r.message)
+  }
+  if (text.includes('发文件超限')) {
+    const r = await callTool('qq_send_file', { file: bigFilePath, name: '太大了.bin' })
+    return r && r.ok ? '居然发了' : '发文件失败：' + (r && r.message)
+  }
+  if (text.includes('发文件发给群')) {
+    const r = await callTool('qq_send_file', { file: sendFilePath, name: '发个文件.txt', target: 'group:555' })
+    return r && r.ok ? '发到群里啦' : '发文件失败：' + (r && r.message)
+  }
+  if (text.includes('发文件目标越界')) {
+    const r = await callTool('qq_send_file', { file: sendFilePath, name: '发个文件.txt', target: 'group:999' })
+    return r && r.ok ? '居然发了' : '发文件失败：' + (r && r.message)
+  }
+  if (text.includes('发文件测试')) {
+    const r = await callTool('qq_send_file', { file: sendFilePath, name: '发个文件.txt' })
+    return r && r.ok ? '文件发出去啦' : '发文件失败：' + (r ? r.message : '没有这个工具')
+  }
   if (text.includes('跑个慢任务')) { await new Promise((r) => setTimeout(r, 1500)); return '慢任务跑完了' }
   if (text.includes('改成快的')) return '好 改成快的'
   if (text.includes('语音说你好')) return '你好呀'
@@ -64,11 +84,21 @@ const qzonePrompts = []
 let fake
 let api
 let dataDir
+let sendFilePath
+let bigFilePath
+let outsideFilePath
 
 before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'aurabot-e2e-'))
   process.env.AURABOT_DATA_DIR = dataDir
   process.env.AURABOT_WORKSPACE = join(dataDir, 'ws')
+  mkdirSync(join(dataDir, 'ws'), { recursive: true })
+  sendFilePath = join(dataDir, 'ws', '发个文件.txt')
+  bigFilePath = join(dataDir, 'ws', '太大了.bin')
+  outsideFilePath = join(dataDir, '外面的文件.txt')
+  writeFileSync(sendFilePath, '这是一个测试文件')
+  writeFileSync(bigFilePath, Buffer.alloc(2 * 1024 * 1024))
+  writeFileSync(outsideFilePath, '不在工作区里的文件')
   mock = await startMockOneBot({ selfId: BOT })
   mkdirSync(dataDir, { recursive: true })
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
@@ -86,6 +116,7 @@ before(async () => {
     diary: { enabled: true },
     qzoneSocial: { friendChance: 1, ownerChance: 1, intervalMin: 1440 },
     merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
+    files: { enabled: true, maxMB: 1, dirs: [] },
   }))
   fake = createFakeDsh({ brain })
   const host = await import('../src/host.js')
@@ -177,6 +208,7 @@ test('群聊：没叫她不回；@她必回（群聊 preset，无本地工具）
   const agent = fake.agents.get(turn.sessionId)
   assert.ok(!agent.tools.has('qq_send_qzone'), '群聊会话没有发空间这类主人工具')
   assert.ok(!agent.tools.has('qq_send_message'))
+  assert.ok(!agent.tools.has('qq_send_file'), '群聊会话没有发文件工具')
 })
 
 test('群聊：叫名字（唤醒词）必回', async () => {
@@ -698,3 +730,84 @@ test('#6 改资料：群里默认没有这些工具；调成「所有人」后�
   assert.equal(mock.sent('set_qq_profile').length, n + 1)
   await fake.call('/save', { profilePerms: { qqNickname: 'owner' } })
 })
+
+test('#52 发文件：主人私聊让她发本机文件，走 OneBot upload_private_file', async () => {
+  const before = mock.sent('upload_private_file').length
+  mock.push(priv(OWNER, text('发文件测试一')))
+  await until(() => mock.sent('upload_private_file').length > before)
+  const call = mock.sent('upload_private_file').at(-1)
+  assert.equal(String(call.params.user_id), OWNER)
+  assert.equal(call.params.file, sendFilePath)
+  assert.equal(call.params.name, '发个文件.txt')
+  await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && s.data.text === '文件发出去啦')))
+  assert.equal(fake.turns.at(-1).toolCalls.at(-1).result.ok, true)
+})
+
+test('#52 发文件：网关看不到本机路径时，小文件自动改走 base64', async () => {
+  mock.state.failUploadPath = true
+  try {
+    const before = mock.sent('upload_private_file').length
+    mock.push(priv(OWNER, text('发文件测试二')))
+    await until(() => mock.sent('upload_private_file').length >= before + 2)
+    const tried = mock.sent('upload_private_file').slice(before)
+    assert.equal(tried[0].params.file, sendFilePath, '先按本机路径发')
+    assert.match(String(tried[1].params.file), /^base64:\/\//)
+    assert.equal(Buffer.from(String(tried[1].params.file).slice('base64://'.length), 'base64').toString('utf8'), '这是一个测试文件')
+    await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && s.data.text === '文件发出去啦')))
+  } finally {
+    mock.state.failUploadPath = false
+  }
+})
+
+test('#52 发文件：模拟测试里只截获，不真的上传', async () => {
+  const before = mock.sent('upload_private_file').length + mock.sent('upload_group_file').length
+  const r = (await fake.call('/modules/tool', { name: 'qq_send_file', args: { file: sendFilePath, name: '发个文件.txt' } })).json()
+  assert.equal(r.ok, true)
+  assert.equal(r.result.ok, true, r.result.message)
+  assert.match(JSON.stringify(r.sent), /\[文件\]/)
+  assert.equal(mock.sent('upload_private_file').length + mock.sent('upload_group_file').length, before, '模拟里不能真上传')
+})
+
+test('#52 发文件：只允许发 QQ 工作区 / 面板加过的目录里的文件', async () => {
+  const before = mock.sent('upload_private_file').length
+  mock.push(priv(OWNER, text('发文件越界一')))
+  await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && String(s.data.text).includes('允许发送的目录'))))
+  assert.equal(mock.sent('upload_private_file').length, before, '越界的文件没有上传')
+})
+
+test('#52 发文件：超过大小上限不发，并说明上限', async () => {
+  const before = mock.sent('upload_private_file').length
+  mock.push(priv(OWNER, text('发文件超限一')))
+  await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && String(s.data.text).includes('文件太大'))))
+  assert.equal(mock.sent('upload_private_file').length, before, '超限的文件没有上传')
+})
+
+test('#52 发文件：主人让她发给白名单里的群（走 upload_group_file）', async () => {
+  const before = mock.sent('upload_group_file').length
+  mock.push(priv(OWNER, text('发文件发给群一')))
+  await until(() => mock.sent('upload_group_file').length > before)
+  const call = mock.sent('upload_group_file').at(-1)
+  assert.equal(String(call.params.group_id), '555')
+  assert.equal(call.params.file, sendFilePath)
+  assert.equal(call.params.name, '发个文件.txt')
+})
+
+test('#52 发文件：target 不在白名单里就拒绝', async () => {
+  const before = mock.sent('upload_group_file').length + mock.sent('upload_private_file').length
+  mock.push(priv(OWNER, text('发文件目标越界一')))
+  await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && String(s.data.text).includes('不在白名单里'))))
+  assert.equal(mock.sent('upload_group_file').length + mock.sent('upload_private_file').length, before)
+})
+
+test('#52 发文件：面板关掉「发文件」后，她就没这个工具了', async () => {
+  await fake.call('/save', { files: { enabled: false } })
+  try {
+    const before = mock.sent('upload_private_file').length
+    mock.push(priv(OWNER, text('发文件测试三')))
+    await until(() => sentTo('private', OWNER).some((c) => c.params.message.some((s) => s.type === 'text' && String(s.data.text).includes('没有这个工具'))))
+    assert.equal(mock.sent('upload_private_file').length, before, '关掉后不会上传')
+  } finally {
+    await fake.call('/save', { files: { enabled: true } })
+  }
+})
+
