@@ -8,6 +8,7 @@ import { createCodexAuth } from './codex-auth.js'
 import { createCodexImage } from './codex-image.js'
 import { mimeOf } from '../chat/inbound.js'
 import { imageToolBlock } from '../core/img.js'
+import { imageSizeFor } from './image-shape.js'
 export { imageToolBlock }
 
 /** 把模板里的 {占位符} 替换掉；不认识的占位符原样留着。 */
@@ -103,8 +104,9 @@ export function createImageGen({ getConfig, log, local, fetchImpl, codexAuth }) 
   const fetch = fetchImpl || ((...args) => globalThis.fetch(...args))
   const auth = codexAuth || createCodexAuth({ log, fetchImpl: fetch })
   const viaCodex = createCodexImage({ auth, fetchImpl: fetch, log })
-  async function generate(prompt) {
-    const c = getConfig().imageGen
+  async function generate(prompt, { shape } = {}) {
+    const config = getConfig().imageGen
+    const c = { ...config, size: imageSizeFor(shape, config) }
     // 本地接口接管：用用户自己电脑上的画图服务
     if (local?.active('image')) {
       const { toImageBuffer } = await import('../local/local.js')
@@ -116,7 +118,7 @@ export function createImageGen({ getConfig, log, local, fetchImpl, codexAuth }) 
     if (!c.enabled) throw new Error('生图还没开启')
     const full = [c.stylePrompt, prompt].filter(Boolean).join('，')
     const t = Date.now()
-    const buf = c.provider === 'codex' ? await viaCodex(c, full) : c.provider === 'custom' ? await viaCustom(c, full) : await viaOpenAI(c, full)
+    const buf = c.provider === 'codex' ? await viaCodex(c, full, { shape }) : c.provider === 'custom' ? await viaCustom(c, full) : await viaOpenAI(c, full)
     if (!buf || !buf.length) throw new Error('生图接口没有返回图片')
     if (!String(mimeOf(buf)).startsWith('image/')) throw new Error('生图接口返回的不是图片')
     log.info(`画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)

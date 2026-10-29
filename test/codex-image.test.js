@@ -236,3 +236,19 @@ test('Windows 打开浏览器不能走 cmd（URL 里的 & 会被截断）', () =
   openInBrowser(url, { run, platform: 'linux' })
   assert.equal(calls[2].bin, 'xdg-open')
 })
+
+test('整合 #81：订阅接法保留构图优先级，通过提示词引导，尺寸仍由服务端选择', async () => {
+  const seen = [], cfg = normalize({ imageGen: { enabled: true, provider: 'codex', shape: 'wide' } })
+  const gen = createImageGen({ getConfig: () => cfg, log: silent,
+    fetchImpl: async (_url, init) => { seen.push(JSON.parse(init.body)); return new Response(JSON.stringify({ data: [{ b64_json: b64 }] })) },
+    codexAuth: { status: () => ({ loggedIn: true }), ensureAccess: async () => ({ access: 'test-access', accountId: 'test-account' }) },
+  })
+  await gen.generate('猫', { shape: 'portrait' })
+  assert.match(seen[0].prompt, /2:3/)
+  await gen.generate('猫')
+  assert.match(seen[1].prompt, /16:9/)
+  cfg.imageGen.shape = 'her'
+  await gen.generate('猫')
+  assert.equal(seen[2].prompt, '猫')
+  assert.ok(seen.every((body) => body.size === 'auto'))
+})
