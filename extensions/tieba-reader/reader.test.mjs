@@ -3,9 +3,17 @@ import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseList, parseHome, parsePost, createTieba } from './tieba.mjs';
+import { parseList, parseHome, parsePost, createTieba, cleanTitle } from './tieba.mjs';
 import sessionHelpers from './session.cjs';
 const fixture = name => readFileSync(new URL('fixtures/' + name, import.meta.url), 'utf8');
+test('post title uses only document title or clean thread heading, never SVG icon titles',()=>{
+  const html='<html><head><title>真正的帖子标题-百度贴吧</title></head><body><svg><title>icon_arrow14_right</title></svg><svg><title>编组 14icon_pure_list_Unfold16@1x</title></svg><div class="pb-content-wrap">正文</div></body></html>';
+  assert.equal(parsePost(html,'url').title,'真正的帖子标题');
+  const heading=html.replace('<div class="pb-content-wrap">','<h1 class="core_title_txt">优先的帖子标题<svg><title>icon_arrow14_right</title></svg></h1><div class="pb-content-wrap">');
+  assert.equal(parsePost(heading,'url').title,'优先的帖子标题');
+  assert.equal(cleanTitle('旧标题-百度贴吧icon_arrow14_right编组 14icon_pure_play12'),'旧标题');
+  assert.equal(cleanTitle('讨论 icon_arrow14_right 的用法'),'讨论 icon_arrow14_right 的用法');
+});
 test('homepage parser reads recommendations and hot posts, rejects external links and deduplicates',()=>{
   const items=parseHome(fixture('home.html'));assert.equal(items.length,2);assert.equal(items[0].section,'首页推荐');assert.equal(items[0].bar,'测试');assert.equal(items[1].section,'首页热门');
   assert.throws(()=>parseHome('<title>百度安全验证</title>'),/安全验证/);
