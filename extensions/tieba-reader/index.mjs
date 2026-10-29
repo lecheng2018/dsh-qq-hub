@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { createTieba, barNames, clean } from './tieba.mjs';
+import { createTieba, barNames, clean, cleanTitle } from './tieba.mjs';
 import { createBrowserReader } from './browser-client.mjs';
 
 export default {
@@ -15,14 +15,18 @@ export default {
     const file = api.dataDir('state.json');
     let state = { lastRun: 0, day: '', shares: 0, seen: [], cursor: 0, lastResult: '尚未浏览', history: [], views: 0, runs: 0 };
     try { state = { ...state, ...JSON.parse(readFileSync(file, 'utf8')) }; } catch {}
+    const titlesBefore = JSON.stringify({ history: state.history, lastResult: state.lastResult });
     state.seen = Array.isArray(state.seen) ? state.seen.filter(s => typeof s === 'string').slice(-500) : [];
     state.history = Array.isArray(state.history) ? state.history.slice(0, 20) : [];
+    state.history = state.history.map(item => item && typeof item === 'object' ? { ...item, title: cleanTitle(item.title) } : item);
+    if (typeof state.lastResult === 'string' && state.lastResult.startsWith('已分享：')) state.lastResult = '已分享：' + cleanTitle(state.lastResult.slice('已分享：'.length));
     for (const key of ['lastRun', 'shares', 'cursor', 'views', 'runs']) if (!Number.isFinite(state[key]) || state[key] < 0) state[key] = 0;
     let busy = false;
     let disposed = false;
     const controller = new AbortController();
     api.onDispose?.(() => { disposed = true; controller.abort(); });
     const save = () => { if (disposed) return; mkdirSync(dirname(file), { recursive: true }); const tmp = file + '.tmp'; writeFileSync(tmp, JSON.stringify(state, null, 2)); renameSync(tmp, file); };
+    if (titlesBefore !== JSON.stringify({ history: state.history, lastResult: state.lastResult })) save();
     const browser = dependencies.renderPage || createBrowserReader(api, () => api.settings().cookie);
     const tieba = createTieba({ getCookie: () => api.settings().cookie,
       renderPage: browser, browserAvailable: () => browser.available?.() !== false, signal: controller.signal,

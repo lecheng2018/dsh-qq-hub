@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import moduleDef from './index.mjs';
 
 function harness(t, overrides={}) {
   const dir=mkdtempSync(join(tmpdir(),'tieba-lifecycle-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  if(overrides.state)writeFileSync(join(dir,'state.json'),JSON.stringify(overrides.state));
   const settings={...moduleDef.defaults,bars:'测试',autoBrowse:true,startHour:0,endHour:0,intervalMinutes:10,...overrides.settings};
   const cfg={enabled:true,dryRun:false,ownerQQ:'12345'};
   const disposers=[];const kinds=[];const sentTexts=[];let reads=0,asks=0,sends=0;let now=Date.UTC(2026,9,29,10);
@@ -22,7 +23,7 @@ function harness(t, overrides={}) {
     reads++;return {title:'标题',contents:['正文']};
   };
   const ext=moduleDef.setup(api,{renderPage,now:()=>now});
-  return {ext,settings,cfg,secrets,routes,builders,kinds,sentTexts,dispose:()=>disposers.forEach(fn=>fn()),advance:()=>{now+=600001;},counts:()=>({reads,asks,sends})};
+  return {ext,settings,cfg,secrets,routes,builders,kinds,sentTexts,persisted:()=>JSON.parse(readFileSync(join(dir,'state.json'),'utf8')),dispose:()=>disposers.forEach(fn=>fn()),advance:()=>{now+=600001;},counts:()=>({reads,asks,sends})};
 }
 test('zero sharing budget still reads and never calls model or sends',async t=>{
   const h=harness(t,{settings:{maxSharesPerDay:0}});await h.ext.tick();
@@ -82,4 +83,10 @@ test('blank forum config uses homepage for both automatic and manual browsing; e
   assert.equal(automatic.ext.state().history[0].origin,'home');assert.equal((await automatic.routes.get('/state')()).browseMode,'home');
   const manual=harness(t,{settings:{bars:'',autoBrowse:false}});assert.equal((await manual.ext.run({manual:true})).shared,1);assert.match(manual.sentTexts[0],/刚逛贴吧首页/);assert.doesNotMatch(manual.sentTexts[0],/首页吧/);
   const scoped=harness(t);await scoped.ext.tick();assert.deepEqual(scoped.kinds,['browse','read']);
+});
+test('existing malformed titles are repaired without removing history or changing URLs and counts',t=>{
+  const title='买的328，感觉和媒体评分差异巨大-百度贴吧icon_arrow14_right编组 14icon_pure_play12';
+  const h=harness(t,{state:{shares:5,views:12,history:[{kind:'share',at:123,title,url:'https://tieba.baidu.com/p/12345678',text:'原分享文字'}],lastResult:'已分享：'+title}});
+  const state=h.persisted();assert.equal(state.history[0].title,'买的328，感觉和媒体评分差异巨大');assert.equal(state.lastResult,'已分享：买的328，感觉和媒体评分差异巨大');
+  assert.equal(state.shares,5);assert.equal(state.views,12);assert.equal(state.history.length,1);assert.equal(state.history[0].text,'原分享文字');assert.equal(state.history[0].url,'https://tieba.baidu.com/p/12345678');
 });
