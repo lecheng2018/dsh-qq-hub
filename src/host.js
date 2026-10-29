@@ -389,6 +389,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'aurabot: 看门狗')
   setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   ctx.effect(() => () => {
+    hub.disposeRecentMedia()
     mods.dispose()
     onebot.stop()
     snowluma.dispose()
