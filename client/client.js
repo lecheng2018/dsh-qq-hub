@@ -186,12 +186,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-pitem .tg{color:var(--ab-dim);font-size:11.5px;margin-top:2px}
 .ab-badge{font-size:10.5px;padding:0 6px;border-radius:999px;background:var(--ab-sea);color:#fff;font-weight:500}
 .ab-psecs{display:flex;flex-direction:column;gap:10px;margin-top:12px}
-.ab-psec{--c:var(--ab-sea);position:relative;overflow:hidden;border:1px solid var(--ab-line);border-radius:12px;background:var(--ab-card);background:linear-gradient(100deg,color-mix(in srgb,var(--c) 9%,transparent),transparent 55%),var(--ab-card);transition:border-color .12s,box-shadow .12s}
-.ab-psec:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
-.ab-psec:focus-within{border-color:var(--c);border-color:color-mix(in srgb,var(--c) 55%,transparent);box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent)}
-.ab-psec-head{display:flex;align-items:center;gap:4px;padding:8px 8px 0 16px}
-.ab-psec-head:before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent)}
-.ab-psec-title{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-weight:620;font-size:13.5px;color:var(--ab-text);color:color-mix(in srgb,var(--c) 70%,var(--ab-text));padding:4px 0;outline:none}
+.ab-psec{--c:var(--ab-sea);position:relative;overflow:hidden;border:1px solid var(--ab-line);border-radius:14px;background:var(--ab-card);background:radial-gradient(120% 140% at 0 0,color-mix(in srgb,var(--c) 7%,transparent),transparent 46%),var(--ab-card);transition:border-color .2s,box-shadow .2s}
+.ab-psec:before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:0 3px 3px 0;background:var(--c);background:linear-gradient(180deg,var(--c),color-mix(in srgb,var(--c) 18%,transparent))}
+.ab-psec:hover{border-color:color-mix(in srgb,var(--c) 22%,var(--ab-line))}
+.ab-psec:focus-within{border-color:var(--c);border-color:color-mix(in srgb,var(--c) 38%,var(--ab-line));box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 4px color-mix(in srgb,var(--c) 8%,transparent),0 6px 18px -10px color-mix(in srgb,var(--c) 45%,transparent)}
+.ab-psec-head{display:flex;align-items:center;gap:4px;padding:10px 8px 0 18px}
+.ab-psec-head:before{content:"";flex:none;width:6px;height:6px;border-radius:50%;background:var(--c);margin-right:8px;opacity:.9}
+.ab-psec-title{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-weight:600;font-size:13.5px;letter-spacing:.02em;color:var(--ab-text);color:color-mix(in srgb,var(--c) 42%,var(--ab-text));padding:4px 0;outline:none}
 .ab-psec-title::placeholder{color:var(--ab-dim);font-weight:400}
 .ab-psec-fixed{flex:1;min-width:0;font-weight:620;font-size:13.5px;padding:4px 0}
 .ab-psec-fixed small{font-weight:400;color:var(--ab-dim);margin-left:8px;font-size:11.5px}
@@ -205,10 +206,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-ibtn:disabled{opacity:.3;cursor:default;background:transparent}
 .ab-aibtn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;margin-left:2px;border:0;border-radius:7px;background:var(--ab-foam);color:var(--ab-deep);font:inherit;font-size:12px;cursor:pointer;transition:background .12s}
 .ab-aibtn:hover,.ab-aibtn.on{background:var(--ab-foam-2)}
+.ab-psec .ab-aibtn{background:color-mix(in srgb,var(--c) 9%,transparent);color:color-mix(in srgb,var(--c) 62%,var(--ab-text))}
+.ab-psec .ab-aibtn:hover{background:color-mix(in srgb,var(--c) 16%,transparent)}
 .ab-aibtn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .ab-psec textarea{display:block;width:100%;box-sizing:border-box;border:0;background:transparent;resize:vertical;outline:none;padding:6px 16px 12px 30px;font:inherit;font-size:13px;line-height:1.75;color:var(--ab-text)}
 .ab-psec textarea::placeholder{color:var(--ab-dim)}
-.ab-psec.cmp{border-color:var(--c);box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent)}
+.ab-psec.cmp{border-color:var(--c);border-color:color-mix(in srgb,var(--c) 45%,var(--ab-line));box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 4px color-mix(in srgb,var(--c) 10%,transparent)}
 .ab-chip.on{border-style:solid;border-color:var(--ab-sea);background:var(--ab-foam-2);color:var(--ab-deep);font-weight:600}
 .ab-chip .n{margin-left:6px;font-size:11px;color:var(--ab-dim);font-weight:400}
 .ab-tf-who{margin-top:8px;font-size:12px;color:var(--ab-sub);line-height:1.6}
@@ -883,8 +886,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     // 人格按【标题】分节：面板里拆开逐节编辑，保存时按原来的写法拼回一整段（文件格式不变）
     const PSEC_HEAD = /^【([^】\n]{1,30})】\s*$/
     const PSEC_SUGGEST = ['你的样子', '性格', '打字习惯', '情绪是活的', '你的生活', '和主人的关系', '绝对禁止']
-    // 每节一个颜色（跟着这一节走，挪位置颜色不变）；挑的是深浅两种主题下都看得清、彼此分得开的色
-    const PSEC_COLORS = ['#0d9488', '#7c3aed', '#d97706', '#db2777', '#16a34a', '#0284c7', '#ea580c', '#4f46e5', '#65a30d', '#c026d3']
+    // 每节一个颜色（跟着这一节走，挪位置颜色不变）。低饱和的雾色系，相邻的冷暖交替，深浅两种主题下都不刺眼：
+    // 青瓷、雾紫、琥珀、雾蓝、藕粉、苔绿、黛蓝、赭石、橄榄、紫藤
+    const PSEC_COLORS = ['#4f9a8c', '#8a7bc0', '#c08a4a', '#5f8fc7', '#c47a90', '#6f9f68', '#5c6fae', '#b9775a', '#8d9450', '#a173b5']
     let psecSeq = 0
     const psec = (title, text) => ({ k: ++psecSeq, title, text })
     const splitPersona = (body) => {
