@@ -38,6 +38,7 @@ export default {
       description: '用你自己的声音翻唱一首歌，做好后自动以语音条发到当前聊天（要两三分钟，调用后先简单回一句「等我一下」就好）。song 写歌名，最好带上歌手，比如「小幸运 田馥甄」。pitch 是变调半音：你是女声，原唱是男声时一般 +12，原唱是女声时 0。',
       properties: { song: str('歌名（可以带歌手）'), pitch: int('变调半音：原唱男声 +12，女声 0') },
       required: ['song'],
+      slow: '好，我这就去弄，稍等一会儿（做好了发你）。',
       execute: async ({ song: name, pitch }) => {
         if (api.config().song.ownerOnly && !hub.turnHasOwner(sessionId)) return { ok: false, message: '只有主人能点歌' }
         return song.request({ song: name, pitch, chatId: chat.chatId })
