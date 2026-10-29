@@ -299,6 +299,7 @@ return function Panel({ settings, save, toast }) {
 
 - `call(路径, 请求体?)`：调你用 `api.route` 加的接口（不带请求体就是 GET）
 - `settings` 是当前设置，`save(patch)` 保存设置，`toast(文字)` 弹提示
+  - `draftSettings` 是页面尚未保存的设置；`setSettings(patch)` 只更新当前模块的页面草稿，不立即写入。使用这两个属性可与原生表单共用底部“保存设置”、撤销和离开提醒。`settings` 与 `save` 仍保留原行为，兼容已有面板。
 - `ui` 里有：`Card` `Btn` `Switch` `Row` `Empty` `Select`；样式类名可以用面板的 `ab-input` `ab-note` `ab-muted` `ab-small` 等
 - 改了 panel.js 回到面板切一下标签页就是新的
 
