@@ -1,14 +1,16 @@
 // 实验性订阅接法：使用非公开端点，账号 / 工作区是否可用由服务端决定。
 import { randomUUID } from 'node:crypto'
 import { fetchImage } from '../core/net.js'
+import { pickShape } from './image-shape.js'
 
 export function createCodexImage({ auth, fetchImpl, log }) {
-  return async function generate(config, prompt) {
+  return async function generate(config, prompt, { shape } = {}) {
     const revision = auth.revision?.()
     const check = () => auth.assertCurrent?.(revision)
     check()
     const c = config.codex || {}
-    const body = { prompt, model: c.model || 'gpt-image-2', quality: c.quality || 'auto', size: 'auto', background: c.background || 'auto' }
+    const hint = { square: '方图构图（1:1）', portrait: '竖版构图（2:3）', landscape: '横版构图（3:2）', wide: '宽幅横版构图（16:9）' }[pickShape(shape, config)]
+    const body = { prompt: [prompt, hint].filter(Boolean).join('，'), model: c.model || 'gpt-image-2', quality: c.quality || 'auto', size: 'auto', background: c.background || 'auto' }
     const once = async ({ access, accountId }) => {
       check()
       if (!accountId) throw new Error('登录信息里没有账号 ID，去生图页重新登录 ChatGPT')

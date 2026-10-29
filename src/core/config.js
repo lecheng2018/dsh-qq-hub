@@ -50,6 +50,7 @@ export const DEFAULTS = {
     apiKey: '',
     model: '',
     size: '1024x1024',
+    shape: 'her', // 工具可选构图；her 时未指定就沿用 size
     stylePrompt: '', // 每次生图自动加在前面的风格描述
     ownerOnly: true, // 只有主人能让她画
     seeOwn: true, // 「让她画完自己看一眼」：开着才把画好的图交给她看
@@ -61,6 +62,8 @@ export const DEFAULTS = {
   },
   persona: { current: 'dafeiyu' },
   group: { ...DEFAULT_GROUP_POLICY, overrides: {} },
+  // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
+  titleFilter: { enabled: true, groups: [], title: '大肥鱼' },
   voice: {
     enabled: true,
     // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http = 指定引擎（失败都会退回 Windows 语音）
@@ -347,6 +350,9 @@ export function normalize(raw) {
   c.merge.maxSec = Math.max(c.merge.waitSec, num(c.merge.maxSec, 8, 0, 60))
   c.merge.groupWaitSec = num(c.merge.groupWaitSec, 5, 0, 60)
   c.merge.groupMaxSec = Math.max(c.merge.groupWaitSec, num(c.merge.groupMaxSec, 15, 0, 120))
+  c.titleFilter.enabled = bool(c.titleFilter.enabled, true)
+  c.titleFilter.groups = qqList(c.titleFilter.groups) // 和群白名单同一套规则
+  c.titleFilter.title = String(c.titleFilter.title ?? '').replace(/[​-‍﻿]/g, '').trim().slice(0, 30) || '大肥鱼'
   g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
   if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
@@ -365,6 +371,7 @@ export function normalize(raw) {
   c.imageGen.seeOwn = bool(c.imageGen.seeOwn, true)
   if (!/^\d{3,4}x\d{3,4}$/.test(String(c.imageGen.size))) c.imageGen.size = '1024x1024'
   c.imageGen.galleryShown = Math.min(50, Math.max(1, Math.round(Number(c.imageGen.galleryShown) || 20)))
+  c.imageGen.shape = ['her', 'square', 'portrait', 'landscape', 'wide'].includes(c.imageGen.shape) ? c.imageGen.shape : 'her'
 
   // provider：custom = 自己填接口（GET/POST + 自定义参数），其它按 OpenAI 兼容
   c.imageGen.provider = ['custom', 'codex'].includes(c.imageGen.provider) ? c.imageGen.provider : 'openai'
