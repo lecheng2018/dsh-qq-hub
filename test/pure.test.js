@@ -341,9 +341,9 @@ test('#6 改资料权限：默认仅主人私聊；所有人含群；关了都�
   assert.equal(profilePermits(off, 'qqNickname', ownerPm, true).ok, false)
 })
 
-test('#6 头像来源：只收网址或「刚才那张」，本地路径不收', () => {
+test('#6 头像来源：显式网址直接给网关；「刚才那张」和「画作」由工具取字节；本地路径不收', () => {
   assert.deepEqual(avatarSource('https://a.com/x.png'), { ok: true, file: 'https://a.com/x.png' })
-  assert.deepEqual(avatarSource('last', 'http://q/img'), { ok: true, file: 'http://q/img' })
+  // last / 画作编号 现在在工具里换成本地图片字节，不再走 avatarSource
   assert.equal(avatarSource('last').ok, false)
   assert.equal(avatarSource('C:/Windows/x.png').ok, false)
   assert.equal(avatarSource('file:///etc/passwd').ok, false)

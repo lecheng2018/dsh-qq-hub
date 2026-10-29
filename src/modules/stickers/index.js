@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { createStickerStore, stickerPath } from '../../features/stickers.js'
 import { defineTool, str } from '../../tools/tools.js'
 import { fetchImage, segmentBytes } from '../../core/net.js'
+import { resolvePainting } from '../../features/paintings.js'
 
 export default {
   id: 'stickers',
@@ -69,18 +70,34 @@ export default {
           },
         }),
       ]
-      // 主人让她存表情：存这个聊天里刚发来的那张（她看得见图，但拿不到图片地址，所以由插件去找）
+      // 主人让她存表情：存这个聊天里刚发来的那张（她看得见图，但拿不到图片地址，所以由插件去找）；
+      // 传 painting（画作编号）时存的是她自己刚画的那张
       tools.push(defineTool({
         name: 'qq_save_sticker',
-        description: '把这个聊天里刚发来的那张表情包 / 图片收进你的表情库（同时收藏到 QQ）。主人说「存一下这个表情」「导入这个表情」「收藏这张」时用。name 是不超过 12 个字的备注，可以不填（会自动看图起名）。',
-        properties: { name: str('备注（≤12 字，可不填）'), tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈（可不填）' } },
-        execute: async ({ name, tags }) => {
+        description: '把这个聊天里刚发来的那张表情包 / 图片收进你的表情库（同时收藏到 QQ）。主人说「存一下这个表情」「导入这个表情」「收藏这张」时用。传 painting（画作编号，如 #1）时，存的是你自己刚画的那张图。name 是不超过 12 个字的备注，可以不填（会自动看图起名）。',
+        properties: {
+          name: str('备注（≤12 字，可不填）'),
+          tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈（可不填）' },
+          painting: str('画作编号（如 #1）：存你自己刚画的图时填'),
+        },
+        execute: async ({ name, tags, painting }) => {
           if (!hub.turnHasOwner(sessionId)) return { ok: false, message: '只有主人能让我存表情' }
-          const media = hub.recentMedia(current)
-          // 优先主人自己发的，其次这个聊天里最近的
-          const pick = media.filter((x) => x.userId === String(api.config().ownerQQ)).at(-1) || media.at(-1)
-          if (!pick) return { ok: false, message: '最近半小时这个聊天里没有人发表情或图片，先把那张发过来' }
-          const buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 5 * 1024 * 1024 })
+          let buf
+          if (painting) {
+            const p = resolvePainting(current, painting)
+            if (!p) return { ok: false, message: `找不到画作 ${painting}（编号可能过期了，先让我画一张？）` }
+            try {
+              buf = readFileSync(p.path)
+            } catch (error) {
+              return { ok: false, message: '这张画的文件读不到了：' + error.message }
+            }
+          } else {
+            const media = hub.recentMedia(current)
+            // 优先主人自己发的，其次这个聊天里最近的
+            const pick = media.filter((x) => x.userId === String(api.config().ownerQQ)).at(-1) || media.at(-1)
+            if (!pick) return { ok: false, message: '最近半小时这个聊天里没有人发表情或图片，先把那张发过来' }
+            buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 5 * 1024 * 1024 })
+          }
           const r = await store.addFromBuffer(buf, { name: String(name || '').slice(0, 12), tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
           if (!r.ok) return { ok: false, message: r.reason || '没存成' }
           if (r.existed) return { ok: true, message: `库里已经有这张了（叫「${r.item.name || '未命名'}」）` }

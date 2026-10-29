@@ -89,6 +89,75 @@ export function paintingPath (file) {
   return existsSync(full) ? full : ''
 }
 
+// 每个聊天最近画过哪几张（只记在内存里，重启后按目录里的文件重新算）。
+// 她换头像 / 收表情时用的是「画作编号 #1」，不是文件路径 —— 路径不外泄。
+const recent = new Map()
+const KEEP = 10
+
+/**
+ * 生图成功后登记一张，返回它在当前聊天里的编号。
+ * 编号是「最近的第几张」：#1 永远是最新那张（刚画完就是 #1），再往前 #2、#3……
+ */
+export function rememberPainting (chatId, file) {
+  const key = String(chatId || '')
+  const name = basename(String(file || ''))
+  if (!key || !safeName(name)) return 0
+  const list = (recent.get(key) || []).filter((f) => f !== name)
+  list.push(name)
+  recent.set(key, list.slice(-KEEP))
+  return 1
+}
+
+/** 这个聊天最近画过几张（编号从 1 开始，1 = 最新）。 */
+export function paintingCount (chatId) {
+  return (recent.get(String(chatId || '')) || []).length
+}
+
+/** 这个聊天最近几张画（新 → 旧），给「我都画过什么」用。 */
+export function recentPaintings (chatId, limit = 10) {
+  const list = recent.get(String(chatId || '')) || []
+  const n = Math.max(1, Math.min(KEEP, Number(limit) || 10))
+  const out = []
+  for (let i = 0; i < Math.min(list.length, n); i++) {
+    const file = list[list.length - 1 - i]
+    const meta = metaOf(file)
+    out.push({ index: i + 1, file, prompt: meta.prompt, at: meta.at })
+  }
+  return out
+}
+
+/**
+ * 把「画作 #1 / 1 / 最新 / 刚才那张 / 完整文件名」解析成本机路径。
+ * 只认这个聊天记过的编号；别名在没记过时退回目录里最新的一张（重启后也能用）。
+ * 不合法 / 不存在返回 null，不抛。
+ */
+export function resolvePainting (chatId, ref) {
+  const s = String(ref == null ? '' : ref).trim()
+  if (!s) return null
+  const list = recent.get(String(chatId || '')) || []
+  let name = ''
+  const alias = /^(latest|last|newest|最新|最近|上一张|刚才那张|刚画的|画作)$/i.test(s)
+  const num = /^#?(\d{1,2})$/.exec(s)
+  if (alias) {
+    name = list.at(-1) || ''
+    if (!name) {
+      // 内存里没有（比如刚重启）：退回目录里最新的一张
+      const latest = listPaintings({ limit: 1 }).items[0]
+      name = latest ? latest.file : ''
+    }
+  } else if (num) {
+    const i = Number(num[1])
+    if (i >= 1 && i <= list.length) name = list[list.length - i]
+  } else {
+    name = safeName(s)
+  }
+  if (!name) return null
+  const full = paintingPath(name)
+  if (!full) return null
+  const meta = metaOf(name)
+  return { file: name, path: full, prompt: meta.prompt, at: meta.at }
+}
+
 /** 删掉一张。 */
 export function removePainting (file) {
   const name = safeName(file)
