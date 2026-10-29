@@ -618,6 +618,16 @@ export function apply(ctx) {
     }
   })
 
+  // 按群头衔不理：白名单里的群（带群名）+ 这些群里现有的头衔，面板里点一个就设成要过滤的那类
+  route('/groups/titles', async () => {
+    const gids = (cfg.allow.groups || []).map(String)
+    const groups = await Promise.all(gids.map(async (gid) => ({ groupId: gid, name: await hub.groupName(gid) })))
+    if (!gids.length) return { ok: true, groups, titles: [], failed: [] }
+    const { titles, failed } = await hub.titleFilter.titlesIn(gids)
+    hub.titleFilter.clear()
+    return { ok: true, groups, titles, failed, message: failed.length ? `有 ${failed.length} 个群的成员没拉到（她在群里吗？）` : '' }
+  })
+
   // 本地接口
   const openFolder = (dir) => {
     mkdirSync(dir, { recursive: true })

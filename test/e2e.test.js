@@ -111,7 +111,9 @@ before(async () => {
     setupDone: true,
     botQQ: BOT,
     ownerQQ: OWNER,
-    allow: { private: [OWNER], groups: ['555', '557', '558', '559'] },
+    allow: { private: [OWNER], groups: ['555', '556', '557', '558', '559'] },
+    // 556 专门测按头衔不理
+    titleFilter: { enabled: true, groups: ['556'], title: '大肥鱼' },
     snowluma: { autoStart: false, autoAttach: false, httpUrl: mock.httpUrl, wsUrl: mock.wsUrl, httpToken: mock.token, wsToken: mock.token, dir: join(dataDir, 'no-snowluma') },
     voice: { engine: 'windows', autoChance: 0 },
     stickers: { autoChance: 0 },
@@ -265,6 +267,20 @@ test('群管：她在群里只是普通成员时，主人要求也做不了，�
   } finally {
     delete mock.state.roles['555']
   }
+})
+
+test('按头衔不理：勾选的群里头衔是「大肥鱼」的成员 @ 她、戳她都不交给模型；没头衔的照常回', async () => {
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  const titled = (uid, t) => ({ ...grp('556', uid, at(t), '另一只鱼'), sender: { user_id: Number(uid), nickname: '另一只鱼', card: '', role: 'member', title: '大肥鱼' } })
+  const turns = fake.turns.length
+  mock.push(titled('880', '你好呀'))
+  mock.push({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', group_id: 556, user_id: 880, target_id: Number(BOT), self_id: Number(BOT) })
+  await sleep(1500)
+  assert.equal(fake.turns.length, turns, '机器人的消息和戳一戳都没交给她')
+  mock.push(grp('556', '881', at('在吗'), '普通群友'))
+  await until(() => fake.turns.length > turns)
+  assert.match(fake.turns.at(-1).userText, /在吗/)
+  assert.doesNotMatch(fake.turns.at(-1).userText, /你好呀/, '被过滤的那条也没进群聊上下文')
 })
 
 test('QQ 命令：主人 /silent 后群里 @ 她也不回，/active 恢复；群友发命令不算', async () => {

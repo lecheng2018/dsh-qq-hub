@@ -186,11 +186,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-pitem .tg{color:var(--ab-dim);font-size:11.5px;margin-top:2px}
 .ab-badge{font-size:10.5px;padding:0 6px;border-radius:999px;background:var(--ab-sea);color:#fff;font-weight:500}
 .ab-psecs{display:flex;flex-direction:column;gap:10px;margin-top:12px}
-.ab-psec{border:1px solid var(--ab-line);border-radius:12px;background:var(--ab-card);transition:border-color .12s,box-shadow .12s}
-.ab-psec:focus-within{border-color:var(--ab-sky);box-shadow:0 0 0 3px var(--ab-foam)}
-.ab-psec.lead{background:linear-gradient(120deg,var(--ab-foam),transparent 60%),var(--ab-card)}
-.ab-psec-head{display:flex;align-items:center;gap:4px;padding:8px 8px 0 14px}
-.ab-psec-title{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-weight:620;font-size:13.5px;color:var(--ab-text);padding:4px 0;outline:none}
+.ab-psec{--c:var(--ab-sea);position:relative;overflow:hidden;border:1px solid var(--ab-line);border-radius:12px;background:var(--ab-card);background:linear-gradient(100deg,color-mix(in srgb,var(--c) 9%,transparent),transparent 55%),var(--ab-card);transition:border-color .12s,box-shadow .12s}
+.ab-psec:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
+.ab-psec:focus-within{border-color:var(--c);border-color:color-mix(in srgb,var(--c) 55%,transparent);box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent)}
+.ab-psec-head{display:flex;align-items:center;gap:4px;padding:8px 8px 0 16px}
+.ab-psec-head:before{content:"";flex:none;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px;box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent)}
+.ab-psec-title{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-weight:620;font-size:13.5px;color:var(--ab-text);color:color-mix(in srgb,var(--c) 70%,var(--ab-text));padding:4px 0;outline:none}
 .ab-psec-title::placeholder{color:var(--ab-dim);font-weight:400}
 .ab-psec-fixed{flex:1;min-width:0;font-weight:620;font-size:13.5px;padding:4px 0}
 .ab-psec-fixed small{font-weight:400;color:var(--ab-dim);margin-left:8px;font-size:11.5px}
@@ -205,9 +206,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-aibtn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;margin-left:2px;border:0;border-radius:7px;background:var(--ab-foam);color:var(--ab-deep);font:inherit;font-size:12px;cursor:pointer;transition:background .12s}
 .ab-aibtn:hover,.ab-aibtn.on{background:var(--ab-foam-2)}
 .ab-aibtn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.ab-psec textarea{display:block;width:100%;box-sizing:border-box;border:0;background:transparent;resize:vertical;outline:none;padding:6px 14px 12px;font:inherit;font-size:13px;line-height:1.75;color:var(--ab-text)}
+.ab-psec textarea{display:block;width:100%;box-sizing:border-box;border:0;background:transparent;resize:vertical;outline:none;padding:6px 16px 12px 30px;font:inherit;font-size:13px;line-height:1.75;color:var(--ab-text)}
 .ab-psec textarea::placeholder{color:var(--ab-dim)}
-.ab-psec.cmp{border-color:var(--ab-sea);box-shadow:0 0 0 3px var(--ab-foam)}
+.ab-psec.cmp{border-color:var(--c);box-shadow:0 0 0 3px var(--ab-foam);box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 16%,transparent)}
+.ab-chip.on{border-style:solid;border-color:var(--ab-sea);background:var(--ab-foam-2);color:var(--ab-deep);font-weight:600}
+.ab-chip .n{margin-left:6px;font-size:11px;color:var(--ab-dim);font-weight:400}
+.ab-tf-who{margin-top:8px;font-size:12px;color:var(--ab-sub);line-height:1.6}
 .ab-psec.cmp textarea{cursor:default}
 .ab-compare{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 12px 12px;padding:8px 8px 8px 12px;border-radius:10px;background:var(--ab-foam)}
 .ab-compare-tag{font-size:11.5px;font-weight:600;color:var(--ab-deep);padding:1px 8px;border-radius:999px;background:var(--ab-card);border:1px solid var(--ab-foam-2)}
@@ -879,6 +883,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     // 人格按【标题】分节：面板里拆开逐节编辑，保存时按原来的写法拼回一整段（文件格式不变）
     const PSEC_HEAD = /^【([^】\n]{1,30})】\s*$/
     const PSEC_SUGGEST = ['你的样子', '性格', '打字习惯', '情绪是活的', '你的生活', '和主人的关系', '绝对禁止']
+    // 每节一个颜色（跟着这一节走，挪位置颜色不变）；挑的是深浅两种主题下都看得清、彼此分得开的色
+    const PSEC_COLORS = ['#0d9488', '#7c3aed', '#d97706', '#db2777', '#16a34a', '#0284c7', '#ea580c', '#4f46e5', '#65a30d', '#c026d3']
     let psecSeq = 0
     const psec = (title, text) => ({ k: ++psecSeq, title, text })
     const splitPersona = (body) => {
@@ -902,7 +908,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     /** 一节设定：标题、正文、上下移、删除、AI 润色。润色后原版和润色版只显示一个，按钮来回切，选定一个另一个就丢掉。 */
     function PersonaSection({ sec, lead, first, last, onChange, onMove, onDelete, onPolish, pending, onPick, onFlip }) {
       const showing = pending ? (pending.view === 'new' ? pending.text : sec.text) : sec.text
-      return h('div', { className: cx('ab-psec', lead && 'lead', pending && 'cmp') },
+      const color = lead ? 'var(--ab-sea)' : PSEC_COLORS[sec.k % PSEC_COLORS.length]
+      return h('div', { className: cx('ab-psec', lead && 'lead', pending && 'cmp'), style: { '--c': color } },
         h('div', { className: 'ab-psec-head' },
           lead
             ? h('div', { className: 'ab-psec-fixed' }, '开场', h('small', null, '她是谁，一两段话'))
@@ -1101,6 +1108,45 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
               h('td', null, g.canManage ? h('span', { className: 'ab-badge' }, '可以') : h('span', { className: 'ab-muted ab-small' }, '不行')))))))
     }
 
+    /** 按群头衔不理：勾选的群里，专属头衔是某个词的成员（别的机器人）她不理。头衔可以从群里现有的里面点一个。 */
+    function TitleFilter({ draft, setDraft }) {
+      const tf = draft.titleFilter || { enabled: true, groups: [], title: '大肥鱼' }
+      const [info, setInfo] = useState(null) // { groups, titles, failed, message } 拉过才有 titles
+      const [busy, setBusy] = useState(false)
+      const set = (p) => setDraft(setPath(draft, 'titleFilter', { ...tf, ...p }))
+      const pull = async () => {
+        setBusy(true)
+        const r = await get('/groups/titles')
+        setBusy(false)
+        if (r.ok) setInfo(r)
+        else setInfo({ groups: [], titles: [], message: r.message || '没拉到' })
+      }
+      useEffect(() => { pull() }, [])
+      const groups = (draft.allow.groups || []).map(String)
+      const nameOf = (gid) => { const g = ((info && info.groups) || []).find((x) => x.groupId === gid); return g && g.name && g.name !== gid ? g.name : '' }
+      const on = (gid) => tf.groups.includes(gid)
+      const hit = info && info.titles ? info.titles.find((t) => t.title === tf.title.trim()) : null
+      return h(Card, { title: '按头衔不理（防机器人互聊）', right: h(Switch, { on: tf.enabled, onChange: (v) => set({ enabled: v }) }),
+        desc: '同一个群里有别的机器人时，给它们挂上同一个专属头衔（比如「大肥鱼」），她在勾选的群里就不理它们：说话、@ 她、戳她都不回，免得机器人之间互相接话停不下来。只认专属头衔，昵称和群名片不算；私聊不受影响。' },
+        h(Row, { label: '要不理的头衔', hint: '一字不差才算。下面列出白名单群里现有的头衔，点一个就填进来。' },
+          h('div', { style: { width: '100%' } },
+            h('div', { className: 'ab-flex' },
+              h('input', { className: 'ab-input', value: tf.title, maxLength: 30, placeholder: '大肥鱼', onChange: (e) => set({ title: e.target.value }) }),
+              h(Btn, { small: true, onClick: pull, disabled: busy }, busy ? '拉取中…' : '从群里拉取头衔')),
+            info && info.titles ? h('div', { className: 'ab-psec-add', style: { marginTop: 10 } },
+              info.titles.length
+                ? info.titles.slice(0, 30).map((t) => h('button', { key: t.title, type: 'button', className: cx('ab-chip', t.title === tf.title.trim() && 'on'), title: t.members.map((m) => m.name).join('、'), onClick: () => set({ title: t.title }) }, t.title, h('span', { className: 'n' }, t.count + ' 人')))
+                : h('span', { className: 'ab-muted ab-small' }, groups.length ? '这些群里还没有人挂专属头衔。' : '群白名单是空的，先在「权限」页加群。')) : null,
+            hit ? h('div', { className: 'ab-tf-who' }, '挂着「' + hit.title + '」的：' + hit.members.map((m) => m.name + '（' + m.id + '）').join('、') + (hit.count > hit.members.length ? ' 等 ' + hit.count + ' 人' : '')) : null,
+            info && info.message ? h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, info.message) : null)),
+        h(Row, { label: '在哪些群生效', hint: '没勾的群照常回。只列白名单里的群。' },
+          groups.length
+            ? h('div', { className: 'ab-flex' }, groups.map((gid) => h('button', { key: gid, type: 'button', className: cx('ab-chip', on(gid) && 'on'), onClick: () => set({ groups: on(gid) ? tf.groups.filter((x) => x !== gid) : [...tf.groups, gid] }) },
+              (on(gid) ? '✓ ' : '') + (nameOf(gid) || '群'), h('span', { className: 'n' }, gid))))
+            : h('span', { className: 'ab-muted ab-small' }, '群白名单是空的。')),
+        h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '查不到某人的头衔时（网关抽风），那条先不回，过几秒再查；成员改了头衔一分钟内生效。'))
+    }
+
     function Group({ draft, setDraft }) {
       const f = useField(draft, setDraft)
       const overrides = draft.group.overrides || {}
@@ -1112,6 +1158,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Row, { label: '群里停顿多久算一段', hint: '群里大家你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着' }, f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')),
           h(Row, { label: '群里最多等多久' }, f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')),
         ),
+        h(TitleFilter, { draft, setDraft }),
         h(Card, { title: '发文件', right: f.sw('files.enabled'), desc: '打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。她只能发 QQ 工作区和下面目录里的文件；单个文件有大小上限；发过什么会记在日志里。' },
           h(Row, { label: '单个文件最大' }, f.num('files.maxMB', { min: 1, max: 2048 }), h('span', { className: 'ab-muted' }, ' MB')),
           h(Row, { label: '额外允许的目录', hint: '一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的' }, f.list('files.dirs', { placeholder: 'D:\\Aurabot\\要发的文件' })),
@@ -2586,7 +2633,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, douyin: Douyin, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
