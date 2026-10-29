@@ -1,7 +1,7 @@
 // 端到端：假 DSH 宿主 + 假 QQ 网关，跑通 Aurabot 整条链路。
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOneBot } from './helpers/mock-onebot.js'
@@ -30,6 +30,7 @@ function fakePng(w, h, salt = 0) {
 
 // 「模型」脚本
 async function brain({ preset, text, images, callTool }) {
+  if (text.includes('热重载探针')) { const r = await callTool('probe73', {}); return r ? '探针:' + r.message : '没有探针工具' }
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
   if (/^【私聊/.test(text) && text.includes('表情改名测试')) { const m = text.match(/把「(.+?)」/); const r = await callTool('qq_edit_sticker', { sticker: m[1], new_name: '改过的名字', tags: ['开心'] }); return r.message }
@@ -947,4 +948,32 @@ test('#58 在 DSH 会话窗口里直接打字：这一轮按主人说的算（�
   api.hub.onSessionEvent({ id: sid }, { type: 'turn/end', data: { turn: 999999, reason: { kind: 'completed' } } })
   api.hub.onSessionEvent({ id: sid }, { type: 'user/message', data: { role: 'user', source: { kind: 'aurabot' }, content: [{ type: 'text', text: 'x' }] } })
   assert.equal(api.hub.turnSendersAllOwner(sid), false, 'QQ 转进来的不标成主人直输')
+})
+
+test('模块热重载后：已有会话下一轮会重挂新实例的工具（issue #73）', async () => {
+  const modsDir = join(dataDir, 'modules', 'probe73')
+  mkdirSync(modsDir, { recursive: true })
+  const writeProbe = (v) => writeFileSync(join(modsDir, 'index.mjs'), `export default {
+  id: 'probe73', name: '探针', api: 1,
+  setup(api) {
+    api.tool(({ chat, level }) => level === 'chat' ? [] : [api.defineTool({
+      name: 'probe73', description: '探针', properties: {},
+      execute: async () => ({ ok: true, message: ${JSON.stringify(v)} }),
+    })])
+  },
+}`)
+  const ask = async () => {
+    const n = fake.turns.length
+    mock.push(priv(OWNER, text('热重载探针')))
+    await until(() => fake.turns.length > n)
+    return String(fake.turns.at(-1).reply || '')
+  }
+  writeProbe('v1')
+  // 等模块被 watcher 加载（每 3 秒扫一次），最多 20 秒
+  const first = await until(async () => { const r = await ask(); return r.includes('v1') ? r : null }, 20000)
+  assert.match(first, /v1/)
+  writeProbe('v2') // 改文件触发热重载
+  const second = await until(async () => { const r = await ask(); return r.includes('v2') ? r : null }, 20000)
+  assert.match(second, /v2/, '热重载后会话应重挂新实例的工具，而不是继续用旧闭包')
+  rmSync(modsDir, { recursive: true, force: true })
 })
