@@ -206,8 +206,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-ibtn:disabled{opacity:.3;cursor:default;background:transparent}
 .ab-aibtn{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;margin-left:2px;border:0;border-radius:7px;background:var(--ab-foam);color:var(--ab-deep);font:inherit;font-size:12px;cursor:pointer;transition:background .12s}
 .ab-aibtn:hover,.ab-aibtn.on{background:var(--ab-foam-2)}
-.ab-psec .ab-aibtn{background:color-mix(in srgb,var(--c) 9%,transparent);color:color-mix(in srgb,var(--c) 62%,var(--ab-text))}
-.ab-psec .ab-aibtn:hover{background:color-mix(in srgb,var(--c) 16%,transparent)}
+.ab-psec .ab-aibtn{background:transparent;color:var(--ab-sub);opacity:.5;transition:opacity .12s,background .12s,color .12s}
+.ab-psec:hover .ab-aibtn,.ab-psec:focus-within .ab-aibtn{opacity:1}
+.ab-psec .ab-aibtn:hover,.ab-psec .ab-aibtn:disabled{background:color-mix(in srgb,var(--c) 10%,transparent);color:color-mix(in srgb,var(--c) 65%,var(--ab-text));opacity:1}
 .ab-aibtn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .ab-psec textarea{display:block;width:100%;box-sizing:border-box;border:0;background:transparent;resize:vertical;outline:none;padding:6px 16px 12px 30px;font:inherit;font-size:13px;line-height:1.75;color:var(--ab-text)}
 .ab-psec textarea::placeholder{color:var(--ab-dim)}
