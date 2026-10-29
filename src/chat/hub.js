@@ -71,6 +71,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
   const recentMedia = createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
+  const slowNoticeSent = new Set() // sessionKey → 这一轮已经发过「正在做」提示（慢工具，issue #74）
   const faces = createFaces({ onebot, log }) // QQ 系统表情：<face:名字> ↔ 编号
   const titleFilter = createTitleFilter({ getConfig, onebot, log }) // 勾选的群里，头衔是某个词的成员（别的机器人）不理
   const groupMembers = new Map() // groupId → { at, list }  群成员（真 @ 时按名字找人，缓存 10 分钟）
@@ -302,7 +303,33 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     {
       for (const tool of tools) {
         try {
-          offs.push(agent.ctx.tools.register(tool))
+          // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
+          // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
+          let reg = tool
+          if (tool.slow) {
+            const { slow, ...base } = tool
+            const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+            reg = {
+              ...base,
+              async execute(args, exec) {
+                let fired = false
+                const timer = setTimeout(() => {
+                  if (fired) return
+                  fired = true
+                  if (slowNoticeSent.has(sid)) return
+                  slowNoticeSent.add(sid)
+                  sendText(chat.chatId, notice, undefined, [], undefined).catch((error) => log.debug('慢工具提示没发出去：', error.message))
+                }, 1500)
+                timer.unref?.()
+                try {
+                  return await tool.execute(args, exec)
+                } finally {
+                  clearTimeout(timer)
+                }
+              },
+            }
+          }
+          offs.push(agent.ctx.tools.register(reg))
         } catch (error) {
           log.warn(`工具 ${tool.name} 挂不上：`, error.message)
         }
@@ -659,6 +686,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       return
     }
     if (event.type === 'turn/end') {
+      slowNoticeSent.delete(key)
       running.delete(chatId)
       stopTyping(key)
       const d = event.data || {}

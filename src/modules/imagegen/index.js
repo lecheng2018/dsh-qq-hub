@@ -45,6 +45,7 @@ export default {
         shape: { type: 'string', enum: ['square', 'portrait', 'landscape', 'wide'], description: 'square 方图 1:1；portrait 竖图 2:3；landscape 横图 3:2；wide 宽幅 16:9。可不填' },
       },
       required: ['prompt'],
+      slow: '好，我这就去画，画好了发你。',
       // 能看图时把原图放进工具结果（image 块），她当轮就能看见自己画了什么
       render: drawResultBlocks,
       execute: async ({ prompt, shape }) => {
