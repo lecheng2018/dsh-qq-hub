@@ -78,7 +78,12 @@ export default {
           if (!c.bili.enabled) return { ok: false, message: 'B 站没打开' }
           const p = profilePermits(c, 'biliAvatar', chat, hub.turnSendersAllOwner(sessionId))
           if (!p.ok) return p
-          const src = avatarSource(image, lastImage.get(hub.chatOfSession?.(sessionId) || chat.chatId))
+          const raw = String(image || '').trim()
+          const useLast = !raw || /^(last|刚才|上一张|最近)/i.test(raw)
+          const previous = lastImage.get(hub.chatOfSession?.(sessionId) || chat.chatId)
+          if (useLast && !previous) return { ok: false, message: '这个聊天里还没人发过可用的图片网址' }
+          // QQ 头像模块现在只校验网址；B站的 last 在这里解析，避免与画作编号混用。
+          const src = avatarSource(useLast ? previous : raw)
           if (!src.ok) return src
           return bili.setAvatar(src.file)
         },
