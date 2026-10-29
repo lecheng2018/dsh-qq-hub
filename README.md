@@ -104,6 +104,11 @@ npm test
 
 `%USERPROFILE%\.dsh\plugins-data\aurabot\`：配置、人格、表情库、日记、记忆、日志，还有自己写的模块（`modules/`）和本地接口脚本（`local/`）。重装、升级插件都不会丢。
 
+## 联系我们
+
+- **协作 / 交流 QQ 群**：**554850395**（项目维护和想法讨论都在这里；装不上、报错了也可以进来问，尽量先带上面板「日志」里的报错和版本号）
+- **GitHub**：[issue](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/issues) 报 bug / 提需求，[PR](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/pulls) 提代码；提之前先翻一下有没有重复。贡献者名单见版本说明和 PR 记录。
+
 ## 致谢
 
 参考了 [Yuuyuko-uu](https://github.com/Yuuyuko-uu) 的 dsh-qq-bridge、dsh-speak-up、dsh-feiyu-mood、dsh-fish-memory 等插件（MIT）在 DSH 插件机制上踩过的坑，具体是：注销器是函数而不是 `.off()`；`followup` 必须 await；心情别每轮都提。没有复制它们的代码。
