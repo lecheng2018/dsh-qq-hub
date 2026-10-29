@@ -93,6 +93,31 @@ test('目录不存在时返回空列表而不是报错，也不顺手建目录',
   process.env.AURABOT_DATA_DIR = dataDir
 })
 
+test('画作引用：记住后能按编号 / 别名 / 文件名解析；不认识的编号不行', async () => {
+  const { rememberPainting, resolvePainting, recentPaintings } = await import('../src/features/paintings.js')
+  const { basename } = await import('node:path')
+  const root = mkdtempSync(join(tmpdir(), 'aurabot-paint-ref-'))
+  process.env.AURABOT_DATA_DIR = root
+  mkdirSync(join(root, 'imagegen'), { recursive: true })
+  try {
+    const a = savePainting(PNG, '第一张', { now: new Date(2026, 9, 28, 1, 0, 0) })
+    assert.equal(rememberPainting('private:1', a), 1)
+    const b = savePainting(PNG, '第二张', { now: new Date(2026, 9, 28, 2, 0, 0) })
+    assert.equal(rememberPainting('private:1', b), 1, '#1 永远是最新那张')
+    assert.equal(resolvePainting('private:1', '#1').file, basename(b))
+    assert.equal(resolvePainting('private:1', '1').file, basename(b))
+    assert.equal(resolvePainting('private:1', '最新').file, basename(b))
+    assert.equal(resolvePainting('private:1', '#2').file, basename(a))
+    assert.equal(resolvePainting('private:1', basename(a)).file, basename(a))
+    assert.equal(resolvePainting('private:1', '#999'), null, '不认识的编号不给')
+    assert.equal(resolvePainting('private:2', '#1'), null, '别的聊天里没有这个编号')
+    assert.equal(resolvePainting('private:1', '../x.png'), null, '非法文件名不给')
+    assert.deepEqual(recentPaintings('private:1', 2).map((x) => x.prompt), ['第二张', '第一张'])
+  } finally {
+    process.env.AURABOT_DATA_DIR = dataDir
+  }
+})
+
 test('面板：图库要拿到 toast，删完才会自动刷新', async () => {
   const { readFileSync } = await import('node:fs')
   const src = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')

@@ -38,6 +38,9 @@ async function brain({ preset, text, images, callTool }) {
   if (text.includes('查看QQ资料测试')) { const r = await callTool('qq_get_profile', {}); return r?.ok ? '资料查到了' : r ? r.message : '没这个工具' }
   if (text.includes('改昵称测试')) { const r = await callTool('qq_set_nickname', { name: '小鲸鱼' }); return r ? r.message : '没这个工具' }
   if (text.includes('改签名测试')) { const r = await callTool('qq_set_signature', { text: '今天也要开心' }); return r ? r.message : '没这个工具' }
+  if (text.includes('刚才那张换头像测试')) { const r = await callTool('qq_set_avatar', { image: 'last' }); return r ? r.message : '没这个工具' }
+  if (text.includes('画作换头像测试')) { const r = await callTool('qq_set_avatar', { image: '#1' }); return r ? r.message : '没这个工具' }
+  if (text.includes('存画作表情测试')) { const r = await callTool('qq_save_sticker', { painting: '#1', name: '自画像' }); return r ? r.message : '没这个工具' }
   if (text.includes('换头像测试')) { const r = await callTool('qq_set_avatar', { image: 'https://example.com/a.png' }); return r ? r.message : '没这个工具' }
   if (text.includes('本地头像测试')) { const r = await callTool('qq_set_avatar', { image: 'C:/Users/a/secret.png' }); return r ? r.message : '没这个工具' }
   if (text.includes('慢慢想') && !text.includes('补充')) { await sleep(2500); return '想好了' }
@@ -604,9 +607,10 @@ test('生图：主人让她画图，调生图服务并把图发出去', async ()
   assert.equal(st.config.imageGen.apiKeySet, true)
 })
 
-test('生图工具结果：能看图时带 image 块，纯文本模型只给文字', async () => {
+test('生图工具结果：能看图时带 image 块，纯文本模型只给文字（#37）', async () => {
   const http = await import('node:http')
-  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  // 用带尺寸的 PNG：这张画之后还会被「存成表情」，表情库会校验宽高
+  const png = fakePng(240, 240, 7)
   const srv = http.createServer(async (req, res) => {
     for await (const _ of req) { /* 读完请求体 */ }
     res.setHeader('content-type', 'application/json')
@@ -616,18 +620,17 @@ test('生图工具结果：能看图时带 image 块，纯文本模型只给文�
   const baseUrl = `http://127.0.0.1:${srv.address().port}/v1`
   // 找准「这次画图」那一轮：别用 sentTo 计数判断，前一个用例的回复可能还在异步发送
   const drawTurn = () => [...fake.turns].reverse().find((t) => (t.toolCalls || []).some((c) => c.name === 'qq_draw_image'))
-  const draw = async (vision) => {
+  const draw = async (vision, seeOwn = true) => {
     const before = drawTurn()
     await fake.call('/save', {
       model: { vision },
-      imageGen: { enabled: true, baseUrl, model: 'test-model', apiKey: 'img-key-123456' },
+      imageGen: { enabled: true, baseUrl, model: 'test-model', apiKey: 'img-key-123456', seeOwn },
     })
     mock.push(priv(OWNER, text('画一只鲸鱼')))
     await until(() => drawTurn() && drawTurn() !== before, 15000)
     return drawTurn().toolCalls.find((c) => c.name === 'qq_draw_image').result
   }
 
-  // 面板里声明「支持」：工具结果里要有原图（base64 原样回来）
   // 面板里声明「支持」：工具结果里要有图，而且是登记过的附件块
   // （直接塞 base64 会让下一轮请求整轮失败，见 imageToolBlock 的注释）
   const withImg = await draw('on')
@@ -635,6 +638,7 @@ test('生图工具结果：能看图时带 image 块，纯文本模型只给文�
   assert.equal(withImg.image.type, 'image')
   assert.ok(withImg.image.attachment?.attachmentId, '要登记成附件块')
   assert.equal(withImg.image.data, undefined, '不要裸 base64')
+  assert.match(withImg.message || '', /画作编号 #1/, '画完给一个画作编号，换头像 / 收表情时用')
   // #59：能看图的模型要拿到本地保存路径，方便她收录表情包 / 存素材
   assert.ok(withImg.path && /\.png$/.test(withImg.path), '能看图时要返回本地路径：' + JSON.stringify(withImg.path))
   assert.match(withImg.message || '', /已保存到本机：/, '路径写进工具结果文字里')
@@ -643,15 +647,60 @@ test('生图工具结果：能看图时带 image 块，纯文本模型只给文�
   assert.equal(withImg.prompt, '一只蓝色小鲸鱼', '带上原始提示词')
   assert.ok(Number(withImg.bytes) > 0 && Number(withImg.elapsedMs) >= 0, '带字节数和耗时')
 
+  // 「让她画完自己看一眼」关掉：不传图、不给路径，但编号照给（还能换头像 / 存表情）
+  const noLook = await draw('on', false)
+  assert.equal(noLook.image, undefined, '关掉开关就不该塞图')
+  assert.match(noLook.message || '', /没把图给你看/)
+  assert.match(noLook.message || '', /画作编号 #1/)
+  assert.doesNotMatch(noLook.message || '', /已保存到本机/, '开关关着时也不给路径')
+
   // 声明「不支持」：纯文本模型，绝不能塞 image 块
   const noImg = await draw('off')
   assert.equal(noImg.image, undefined, '纯文本模型不应该拿到 image 块')
   assert.match(noImg.message || '', /没能把图片交给你看/, '看不了图时要如实说，别让她编画面')
-  assert.doesNotMatch(noImg.message || '', /存在\s*[A-Za-z]:[\\\\/]|\.png|已保存到本机/, '看不了图的模型不给文件路径')
+  assert.doesNotMatch(noImg.message || '', /存在\s*[A-Za-z]:[\\/]|\.png|已保存到本机/, '看不了图的模型不给文件路径')
 
   // 恢复默认
-  await fake.call('/save', { model: { vision: 'auto' } })
+  await fake.call('/save', { model: { vision: 'auto' }, imageGen: { seeOwn: true } })
   srv.close()
+})
+
+test('画作编号：换头像 / 存表情都能用，而且不靠文件路径', async () => {
+  // 上一条用例在这个聊天里画过图，画作编号已经登记
+  mock.push(priv(OWNER, text('画作换头像测试')))
+  const a = await lastCall('画作换头像测试')
+  assert.equal(a.result.ok, true, JSON.stringify(a.result))
+  const call = mock.sent('set_qq_avatar').at(-1)
+  const file = String(call.params.file)
+  assert.match(file, /^base64:\/\/|avatar-/i, '用画作换头像：交的是图片数据，不是模型给的路径')
+
+  const before = (await fake.call('/stickers')).json().items.length
+  mock.push(priv(OWNER, text('存画作表情测试')))
+  const b = await lastCall('存画作表情测试')
+  assert.equal(b.result.ok, true, JSON.stringify(b.result))
+  const items = (await fake.call('/stickers')).json().items
+  assert.equal(items.length, before + 1, '自己画的图能收进表情库')
+  assert.ok(items.some((i) => i.name === '自画像'), '名字用她给的那个')
+})
+
+test('换头像：主人发来的图也能用，不能被「她的画作」抢走', async () => {
+  // 主人先发一张图（和画作不同的字节，能区分是哪张）
+  const png = fakePng(300, 300, 11)
+  mock.push(priv(OWNER, [{ type: 'image', data: { sub_type: 0, file: 'base64://' + png.toString('base64') } }]))
+  await until(() => fake.turns.at(-1)?.images === 1)
+
+  const n = mock.sent('set_qq_avatar').length
+  mock.push(priv(OWNER, text('刚才那张换头像测试')))
+  const c = await lastCall('刚才那张换头像测试')
+  assert.equal(c.result.ok, true, JSON.stringify(c.result))
+  assert.equal(mock.sent('set_qq_avatar').length, n + 1, '真的调了换头像')
+  const call = mock.sent('set_qq_avatar').at(-1)
+  const file = String(call.params.file)
+  assert.match(file, /^base64:\/\/|avatar-/i, '应该交图片数据，而不是链接')
+  const sent = file.startsWith('base64://')
+    ? Buffer.from(file.slice('base64://'.length), 'base64')
+    : readFileSync(file)
+  assert.deepEqual(sent, png, '换上去的是主人发的那张图，不是她自己的画')
 })
 
 test('每日整理：往日的临时流水整理后清空，今天的保留；空间日记进了记忆库', async () => {

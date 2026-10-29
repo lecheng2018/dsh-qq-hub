@@ -179,12 +179,14 @@ export function createImageGen({ getConfig, log, local }) {
 
 /**
  * qq_draw_image 工具结果里那句话。
- * 看不了图时要如实说，否则她会照着提示词编画面细节 —— 主人以为她看见了，其实全是猜的。
+ * 看不了图、或者「让她画完自己看一眼」关着时，都要如实说，否则她会照着提示词编画面细节。
  * 这里只回一句话，不带文件路径；能不能把「已保存到本机：路径」告诉她，由调用方按
- * 「当前模型能不能看图」决定（#59：能看图的模型要路径来收录表情包/存素材）。
+ * 「这张图有没有真的交出去」决定（能看图 + 开关开着 + 附件登记成功才给）。
  */
-export function drawToolMessage ({ visual = false } = {}) {
-  return visual ? '画好发出去了' : '画好发出去了，但这次没能把图片交给你看；别描述画面里有什么'
+export function drawToolMessage ({ visual = false, seeOwn = true } = {}) {
+  if (!visual) return '画好发出去了，但这次没能把图片交给你看；别描述画面里有什么'
+  if (!seeOwn) return '画好发出去了。这次没把图给你看，别描述画面里有什么'
+  return '画好发出去了'
 }
 
 /**
