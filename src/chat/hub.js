@@ -60,7 +60,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const map = () => readJson(mapFile(), () => ({ chats: {} }))
   const saveMap = (m) => writeJson(mapFile(), m)
 
-  const mounted = new WeakMap() // agent → { off: fn[] , chatId }
+  const mounted = new Map() // sessionKey → { agent, offs, chatId, toolsKey }  按会话记，agent 对象换了也能清掉旧工具（#90）
+  const toolDisposers = new Map() // `${sessionKey}|${工具名}` → disposer，防注册表里残留同名工具时挂不上（#90）
   const sessionToChat = new Map() // sessionKey → chatId
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
   const groupBuf = new Map() // groupId → [{t, uid, nick, text, at}]
@@ -291,9 +292,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let gen = 0
     try { gen = typeof toolsGeneration === 'function' ? Number(toolsGeneration()) || 0 : 0 } catch (error) { gen = 0 }
     const toolsKey = tools.map((t) => t.name).sort().join(',') + '|' + denied.join(',') + '|gen:' + gen
-    const prev = mounted.get(agent)
-    // 工具清单变了（比如面板里开了生图）就整套重挂；没变就别动（改工具会让前缀缓存失效）
-    if (prev && prev.chatId === chat.chatId && prev.toolsKey === toolsKey) return
+    const prev = mounted.get(sid)
+    // 工具清单变了（比如面板里开了生图）就整套重挂；同一个 agent 且没变就别动（改工具会让前缀缓存失效）
+    if (prev && prev.agent === agent && prev.chatId === chat.chatId && prev.toolsKey === toolsKey) return
     if (prev) for (const off of prev.offs) { try { if (typeof off === 'function') off() } catch (error) {} }
     const offs = []
     // 联动工具是给 DSH 其他会话用的，她自己的 QQ 会话里不该有（陌生人的会话更不行）
@@ -329,7 +330,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
               },
             }
           }
-          offs.push(agent.ctx.tools.register(reg))
+          // 注册表里如果残留同名工具（旧 agent 作用域/旧版泄漏），先把我们记着的旧 disposer 清掉再注册
+          const dkey = sid + '|' + tool.name
+          const stale = toolDisposers.get(dkey)
+          if (stale) { try { stale() } catch (error) {} toolDisposers.delete(dkey) }
+          const off = agent.ctx.tools.register(reg)
+          toolDisposers.set(dkey, off)
+          offs.push(() => { toolDisposers.delete(dkey); try { off() } catch (error) {} })
         } catch (error) {
           log.warn(`工具 ${tool.name} 挂不上：`, error.message)
         }
@@ -353,7 +360,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     } catch (error) {
       log.debug('挂上下文失败：', error.message)
     }
-    mounted.set(agent, { chatId: chat.chatId, offs, toolsKey })
+    mounted.set(sid, { agent, chatId: chat.chatId, offs, toolsKey })
   }
 
   // ---------- 发到 QQ ----------
@@ -697,7 +704,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const autoReply = st.autoReply
       st.autoReply = null
       st.text = ''
-      st.senders = new Set()
+      // 上一轮还在跑时新消息已经排队给「下一轮」：这一轮 turn/end 不能把下一轮的说话人清掉（#90）
+      st.senders = st.pendingSenders || new Set()
+      st.pendingSenders = new Set()
       st.directOwner = false
       st.system = null
       st.wantVoice = false
@@ -1225,8 +1234,17 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const lines = earlier.map((x) => `${new Date(x.at).toTimeString().slice(0, 5)} 你：${x.text}`)
       content = [{ type: 'text', text: `【你之前在这个聊天里主动说过（是在别处安排下发的，这里的人都看到了）】\n${lines.join('\n')}\n` }, ...content]
     }
-    if (senderId) st.senders.add(String(senderId))
-    for (const s of opts.extraSenders || []) st.senders.add(String(s))
+    // 这一轮还在跑、这句是排队给下一轮的：额外记到 pendingSenders，等上一轮 turn/end 时接过去（#90）
+    const queuedNextTurn = !opts.steer && (running.has(chat.chatId) || busy.has(chat.chatId))
+    const addSender = (u) => {
+      st.senders.add(String(u))
+      if (queuedNextTurn) {
+        if (!st.pendingSenders) st.pendingSenders = new Set()
+        st.pendingSenders.add(String(u))
+      }
+    }
+    if (senderId) addSender(senderId)
+    for (const s of opts.extraSenders || []) addSender(s)
     // 上一句也留着：这一句太短（「嗯嗯」「然后呢」）时一起拿去想起相关的事
     if (st.lastText) st.prevText = st.lastText
     st.lastText = String(opts.queryText ?? content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')).slice(-600)
@@ -1277,21 +1295,37 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   /** 这一轮里说话的人是不是全是主人（群管等敏感工具用）。 */
   /** 这一轮里主人说过话（群里常有别人插话，不要求每条都是主人）。 */
+  // 主人私聊里只可能是主人说话：就算这一轮的记录丢了（工具是旧闭包、排队轮次被上一轮 turn/end 清掉等，见 #90），
+  // 「仅主人」也应当放行；群聊 / 别人私聊不放宽。
+  function ownerPrivateChat(sessionId) {
+    try { return chatOfSession(sessionId) === `private:${getConfig().ownerQQ}` } catch (error) { return false }
+  }
+
   function turnHasOwner(sessionId) {
     const st = turnState.get(sessionKey(sessionId))
     if (st && st.directOwner) return true // 主人在 DSH 面板里直接打字
-    return Boolean(st && [...st.senders].some((u) => isOwner(getConfig(), u)))
+    if (st && [...st.senders].some((u) => isOwner(getConfig(), u))) return true
+    return ownerPrivateChat(sessionId)
   }
 
   function turnSendersAllOwner(sessionId) {
     const st = turnState.get(sessionKey(sessionId))
     if (st && st.directOwner) return true // 主人在 DSH 面板里直接打字
-    if (!st || !st.senders.size) return false
+    if (!st || !st.senders.size) return ownerPrivateChat(sessionId)
     return [...st.senders].every((u) => isOwner(getConfig(), u))
   }
 
   function chatOfSession(sessionId) {
-    return sessionToChat.get(sessionKey(sessionId)) || ''
+    const key = sessionKey(sessionId)
+    const live = sessionToChat.get(key)
+    if (live) return live
+    // 重启后会话还没被第一条消息唤醒时，内存映射是空的：退回持久化的 聊天→会话 映射（#90 兜底要用）
+    try {
+      for (const [chatId, entry] of Object.entries(map().chats || {})) {
+        if (entry && entry.sessionId && sessionKey(entry.sessionId) === key) return chatId
+      }
+    } catch (error) {}
+    return ''
   }
 
   /** 只让一个聊天重新开始：归档它的会话，下一条消息开新会话。 */
