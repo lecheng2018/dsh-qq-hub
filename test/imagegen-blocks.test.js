@@ -25,11 +25,15 @@ test('drawResultBlocks：有图时文字 + image 块，没图时只有文字', (
   assert.deepEqual(bad, [{ type: 'text', text: '✗ 生图服务没配' }])
 })
 
-test('drawToolMessage：看不了图时如实说；这个函数本身不带路径（路径由模块按能否看图决定）', () => {
-  assert.equal(drawToolMessage({ visual: true }), '画好发出去了')
+test('drawToolMessage：给看了 / 开关关着 / 看不了图，这三种说清楚；不带路径', () => {
+  assert.equal(drawToolMessage({ visual: true, seeOwn: true }), '画好发出去了')
+  const off = drawToolMessage({ visual: true, seeOwn: false })
+  assert.match(off, /没把图给你看/, '「让她画完自己看一眼」关着时如实说')
   const blind = drawToolMessage({ visual: false })
   assert.match(blind, /没能把图片交给你看/)
-  assert.doesNotMatch(blind, /存在\s*[A-Za-z]:[\\\\/]|\.png|读它/, '不能给文件路径')
+  for (const msg of [off, blind]) {
+    assert.doesNotMatch(msg, /存在\s*[A-Za-z]:[\\\\/]|\.png|读它/, '不能给文件路径')
+  }
 })
 
 test('imageToolBlock：小图登记成附件块；没附件服务 / 登记失败 → null', async () => {
