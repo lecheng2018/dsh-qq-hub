@@ -1168,9 +1168,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   async function pushToSession(chat, content, senderId, opts = {}) {
+    const { agent, sessionId } = await agentFor(chat)
+    const key = sessionKey(sessionId)
+    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+    // 上一句也带上：相关记忆检索遇到「嗯嗯」这种短句时，用上一句一起找（#79 之后由模块在提示词里加）
+    const prevText = st.lastText || st.prevText || ''
     if (hooks?.prompt) {
       try {
-        const next = await hooks.prompt(content, { chat, senderId, ...opts })
+        const next = await hooks.prompt(content, { chat, sessionId, senderId, prevText, ...opts })
         if (next === null) {
           log.info(`${chat.chatId}：扩展模块决定这次不交给她`)
           if (!opts.steer) release(chat.chatId) // 插话被拦下时，当前这一轮还在跑，不能放开
@@ -1187,9 +1192,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const lines = earlier.map((x) => `${new Date(x.at).toTimeString().slice(0, 5)} 你：${x.text}`)
       content = [{ type: 'text', text: `【你之前在这个聊天里主动说过（是在别处安排下发的，这里的人都看到了）】\n${lines.join('\n')}\n` }, ...content]
     }
-    const { agent, sessionId } = await agentFor(chat)
-    const key = sessionKey(sessionId)
-    const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
     if (senderId) st.senders.add(String(senderId))
     for (const s of opts.extraSenders || []) st.senders.add(String(s))
     // 上一句也留着：这一句太短（「嗯嗯」「然后呢」）时一起拿去想起相关的事
