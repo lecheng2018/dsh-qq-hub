@@ -13,11 +13,27 @@ export default {
   version: '1.0.0',
   description: '画一张图发到聊天里（qq_draw_image）',
   tab: 'imagegen',
-  files: ['features/imagegen.js', 'features/image-shape.js', 'features/paintings.js'],
+  files: ['features/imagegen.js', 'features/image-shape.js', 'features/paintings.js', 'features/codex-auth.js', 'features/codex-image.js'],
   setup(api) {
     const { hub, local } = api.core
     const memory = api.lazy('memory')
     const gen = createImageGen({ getConfig: api.config, log: api.log, local })
+    const auth = gen.codexAuth
+    api.onDispose?.(() => gen.dispose())
+    const accountAction = (fn) => async (req) => {
+      if (req?.method !== 'POST' || !/^application\/json(?:\s*;|$)/i.test(String(req.headers?.['content-type'] || ''))) return { ok: false, message: '账号操作需要 POST JSON 请求' }
+      return fn(req)
+    }
+    api.route('/image/codex/status', async () => ({ ok: true, ...auth.status(), login: auth.loginStatus() }))
+    api.route('/image/codex/login', accountAction(async () => ({ ok: true, ...(await auth.startLogin()), ...auth.loginStatus() })))
+    api.route('/image/codex/login/status', async () => ({ ok: true, ...auth.loginStatus(), ...auth.status() }))
+    api.route('/image/codex/complete', accountAction(async (req) => {
+      const body = await api.core.http.body(req)
+      const credential = await auth.completeLogin(String(body?.input || ''))
+      return { ok: true, email: credential.email || '', accountId: credential.accountId || '' }
+    }))
+    api.route('/image/codex/cancel', accountAction(async () => ({ ok: true, ...auth.cancelLogin('已取消') })))
+    api.route('/image/codex/logout', accountAction(async () => ({ ok: true, ...auth.logout() })))
 
     // 她的画作：面板底下的图库（直接读存图目录，可以单张删、开文件夹）
     api.route('/image/gallery', async (req) => {
