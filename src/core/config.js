@@ -111,6 +111,11 @@ export const DEFAULTS = {
     maxRepliesPerDay: 6,
     shareToOwner: true, // 看到好玩的私聊分享给主人
     like: false, // 顺手点赞
+    vision: false, // 可选：ffmpeg 抽帧交给视觉模型
+    visionFrames: 6,
+    ffmpegPath: '', // 留空从 PATH 查找
+    shotChance: 0.35, // 刷完发截图给主人；0 = 不自动发
+    shotLibrary: 300,
   },
   // 刷抖音：专用浏览器（独立登录资料，不碰你平时的浏览器），经 CDP 控制。浏览 / 点赞 / 评论 / 分享各项权限在 profilePerms.douyin*。
   douyin: {
@@ -277,7 +282,11 @@ export function normalize(raw) {
   for (const k of ['tts', 'image', 'song', 'asr']) c.local[k] = bool(c.local[k], false)
   const b = c.bili
   Object.assign(b, splitBiliCookie(b))
-  for (const k of ['enabled', 'autoBrowse', 'comment', 'reply', 'shareToOwner', 'like']) b[k] = bool(b[k], DEFAULTS.bili[k])
+  for (const k of ['enabled', 'autoBrowse', 'comment', 'reply', 'shareToOwner', 'like', 'vision']) b[k] = bool(b[k], DEFAULTS.bili[k])
+  b.visionFrames = Math.round(num(b.visionFrames, 6, 2, 12))
+  b.ffmpegPath = String(b.ffmpegPath || '').trim()
+  b.shotChance = num(b.shotChance, 0.35, 0, 1)
+  b.shotLibrary = Math.round(num(b.shotLibrary, 300, 20, 2000))
   b.intervalHours = num(b.intervalHours, 4, 1, 48)
   b.maxRunsPerDay = num(b.maxRunsPerDay, 3, 0, 24)
   b.perRun = num(b.perRun, 3, 1, 8)
