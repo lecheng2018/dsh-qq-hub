@@ -1,9 +1,11 @@
-// 生图：两种接法
+// 生图：OpenAI 兼容、自定义接口，以及实验性 Codex 订阅接法。
 //   ① openai —— 兼容 OpenAI /v1/images/generations 的服务（硅基流动、通义万相兼容层、本地 ComfyUI / SD WebUI 的 OpenAI 代理……）
 //   ② custom —— 自己填接口：GET / POST、URL 模板（{prompt} 占位）、自定义参数名、从返回 JSON 里按路径取图
 // 地址和密钥由主人在面板里填；生成结果统一成 Buffer 交给 QQ 发出。
 
 import { fetchImage } from '../core/net.js'
+import { createCodexAuth } from './codex-auth.js'
+import { createCodexImage } from './codex-image.js'
 import { mimeOf } from '../chat/inbound.js'
 import { imageToolBlock } from '../core/img.js'
 export { imageToolBlock }
@@ -97,7 +99,10 @@ async function valueToBuffer (v) {
   throw new Error('生图接口返回的既不是图片地址也不是图片')
 }
 
-export function createImageGen({ getConfig, log, local }) {
+export function createImageGen({ getConfig, log, local, fetchImpl, codexAuth }) {
+  const fetch = fetchImpl || ((...args) => globalThis.fetch(...args))
+  const auth = codexAuth || createCodexAuth({ log, fetchImpl: fetch })
+  const viaCodex = createCodexImage({ auth, fetchImpl: fetch, log })
   async function generate(prompt) {
     const c = getConfig().imageGen
     // 本地接口接管：用用户自己电脑上的画图服务
@@ -111,7 +116,7 @@ export function createImageGen({ getConfig, log, local }) {
     if (!c.enabled) throw new Error('生图还没开启')
     const full = [c.stylePrompt, prompt].filter(Boolean).join('，')
     const t = Date.now()
-    const buf = c.provider === 'custom' ? await viaCustom(c, full) : await viaOpenAI(c, full)
+    const buf = c.provider === 'codex' ? await viaCodex(c, full) : c.provider === 'custom' ? await viaCustom(c, full) : await viaOpenAI(c, full)
     if (!buf || !buf.length) throw new Error('生图接口没有返回图片')
     if (!String(mimeOf(buf)).startsWith('image/')) throw new Error('生图接口返回的不是图片')
     log.info(`画好了一张图（${Math.round(buf.length / 1024)}KB，${Math.round((Date.now() - t) / 1000)}s）：${prompt.slice(0, 40)}`)
@@ -171,10 +176,11 @@ export function createImageGen({ getConfig, log, local }) {
     if (local?.active('image')) return true
     const c = getConfig().imageGen
     if (!c.enabled) return false
+    if (c.provider === 'codex') return auth.status().loggedIn
     return c.provider === 'custom' ? Boolean(c.custom && c.custom.url) : Boolean(c.baseUrl && c.model)
   }
 
-  return { generate, enabled }
+  return { generate, enabled, codexAuth: auth, dispose: () => auth.dispose?.() }
 }
 
 /**
