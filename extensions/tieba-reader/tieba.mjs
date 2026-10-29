@@ -1,6 +1,11 @@
 import { load } from 'cheerio/slim';
 
 export const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+export const cleanTitle = raw => clean(raw)
+  .replace(/\s*[-_]\s*百度贴吧\s*icon_[\s\S]*$/i, '')
+  .replace(/\s*[-_]\s*百度贴吧\s*$/, '').trim().slice(0, 250);
+const nodeText = node => { const copy = node.clone(); copy.find('svg,script,style,noscript').remove(); return copy.text(); };
+const documentTitle = $ => $('head > title').first().text() || $('title').filter((_i, el) => !$(el).parents('svg').length).first().text();
 export function barNames(raw) {
   return [...new Set(String(raw || '').split(/[\n,，;；]+/).map((s) => clean(s).replace(/吧$/, '')).filter(Boolean))].slice(0, 20);
 }
@@ -20,7 +25,7 @@ export function cookieHeader(raw) {
 }
 export function checkPage(html) {
   const $ = load(html);
-  const title = $('title').text();
+  const title = documentTitle($);
   if (/百度安全验证|安全验证|访问验证|验证码/.test(title) || $('#captcha,#vcode,#wappassverify').length) {
     throw new Error('贴吧要求安全验证，请在浏览器登录贴吧并完成验证；本模块不自动绕过验证。');
   }
@@ -39,7 +44,7 @@ export function parseList(html, mode = 'forum') {
     const root = $(el);
     const a = root.find(mode === 'search' ? '.p_title a, a.bluelink' : 'a.thread-content-link, a.j_th_tit, .threadlist_title a, a[href*="/p/"]').first();
     const url = postUrl(a.attr('href'));
-    const title = clean(a.attr('title') || root.find('.thread-title').first().text() || a.text());
+    const title = cleanTitle(a.attr('title') || nodeText(root.find('.thread-title').first()) || nodeText(a));
     if (url && title && !out.some((p) => p.url === url)) out.push({ url, title,
       snippet: clean(root.find('.thread-content,.threadlist_abs,.p_content').first().text()).slice(0, 700), source: '贴吧列表（尚未读取正文）' });
   });
@@ -52,7 +57,7 @@ export function parseHome(html) {
     const a = $(el); const url = postUrl(a.attr('href'));
     if (!url || seen.has(url)) return;
     const card = a.closest('.thread-card,.feed-card,.feed-item,.feed_item,.feed_card,.threadlist_li,li,article').first();
-    const title = clean(a.attr('title') || card.find('.thread-title,.feed-title,.post-title,h2,h3').first().text() || a.text());
+    const title = cleanTitle(a.attr('title') || nodeText(card.find('.thread-title,.feed-title,.post-title,h2,h3').first()) || nodeText(a));
     if (title.length < 2 || /^\d+[万亿]?$/.test(title)) return;
     const hot = a.closest('.hot-list,.hot_list,.hot-thread,.hot_thread,.rank-list,.rank_list,[class^="hot-"],[class^="hot_"],[class^="rank-"],[class^="rank_"]').length > 0;
     const forum = card.find('a[href*="/f?"]').first();
@@ -66,11 +71,11 @@ export function parseHome(html) {
 }
 export function parsePost(html, url) {
   const $ = checkPage(html);
-  const title = clean($('.core_title_txt').first().text() || $('title').text()).slice(0, 250);
+  const title = cleanTitle(nodeText($('.core_title_txt').first()) || documentTitle($));
   const posts = [];
   const textOf = node => {
     const content = node.clone();
-    content.find('script,style,noscript').remove();
+    content.find('svg,script,style,noscript').remove();
     content.find('br').replaceWith('\n');
     return clean(content.text());
   };
@@ -89,7 +94,7 @@ export function parsePost(html, url) {
   $('.l_post').each((_i, el) => {
     const root = $(el);
     const content = root.find('.d_post_content').first().clone();
-    content.find('script,style').remove();
+    content.find('svg,script,style').remove();
     content.find('br').replaceWith('\n');
     const text = clean(content.text());
     if (!text) return;
@@ -220,7 +225,7 @@ export function createTieba({ getCookie, searchWeb, fetchImpl = fetch, renderPag
           if (page.html) return { ok: true, mode: 'browser', ...parsePost(page.html, url) };
           const posts = (page.contents || []).map((text,i) => ({ section: page.hasOpening && i === 0 ? '楼主正文' : '可见回复（顺序，不代表楼层号）', text: clean(text).slice(0,3000) })).filter(p => p.text);
           if (!posts.length) throw new Error('浏览器未读到帖子正文，可能已删除或需要验证');
-          return { ok: true, mode: 'browser', url, title: clean(page.title).replace(/[-_]百度贴吧$/, ''), posts, imageCount: page.imageCount || 0,
+          return { ok: true, mode: 'browser', url, title: cleanTitle(page.title), posts, imageCount: page.imageCount || 0,
             source: '贴吧正文（浏览器实际加载内容，最多10段，未展开全部楼中楼）' };
         }
         return { ok: true, ...parsePost(await request(url), url) };
