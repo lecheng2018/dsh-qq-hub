@@ -33,6 +33,8 @@ async function brain({ preset, text, images, callTool }) {
   if (text.includes('at+表情测试')) return '<at:10000001> 看这个<sticker:开心>'
   if (text.includes('热重载探针')) { const r = await callTool('probe73', {}); return r ? '探针:' + r.message : '没有探针工具' }
   if (text.includes('慢工具测试')) { const r = await callTool('slow74', {}); return r ? '慢工具好了' : '没有慢工具' }
+  if (text.includes('排队权限测试0') || text.includes('排队权限测试2')) { const r = await callTool('permprobe90', {}); return r ? String(r.message || '') : '没有探针' }
+  if (text.includes('排队权限测试1')) { await sleep(1200); return '第一轮好了' }
   if (text.includes('【空间互动')) { qzonePrompts.push(text); return '哈哈好看' }
   if (/^【(私聊|群聊)/.test(text) && text.includes('戳了戳你')) return '干嘛戳我<poke>'
   if (/^【私聊/.test(text) && text.includes('表情改名测试')) { const m = text.match(/把「(.+?)」/); const r = await callTool('qq_edit_sticker', { sticker: m[1], new_name: '改过的名字', tags: ['开心'] }); return r.message }
@@ -965,7 +967,7 @@ test('#58 在 DSH 会话窗口里直接打字：这一轮按主人说的算（�
   // 从 QQ 转进来的消息（source.kind = 'aurabot'）不会误标成「面板里直接打字」
   api.hub.onSessionEvent({ id: sid }, { type: 'turn/end', data: { turn: 999999, reason: { kind: 'completed' } } })
   api.hub.onSessionEvent({ id: sid }, { type: 'user/message', data: { role: 'user', source: { kind: 'aurabot' }, content: [{ type: 'text', text: 'x' }] } })
-  assert.equal(api.hub.turnSendersAllOwner(sid), false, 'QQ 转进来的不标成主人直输')
+  assert.equal(api.hub.turnSendersAllOwner(sid), true, '主人私聊里还有 #90 的安全兜底：这里只可能是主人说话')
 })
 
 test('模块热重载后：已有会话下一轮会重挂新实例的工具（issue #73）', async () => {
@@ -1039,5 +1041,55 @@ test('慢工具卡住超过 1.5 秒先发一条「正在做」提示，不让主
   const doneAt = texts.findIndex((x) => /慢工具好了/.test(x))
   assert.ok(noticeAt >= 0, '慢工具卡住时要先发提示：' + JSON.stringify(texts))
   assert.ok(doneAt > noticeAt, '提示要比最终回复先到：' + JSON.stringify(texts))
+  rmSync(modsDir, { recursive: true, force: true })
+})
+
+test('主人私聊里这一轮的说话人记录丢了，也按主人算（#90 兜底）', async () => {
+  const n = fake.turns.length
+  mock.push(priv(OWNER, text('兜底测试')))
+  await until(() => fake.turns.length > n, 8000)
+  const sid = fake.turns.at(-1).sessionId
+  assert.ok(sid, '主人私聊会话应该已经建过')
+  api.hub.simulateTurn(sid, [])
+  api.hub.onSessionEvent({ id: sid }, { type: 'turn/end', data: { turn: 999, reason: { kind: 'completed' } } })
+  assert.equal(api.hub.turnSendersAllOwner(sid), true, '主人私聊里仅主人操作不该被误拒')
+  assert.equal(api.hub.turnHasOwner(sid), true)
+  const gsid = api.hub.sessions()['group:557']?.sessionId
+  if (gsid) {
+    api.hub.simulateTurn(gsid, [])
+    api.hub.onSessionEvent({ id: gsid }, { type: 'turn/end', data: { turn: 998, reason: { kind: 'completed' } } })
+    assert.equal(api.hub.turnSendersAllOwner(gsid), false, '群聊不能兜底成主人')
+  }
+})
+
+test('上一轮还在跑时排队的新消息，不会让下一轮的「仅主人」判断失效（#90）', async () => {
+  const modsDir = join(dataDir, 'modules', 'permprobe90')
+  mkdirSync(modsDir, { recursive: true })
+  writeFileSync(join(modsDir, 'index.mjs'), `export default {
+  id: 'permprobe90', name: '权限探针', api: 1,
+  setup(api) {
+    const hub = api.core.hub
+    api.tool(({ level, sessionId }) => level === 'chat' ? [] : [api.defineTool({
+      name: 'permprobe90', description: '权限探针',
+      properties: {},
+      execute: async () => ({ ok: true, message: 'allOwner=' + hub.turnSendersAllOwner(sessionId) + ',hasOwner=' + hub.turnHasOwner(sessionId) }),
+    })])
+  },
+}`)
+  // 先等探针工具装上（模块 watcher 每 3 秒扫一次），期间反复发探测消息
+  const probe = async () => {
+    const n = fake.turns.length
+    mock.push(grp('557', OWNER, text('排队权限测试0'), '主人'))
+    await until(() => fake.turns.length > n, 8000)
+    return String(fake.turns.at(-1).reply || '')
+  }
+  await until(async () => /allOwner=/.test(await probe()), 20000)
+  // 上一轮还在跑（brain sleep 1200ms）时来下一条消息，两条都在 557 群里
+  const before = fake.turns.length
+  mock.push(grp('557', OWNER, text('排队权限测试1'), '主人'))
+  await sleep(800)
+  mock.push(grp('557', OWNER, text('排队权限测试2'), '主人'))
+  const second = await until(() => fake.turns.slice(before).find((t) => /allOwner=/.test(String(t.reply))), 20000)
+  assert.match(String(second.reply), /allOwner=true/, '排队轮次也要认出主人：' + second.reply)
   rmSync(modsDir, { recursive: true, force: true })
 })
