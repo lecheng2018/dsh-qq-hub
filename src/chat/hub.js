@@ -1316,7 +1316,16 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   function chatOfSession(sessionId) {
-    return sessionToChat.get(sessionKey(sessionId)) || ''
+    const key = sessionKey(sessionId)
+    const live = sessionToChat.get(key)
+    if (live) return live
+    // 重启后会话还没被第一条消息唤醒时，内存映射是空的：退回持久化的 聊天→会话 映射（#90 兜底要用）
+    try {
+      for (const [chatId, entry] of Object.entries(map().chats || {})) {
+        if (entry && entry.sessionId && sessionKey(entry.sessionId) === key) return chatId
+      }
+    } catch (error) {}
+    return ''
   }
 
   /** 只让一个聊天重新开始：归档它的会话，下一条消息开新会话。 */
