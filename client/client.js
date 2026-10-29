@@ -2090,7 +2090,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       static getDerivedStateFromError(error) { return { error } }
       render() { return this.state.error ? h('div', { className: 'ab-note err' }, '这个模块的面板出错了：' + String((this.state.error && this.state.error.message) || this.state.error)) : this.props.children }
     }
-    function ExtPanel({ m, settings, toast, reload }) {
+    function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload }) {
       const [Comp, setComp] = useState(null)
       const [err, setErr] = useState('')
       useEffect(() => {
@@ -2107,7 +2107,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       if (err) return h('div', { className: 'ab-note err' }, '面板加载失败：' + err)
       if (!Comp) return h(Empty, { icon: '⏳', text: '加载中…' })
       const save = async (patch) => { const r = await post('/save', { ext: { [m.id]: patch } }); toast(r.ok === false ? r.message : '保存好了', r.ok === false ? 'err' : 'ok'); reload() }
-      return h(PanelBoundary, null, h(Comp, { settings, save, toast, reload }))
+      return h(PanelBoundary, null, h(Comp, { settings, draftSettings, setSettings, save, toast, reload }))
     }
     function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
       const m = (st.modules || []).find((x) => x.id === mod)
@@ -2115,6 +2115,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       if (!m) return h(Empty, { icon: '🧩', text: '这个模块没在跑了' })
       const base = 'ext.' + m.id + '.'
       const settings = { ...(m.defaults || {}), ...((st.config.ext || {})[m.id] || {}) }
+      const draftSettings = { ...(m.defaults || {}), ...((draft.ext || {})[m.id] || {}) }
+      const setSettings = (patch) => setDraft((previous) => ({ ...previous, ext: { ...previous.ext, [m.id]: { ...(previous.ext || {})[m.id], ...patch } } }))
       const field = (s) => {
         const p = base + s.key
         if (s.type === 'switch') return f.sw(p)
@@ -2125,11 +2127,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         return f.text(p, { placeholder: s.placeholder })
       }
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: m.name, desc: m.description, right: h('span', { className: 'ab-badge mine' }, embedded ? '扩展模块 · ' + m.id : m.id) },
+        ((m.settings || []).length || (m.errors || []).length || !m.panel) ? h(Card, { title: m.name, desc: m.description, right: h('span', { className: 'ab-badge mine' }, embedded ? '扩展模块 · ' + m.id : m.id) },
           (m.settings || []).map((s) => h(Row, { key: s.key, label: s.label || s.key, hint: s.hint }, field(s))),
           (m.settings || []).length ? h('div', { className: 'ab-small ab-muted' }, '改完点下面的「保存设置」。') : null,
-          (m.errors || []).length ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, '最近的报错：' + m.errors[0].message) : null),
-        m.panel ? h(ExtPanel, { m, settings, toast, reload }) : null)
+          (m.errors || []).length ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, '最近的报错：' + m.errors[0].message) : null) : null,
+        m.panel ? h(ExtPanel, { m, settings, draftSettings, setSettings, toast, reload }) : null)
     }
 
     const BILI_KIND = { watch: '看了', comment: '评论', reply: '回复', share: '分享给你', shot: '发你截图', error: '没成功' }
