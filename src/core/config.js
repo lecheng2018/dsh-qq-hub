@@ -150,6 +150,20 @@ export const DEFAULTS = {
       newAccountDays: 3, // 首次登录起这么多天内，上限都减半
     },
   },
+  // 刷小黑盒：用主人的账号逛游戏社区（读多写少）。点赞 / 评论 / 发帖各项权限在 profilePerms.heybox*。
+  heybox: {
+    enabled: false, // 总开关：默认关，先在面板里填 Cookie 再打开
+    cookie: '', // 整串 Cookie（pkey 必须有；要写操作还得有 x_xhh_tokenid）
+    autoBrowse: true, // 定时自己去逛（只读）
+    intervalHours: 4, // 多久逛一圈
+    maxRunsPerDay: 6, // 每天最多逛几轮
+    perRun: 3, // 一圈看几条
+    likeDaily: 10, // 每天最多点赞
+    commentDaily: 3, // 每天最多评论
+    maxPostsPerDay: 3, // 每天最多发帖（硬上限，多了容易被限）
+    defaultTopic: 7214, // 发帖默认分区：7214 盒友杂谈 / 18745 数码硬件 / 806933 AI
+    postStyle: 'mix', // 发帖风格：diary 大肥鱼日记 / news 热搜文 / mix 肥鱼热搜
+  },
   qzoneSocial: {
     enabled: true,
     replyOwn: true, // 回复自己说说下别人的新评论
