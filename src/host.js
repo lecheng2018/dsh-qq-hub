@@ -254,6 +254,8 @@ export function apply(ctx) {
     isMuted: (chatId) => mutes.muted(chatId),
     moodEffects: () => use('mood')?.effects?.() ?? null,
     availableModels: () => modelCache,
+    // 模块（重）启动代际：模块热重载后工具名没变、但实例换了，hub 要据此重挂工具（issue #73）
+    toolsGeneration: () => (mods ? mods.generation?.() || 0 : 0),
     hooks: {
       message: (msg) => mods.claim('message', msg),
       reply: (text, info) => mods.filter('reply', text, info),

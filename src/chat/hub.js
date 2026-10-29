@@ -51,7 +51,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -282,7 +282,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const sid = sessionKey(agent.session?.id ?? agent.id)
     const tools = level !== 'chat' && typeof buildTools === 'function' ? buildTools({ chat, level, sessionId: sid }) : []
     const denied = (() => { try { return hooks?.deniedTools?.() || [] } catch (error) { return [] } })()
-    const toolsKey = tools.map((t) => t.name).sort().join(',') + '|' + denied.join(',')
+    // 模块（重）启动代际也进 key：热重载后工具名通常不变，但工具对象是旧实例的闭包（issue #73），
+    // 只比名字会一直 return，会话里永远用旧实现/旧状态；带上代际就整套重挂。
+    let gen = 0
+    try { gen = typeof toolsGeneration === 'function' ? Number(toolsGeneration()) || 0 : 0 } catch (error) { gen = 0 }
+    const toolsKey = tools.map((t) => t.name).sort().join(',') + '|' + denied.join(',') + '|gen:' + gen
     const prev = mounted.get(agent)
     // 工具清单变了（比如面板里开了生图）就整套重挂；没变就别动（改工具会让前缀缓存失效）
     if (prev && prev.chatId === chat.chatId && prev.toolsKey === toolsKey) return
