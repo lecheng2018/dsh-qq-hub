@@ -50,7 +50,9 @@ test('opening login is deduplicated and completion updates its status',async()=>
   h.children[0].child.stdout.write('AURABOT_TIEBA:'+JSON.stringify({event:'login-opened'})+'\n');
   await new Promise(r=>setTimeout(r,10));assert.match(h.reader.status().lastLogin,/窗口已打开/);assert.equal(h.reader.status().loginPending,true);
   h.children[0].child.stdout.write('AURABOT_TIEBA:'+JSON.stringify({ok:true,data:{loggedIn:true,name:'测试账号',autoClosed:true}})+'\n');
-  await new Promise(r=>setImmediate(r));assert.equal(h.reader.status().loginPending,false);assert.match(h.reader.status().lastLogin,/会话已保存/);h.dispose();
+  // 等回环 IPC 把结果走完（Linux 上 setImmediate 一次不够，改成最多等 500ms）
+  for (let i = 0; i < 100 && h.reader.status().loginPending; i++) await new Promise(r=>setTimeout(r,5));
+  assert.equal(h.reader.status().loginPending,false);assert.match(h.reader.status().lastLogin,/会话已保存/);h.dispose();
   assert.equal(h.reader.status().loginResult.loggedIn,true);assert.match(h.reader.status().lastLogin,/已自动关闭/);
 });
 test('browser runtime is discovered automatically and absence does not request a manual path',()=>{
