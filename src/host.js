@@ -434,6 +434,7 @@ export function apply(ctx) {
       diary: diary ? { next: diary.nextTime(), last: diary.history()[0] || null } : { next: 0, last: null },
       qzoneSocial: use('qzone-social')?.state?.() ?? null,
       speakUp: use('speakup')?.state?.() ?? { count: 0 },
+      purpose: purposeOverview(),
       memory: { lastConsolidate: memory?.lastConsolidate?.() ?? 0 },
       avatar: avatarInfo(),
       voice: { edgeInstalled: use('voice')?.edgeInstalled?.() ?? false },
@@ -447,6 +448,40 @@ export function apply(ctx) {
   }
 
   route('/state', async () => overview())
+
+  // ---------- 面板：目的引擎聚合 ----------
+  // 面板令牌脱敏：任何 32 位以上的十六进制串（bridge token 等）只留尾 4 位。
+  const HEX_RE = /[0-9a-f]{32,}/gi
+  function redactTokens(value) {
+    const walk = (v) => typeof v === 'string' ? v.replace(HEX_RE, (m) => '（已脱敏…' + m.slice(-4) + '）')
+      : Array.isArray(v) ? v.map(walk)
+      : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => /token|secret/i.test(k) && typeof x === 'string' && x ? [k, '（已脱敏…' + String(x).slice(-4) + '）'] : [k, walk(x)]))
+      : v
+    return walk(value)
+  }
+  // 「目的引擎」聚合：purpose 模块（默认关）没开或没提供接口时 available=false，面板显示引导文案，不报错。
+  // 安静时段真相 = speakUp 醒着窗口（与 purpose/module.js 的 purposeConfig 派生保持一致）。
+  function purposeOverview() {
+    const pu = use('purpose')
+    const ext = (cfg.ext && cfg.ext.purpose) || {}
+    const sp = cfg.speakUp || {}
+    const pad2 = (n) => String(n % 24).padStart(2, '0')
+    const awakeFrom = Number.isFinite(sp.awakeFrom) ? sp.awakeFrom : 8
+    const awakeTo = Number.isFinite(sp.awakeTo) ? sp.awakeTo : 23
+    const quiet = awakeTo >= 24 || awakeFrom >= awakeTo ? { quietStart: '00:00', quietEnd: '00:00' } : { quietStart: pad2(awakeTo) + ':00', quietEnd: pad2(awakeFrom) + ':00' }
+    return {
+      available: typeof pu?.status === 'function',
+      enabled: ext.enabled === true,
+      status: pu?.status?.() ?? null,
+      count: pu?.state?.().count ?? 0,
+      pacing: ['conservative', 'default', 'active'].includes(ext.pacing) ? ext.pacing : 'default',
+      quietStart: quiet.quietStart,
+      quietEnd: quiet.quietEnd,
+      dailyMax: Number.isFinite(sp.maxPerDay) ? sp.maxPerDay : null,
+      awakeFrom,
+      awakeTo,
+    }
+  }
 
   route('/save', async (req) => {
     const body = await readBody(req)
@@ -469,6 +504,37 @@ export function apply(ctx) {
     await mods.sync().catch(() => {})
     if (pw && !pw.ok) return { ...(await overview()), ok: false, message: '其他设置保存了，但控制台密码没改：' + pw.message }
     return { ...(await overview()), message: '保存好了' + (pw ? '，' + pw.message : '') }
+  })
+
+  // ---------- 面板代理：目的引擎 ----------
+  // 统一走 /panel/* 前缀，避免和模块自注册的 /purpose/* 路由撞名；模块缺新接口时降级返回 available:false。
+  route('/panel/purpose/status', async () => ({ ok: true, purpose: purposeOverview() }))
+  route('/panel/purpose/preview', async () => {
+    const pu = use('purpose')
+    if (typeof pu?.preview !== 'function') return { ok: false, available: false, message: '目的引擎模块没在跑，没法预览' }
+    return { ok: true, result: redactTokens(await pu.preview()) }
+  })
+  route('/panel/purpose/run', async () => {
+    const pu = use('purpose')
+    if (typeof pu?.run !== 'function') return { ok: false, available: false, message: '目的引擎模块没在跑' }
+    const r = await pu.run('面板')
+    const msg = r && { sent: '已经去找你了', silent: '她这轮想了想，决定不说（不硬发）', muted: '主人在私聊里让她闭嘴了', disabled: '目的引擎开关是关的' }[r.outcome]
+    return { ok: !r || r.outcome !== 'disabled', message: msg || (r ? `这轮结束：${r.outcome}` : '没有结果'), result: redactTokens(r) }
+  })
+  route('/panel/purpose/config', async (req) => {
+    const b = await readBody(req)
+    const patch = {}
+    const extPatch = {}
+    if (typeof b.enabled === 'boolean') extPatch.enabled = b.enabled
+    if (['conservative', 'default', 'active'].includes(b.pacing)) extPatch.pacing = b.pacing
+    if (Object.keys(extPatch).length) patch.ext = { purpose: extPatch }
+    const spPatch = {}
+    for (const k of ['awakeFrom', 'awakeTo', 'maxPerDay']) if (Number.isFinite(b[k])) spPatch[k] = Math.max(0, Math.floor(b[k]))
+    if (Object.keys(spPatch).length) patch.speakUp = spPatch
+    if (!Object.keys(patch).length) return { ok: false, message: '没有可保存的字段' }
+    setConfig(mergeFromPanel(cfg, patch))
+    log.info(`面板已保存目的引擎设置｜${Object.keys(extPatch).map((k) => k + '=' + extPatch[k]).concat(Object.keys(spPatch).map((k) => k + '=' + spPatch[k])).join(' ')}`)
+    return { ok: true, purpose: purposeOverview() }
   })
 
   route('/logs', async (req) => {
