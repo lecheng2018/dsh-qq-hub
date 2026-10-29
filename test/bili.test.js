@@ -21,6 +21,29 @@ test('WBI 签名和文档里的例子一致', () => {
   assert.equal(q, 'bar=514&foo=114&wts=1702204169&zab=1919810&w_rid=8f6f2b5b3d485fe1886cec6a0be8c5d4')
 })
 
+test('playurl：WBI 签名请求 DASH，兼容两种地址字段并过滤空流', async () => {
+  let request
+  const client = api.createBiliApi({ getCookie: () => 'buvid3=test', fetchImpl: async (url) => {
+    if (url.includes('/nav')) return { json: async () => ({ data: { wbi_img: {
+      img_url: 'https://i.example/7cd084941338484aae1ad9425b84077c.png', sub_url: 'https://i.example/4932caff0ff746eab6f01bf08b70ac45.png',
+    } } }) }
+    request = new URL(url)
+    return { json: async () => ({ code: 0, data: { dash: {
+      video: [{ base_url: 'https://cdn.example/1', codecs: 'avc1', height: 480 }, { baseUrl: 'https://cdn.example/2' }, {}],
+      audio: [{ baseUrl: 'https://cdn.example/audio' }],
+    } } }) }
+  } })
+  const r = await client.playurl({ bvid: 'BV1aaaaaaaaa', cid: 9 })
+  assert.equal(request.pathname, '/x/player/wbi/playurl')
+  assert.equal(request.searchParams.get('fnval'), '16')
+  assert.equal(request.searchParams.get('cid'), '9')
+  assert.equal(request.searchParams.get('bvid'), 'BV1aaaaaaaaa')
+  assert.match(request.searchParams.get('w_rid'), /^[a-f0-9]{32}$/)
+  assert.equal(r.video.length, 2)
+  assert.equal(r.video[0].baseUrl, 'https://cdn.example/1')
+  assert.equal(r.audio.length, 1)
+})
+
 test('解析：Cookie 只取有用的、认出视频号和短链、QQ 分享卡片', async () => {
   assert.deepEqual(api.parseCookie('SESSDATA=abc; bili_jct=x1; foo=bar; buvid3=b3'), { SESSDATA: 'abc', bili_jct: 'x1', buvid3: 'b3' })
   assert.deepEqual(api.findVideoId('看这个 https://www.bilibili.com/video/BV1GJ411x7h7/?p=1'), { bvid: 'BV1GJ411x7h7' })
