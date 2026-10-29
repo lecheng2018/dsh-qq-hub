@@ -412,15 +412,30 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）
     const recent = recentEvents()
     if (recent.length) parts.push('（你最近做过的事：' + recent.map((m) => `${agoText(m.at)}${m.text}`).join('；') + '。聊到了可以自然提起。）')
-    const q = hub?.lastTextOf?.(sessionId) || ''
-    if (q) {
-      // 群里这一段谁在说话，关于这些人的记忆优先想起
-      const about = chat.kind === 'group' ? hub?.speakersOf?.(sessionId) || [] : chat.userId
-      const shown = new Set(recent.map((m) => m.id))
-      const hits = recall(q, { about, where: chat.chatId || '', context: q.length < 12 ? hub?.prevTextOf?.(sessionId) || '' : '' }).filter((h) => !shown.has(h.it.id))
-      if (hits.length) parts.push('（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + hits.map((h) => memoryLine(h.it)).join('；') + '）')
-    }
+    // 注意：随每条消息变化的「相关记忆」不放在这里（#79）——运行时上下文快照每轮都会追加到历史，
+    // 内容一变就多一份快照；放在用户消息里（recallHint）只占当轮，不会越滚越大。
     return parts.join('\n')
+  }
+
+  /**
+   * 这一轮聊到的事相关的记忆（#79）：内容随每条消息变化，所以由模块在「交给她的内容」里附上，
+   * 不放进每轮都会追加的运行时上下文快照。最多 4 条、总长 ≤ 300 字。
+   */
+  function recallHint(chat, queryText, prevText = '') {
+    const cfg = getConfig().memory
+    if (!cfg.enabled) return ''
+    const q = String(queryText || '').trim()
+    if (!q) return ''
+    const recent = recentEvents()
+    const shown = new Set(recent.map((m) => m.id))
+    const about = chat && chat.kind === 'private' ? chat.userId : undefined
+    // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
+    const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
+    const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText }).filter((h) => !shown.has(h.it.id)).slice(0, 4)
+    if (!hits.length) return ''
+    let body = hits.map((h) => memoryLine(h.it)).join('；')
+    if (body.length > 300) body = body.slice(0, 300) + '…'
+    return '（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + body + '）'
   }
 
   /** 回顾：结合最近聊天和已有经验，更新这个人的相处经验（合并、提炼、最多 8 条，概括不琐碎）。 */
@@ -673,6 +688,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   return {
+    recallHint,
     add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
     profiles: () => { const s = load(); return Object.entries(s.profiles || {}).map(([qq, p]) => ({ qq, ...p })).sort((a, b) => b.at - a.at) },
     setProfile, buildProfile,
