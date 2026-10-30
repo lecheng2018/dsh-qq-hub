@@ -13,7 +13,7 @@ export const API_BASE = 'https://api.xiaoheihe.cn'
 export const WEB_BASE = 'https://www.xiaoheihe.cn'
 
 const ALPHABET = 'AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89'
-const HMAC_SALT = 'Z7mFG4tQp9Ws2LxB8'
+const HMAC_SALT = 'Z7mFG4tQp9Ws2LxB8H'
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 
 // web 端通用参数（与真实请求一致）
@@ -147,6 +147,12 @@ export class HeyboxClient {
     return /pkey=|user_pkey=/.test(this.cookie)
   }
 
+  /** 从 Cookie 里取 heybox_id（网页端每个请求都会带上它，缺了会被当成未登录） */
+  get heyboxId() {
+    const m = String(this.cookie || '').match(/heybox_id=(\d+)/)
+    return m ? m[1] : ''
+  }
+
   async #throttle() {
     const wait = this.interval - (Date.now() - this.lastAt)
     if (wait > 0) await new Promise((r) => setTimeout(r, wait))
@@ -170,7 +176,10 @@ export class HeyboxClient {
     this.lastAt = Date.now()
     this.calls += 1
 
-    const query = { ...BASE_PARAMS, ...params }
+    const query = { ...BASE_PARAMS }
+    // 网页端每个请求都带 heybox_id，缺了会被当成未登录
+    if (this.heyboxId) query.heybox_id = this.heyboxId
+    Object.assign(query, params)
     if (signed) Object.assign(query, signParams(path, { workshop }))
 
     const url = new URL(API_BASE + path)
