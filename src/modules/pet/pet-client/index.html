@@ -75,6 +75,7 @@
   let workMap = {}     // 干活状态 → 动画 id（服务端按命名约定/包配置解析好）
   window.__setPack = (p) => {
     packAnims = p && p.anims ? p.anims : {}
+    coolDown = {} // 主进程重推素材表（重连/换包）：冷却全部清零，从干净状态开始
     pools = (p && p.pools) || { idle: [], speak: [], click: [] }
     weights = (p && p.weights) || {}
     physicsParams = (p && p.physics) || null
@@ -91,8 +92,15 @@
   // 现在一律「播完直接接 playIdle（idle 自己首尾相接）」，不再依赖定时器接力。
   let currentAnim = ''
   let currentKind = ''
+  // 素材故障冷却（修「不定时变鲸鱼」）：加载连续失败只临时跳过 5 分钟，不再永久摘除——
+  // DSH 重启窗口期、端口漂移、GPU 解码 hiccup 都是暂时性的，摘除了就永远播不回来。
+  let coolDown = {}   // 动画名 → 冷却到期时间戳；到期后 pickFrom 自动恢复可选
+  let failStreak = 0  // 连续「起播即失败」次数：服务器全挂时避免紧密重试循环
+  const COOL_MS = 5 * 60_000
+  const FAIL_STREAK_MAX = 3
   function pickFrom(poolName) {
-    const pool = (pools[poolName] || []).filter((n) => packAnims[n])
+    const now = Date.now()
+    const pool = (pools[poolName] || []).filter((n) => packAnims[n] && !(coolDown[n] && now < coolDown[n]))
     if (!pool.length) return ''
     const w = pool.map((n) => Math.max(0, Number(weights[poolName]) || 1))
     const total = w.reduce((a, b) => a + b, 0)
@@ -119,17 +127,29 @@
     video.classList.remove('squashing')
     video.style.display = 'block'
     video.onended = () => { const f = onEnd; onEnd = null; (f || playIdle)() }
-    // 素材 404 / 坏文件：先带随机串重试一次（插件刚重启、素材路由还没注册的情况很常见），
-    // 仍然失败才把这段从地址表里摘掉，回落静态形象——绝不把整张表清空。
+    // 真正播起来了：清连续失败计数、清这段的重试标记与冷却（修「同段二次失败不再重试」）
+    video.onplaying = () => { failStreak = 0; delete video.dataset.retried; delete coolDown[name] }
+    // 素材 404 / 坏文件：先带随机串重试一次（插件刚重启、素材路由还没注册的情况很常见）。
+    // 仍然失败只进 5 分钟冷却（不永久摘除），并马上试同池其他段；连续 3 次起播即败才
+    // 回落静态形象等 scheduleIdle。播起来之后才出错（currentTime>0.2）≈ 解码/GPU hiccup，
+    // 素材本身没坏：不进冷却，直接换一段。
     video.onerror = () => {
-      if (video.dataset.retried !== name) {
+      const decodeHiccup = Number(video.currentTime) > 0.2
+      if (!decodeHiccup && video.dataset.retried !== name) {
         video.dataset.retried = name
         video.src = url + (url.includes('?') ? '&' : '?') + 'retry=' + Date.now()
         video.play().catch(() => {})
         return
       }
-      delete packAnims[name]
+      if (!decodeHiccup) coolDown[name] = Date.now() + COOL_MS
+      const kindNow = currentKind
       stopVideo()
+      failStreak++
+      if (failStreak < FAIL_STREAK_MAX) {
+        const pool = (kindNow === 'speak' || kindNow === 'click') ? kindNow : 'idle'
+        const alt = pickFrom(pool)
+        if (alt) { playAnim(alt, playIdle, pool); return }
+      }
       scheduleIdle()
     }
     // 同一段重播（菜单又点了一次同一动作）：回开头即可，不必重新拉流
@@ -141,7 +161,7 @@
   }
   function playIdle() {
     const name = pickFrom('idle')
-    if (!name) return stopVideo()
+    if (!name) { stopVideo(); scheduleIdle(); return } // 全在冷却：鲸鱼兜底 + 定时重试（冷却到期自动复活）
     playAnim(name, playIdle, 'idle') // idle 池首尾相接
   }
   let idleTimer = null
@@ -209,8 +229,8 @@
     clearTimeout(idleTimer)
     return playAnim(name, playIdle, 'menu')
   }
-  // 自检/调试用：当前在播什么、地址表里有多少段（右键菜单不通时先看这个）
-  window.__playAnimInfo = () => ({ anim: currentAnim, kind: currentKind, count: Object.keys(packAnims).length })
+  // 自检/调试用：当前在播什么、地址表里有多少段、几段在冷却（右键菜单不通时先看这个）
+  window.__playAnimInfo = () => ({ anim: currentAnim, kind: currentKind, count: Object.keys(packAnims).length, cooling: Object.keys(coolDown).length })
 
   // ---------- 干活状态（思考/干活/等确认/完成/出错）：跟着 DSH 会话切动画 ----------
   // 进行中的档位循环播同一段（思考就一直在思考），终态播一次就回 idle；状态没变不重播。

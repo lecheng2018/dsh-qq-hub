@@ -165,6 +165,7 @@ function hideBubble() {
 
 // ---------- 长轮询主循环 ----------
 let running = true
+let hadError = false // 上一轮轮询失败过：重连成功后强制重推素材表（见下）
 async function pollLoop() {
   let attempt = 0
   while (running) {
@@ -180,6 +181,13 @@ async function pollLoop() {
       const data = await res.json()
       attempt = 0
       const firstBoot = bootId && data.bootId !== bootId
+      // 重连成功（中途断过，或插件换 bootId 重启过）：强制重推一次素材表。
+      // 修「变鲸鱼后长时间不恢复」：DSH 重启窗口期渲染页可能还拿着旧端口的素材 URL，
+      // 不重推的话 /config 就算正常也回不来（pack JSON 没变）；重推后渲染页换新地址并清零冷却。
+      if (hadError || firstBoot) {
+        hadError = false
+        if (win && !win.isDestroyed()) win.__packPushed = false
+      }
       bootId = data.bootId
       cursor = data.cursor
       if (firstBoot) cursor = null // 插件重启过：这一轮只对齐水位，不消费旧事件，下一轮取增量
@@ -196,6 +204,7 @@ async function pollLoop() {
       refreshConfig() // 便宜：跟着轮询节奏对齐包配置与素材路由（新放素材也能被发现）
       await sleep(50)
     } catch {
+      hadError = true
       attempt++
       await sleep(Math.min(15_000, 1500 + attempt * 1500)) // 出错退避，并重读 host.json（端口可能漂了）
     }
