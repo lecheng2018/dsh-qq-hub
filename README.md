@@ -125,6 +125,17 @@ npm test
 - **协作 / 交流 QQ 群**：**554850395**（项目维护和想法讨论都在这里；装不上、报错了也可以进来问，尽量先带上面板「日志」里的报错和版本号）
 - **GitHub**：[issue](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/issues) 报 bug / 提需求，[PR](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/pulls) 提代码；提之前先翻一下有没有重复。贡献者名单见版本说明和 PR 记录。
 
+## 桌宠的来源
+
+桌面上的那只小鱼和侧栏「桌宠」页**不是本项目自研的设计**：客户端形态（Electron 透明置顶窗、HTTP 长轮询、气泡与右键菜单）、
+拖拽甩抛物理、pet pack 目录约定、以及工作状态六档 / 碎碎念动画的命名约定，都移植自
+[dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（作者 [PC2005-cloud](https://github.com/PC2005-cloud)，代码 MIT）。
+Aurabot 这边做的是适配层：接进模块体系、和「主动搭话」的载体互斥、面板设置、DSH 会话事件联动。
+
+「大肥鱼」形象与动画素材是 **CC BY-NC-SA 4.0**（署名 · 非商业 · 相同方式共享，作者声明不可商用），
+**不随本仓库分发**，需要动画请自行从 dsh-pet 的 Release 取得并遵守其许可。
+完整署名与许可原文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
 ## 致谢
 
 参考了 [Yuuyuko-uu](https://github.com/Yuuyuko-uu) 的 dsh-qq-bridge、dsh-speak-up、dsh-feiyu-mood、dsh-fish-memory 等插件（MIT）在 DSH 插件机制上踩过的坑，具体是：注销器是函数而不是 `.off()`；`followup` 必须 await；心情别每轮都提。没有复制它们的代码。

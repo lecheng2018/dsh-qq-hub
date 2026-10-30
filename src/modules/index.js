@@ -11,6 +11,7 @@ import diary from './diary/index.js'
 import qzoneSocial from './qzone-social/index.js'
 import speakup from './speakup/index.js'
 import purpose from './purpose/index.js'
+import pet from './pet/index.js'
 import bili from './bili/index.js'
 import song from './song/index.js'
 import profile from './profile/index.js'
@@ -18,4 +19,4 @@ import contacts from './contacts/index.js'
 import douyin from './douyin/index.js'
 import heybox from './heybox/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, song, profile, contacts, douyin, heybox]
+export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox]
