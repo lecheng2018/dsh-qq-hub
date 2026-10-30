@@ -50,14 +50,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## 「大肥鱼」形象与动画素材 —— 不随本项目分发
+## 「大肥鱼」形象与动画素材 —— 独立仓库分发，运行时自动下载
 
 - 来源：dsh-pet 的 pet pack（作者 PC2005-cloud）
 - 许可：**CC BY-NC-SA 4.0**（署名 · 非商业 · 相同方式共享）
   <https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans>
 - 作者声明原文：「大肥鱼是遵守 CC BY-NC-SA 4.0 协议的形象，不可以以任何形式商业化。」
-- 本仓库**不包含**任何 `.webm` / 形象素材。想要动画请自行从 dsh-pet 的 Release 取得，
-  并遵守其许可（署名 + 非商业 + 相同方式共享）。
+- 本仓库**不包含**任何 `.webm` / 形象素材（体积 50MB+，不进 git）。素材放在独立素材仓库
+  [dsh-aurabot-qq-mods](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods)（同为 CC BY-NC-SA 4.0），
+  插件启动发现 default 包缺失时**自动下载落位**到数据目录 `packs/`（地址可在面板换镜像）。
+  重新分发素材（含该素材仓库）须遵守其许可：署名 + 非商业 + 相同方式共享。
 
 ## Mieksido/surfcore — 目的引擎（MIT）
 

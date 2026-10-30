@@ -132,8 +132,10 @@ npm test
 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（作者 [PC2005-cloud](https://github.com/PC2005-cloud)，代码 MIT）。
 Aurabot 这边做的是适配层：接进模块体系、和「主动搭话」的载体互斥、面板设置、DSH 会话事件联动。
 
-「大肥鱼」形象与动画素材是 **CC BY-NC-SA 4.0**（署名 · 非商业 · 相同方式共享，作者声明不可商用），
-**不随本仓库分发**，需要动画请自行从 dsh-pet 的 Release 取得并遵守其许可。
+「大肥鱼」形象与动画素材是 **CC BY-NC-SA 4.0**（署名 · 非商业 · 相同方式共享，作者声明不可商用）。
+素材体积大（50MB+）**不随本仓库分发**：插件启动时会从独立素材仓库
+[dsh-aurabot-qq-mods](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods) **自动下载落位**（用户零操作；
+素材在仓库的 `pet-pack/` 文件夹里，不在仓库根目录；网络不佳可在面板「桌宠 → 素材包下载地址」换成任意镜像直链）。使用请遵守其许可，
 完整署名与许可原文见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 致谢
