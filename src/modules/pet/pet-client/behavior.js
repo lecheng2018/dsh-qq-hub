@@ -682,6 +682,7 @@ async function iconActionChain(mode, params, ctx, budget) {
   let icons = null
   try { icons = await ctx.readDesktopIcons() } catch { icons = null }
   if (budget.cancelled) return stop
+  if (ctx.debugLog) ctx.debugLog({ phase: 'icons', count: Array.isArray(icons) ? icons.length : -1, sample: Array.isArray(icons) ? icons.slice(0, 8).map((i) => ({ name: i.name, x: i.x, y: i.y, file: i.file })) : null })
   if (!Array.isArray(icons)) {
     // 降级路径：读不到图标 → 走到屏幕下沿随机位置「空叼一口」，演完照实回执 refused
     // （绝不假装得手：没碰文件就是没碰文件）
@@ -705,8 +706,10 @@ async function iconActionChain(mode, params, ctx, budget) {
   const area = typeof ctx.workArea === 'function' ? ctx.workArea() : null
   const target = iconApproachTarget(icon, body, undefined, area)
   if (!target) return { status: 'refused', reason: 'no-body' }
+  if (ctx.debugLog) ctx.debugLog({ phase: 'target', icon: { name: icon.name, x: icon.x, y: icon.y, file: icon.file || '' }, target, body, area })
   const ok = await moveTo(target)
   if (budget.cancelled) return stop
+  if (ctx.debugLog) ctx.debugLog({ phase: 'walked', ok, body: ctx.bodyRect() })
   if (!ok) return { status: 'failed', reason: 'move-interrupted' }
   await ctx.playAnimByName(ICON_ANIMS.grab) // 叼起（找不到素材静默）
   if (budget.cancelled) return stop
@@ -716,9 +719,12 @@ async function iconActionChain(mode, params, ctx, budget) {
     // 落点：AI 给了坐标就用，否则随机（离起点至少 DROP_MIN_DIST_PX）
     const drop = pickDropPoint(target, body, area, { x: params.x, y: params.y, minDist: THRESHOLDS.DROP_MIN_DIST_PX, rng: ctx.rng })
     if (!drop) return { status: 'refused', reason: 'no-area' }
-    // 图标左上角相对身体中心的偏移：叼着走期间保持不变（图标看着就挂在嘴边）
-    const dx = Number(icon.x) - Number(target.x)
-    const dy = Number(icon.y) - Number(target.y)
+    // 图标相对身体中心的**叼着偏移**（2026-10-30 四次修正）：不再原样保留「站位偏移」——
+    // 左列图标会从右边绕位，dx 能到 -300，叼着走时图标拖在身后半米远，看着完全脱节。
+    // 改成「挂嘴边」：水平夹进身体边缘内侧 16px，垂直保持图标原高度（夹进身体上半段）。
+    const carryHalf = Math.max(8, Math.round(body.width / 2) - 16)
+    const dx = Math.max(-carryHalf, Math.min(carryHalf, Math.round(Number(icon.x) - Number(target.x))))
+    const dy = Math.max(-Math.round(body.height / 2), Math.min(0, Math.round(Number(icon.y) - Number(target.y))))
     const cell = THRESHOLDS.ICON_CELL_PX
     // 图标别忘了夹在屏幕内：先把「图标中心」夹进工作区，再换回左上角（moveDesktopIcon 收的是左上角）
     const center = clampBodyCenter(
@@ -760,6 +766,7 @@ async function iconActionChain(mode, params, ctx, budget) {
     if (!arrived) return { status: 'failed', reason: 'move-interrupted' }
     // 松口：图标落在新位置（这一步失败就如实回执「挪不动」，绝不假装成功）
     const put = await ctx.moveDesktopIcon(icon.name, dropIcon.x, dropIcon.y)
+    if (ctx.debugLog) ctx.debugLog({ phase: 'drop', icon: icon.name, drop, dx, dy, dropIcon, put })
     if (put === false) return { status: 'refused', reason: 'icon-move-unavailable' }
     await ctx.playAnimByName(ICON_ANIMS.win) // 得逞
     return {
@@ -777,6 +784,7 @@ async function iconActionChain(mode, params, ctx, budget) {
   try {
     res = await ctx.iconAct({ mode: 'hide', icon: actName, playbackId: String(params.playbackId || ''), force: true })
   } catch { res = { ok: false, reason: 'act-error' } }
+  if (ctx.debugLog) ctx.debugLog({ phase: 'act', icon: icon.name, actName, res })
   if (budget.cancelled) return stop
   if (res && res.ok === true) {
     // 图标由 Explorer 变更通知自己消失；播「得逞」
