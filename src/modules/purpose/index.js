@@ -39,6 +39,8 @@ export default {
       isMuted: (chatId) => { try { return api.core.mutes.muted(chatId) } catch { return false } },
       mood: () => api.use('mood'),
       memory: () => api.use('memory'),
+      // 载体分发用（面板里 carrier=pet 时推桌宠气泡；桌宠没开是 null，按离线回落处理）
+      pet: () => api.use('pet'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },
     })
     api.every(60_000, () => purpose.tick(), '目的引擎')
