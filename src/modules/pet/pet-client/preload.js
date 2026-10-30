@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('petBridge', {
   setHit: (hit) => ipcRenderer.send('pet:hit', Boolean(hit)),
   /** 右键菜单：渲染页 contextmenu → 主进程弹原生菜单（仿 dsh-pet 的右键菜单）。 */
   showMenu: () => ipcRenderer.send('pet:menu'),
+  /** 反应层①点击桌宠上报：渲染页单击（非拖拽）时调用，主进程触发「撒娇+追鼠标」。 */
+  reportClick: () => ipcRenderer.send('pet:click'),
   /** 主动连上插件问一次配置/状态（菜单项「换个动作」等需要确认在线时用，可选）。 */
   ping: () => ipcRenderer.send('pet:ping'),
 })
