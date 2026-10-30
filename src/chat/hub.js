@@ -19,7 +19,7 @@ import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
 import { defaultModel, pickReasoningEffort, canSeeImages, modelVision } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
-import { createFaces, textToSegments, stripFaceTags } from './faces.js'
+import { createFaces, textToSegments, stripFaceTags, speakableText } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
 import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
@@ -430,7 +430,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   async function sendVoice(chatId, text, replyId, userId) {
     try {
-      const { file, engine } = await tts.speak(text)
+      // 表情标签 / emoji 不念出来：TTS 只念能说的字（用户反馈：发语音时「呲牙」被读出来）
+      const spoken = speakableText(text)
+      if (!spoken) throw new Error('这条语音里只有表情/符号，没有能念的字')
+      const { file, engine } = await tts.speak(spoken)
       const b64 = readFileSync(file).toString('base64')
       // QQ 客户端不支持「引用 / @ + 语音」同一条消息：这样发电脑 QQ 是空白气泡、手机 QQ 提示
       // 「该消息类型暂不支持查看」，语音也听不到（issue #103）。语音条一律单独成条，引用和 @ 只能放弃。

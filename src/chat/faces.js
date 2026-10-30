@@ -73,6 +73,22 @@ export function textToSegments(text, idOf) {
 /** 去掉文字里的 <face:…> 标签（系统表情关着时用）。 */
 export const stripFaceTags = (text) => String(text ?? '').replace(FACE_TAG, '').replace(/[ \t]{2,}/g, ' ').trim()
 
+/**
+ * 语音条要念的文字：去掉 QQ 小黄脸标签、表情包/戳一戳等格式标签、以及 emoji 图形符号，
+ * 不然 TTS 会把「呲牙」这类表情名字甚至 emoji 直接念出来（用户反馈：发语音时表情被读出来）。
+ * 去掉后没字可念时返回空串，由调用方决定改发文字。
+ */
+export function speakableText (text) {
+  return String(text ?? '')
+    .replace(FACE_TAG, '')
+    .replace(/<sticker:[^>]*>(?:\s*<\/sticker>)?/g, '')
+    .replace(/<poke\s*\/?>/g, '')
+    .replace(/<\/?voice>/g, '')
+    .replace(/[\p{Extended_Pictographic}\u200D\uFE0F\u20E3]/gu, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
 /** 系统表情对照：先用常用的，第一次用到时再去网关拉完整目录（一天刷新一次）。 */
 export function createFaces({ onebot, log } = {}) {
   let index = COMMON_INDEX
