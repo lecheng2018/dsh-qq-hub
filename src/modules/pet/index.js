@@ -53,7 +53,7 @@ export default {
     workBubble: true,             // 干完活弹一句气泡
     workNotify: true,             // 干完活发系统通知（Electron 原生通知）
     // AI 行为大脑（决策层）：独立配额，与碎碎念/主动搭话完全无关
-    behaviorEnabled: true,
+    behaviorEnabled: false, // 默认关（主人在 #115 审查时要求：先关着，面板里手动打开才会自己动）
     behaviorMinMinutes: 10,       // 独立触发间隔下限（硬下限 1 分钟，见 behaviorSettings 的 clamp）
     behaviorMaxMinutes: 25,
     behaviorMaxPerDay: 99999,     // 默认不设实际限制
