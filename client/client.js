@@ -1671,6 +1671,37 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
 
     // 「桌宠」面板卡：状态、装客户端、专注模式、心跳、表情预览。数据走 /panel/pet/* 代理，模块没装好时给引导。
     const PET_MOODS = [{ key: 'idle', label: '😐 平常' }, { key: 'happy', label: '😄 开心' }, { key: 'shy', label: '😳 害羞' }, { key: 'sad', label: '😢 委屈' }, { key: 'angry', label: '😠 生气' }, { key: 'sleepy', label: '😴 困了' }, { key: 'think', label: '🤔 想事' }, { key: 'love', label: '🥰 喜欢你' }]
+    // 行为动作全表（面板「试一下」）：与 fork/src/modules/pet/index.js 的 BEHAVIOR_ACTIONS / BEHAVIOR_DEFERRED 一一对应。
+    // tier：1 = 第一批已开放；2 = 第二批图标动作（服务端隔离区，可一键归还）；3 = 第三批暂未实现（点了客户端回执 refused:not-implemented）。
+    const PET_BEHAVIOR_ACTIONS = [
+      { action: 'chase_cursor', name: '追鼠标', effect: '扑过去追着你的鼠标跑，追到后按住指针 5 秒再松开', tier: 1 },
+      { action: 'wander', name: '溜达', effect: '自己溜达到屏幕另一头', tier: 1 },
+      { action: 'idle_anim', name: '小动作', effect: '随便播一段小动作（摇尾巴、眨眼这类），不移动', tier: 1 },
+      { action: 'steal_cursor', name: '叼鼠标', effect: '冲到鼠标位置叼住，带着鼠标同步跑到一个随机位置（也可由 AI 指定坐标）再松口', tier: 1 },
+      { action: 'say', name: '说一句', effect: '只冒个气泡说句话，不做动作', tier: 1 },
+      { action: 'drag_icon', name: '叼图标', effect: '叼起桌面图标搬到另一个位置放下（默认随机落点，不填图标名就随机挑一个）', tier: 2 },
+      { action: 'hide_icon', name: '收图标', effect: '把桌面图标收进隔离区，随时可以放回去', tier: 2 },
+      { action: 'nudge_window', name: '推窗口', effect: '把窗口一路推到屏幕边界外（只剩一条边），人和窗口一起走，5 秒后再一起拉回原位', tier: 3 },
+      { action: 'close_window', name: '关窗口', effect: '跑到窗口右上角，优雅关掉（等于点右上角 X，另有独立安全开关）', tier: 3 },
+    ]
+    // 回执展示口径：played / refused / failed 是客户端 /playback 回的三种终态，pending 是刚下发还没回。
+    const PET_RECEIPT_VIEW = {
+      played: { icon: '✅', word: '演完了', color: 'var(--ab-ok)' },
+      refused: { icon: '🚫', word: '被拦下', color: 'var(--ab-warn)' },
+      failed: { icon: '❌', word: '没演成', color: 'var(--ab-err)' },
+      pending: { icon: '⏳', word: '等回执', color: 'var(--ab-sub)' },
+      other: { icon: '·', word: '', color: 'var(--ab-sub)' },
+    }
+    /** 解析 behavior.json 的 recent 一行：`chase_cursor → played`、`hide_icon → refused（not-implemented）`、`say → 下发（等回执）`。 */
+    function parseBehaviorReceipt(line) {
+      const m = /^([a-z_]+)\s*→\s*(.+)$/.exec(String(line || '').trim())
+      if (!m) return null
+      const rest = m[2].trim()
+      const status = /^played\b/.test(rest) ? 'played' : /^refused\b/.test(rest) ? 'refused' : /^failed\b/.test(rest) ? 'failed' : /下发/.test(rest) ? 'pending' : 'other'
+      const i = rest.indexOf('（')
+      const why = i >= 0 ? rest.slice(i + 1).replace(/）\s*$/, '') : ''
+      return { action: m[1], status, why, text: rest }
+    }
     function PetPanel({ toast }) {
       const [pet, setPet] = useState(null)
       const [purpose, setPurpose] = useState(null)
@@ -1678,13 +1709,27 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [busy, setBusy] = useState('')
       // 碎碎念 / 干活状态的本地编辑态（数字与文案池要「应用」才提交；开关、下拉即点即存）
       const [ws, setWs] = useState(null)
+      // 行为动作卡：状态（/behavior/status）+ 隔离区清单（/behavior/icon/quarantine）+ 点完立刻给反馈的本地回执
+      const [bh, setBh] = useState(null)
+      // 行为与安全的本地编辑态：数字/白名单要「应用」才提交（开关即点即存）。null = 还没动过，直接用服务端值。
+      const [bcfg, setBcfg] = useState(null)
+      const [bhErr, setBhErr] = useState('')
+      const [quar, setQuar] = useState(null)
+      const [quarErr, setQuarErr] = useState('')
+      const [pend, setPend] = useState({})
       const load = async () => {
         const [pr, pu] = await Promise.all([get('/panel/pet/status'), get('/panel/purpose/status')])
         if (pr.ok) { setPet(pr.pet); setWs((old) => old || (pr.pet && pr.pet.whisper ? { ...pr.pet.whisper } : null)) }
         if (pu.ok) setPurpose(pu.purpose)
         setLoaded(true)
       }
-      useEffect(() => { load(); const t = setInterval(load, 8000); return () => { clearInterval(t) } }, [])
+      // 第二批接口（隔离区）没好时只记一条兜底文案，卡片照常渲染不炸
+      const loadBehavior = async () => {
+        const [br, qr] = await Promise.all([get('/panel/pet/behavior/status'), get('/panel/pet/behavior/quarantine')])
+        if (br.ok && br.behavior) { setBh(br.behavior); setBhErr('') } else setBhErr(br.message || '接口没有响应')
+        if (qr.ok) { setQuar(Array.isArray(qr.items) ? qr.items : []); setQuarErr('') } else setQuarErr(qr.message || '接口没有响应')
+      }
+      useEffect(() => { load(); loadBehavior(); const t = setInterval(() => { load(); loadBehavior() }, 8000); return () => { clearInterval(t) } }, [])
       const online = Boolean(pet && (pet.online ?? pet.presence?.online))
       const installed = Boolean(pet && (pet.installed ?? true))
       const state = !pet ? '未安装' : online ? '在线' : '离线'
@@ -1697,6 +1742,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       // Electron 三键：安装状态看 status.electronInstalled（electron.exe 在不在）；运行状态复用心跳（在线 = 在跑）
       const electronInstalled = Boolean(pet && (pet.electronInstalled ?? false))
       const portReady = pet ? pet.portReady !== false : false
+      // 客户端生成物对账（服务端 status.client）：缺 behavior.js 这类「旧壳」会让行为层静默失效
+      const clientInfo = (pet && pet.client) || null
+      const clientBad = Boolean(clientInfo && clientInfo.installed && !clientInfo.healthy)
       const act = async (key, path, okMsg) => {
         setBusy(key)
         try {
@@ -1725,6 +1773,67 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const nextIn = whisper && whisper.nextAt ? Math.max(0, Math.round((whisper.nextAt - Date.now()) / 60000)) : null
       const nextText = nextIn == null ? '' : nextIn <= 0 ? '马上' : nextIn < 60 ? nextIn + ' 分钟后' : nextIn < 1440 ? Math.round(nextIn / 60) + ' 小时后' : (Math.round(nextIn / 144) / 10) + ' 天后'
       const workEnabled = pet ? pet.workEnabled !== false : true
+      // ---------- 行为动作：状态行文案、回执映射、三个动作（试一下 / AI 开关 / 放回去） ----------
+      const bRecent = bh && Array.isArray(bh.recent) ? bh.recent : []
+      const bDisabled = new Set((bh && Array.isArray(bh.disabledActions) ? bh.disabledActions : []))
+      // recent 只留最近 8 条且带时间以外的全部信息：取该动作最后一次出现的那行
+      const bLatest = (action) => {
+        let line = ''
+        for (const x of bRecent) { const r = parseBehaviorReceipt(x); if (r && r.action === action) line = x }
+        return line
+      }
+      const receiptOf = (action) => {
+        const line = bLatest(action)
+        const p = pend[action]
+        // 点完的 20 秒内、回执还没变 → 先显示「已下发」，别让按钮像没反应
+        if (p && Date.now() - p.at < 20000 && (!line || line === p.base)) return { ...PET_RECEIPT_VIEW.pending, raw: '刚下发，等桌宠回执' }
+        if (!line) return null
+        const r = parseBehaviorReceipt(line)
+        if (!r) return { ...PET_RECEIPT_VIEW.other, word: line, raw: line }
+        const v = PET_RECEIPT_VIEW[r.status] || PET_RECEIPT_VIEW.other
+        if (r.status === 'other') return { ...v, word: r.text, raw: line }
+        return { ...v, why: r.why, raw: line }
+      }
+      const bNextIn = bh && bh.nextAt ? Math.round((bh.nextAt - Date.now()) / 60000) : null
+      const bNextText = bNextIn == null ? '还没排程' : bNextIn <= 0 ? '马上' : bNextIn < 60 ? '约 ' + bNextIn + ' 分钟后' : bNextIn < 1440 ? '约 ' + Math.round(bNextIn / 60) + ' 小时后' : '约 ' + Math.round(bNextIn / 144) / 10 + ' 天后'
+      const tryAction = async (action) => {
+        const base = bLatest(action)
+        setPend((old) => ({ ...old, [action]: { base, at: Date.now() } }))
+        try {
+          // 面板通道：不直连模块的 /behavior，走宿主的 /panel/pet/behavior 代理（和碎碎念/专注模式同一套）
+          const r = await post('/panel/pet/behavior', { action, force: true })
+          if (!r.ok) {
+            setPend((old) => { const n = { ...old }; delete n[action]; return n })
+            toast(r.message || '没演成', 'err')
+          } else toast(r.message || '已下发', 'ok')
+        } catch (e) { toast(e.message) } finally { setTimeout(loadBehavior, 1500) }
+      }
+      const toggleAction = async (action, on) => {
+        try {
+          const r = await post('/panel/pet/behavior/actions', { action, on })
+          if (!r.ok) toast(r.message || '没保存', 'err')
+          else {
+            setBh((old) => (old ? { ...old, disabledActions: Array.isArray(r.disabledActions) ? r.disabledActions : [] } : old))
+            toast(on ? '这个动作重新交给 AI 了' : '这个动作不给 AI 用了（「试一下」不受影响）', 'ok')
+          }
+        } catch (e) { toast(e.message) } finally { loadBehavior() }
+      }
+      const restoreIcon = async (id) => {
+        try {
+          const r = await post('/panel/pet/behavior/restore', { id })
+          toast(r.message || (r.ok ? '放回去了' : '没放回去'), r.ok ? 'ok' : 'err')
+        } catch (e) { toast(e.message) } finally { loadBehavior() }
+      }
+      // 第三批：关窗后「补偿道歉」——心情回一点，并标记最近一条未道歉的记录
+      const apologize = async () => {
+        try {
+          const r = await post('/panel/pet/behavior/apologize', {})
+          toast(r.message || (r.ok ? '她道了歉' : '没道歉'), r.ok ? 'ok' : 'err')
+        } catch (e) { toast(e.message) } finally { loadBehavior() }
+      }
+      // 行为与安全：c = 本地草稿（改了一半别被 8 秒轮询冲掉）|| 服务端真值
+      const c = bcfg || bh || {}
+      const saveBehCfg = async (patch, msg) => { await savePet(patch, msg); setBcfg(null); loadBehavior() }
       return h('div', { className: 'ab-grid' },
         h(Card, { title: '桌宠', desc: '把「大肥鱼」请到桌面上：一个小小的她待在屏幕角落，主动搭话走气泡；你也可以点她聊天。' },
         h('div', { className: 'ab-flex', style: { marginBottom: 8 } },
@@ -1736,8 +1845,12 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             : '主动搭话走 QQ 私聊，桌宠只显示气泡不发')),
         h(Row, { label: '专注模式', hint: '开着时她不弹气泡、也不主动搭话（学习/开会不被打扰）' },
           h(Switch, { on: focus, onChange: async (v) => { setBusy('focus'); try { const r = await post('/panel/pet/focus', { enabled: v }); if (!r.ok) toast(r.message || '没成功', 'err'); else toast(v ? '专注模式开了' : '专注模式关了', 'ok') } catch (e) { toast(e.message) } finally { setBusy(''); load() } } })),
+        clientBad ? h('div', { className: 'ab-note warn', style: { marginTop: 8 } },
+          h('div', null, '⚠ 客户端和插件版本对不上：' + (clientInfo.message || '需要重新生成')),
+          clientInfo.missing && clientInfo.missing.length ? h('div', { className: 'ab-small', style: { marginTop: 4 } }, '缺文件：' + clientInfo.missing.join('、') + '（缺 behavior.js 时行为层整个不生效，只打日志）') : null,
+          clientInfo.needsRestart ? h('div', { className: 'ab-small', style: { marginTop: 4 } }, 'Electron 现在在跑：重新生成后要「停止桌宠」再「启动桌宠」才生效') : null) : null,
         h('div', { className: 'ab-flex', style: { marginTop: 10 } },
-          h(Btn, { small: true, disabled: busy === 'dl', onClick: async () => { setBusy('dl'); try { const r = await post('/panel/pet/download'); if (!r.ok) toast(r.message || '没成功', 'err'); else toast('客户端已放到数据目录，按桌宠模块说明启动即可', 'ok') } catch (e) { toast(e.message) } finally { setBusy(''); load() } } }, busy === 'dl' ? '下载中…' : '下载 / 生成客户端'),
+          h(Btn, { small: true, disabled: busy === 'dl', onClick: async () => { setBusy('dl'); try { const r = await post('/panel/pet/download'); if (!r.ok) toast(r.message || '没成功', 'err'); else toast(clientBad ? '客户端已重新生成，重启 Electron 后生效' : '客户端已放到数据目录，按桌宠模块说明启动即可', 'ok') } catch (e) { toast(e.message) } finally { setBusy(''); load() } } }, busy === 'dl' ? '生成中…' : clientBad ? '重新生成客户端' : '下载 / 生成客户端'),
           h('span', { className: 'ab-muted ab-small' }, '放到数据目录 modules-data/pet/app，随插件自动发现')),
         h('div', { className: 'ab-flex', style: { marginTop: 6 } },
           h(Btn, { small: true, disabled: busy === 'ei', onClick: () => act('ei', '/panel/pet/electron-install', 'Electron 安装完成') }, busy === 'ei' ? '安装中…' : electronInstalled ? '重装 Electron' : '安装 Electron'),
@@ -1748,6 +1861,133 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Row, { label: '表情预览', hint: '气泡与心情事件会用到这些表情' },
           h('div', { style: { flex: 1, display: 'flex', flexWrap: 'wrap', gap: 6 } },
             moods.map((m, i) => h('span', { key: (m.key || m) + i, className: 'ab-pill' }, moodLabel(m))))),
+        ),
+        // ---------- 行为动作（面板测试通道）：状态行 + 逐动作「试一下」/ AI 开关 + 行内最近回执 ----------
+        h(Card, { title: '行为动作', desc: '她的「行为大脑」每隔一会儿自己挑一个动作演：追鼠标、叼鼠标、叼图标、推窗口……这里可以逐个「试一下」（绕过专注模式与安静时段，立刻下发），也可以把某个动作从 AI 的动作表里拿掉——「试一下」按钮不受影响。桌宠没在跑时点按钮只是下发排队，等她跑起来才演。右边「最近回执」是客户端演完或拒演回来的结果。AI 每次决策都在工作区里单独开一条「行为大脑」会话，能当场看到她怎么想的。' },
+          bhErr && !bh
+            ? h('div', { className: 'ab-flex' }, h('span', { className: 'ab-muted ab-small' }, '行为动作接口还没就绪：' + bhErr + '（更新插件后刷新页面即可）'), h(Btn, { small: true, onClick: loadBehavior }, '重试'))
+            : !bh ? h(Empty, { icon: '⏳', text: '加载中…' })
+              : h('div', null,
+                h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
+                  h('span', { className: 'ab-pill' }, h('i', { className: cx('ab-dot', bh.enabled ? 'ok' : '') }), '行为大脑' + (bh.enabled ? '开着' : '关着')),
+                  h('span', { className: 'ab-pill' }, '今天 ' + (bh.today || 0) + '/' + (bh.maxPerDay ?? '?') + ' 次'),
+                  h('span', { className: 'ab-pill' }, bh.thinking ? '正在想下一个动作…' : '下次触发 ' + bNextText),
+                  bh.online === false ? h('span', { className: 'ab-pill' }, h('i', { className: 'ab-dot err' }), '桌宠没在跑') : null,
+                ),
+                h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
+                  (bh.enabled ? '' : '总开关关着（模块设置里打开）：AI 不会自己演，下面的「试一下」照常能用。')
+                  + (bh.lastAt ? '上次演 ' + timeAgo(bh.lastAt) + '。' : '今天还没演过。')),
+                // 环境简报对账（这一轮 AI 到底拿到了什么）：图标是服务端直接读桌面目录，
+                // 窗口只能靠客户端定时上报（/behavior/env），所以两者要分开显示，缺一个就说明那半边喂空了
+                h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
+                  '环境简报：桌面图标 ' + ((Array.isArray(bh.envIcons) ? bh.envIcons.length : 0)) + ' 个'
+                  + '｜开着的窗口 ' + ((Array.isArray(bh.envWindows) ? bh.envWindows.length : 0)) + ' 个'
+                  + (bh.envWindowsAt ? '（' + timeAgo(bh.envWindowsAt) + '上报）' : '（客户端还没上报，窗口动作只能按前台窗口算）')
+                  + (bh.thinking ? '｜正在「' + (bh.turnTitle || '行为大脑') + '」里想' : '')),
+                h('table', { className: 'ab-table' },
+                  h('thead', null, h('tr', null, ['动作', '最近回执', 'AI 动作表', '试一下'].map((x) => h('th', { key: x }, x)))),
+                  h('tbody', null, PET_BEHAVIOR_ACTIONS.map((a) => {
+                    const rc = receiptOf(a.action)
+                    // 置灰只认服务端口径：deferredActions 里还有它才算「还没实现」（第三批三个已放开）
+                    const deferred = (Array.isArray(bh && bh.deferredActions) ? bh.deferredActions : []).includes(a.action)
+                    return h('tr', { key: a.action },
+                      h('td', null,
+                        h('b', null, a.name),
+                        h('span', { className: 'ab-muted ab-small' }, ' ' + a.action),
+                        h('div', { className: 'ab-muted ab-small' }, a.effect + (a.tier === 2 ? '（第二批，可还原）' : deferred ? '（还没实现）' : ''))),
+                      h('td', { style: { maxWidth: 220 } }, rc
+                        ? h('span', { className: 'ab-small', style: { color: rc.color }, title: rc.raw }, rc.icon + ' ' + rc.word + (rc.why ? '：' + rc.why : ''))
+                        : h('span', { className: 'ab-muted ab-small' }, '还没试过')),
+                      h('td', null, h(Switch, {
+                        on: !bDisabled.has(a.action), disabled: deferred,
+                        title: deferred ? '第三批还没实现，先不进 AI 动作表' : '关掉后 AI 不会自己挑这个动作（「试一下」不受影响）',
+                        onChange: (v) => toggleAction(a.action, v),
+                      })),
+                      h('td', null, h(Btn, { small: true, onClick: () => tryAction(a.action) }, '试一下')),
+                    )
+                  })),
+                ),
+              ),
+        ),
+        // ---------- 行为与安全（模块级开关）----------
+        // 为什么放在面板：pet 是**内置模块**，DSH 面板只给「用户自己复制出来的模块」生成设置表单
+        // （client.js 的 hasUi 要求 running==='user' && !builtin），所以 index.js 里那份 settings schema
+        // 在内置形态下没有任何 UI。不在这里补一张卡，关窗物理闸就永远打不开。
+        bh ? h(Card, {
+          title: '行为与安全',
+          desc: 'AI 只能从动作表里挑动作，闹到什么程度由这里定。开关即点即存，数字和白名单点「应用」。'
+            + '「允许 AI 关闭窗口」默认关，它是一道物理闸：AI 与手动「试一下」都绕不过去。',
+        },
+          h(Row, { label: '行为大脑', hint: '关掉后她不再自己挑动作（面板「试一下」仍可手动触发）' },
+            h(Switch, { on: c.enabled !== false, onChange: (v) => saveBehCfg({ behaviorEnabled: v }, v ? '行为大脑已开' : '行为大脑已关，她只回应你') })),
+          h(Row, { label: '行为间隔', hint: '最短不低于 1 分钟（铁律）' },
+            h('input', { className: 'ab-input sm', type: 'number', min: 1, max: 9999, value: c.minMinutes ?? '', onChange: (e) => setBcfg({ ...c, minMinutes: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '到'),
+            h('input', { className: 'ab-input sm', type: 'number', min: 1, max: 9999, value: c.maxMinutes ?? '', onChange: (e) => setBcfg({ ...c, maxMinutes: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '分钟'),
+            h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorMinMinutes: Number(c.minMinutes), behaviorMaxMinutes: Number(c.maxMinutes) }, '间隔改好了') }, '应用')),
+          h(Row, { label: '每天最多', hint: '0 = 她不再自己动' },
+            h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 999999, value: c.maxPerDay ?? '', onChange: (e) => setBcfg({ ...c, maxPerDay: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '次'),
+            h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorMaxPerDay: Number(c.maxPerDay) }, '上限改好了') }, '应用')),
+          h(Row, { label: '鼠标闲置凑近', hint: '鼠标这么久没动，她凑过去戳一下' },
+            h('input', { className: 'ab-input sm', type: 'number', min: 1, max: 240, value: c.idleCursorMinutes ?? '', onChange: (e) => setBcfg({ ...c, idleCursorMinutes: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '分钟'),
+            h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorIdleCursorMinutes: Number(c.idleCursorMinutes) }, '改好了') }, '应用')),
+          h(Row, { label: '图标小动作', hint: '叼着桌面图标拖一拖 / 收走图标（只挪不删，可一键归还）' },
+            h(Switch, { on: c.iconMischiefEnabled !== false, onChange: (v) => saveBehCfg({ behaviorIconMischiefEnabled: v }, v ? '图标小动作已开' : '已关，她不碰桌面图标了') })),
+          h(Row, { label: '收走的图标自动归还', hint: '超过这么多天还没被放回，她自己还回去' },
+            h('input', { className: 'ab-input sm', type: 'number', min: 1, max: 365, value: c.iconQuarantineDays ?? '', onChange: (e) => setBcfg({ ...c, iconQuarantineDays: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '天'),
+            h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorIconQuarantineDays: Number(c.iconQuarantineDays) }, '改好了') }, '应用')),
+          h(Row, { label: '允许 AI 关闭窗口', hint: '⚠ 高危：会真的关闭程序窗口，未保存的工作可能丢失。物理闸：AI 与「试一下」都绕不过去，测试关窗前必须先打开它' },
+            h(Switch, { on: c.closeWindowEnabled === true, onChange: (v) => saveBehCfg({ behaviorCloseWindowEnabled: v }, v ? '已允许关窗；建议先在下面填白名单' : '已禁止关窗') })),
+          h(Row, { label: '关窗心情闸', hint: '心情低于此值 AI 才可能关窗（手动「试一下」不受心情限制，只受上面的物理闸管）' },
+            h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: c.moodCloseWindowBelow ?? '', onChange: (e) => setBcfg({ ...c, moodCloseWindowBelow: e.target.value }) }),
+            h('span', { className: 'ab-muted' }, '分'),
+            h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorMoodCloseWindowBelow: Number(c.moodCloseWindowBelow) }, '改好了') }, '应用')),
+          h(Row, { label: '窗口操作白名单', hint: '一行一个进程名或标题关键词；留空 = 只碰普通窗口（DSH 自己、桌宠、资源管理器永远不碰）' },
+            h('textarea', { className: 'ab-textarea', rows: 3, value: c.windowWhitelist ?? '', placeholder: 'notepad', onChange: (e) => setBcfg({ ...c, windowWhitelist: e.target.value }) }),
+            h('div', { style: { marginTop: 6 } }, h(Btn, { small: true, disabled: busy === 'cfg', onClick: () => saveBehCfg({ behaviorWindowWhitelist: String(c.windowWhitelist ?? '') }, '白名单存好了') }, '保存白名单'))),
+        ) : null,
+        // ---------- 被收走的图标（第二批）：hide_icon 的隔离区，一键放回 ----------
+        h(Card, { title: '被收走的图标', desc: '「收图标」不是删除：她把桌面图标剪切到插件数据目录的隔离区，文件原样留着。这里可以随时放回原位（原位置被占了会自动改名「名字(归还)」），超过「隔离保留天数」（默认 7 天）她也会自己放回去。' },
+          quarErr
+            ? h('div', { className: 'ab-flex' }, h('span', { className: 'ab-muted ab-small' }, '隔离区清单读不了：' + quarErr), h(Btn, { small: true, onClick: loadBehavior }, '重试'))
+            : quar === null ? h(Empty, { icon: '⏳', text: '加载中…' })
+              : quar.length === 0 ? h(Empty, { icon: '✨', text: '隔离区空空的，桌宠很乖' })
+                : h('table', { className: 'ab-table' },
+                  h('thead', null, h('tr', null, ['名称', '原位置', '收走时间', '原因', ''].map((x, i) => h('th', { key: i }, x)))),
+                  h('tbody', null, quar.map((it) => h('tr', { key: it.id },
+                    h('td', null, h('b', null, it.name || '（未命名）')),
+                    h('td', { style: { maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: it.originalPath || '' },
+                      h('span', { className: 'ab-muted ab-small' }, it.originalPath || '—')),
+                    h('td', null, h('span', { className: 'ab-muted ab-small' }, it.at ? new Date(it.at).toLocaleString() : '—')),
+                    h('td', null, h('span', { className: 'ab-muted ab-small' }, it.reason || '—')),
+                    h('td', null, h(Btn, { small: true, onClick: () => restoreIcon(it.id) }, '放回去')),
+                  ))),
+                ),
+        ),
+        // ---------- 关窗记录（第三批）：close_window 的账本 + 一键补偿道歉 ----------
+        h(Card, { title: '关窗记录', desc: '「关窗口」是高危动作：AI 只有在「允许 AI 关闭窗口」开着、且她心情低于 ' + (bh && bh.moodCloseWindowBelow != null ? bh.moodCloseWindowBelow : 35) + ' 时才会自己关；手动「试一下」不受心情限制，但同样要先开那个开关。关的方式等于点右上角 X（程序会自己问要不要保存）。DSH 自己的窗口、桌宠、资源管理器、全屏窗口永远不碰。' },
+          h('div', { className: 'ab-flex', style: { marginBottom: 8 } },
+            h('span', { className: 'ab-pill' }, '今天关了 ' + ((bh && bh.closeToday) || 0) + ' 个'),
+            h('span', { className: 'ab-pill' }, bh && bh.closeWindowEnabled ? 'AI 关窗：已允许' : 'AI 关窗：不允许（默认）'),
+            bh && bh.mood != null ? h('span', { className: 'ab-muted ab-small' }, '现在心情 ' + bh.mood + '（低于 ' + bh.moodCloseWindowBelow + ' 才会自己关）') : null,
+            bh && bh.apologyDue ? h(Btn, { small: true, onClick: apologize }, '让她道歉（心情回一点）') : null),
+          (bh && Array.isArray(bh.closeLog) && bh.closeLog.length)
+            ? h('table', { className: 'ab-table' },
+              h('thead', null, h('tr', null, ['窗口', '时间', '结果', ''].map((x, i) => h('th', { key: i }, x)))),
+              h('tbody', null, bh.closeLog.map((x, i) => h('tr', { key: i },
+                h('td', { style: { maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: x.window || '' },
+                  h('b', null, x.window || '（没回报窗口名）')),
+                h('td', null, h('span', { className: 'ab-muted ab-small' }, x.at ? new Date(x.at).toLocaleString() : '—')),
+                h('td', null, h('span', { className: 'ab-small' },
+                  x.status === 'played' ? '关掉了' : x.status === 'refused' ? '被拦下：' + (x.reason || '') : '没关成')),
+                h('td', null, h('span', { className: 'ab-muted ab-small' }, x.apologizedAt ? '已道歉' : (x.status === 'played' ? '还没道歉' : '—'))),
+              ))),
+            )
+            : h(Empty, { icon: '🪟', text: '还没关过任何窗口（她挺乖的）' }),
         ),
         // ---------- 碎碎念：桌宠自己的气泡流（载体选 QQ 也照常生效，永不发 QQ） ----------
         whisper ? h(Card, { title: '碎碎念', desc: '她自己在桌面上嘟囔的小气泡：跟「主动搭话」完全分开，载体选 QQ 时也照常出现；只上桌宠气泡，不会发到 QQ。到了点她会带着记忆自己想一句——工作区里会像「主动搭话（目的回合）」那样开一条「' + (whisper.turnTitle || '桌宠 · 碎碎念（自己的回合）') + '」的会话，能当场看到她的思考过程。间隔与时段跟着「主动搭话」那边的醒着时间。' },
