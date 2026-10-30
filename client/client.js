@@ -518,12 +518,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'song', label: '翻唱', flag: 'song.enabled' },
       { id: 'bili', label: 'B站', flag: 'bili.enabled' },
       { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
+      { id: 'heybox', label: '小黑盒', flag: 'heybox.enabled' },
       { id: 'local', label: '本地接口' },
       { id: 'modules', label: '扩展' },
       { id: 'logs', label: '日志' },
     ]
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
-    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'] }
+    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
 
     // 两层导航：上面一排是分组，下面一排是这组里的页面；每组记住上次看的那页，Alt+K 查找功能
@@ -532,11 +533,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'home', label: '概览', icon: 'M3 10.5 12 3l9 7.5M5.5 9v11.5h13V9M10 20.5v-6h4v6', tabs: ['overview'] },
       { id: 'self', label: '人设', icon: 'M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5', tabs: ['persona', 'group', 'speakup', 'mood'] },
       { id: 'express', label: '表达', icon: 'M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01', tabs: ['voice', 'stickers', 'imagegen', 'song'] },
-      { id: 'platform', label: '平台', icon: 'M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z', tabs: ['diary', 'bili', 'douyin'] },
+      { id: 'platform', label: '平台', icon: 'M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z', tabs: ['diary', 'bili', 'douyin', 'heybox'] },
       { id: 'system', label: '系统', icon: 'M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4', tabs: ['connect', 'model', 'access', 'local', 'modules', 'logs'] },
     ]
     // 自己写的模块：名字像逛平台的放「平台」，其余放「系统」（排在「日志」前面）
-    const PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站/
+    const PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站|小黑盒/
     const navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ext && PLATFORM_EXT.test(t.label) ? NAV_GROUPS[3] : NAV_GROUPS[4])
     const navOrder = (g, t) => { const i = g.tabs.indexOf(t.id); return i >= 0 ? i : g.tabs.length - (g.tabs.includes('logs') ? 1.5 : 0) }
     const NAV_ALIAS = {
@@ -1083,6 +1084,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         row('douyinComment', '抖音评论', '有人让她去某个视频下评论；关掉后她自己刷的时候也不评论。'),
         row('douyinShareOwner', '分享抖音给主人', '刷到好玩的视频在 QQ 私聊里发给你（她的话 + 链接）。'),
         row('douyinDm', '主动发抖音私信', '主人明确让她给某个人发私信时（主页链接或抖音号）；列表里没有会话会从对方主页发起。默认仅主人私聊。'),
+        row('heyboxBrowse', '逛小黑盒 / 看帖子', '让她翻信息流（heybox_feed）、读帖子正文和热评（heybox_watch）、看热榜和搜帖子（heybox_hot / heybox_search / heybox_topics）。定时自己逛不受这项限制。'),
+        row('heyboxLike', '小黑盒点赞', '有人让她给某个帖子点赞；关掉后她自己逛的时候也不点赞。'),
+        row('heyboxComment', '小黑盒评论', '有人让她去某个帖子下评论；关掉后她自己逛的时候也不评论。'),
+        row('heyboxPost', '小黑盒发帖 / 删帖', '让她发帖（heybox_post，文章模式可带图）和删自己发的帖（heybox_delete）。发帖会用你的账号公开发布，默认仅主人私聊。'),
       )
     }
 
@@ -2326,6 +2331,164 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       )
     }
 
+
+    const HEYBOX_KIND = { browse: '逛了一圈', like: '点了赞', comment: '发了评论', post: '发了帖', delete: '删了帖' }
+
+
+    /** 「小黑盒」页：账号、逛法、额度、热榜预览、发帖分区与自检提醒、逛过什么。 */
+    function Heybox({ draft, setDraft, toast }) {
+      const f = useField(draft, setDraft)
+      const [s, setS] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [hot, setHot] = useState(null)
+      const [cookieText, setCookieText] = useState('')
+      const load = () => get('/heybox/state').then(setS)
+      useEffect(() => { load() }, [])
+      const act = (path, label, body) => async () => {
+        setBusy(label)
+        const r = await post(path, body)
+        setBusy('')
+        toast(r.message || (r.ok ? '好了' : '没成功'), r.ok === false ? 'err' : 'ok')
+        load()
+      }
+      const checkAccount = async () => {
+        setBusy('account')
+        const r = await get('/heybox/account')
+        setBusy('')
+        toast(r.message || (r.loggedIn ? '已登录：' + (r.nickname || '') : '没登录'), r.loggedIn ? 'ok' : 'err')
+        load()
+      }
+      const loadHot = async () => {
+        setBusy('hot')
+        const r = await post('/heybox/hot')
+        setBusy('')
+        if (r.ok === false) { toast(r.message || '拉不到热榜', 'err'); return }
+        setHot(r)
+        load()
+      }
+      const saveCookie = async () => {
+        if (!cookieText.trim()) { toast('先把 Cookie 粘进来', 'err'); return }
+        setBusy('cookie')
+        const r = await post('/heybox/login-cookie', { cookie: cookieText })
+        setBusy('')
+        toast(r.message || (r.ok ? '存好了' : '没成功'), r.ok === false ? 'err' : 'ok')
+        if (r.ok) setCookieText('')
+        load()
+      }
+      const acct = s && s.account
+      const acctText = !acct || !acct.checkedAt ? h('span', { className: 'ab-small ab-muted' }, '还没检查过') :
+        h('span', { className: 'ab-small', style: { color: acct.loggedIn ? 'var(--ab-ok)' : 'var(--ab-warn)' } },
+          acct.loggedIn ? '已登录：' + (acct.nickname || '') + (acct.heyboxId ? '（id ' + acct.heyboxId + '）' : '') : (acct.message || '还没登录'),
+          acct.checkedAt ? h('span', { className: 'ab-muted' }, ' · ' + timeAgo(acct.checkedAt) + '查的') : null)
+      const quota = (s && s.quota) || {}
+      const left = (s && s.left) || {}
+      const limits = (s && s.limits) || {}
+      return h('div', { className: 'ab-grid' },
+        h(Card, {
+          title: '刷小黑盒', right: f.sw('heybox.enabled'),
+          desc: '用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么，配图走小黑盒图床），发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。',
+        },
+          h(Row, { label: '小黑盒账号', hint: '从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）' },
+            h('div', null,
+              h('div', { className: 'ab-flex' },
+                h(Btn, { small: true, onClick: checkAccount, disabled: !!busy }, busy === 'account' ? '检查中…' : '检查登录'),
+                acctText),
+              h('div', { style: { marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' } },
+                h('textarea', {
+                  className: 'ab-input', rows: 3, spellCheck: false,
+                  style: { flex: 1, minWidth: 260, fontFamily: 'monospace', fontSize: 12 },
+                  placeholder: 'pkey=…; heybox_id=…; x_xhh_tokenid=…',
+                  value: cookieText, onChange: (e) => setCookieText(e.target.value),
+                }),
+                h(Btn, { small: true, kind: 'primary', onClick: saveCookie, disabled: !!busy }, busy === 'cookie' ? '保存中…' : '保存 Cookie')),
+              s && s.hasCookie
+                ? h('div', { className: 'ab-small', style: { marginTop: 6, color: s.hasToken ? 'var(--ab-ok)' : 'var(--ab-warn)' } },
+                  s.hasToken ? '✓ 有 pkey 和 x_xhh_tokenid，读写都能用' : '⚠ 只有 pkey，没有 x_xhh_tokenid：点赞 / 评论 / 发帖大概率会被拒')
+                : null)),
+        ),
+        h(Card, {
+          title: '她的逛法', desc: '只在「主动搭话」里设的醒着时间内自己逛。主人在 QQ 里让她「去逛逛小黑盒」也行。逛是只读的，不会乱点赞评论。',
+        },
+          h(Row, { label: '定时自己去逛' }, f.sw('heybox.autoBrowse')),
+          h(Row, { label: '多久逛一圈' }, f.range('heybox.intervalHours', 1, 24, 1, (v) => v + ' 小时')),
+          h(Row, { label: '一圈看几条' }, f.range('heybox.perRun', 1, 10, 1, (v) => v + ' 条')),
+          h(Row, { label: '每天最多逛' }, f.range('heybox.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')),
+        ),
+        h(Card, {
+          title: '每天上限',
+          desc: '小黑盒的帖详情和搜索接口查太勤会弹验证码（还可能连坐浏览器登录态），所以额度别设太大。搜索被挡时她会自动降级去翻信息流，不会反复硬试。',
+        },
+          h(Row, { label: '点赞' }, f.num('heybox.likeDaily', { min: 0, max: 60 }), h('span', { className: 'ab-muted' }, '次/天')),
+          h(Row, { label: '评论' }, f.num('heybox.commentDaily', { min: 0, max: 30 }), h('span', { className: 'ab-muted' }, '条/天')),
+          h(Row, { label: '发帖' }, f.num('heybox.maxPostsPerDay', { min: 0, max: 5 }), h('span', { className: 'ab-muted' }, '篇/天（建议别超过 3）')),
+          h(Row, { label: '发帖风格', hint: '她写帖时按这个口吻来。也可以让她单次换：跟她说「用日记风格发一篇」' },
+            f.select('heybox.postStyle', [
+              { value: 'diary', label: '大肥鱼日记', desc: '第一人称随手记，跟空间日记一个味，120-300字' },
+              { value: 'news', label: '热搜文', desc: '报道新闻体，摆具体数字，200-800字' },
+              { value: 'mix', label: '肥鱼热搜', desc: '用日记口吻写热搜，150-500字' },
+            ], { width: 220 })),
+          h(Row, { label: '发帖默认分区', hint: '文章帖必须挂分区，否则会报「请添加分区」。这三个是实测存在的' },
+            f.select('heybox.defaultTopic', [
+              { value: 7214, label: '盒友杂谈', desc: '最常用，什么都能聊' },
+              { value: 18745, label: '数码硬件', desc: '显卡、笔记本、外设' },
+              { value: 806933, label: 'AI', desc: 'AI 相关，容易涨浏览' },
+            ], { width: 200 })),
+          s ? h(Row, { label: '今天已经用掉', hint: '到 0 就等明天，或者手动清零（重启一次会话不会重置）' },
+            h('div', { className: 'ab-flex' },
+              h('span', { className: 'ab-small ab-muted' },
+                '逛 ' + (quota.browse || 0) + '/' + (limits.maxRunsPerDay || 0) +
+                ' · 赞 ' + (quota.like || 0) + '/' + (limits.likeDaily || 0) +
+                ' · 评 ' + (quota.comment || 0) + '/' + (limits.commentDaily || 0) +
+                ' · 帖 ' + (quota.post || 0) + '/' + (limits.maxPostsPerDay || 0)),
+              h(Btn, { small: true, kind: 'ghost', onClick: act('/heybox/clear-quota', 'quota') }, busy === 'quota' ? '清零中…' : '清零')))
+            : null,
+        ),
+        h(Card, {
+          title: '热榜预览', right: h('div', { className: 'ab-flex' },
+            h(Btn, { small: true, onClick: load }, '刷新'),
+            h(Btn, { small: true, kind: 'primary', onClick: loadHot, disabled: !!busy }, busy === 'hot' ? '拉取中…' : '看热榜')),
+          desc: '她写帖前会先看这个（热榜 → 搜社区 → 找具体素材）。这里只是让你看看现在有什么题，热榜里电竞和商业新闻不适合这个号。',
+        },
+          !hot ? h(Empty, { icon: '🔥', text: '点右上角「看热榜」，看看现在小黑盒在热议什么。' })
+            : (hot.list || []).length === 0 ? h(Empty, { icon: '🔥', text: '热榜是空的，可能接口变了。' })
+            : h('div', { className: 'ab-list' }, (hot.list || []).map((x, i) => h('div', { key: i, className: 'ab-li' },
+              h('div', { className: 'meta' }, String(i + 1)), h('div', { className: 'body' }, x.text, x.tag ? h('span', { className: 'ab-muted' }, '  [' + x.tag + ']') : null)))),
+        ),
+        h(Card, {
+          title: '发帖自检（她发之前自己过一遍）',
+          desc: '这几条写在她的规则里，不满足就不发。你也可以照着看，她要发的帖哪条对不上就让改。',
+        },
+          h('div', { className: 'ab-note', style: { marginBottom: 8, whiteSpace: 'pre-line' } },
+            [
+              '① 先看热榜挑题（不许跳过），挑不出来就说今天没合适的，别硬凑。',
+              '② 再看社区高赞帖在聊什么角度，可以借角度但用自己的话。',
+              '③ 素材里必须有具体的东西：价格、销量、时长、机制名、star 增速——没具体信息就是水文。',
+              '④ 标题别和正文第一行重复；不编造第一人称经历；正文 200-800 字；配图越多越好。',
+              '⑤ 不碰政治、医疗法律建议、评价真人、判断价格是否合理；读一遍像不像人话（转折词堆砌就是 AI 腔）。',
+            ].join('\n')),
+          h('div', { className: 'ab-note warn' },
+            '格式上的坑（已修在内核里）：帖子类型必须是「文章」(link_tag=11) 才能解析 HTML 并把图插在文字中间；分区 id 必须是真实存在的 7214 / 18745 / 806933，乱填会一直报「错误的帖子类型」。'),
+        ),
+        h(Card, {
+          title: '她逛过什么', right: h('div', { className: 'ab-flex' },
+            h(Btn, { small: true, onClick: load }, '刷新'),
+            h(Btn, { small: true, kind: 'primary', onClick: act('/heybox/run', 'run'), disabled: !!busy }, busy === 'run' ? '正在逛…' : '现在逛一圈')),
+        },
+          s && s.lastSkipReason ? h('div', { className: 'ab-note warn', style: { marginBottom: 8 } }, '上次没逛成：' + s.lastSkipReason) : null,
+          s ? h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } },
+            s.lastRun ? '上次逛：' + timeAgo(s.lastRun) : '还没逛过') : null,
+          !s ? h(Empty, { icon: '⏳', text: '加载中…' })
+            : (s.history || []).length === 0 ? h(Empty, { icon: '📭', text: '还没逛过。先填 Cookie、打开开关，再点「现在逛一圈」。' })
+            : h('div', { className: 'ab-list' }, (s.history || []).map((x, i) => h('div', { key: i, className: 'ab-li' },
+              h('div', { className: 'meta' }, timeAgo(x.at), h('br'), HEYBOX_KIND[x.kind] || x.kind),
+              h('div', { className: 'body' },
+                x.linkId ? h('a', { href: 'https://www.xiaoheihe.cn/app/bbs/link/' + x.linkId, target: '_blank', rel: 'noreferrer' }, x.title || x.linkId) : null,
+                x.text ? h('div', { className: 'ab-muted' }, x.text) : null,
+                x.count ? h('div', { className: 'ab-muted' }, '看了 ' + x.count + ' 条') : null)))),
+        ),
+      )
+    }
+
     /** 「她的画作」：读存图目录里最近的 N 张，可以单张删除、开文件夹。 */
     function PaintGallery({ draft, setDraft, toast }) {
       const f = useField(draft, setDraft)
@@ -2697,10 +2860,10 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
       const body = curTab.ext ? ExtPage : {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, douyin: Douyin, local: LocalApi, modules: Modules, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
