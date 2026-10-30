@@ -535,6 +535,110 @@ test('听语音：收到语音先转文字再交给她', async () => {
   await until(() => fake.turns.at(-1)?.userText.includes('[语音] 今天想吃白米饭'))
 })
 
+test('引用消息：私聊能看到被引用的内容；引用她自己时标「你」', async () => {
+  mock.state.messages = {
+    7001: { message_id: 7001, sender: { user_id: OWNER, nickname: '主人' }, message: [{ type: 'text', data: { text: '上周说的那件事' } }] },
+    7002: { message_id: 7002, sender: { user_id: BOT, nickname: '大肥鱼' }, message: [{ type: 'text', data: { text: '我说过的晚安' } }] },
+  }
+  try {
+    let before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7001' } }, ...text('这个你看到了吗')]))
+    await until(() => fake.turns.slice(before).some((t) => /上周说的那件事/.test(String(t.userText))), 15000)
+    const t1 = fake.turns.slice(before).find((t) => /上周说的那件事/.test(String(t.userText)))
+    assert.match(String(t1.userText), /引用 主人\(10000001\) 的消息/)
+
+    before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7002' } }, ...text('你还记得吗')]))
+    await until(() => fake.turns.slice(before).some((t) => /我说过的晚安/.test(String(t.userText))), 15000)
+    const t2 = fake.turns.slice(before).find((t) => /我说过的晚安/.test(String(t.userText)))
+    assert.match(String(t2.userText), /引用 你 的消息/, '引用的是她自己，要标成「你」')
+  } finally {
+    delete mock.state.messages
+  }
+})
+
+test('引用消息：群聊里也能看到被引用的内容', async () => {
+  mock.state.messages = {
+    7101: { message_id: 7101, sender: { user_id: '999', nickname: '小明' }, message: [{ type: 'text', data: { text: '昨晚那把打得好' } }] },
+  }
+  try {
+    const before = fake.turns.length
+    mock.push(grp('557', OWNER, [{ type: 'reply', data: { id: '7101' } }, ...text('你看这个')], '主人'))
+    await until(() => fake.turns.slice(before).some((t) => /昨晚那把打得好/.test(String(t.userText))), 20000)
+    const t = fake.turns.slice(before).find((t) => /昨晚那把打得好/.test(String(t.userText)))
+    assert.match(String(t.userText), /引用 小明\(999\) 的消息/, '群提示词里要带引用说明')
+  } finally {
+    delete mock.state.messages
+  }
+})
+
+test('引用消息：引用里的图片也作为附件给她看', async () => {
+  const png = fakePng(240, 240, 7)
+  mock.state.messages = {
+    7201: { message_id: 7201, sender: { user_id: OWNER, nickname: '主人' }, message: [{ type: 'image', data: { sub_type: 0, file: 'base64://' + png.toString('base64') } }] },
+  }
+  try {
+    const before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7201' } }, ...text('这张图呢')]))
+    await until(() => fake.turns.slice(before).some((t) => t.images >= 1), 20000)
+    const t = fake.turns.slice(before).find((x) => x.images >= 1)
+    assert.ok(t.images >= 1, '引用里的图片要作为附件交给她')
+  } finally {
+    delete mock.state.messages
+  }
+})
+
+test('引用消息：引用里的表情包也作为附件给她看', async () => {
+  const png = fakePng(120, 120, 8)
+  mock.state.messages = {
+    7401: { message_id: 7401, sender: { user_id: OWNER, nickname: '主人' }, message: [{ type: 'image', data: { sub_type: 1, summary: '[表情包]', file: 'base64://' + png.toString('base64') } }] },
+  }
+  try {
+    const before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7401' } }, ...text('这个表情呢')]))
+    await until(() => fake.turns.slice(before).some((t) => t.images >= 1), 20000)
+    const t = fake.turns.slice(before).find((x) => x.images >= 1)
+    assert.ok(t.images >= 1, '引用里的表情包要作为附件交给她')
+    assert.match(String(t.userText), /表情包/, '文字里也要注明引用的是表情包')
+  } finally {
+    delete mock.state.messages
+  }
+})
+
+test('引用消息：get_msg 只回空 url + 裸文件名时，从消息历史补图片地址', async () => {
+  const png = fakePng(120, 120, 9)
+  mock.state.messages = {
+    7501: { message_id: 7501, sender: { user_id: BOT, nickname: '大肥鱼' }, message: [{ type: 'image', data: { url: '', file: 'abc.png', sub_type: 1, summary: '[确认眼神]' } }] },
+  }
+  mock.state.history = [
+    { message_id: 7501, real_id: 7501, sender: { user_id: BOT }, message: [{ type: 'image', data: { url: 'base64://' + png.toString('base64'), file: 'abc.gif', sub_type: 1, summary: '[确认眼神]' } }] },
+  ]
+  try {
+    const before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7501' } }, ...text('这个表情呢')]))
+    await until(() => fake.turns.slice(before).some((t) => t.images >= 1), 20000)
+    const t = fake.turns.slice(before).find((x) => x.images >= 1)
+    assert.ok(t.images >= 1, '历史里的图片地址要补上，表情包才算真的看到')
+    assert.match(String(t.userText), /引用 你 的消息/, '她自己的表情包标成「你」')
+  } finally {
+    delete mock.state.messages
+    delete mock.state.history
+  }
+})
+
+test('引用消息：拉不到内容时明确告诉她没读到（不装看见）', async () => {
+  mock.state.failGetMsg = true
+  try {
+    const before = fake.turns.length
+    mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7301' } }, ...text('这个呢')]))
+    await until(() => fake.turns.slice(before).some((t) => /没读到/.test(String(t.userText))), 15000)
+    const t = fake.turns.slice(before).find((t) => /没读到/.test(String(t.userText)))
+    assert.match(String(t.userText), /如实说没看到/, '要让她知道可以如实说没看到')
+  } finally {
+    mock.state.failGetMsg = false
+  }
+})
+
 test('空间日记：手动写一篇（仅自己可见），配今天画的图，不往聊天里发，然后删除', async () => {
   const { savePainting } = await import('../src/features/paintings.js')
   const { unlinkSync } = await import('node:fs')

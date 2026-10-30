@@ -68,7 +68,18 @@ export async function startMockOneBot({ selfId = '20000002', token = 'mock-token
         return { message_id: ++msgSeq }
       case 'get_group_member_info': return { group_id: params.group_id, user_id: params.user_id, role: state.roles[String(params.group_id)] || 'owner' }
       case 'get_group_info': return { group_id: params.group_id, group_name: '测试群' }
-      case 'get_msg': return { message_id: params.message_id, sender: { user_id: 1 } }
+      case 'get_msg': {
+        if (state.failGetMsg) throw new Error('get_msg failed')
+        // 测试可以往 state.messages[message_id] 里塞一条被引用的消息（正文 / 图片）
+        const quoted = state.messages && state.messages[params.message_id]
+        if (quoted) return quoted
+        return { message_id: params.message_id, sender: { user_id: 1 } }
+      }
+      case 'get_friend_msg_history':
+      case 'get_group_msg_history': {
+        if (state.failHistory) throw new Error('history failed')
+        return { messages: state.history || [] }
+      }
       case 'add_custom_face': {
         const id = 'emoji-' + (faces.size + 1)
         faces.set(id, '')
