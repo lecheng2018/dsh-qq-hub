@@ -4,8 +4,9 @@
 // pet pack 目录约定、以及工作状态六档 / 碎碎念动画的命名约定，都移植自 dsh-pet
 // （https://github.com/PC2005-cloud/dsh-pet ，作者 PC2005-cloud，代码 MIT）。
 // 本项目做的是把它接进 Aurabot 的模块体系（api.route 长轮询、载体互斥、面板设置、DSH 会话事件联动）。
-// 形象/动画素材（「大肥鱼」）是 CC BY-NC-SA 4.0，**不随本仓库分发**，用户自备。
-// 完整署名与许可原文见仓库根 THIRD-PARTY-NOTICES.md。
+// 形象/动画素材（「大肥鱼」）是 CC BY-NC-SA 4.0：体积大（50MB+）不进本仓库，由插件**启动时自动下载**落位
+// 到数据目录 packs/（用户零操作；下载失败回落客户端内置形象）。默认地址是独立素材仓库
+// dsh-aurabot-qq-mods（GitHub archive zip 直链，可在面板设置里换成任意镜像/Gitee 地址），署名见 THIRD-PARTY-NOTICES.md。
 //
 // 作用：给「主动搭话」提供一个桌面悬浮窗载体。插件侧只做三件事：
 //   1. 在 /aurabot/api/* 挂一组 HTTP 长轮询接口（内置模块 route 无前缀；api.route 没有 WebSocket/SSE，R6）；
@@ -19,7 +20,7 @@
 //   · api.use('pet').dispatch({ text, modality?, purpose?, force?, anim? }) → { ok, via:'pet'|'qq', ... }
 //   · focus.json 开着时自动轮次一律不发（也不回落）；force=true（面板手动测试）可绕过
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync, rmSync } from 'node:fs'
 import { join, dirname, sep, basename, extname } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
@@ -40,6 +41,8 @@ export default {
 
   defaults: {
     carrier: 'qq', modality: 'text', petFallbackToQQ: true, pack: 'default',
+    // 默认素材包下载地址（「大肥鱼」形象包不进插件仓库，从素材仓库拉；网络不佳可换成任意镜像直链）
+    petPackUrl: 'https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods/archive/refs/heads/main.zip',
     // 碎碎念（桌宠自己的气泡流，与「主动搭话」完全独立：载体选 QQ 时她也会在桌面上自己嘟囔）
     whisperEnabled: true,
     whisperSource: 'model',       // 'model' = 现想一句（失败回落本地池）/ 'pool' = 只用文案池
@@ -69,6 +72,7 @@ export default {
     { key: 'carrier', label: '主动搭话载体', type: 'select', options: [{ value: 'qq', label: 'QQ 私聊' }, { value: 'pet', label: '桌宠气泡' }], hint: 'pet 时桌宠不在线会按下面的开关回落到 QQ；两边永不双发' },
     { key: 'modality', label: '气泡形式', type: 'select', options: [{ value: 'text', label: '文字气泡' }, { value: 'voice', label: '文字 + 语音' }], hint: '语音失败自动降级为纯文字' },
     { key: 'petFallbackToQQ', label: '桌宠离线回落 QQ', type: 'switch' },
+    { key: 'petPackUrl', label: '素材包下载地址', type: 'text', hint: '「大肥鱼」形象包 zip 直链（默认走 GitHub 素材仓库 dsh-aurabot-qq-mods；国内网络可换成 Gitee 等镜像直链）。zip 里素材要放文件夹（如 pet-pack/default-animation/），archive 自带的单层仓库目录会自动剥。装完插件后缺包自动下载，也可在面板手动重下' },
     { key: 'whisperEnabled', label: '碎碎念', type: 'switch', hint: '只出现在桌宠气泡里，不会发到 QQ；载体是 QQ 时照常生效' },
     { key: 'whisperSource', label: '碎碎念内容', type: 'select', options: [{ value: 'model', label: '她自己想一句（工作区看得到思考）' }, { value: 'pool', label: '用现成文案' }] },
     { key: 'whisperMinMinutes', label: '碎碎念最短间隔（分钟）', type: 'number', min: 1, max: 9999 },
@@ -238,9 +242,10 @@ export default {
       return data
     }
 
-    // ---------- pet pack（换形象，仿 dsh-pet 目录约定；素材只放数据目录，插件目录禁放 .webm） ----------
+    // ---------- pet pack（换形象，仿 dsh-pet 目录约定；运行数据只写数据目录） ----------
     // <dataDir>/packs/<名>-config.json + <名>-animation/*.webm；default 包 = default-animation/。
-    // 素材版权注意：dsh-pet 形象「大肥鱼」是 CC BY-NC-SA 4.0，用户自备，不随插件分发（见 README / PET_MODULE_API.md）。
+    // 素材版权注意：dsh-pet 形象「大肥鱼」是 CC BY-NC-SA 4.0。素材不进本仓库（50MB+），
+    // 由 ensureDefaultPack() 从素材仓库（petPackUrl，默认 dsh-aurabot-qq-mods）自动下载落位，见下方下载段。
     const packsDir = () => api.dataDir('packs')
     const NAME_RE = /^[\w\u4e00-\u9fa5-]{1,40}$/
     const FILE_RE = /^[\w\u4e00-\u9fa5 .()（）-]{1,80}\.(webm|png|json)$/i
@@ -744,6 +749,96 @@ export default {
       const buf = Buffer.from(await res.arrayBuffer())
       writeFileSync(file, buf)
       return buf
+    }
+
+    // ---------- 默认素材包自动下载（装完即有，用户零操作） ----------
+    // 背景：「大肥鱼」素材 50MB+（106 个 webm），不进插件仓库也不进 PR；放独立素材仓库
+    // dsh-aurabot-qq-mods，插件启动发现 default 包缺失/为空就自动下载落位到 <dataDir>/packs/。
+    // 失败不炸（客户端自己有静态形象兜底），走 every 兜底轮询重试；地址可在面板换镜像。
+    // zip 内容约定：素材放在**文件夹**里（别把 106 个 webm 摊在仓库根目录），文件夹名随意：
+    //   <任意文件夹>/default-config.json + default-manifest.json + default-animation/*.webm
+    // —— archive zip 自带的 <仓库名>-<分支>/ 顶层目录也会自动剥，所以 <仓库>-<分支>/pet-pack/… 同样认。
+    const PACK_CHECK_MS = 10 * MIN_MS        // 兜底轮询间隔（只在缺包时才真的下载）
+    let packDownloading = false              // 并发闸：面板手动 + every 轮询同时触发时不重复下
+
+    /** default 包是否缺失（没 config 或 animation 目录里一个 webm 都没有）。 */
+    function defaultPackMissing() {
+      try {
+        if (!existsSync(configOfPack('default'))) return true
+        return readdirSync(animsDirOf('default')).filter((f) => /\.webm$/i.test(f)).length === 0
+      } catch { return true }
+    }
+
+    /**
+     * 在解压暂存目录里找素材包根（含 default-animation/ 的那一层）。找不到返回 null。
+     * 素材仓库约定：**素材必须放文件夹里**（不在仓库根目录摊 106 个 webm），文件夹名随意（pet-pack/、default/、大肥鱼/ 都行）。
+     * 所以要按层找：包根 = 暂存目录本身 / <仓库名>-<分支>/ / <任意一层文件夹>/ / <仓库名>-<分支>/<任意一层文件夹>/。
+     */
+    function findPackRoot(stage) {
+      const isPackRoot = (dir) => { try { return existsSync(join(dir, 'default-animation')) } catch { return false } }
+      const subDirs = (dir) => {
+        try { return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => join(dir, e.name)) } catch { return [] }
+      }
+      if (isPackRoot(stage)) return stage
+      for (const d1 of subDirs(stage)) {
+        if (isPackRoot(d1)) return d1
+        for (const d2 of subDirs(d1)) if (isPackRoot(d2)) return d2 // archive 顶层目录 + 素材文件夹 两层组合
+      }
+      return null
+    }
+
+    /**
+     * 下载并落位 default 素材包。
+     * @param {boolean} force true = 包已在也重新下载（面板「重新下载素材包」）；false = 只在缺包时下载
+     * @returns {Promise<{ok:boolean, skipped?:boolean, count?:number, message:string}>}
+     */
+    async function ensureDefaultPack(force = false) {
+      if (packDownloading) return { ok: false, message: '素材包正在下载中，别急' }
+      if (!force && !defaultPackMissing()) return { ok: true, skipped: true, message: 'default 素材包已就位，不用下载' }
+      const url = String(api.settings().petPackUrl || '').trim()
+      if (!url) return { ok: false, message: '没有配置素材包下载地址（面板「桌宠」→「素材包下载地址」）' }
+      packDownloading = true
+      const stage = api.dataDir('packs-staging') // 解压暂存目录：校验通过才落位，失败不污染 packs/
+      try {
+        const zip = await fetchZipTo(url, api.dataDir('packs-download.zip'))
+        try { rmSync(stage, { recursive: true, force: true }) } catch {}
+        mkdirSync(stage, { recursive: true })
+        unzipTo(zip, stage)
+        const root = findPackRoot(stage)
+        if (!root) throw new Error('zip 里找不到 default-animation/（内容结构不对：素材要放文件夹里，如 pet-pack/default-animation/）')
+        mkdirSync(animsDirOf('default'), { recursive: true })
+        let copied = 0
+        for (const f of readdirSync(join(root, 'default-animation'))) {
+          const src = join(root, 'default-animation', f)
+          try { if (!statSync(src).isFile()) continue } catch { continue }
+          copyFileSync(src, join(animsDirOf('default'), f))
+          copied++
+        }
+        if (copied === 0) throw new Error('default-animation/ 里没有动画文件（.webm）')
+        for (const f of ['default-config.json', 'default-manifest.json']) {
+          const src = join(root, f)
+          try { if (statSync(src).isFile()) copyFileSync(src, join(packsDir(), f)) } catch {}
+        }
+        api.log.info(`桌宠：素材包已下载落位（${copied} 个动画 → packs/default-animation/）`)
+        ensureAssetRoutes()
+        return { ok: true, count: copied, message: `素材包下载完成（${copied} 个动画）` }
+      } catch (error) {
+        const msg = `素材包下载失败：${String(error?.message || error).slice(0, 200)}`
+        api.log.warn(msg)
+        return { ok: false, message: msg }
+      } finally {
+        packDownloading = false
+        try { rmSync(stage, { recursive: true, force: true }) } catch {}
+        try { unlinkSync(api.dataDir('packs-download.zip')) } catch {}
+      }
+    }
+
+    // 自动落位调度：真机启动后 5 秒补一次 + 每 10 分钟兜底查一次（只在缺包时才下载）。
+    // 测试环境（注入了 __petTestHooks）一律跳过——测试不打真网络，靠手动调 ensureDefaultPack + fake fetchZip。
+    if (!api.__petTestHooks) {
+      const kick = setTimeout(() => { ensureDefaultPack().catch(() => {}) }, 5_000)
+      kick.unref?.()
+      api.every(PACK_CHECK_MS, () => { if (defaultPackMissing()) ensureDefaultPack().catch(() => {}) }, '素材包自动落位')
     }
 
     async function electronInstallZip(exe) {
@@ -1932,6 +2027,14 @@ export default {
       emit('pack', { pack: name })
       api.core.http.send(res, 200, { ok: true, pack: packView() })
     })
+    // ---------- 默认素材包（手动重下）：POST /packs/fetch-default，body 留空 {} 即可 ----------
+    // force=true：包已在也重新下载（换镜像地址后点这个）。自动落位走启动后 5 秒 + every 兜底轮询。
+    api.route('/packs/fetch-default', async (req, res) => {
+      if (!guard(req, res).ok) return
+      const r = await ensureDefaultPack(true)
+      ensureAssetRoutes()
+      api.core.http.send(res, r.ok ? 200 : 502, r)
+    })
     // ---------- 动画播放回执（P2）：客户端播完点播动画后 POST {playbackId,status} ----------
     // 行为动作扩展：status 允许 played / failed / refused（被安全闸拦），可带 reason/action 字段。
     api.route('/playback', async (req, res) => {
@@ -2131,6 +2234,7 @@ export default {
       activePack,
       packView,
       ensureAssetRoutes,
+      ensureDefaultPack,                     // 素材包下载落位（force=false 只在缺包时下；测试/面板手动用）
       // 碎碎念（桌宠自己的气泡流）与干活状态
       whisper: whisperOnce,                  // 手动/测试：立即碎碎念一句（force）
       whisperNow: whisperOnce,
