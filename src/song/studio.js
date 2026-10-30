@@ -715,6 +715,36 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     return out
   }
 
+  /**
+   * 语音条变声（给「语音」模块用）：把一段 TTS 音频用翻唱里导入的 RVC 音色模型换成她的声音。
+   * 内置 RVC 模式会先用 ffmpeg 把 TTS 输出（常见是 mp3）转成 44.1k 单声道 wav 再换声。
+   * @param {string} input 输入音频文件
+   * @param {{voice?: string, pitch?: number, outDir?: string}} [opts] voice = models 里的音色 id；pitch = 变调半音
+   * @returns {Promise<string>} 变声后的 wav 文件
+   */
+  async function convertSpeech(input, { voice = '', pitch = 0, outDir = '' } = {}) {
+    if (!existsSync(input)) throw new Error('要变声的音频不存在')
+    const p = P()
+    const voices = listVoices(p.models)
+    if (!voices.length) throw new Error('翻唱里还没有导入音色模型：面板「翻唱」页导入 .pth / zip')
+    const v = (voice ? voices.find((x) => x.id === voice) : voices.find((x) => x.id === cfg().voice)) || voices[0]
+    const dir = outDir || join(work(), 'speech-rvc')
+    mkdirSync(dir, { recursive: true })
+    let source = input
+    if (!local?.active('song')) {
+      if (!existsSync(p.python) || !existsSync(join(p.applio, 'core.py')) || !existsSync(p.rmvpe) || !existsSync(p.contentvec)) {
+        throw new Error('翻唱环境还没装好：面板「翻唱」页点「一键安装」，装好后再给语音条变声')
+      }
+      if (existsSync(p.ffmpeg)) {
+        const wav = join(dir, 'speech-in.wav')
+        await run(p.ffmpeg, ['-y', '-hide_banner', '-loglevel', 'error', '-i', input, '-ar', '44100', '-ac', '1', wav], { log })
+        if (existsSync(wav)) source = wav
+      }
+    }
+    const n = Math.max(-24, Math.min(24, Math.round(Number(pitch) || 0)))
+    return convert(source, dir, v, n)
+  }
+
   async function mix(vocals, inst, dir) {
     const c = cfg()
     const full = join(dir, 'cover.mp3')
@@ -829,6 +859,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
 
   return {
     status,
+    convertSpeech,
     install: () => { runInstall(); return { ok: true, message: '开始安装，要下载好几个 GB，可能要十几分钟' } },
     request,
     search: (q) => searchSongs(q, { cookie: cfg().neteaseCookie, limit: 8 }),

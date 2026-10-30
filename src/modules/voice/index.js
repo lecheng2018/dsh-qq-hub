@@ -3,7 +3,8 @@
 // 导出 speak(text) → { file, engine }：聊天中枢发语音时找它。替换这个模块就能换成任何你想要的念法。
 
 import { existsSync, readFileSync } from 'node:fs'
-import { textToSpeech, edgeInstalled, installEdge } from '../../voice/tts.js'
+import { textToSpeech, edgeInstalled, installEdge, voiceConverters } from '../../voice/tts.js'
+import { createSongVoice } from '../../voice/rvc.js'
 import { toMono16k } from '../../voice/wav.js'
 import { fileOf } from '../../local/local.js'
 
@@ -13,7 +14,7 @@ export default {
   version: '1.0.0',
   description: '发语音条：把她的话念出来（关掉后想发语音时改发文字）',
   tab: 'voice',
-  files: ['voice/tts.js'],
+  files: ['voice/tts.js', 'voice/rvc.js'],
   setup(api) {
     const { hub, onebot, local, http } = api.core
 
@@ -27,6 +28,27 @@ export default {
       }
       return textToSpeech(text, api.config().voice, api.log)
     }
+
+    // 语音条变声：如果面板里选了「翻唱里导入的音色」，TTS 后再用 RVC 换成她的声音。
+    // 挂在 tts.js 的 voiceConverters 上（卸载时摘掉）；变声失败会保留 TTS 原声。
+    const songVoice = createSongVoice({ getConfig: api.config, getSong: () => api.use('song'), dataDir: api.dataDir, log: api.log })
+    voiceConverters.push(songVoice)
+    api.onDispose?.(() => {
+      const i = voiceConverters.indexOf(songVoice)
+      if (i >= 0) voiceConverters.splice(i, 1)
+    })
+
+    // 面板「语音」页用：翻唱模块现成的音色列表 + 是否可用（只读，不触发任何转换）
+    api.route('/voice/song-voices', async () => {
+      const song = api.use('song')
+      if (!song || typeof song.status !== 'function') return { ok: true, available: false, voices: [], message: '翻唱模块没在跑' }
+      try {
+        const st = song.status()
+        return { ok: true, available: Boolean(st.ready), ready: Boolean(st.ready), voices: st.voices || [], selected: api.config().voice.songVoice || '', message: st.message || '' }
+      } catch (error) {
+        return { ok: false, available: false, voices: [], message: String(error.message || error) }
+      }
+    })
 
     api.route('/voice/test', async (req) => {
       const b = await http.body(req)
