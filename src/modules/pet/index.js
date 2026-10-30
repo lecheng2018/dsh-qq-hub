@@ -19,10 +19,11 @@
 //   · api.use('pet').dispatch({ text, modality?, purpose?, force?, anim? }) → { ok, via:'pet'|'qq', ... }
 //   · focus.json 开着时自动轮次一律不发（也不回落）；force=true（面板手动测试）可绕过
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkSync, renameSync, copyFileSync } from 'node:fs'
+import { join, dirname, sep } from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
+import { inflateRawSync } from 'node:zlib'
 
 const ONLINE_TTL = 60_000        // 心跳超时：60 秒内没轮询过 /events 就算离线
 const EVENT_LIMIT = 200          // 事件内存队列上限
@@ -542,11 +543,17 @@ export default {
         : join('dist', 'electron')
       return join(appDir(), 'node_modules', 'electron', rel)
     }
-    // 不经 shell 拼接：优先用同目录 node 自带的 npm-cli.js 直接跑；找不到就明确报错（Windows 上 spawn 'npm.cmd' 无 shell 会被拒）。
+    // 不经 shell 拼接：找 npm-cli.js 直接跑（Windows 上 spawn 'npm.cmd' 无 shell 会被拒）；都找不到就返回空串，
+    // 由 electronInstall 走「zip 直装」兜底（目标电脑可能根本没有 Node/npm 环境）。
     // npmCli 也可被测试钩子覆盖（petHooks.npmCli = 一个真实存在的假 cli 路径）。
     const npmCli = () => {
-      const cli = petHooks.npmCli || join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
-      return cli && existsSync(cli) ? cli : ''
+      // 'npmCli' in hooks = 显式覆盖（含空串「强制没有 npm」，测试用来逼出 zip 直装路径）
+      const candidates = 'npmCli' in petHooks ? [petHooks.npmCli] : [
+        join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        // Unix 系统级 node（如 /usr/bin/node）的 npm 实际在 /usr/lib/node_modules 下
+        join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      ]
+      return candidates.find((c) => c && existsSync(c)) || ''
     }
     // 测试钩子：测试注入 fake spawn/kill，不打真网络、不真启动 Electron
     const petHooks = api.__petTestHooks || {}
@@ -567,12 +574,91 @@ export default {
       return electronProc
     }
 
+    // ---------- zip 直装（无 npm 环境的兜底，自动化优先） ----------
+    // 背景：DSH 自带运行时（dsh-runtimes/.../node）不带 npm-cli.js，目标电脑也可能没装 Node/npm。
+    // Electron 的 npm 包本质就是「下载官方 zip → 解压到 node_modules/electron/dist」，这里跳过 npm 直接干：
+    // 下载走 npmmirror 镜像（同 npm 路径的 ELECTRON_MIRROR），解压用 Node 自带 zlib（纯 JS，零外部依赖、零环境要求）。
+    const ELECTRON_VERSION_FALLBACK = '45.1.0' // 与 pet-client 模板 app/package.json 的 devDependencies.electron 对齐
+    const electronZipUrl = () => {
+      let ver = ELECTRON_VERSION_FALLBACK
+      try {
+        const pkg = JSON.parse(readFileSync(join(appDir(), 'package.json'), 'utf8'))
+        const m = String(pkg?.devDependencies?.electron || '').match(/\d+\.\d+\.\d+/)
+        if (m) ver = m[0]
+      } catch {} // package.json 读不到就用兜底版本
+      const platform = process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'
+      return { ver, url: `https://npmmirror.com/mirrors/electron/${ver}/electron-v${ver}-${platform}-${process.arch}.zip` }
+    }
+
+    // 纯 JS zip 解压（支持存储/deflate 两种压缩法；带 zip-slip 防护；unix 上恢复可执行位）
+    function unzipTo(zip, destDir) {
+      const u32 = (o) => zip.readUInt32LE(o)
+      const u16 = (o) => zip.readUInt16LE(o)
+      // 从尾部往前找 EOCD（0x06054b50），兼容最长 64KB 的 zip 注释区
+      let eocd = -1
+      for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 65535); i--) {
+        if (u32(i) === 0x06054b50) { eocd = i; break }
+      }
+      if (eocd < 0) throw new Error('不是有效的 zip 文件（找不到目录结尾标记）')
+      const count = u16(eocd + 10)
+      let ptr = u32(eocd + 16)
+      for (let n = 0; n < count; n++) {
+        if (u32(ptr) !== 0x02014b50) throw new Error(`zip 目录损坏（条目 ${n}）`)
+        const method = u16(ptr + 10)
+        const csize = u32(ptr + 20)
+        const nameLen = u16(ptr + 28)
+        const extraLen = u16(ptr + 30)
+        const commentLen = u16(ptr + 32)
+        const externAttr = u32(ptr + 38)
+        const localOff = u32(ptr + 42)
+        const name = zip.toString('utf8', ptr + 46, ptr + 46 + nameLen)
+        ptr += 46 + nameLen + extraLen + commentLen
+        if (name.endsWith('/')) { mkdirSync(join(destDir, name), { recursive: true }); continue }
+        if (externAttr >>> 31) continue // 符号链接条目：安全起见直接跳过
+        const target = join(destDir, name)
+        if (target !== destDir && !target.startsWith(destDir + sep)) throw new Error(`zip 里的可疑路径：${name}`) // 防 zip-slip
+        if (u32(localOff) !== 0x04034b50) throw new Error(`zip 局部头损坏：${name}`)
+        const dataOff = localOff + 30 + u16(localOff + 26) + u16(localOff + 28)
+        const data = method === 0 ? Buffer.from(zip.subarray(dataOff, dataOff + csize)) : inflateRawSync(zip.subarray(dataOff, dataOff + csize))
+        mkdirSync(dirname(target), { recursive: true })
+        writeFileSync(target, data)
+        if (process.platform !== 'win32' && ((externAttr >>> 16) & 0o111)) chmodSync(target, 0o755) // unix 可执行位
+      }
+    }
+
+    // 下载（可被测试钩子 petHooks.fetchZip 覆盖，不打真网络）
+    async function fetchZipTo(url, file) {
+      const fetchZip = petHooks.fetchZip || ((u) => fetch(u))
+      const res = await fetchZip(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const buf = Buffer.from(await res.arrayBuffer())
+      writeFileSync(file, buf)
+      return buf
+    }
+
+    async function electronInstallZip(exe) {
+      const { ver, url } = electronZipUrl()
+      const zipFile = join(appDir(), 'electron.zip')
+      try {
+        const zip = await fetchZipTo(url, zipFile)
+        mkdirSync(join(appDir(), 'node_modules'), { recursive: true })
+        unzipTo(zip, join(appDir(), 'node_modules', 'electron'))
+        if (!existsSync(exe)) throw new Error('解压完成但没找到可执行文件（版本/平台可能不匹配）')
+        return { ok: true, installed: true, exe, message: `Electron v${ver} 安装完成（npmmirror 直下 zip，无需 npm）` }
+      } catch (error) {
+        return { ok: false, message: `zip 直装失败：${String(error?.message || error).slice(0, 240)}（可换个网络再点一次，或看 USER-MANUAL 的手动安装教程）` }
+      } finally {
+        try { unlinkSync(zipFile) } catch {}
+      }
+    }
+
     async function electronInstall() {
       const exe = electronExe()
       if (existsSync(exe)) return { ok: true, alreadyInstalled: true, exe, message: 'Electron 已安装，不用重复装' }
       if (!existsSync(join(appDir(), 'main.js'))) return { ok: false, message: '还没生成客户端：先点「下载 / 生成客户端」' }
+      // 有 npm-cli 就走 npm（老行为，保持不变）；没有（DSH 自带运行时/裸机）就走 zip 直装，零环境依赖。
       const cli = npmCli()
-      if (!cli) return { ok: false, message: '找不到 npm-cli.js，装不了 Electron（可手动在 app 目录 npm i -D electron）' }
+      if (!cli) return electronInstallZip(exe)
       const out = await new Promise((resolve) => {
         let tail = ''
         let child = null
