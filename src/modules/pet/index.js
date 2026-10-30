@@ -1626,38 +1626,78 @@ export default {
     const ICON_NAME_DENY = new Set(['desktop.ini', 'thumbs.db', 'iconcache.db'])
     // 桌面系统图标（回收站/此电脑…）以 CLSID GUID 命名，永远不碰
     const CLSID_RE = /^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}(\.|$)/
-    /** 定位主人桌面：测试注入 api.__petTestHooks.desktopDir；真机优先 USERPROFILE\Desktop，兜底 OneDrive 桌面重定向。 */
-    function detectDesktopDir() {
+    /** 主人的桌面目录清单（2026-10-30 用户实测「收图标容易 not-found」）：
+     *  资源管理器桌面是**合并视图**——用户桌面 + 公共桌面（PUBLIC\Desktop）一起显示，
+     *  客户端 ListView 读到的图标清单就是合并视图（微信/QQ/Chrome 这类快捷方式全在公共桌面）。
+     *  服务端以前只认用户桌面，客户端挑了公共桌面图标一发回来就 not-found。
+     *  顺序即优先级：用户桌面在前（同名时以用户桌面为准）；测试注入 hooks.desktopDir 时只认注入目录。 */
+    function desktopDirs() {
       const hooks = api.__petTestHooks || {}
-      if (typeof hooks.desktopDir === 'function') { try { return hooks.desktopDir() } catch {} }
+      if (typeof hooks.desktopDir === 'function') { try { const d = hooks.desktopDir(); return d ? [d] : [] } catch {} }
       const up = String(process.env.USERPROFILE || '').trim()
-      if (!up) return null // 环境里没有 USERPROFILE（非 Windows/被裁掉）：不猜相对路径，直接认输
-      for (const cand of [join(up, 'Desktop'), join(up, 'OneDrive', 'Desktop')]) {
-        try { if (existsSync(cand) && statSync(cand).isDirectory()) return cand } catch {}
-      }
-      return null
+      const pub = String(process.env.PUBLIC || '').trim()
+      const cand = up
+        ? [join(up, 'Desktop'), join(up, 'OneDrive', 'Desktop'), join(up, 'OneDrive', '桌面')]
+        : []
+      if (pub) cand.push(join(pub, 'Desktop'))
+      return cand.filter((d) => { try { return d && existsSync(d) && statSync(d).isDirectory() } catch { return false } })
+    }
+    /** 兼容旧调用（只关心「有没有桌面」的地方）：返回第一个可用桌面。 */
+    function detectDesktopDir() {
+      return desktopDirs()[0] || null
     }
     /**
      * 列出桌面上「真能碰」的图标文件名（给 AI 挑目标 / 面板调试用）。
-     * 与 validateDesktopIcon 同一套拒绝规则；读不到桌面就返回空数组，绝不抛。
+     * 与 validateDesktopIcon 同一套拒绝规则；跨目录合并去重（用户桌面优先）；
+     * 读不到任何桌面就返回空数组，绝不抛。
      */
     function listDesktopIcons(limit = 30) {
-      const desktop = detectDesktopDir()
-      if (!desktop) return []
-      let names = []
-      try { names = readdirSync(desktop) } catch { return [] }
+      const dirs = desktopDirs()
+      const seen = new Set()
       const out = []
-      for (const raw of names) {
-        if (out.length >= limit) break
-        const n = String(raw)
-        if (!n || n.startsWith('.') || n.startsWith('~$')) continue
-        if (ICON_NAME_DENY.has(n.toLowerCase()) || CLSID_RE.test(n)) continue
-        if (ICON_EXT_DENY.has(extname(n).toLowerCase())) continue
-        try { if (!statSync(join(desktop, n)).isFile()) continue } catch { continue }
-        // 进 prompt 前把控制字符换成空格（防止文件名把简报结构搞乱）
-        out.push(n.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 60))
+      for (const desktop of dirs) {
+        let names = []
+        try { names = readdirSync(desktop) } catch { continue }
+        for (const raw of names) {
+          if (out.length >= limit) return out
+          const n = String(raw)
+          const key = n.toLowerCase()
+          if (!n || seen.has(key)) continue
+          seen.add(key)
+          if (n.startsWith('.') || n.startsWith('~$')) continue
+          if (ICON_NAME_DENY.has(key) || CLSID_RE.test(n)) continue
+          if (ICON_EXT_DENY.has(extname(n).toLowerCase())) continue
+          try { if (!statSync(join(desktop, n)).isFile()) continue } catch { continue }
+          // 进 prompt 前把控制字符换成空格（防止文件名把简报结构搞乱）
+          out.push(n.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 60))
+        }
       }
       return out
+    }
+    /** 把一个待碰的图标名解析成真实文件：多桌面目录 × （原名 → 补常见后缀）逐个 stat。
+     *  补后缀治「客户端只能拿到显示名」：ListView 给「微信」，磁盘上是「微信.lnk」。
+     *  @returns {{dir:string, name:string, path:string}|{notFile:boolean}|null} name 一定是**磁盘真名**；
+     *          notFile = 名字真实存在但不是普通文件（文件夹/特殊项），调用方要单独报 not-file。 */
+    function resolveDesktopFile(icon) {
+      const raw = String(icon || '').trim()
+      if (!raw || /[/\\]/.test(raw) || raw.includes('..')) return null
+      const dirs = desktopDirs()
+      for (const dir of dirs) {
+        const p = join(dir, raw)
+        try {
+          const st = statSync(p)
+          if (st.isFile()) return { dir, name: raw, path: p }
+          return { notFile: true }
+        } catch {}
+      }
+      for (const dir of dirs) {
+        for (const ext of ['.lnk', '.url', '.exe']) {
+          const name = raw + ext
+          const p = join(dir, name)
+          try { const st = statSync(p); if (st.isFile()) return { dir, name, path: p } } catch {}
+        }
+      }
+      return null
     }
     /** 校验一个待碰的桌面图标名：必须直接躺在桌面（无路径分隔）、真实存在、是普通文件、不在拒绝名单。 */
     function validateDesktopIcon(icon) {
@@ -1668,14 +1708,17 @@ export default {
       if (CLSID_RE.test(name)) return { ok: false, reason: 'system-icon', name } // 回收站/此电脑等系统图标
       const ext = extname(name).toLowerCase()
       if (ICON_EXT_DENY.has(ext)) return { ok: false, reason: 'bad-ext', name } // 可执行/脚本类拒绝
-      const desktop = detectDesktopDir()
-      if (!desktop) return { ok: false, reason: 'desktop-not-found', name }
-      const path = join(desktop, name)
-      try {
-        const st = statSync(path)
-        if (!st.isFile()) return { ok: false, reason: 'not-file', name } // 文件夹 / 特殊项一律拒绝
-      } catch { return { ok: false, reason: 'not-found', name } }
-      return { ok: true, path, name }
+      if (!desktopDirs().length) return { ok: false, reason: 'desktop-not-found', name }
+      const hit = resolveDesktopFile(name)
+      if (!hit) return { ok: false, reason: 'not-found', name }
+      if (hit.notFile) return { ok: false, reason: 'not-file', name } // 文件夹 / 特殊项一律拒绝
+      // 补后缀命中的真实文件名要再过一遍拒绝规则（显示名「无限试用Navicat」→ 磁盘「无限试用Navicat.bat」必须拒）
+      if (hit.name !== name) {
+        if (hit.name.startsWith('.') || hit.name.startsWith('~$')) return { ok: false, reason: 'hidden', name }
+        if (ICON_NAME_DENY.has(hit.name.toLowerCase())) return { ok: false, reason: 'system-file', name }
+        if (ICON_EXT_DENY.has(extname(hit.name).toLowerCase())) return { ok: false, reason: 'bad-ext', name }
+      }
+      return { ok: true, path: hit.path, name: hit.name }
     }
     /** 读 manifest（数组：[{id,name,originalPath,quarantinePath,at,reason,playbackId}]）；脏数据一律丢弃，宁可少一条也不让面板炸。 */
     function loadManifest() {

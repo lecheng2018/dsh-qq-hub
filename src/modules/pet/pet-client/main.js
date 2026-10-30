@@ -413,13 +413,15 @@ function moveWindowTo(getTarget, opts) {
   if (!win || win.isDestroyed()) return Promise.resolve(false)
   stopThrow() // 与甩抛互斥
   if (o.carry) ensureCursorHelper() // 叼鼠标：提前把光标助手叫醒（首次编译要 ~1s，别等第一帧）
+  const t0 = Date.now()
+  debugIconLog({ kind: 'move', phase: 'start', align: o.align || '', speed: o.speed || 0, stopPx: o.stopPx || 8, maxMs: o.maxMs || 0, t0 })
   return new Promise((resolve) => {
-    const t0 = Date.now()
     const maxMs = o.maxMs || MOVE_MAX_MS
     const stopPx = o.stopPx || 8
     const speed = Math.max(10, Number(o.speed) || MOVE_SPEED_PX_S)
     let lastPos = ''
     let lastAt = Date.now()
+    let lastDbgAt = 0 // 步级诊断采样（~600ms 一条，够对账又不刷屏）
     // 亚像素累积位置：50px/s 每帧只有 0.8px，直接用 round(整数窗口位置 + 0.8) 会永远回到原处
     // （每帧都从同一个整数起点算 0.8 → 取整 0 → 一步都走不出去）。所以位置用浮点自己攒，
     // 只在真正 setPosition 时取整；一旦发现真实窗口位置与我们的浮点差 > 2px（用户拖动/甩抛），
@@ -429,15 +431,16 @@ function moveWindowTo(getTarget, opts) {
     let animOn = false // 只在真的开始位移后才起跑动动画（原地不动不该踏步）
     const done = (ok) => {
       stopMover()
+      debugIconLog({ kind: 'move', phase: 'done', ok, elapsed: Date.now() - t0 })
       if (animOn) { animOn = false; stopMoveAnim() }
       if (o.carry) releaseCursorClip() // 松口：无论怎么结束，都必须放开鼠标裁剪区
       resolve(ok)
     }
     const step = () => {
       mover = null
-      if (!win || win.isDestroyed()) return done(false)
+      if (!win || win.isDestroyed()) { debugIconLog({ kind: 'move', phase: 'abort', why: 'win-gone' }); return done(false) }
       const target = getTarget()
-      if (!target) return done(false)
+      if (!target) { debugIconLog({ kind: 'move', phase: 'abort', why: 'target-null' }); return done(false) }
       const now = Date.now()
       const [w, h] = win.getSize()
       const [x, y] = win.getPosition()
@@ -463,10 +466,15 @@ function moveWindowTo(getTarget, opts) {
       const dx = gx - x
       const dy = gy - y
       const dist = Math.hypot(dx, dy)
+      if (now - lastDbgAt > 600) {
+        lastDbgAt = now
+        debugIconLog({ kind: 'move', phase: 'step', x, y, gx, gy, dist: Math.round(dist), stopPx, speed, left: maxMs - (now - t0) })
+      }
       if (dist <= stopPx || now - t0 > maxMs) {
         // 收尾：把最后一小步贴上去（仍做一次位置变更检查）
         const key = gx + ',' + gy
         if (key !== lastPos) { lastPos = key; try { win.setPosition(gx, gy) } catch {} }
+        debugIconLog({ kind: 'move', phase: 'snap', x, y, gx, gy, dist: Math.round(dist), timedOut: now - t0 > maxMs })
         // 叼着鼠标走：终点也要把指针按到最终身体中心，免得停在半路
         if (o.carry) pinCursorAtDip(gx + b.offsetX + b.width / 2, gy + b.offsetY + b.height / 2)
         return done(now - t0 <= maxMs)
@@ -488,7 +496,7 @@ function moveWindowTo(getTarget, opts) {
       const key = nx + ',' + ny
       if (key !== lastPos) { // 位置没变不调原生接口（startThrow 的教训）
         lastPos = key
-        try { win.setPosition(nx, ny) } catch { return done(false) }
+        try { win.setPosition(nx, ny) } catch (e) { debugIconLog({ kind: 'move', phase: 'abort', why: 'setpos-throw', msg: String(e && e.message || e) }); return done(false) }
       }
       // 叼着鼠标走（steal_cursor 阶段②）：每帧把指针钉在身体中心并夹住裁剪区，
       // 于是「桌宠和鼠标一起动」且用户中途拽不出去（不会出现闪回）。
@@ -1346,6 +1354,20 @@ async function reportEnvironment() {
 setInterval(() => { reportEnvironment().catch(() => {}) }, 120_000)
 setTimeout(() => { reportEnvironment().catch(() => {}) }, 8_000) // 起来先报一次，别等两分钟
 // ---------- 执行器接线：behavior.js 的 run(params, ctx) 需要的 IO 全在这里 ----------
+// 图标/走位链路诊断（2026-10-30「叼/收图标定位不对」排查）：JSONL 追加到 app 目录 debug-icon.log，
+// 超 64KB 砍半保留尾部。记录的是「客户端当时看到的原始数字」，真机对账全靠它。失败静默。
+function debugIconLog(obj) {
+  try {
+    const f = path.join(__dirname, 'debug-icon.log')
+    let size = 0
+    try { size = fs.statSync(f).size } catch {}
+    if (size > 65536) {
+      const tail = fs.readFileSync(f, 'utf8').split('\n').slice(-80).join('\n')
+      fs.writeFileSync(f, tail)
+    }
+    fs.appendFileSync(f, JSON.stringify({ t: new Date().toISOString(), ...obj }) + '\n')
+  } catch {}
+}
 const behaviorCtx = () => ({
   moveWindowTo,
   bodyRect,
@@ -1385,6 +1407,7 @@ const behaviorCtx = () => ({
   readDesktopIcons,
   iconAct: (body) => apiPostAwait('/behavior/icon/act', body),
   moveDesktopIcon,
+  debugLog: debugIconLog,
   // 图标动作降级用：读不到图标时走到屏幕下沿随机位置空演一口
   workArea: () => { try { return screen.getPrimaryDisplay().workArea } catch { return null } },
   // 窗口动作桥：枚举 / 优雅关闭 / 匀速推（人物同速跟着走）/ 绝对归位。白名单判定在 behavior.js 里做。
