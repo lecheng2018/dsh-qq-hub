@@ -87,6 +87,8 @@ export const DEFAULTS = {
     faces: true, // 回复里能夹 QQ 自带的小黄脸（<face:名字>）
     autoChance: 0.35, // 文字回复自动配一张表情的概率
     collect: true, // 偷表情
+    // 怎么偷：auto = 看到就收（默认，保持原行为）；ask = 她挑（先记着，喜欢才凭编号收）；owner = 只听主人的（只有主人语境下才提示/允许收）
+    collectMode: 'auto',
     fromGroups: true,
     fromPrivate: true,
     maxPerHour: 20,
@@ -287,6 +289,7 @@ export function normalize(raw) {
   c.voice.autoMaxChars = num(c.voice.autoMaxChars, 80, 1, 500)
   c.stickers.autoChance = num(c.stickers.autoChance, 0.35, 0, 1)
   c.stickers.faces = c.stickers.faces !== false
+  c.stickers.collectMode = ['ask', 'auto', 'owner'].includes(c.stickers.collectMode) ? c.stickers.collectMode : 'auto'
   c.stickers.maxPerHour = num(c.stickers.maxPerHour, 20, 0, 200)
   c.stickers.maxLibrary = num(c.stickers.maxLibrary, 300, 20, 2000)
   c.diary.timesPerDay = num(c.diary.timesPerDay, 2, 0, 6)
