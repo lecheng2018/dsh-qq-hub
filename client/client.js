@@ -1677,11 +1677,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       { action: 'chase_cursor', name: '追鼠标', effect: '扑过去追着你的鼠标跑，追到后按住指针 5 秒再松开', tier: 1 },
       { action: 'wander', name: '溜达', effect: '自己溜达到屏幕另一头', tier: 1 },
       { action: 'idle_anim', name: '小动作', effect: '随便播一段小动作（摇尾巴、眨眼这类），不移动', tier: 1 },
-      { action: 'steal_cursor', name: '叼鼠标', effect: '快速冲到鼠标位置叼住，带着鼠标一起同步移动一段再松口', tier: 1 },
+      { action: 'steal_cursor', name: '叼鼠标', effect: '冲到鼠标位置叼住，带着鼠标同步跑到一个随机位置（也可由 AI 指定坐标）再松口', tier: 1 },
       { action: 'say', name: '说一句', effect: '只冒个气泡说句话，不做动作', tier: 1 },
-      { action: 'drag_icon', name: '叼图标', effect: '走到桌面图标旁叼住，真的把图标拖着走一段再放回原位', tier: 2 },
+      { action: 'drag_icon', name: '叼图标', effect: '叼起桌面图标搬到另一个位置放下（默认随机落点，不填图标名就随机挑一个）', tier: 2 },
       { action: 'hide_icon', name: '收图标', effect: '把桌面图标收进隔离区，随时可以放回去', tier: 2 },
-      { action: 'nudge_window', name: '推窗口', effect: '把你正在用的窗口推到屏幕边上，5 秒后再拉回原位（内容不变）', tier: 3 },
+      { action: 'nudge_window', name: '推窗口', effect: '把窗口一路推到屏幕边界外（只剩一条边），人和窗口一起走，5 秒后再一起拉回原位', tier: 3 },
       { action: 'close_window', name: '关窗口', effect: '跑到窗口右上角，优雅关掉（等于点右上角 X，另有独立安全开关）', tier: 3 },
     ]
     // 回执展示口径：played / refused / failed 是客户端 /playback 回的三种终态，pending 是刚下发还没回。
