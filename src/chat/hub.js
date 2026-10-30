@@ -73,6 +73,63 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
   const recentMedia = createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
+  // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
+  // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
+  const stickerStash = new Map() // chatId → { at, segs: [seg] }
+  const STICKER_TTL = 30 * 60_000 // 和「最近图片」一个尺度
+  const stashFile = () => dataDir('sticker-stash.json')
+  let stashLoaded = false
+
+  function loadStash () {
+    if (stashLoaded) return
+    stashLoaded = true
+    try {
+      const raw = readJson(stashFile(), () => ({}))
+      const now = Date.now()
+      for (const [chatId, v] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+        if (v && Array.isArray(v.segs) && v.segs.length && now - Number(v.at || 0) < STICKER_TTL) {
+          stickerStash.set(chatId, { at: Number(v.at) || now, segs: v.segs })
+        }
+      }
+    } catch (error) {}
+  }
+
+  function saveStash () {
+    const now = Date.now()
+    const out = {}
+    for (const [chatId, v] of stickerStash) if (v && now - v.at < STICKER_TTL) out[chatId] = v
+    try { writeJson(stashFile(), out) } catch (error) {}
+  }
+
+  /** 记下这一轮收到的表情，返回张数。 */
+  function rememberStickers (chatId, segs) {
+    loadStash()
+    const list = (segs || []).slice(0, 4)
+    if (!list.length) return 0
+    stickerStash.set(chatId, { at: Date.now(), segs: list })
+    saveStash()
+    return list.length
+  }
+
+  /** 取第 index 张（从 1 开始）。过期或没有就返回 null。 */
+  function stickerOf (chatId, index) {
+    loadStash()
+    const s = stickerStash.get(chatId)
+    if (!s || Date.now() - s.at > STICKER_TTL) return null
+    const i = Number(index) - 1
+    return Number.isInteger(i) && i >= 0 && i < s.segs.length ? s.segs[i] : null
+  }
+
+  /**
+   * 「她挑」模式那句轻提示。
+   * 措辞要像她自己的念头，不能像发图的人在提醒她 —— 否则每来一张表情她就回报一次
+   * “我收了 / 我已经有了”，完全不像偷偷攒表情。收不收、说不说都随她。
+   */
+  function stickerHint (n) {
+    const range = n > 1 ? `1~${n}` : '1'
+    return `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${range} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
+  }
+
   const slowNoticeSent = new Set() // sessionKey → 这一轮已经发过「正在做」提示（慢工具，issue #74）
   const faces = createFaces({ onebot, log }) // QQ 系统表情：<face:名字> ↔ 编号
   const titleFilter = createTitleFilter({ getConfig, onebot, log }) // 勾选的群里，头衔是某个词的成员（别的机器人）不理
@@ -950,10 +1007,24 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
 
     const allowed = checkAllowed(cfg, msg)
-    // 偷表情：只从白名单里的会话偷
+    // 偷表情：只从白名单里的会话偷；按 collectMode 分三种
+    //   auto  = 全都偷（看到就收）
+    //   ask   = 她挑（先记着，给她一句轻提示，她喜欢才凭编号收）
+    //   owner = 只听主人的：先记着，但只有主人发来的表情才提示她收；
+    //           真正能不能收由工具那边再按「这一轮说话的全是主人」把关
+    let stickerPick = 0
+    const collectMode = cfg.stickers.collectMode || 'auto'
     if (allowed.allowed && msg.stickers.length && cfg.stickers.collect) {
       const okSrc = msg.kind === 'group' ? cfg.stickers.fromGroups : cfg.stickers.fromPrivate
-      if (okSrc) for (const s of msg.stickers) stickers.collect(s, msg.chatId).then((r) => { if (!r.ok) log.debug('没收这张表情：', r.reason) }).catch(() => {})
+      if (okSrc) {
+        if (collectMode === 'auto') {
+          for (const s of msg.stickers) stickers.collect(s, msg.chatId).then((r) => { if (!r.ok) log.debug('没收这张表情：', r.reason) }).catch(() => {})
+        } else {
+          stickerPick = rememberStickers(msg.chatId, msg.stickers)
+          // 只听主人的：别人发的先悄悄记着（主人之后说「收下那张」还能用），但不提示她
+          if (collectMode === 'owner' && !isOwner(cfg, msg.userId)) stickerPick = 0
+        }
+      }
     }
     if (!allowed.allowed) {
       log.debug(`忽略 ${msg.chatId}（${allowed.reason}）`)
@@ -1085,7 +1156,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
     onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
 
-    enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode)
+    enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode, { stickerPick })
   }
 
   /** 把消息里的「[合并转发]」换成里面的聊天记录（最多 40 条，嵌套的转发不再展开）。 */
@@ -1211,7 +1282,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const running = new Set() // chatId → 这一轮还在跑（模型 / 工具还没结束，turn/end 之前）；私聊此时新消息直接 steer 进去
   const isBusy = (chatId) => busy.has(chatId) && Date.now() - busy.get(chatId) < BUSY_MAX_MS
 
-  function enqueue(chat, content, senderId, wantVoice, mode = 'must') {
+  function enqueue(chat, content, senderId, wantVoice, mode = 'must', extra = {}) {
     const m = getConfig().merge
     const p = pending.get(chat.chatId) || { chat, texts: [], images: [], senders: new Set(), wantVoice: false, timer: null, firstAt: Date.now(), mode, count: 0 }
     p.chat = chat
@@ -1221,6 +1292,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (c.type === 'text') p.texts.push(c.text)
       else if (c.type === 'image' && p.images.length < 4) p.images.push(c)
     }
+    if (extra.stickerPick) p.stickerPick = (p.stickerPick || 0) + extra.stickerPick
     if (senderId) p.senders.add(String(senderId))
     p.wantVoice = p.wantVoice || wantVoice
     pending.set(chat.chatId, p)
@@ -1239,11 +1311,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const p = pending.get(chatId)
     if (!p) return
     clearTimeout(p.timer)
+    // 「她挑」的提示统一在这里补：私聊、群聊、插话三条路都要带上
+    const hint = p.stickerPick ? '\n\n' + stickerHint(p.stickerPick) : ''
     // 私聊：她这一轮还在跑（想 / 调工具），新消息直接 steer 进当前这一轮，像在 DSH 界面里插话一样（#7）
     if (isBusy(chatId) && p.chat.kind === 'private' && running.has(chatId)) {
       pending.delete(chatId)
       if (p.count > 1) log.info(`${chatId}：合并了 ${p.count} 条消息一起插给她`)
-      const content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+      const content = [{ type: 'text', text: p.texts.join('\n') + hint }, ...p.images]
       const query = p.texts.map((t) => t.replace(/^【私聊】[^：]*：/, '')).join('\n')
       const [first, ...rest] = [...p.senders]
       try {
@@ -1271,12 +1345,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       const gp = await groupPrompt(p.chat, p.mode, Math.max(0, 4 - p.images.length))
       if (gp.speakers.length) lastSpeaker.set(chatId, [...p.senders].pop() || gp.speakers.at(-1))
-      content = [{ type: 'text', text: gp.text }, ...p.images, ...(gp.images || [])]
+      content = [{ type: 'text', text: gp.text + hint }, ...p.images, ...(gp.images || [])]
       p.query = gp.query
       p.speakers = gp.speakers
       p.autoReply = gp.autoReply
     } else {
-      content = [{ type: 'text', text: p.texts.join('\n') }, ...p.images]
+      content = [{ type: 'text', text: p.texts.join('\n') + hint }, ...p.images]
     }
     busy.set(chatId, Date.now())
     try {
@@ -1362,7 +1436,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       content = [{ type: 'text', text: `【你之前在这个聊天里主动说过（是在别处安排下发的，这里的人都看到了）】\n${lines.join('\n')}\n` }, ...content]
     }
     // 这一轮还在跑、这句是排队给下一轮的：额外记到 pendingSenders，等上一轮 turn/end 时接过去（#90）
-    const queuedNextTurn = !opts.steer && (running.has(chat.chatId) || busy.has(chat.chatId))
+    // ⚠ 不能用 busy：flush 一开始就把 busy 置上了，否则会把这一批自己的说话人塞进下一轮，
+    //    主人和群友混在一起会让「仅主人」判断误拒（sticker-owner 回归抓到过）。
+    const queuedNextTurn = !opts.steer && running.has(chat.chatId)
     const addSender = (u) => {
       st.senders.add(String(u))
       if (queuedNextTurn) {
@@ -1523,6 +1599,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     modelFor: targetModel,
     /** 这个聊天最近发来的图片 / 表情（新的在后面），可选只要某人发的 */
     recentMedia: (chatId, userId) => recentMedia.get(chatId, userId),
+    stickerOf,
     capture,
     simulateTurn,
     onMessage,
