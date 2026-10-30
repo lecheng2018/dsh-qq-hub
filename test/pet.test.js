@@ -414,6 +414,89 @@ test('Electron 安装失败路径：npm 非零退出 → ok:false 带原因；�
   assert.match(r.message, /npm 安装失败/)
 })
 
+/** 手工拼一个最小合法 zip（存储法、无压缩）：顺带走真解压器，不引第三方依赖。 */
+function tinyZip(entries) {
+  const chunks = []
+  const central = []
+  let off = 0
+  for (const [name, data] of entries) {
+    const nameBuf = Buffer.from(name)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(nameBuf.length, 26)
+    local.writeUInt32LE(data.length, 18) // csize（存储法 = 原大小）
+    local.writeUInt32LE(data.length, 22) // usize
+    chunks.push(local, nameBuf, data)
+    const cd = Buffer.alloc(46)
+    cd.writeUInt32LE(0x02014b50, 0)
+    cd.writeUInt16LE(20, 4)
+    cd.writeUInt16LE(20, 6)
+    cd.writeUInt16LE(0, 10) // method 0 = 存储
+    cd.writeUInt32LE(data.length, 20) // csize
+    cd.writeUInt32LE(data.length, 24) // usize
+    cd.writeUInt16LE(nameBuf.length, 28)
+    cd.writeUInt32LE(off, 42) // 局部头偏移
+    central.push(cd, nameBuf)
+    off += 30 + nameBuf.length + data.length
+  }
+  const cdBuf = Buffer.concat(central)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(entries.length, 10)
+  eocd.writeUInt32LE(cdBuf.length, 12)
+  eocd.writeUInt32LE(off, 16)
+  return Buffer.concat([...chunks, cdBuf, eocd])
+}
+
+test('Electron 兜底直装：没有 npm-cli（DSH 运行时/裸机）→ npmmirror zip 直下 + 纯 JS 解压，零 npm 依赖', async () => {
+  const env = startModule()
+  const appDir = env.api.dataDir('app')
+  await env.exports.download() // 先有 app/main.js + package.json
+  const exe = join(appDir, 'node_modules', 'electron', ELECTRON_REL)
+  const exeZipPath = ELECTRON_REL.split('\\').join('/')
+
+  let requestedUrl = ''
+  const fakeZip = tinyZip([
+    ['dist/', Buffer.alloc(0)],
+    [exeZipPath, Buffer.from('fake electron')],
+    ['package.json', Buffer.from('{"name":"electron","version":"45.1.0"}')],
+    ['index.js', Buffer.from('module.exports = "fake"')],
+  ])
+  // 换一个带 hooks 的实例（hooks 在 setup 时读）；npmCli: '' = 强制没有 npm（逼出 zip 直装路径），
+  // fetchZip 钩子替代真下载，不打真网络。
+  const env2 = startModule({
+    hooks: {
+      npmCli: '',
+      fetchZip: async (url) => {
+        requestedUrl = url
+        return { ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }
+      },
+    },
+  })
+  const r = await env2.exports.electronInstall()
+  assert.equal(r.ok, true, `zip 直装应成功：${r.message}`)
+  assert.match(requestedUrl, /^https:\/\/npmmirror\.com\/mirrors\/electron\//, '下载必须走 npmmirror 镜像')
+  assert.match(requestedUrl, /electron-v\d+\.\d+\.\d+-/, 'URL 带具体版本号（来自 app/package.json）')
+  assert.ok(existsSync(exe), '解压后 electron.exe 在位')
+  assert.equal(readFileSync(exe, 'utf8'), 'fake electron', '解压内容正确')
+  assert.ok(!existsSync(join(appDir, 'electron.zip')), '装完清理临时 zip')
+  assert.match(r.message, /无需 npm/)
+
+  const again = await env2.exports.electronInstall()
+  assert.equal(again.alreadyInstalled, true, '已装则跳过')
+})
+
+test('Electron 兜底直装失败：下载炸了 → ok:false 带原因（不再出现「找不到 npm-cli.js」死路提示）', async () => {
+  const env = startModule({ hooks: { npmCli: '', fetchZip: async () => { throw new Error('ECONNREFUSED 模拟断网') } } })
+  await env.exports.download()
+  const r = await env.exports.electronInstall()
+  assert.equal(r.ok, false)
+  assert.match(r.message, /zip 直装失败/)
+  assert.match(r.message, /ECONNREFUSED/)
+  assert.doesNotMatch(r.message, /找不到 npm-cli\.js/, '报错不再是一条死路提示')
+})
+
 test('启动桌宠：分离进程 + 清 ELECTRON_RUN_AS_NODE；心跳活着提示已在跑；stop 杀记录的 pid', async () => {
   const killed = []
   const { spawn, calls } = fakeSpawn()
