@@ -1226,10 +1226,10 @@ export default {
       { action: 'chase_cursor', desc: '扑过去追主人的鼠标指针，追到后把指针按住 5 秒再松开（最雀跃）', params: '无参数 {}', say: '（扑过去追你的鼠标！）' },
       { action: 'wander', desc: '自己溜达到屏幕另一头', params: '无参数 {}', say: '（去那边看看）' },
       { action: 'idle_anim', desc: '自己找点事做：随便播一段小动作（摇尾巴、眨眼这类），不移动', params: '无参数 {}', say: '（自己找点事做）' },
-      { action: 'steal_cursor', desc: '叼鼠标：快速冲到鼠标位置叼住，带着鼠标一起同步移动一段再松口（闹脾气才用）', params: '无参数 {}', say: '（叼走你的鼠标）' },
-      { action: 'drag_icon', desc: '走到桌面图标旁叼住，真的把图标拖着走一小段再放回原位', params: '{"icon":"桌面上的文件名"}', say: '（这个图标我拖一下）' },
-      { action: 'hide_icon', desc: '把桌面图标「收走」藏进隔离区（可随时放回原位，绝不真删）', params: '{"icon":"桌面上的文件名"}', say: '（这个我先收起来）' },
-      { action: 'nudge_window', desc: '把你正在用的窗口推到屏幕边上、5 秒后再拉回原位（不改任何内容）', params: '可选 {"title":"窗口标题片段"}，不填就用前台窗口', say: '（把这个窗口推出去）' },
+      { action: 'steal_cursor', desc: '叼鼠标：快速冲到鼠标位置叼住，带着鼠标一起同步移动一段再松口（闹脾气才用）', params: '可选 {"x":落点屏幕横坐标,"y":落点纵坐标}，不填就每次随机一个位置', say: '（叼走你的鼠标）' },
+      { action: 'drag_icon', desc: '走到桌面图标旁叼住，把图标**挪到另一个位置放下**（真的搬走，不是原地抖一下）', params: '可选 {"icon":"桌面上的文件名","x":落点横坐标,"y":落点纵坐标}；不填 icon 就随机叼一个，不填 x/y 就随机落点', say: '（这个图标我挪个地方）' },
+      { action: 'hide_icon', desc: '把桌面图标「收走」藏进隔离区（可随时放回原位，绝不真删）', params: '可选 {"icon":"桌面上的文件名"}；不填就随机收一个', say: '（这个我先收起来）' },
+      { action: 'nudge_window', desc: '把你正在用的窗口一路推到屏幕边界外（只剩一条边露着），按住 5 秒再同步拉回原位（不改任何内容）', params: '可选 {"title":"窗口标题片段"}，不填就用前台窗口', say: '（把这个窗口推出去）' },
       { action: 'close_window', desc: '🔴 把你正在用的窗口优雅关掉（等价点右上角 X，程序会自己问要不要保存）', params: '可选 {"title":"窗口标题片段"}，不填就用前台窗口', say: '（这个窗口碍事，关掉）' },
       { action: 'say', desc: '只说一句话不做动作', params: '{"text":"要说的话"}', say: '' },
     ]
@@ -1244,6 +1244,8 @@ export default {
     // 窗口动作（第三批）：真正碰到「别人的窗口」——白名单/排除名单在客户端执行层判（只有它能枚举窗口），
     // 服务端只管心情闸、开关闸、下发与记录。
     const WINDOW_ACTIONS = new Set(['nudge_window', 'close_window'])
+    // 落点动作（drag_icon / steal_cursor）：AI 可以指定「放到哪」，省了就让客户端随机一个位置。
+    const DROP_ACTIONS = new Set(['drag_icon', 'steal_cursor'])
     const OPEN_ACTIONS = new Set(BEHAVIOR_ACTIONS.map((a) => a.action))
     const ALL_ACTIONS = new Set([...OPEN_ACTIONS, ...BEHAVIOR_DEFERRED]) // 手动「试一下」通道认全表
     const BEHAVIOR_FALLBACK_POOL = [
@@ -1369,12 +1371,13 @@ export default {
         mem.length ? `【你记得的事】\n${mem.map((t) => '- ' + t).join('\n')}` : '',
         `【现在】\n${busy}\n时段：${part}。心情：${moodNow()}。反应层：${reactLine}`,
         `【上一次动作的回执】${lastReceipt}`,
-        icons.length ? `【主人桌面上的图标（图标动作只能从这些名字里原样照抄一个）】\n${icons.join('、')}` : '',
+        icons.length ? `【主人桌面上的图标（图标动作只能从这些名字里原样照抄一个；不填 icon 就自己随机叼一个）】\n${icons.join('、')}` : '',
         winLines.length
           ? `【主人现在开着的窗口（★=正在用的那个，约 ${winAgeMin} 分钟前读的；窗口动作的 title 只能从这里抄片段）】\n${winLines.join('\n')}`
           : '',
         `【可用动作表（只能从这里选）】\n${table}`,
         `【窗口动作说明】nudge_window / close_window 只作用于主人**正在用的那个窗口**：params.title 可以填上面窗口清单里某条标题的**片段**（照抄几个字，别自己编），不填就是前台窗口${winLines.length ? '' : '（这次没读到窗口清单，所以别填 title）'}。close_window 是闹脾气才用的重动作：只在心情很低时才可选，关掉的是别人真在用的窗口，事后会被记一笔、也可能被要求道歉——绝大多数时候别选它。`,
+        '【落点】drag_icon 会把图标搬到另一个位置、steal_cursor 会把鼠标丢到别处：落点由你决定——在 params 里给 "x"/"y"（屏幕坐标，左上角是 0,0）就按你给的，不给就每次随机一个位置。想「扔到屏幕角落」「扔到右下角」这种，就自己给坐标。',
         banned.length ? `【暂未开放或已被主人禁用，禁止选择】${banned.join('、')}` : '',
         [
           '【输出格式】只输出一个严格 JSON 对象，不要任何解释、不要代码块标记：',
@@ -1412,10 +1415,21 @@ export default {
       let params = obj.params
       if (params == null) params = {}
       if (typeof params !== 'object' || Array.isArray(params)) return null
-      // 图标动作必须带合法的 icon 参数（只认文件名，不带路径）——非法参数按铁律 1 丢弃
+      // 图标动作：icon 可以不填（2026-10-30 用户指定：不给名字就随机挑一个）；
+      // 填了就必须是合法文件名（只认文件名，不带路径）——非法参数按铁律 1 丢弃
       if (ICON_ACTIONS.has(action)) {
         const icon = params.icon
-        if (typeof icon !== 'string' || !icon.trim() || icon.length > 260 || /[/\\]/.test(icon)) return null
+        if (icon != null && (typeof icon !== 'string' || !icon.trim() || icon.length > 260 || /[/\\]/.test(icon))) return null
+      }
+      // 落点坐标：给了就用（屏幕 DIP 坐标），省了就让客户端随机。非法坐标直接丢弃这一轮。
+      if (DROP_ACTIONS.has(action)) {
+        for (const k of ['x', 'y']) {
+          const v = params[k]
+          if (v == null || v === '') { delete params[k]; continue }
+          const n = Number(v)
+          if (!Number.isFinite(n) || Math.abs(n) > 20000) return null
+          params[k] = Math.round(n)
+        }
       }
       // 窗口动作（第三批）：title 只是「标题片段」，不是句柄；可以不填（不填就由客户端挑前台窗口）
       if (WINDOW_ACTIONS.has(action)) {

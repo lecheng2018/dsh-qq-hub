@@ -96,19 +96,28 @@ test('pickWindowTarget：白名单只放行命中的；指名找不到就 refuse
   assert.equal(B.pickWindowTarget([], {}).reason, 'no-window', '空清单 → no-window')
 })
 
-test('windowApproachTarget：优先站窗口右侧，出屏改左侧，两边都不行就贴屏幕右沿', () => {
+test('windowPushPlan：朝更近的竖边推、人物站窗内侧、推出去只剩 keep 宽（2026-10-30 用户改法）', () => {
   const body = { x: 0, y: 0, width: 240, height: 240 }
   const area = { x: 0, y: 0, width: 1920, height: 1080 }
-  const half = body.width / 2
-  const mid = { x: 500, y: 300, width: 600, height: 400 }
-  // 返回的是**身体中心**（moveWindowTo 的口径），所以右侧点 = 窗口右沿 + gap + 半身宽
-  assert.deepEqual(B.windowApproachTarget(mid, body, { workArea: () => area }),
-    { x: 500 + 600 + B.THRESHOLDS.ICON_GAP_PX + half, y: 300 + 200 })
-  const right = { x: 1700, y: 300, width: 200, height: 400 } // 右侧放不下 → 左侧
-  assert.equal(B.windowApproachTarget(right, body, { workArea: () => area }).x, 1700 - B.THRESHOLDS.ICON_GAP_PX - half)
-  const huge = { x: 0, y: 0, width: 1920, height: 1080 } // 两边都放不下 → 贴右沿
-  assert.equal(B.windowApproachTarget(huge, body, { workArea: () => area }).x, 1920 - half)
-  assert.equal(B.windowApproachTarget({ x: 0, y: 0, width: 0, height: 0 }, body, {}), null, '窗口尺寸 0 → null')
+  const gap = B.THRESHOLDS.WINDOW_STAND_GAP_PX
+  const keep = B.THRESHOLDS.WINDOW_PUSH_KEEP_PX
+  const mid = { x: 500, y: 300, width: 600, height: 400 } // 窗口中线 800 < 960 → 往左推
+  const plan = B.windowPushPlan(mid, body, area)
+  assert.equal(plan.toLeft, true, '靠左半边 → 往左推')
+  // 推完窗口左沿 = 屏幕左沿 + keep - 窗宽 → 只留 keep 宽在屏内
+  assert.equal(mid.x + plan.deltaX, 0 + keep - mid.width, '推完只剩 keep 宽')
+  assert.equal(plan.stand.x, 500 + 600 + gap, '人物站窗内侧（往左推就站窗口右边），gap = 24')
+  assert.equal(plan.stand.y, 300 + 400 / 2, '纵向对齐窗口中线')
+  assert.ok(plan.pushMs > 0, '要有推的时长（人物与窗口同速）')
+  // 靠右半边 → 往右推，人物站窗口左边
+  const right = B.windowPushPlan({ x: 1200, y: 200, width: 600, height: 400 }, body, area)
+  assert.equal(right.toLeft, false, '靠右半边 → 往右推')
+  assert.equal(1200 + right.deltaX, 1920 - keep, '推完右沿只剩 keep')
+  assert.equal(right.stand.x, 1200 - gap, '人物站窗口左边')
+  // 已经贴在边上（推不出戏剧效果）→ null，别白跑一趟
+  assert.equal(B.windowPushPlan({ x: -520, y: 300, width: 600, height: 400 }, body, area), null)
+  assert.equal(B.windowPushPlan({ x: 0, y: 0, width: 0, height: 400 }, body, area), null, '窗口宽度 0 → null')
+  assert.equal(B.windowPushPlan(mid, body, null), null, '没有工作区 → null')
 })
 
 test('close_window：跑到窗口**右上角**再关，只发一次 WM_CLOSE，回执带窗口标题', async () => {
@@ -124,10 +133,12 @@ test('close_window：跑到窗口**右上角**再关，只发一次 WM_CLOSE，�
   assert.equal(r.status, 'played')
   assert.deepEqual(calls, [2], '只关前台那个窗口，且只关一次')
   assert.equal(r.detail, 'aurabot - Visual Studio Code')
-  // 右上角：身体中心在「窗口右沿 + gap + 半身宽」，竖直与窗口上沿对齐
+  // 右上角：身体中心落在「窗口右沿 + gap」「窗口上沿 + gap」处（以**人物**到达为准）
   const box = BOX
-  assert.equal(targets[0].t.x, 1200 + B.THRESHOLDS.ICON_GAP_PX + box.width / 2, '站窗口右上角外侧')
-  assert.equal(targets[0].t.y, 0 + box.height / 2, '竖直中心对齐窗口上沿')
+  const gap = B.THRESHOLDS.WINDOW_STAND_GAP_PX
+  assert.equal(targets[0].t.x, 1200 + gap, '人物中心贴窗口右上角外侧')
+  // 竖直方向被「半个身位」夹住：身体上沿正好压在窗口上沿（不会整个人沉到窗口里）
+  assert.equal(targets[0].t.y, Math.max(0 + gap, box.height / 2), '身体上沿贴窗口上沿')
   assert.equal(targets[0].o.align, 'body', '以人物到达为准')
 
   const bad = await B.execute('close_window', {}, fakeCtx({ listWindows: async () => WINS, selfPids: () => [600], windowClose: async () => false }))
@@ -135,29 +146,60 @@ test('close_window：跑到窗口**右上角**再关，只发一次 WM_CLOSE，�
   assert.equal(bad.reason, 'close-failed')
 })
 
-test('nudge_window：把窗口推出去并按住 5 秒（windowPush），推失败按 failed 收尾', async () => {
-  const pushed = []
-  const ok = await B.execute('nudge_window', {}, fakeCtx({
-    listWindows: async () => WINS, selfPids: () => [600],
-    windowPush: async (h, ms) => { pushed.push({ h, ms }); return true },
-  }))
+test('nudge_window：人物跑到窗内侧、和窗口一起匀速挪出去，按住 5 秒再同步拉回（不是闪现）', async () => {
+  const slides = []
+  const called = { sleep: [], place: [], moves: [] }
+  const ctx = fakeCtx({
+    listWindows: async () => WINS,
+    selfPids: () => [600],
+    windowSlide: async (hwnd, dx, dy, ms) => { slides.push({ hwnd, dx, dy, ms }); return true },
+    windowPlace: async (hwnd, x, y) => { called.place.push({ hwnd, x, y }); return true },
+    sleep: async (ms) => { called.sleep.push(ms) },
+    moveWindowTo: async (getTarget, o) => { called.moves.push({ t: getTarget(), o }); return true },
+  })
+  const ok = await B.execute('nudge_window', {}, ctx)
   assert.equal(ok.status, 'played')
-  assert.equal(pushed[0].h, 2)
-  assert.equal(pushed[0].ms, B.THRESHOLDS.WINDOW_PUSH_HOLD_MS, '按住 5 秒再拉回')
-  const fail = await B.execute('nudge_window', {}, fakeCtx({ listWindows: async () => WINS, selfPids: () => [600], windowPush: async () => false }))
+  assert.equal(ok.detail, 'aurabot - Visual Studio Code')
+  const plan = B.windowPushPlan(WINS[1], BOX, ctx.workArea())
+  assert.equal(slides.length, 2, '推出去一次 + 拉回来一次')
+  assert.equal(slides[0].hwnd, 2)
+  assert.equal(slides[0].dx, plan.deltaX, '第一次：按计划位移推出去')
+  assert.equal(slides[1].dx, -plan.deltaX, '第二次：同一条位移反向拉回')
+  assert.equal(slides[0].ms, plan.pushMs, '窗口匀速滑过，时长 = 位移 / 速度')
+  assert.deepEqual(called.sleep, [B.THRESHOLDS.WINDOW_PUSH_HOLD_MS], '按住 5 秒')
+  assert.deepEqual(called.place, [{ hwnd: 2, x: 0, y: 0 }], '兜底把窗口摆回原始坐标')
+  // 三次走位都以「人物到达」为准（先跑到窗内侧，再跟着窗口同进同退）
+  assert.equal(called.moves.length, 3, '站位 1 次 + 推出去 1 次 + 拉回来 1 次')
+  for (const m of called.moves) assert.equal(m.o.align, 'body', '窗口动作全部以人物到达为准')
+  assert.ok(called.moves[0].o.speed === B.THRESHOLDS.RUN_SPEED_PX_S, '跑动速度 150px/s')
+
+  // 推失败（桥返回 false）→ failed:push-failed，但窗口仍被摆回原位（不留残局）
+  const failPlace = []
+  const fail = await B.execute('nudge_window', {}, fakeCtx({
+    listWindows: async () => WINS, selfPids: () => [600],
+    windowSlide: async () => false,
+    windowPlace: async (hwnd, x, y) => { failPlace.push({ hwnd, x, y }); return true },
+  }))
   assert.equal(fail.status, 'failed')
   assert.equal(fail.reason, 'push-failed')
+  assert.deepEqual(failPlace, [{ hwnd: 2, x: 0, y: 0 }], '失败也要还原窗口')
+  // 没有 windowSlide 桥：refused，绝不只动窗口不动人
+  const noBridge = await B.execute('nudge_window', {}, fakeCtx({ listWindows: async () => WINS, selfPids: () => [600] }))
+  assert.equal(noBridge.reason, 'no-window-bridge')
 })
 
-test('windowCornerTarget：站窗口右上角，右侧出屏就贴屏幕右沿', () => {
+test('windowCornerTarget：人物中心贴窗口右上角，出屏就夹回工作区（以人物到达为准）', () => {
   const body = { x: 0, y: 0, width: 240, height: 240 }
   const area = { x: 0, y: 0, width: 1920, height: 1080 }
+  const gap = B.THRESHOLDS.WINDOW_STAND_GAP_PX
   const w = { x: 400, y: 100, width: 800, height: 600 }
   const t = B.windowCornerTarget(w, body, { workArea: () => area })
-  assert.equal(t.x, 400 + 800 + B.THRESHOLDS.ICON_GAP_PX + 120, '右沿外 gap + 半身宽')
-  assert.equal(t.y, 100 + 120, '竖直中心对齐窗口上沿')
+  // 2026-10-30 用户实测修正：以前返回「角 + 半身宽」，人物落到了角的外侧下方
+  assert.equal(t.x, 400 + 800 + gap, '人物中心就在窗口右沿外 gap 处')
+  assert.equal(t.y, 100 + gap, '人物中心就在窗口上沿外 gap 处')
   const right = B.windowCornerTarget({ x: 1700, y: 0, width: 220, height: 600 }, body, { workArea: () => area })
-  assert.equal(right.x, 1920 - 120, '出屏贴屏幕右沿内侧')
+  assert.equal(right.x, 1920 - 120, '出屏贴屏幕右沿内侧（四边留半个身位）')
+  assert.equal(right.y, 120, '竖直也被夹住半个身位')
   assert.equal(B.windowCornerTarget({ x: 0, y: 0, width: 0, height: 0 }, body, {}), null)
 })
 
@@ -228,10 +270,16 @@ test('走位/折线纯函数：站图标左 60px；左边放不下就绕到右�
   assert.equal(nearLeft.x, 30 + 60 + 120, '左边放不下 → 站到图标右边（身体左缘距图标 60px）')
   const middle = B.iconApproachTarget({ x: 800, y: 200 }, body, undefined, area)
   assert.equal(middle.x, 800 - 60 - 120, '两边界都放得下时仍旧站左边（行为不变）')
-  const start = { x: 10, y: 20 }
-  const path = B.iconDragPath(start, () => 0.25)
-  assert.equal(path.length, 4, '3 个折点 + 回到起点')
-  assert.deepEqual(path[3], { x: 10, y: 20 }, '最后一个点必须放回原位')
+  // 随机落点（2026-10-30 用户指定：每次都放到不固定的位置）
+  const area2 = { x: 0, y: 0, width: 1920, height: 1040 }
+  const rnd = B.pickDropPoint({ x: 100, y: 100 }, body, area2, { rng: () => 0.5 })
+  assert.ok(rnd && rnd.source === 'random', '没给坐标 → 随机落点')
+  assert.ok(rnd.x >= 120 && rnd.x <= 1800, '随机点也在工作区内（留半个身位）')
+  const ai = B.pickDropPoint({ x: 100, y: 100 }, body, area2, { x: 5000, y: -100 })
+  assert.equal(ai.source, 'ai', 'AI 给了坐标就用它的')
+  assert.equal(ai.x, 1800, '越界的坐标夹回工作区')
+  assert.equal(ai.y, 120)
+  assert.equal(B.pickDropPoint({ x: 0, y: 0 }, body, null, {}), null, '没有工作区 → null')
 })
 
 test('hide_icon 全链：走位→叼起→act ok→得逞→played；act 体含 playbackId/force/mode', async () => {
@@ -270,32 +318,63 @@ test('hide_icon：被安全闸拒绝 → 播疑惑/叹气 + refused 回执带服
   assert.equal(r2.status, 'refused')
 })
 
-test('drag_icon：图标真的跟着走（moveDesktopIcon），走完放回原位；绝不调 act 接口', async () => {
+test('drag_icon：图标真的被搬到**新位置**放下（不还原），绝不调 act 接口', async () => {
   const targets = []
   const iconMoves = []
   const ctx = fakeCtx({
     readDesktopIcons: async () => [{ name: '游戏.lnk', x: 500, y: 900 }],
     bodyRect: () => ({ ...BOX, width: 240, height: 240 }),
+    workArea: () => ({ x: 0, y: 0, width: 1920, height: 1040 }),
     moveWindowTo: async (getTarget) => { targets.push(getTarget()); return true },
     playAnimByName: async () => true,
     moveDesktopIcon: async (name, x, y) => { iconMoves.push({ name, x, y }); return true },
     iconAct: async () => { throw new Error('drag_icon 不许调 act！') }, // 调了就炸出 failed，正好当断言
   })
-  const r = await B.execute('drag_icon', { icon: '游戏.lnk' }, ctx)
+  const r = await B.execute('drag_icon', { icon: '游戏.lnk', x: 1400, y: 300 }, ctx)
   assert.equal(r.status, 'played')
-  assert.ok(targets.length >= 5, '走位 1 次 + 折线 4 点（3 折点 + 放回）')
-  assert.deepEqual(targets[targets.length - 1], targets[0], '折线最后回到走位起点')
-  // 图标被搬了：每个折点一次 + 最后放回一次
-  assert.ok(iconMoves.length >= 4, '图标要跟着桌宠一起动，实际 ' + iconMoves.length)
-  assert.equal(iconMoves[iconMoves.length - 1].name, '游戏.lnk')
-  assert.equal(iconMoves[iconMoves.length - 1].x, 500, '最后放回图标原位 x')
-  assert.equal(iconMoves[iconMoves.length - 1].y, 900, '最后放回图标原位 y')
-  // 没有 moveDesktopIcon 桥（没装 koffi）：退化成只演不真拖，仍 played
+  assert.ok(targets.length >= 2, '走位 1 次 + 搬到落点 1 次')
+  const lastTarget = targets[targets.length - 1]
+  assert.deepEqual({ x: lastTarget.x, y: lastTarget.y }, { x: 1400, y: 300 }, '最后一次移动的终点 = 落点（AI 坐标）')
+  assert.equal(lastTarget.source, 'ai', 'AI 给了坐标就标 ai（回执里要区分「按指令」/「随机」）')
+  // 图标真的被搬走了：最后一步落在新位置，**不是**原位
+  const last = iconMoves[iconMoves.length - 1]
+  assert.equal(last.name, '游戏.lnk')
+  assert.notEqual(last.x, 500, '图标不能被放回原位（用户要的是挪窝）')
+  assert.notEqual(last.y, 900)
+  assert.ok(Math.abs(last.x - 1400) <= 240 && Math.abs(last.y - 300) <= 240, '图标落点贴着落点附近，实际 ' + last.x + ',' + last.y)
+  assert.match(r.detail, /1400,300/, '回执里带落点，面板能对账')
+  // 没有 moveDesktopIcon 桥：如实 refused（不假装挪成功了）
   const r2 = await B.execute('drag_icon', { icon: '游戏.lnk' }, fakeCtx({
     readDesktopIcons: async () => [{ name: '游戏.lnk', x: 500, y: 900 }],
     playAnimByName: async () => true,
   }))
-  assert.equal(r2.status, 'played')
+  assert.equal(r2.status, 'refused')
+  assert.equal(r2.reason, 'no-icon-bridge')
+  // 搬运失败（moveDesktopIcon 返回 false）：也如实 refused
+  const r3 = await B.execute('drag_icon', { icon: '游戏.lnk' }, fakeCtx({
+    readDesktopIcons: async () => [{ name: '游戏.lnk', x: 500, y: 900 }],
+    workArea: () => ({ x: 0, y: 0, width: 1920, height: 1040 }),
+    moveDesktopIcon: async () => false,
+    playAnimByName: async () => true,
+  }))
+  assert.equal(r3.status, 'refused')
+  assert.equal(r3.reason, 'icon-move-unavailable')
+})
+
+test('drag_icon 半路被打断（没走到落点）：图标必须放回原位，不留半路残局', async () => {
+  const iconMoves = []
+  const ctx = fakeCtx({
+    readDesktopIcons: async () => [{ name: '游戏.lnk', x: 500, y: 900 }],
+    workArea: () => ({ x: 0, y: 0, width: 1920, height: 1040 }),
+    moveDesktopIcon: async (name, x, y) => { iconMoves.push({ name, x, y }); return true },
+    playAnimByName: async () => true,
+    // 第一段（走到图标）成功、第二段（搬到落点）失败
+    moveWindowTo: (() => { let n = 0; return async () => { n++; return n === 1 } })(),
+  })
+  const r = await B.execute('drag_icon', { icon: '游戏.lnk' }, ctx)
+  assert.equal(r.status, 'failed')
+  const last = iconMoves[iconMoves.length - 1]
+  assert.deepEqual({ x: last.x, y: last.y }, { x: 500, y: 900 }, '失败时图标回到原位')
 })
 
 test('hide_icon：发给服务端的是**磁盘名**（ListView 显示名不带 .lnk，服务端按磁盘名 stat）', async () => {
@@ -359,7 +438,7 @@ test('读不到桌面图标 → 设计稿 §6.2 降级：走到屏幕下沿空�
 
 test('降级表演也不能拖垮回执：ctx 没 workArea/bodyRect 时静默跳过，仍 refused', async () => {
   let moved = 0
-  const r = await B.execute('drag_icon', {}, fakeCtx({
+  const r = await B.execute('hide_icon', {}, fakeCtx({
     readDesktopIcons: async () => null,
     workArea: () => null,
     moveWindowTo: async () => { moved++; return true },
@@ -409,13 +488,15 @@ test('hide_icon：act 回 ok:false 但没给 reason → 回执 refused:icon-act-
 test('超时兜底会真收手：预算内的走位 maxMs 收缩，且超时后不再搬窗口', async () => {
   let moves = 0
   const budgets = []
+  const BUDGET_MS = 120 // 与 remainMs 的下限一致：每段走位 100ms → 第二段走到一半就到点，必须收手
   const ctx = fakeCtx({
     readDesktopIcons: async () => [{ name: 'a.txt', x: 400, y: 900 }],
-    iconTimeoutMs: 120,
+    iconTimeoutMs: BUDGET_MS,
+    moveDesktopIcon: async () => true,
     moveWindowTo: async (_getTarget, opts) => {
       moves++
       budgets.push(opts && opts.maxMs)
-      await new Promise((r) => setTimeout(r, 50))
+      await new Promise((r) => setTimeout(r, 100))
       return true
     },
     playAnimByName: async () => true,
@@ -424,7 +505,7 @@ test('超时兜底会真收手：预算内的走位 maxMs 收缩，且超时后�
   const r = await B.execute('drag_icon', { icon: 'a.txt' }, ctx)
   assert.equal(r.status, 'failed')
   assert.equal(r.reason, 'timeout')
-  assert.ok(budgets.every((m) => m <= 120), `走位不能拿到超出预算的 maxMs：${budgets.join(',')}`)
+  assert.ok(budgets.every((m) => m <= BUDGET_MS), `走位不能拿到超出预算的 maxMs：${budgets.join(',')}`)
   const atTimeout = moves
   await new Promise((r2) => setTimeout(r2, 250))
   assert.equal(moves, atTimeout, '超时之后不许再搬窗口（否则窗口会在后台继续乱跑）')
@@ -643,6 +724,8 @@ function fakeCtx(extra) {
   return {
     moveWindowTo: async () => true,
     bodyRect: () => ({ ...BOX }),
+    // 主显示器工作区（默认 1920×1040）：随机落点 / 降级表演 / 窗口计划都要它
+    workArea: () => ({ x: 0, y: 0, width: 1920, height: 1040 }),
     cursor: () => ({ x: 620, y: 620 }),
     playAnimByName: async () => false,
     nativeMove: async () => true,
@@ -674,11 +757,11 @@ test('stepToward：匀速——横跨 1600px 一帧只走 speed*dt，不再「�
   assert.equal(B.stepToward({ x: 0, y: 0 }, { x: 100, y: 0 }, 900, 0).step, 0)
 })
 
-test('chase_cursor 用比常规更快的速度（否则追不上会动的光标）', async () => {
-  // 2026-10-30 两次降速（用户指定绝对速度）：常规 900→320→**50**，追鼠标 1500→620→**97**。
-  // 这里锁「追大约两倍于常规」这个契约，不写死单点数值（调参别再一改就红）。
-  const REGULAR = 50 // 与 main.js 的 MOVE_SPEED_PX_S 对齐（跨进程没法 require，测试里注明）
-  assert.ok(B.THRESHOLDS.CHASE_SPEED_PX_S >= 1.5 * REGULAR, '追鼠标至少比常规快 1.5 倍')
+test('chase_cursor 用跑动速度（150px/s）而不是溜达速度', async () => {
+  // 2026-10-30 三次调参的最终值：溜达 50 / 跑动 150 / 叼鼠标 400·250。
+  // 追鼠标要跟得上会动光标，必须用跑动档而不是散步档。
+  assert.ok(B.THRESHOLDS.CHASE_SPEED_PX_S >= B.THRESHOLDS.RUN_SPEED_PX_S, '追鼠标至少和跑动一样快')
+  assert.ok(B.THRESHOLDS.CHASE_SPEED_PX_S > B.THRESHOLDS.WANDER_SPEED_PX_S, '不能拿散步速度追鼠标')
   let seen = null
   const ctx = fakeCtx({ moveWindowTo: async (_t, opts) => { seen = opts; return true } })
   const r = await B.execute('chase_cursor', {}, ctx)
@@ -756,12 +839,18 @@ test('主进程接线契约：handleBehavior 有「事件 say > 动作默认台�
   assert.ok(/react\('pat'[\s\S]{0,120}showBubble/.test(src), '摸摸（反应层）也要顶气泡')
 })
 
-test('移动降速与跑动动画契约：50px/s + 亚像素累积 + 名字按右键菜单同源解析', () => {
+test('移动速度契约：溜达 50 / 其余跑动 150 / 叼鼠标 400·250，且亚像素累积 + 动画同源解析', () => {
   const src = readFileSync(new URL('../src/modules/pet/pet-client/main.js', import.meta.url), 'utf8')
   const html = readFileSync(new URL('../src/modules/pet/pet-client/index.html', import.meta.url), 'utf8')
-  // 速度：常规 50（用户指定绝对值），追鼠标 97（≈2 倍）。别再飘回 900/1500。
-  assert.ok(/const MOVE_SPEED_PX_S = 50\b/.test(src), '常规移动速度必须是 50px/s')
-  assert.equal(B.THRESHOLDS.CHASE_SPEED_PX_S, 97)
+  // 2026-10-30（用户第三次指定）：除了「叼鼠标」，其余跑动统一 150px/s（50 太磨蹭）；
+  // 溜达保持 50（散步感）；叼鼠标冲刺 400、叼着走 250。
+  assert.equal(B.THRESHOLDS.RUN_SPEED_PX_S, 150, '跑动速度 150px/s')
+  assert.equal(B.THRESHOLDS.WANDER_SPEED_PX_S, 50, '溜达保持 50px/s')
+  assert.equal(B.THRESHOLDS.CHASE_SPEED_PX_S, 150, '追鼠标也走 150')
+  assert.equal(B.THRESHOLDS.STEAL_SPEED_PX_S, 400, '叼鼠标冲刺 400')
+  assert.equal(B.THRESHOLDS.STEAL_CARRY_SPEED_PX_S, 250, '叼着走 250')
+  // 主进程默认速度 = 散步 50（只有 wander 不传 speed 时用得上）
+  assert.ok(/const MOVE_SPEED_PX_S = 50\b/.test(src), '主进程默认速度必须是 50px/s')
   // 速度下限不能是 80：Math.max(80, ...) 会把 50 悄悄改回 80（曾经踩过）
   assert.ok(!/Math\.max\(80, Number\(o\.speed\)/.test(src), '速度下限不能高于 50')
   // 50px/s ≈ 每帧 0.8px：必须用浮点累积位置，否则 round() 永远回到原处、一步都走不动

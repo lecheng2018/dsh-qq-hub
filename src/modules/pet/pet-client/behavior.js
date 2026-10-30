@@ -36,28 +36,34 @@ const THRESHOLDS = Object.freeze({
   IDLE_CURSOR_MINUTES: 8,
   // 反应冷却：同一反应 30 秒内不重复触发
   REACTION_COOLDOWN_MS: 30_000,
-  // 追鼠标：距目标 <STOP_PX 视为追到；MOVE_MAX_MS 兜底防死循环；
-  // 追到后把指针按住 CHASE_HOLD_MS 再松开（2026-10-30 用户指定）
+  // ---------- 速度（2026-10-30 用户第二次指定） ----------
+  // 叼鼠标：冲刺 400、叼着走 250（这两个不动）；溜达保持 50（散步感）；其余跑动统一 150。
+  RUN_SPEED_PX_S: 150,        // 追鼠标 / 叼图标 / 窗口动作的跑动速度
+  WANDER_SPEED_PX_S: 50,      // 溜达：慢慢晃，才有「闲逛」的样子
+  STEAL_SPEED_PX_S: 400,      // 叼鼠标阶段①：冲过去
+  STEAL_CARRY_SPEED_PX_S: 250, // 叼鼠标阶段②：叼着走
+  STEAL_STOP_PX: 10,          // 冲刺阶段视为「冲到」的距离（鼠标 ≈ 被叼在嘴里）
+  // 追鼠标：距目标 <STOP_PX 视为追到；追到后把指针按住 CHASE_HOLD_MS 再松开
   CHASE_STOP_PX: 8,
   CHASE_HOLD_MS: 5_000,
-  // 叼鼠标（2026-10-30 重写，用户指定）：先以 STEAL_SPEED_PX_S 快速冲到鼠标位置，
-  // 叼住后 window 与鼠标一起同步移动一段再松口。
-  // 速度（用户指定）：冲刺 400、叼着走 250。
-  STEAL_SPEED_PX_S: 400,
-  STEAL_CARRY_SPEED_PX_S: 250,
-  STEAL_STOP_PX: 10,       // 冲刺阶段视为「冲到」的距离（鼠标 ≈ 被叼在嘴里）
-  STEAL_DRAG_PX: 180,      // 默认拖拽距离
-  CHASE_SPEED_PX_S: 97,     // ≈ 常规 50 的两倍：看得出在追，但不再是一闪而过
-  CHASE_MAX_MS: 60_000,     // 追鼠标单独兜底：97px/s × 60s ≈ 5800px，够横跨双屏
+  CHASE_SPEED_PX_S: 150,
+  CHASE_MAX_MS: 60_000,       // 追鼠标单独兜底：150px/s × 60s ≈ 9000px，够横跨双屏
   MOVE_MAX_MS: 90_000,
-  // 图标动作：走到图标旁 60px；整条链路总时长兜底 ≤60s（2026-10-30 随 50px/s 放宽：
-  // 1920 屏走过去就要 38s，12s/18s 那种预算根本走不到，动作会被瞬判失败）
+  // 图标动作：走到图标旁 60px；整条链路总时长兜底 ≤60s（150px/s 也够横跨双屏）
   ICON_GAP_PX: 60,
   ICON_TOTAL_MAX_MS: 60_000,
   // 图标单元格的竖直中心（ListView 给的是单元格左上角；图标约 48px + 文字，取 38 当中心）
   ICON_CENTER_OFFSET_Y: 38,
-  // 推窗口（2026-10-30 用户指定）：把窗口推到屏幕边界外，按住 5 秒再拉回原位
+  // 图标单元格尺寸估算（放下时用来把图标夹在屏幕内，别把图标丢到屏幕外）
+  ICON_CELL_PX: 96,
+  // 随机落点（2026-10-30 用户指定：图标 / 鼠标每次都要放到不固定的位置）：
+  // 离起点至少这么远，免得看起来像「原地抖了一下」
+  DROP_MIN_DIST_PX: 280,
+  // 推窗口（2026-10-30 用户指定）：把窗口推到屏幕边界外只剩 keep 宽，按住 5 秒再拉回原位
+  WINDOW_PUSH_KEEP_PX: 80,
   WINDOW_PUSH_HOLD_MS: 5_000,
+  // 窗口动作的站位：人物**中心**距窗口边缘多远（贴上去，但不整个盖住右上角的按钮）
+  WINDOW_STAND_GAP_PX: 24,
 })
 
 // ---------- 动作注册表（客户端执行部分） ----------
@@ -92,7 +98,11 @@ const ACTIONS = {
         ? ctx.pickWanderTarget(box)
         : null
       if (!target) return { status: 'refused', reason: 'no-area' }
-      const ok = await ctx.moveWindowTo(() => target, { stopPx: 6, maxMs: THRESHOLDS.MOVE_MAX_MS })
+      const ok = await ctx.moveWindowTo(() => target, {
+        stopPx: 6,
+        maxMs: THRESHOLDS.MOVE_MAX_MS,
+        speed: THRESHOLDS.WANDER_SPEED_PX_S, // 溜达保持 50px/s（散步感）
+      })
       return { status: ok ? 'played' : 'failed', reason: ok ? '' : 'move-interrupted' }
     },
   },
@@ -122,19 +132,18 @@ const ACTIONS = {
       const body = ctx.bodyRect()
       const start = ctx.cursor()
       if (!body || !start) return { status: 'failed', reason: 'no-body' }
-      const drag = Math.max(60, Math.min(400, Number(params && params.drag) || THRESHOLDS.STEAL_DRAG_PX))
-      const cx = Math.round(body.x + body.width / 2)
-      const cy = Math.round(body.y + body.height / 2)
-      const ang = Math.random() * Math.PI * 2
-      let end = { x: cx + Math.cos(ang) * drag, y: Math.max(4, cy + Math.sin(ang) * drag) }
       const area = typeof ctx.workArea === 'function' ? ctx.workArea() : null
-      if (area && area.width > 0) { // 别把鼠标拖出工作区
-        end.x = Math.min(Math.max(end.x, area.x + 4), area.x + area.width - 4)
-        end.y = Math.min(end.y, area.y + area.height - 4)
-      }
+      // 落点（2026-10-30 用户指定）：AI 给了坐标就用它的，否则每次在工作区里随机一个点——
+      // 以前是「随机角度 × 固定 180px」，每次落点都落在同一圈上，用户要求「每次都不固定」。
+      const drop = pickDropPoint(start, body, area, {
+        x: params && params.x,
+        y: params && params.y,
+        minDist: THRESHOLDS.DROP_MIN_DIST_PX,
+      })
+      if (!drop) return { status: 'failed', reason: 'no-area' }
       ctx.playAnimByName(['叼', '咬', '挣扎', 'steal']) // 叼住动画（找不到素材静默）
       // carry:true → 主进程每帧把鼠标钉在身体中心并锁住裁剪区，窗口与鼠标天然同步
-      const ok2 = await ctx.moveWindowTo(() => end, {
+      const ok2 = await ctx.moveWindowTo(() => drop, {
         stopPx: 4,
         maxMs: THRESHOLDS.MOVE_MAX_MS,
         speed: THRESHOLDS.STEAL_CARRY_SPEED_PX_S,
@@ -157,37 +166,58 @@ const ACTIONS = {
   },
   // ---------- 图标动作：drag_icon / hide_icon（共用动画链骨架） ----------
   drag_icon: {
-    desc: '[第二批] 走到桌面图标旁叼着拖一小段随机折线又放回（图标不挪窝，不调 act）',
-    say: '（这个图标我拖一下）',
+    desc: '走到桌面图标旁叼住，把图标拖到一个新位置放下（默认随机落点，也可由 params.x/y 指定）',
+    say: '（这个图标我挪个地方）',
     run: (params, ctx) => iconActionRun('drag', params, ctx),
   },
   hide_icon: {
-    desc: '[第二批] 把桌面图标收走（POST /behavior/icon/act，被安全闸拒绝时回执 refused 带中文原因）',
+    desc: '把桌面图标收走（不给 params.icon 就随机挑一个；POST /behavior/icon/act，被安全闸拒绝时回执带原因）',
     say: '（这个我先收起来）',
     run: (params, ctx) => iconActionRun('hide', params, ctx),
   },
   // ---------- 窗口动作（只发 WM_CLOSE，绝不 taskkill） ----------
   // 2026-10-30：peek_window（探头）按用户要求删除——凑头没意义。
   nudge_window: {
-    desc: '把你正在用的窗口推到屏幕边界外，按住 5 秒再拉回原位（不改内容、不动大小）',
+    desc: '跑到窗口内侧，把窗口一路推到屏幕边界外（只剩一条边），按住 5 秒再同步拉回原位',
     say: '（把这个窗口推出去）',
     async run(params, ctx) {
       const got = await pickWindowForAction(params, ctx)
       if (got.reason) return { status: 'refused', reason: got.reason }
       const w = got.window
       const body = ctx.bodyRect()
-      const target = body ? windowApproachTarget(w, body, ctx) : null
-      if (target) {
-        // align:'body'：以人物到达为准（窗口贴着屏幕上沿时也走得到）
-        const ok = await ctx.moveWindowTo(() => target, { stopPx: 8, maxMs: THRESHOLDS.MOVE_MAX_MS, align: 'body' })
-        if (!ok) return { status: 'failed', reason: 'move-interrupted', detail: w.title }
-      }
+      const area = typeof ctx.workArea === 'function' ? ctx.workArea() : null
+      // 计划（纯函数）：朝更近的竖边推，人物站**窗内侧**——窗口被推出去时人物还跟得上（不会被夹在屏外）
+      const plan = body ? windowPushPlan(w, body, area) : null
+      if (!plan) return { status: 'refused', reason: 'no-area', detail: w.title }
+      if (typeof ctx.windowSlide !== 'function') return { status: 'refused', reason: 'no-window-bridge', detail: w.title }
+      // 1) 先跑到窗口内侧（align:'body'：以人物到达为准）
+      const arrive = await ctx.moveWindowTo(() => plan.stand, {
+        stopPx: 6, maxMs: THRESHOLDS.MOVE_MAX_MS, align: 'body', speed: THRESHOLDS.RUN_SPEED_PX_S,
+      })
+      if (!arrive) return { status: 'failed', reason: 'move-interrupted', detail: w.title }
       await ctx.playAnimByName(WINDOW_ANIMS.nudge)
-      if (typeof ctx.windowPush !== 'function') return { status: 'refused', reason: 'no-window-bridge', detail: w.title }
-      // 主进程：推出去 → 按住 holdMs → 精确还原（还原在 while 里保证，异常也不留残局）
-      const done = await ctx.windowPush(w.hwnd, THRESHOLDS.WINDOW_PUSH_HOLD_MS)
-      await ctx.playAnimByName(done ? WINDOW_ANIMS.win : WINDOW_ANIMS.sorry)
-      return done
+      const home = bodyOf(ctx) || plan.stand
+      const pushMs = plan.pushMs
+      // 2) 推出去：窗口匀速滑走 + 人物同速跟着走（同一条 delta、同一段时长）——
+      //    用户明确要求「不是窗口闪现到特定位置」，而是人物和窗口一起挪过去。
+      const [petOut, winOut] = await Promise.all([
+        ctx.moveWindowTo(() => ({ x: home.x + plan.deltaX, y: home.y }), {
+          stopPx: 6, maxMs: pushMs + 30_000, align: 'body', speed: THRESHOLDS.RUN_SPEED_PX_S,
+        }),
+        ctx.windowSlide(w.hwnd, plan.deltaX, 0, pushMs),
+      ])
+      const pushed = Boolean(petOut) && Boolean(winOut)
+      // 3) 按住 5 秒（窗口就停在屏幕外那条缝上，人物也站在边上）
+      if (pushed) await ctx.sleep(THRESHOLDS.WINDOW_PUSH_HOLD_MS)
+      // 4) 同步拉回原位
+      await Promise.all([
+        ctx.moveWindowTo(() => home, { stopPx: 6, maxMs: pushMs + 30_000, align: 'body', speed: THRESHOLDS.RUN_SPEED_PX_S }),
+        ctx.windowSlide(w.hwnd, -plan.deltaX, 0, pushMs),
+      ])
+      // 5) 兜底：不管中间怎么失败，窗口最终一定回到原始坐标（push 是「吓一跳」，不是「弄丢窗口」）
+      if (typeof ctx.windowPlace === 'function') { try { await ctx.windowPlace(w.hwnd, w.x, w.y) } catch {} }
+      await ctx.playAnimByName(pushed ? WINDOW_ANIMS.win : WINDOW_ANIMS.sorry)
+      return pushed
         ? { status: 'played', reason: '', detail: w.title }
         : { status: 'failed', reason: 'push-failed', detail: w.title }
     },
@@ -203,12 +233,13 @@ const ACTIONS = {
       if (got.reason) return { status: 'refused', reason: got.reason }
       const w = got.window
       const body = ctx.bodyRect()
-      // 用户指定：跑到目标窗口**右上角**再关（那里就是 X 的位置）
+      // 用户指定：**人物**跑到目标窗口右上角（那里就是 X 的位置）——目标点就是人物中心要到的点
       const target = body ? windowCornerTarget(w, body, ctx) : null
-      if (target) {
-        const ok = await ctx.moveWindowTo(() => target, { stopPx: 8, maxMs: THRESHOLDS.MOVE_MAX_MS, align: 'body' })
-        if (!ok) return { status: 'failed', reason: 'move-interrupted', detail: w.title }
-      }
+      if (!target) return { status: 'refused', reason: 'no-body', detail: w.title }
+      const okMove = await ctx.moveWindowTo(() => target, {
+        stopPx: 6, maxMs: THRESHOLDS.MOVE_MAX_MS, align: 'body', speed: THRESHOLDS.RUN_SPEED_PX_S,
+      })
+      if (!okMove) return { status: 'failed', reason: 'move-interrupted', detail: w.title }
       if (typeof ctx.windowClose !== 'function') return { status: 'refused', reason: 'no-window-bridge', detail: w.title }
       const ok = await ctx.windowClose(w.hwnd) // 铁律 3：只发 WM_CLOSE
       await ctx.playAnimByName(ok ? WINDOW_ANIMS.win : WINDOW_ANIMS.sorry)
@@ -228,7 +259,8 @@ function notImplemented() {
 //   listWindows() → Promise<[{hwnd,pid,proc,title,cls,zoomed,fg,x,y,width,height}] | null>
 //     （x/y/width/height 已由客户端换算成 DIP；读不到返回 null）
 //   windowClose(hwnd) → Promise<boolean>   只发 WM_CLOSE（铁律 3，绝不 taskkill）
-//   windowPush(hwnd, holdMs) → Promise<boolean>  把窗口推出屏幕边界 → 按住 holdMs → 还原原位
+//   windowSlide(hwnd, dx, dy, ms) → Promise<boolean>  把窗口在 ms 内匀速挪 (dx,dy)（人物同速跟着走）
+//   windowPlace(hwnd, x, y) → Promise<boolean>  把窗口放到绝对坐标（推完的兜底还原）
 //   moveDesktopIcon(name, x, y) → Promise<boolean>  真的挪动桌面图标（ListView LVM_SETITEMPOSITION）
 //   selfPids()        → number[]           自己的进程（桌宠/宿主），永远不碰
 const WINDOW_ANIMS = Object.freeze({
@@ -302,36 +334,61 @@ function pickWindowTarget(windows, opts) {
   const sorted = [...pool].sort((a, b) => (Number(b.fg) || 0) - (Number(a.fg) || 0) || winArea(b) - winArea(a))
   return { window: sorted[0] }
 }
-/** 站到窗口旁边（纯函数）：右侧留 gap；右侧出屏就站左侧；两边都出屏就贴着屏幕右沿。 */
-function windowApproachTarget(w, body, ctx) {
-  if (!w || !body || !(Number(w.width) > 0) || !(Number(w.height) > 0)) return null
-  const gap = THRESHOLDS.ICON_GAP_PX
-  // 返回**身体中心**（moveWindowTo 的口径）：身体边缘距窗口 gap，纵向居中对齐窗口
-  const y = Math.round(Number(w.y) + Number(w.height) / 2)
-  const half = body.width / 2
-  const right = { x: Math.round(Number(w.x) + Number(w.width) + gap + half), y }
-  const left = { x: Math.round(Number(w.x) - gap - half), y }
-  const area = ctx && typeof ctx.workArea === 'function' ? ctx.workArea() : null
-  if (!area || !(area.width > 0)) return right
-  const fits = (p) => p.x - half >= area.x && p.x + half <= area.x + area.width
-  if (fits(right)) return right
-  if (fits(left)) return left
-  return { x: Math.round(area.x + area.width - half), y }
+/** 当前身体中心（人物所在点）。拿不到返回 null。 */
+function bodyOf(ctx) {
+  const b = ctx && typeof ctx.bodyRect === 'function' ? ctx.bodyRect() : null
+  if (!b) return null
+  return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) }
 }
-/** 站到窗口**右上角**（纯函数，close_window 用，2026-10-30 用户指定）：
- *  身体中心落在「窗口右上角向外 gap」，竖直方向与窗口上沿对齐（头在角上、身子挂在外侧）。
- *  右侧出屏就贴到屏幕右沿内侧，保证人物真的到得了。 */
+/** 把「人物中心」夹进工作区（四边各留半个身位，人物整个在屏内）。没有 area 就原样返回。 */
+function clampBodyCenter(p, body, area) {
+  const x = Number(p && p.x)
+  const y = Number(p && p.y)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  if (!area || !(Number(area.width) > 0)) return { x: Math.round(x), y: Math.round(y) }
+  const halfW = Math.max(0, Number(body && body.width) || 0) / 2
+  const halfH = Math.max(0, Number(body && body.height) || 0) / 2
+  const loX = Number(area.x) + halfW
+  const hiX = Number(area.x) + Number(area.width) - halfW
+  const loY = Number(area.y) + halfH
+  const hiY = Number(area.y) + Number(area.height) - halfH
+  return {
+    x: Math.round(Math.min(Math.max(x, loX), Math.max(loX, hiX))),
+    y: Math.round(Math.min(Math.max(y, loY), Math.max(loY, hiY))),
+  }
+}
+/** 站到窗口**右上角**（纯函数，close_window 用）：返回**人物中心**该到的点。
+ *  2026-10-30 用户实测修正：「以人物到达为准」——以前返回的是「窗口边缘 + 半个身位」，
+ *  于是人物中心落到了角的外侧下方，看起来像「窗口左上角到了、人物没到」。现在直接把人物中心
+ *  放在「角向外 gap」处，人物就真的贴在那个角上（并轻微盖住 X 按钮，正是要按它的样子）。 */
 function windowCornerTarget(w, body, ctx) {
   if (!w || !body || !(Number(w.width) > 0) || !(Number(w.height) > 0)) return null
-  const gap = THRESHOLDS.ICON_GAP_PX
-  const half = body.width / 2
-  const y = Math.round(Number(w.y) + body.height / 2) // 人物竖直中心 ≈ 窗口上沿
-  let x = Math.round(Number(w.x) + Number(w.width) + gap + half)
+  const gap = THRESHOLDS.WINDOW_STAND_GAP_PX
   const area = ctx && typeof ctx.workArea === 'function' ? ctx.workArea() : null
-  if (area && area.width > 0 && x + half > area.x + area.width) {
-    x = Math.round(area.x + area.width - half)
-  }
-  return { x, y }
+  return clampBodyCenter({ x: Number(w.x) + Number(w.width) + gap, y: Number(w.y) + gap }, body, area)
+}
+/** 推窗口计划（纯函数）：朝更近的那条竖边推，人物站**窗内侧**（推的反方向），
+ *  窗口被推出屏幕时人物还能跟着走；推出去屏幕里只留 keepPx 宽。
+ *  返回 { stand, deltaX, pushMs }（stand 是人物中心、deltaX 是窗口要走的水平距离）。 */
+function windowPushPlan(w, body, area, opts) {
+  if (!w || !body || !(Number(w.width) > 0)) return null
+  if (!area || !(Number(area.width) > 0)) return null
+  const o = opts || {}
+  const keep = Number(o.keepPx) > 0 ? Number(o.keepPx) : THRESHOLDS.WINDOW_PUSH_KEEP_PX
+  const gap = Number(o.gapPx) > 0 ? Number(o.gapPx) : THRESHOLDS.WINDOW_STAND_GAP_PX
+  const speed = Number(o.speedPxS) > 0 ? Number(o.speedPxS) : THRESHOLDS.RUN_SPEED_PX_S
+  const wl = Number(w.x)
+  const ww = Number(w.width)
+  const toLeft = wl + ww / 2 < Number(area.x) + Number(area.width) / 2
+  const targetX = toLeft ? Number(area.x) + keep - ww : Number(area.x) + Number(area.width) - keep
+  const deltaX = Math.round(targetX - wl)
+  if (Math.abs(deltaX) < 40) return null // 已经贴在边上了：推不出戏剧效果，别白跑一趟
+  // 人物站窗内侧：要往左推就站窗口右边，往右推就站窗口左边；纵向对齐窗口中线
+  const standX = toLeft ? wl + ww + gap : wl - gap
+  const stand = clampBodyCenter({ x: standX, y: Number(w.y) + Number(w.height) / 2 }, body, area)
+  if (!stand) return null
+  const pushMs = Math.max(120, Math.round(Math.abs(deltaX) / speed * 1000))
+  return { stand, deltaX, pushMs, toLeft }
 }
 
 /** 取窗口清单 → 挑一个。桥缺失/读不到一律 refused（绝不猜）。 */
@@ -521,18 +578,33 @@ function iconApproachTarget(icon, body, gapPx, area) {
   return left // 两边都放不下（图标在极窄屏中间）：仍旧按左边，由 moveWindowTo 的 align:'body' 夹回来
 }
 
-/** 拖动折线（纯函数）：从起点出发走 3 个 ±120px 随机折点，最后一个点回到起点（放回原位）。 */
-function iconDragPath(start, rng) {
-  const rand = rng || Math.random
-  const pts = []
-  for (let i = 0; i < 3; i++) {
-    pts.push({
-      x: Math.round(start.x + (rand() * 2 - 1) * 120),
-      y: Math.round(start.y + (rand() * 2 - 1) * 120),
-    })
+/** 随机落点（纯函数，返回**人物中心**该到的点）：
+ *  · opts.x / opts.y（AI 给的屏幕坐标，DIP）合法就用它——「每次不固定」由 AI 决定；
+ *  · 否则在工作区里随机（四边各留半个身位，人物整个在屏内），且离 from 至少 minDist，
+ *    免得看起来像「原地抖了一下」。
+ *  拿不到工作区 → null（调用方按 no-area 拒演）。rng 可注入以便单测。 */
+function pickDropPoint(from, body, area, opts) {
+  const o = opts || {}
+  const rand = o.rng || Math.random
+  if (!area || !(Number(area.width) > 0)) return null
+  const half = Math.max(0, Number(body && body.width) || 0) / 2
+  const halfH = Math.max(0, Number(body && body.height) || 0) / 2
+  const loX = Number(area.x) + half
+  const hiX = Math.max(loX, Number(area.x) + Number(area.width) - half)
+  const loY = Number(area.y) + halfH
+  const hiY = Math.max(loY, Number(area.y) + Number(area.height) - halfH)
+  const clampX = (v) => Math.round(Math.min(Math.max(v, loX), hiX))
+  const clampY = (v) => Math.round(Math.min(Math.max(v, loY), hiY))
+  const ax = Number(o.x)
+  const ay = Number(o.y)
+  if (Number.isFinite(ax) && Number.isFinite(ay)) return { x: clampX(ax), y: clampY(ay), source: 'ai' }
+  const minDist = Number(o.minDist) > 0 ? Number(o.minDist) : THRESHOLDS.DROP_MIN_DIST_PX
+  let last = null
+  for (let i = 0; i < 8; i++) {
+    last = { x: clampX(loX + rand() * Math.max(1, hiX - loX)), y: clampY(loY + rand() * Math.max(1, hiY - loY)) }
+    if (!from || Math.hypot(last.x - Number(from.x), last.y - Number(from.y)) >= minDist) break
   }
-  pts.push({ x: Math.round(start.x), y: Math.round(start.y) })
-  return pts
+  return { ...last, source: 'random' }
 }
 
 /** 图标链路的时间预算：deadline 到点后 cancelled=true，所有走位目标立刻返回 null（moveWindowTo 当场中止）。
@@ -579,7 +651,9 @@ async function degradeIconPerf(ctx, budget) {
       x: Math.round(area.x + rand() * Math.max(0, area.width - body.width)),
       y: Math.round(area.y + Math.max(0, area.height - body.height)), // 屏幕下沿
     }
-    const ok = await ctx.moveWindowTo(() => (budget.cancelled ? null : point), { stopPx: 8, maxMs: remainMs(budget) })
+    const ok = await ctx.moveWindowTo(() => (budget.cancelled ? null : point), {
+      stopPx: 8, maxMs: remainMs(budget), speed: THRESHOLDS.RUN_SPEED_PX_S,
+    })
     if (budget.cancelled || !ok) return
     await ctx.playAnimByName(ICON_ANIMS.grab)
     if (budget.cancelled) return
@@ -587,21 +661,24 @@ async function degradeIconPerf(ctx, budget) {
   } catch { /* 降级表演失败也不许影响回执 */ }
 }
 
-/** 共用动画链骨架：定位选标 → 走到图标旁 60px → 叼起 →（hide 调 act / drag 真拖图标）→ 收尾。
+/** 共用动画链骨架：定位选标 → 走到图标旁 60px → 叼起 →（hide 调 act / drag 拖到新位置）→ 收尾。
  *  每一步都看 budget.cancelled（超时后立刻收手，绝不继续搬窗口）。
- *  2026-10-30 两处修正（用户实测反馈）：
+ *  2026-10-30 三次修正（用户实测反馈）：
  *    · 走位用 align:'body'——以**人物**到达为准（屏幕上沿的图标也走得到）；
- *    · drag 真拖：给图标桥就按「图标相对身体中心的偏移」跟着桌宠走，最后**放回原位**。 */
+ *    · drag 真拖：图标跟着身体走，最后**真的放下**（默认随机落点，也可由 params.x/y 指定）；
+ *    · 只有「没走到 / 被取消」才把图标放回原位——演成功了就留在新位置（用户要的就是挪窝）。 */
 async function iconActionChain(mode, params, ctx, budget) {
   const stop = { status: 'failed', reason: 'cancelled' }
   /** 走到某点：预算内缓动；取消后 getTarget 返回 null → moveWindowTo 立即中止。
    *  align:'body'：把**身体中心**夹进工作区（窗口允许越出屏幕边），人物才真的到得了图标。 */
   const moveTo = (point, stopPx, speed) => ctx.moveWindowTo(
     () => (budget.cancelled ? null : point),
-    { stopPx: stopPx || 6, maxMs: remainMs(budget), align: 'body', ...(speed ? { speed } : {}) },
+    { stopPx: stopPx || 6, maxMs: remainMs(budget), align: 'body', speed: speed || THRESHOLDS.RUN_SPEED_PX_S },
   )
   // 1) 拿图标清单：桥缺失/读不到（含抛异常）一律 refused，绝不让主进程崩
   if (typeof ctx.readDesktopIcons !== 'function') return { status: 'refused', reason: 'no-desktop-bridge' }
+  // drag 必须能真的搬图标：没有这个桥就别白跑一趟（用户要的是「挪窝」，不是演一下）
+  if (mode === 'drag' && typeof ctx.moveDesktopIcon !== 'function') return { status: 'refused', reason: 'no-icon-bridge' }
   let icons = null
   try { icons = await ctx.readDesktopIcons() } catch { icons = null }
   if (budget.cancelled) return stop
@@ -612,6 +689,7 @@ async function iconActionChain(mode, params, ctx, budget) {
     return { status: 'refused', reason: 'desktop-icons-unavailable' }
   }
   // 2) 选目标：params.icon 指名（服务端简报给的文件名）→ 必须存在且是普通文件；否则自己随机挑
+  //    （2026-10-30 用户指定：没给名字就随机收/拖一个，每次都不一样）
   let icon
   const wanted = String(params.icon || '').trim()
   if (wanted) {
@@ -634,27 +712,61 @@ async function iconActionChain(mode, params, ctx, budget) {
   if (budget.cancelled) return stop
   // 4) 分支
   if (mode === 'drag') {
-    // 真拖（2026-10-30 用户要求：图标必须跟着动）：拖拽期间图标保持在身体中心的固定偏移上，
-    // 走完随机折线再**放回原位**。没有 moveDesktopIcon 桥（没装 koffi）就退化成只演不真拖。
-    const legs = iconDragPath(target)
-    const canMoveIcon = typeof ctx.moveDesktopIcon === 'function'
-    const dx = icon.x - target.x
-    const dy = icon.y - target.y
+    // 拖到新位置放下（2026-10-30 用户指定：挪窝，不是原地抖一下）
+    // 落点：AI 给了坐标就用，否则随机（离起点至少 DROP_MIN_DIST_PX）
+    const drop = pickDropPoint(target, body, area, { x: params.x, y: params.y, minDist: THRESHOLDS.DROP_MIN_DIST_PX, rng: ctx.rng })
+    if (!drop) return { status: 'refused', reason: 'no-area' }
+    // 图标左上角相对身体中心的偏移：叼着走期间保持不变（图标看着就挂在嘴边）
+    const dx = Number(icon.x) - Number(target.x)
+    const dy = Number(icon.y) - Number(target.y)
+    const cell = THRESHOLDS.ICON_CELL_PX
+    // 图标别忘了夹在屏幕内：先把「图标中心」夹进工作区，再换回左上角（moveDesktopIcon 收的是左上角）
+    const center = clampBodyCenter(
+      { x: drop.x + dx + cell / 2, y: drop.y + dy + cell / 2 },
+      { width: cell, height: cell },
+      area,
+    ) || { x: drop.x + dx + cell / 2, y: drop.y + dy + cell / 2 }
+    const dropIcon = { x: Math.round(center.x - cell / 2), y: Math.round(center.y - cell / 2) }
+    let lastAt = 0
+    let lastKey = ''
+    let bridgeOk = true
+    /** 每帧把图标搬到「身体中心 + 固定偏移」；60ms 节流（常驻助手几毫秒一条，但不值得每帧刷）。 */
+    const follow = () => {
+      if (!bridgeOk) return
+      const b = ctx.bodyRect()
+      if (!b) return
+      const x = Math.round(b.x + b.width / 2 + dx)
+      const y = Math.round(b.y + b.height / 2 + dy)
+      const key = x + ',' + y
+      const now = Date.now()
+      if (key === lastKey || now - lastAt < 60) return
+      lastKey = key
+      lastAt = now
+      Promise.resolve(ctx.moveDesktopIcon(icon.name, x, y))
+        .then((good) => { if (good === false) bridgeOk = false })
+        .catch(() => { bridgeOk = false })
+    }
+    let arrived = false
     try {
-      for (const p of legs) {
-        if (budget.cancelled) return stop
-        await moveTo(p, 8, THRESHOLDS.STEAL_CARRY_SPEED_PX_S)
-        if (!canMoveIcon) continue
-        // 拖到哪就把图标搬到哪（图标左上角 = 身体中心 + 初始偏移）
-        await ctx.moveDesktopIcon(icon.name, Math.round(p.x + dx), Math.round(p.y + dy))
-      }
+      arrived = await ctx.moveWindowTo(
+        () => { if (budget.cancelled) return null; follow(); return drop },
+        { stopPx: 6, maxMs: remainMs(budget), align: 'body', speed: THRESHOLDS.RUN_SPEED_PX_S },
+      )
     } finally {
-      // 无论正常演完 / 超时取消 / 中途抛错，图标都必须回到原位——不能留一个搬歪的桌面
-      if (canMoveIcon) { try { await ctx.moveDesktopIcon(icon.name, icon.x, icon.y) } catch {} }
+      // 没走到 / 被取消 / 中途抛错：图标必须回到原位（不能留一个卡在半路的桌面）
+      if (!arrived) { try { await ctx.moveDesktopIcon(icon.name, icon.x, icon.y) } catch {} }
     }
     if (budget.cancelled) return stop
+    if (!arrived) return { status: 'failed', reason: 'move-interrupted' }
+    // 松口：图标落在新位置（这一步失败就如实回执「挪不动」，绝不假装成功）
+    const put = await ctx.moveDesktopIcon(icon.name, dropIcon.x, dropIcon.y)
+    if (put === false) return { status: 'refused', reason: 'icon-move-unavailable' }
     await ctx.playAnimByName(ICON_ANIMS.win) // 得逞
-    return { status: 'played', reason: '' }
+    return {
+      status: 'played',
+      reason: '',
+      detail: `${icon.name} → ${drop.x},${drop.y}（${drop.source === 'ai' ? '按指令' : '随机'}）`,
+    }
   }
   // hide_icon：POST /behavior/icon/act（契约：{ok, id?, name, originalPath?, reason?}，reason 是原因 code）
   // 注意发给服务端的必须是**磁盘文件名**：ListView 给的是显示名（`Trae CN`），服务端按 `<桌面>/Trae CN`
@@ -772,4 +884,4 @@ function pickWanderTarget(area, from, rng) {
   return { x: Math.round(area.x + area.width - from.x + area.x), y: Math.round(area.y + area.height - from.y + area.y) }
 }
 
-module.exports = { ACTIONS, THRESHOLDS, execute, stepToward, distToBox, inBox, isTeasing, isPatting, isCursorIdle, canReact, pickWanderTarget, ICON_ANIMS, ICON_REASON_TEXT, iconReasonText, filterNormalIcons, isNormalIcon, pickNormalIcon, resolveIconTarget, iconKey, iconApproachTarget, iconDragPath, iconCandidatePaths, matchIconByName, WINDOW_ANIMS, pickWindowTarget, windowApproachTarget, windowCornerTarget, parseWhitelist }
+module.exports = { ACTIONS, THRESHOLDS, execute, stepToward, distToBox, inBox, isTeasing, isPatting, isCursorIdle, canReact, pickWanderTarget, pickDropPoint, clampBodyCenter, bodyOf, ICON_ANIMS, ICON_REASON_TEXT, iconReasonText, filterNormalIcons, isNormalIcon, pickNormalIcon, resolveIconTarget, iconKey, iconApproachTarget, iconCandidatePaths, matchIconByName, WINDOW_ANIMS, pickWindowTarget, windowCornerTarget, windowPushPlan, parseWhitelist }

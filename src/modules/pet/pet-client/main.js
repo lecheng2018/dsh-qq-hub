@@ -352,8 +352,8 @@ const MOVE_FRAME_MS = 16 // ≈60fps
 // 速度（2026-10-30 第二次调慢，用户指定绝对值）：常规 50px/s（原来 900，改到 320 还嫌快）。
 // 50px/s 意味着 16ms 一帧只走 0.8px —— 必须走**亚像素累积**（见 moveWindowTo 的 curX/curY），
 // 否则每帧 round(0.8)=0，窗口一步都挪不动，表现为「完全卡住」。
-const MOVE_SPEED_PX_S = 50         // 常规速度：慢慢挪，像在散步
-// 注意：追鼠标的速度不在这里，由 behavior.js 的 THRESHOLDS.CHASE_SPEED_PX_S（97）按动作传入。
+const MOVE_SPEED_PX_S = 50         // 默认速度 = 散步（只有 wander 用它，其余动作由 behavior.js 传 150）
+// 注意：真正跑动的速度都在 behavior.js 的 THRESHOLDS：RUN 150 / WANDER 50 / 叼鼠标 400·250。
 const MOVE_MAX_MS = 90_000         // 单次移动兜底：50px/s 走满 3840 宽屏 ≈77s，留余量
 let mover = null // 行为移动循环定时器句柄（非空 = 正在移动）
 function stopMover() {
@@ -1216,29 +1216,46 @@ const WINDOW_CS_SOURCE = [
   '    if (h == IntPtr.Zero || !IsWindowVisible(h)) return "ERR|not-visible";',
   '    return PostMessageW(h, WM_CLOSE, IntPtr.Zero, IntPtr.Zero) ? "OK" : "ERR|post-failed";',
   '  }',
-  '  // 2026-10-30 用户指定：把窗口推到屏幕边界外（只留 KEEP px 露在屏幕里），按住 holdMs 再精确还原。',
-  '  // 还原写在同一段脚本里：即使主进程这时被打断，窗口也会自己回到原位。',
-  '  public static string Push(string hwnd, string holdMs) {',
+  '  // 2026-10-30 用户指定「不要闪现」：在 ms 内把窗口匀速挪 (dx,dy)（物理像素，可为负）。',
+  '  // 桌宠在同一段时长里以同样速度走过去，看上去就是「她推着窗口走」。',
+  '  public static string Slide(string hwnd, string dx, string dy, string ms) {',
   '    IntPtr h = (IntPtr)long.Parse(hwnd);',
-  '    int hold = int.Parse(holdMs);',
+  '    int ddx = int.Parse(dx), ddy = int.Parse(dy), dur = int.Parse(ms);',
+  '    if (dur < 1) dur = 1;',
   '    RECT r; if (!GetWindowRect(h, out r)) return "ERR|no-rect";',
-  '    int w = r.R - r.L;',
-  '    if (w <= 0) return "ERR|no-size";',
-  '    int sw = GetSystemMetrics(0);',
-  '    int keep = Math.Min(80, w);',
-  '    bool toLeft = (r.L + w / 2) < (sw / 2);',
-  '    int nx = toLeft ? -(w - keep) : (sw - keep);',
-  '    SetWindowPos(h, IntPtr.Zero, nx, r.T, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);',
-  '    System.Threading.Thread.Sleep(hold);',
-  '    SetWindowPos(h, IntPtr.Zero, r.L, r.T, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);',
+  '    int sx = r.L, sy = r.T;',
+  '    var sw = System.Diagnostics.Stopwatch.StartNew();',
+  '    while (true) {',
+  '      long el = sw.ElapsedMilliseconds;',
+  '      double t = el >= dur ? 1.0 : (double)el / dur;',
+  '      int nx = sx + (int)Math.Round(ddx * t);',
+  '      int ny = sy + (int)Math.Round(ddy * t);',
+  '      SetWindowPos(h, IntPtr.Zero, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);',
+  '      if (t >= 1.0) break;',
+  '      System.Threading.Thread.Sleep(15);',
+  '    }',
   '    return "OK";',
+  '  }',
+  '  // 绝对归位（推完的兜底）：不管中间发生什么，窗口最终一定回到原始坐标。',
+  '  public static string Place(string hwnd, string x, string y) {',
+  '    IntPtr h = (IntPtr)long.Parse(hwnd);',
+  '    if (h == IntPtr.Zero) return "ERR|bad-window";',
+  '    return SetWindowPos(h, IntPtr.Zero, int.Parse(x), int.Parse(y), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) ? "OK" : "ERR|place-failed";',
   '  }',
   '}',
 ].join('\n')
-/** 跑一次 DeskWin 方法。参数只允许纯数字（防注入）；失败返回 null。
- *  timeoutMs 默认 25s：Push 要在脚本里按住 5 秒再还原，12s 会把它掐掉。 */
+/** 参数消毒：只留数字，允许一个前导负号（窗口位移会用到负数）。
+ *  负数不能直接 replace(/\D/g,'')——那会把 -600 变成 600，窗口反而往反方向飞。 */
+function numArg(a) {
+  const raw = String(a === undefined || a === null ? '' : a).trim()
+  const neg = raw.startsWith('-')
+  const digits = raw.replace(/\D/g, '')
+  return (neg ? '-' : '') + digits
+}
+/** 跑一次 DeskWin 方法。参数只允许数字（防注入）；失败返回 null。
+ *  timeoutMs 默认 25s：Slide 要在脚本里匀速走完一段（最长按位移换算，调用方会传更大的超时）。 */
 function runDeskWin(method, timeoutMs, ...args) {
-  const safe = args.map((a) => String(a === undefined || a === null ? '' : a).replace(/\D/g, ''))
+  const safe = args.map(numArg)
   const call = safe.length ? `[DeskWin]::${method}(${safe.map((a) => `"${a}"`).join(', ')})` : `[DeskWin]::${method}()`
   const ps = [
     '$ErrorActionPreference = "Stop"',
@@ -1286,11 +1303,23 @@ async function windowClose(hwnd) {
   const out = await runDeskWin('Close', 15_000, hwnd)
   return typeof out === 'string' && /(^|\n)\s*OK\s*(\n|$)/.test(out)
 }
-/** 推窗口（nudge_window，2026-10-30 用户指定）：推到屏幕边界外 → 按住 holdMs → 精确还原原位置。
- *  还原在同一个 PowerShell 进程里完成，主进程被打断也不留残局。 */
-async function windowPush(hwnd, holdMs) {
-  const ms = Math.max(300, Math.min(20_000, Math.round(Number(holdMs) || 5_000)))
-  const out = await runDeskWin('Push', ms + 20_000, hwnd, String(ms))
+/** 推窗口（nudge_window）：把窗口在 ms 内匀速挪 (dx, dy)（DIP 位移，可为负）。
+ *  2026-10-30 用户指定「不要闪现」——桌宠在同一段时长里以同速走过去，看起来才是「她推着窗口走」。
+ *  dx/dy 是**相对当前窗口位置**的位移，重复调用可累加（推出去一次、拉回来一次）。 */
+async function windowSlide(hwnd, dx, dy, ms) {
+  const dur = Math.max(16, Math.min(120_000, Math.round(Number(ms) || 0)))
+  const a = dipToPhysical(0, 0)
+  const b = dipToPhysical(Math.round(Number(dx) || 0), Math.round(Number(dy) || 0))
+  const px = Math.round(b.x - a.x)
+  const py = Math.round(b.y - a.y)
+  if (!px && !py) return true
+  const out = await runDeskWin('Slide', dur + 25_000, hwnd, px, py, dur)
+  return typeof out === 'string' && /(^|\n)\s*OK\s*(\n|$)/.test(out)
+}
+/** 把窗口放到绝对位置（DIP）。推窗口的兜底还原：中间失败也一定把窗口摆回原处。 */
+async function windowPlace(hwnd, dipX, dipY) {
+  const p = dipToPhysical(Math.round(Number(dipX) || 0), Math.round(Number(dipY) || 0))
+  const out = await runDeskWin('Place', 15_000, hwnd, p.x, p.y)
   return typeof out === 'string' && /(^|\n)\s*OK\s*(\n|$)/.test(out)
 }
 // ---------- 桌面环境上报（2026-10-30）：把「开着哪些窗口」喂给 AI 简报 ----------
@@ -1358,10 +1387,11 @@ const behaviorCtx = () => ({
   moveDesktopIcon,
   // 图标动作降级用：读不到图标时走到屏幕下沿随机位置空演一口
   workArea: () => { try { return screen.getPrimaryDisplay().workArea } catch { return null } },
-  // 窗口动作桥：枚举 / 优雅关闭 / 推出边界再拉回。白名单判定在 behavior.js 里做。
+  // 窗口动作桥：枚举 / 优雅关闭 / 匀速推（人物同速跟着走）/ 绝对归位。白名单判定在 behavior.js 里做。
   listWindows,
   windowClose,
-  windowPush,
+  windowSlide,
+  windowPlace,
   selfPids: () => {
     const p = [process.pid]
     try { if (process.ppid) p.push(process.ppid) } catch {}
