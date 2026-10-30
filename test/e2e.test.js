@@ -80,6 +80,7 @@ async function brain({ preset, text, images, callTool }) {
   if (text.includes('跑个慢任务')) { await new Promise((r) => setTimeout(r, 1500)); return '慢任务跑完了' }
   if (text.includes('改成快的')) return '好 改成快的'
   if (text.includes('语音说你好')) return '你好呀'
+  if (text.includes('表情语音测试')) return '<voice>晚安<face:呲牙>😁</voice>'
   if (text.includes('语音带引用')) return '<voice>晚安啦 做个好梦</voice>'
   if (text.includes('晚安')) return '<voice>晚安啦 做个好梦</voice>'
   if (text.includes('没人叫你')) return '[沉默]'
@@ -505,6 +506,24 @@ test('引用 + 语音：语音条单独一条发，不和引用/@ 拼在同一�
     const recs = mock.calls.slice(before).filter((c) => c.action === 'send_group_msg' && (c.params.message || []).some((s) => s.type === 'record'))
     assert.equal(recs.length, 1, '语音条应该只发一条')
     assert.deepEqual(recs[0].params.message.map((s) => s.type), ['record'], '语音条必须单独一条，不能带引用/@：' + JSON.stringify(recs[0].params.message.map((s) => s.type)))
+  } finally {
+    srv.close()
+    await fake.call('/save', { voice: { engine: 'windows' } })
+  }
+})
+
+test('语音条不把 QQ 表情/emoji 念出来（face 标签和 emoji 在 TTS 前去掉）', async () => {
+  const http = await import('node:http')
+  let spoken = ''
+  const srv = http.createServer((req, res) => { spoken = new URL(req.url, 'http://x').searchParams.get('text') || ''; res.end(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(2000)])) })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  await fake.call('/save', { voice: { engine: 'http', http: { urlTemplate: `http://127.0.0.1:${srv.address().port}/tts?text={text}` } } })
+  try {
+    const n = sentTo('private', OWNER).length
+    mock.push(priv(OWNER, text('表情语音测试')))
+    await until(() => sentTo('private', OWNER).slice(n).some((c) => (c.params.message || []).some((s) => s.type === 'record')), 20000)
+    assert.match(spoken, /晚安/, '能念的字要保留：' + spoken)
+    assert.doesNotMatch(spoken, /呲牙|face:|😁|在读/, '表情标签和 emoji 不能念出来：' + spoken)
   } finally {
     srv.close()
     await fake.call('/save', { voice: { engine: 'windows' } })
