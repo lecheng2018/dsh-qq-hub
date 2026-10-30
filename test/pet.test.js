@@ -336,17 +336,167 @@ test('P1：没放任何素材时 /config 的 pack 为 null（客户端回静态�
   assert.equal(cfg.json.pack, null)
 })
 
+// ---------- 默认素材包自动下载（「大肥鱼」素材不进插件 git，装完从素材仓库自动落位） ----------
+
+test('素材包自动下载：缺包 + 配了地址 + fetchZip 注入 → 落位 packs/default-animation/；archive zip 的单层顶层目录 + 素材文件夹自动剥', async () => {
+  // 模拟素材仓库的真实结构：archive zip 自带 <仓库名>-<分支>/ 顶层目录，素材再放一层 pet-pack/ 文件夹
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/README.md', Buffer.from('# 素材仓库')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-config.json', Buffer.from(JSON.stringify({ pools: { idle: ['anim-001'] } }))],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-manifest.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-001.webm', WEBM],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-002.webm', WEBM],
+  ])
+  let requestedUrl = ''
+  const env = startModule({
+    settings: { petPackUrl: 'https://gitee.com/x/dsh-aurabot-qq-mods/archive/refs/heads/main.zip' },
+    hooks: {
+      fetchZip: async (url) => {
+        requestedUrl = url
+        return { ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }
+      },
+    },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 200, `应下载成功：${r.json && r.json.message}`)
+  assert.equal(r.json.ok, true)
+  assert.match(requestedUrl, /dsh-aurabot-qq-mods/, '用的就是面板配置的素材包地址')
+  assert.equal(r.json.count, 2, '落位 2 个动画')
+  const dd = process.env.AURABOT_DATA_DIR
+  assert.ok(existsSync(join(dd, 'modules-data', 'pet', 'packs', 'default-config.json')), 'config 一并落位')
+  assert.ok(existsSync(join(dd, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')))
+  assert.ok(!existsSync(env.api.dataDir('packs-download.zip')), '临时 zip 用完清理')
+  assert.ok(!existsSync(env.api.dataDir('packs-staging')), '暂存目录用完清理')
+  const packs = await env.call('/packs')
+  const def = packs.json.packs.find((p) => p.name === 'default')
+  assert.ok(def, '/packs 能扫到 default 包')
+  assert.equal(def.anims.length, 2, '扫描看到落位的动画')
+})
+
+test('素材包：素材文件夹名字随意（大肥鱼/ 这种中文名也认）——只认「哪一层里有 default-animation/」', async () => {
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/default-config.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/default-animation/anim-001.webm', WEBM],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.json.ok, true, `任意文件夹名也要能落位：${r.json.message}`)
+  assert.equal(r.json.count, 1)
+  assert.ok(existsSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')))
+})
+
+test('素材包：没配下载地址 → 明确报错不炸；包已就位 → 非 force 直接跳过（every 兜底轮询不重复下载）', async () => {
+  const env = startModule() // fake settings 没有 petPackUrl = 没配地址
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.match(r.json.message, /下载地址/, '提示去面板配置地址，而不是抛错')
+
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  const skip = await env.exports.ensureDefaultPack(false)
+  assert.equal(skip.ok, true)
+  assert.equal(skip.skipped, true, '包已就位时非 force 调用跳过')
+  assert.ok(!existsSync(env.api.dataDir('packs-staging')), '不留下暂存目录')
+})
+
+test('素材包：下载炸了（HTTP 404）→ ok:false 带原因，packs/ 不被污染', async () => {
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/bad.zip' },
+    hooks: { fetchZip: async () => ({ ok: false, status: 404 }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.match(r.json.message, /素材包下载失败/)
+  assert.match(r.json.message, /404/)
+  assert.ok(!existsSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')), '失败不落位')
+})
+
 // ---------- 客户端安装（面板 download） ----------
 
 test('download()：把 pet-client 模板生成到数据目录 app/（含 physics.js / preload.js）', async () => {
   const env = startModule()
   const r = await env.exports.download()
   assert.equal(r.ok, true)
-  for (const f of ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'README.md']) {
+  for (const f of ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'README.md']) {
     assert.ok(existsSync(join(r.dir, f)), `${f} 已生成`)
   }
   const host = JSON.parse(readFileSync(join(dirname(r.dir), 'host.json'), 'utf8'))
   assert.ok(host.token, 'app 目录上一级的 host.json 已就绪（客户端起来即可发现插件）')
+})
+
+test('/client/install：返回的 files 清单包含 behavior.js（行为层文件必须随客户端生成，否则整体降级）', async () => {
+  const env = startModule()
+  const r = await env.call('/client/install', { method: 'POST', json: {} })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.ok, true)
+  assert.ok(Array.isArray(r.json.files) && r.json.files.includes('behavior.js'), `files 含 behavior.js：${JSON.stringify(r.json.files)}`)
+  assert.ok(existsSync(join(r.json.dir, 'behavior.js')), 'behavior.js 已生成到数据目录 app/')
+})
+
+// ---------- 客户端生成物对账（治「旧壳」：app/ 缺 behavior.js 时行为层静默失效） ----------
+
+test('clientStatus：没生成过 → installed=false、healthy=false', async () => {
+  const env = startModule()
+  const st = env.exports.clientStatus()
+  assert.equal(st.installed, false)
+  assert.equal(st.healthy, false)
+  assert.match(st.message, /还没生成/)
+})
+
+test('clientStatus：生成后 healthy，且 app/ 里留下签名凭据', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const st = env.exports.clientStatus()
+  assert.equal(st.installed, true)
+  assert.equal(st.healthy, true, st.message)
+  assert.ok(st.sig && st.sig === st.generatedSig, `模板签名应与生成凭据一致：${st.sig} / ${st.generatedSig}`)
+  assert.ok(existsSync(join(env.api.dataDir('app'), 'client-stamp.json')), '生成时写了 client-stamp.json')
+})
+
+test('clientStatus：缺 behavior.js（典型旧壳）→ missing 点名、healthy=false', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  unlinkSync(join(env.api.dataDir('app'), 'behavior.js'))
+  const st = env.exports.clientStatus()
+  assert.equal(st.healthy, false)
+  assert.deepEqual(st.missing, ['behavior.js'])
+  assert.match(st.message, /behavior\.js/)
+})
+
+test('clientStatus：模板比生成物新（签名不一致）→ outdated、healthy=false', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  writeFileSync(join(env.api.dataDir('app'), 'client-stamp.json'), JSON.stringify({ sig: 'oldoldold123', at: 1 }))
+  const st = env.exports.clientStatus()
+  assert.equal(st.outdated, true)
+  assert.equal(st.healthy, false)
+  assert.match(st.message, /更新|重新生成/)
+})
+
+test('clientStatus：手改 app/main.js → changed 点名，但不谎报「跑不起来」', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const p = join(env.api.dataDir('app'), 'main.js')
+  writeFileSync(p, readFileSync(p, 'utf8') + '\n// 手改一行\n')
+  const st = env.exports.clientStatus()
+  assert.deepEqual(st.changed, ['main.js'])
+  assert.equal(st.healthy, true) // 内容不同 ≠ 缺文件：只是提醒「重新生成会覆盖」
+})
+
+test('/status：带 client 对账字段（面板「桌宠」卡据此提示）', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const r = await env.call('/status')
+  assert.equal(r.json.client.installed, true)
+  assert.equal(r.json.client.healthy, true)
 })
 
 // ---------- Electron 三键（面板「安装 Electron / 启动桌宠 / 停止桌宠」） ----------
