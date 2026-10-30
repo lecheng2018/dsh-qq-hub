@@ -64,7 +64,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const toolDisposers = new Map() // `${sessionKey}|${工具名}` → disposer，防注册表里残留同名工具时挂不上（#90）
   const sessionToChat = new Map() // sessionKey → chatId
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
-  const groupBuf = new Map() // groupId → [{t, uid, nick, text, at}]
+  const groupBuf = new Map() // groupId → [{t, uid, nick, text, at, replyId, quote}]
+  const quoteCache = new Map() // replyId → { ok, who, uid, text, images, stickers, records, isBot }  引用消息解析缓存
   const groupInterjects = new Map() // groupId → [t]  她主动开口（插话、接话）的时间
   const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
   const groupRefs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
@@ -745,15 +746,112 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return groupNames.get(gid) || gid
   }
 
-  async function repliedToBot(replyId) {
+  // ---------- 引用消息 ----------
+  // QQ 的引用段只有 message_id，正文要用 get_msg 再取一次。取到后把「谁、说了什么、几张图」带上；
+  // 取不到也记一笔，让她知道「这条引用没读到」，可以如实说没看到（别装作看见了）。
+  const QUOTE_CACHE_MAX = 200
+  /** 表情包/图片段里有没有能直接下载的地址（有些 get_msg 只回了空 url + 裸文件名）。 */
+  const quoteSegUsable = (seg) => {
+    const d = (seg && seg.data) || {}
+    return [d.url, d.file].some((x) => typeof x === 'string'
+      && (/^https?:\/\//i.test(x) || x.startsWith('base64://') || x.startsWith('file://') || /^[a-zA-Z]:[\\/]/.test(x)))
+  }
+  const quoteNeedsHistory = (parsed) => [...(parsed.images || []), ...(parsed.stickers || [])].some((seg) => !quoteSegUsable(seg))
+  /**
+   * get_msg 对「她发出的表情包/图片」可能只回空 url + 裸文件名（下载不了）。
+   * 这时退回消息历史（get_friend_msg_history / get_group_msg_history），里面带可用 url。
+   */
+  async function quoteFromHistory(id, ctx) {
+    if (!ctx || (!ctx.userId && !ctx.groupId)) return null
+    const group = Boolean(ctx.groupId)
+    const action = group ? 'get_group_msg_history' : 'get_friend_msg_history'
+    const base = group ? { group_id: Number(ctx.groupId) } : { user_id: Number(ctx.userId) }
+    // 先用引用 id 当锚点（能取到更早的消息），拿不到再退回「最近 30 条」
+    const anchor = /^-?\d+$/.test(id) ? Number(id) : 0
+    const attempts = anchor
+      ? [{ ...base, message_id: anchor, count: 5, reverse_order: false }, { ...base, count: 30 }]
+      : [{ ...base, count: 30 }]
+    for (const params of attempts) {
+      try {
+        const r = await onebot.call(action, params, { timeoutMs: 8000, retries: 0 })
+        const hit = (r?.messages || []).find((m) => String(m?.message_id ?? '') === id || String(m?.real_id ?? '') === id)
+        if (hit) return hit
+      } catch (error) {
+        log.debug(`引用消息历史也拉不到（${id}）：`, error.message)
+      }
+    }
+    return null
+  }
+  async function quotedInfo(replyId, ctx = null) {
+    const id = String(replyId || '')
+    if (!id) return null
+    if (quoteCache.has(id)) return quoteCache.get(id)
+    const out = { ok: false, who: '', uid: '', text: '', images: [], stickers: [], records: 0, isBot: false, at: 0 }
+    try {
+      const m = await onebot.call('get_msg', { message_id: Number(id) || id }, { timeoutMs: 5000, retries: 0 })
+      const sender = m?.sender || {}
+      out.uid = String(sender.user_id ?? m?.user_id ?? '')
+      out.who = String(sender.card || sender.nickname || out.uid || '某人')
+      const kind = ctx?.groupId ? 'group' : 'private'
+      let parsed = parseMessageEvent({ message_type: kind, group_id: ctx?.groupId, user_id: out.uid, sender, message: m?.message ?? m?.raw_message ?? '' }, selfId, { faceName: faces.nameOf })
+      if (quoteNeedsHistory(parsed)) {
+        const hit = await quoteFromHistory(id, ctx)
+        if (hit) {
+          const again = parseMessageEvent({ message_type: kind, group_id: ctx?.groupId, user_id: out.uid, sender: hit.sender || sender, message: hit.message ?? '' }, selfId, { faceName: faces.nameOf })
+          if (!quoteNeedsHistory(again)) parsed = again
+          else { parsed.images = [...(parsed.images || []), ...(again.images || [])]; parsed.stickers = [...(parsed.stickers || []), ...(again.stickers || [])] }
+        }
+      }
+      out.text = String(parsed.text || '').trim().slice(0, 300)
+      out.images = parsed.images || []
+      out.stickers = parsed.stickers || []
+      out.records = (parsed.records || []).length
+      out.isBot = out.uid === String(selfId || getConfig().botQQ)
+      out.ok = true
+      out.at = Date.now()
+    } catch (error) {
+      log.debug(`引用消息没拉到（${id}）：`, error.message)
+    }
+    if (quoteCache.size >= QUOTE_CACHE_MAX) quoteCache.delete(quoteCache.keys().next().value)
+    quoteCache.set(id, out)
+    return out
+  }
+
+  const quoteWho = (q) => (q.isBot ? '你' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`)
+  const quoteBody = (q) => {
+    const body = String(q.text || '').replace(/\[(图片|表情包)\]/g, '').trim()
+    if (body) return body
+    if (q.images.length) return '（图片）'
+    if (q.records) return '（语音）'
+    if (q.stickers.length) return '（表情包）'
+    return '（没有文字）'
+  }
+  /** 引用说明：群聊接在某条消息后面，私聊单独一行。失败时明说没读到，让她可以如实讲。 */
+  const quoteInline = (q) => {
+    if (!q) return ''
+    if (!q.ok) return '（引用了某条消息，但内容没读到；如果影响理解，可以如实说没看到，让对方重发或说一下是哪条）'
+    const pics = q.images.length && q.stickers.length
+      ? `，另有 ${q.images.length} 张图、${q.stickers.length} 个表情包`
+      : q.images.length ? `，另有 ${q.images.length} 张图`
+      : q.stickers.length ? `，另有 ${q.stickers.length} 个表情包`
+      : q.records ? '，一条语音' : ''
+    return `（引用 ${quoteWho(q)} 的消息：「${quoteBody(q)}」${pics}）`
+  }
+  /** 引用里的图片 / 表情包：最多 take 张转成附件；模型看不了图就只留上面的文字说明。 */
+  async function quoteImages(q, take = 2) {
+    if (!q?.ok || take <= 0) return []
+    const segs = [...q.images, ...q.stickers].slice(0, take)
+    if (!segs.length) return []
+    if ((await canSeeImages(dsh, getConfig())) === false) return []
+    const got = await imagesOf({ stickers: [], images: segs })
+    return got.map((x, i) => ({ type: 'image', data: x.data, mediaType: x.mediaType, name: `quote-${q.uid || 'x'}-${i + 1}` }))
+  }
+
+  async function repliedToBot(replyId, msg) {
     if (!replyId) return false
     if (sentIds.has(replyId)) return true
-    try {
-      const m = await onebot.call('get_msg', { message_id: Number(replyId) || replyId }, { timeoutMs: 5000 })
-      return String(m?.sender?.user_id ?? m?.user_id ?? '') === String(selfId || getConfig().botQQ)
-    } catch (error) {
-      return false
-    }
+    const q = await quotedInfo(replyId, msg)
+    return Boolean(q && q.ok && q.isBot)
   }
 
   async function transcribe(msg) {
@@ -845,7 +943,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let groupEntry = null
     if (msg.kind === 'group') {
       const buf = groupBuf.get(msg.groupId) || []
-      groupEntry = { t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned, mid: msg.messageId, direct: false }
+      groupEntry = { t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned, mid: msg.messageId, direct: false, replyId: msg.replyId }
       buf.push(groupEntry)
       while (buf.length > 40) buf.shift()
       groupBuf.set(msg.groupId, buf)
@@ -912,7 +1010,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const recentTexts = (groupBuf.get(msg.groupId) || []).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0
       try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' ')) : 0 } catch (error) {}
-      const quotedBot = await repliedToBot(msg.replyId)
+      const quotedBot = await repliedToBot(msg.replyId, msg)
       const decision = decideGroupReply({
         policy: pol,
         relevance: topicRelevance(recentTexts, pol.interests, memScore),
@@ -963,8 +1061,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const last = (groupBuf.get(msg.groupId) || []).findLast?.((x) => x.uid === msg.userId)
       if (last) last.text = text
     }
+    // 引用消息：私聊现在就把被引用的内容取出来拼进正文；群聊留给 groupPrompt 懒加载（没交给她就白取）
+    const quoted = msg.kind === 'private' && msg.replyId ? await quotedInfo(msg.replyId, msg) : null
     // 群聊：不在这里拼文案。等这段消息攒齐了（或她回完上一段），flush 时把群里新来的话一次性交给她
-    const content = msg.kind === 'group' ? [] : [{ type: 'text', text: `【私聊】${msg.nickname}(${msg.userId})：` + (text || '（没有文字）') }]
+    const content = msg.kind === 'group' ? [] : [{ type: 'text', text: `【私聊】${msg.nickname}(${msg.userId})：` + (text || '（没有文字）') + (quoted ? '\n' + quoteInline(quoted) : '') }]
     const imgs = await imagesOf(msg)
     if (imgs.length) {
       // 模型明确不支持看图：硬塞图片块会让整轮请求被拒（她就一个字都回不了），改成一行文字提示
@@ -974,6 +1074,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       } else {
         for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
       }
+    }
+    // 引用里的图 / 表情包也给她看（最多 2 张，总数不超过 4；看不了图的模型靠上面的文字说明）
+    if (quoted?.ok && (quoted.images.length || quoted.stickers.length) && imgs.length < 4) {
+      const qImgs = await quoteImages(quoted, Math.min(2, 4 - imgs.length))
+      for (const c of qImgs) content.push(c)
     }
     logChat(msg.chatId, msg.nickname, text, msg.userId)
     lastChatAt = now
@@ -1049,14 +1154,20 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   /** 群聊这一段的提示词：之前的几句当背景，上次交给她之后群里新说的话全部列出来，让她看完整段再回。 */
-  async function groupPrompt(chat, mode) {
+  async function groupPrompt(chat, mode, imageRoom = 0) {
     const name = await groupName(chat.groupId)
     const buf = groupBuf.get(chat.groupId) || []
     // 时间戳可能同一毫秒：直接取上一轮之后的消息，避免紧接着到达的消息丢失。
     const fresh = buf.filter((x) => !x.fed).slice(-20)
     const older = buf.filter((x) => x.fed).slice(-8)
     for (const x of buf) x.fed = true
-    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}`
+    // 引用内容只在这一段真要交给她时才取（缓存在 quoteCache 里，取失败也会记一笔）
+    const need = fresh.filter((x) => x.replyId && !('quote' in x))
+    if (need.length) {
+      const infos = await Promise.all(need.map((x) => quotedInfo(x.replyId, chat)))
+      need.forEach((x, i) => { x.quote = infos[i] })
+    }
+    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}`
     // 新消息带编号，她想专门回某一条时可以引用；编号 → QQ 消息 ID 记下来，发的时候换成引用
     const refs = {}
     const numbered = fresh.map((x, i) => {
@@ -1074,11 +1185,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
       '大多数时候直接说就行。只有想专门接其中某一条、而直接说别人会看不出你在回谁时（比如那条已经被后面的话刷上去了、或者你在回某个人随口一提的事），才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
+    // 引用里的图 / 表情包：有空位就带上（最多 2 张）
+    const quotedImages = []
+    if (imageRoom > 0) {
+      for (const x of fresh) {
+        if (!x.quote?.ok || (!x.quote.images.length && !x.quote.stickers.length)) continue
+        const take = Math.min(2, imageRoom - quotedImages.length)
+        if (take <= 0) break
+        quotedImages.push(...await quoteImages(x.quote, take))
+      }
+    }
     const direct = fresh.filter((x) => x.direct)
     const directSenders = new Set(direct.map((x) => x.uid))
     const target = directSenders.size === 1 ? direct.at(-1) : null
     const autoReply = target ? { mid: target.mid, uid: target.uid } : null
-    return { text, query, speakers, autoReply }
+    return { text, query, speakers, autoReply, images: quotedImages }
   }
 
   // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------
@@ -1148,9 +1269,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         arr.push(Date.now())
         groupInterjects.set(gid, arr)
       }
-      const gp = await groupPrompt(p.chat, p.mode)
+      const gp = await groupPrompt(p.chat, p.mode, Math.max(0, 4 - p.images.length))
       if (gp.speakers.length) lastSpeaker.set(chatId, [...p.senders].pop() || gp.speakers.at(-1))
-      content = [{ type: 'text', text: gp.text }, ...p.images]
+      content = [{ type: 'text', text: gp.text }, ...p.images, ...(gp.images || [])]
       p.query = gp.query
       p.speakers = gp.speakers
       p.autoReply = gp.autoReply
