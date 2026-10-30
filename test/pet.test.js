@@ -336,6 +336,89 @@ test('P1：没放任何素材时 /config 的 pack 为 null（客户端回静态�
   assert.equal(cfg.json.pack, null)
 })
 
+// ---------- 默认素材包自动下载（「大肥鱼」素材不进插件 git，装完从素材仓库自动落位） ----------
+
+test('素材包自动下载：缺包 + 配了地址 + fetchZip 注入 → 落位 packs/default-animation/；archive zip 的单层顶层目录 + 素材文件夹自动剥', async () => {
+  // 模拟素材仓库的真实结构：archive zip 自带 <仓库名>-<分支>/ 顶层目录，素材再放一层 pet-pack/ 文件夹
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/README.md', Buffer.from('# 素材仓库')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-config.json', Buffer.from(JSON.stringify({ pools: { idle: ['anim-001'] } }))],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-manifest.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-001.webm', WEBM],
+    ['dsh-aurabot-qq-mods-main/pet-pack/default-animation/anim-002.webm', WEBM],
+  ])
+  let requestedUrl = ''
+  const env = startModule({
+    settings: { petPackUrl: 'https://gitee.com/x/dsh-aurabot-qq-mods/archive/refs/heads/main.zip' },
+    hooks: {
+      fetchZip: async (url) => {
+        requestedUrl = url
+        return { ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }
+      },
+    },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 200, `应下载成功：${r.json && r.json.message}`)
+  assert.equal(r.json.ok, true)
+  assert.match(requestedUrl, /dsh-aurabot-qq-mods/, '用的就是面板配置的素材包地址')
+  assert.equal(r.json.count, 2, '落位 2 个动画')
+  const dd = process.env.AURABOT_DATA_DIR
+  assert.ok(existsSync(join(dd, 'modules-data', 'pet', 'packs', 'default-config.json')), 'config 一并落位')
+  assert.ok(existsSync(join(dd, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')))
+  assert.ok(!existsSync(env.api.dataDir('packs-download.zip')), '临时 zip 用完清理')
+  assert.ok(!existsSync(env.api.dataDir('packs-staging')), '暂存目录用完清理')
+  const packs = await env.call('/packs')
+  const def = packs.json.packs.find((p) => p.name === 'default')
+  assert.ok(def, '/packs 能扫到 default 包')
+  assert.equal(def.anims.length, 2, '扫描看到落位的动画')
+})
+
+test('素材包：素材文件夹名字随意（大肥鱼/ 这种中文名也认）——只认「哪一层里有 default-animation/」', async () => {
+  const fakeZip = tinyZip([
+    ['dsh-aurabot-qq-mods-main/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/', Buffer.alloc(0)],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/default-config.json', Buffer.from('{}')],
+    ['dsh-aurabot-qq-mods-main/大肥鱼/default-animation/anim-001.webm', WEBM],
+  ])
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/mods.zip' },
+    hooks: { fetchZip: async () => ({ ok: true, arrayBuffer: async () => fakeZip.buffer.slice(fakeZip.byteOffset, fakeZip.byteOffset + fakeZip.byteLength) }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.json.ok, true, `任意文件夹名也要能落位：${r.json.message}`)
+  assert.equal(r.json.count, 1)
+  assert.ok(existsSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')))
+})
+
+test('素材包：没配下载地址 → 明确报错不炸；包已就位 → 非 force 直接跳过（every 兜底轮询不重复下载）', async () => {
+  const env = startModule() // fake settings 没有 petPackUrl = 没配地址
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.match(r.json.message, /下载地址/, '提示去面板配置地址，而不是抛错')
+
+  writePack(process.env.AURABOT_DATA_DIR, 'default', { 'anim-001.webm': WEBM }, { pools: {} })
+  const skip = await env.exports.ensureDefaultPack(false)
+  assert.equal(skip.ok, true)
+  assert.equal(skip.skipped, true, '包已就位时非 force 调用跳过')
+  assert.ok(!existsSync(env.api.dataDir('packs-staging')), '不留下暂存目录')
+})
+
+test('素材包：下载炸了（HTTP 404）→ ok:false 带原因，packs/ 不被污染', async () => {
+  const env = startModule({
+    settings: { petPackUrl: 'https://example.com/bad.zip' },
+    hooks: { fetchZip: async () => ({ ok: false, status: 404 }) },
+  })
+  const r = await env.call('/packs/fetch-default', { method: 'POST', json: {} })
+  assert.equal(r.status, 502)
+  assert.equal(r.json.ok, false)
+  assert.match(r.json.message, /素材包下载失败/)
+  assert.match(r.json.message, /404/)
+  assert.ok(!existsSync(join(process.env.AURABOT_DATA_DIR, 'modules-data', 'pet', 'packs', 'default-animation', 'anim-001.webm')), '失败不落位')
+})
+
 // ---------- 客户端安装（面板 download） ----------
 
 test('download()：把 pet-client 模板生成到数据目录 app/（含 physics.js / preload.js）', async () => {

@@ -2,7 +2,8 @@
 
 > **来源与许可**：桌宠的客户端形态、拖拽物理、pet pack 目录约定、工作状态/碎碎念动画命名约定，
 > 移植自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（作者 PC2005-cloud，代码 MIT）——**不是自研**。
-> 本仓库只做「接进 Aurabot 模块体系」的适配层。形象/动画素材是 CC BY-NC-SA 4.0，不随本仓库分发。
+> 本仓库只做「接进 Aurabot 模块体系」的适配层。形象/动画素材是 CC BY-NC-SA 4.0，不随本仓库分发——
+> 插件启动时从独立素材仓库 dsh-aurabot-qq-mods **自动下载落位**（见 §6 素材来源）。
 > 完整署名见仓库根 [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)。
 
 > 给三个读者：面板/前端（agent C）、桌宠 Electron 客户端、以及产出主动发言的
@@ -19,7 +20,7 @@
 | `focus.json` | 专注模式：`{enabled, updatedAt, source}`。**读不到 / 坏了 / enabled≠true 一律按关闭**（fail-open，不 crash） |
 | `voice/<sha1>.wav` | TTS 产物转存（推气泡前**即刻**从 voice-cache 拷入：voice-cache 24h 清理不能直接指给客户端）；>24h 自动清理 |
 | `app/` | Electron 客户端生成目录（`POST /client/install` 或面板「下载客户端」从模块自带 pet-client 模板拷入：main.js / preload.js / index.html / physics.js / README.md） |
-| `packs/<名>-animation/*.webm` | 形象包动画素材（P1/P4，用户自备；**插件目录里不存放任何 .webm**） |
+| `packs/<名>-animation/*.webm` | 形象包动画素材（P1/P4；default 包由插件启动时从素材仓库自动下载落位，**插件目录里不存放任何 .webm**） |
 | `packs/<名>-config.json` | 形象包配置（动画池/权重/事件映射/物理参数，见 §6） |
 
 ## 2. 鉴权（四道闸门，顺序不能换）
@@ -276,9 +277,13 @@ modules-data/pet/packs/
 }
 ```
 
-素材规格：VP9 透明通道 webm（640×360 左右）。**版权**：dsh-pet 的宠物形象是
-CC BY-NC-SA 4.0 + 禁止商用，**不随本插件分发，用户自备**（引用 dsh-pet Release 需附署名；
-自制可参考 dsh-pet 的 MAKE-YOUR-OWN-PET 配方）。
+素材规格：VP9 透明通道 webm（640×360 左右）。**版权与获取**：dsh-pet 的宠物形象是
+CC BY-NC-SA 4.0 + 禁止商用，**不随本插件分发**。default 包由插件启动时从独立素材仓库
+[dsh-aurabot-qq-mods](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq-mods) 自动下载落位（素材放在该仓库的
+`pet-pack/` 文件夹里：`pet-pack/default-config.json` + `pet-pack/default-manifest.json` + `pet-pack/default-animation/*.webm`；
+文件夹名其实随意，下载端只认「哪一层里有 default-animation/」）。`POST /packs/fetch-default`
+可手动重下；地址在面板设置 `petPackUrl`，可换 Gitee 等镜像直链。自制包可参考 dsh-pet 的 MAKE-YOUR-OWN-PET 配方，
+放进数据目录 `packs/` 即可（重新分发须遵守 CC BY-NC-SA：署名 + 非商业 + 相同方式共享）。
 
 ## 7. 桌宠客户端（pet-client）
 
