@@ -503,9 +503,55 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     }
   }
 
-  async function tick() {
+  // ── 后台会话：定时自己刷（独立 system 会话，带人格，结果不发到 QQ） ──
+  //
+  // 说明（原作者 review 里点到的）：
+  //   · 工具永远跑在「调用它的那个聊天」的会话里，所以要有独立会话就得自己开一个；
+  //   · api.think / hub.runSystemTurn 会建 system:ext-heybox 后台会话，带人格；
+  //   · 记忆是全局一份，但后台 system 会话不会自动带记忆、也不会被提取，
+  //     所以这里手动 recall 拼进 prompt，想留下的再用 memory.add 写回去。
+
+  async function runDuty({ memory, owner = '' } = {}) {
     const c = getConfig().heybox || {}
-    if (!c.enabled || !c.autoBrowse) return
+    if (!c.enabled || !c.autoBrowse || !hasLogin()) return { ok: false, message: '没开或没登录' }
+    if (left('browse') <= 0) return { ok: false, message: '今天逛的轮数到上限了' }
+
+    // 手动把相关记忆拼进 prompt（后台会话不会自动带）
+    let about = []
+    try {
+      about = memory?.recall?.('小黑盒 游戏 帖子 兴趣', { limit: 6 }) || []
+    } catch { about = [] }
+    const aboutText = (Array.isArray(about) ? about : []).map((m) => '- ' + (m.text || m)).join('\n') || '（暂无）'
+
+    const prompt = [
+      '【刷小黑盒，不是聊天，这一轮不会发到 QQ】',
+      owner ? `主人是 ${owner}。` : '',
+      `你记得的关于游戏/社区的事：\n${aboutText}`,
+      '先看热榜挑一个游戏相关的题（电竞和商业新闻不适合），再看社区高赞帖在聊什么角度，然后决定这次做什么。',
+      '只读浏览不用征求同意；要发帖、点赞、评论的话，先按你的自检清单过一遍再动手。',
+      '做完用一两句话说说你看了什么、做了什么，别写成报告。',
+    ].filter(Boolean).join('\n\n')
+
+    const out = await hub.runSystemTurn('heybox', 'QQ · 刷小黑盒', prompt, { timeoutMs: 240000 })
+    bump('browse')
+    const st = readState()
+    st.lastRun = nowMs()
+    st.lastSkipReason = ''
+    writeState(st)
+    pushHistory({ kind: 'browse', note: String(out || '').slice(0, 80) })
+
+    // 想留下的东西写进记忆
+    try {
+      const t = String(out || '').trim()
+      if (t && t.length > 10) memory?.addEvent?.({ text: `我在小黑盒逛了一圈：${t.slice(0, 120)}`, tags: ['小黑盒'], importance: 0.45 })
+    } catch { /* 记忆模块没在跑就算了 */ }
+
+    return { ok: true, message: String(out || '').slice(0, 300), session: 'system:ext-heybox' }
+  }
+
+  async function tick({ memory, owner } = {}) {
+    const c = getConfig().heybox || {}
+    if (!c.enabled || !c.autoBrowse || !hasLogin()) return
     const st = readState()
     const gap = (Number(c.intervalHours) || 4) * 3600_000
     if (st.lastRun && nowMs() - st.lastRun < gap) return
@@ -514,13 +560,17 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       writeState(st)
       return
     }
-    const r = await browse()
-    if (r.ok) log?.info?.('小黑盒逛了一圈：' + (r.links?.length || 0) + ' 条')
-    else {
-      st.lastSkipReason = r.message
+    try {
+      const r = await runDuty({ memory, owner })
+      if (!r.ok) { st.lastSkipReason = r.message; writeState(st) }
+      else log?.info?.('小黑盒后台会话跑完：' + r.message.slice(0, 40))
+    } catch (e) {
+      st.lastSkipReason = e.message
       writeState(st)
+      log?.warn?.('小黑盒后台会话失败：' + e.message)
     }
   }
+
 
   async function account(force = false) {
     const st = readState()
@@ -592,6 +642,6 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   return {
     feed, feedReport, detail, watch, hot, search, topicList,
     like, comment, remove, post, browse, tick, account, saveCookie, clearQuota, state,
-    linkIdOf, postBrief, POST_STYLES, DEFAULT_POST_STYLE,
+    linkIdOf, postBrief, POST_STYLES, DEFAULT_POST_STYLE, runDuty,
   }
 }
