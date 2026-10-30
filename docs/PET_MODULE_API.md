@@ -35,7 +35,7 @@
 |---|---|---|
 | GET | `/events?since=&wait=&client=` | **长轮询**。`since` 空=只取水位不重放；`since > 当前序号`（bootId 变过）同样只回水位；`wait≤60s`（客户端用 25）。返回 `{ok, bootId, cursor, events[], focus, serverTime}`。每次调用刷新该 `client` 的心跳（60s TTL） |
 | GET | `/status` | `{online:{online,lastSeenAt,clients}, focus, bootId, seq, carrier, modality, fallbackToQQ, pack, playbackCount, portReady, port, electronInstalled, pid, hostFile, clientDir}`。`portReady:false` = 端口未就绪（宿主还没注入）；`electronInstalled` = app/node_modules/electron 里的 electron.exe 在不在；`pid` = 记录的桌宠进程号 |
-| GET | `/config` | 客户端配置：carrier/modality/fallbackToQQ/focus + `moods` 表情枚举 + `pack`（当前形象包视图，null=无素材走静态形象）。**顺带刷新素材路由**（新放素材被发现） |
+| GET | `/config` | 客户端配置：carrier/modality/fallbackToQQ/focus + `moods` 表情枚举 + `pack`（当前形象包视图，null=无素材走静态形象）+ `behavior{enabled, idleCursorMinutes}`（客户端反应层靠它尊重总开关与闲置分钟，见 §4.3）。**顺带刷新素材路由**（新放素材被发现） |
 | GET | `/history` | 最近推过的气泡（≤60 条）+ 最近动画回执 `playbacks`（≤20 条） |
 | POST | `/focus` | body `{enabled, source?}` → 写 focus.json + 广播 `focus` 事件（唤醒长轮询） |
 | POST | `/bubble` | body `{text, modality?, force?, anim?}`：测试气泡，默认 `force=true`（绕过专注模式）；`anim` 点播动作 |
@@ -147,6 +147,84 @@ pet.dispatch({ text, modality?, purpose?, force?, anim? })
 | `workBubble` | true | 完成/出错弹一句气泡 |
 | `workNotify` | true | 完成/出错发系统通知（Electron `Notification`，Windows 需要 AppUserModelID） |
 
+## 4.3 行为动作（「行为大脑」：AI 自己挑一个动作演）
+
+每隔 `behaviorMinMinutes`~`behaviorMaxMinutes` 分钟跑一轮后台回合：把**现状简报**喂给模型，模型只能从
+**硬编码动作表**里挑一个动作、按给定参数格式输出 JSON。解析失败 / 动作不在表里 / 被闸拦下 → 一律丢弃，
+回退本地池文案（绝不执行表外动作，也不把失败抛给用户）。
+
+### 决策回合跑在哪
+
+`api.think(prompt, { title: '桌宠 · 行为大脑（自己的回合）', noTools: true, key: 'behavior' })`
+
+- `key` 决定会话名：`system:ext-pet:behavior`，工作区里**单独一条会话**，能当场看到她这轮怎么想的；
+  碎碎念仍走 `system:ext-pet`（不带 key = 原行为，向后兼容）。两者不共用会话 → 不互相排队、
+  提示词不串上下文。
+- 老宿主没有 `api.think` 时退化成 `api.ask`（工作区看不到思考），没有 `key` 支持时行为与以前一致。
+
+### 简报里有什么
+
+人格设定 / 记忆 2~3 条 / 宿主干活档位 / 时段 / 心情 / 反应层最近事件 / 上次动作回执 /
+**桌面图标清单**（服务端读桌面目录，≤30 个）/ **开着的窗口清单**（客户端上报，≤12 条，★=前台）/
+可用动作表 / 禁选清单（暂未开放 + 开关关着 + 主人逐个禁用的）。
+
+窗口清单只能客户端枚举（`listWindows` 走 PowerShell + Win32）：客户端每 2 分钟
+`POST /behavior/env`，只推标题/进程名/是否前台（自己的窗口不推）。服务端缓存 **10 分钟过期**；
+过期或没上报时简报不写这一段，并写明「别填 title，按前台窗口算」——绝不让模型拿过期标题去点名。
+
+### 动作表（AI 只能选这些，`say` 是默认台词）
+
+| action | 效果 | 参数 |
+|---|---|---|
+| `chase_cursor` | 追鼠标，追到后把指针按住 5 秒（ClipCursor 夹住） | `{}` |
+| `wander` | 溜达到屏幕另一头 | `{}` |
+| `idle_anim` | 播一段 idle 小动作，不移动 | `{}` |
+| `steal_cursor` | 叼鼠标：400px/s 冲到指针，叼住后 250px/s 同步拖一段（全程夹住指针） | `{}` |
+| `drag_icon` | 走到桌面图标旁叼住，真把图标拖一段再放回原位 | `{"icon":"桌面文件名"}` |
+| `hide_icon` | 收进隔离区（可归还，绝不删） | `{"icon":"桌面文件名"}` |
+| `nudge_window` | 把窗口推到屏幕边界外，5 秒后精确拉回 | `{"title?":"标题片段"}` |
+| `close_window` | 人物跑到窗口右上角再优雅关闭（WM_CLOSE） | `{"title?":"标题片段"}` |
+| `say` | 只说一句 | `{"text":"要说的话"}` |
+
+### 安全闸
+
+- **`close_window`**：`behaviorCloseWindowEnabled`（默认 **false**，物理闸——手动「试一下」也绕不过）
+  + 心情闸（AI 路径，`behaviorMoodCloseWindowBelow`）+ 客户端白名单/排除名单 + **只发 WM_CLOSE，绝不 taskkill**；
+  每次关窗记 `behavior.json.closeLog`（20 条），面板可让她道歉。
+- **`hide_icon`**：`behaviorIconMischiefEnabled`（默认 true，只拦 AI 路径）；只 `rename` 到
+  `desktop-quarantine/` + manifest 记录，面板一键归还，超 `behaviorIconQuarantineDays` 天自动归还；
+  文件夹 / 隐藏文件 / 桌面系统图标（CLSID）/ 可执行脚本一律拒绝。
+- 图标参数只认**文件名**（无路径分隔、无控制字符）；窗口参数只认**标题片段**（≤60 字、无控制字符）。
+- 反应层（点击→追鼠标、摸摸、勾引、鼠标闲置→叼鼠标）在客户端本地执行，但读 `/config` 的
+  `behavior.enabled`，面板关掉总开关就不再触发。主人在忙 / 专注模式 / 安静时段 / 每日上限都在服务端拦。
+
+### 路由（`/aurabot/api` 下）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/behavior` | body `{action, params?, say?, force?}`：手动下发（面板「试一下」，force 默认 true 绕排程/专注/安静时段；关窗物理闸仍然生效） |
+| GET | `/behavior/status` | 行为状态：开关/间隔/配额/今日次数/下次触发/每动作开关/开放与占位动作/心情/白名单/关窗记录/隔离区条数/**环境简报对账**（`envIcons` `envWindows` `envWindowsAt`）/`thinking` |
+| POST | `/behavior/reaction` | body `{kind, detail?}`：客户端反应层摘要（click/tease/pat/idle-cursor…），只喂下一轮简报，不重复 emit（30 秒同类冷却在客户端） |
+| POST | `/behavior/env` | body `{windows:[{title, proc?, fg?}]}`：客户端上报窗口清单（服务端截断/清控制字符/去空/≤12 条） |
+| POST | `/behavior/icon/act` | body `{mode:'hide', icon, playbackId?, force?}`：收图标进隔离区 |
+| GET | `/behavior/icon/quarantine` | 隔离区清单 `{items:[{id,name,originalPath,at,reason}], enabled, days}` |
+| POST | `/behavior/icon/restore` | body `{id}`：放回原位（原位置被占则改名） |
+| GET | `/behavior/window/log` | 关窗记录（≤20 条） |
+| POST | `/behavior/window/apologize` | 为最近一条未道歉的关窗记录道歉（心情 +8） |
+
+| 设置 | 默认 | 说明 |
+|---|---|---|
+| `behaviorEnabled` | true | 行为大脑总开关（关掉后 AI 不自己演；反应层也停；面板「试一下」照常） |
+| `behaviorMinMinutes` / `behaviorMaxMinutes` | 10 / 25 | 触发间隔（硬下限 1 分钟） |
+| `behaviorMaxPerDay` | 99999 | 每日上限 |
+| `behaviorIdleCursorMinutes` | 8 | 鼠标闲置多久触发 `steal_cursor`（另见反应层冷却） |
+| `behaviorDisabledActions` | 空 | 不进 AI 动作表的动作（逗号分隔；手动通道不受影响） |
+| `behaviorIconMischiefEnabled` | true | 图标小动作（`drag_icon`/`hide_icon`）AI 闸 |
+| `behaviorIconQuarantineDays` | 7 | 隔离区超期自动归还 |
+| `behaviorCloseWindowEnabled` | **false** | 🔴 允许关窗（物理闸） |
+| `behaviorMoodCloseWindowBelow` | 35 | 心情低于此值 AI 才可能选 `close_window` |
+| `behaviorWindowWhitelist` | 空 | 窗口动作白名单（标题关键词，逗号/换行分隔；空=不额外放行） |
+
 ## 5. 面板对接（host.js 经 /panel/pet/* 代理，模块提供以下导出）
 
 | 导出 | 用途 |
@@ -240,6 +318,13 @@ physics 移植（弹簧/软钳速/抛体/松手初速/挤压/落地吸附）、*
 载体=桌宠暂停、离线静默、每日上限、干活时让路、自定义文案池、force 仍尊重专注模式）、
 **干活状态**（六档映射、清单文案、收尾文案、中断清空、子代理不参与、关开关后不再新开档）。
 `test/panel-purpose.test.js` 另验宿主注入链路（webServer.port → host.json）与三键 /panel 代理的降级路径。
+
+**行为动作**另有三个文件（都不需要 Electron，纯逻辑 + 假 ctx）：
+`test/pet-behavior.test.js`（服务端决策层：配额钳制/宽松解析/非法动作回退/回执写回/关窗四重闸/
+隔离区与归还/环境简报（桌面图标 + 客户端上报的窗口清单 + 过期不编造）/`/config` 的 behavior 段）、
+`test/pet-behavior-client.test.js`（客户端执行层：每个动作的走位与回执、叼鼠标两段速度、追到按住、
+图标真拖且必放回、推窗口、反应层纯判定函数）、`test/panel-behavior.test.js`（面板「试一下」/每动作开关/
+隔离区/关窗记录与道歉的代理链路）。
 
 ## 9. 不做清单（防返工，对齐 PROJECT_MAP §17.5）
 

@@ -342,11 +342,78 @@ test('download()：把 pet-client 模板生成到数据目录 app/（含 physics
   const env = startModule()
   const r = await env.exports.download()
   assert.equal(r.ok, true)
-  for (const f of ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'README.md']) {
+  for (const f of ['main.js', 'preload.js', 'index.html', 'physics.js', 'packmeta.js', 'behavior.js', 'README.md']) {
     assert.ok(existsSync(join(r.dir, f)), `${f} 已生成`)
   }
   const host = JSON.parse(readFileSync(join(dirname(r.dir), 'host.json'), 'utf8'))
   assert.ok(host.token, 'app 目录上一级的 host.json 已就绪（客户端起来即可发现插件）')
+})
+
+test('/client/install：返回的 files 清单包含 behavior.js（行为层文件必须随客户端生成，否则整体降级）', async () => {
+  const env = startModule()
+  const r = await env.call('/client/install', { method: 'POST', json: {} })
+  assert.equal(r.status, 200)
+  assert.equal(r.json.ok, true)
+  assert.ok(Array.isArray(r.json.files) && r.json.files.includes('behavior.js'), `files 含 behavior.js：${JSON.stringify(r.json.files)}`)
+  assert.ok(existsSync(join(r.json.dir, 'behavior.js')), 'behavior.js 已生成到数据目录 app/')
+})
+
+// ---------- 客户端生成物对账（治「旧壳」：app/ 缺 behavior.js 时行为层静默失效） ----------
+
+test('clientStatus：没生成过 → installed=false、healthy=false', async () => {
+  const env = startModule()
+  const st = env.exports.clientStatus()
+  assert.equal(st.installed, false)
+  assert.equal(st.healthy, false)
+  assert.match(st.message, /还没生成/)
+})
+
+test('clientStatus：生成后 healthy，且 app/ 里留下签名凭据', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const st = env.exports.clientStatus()
+  assert.equal(st.installed, true)
+  assert.equal(st.healthy, true, st.message)
+  assert.ok(st.sig && st.sig === st.generatedSig, `模板签名应与生成凭据一致：${st.sig} / ${st.generatedSig}`)
+  assert.ok(existsSync(join(env.api.dataDir('app'), 'client-stamp.json')), '生成时写了 client-stamp.json')
+})
+
+test('clientStatus：缺 behavior.js（典型旧壳）→ missing 点名、healthy=false', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  unlinkSync(join(env.api.dataDir('app'), 'behavior.js'))
+  const st = env.exports.clientStatus()
+  assert.equal(st.healthy, false)
+  assert.deepEqual(st.missing, ['behavior.js'])
+  assert.match(st.message, /behavior\.js/)
+})
+
+test('clientStatus：模板比生成物新（签名不一致）→ outdated、healthy=false', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  writeFileSync(join(env.api.dataDir('app'), 'client-stamp.json'), JSON.stringify({ sig: 'oldoldold123', at: 1 }))
+  const st = env.exports.clientStatus()
+  assert.equal(st.outdated, true)
+  assert.equal(st.healthy, false)
+  assert.match(st.message, /更新|重新生成/)
+})
+
+test('clientStatus：手改 app/main.js → changed 点名，但不谎报「跑不起来」', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const p = join(env.api.dataDir('app'), 'main.js')
+  writeFileSync(p, readFileSync(p, 'utf8') + '\n// 手改一行\n')
+  const st = env.exports.clientStatus()
+  assert.deepEqual(st.changed, ['main.js'])
+  assert.equal(st.healthy, true) // 内容不同 ≠ 缺文件：只是提醒「重新生成会覆盖」
+})
+
+test('/status：带 client 对账字段（面板「桌宠」卡据此提示）', async () => {
+  const env = startModule()
+  await env.call('/client/install', { method: 'POST', json: {} })
+  const r = await env.call('/status')
+  assert.equal(r.json.client.installed, true)
+  assert.equal(r.json.client.healthy, true)
 })
 
 // ---------- Electron 三键（面板「安装 Electron / 启动桌宠 / 停止桌宠」） ----------

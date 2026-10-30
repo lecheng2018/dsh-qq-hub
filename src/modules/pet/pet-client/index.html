@@ -54,7 +54,10 @@
 <body>
   <div id="bubble"><div class="tag" id="bubbleTag">主动来找你</div><div id="bubbleText"></div></div>
   <div id="stage">
-    <div id="pet" class="mood-neutral">🐳</div>
+    <!-- 静态形象的**兜底**：只有素材表为空 / 全部素材加载失败时才出现（见 stopVideo）。
+         正常情况下静止时显示的是「待机动画的末帧」= 鲸鱼娘本人，不是这个 emoji。
+         初始先藏起来，免得素材表到达前的几百毫秒里闪一下蓝色圆圈。 -->
+    <div id="pet" class="mood-neutral" style="display:none">🐳</div>
     <video id="anim" autoplay muted playsinline></video>
   </div>
 <script src="physics.js"></script>
@@ -81,17 +84,26 @@
     physicsParams = (p && p.physics) || null
     workMap = (p && p.workStatus) || {}
     if (!hasAnims()) stopVideo()
+    else if (!currentAnim) playStill() // 首次拿到素材表：先摆一个待机立绘（别露 emoji）
     scheduleIdle()
   }
   const hasAnims = () => Object.keys(packAnims).length > 0
 
-  // ---------- 动画播放（权重随机，播完回 idle；出错/缺素材回静态形象，不报错） ----------
+  // ---------- 动画播放（权重随机，播完回静态/接 idle；出错/缺素材回静态形象，不报错） ----------
   // currentKind：'idle' | 'speak' | 'click' | 'menu'，'' = 没在播。
   // 历史 bug：点播播完靠 scheduleIdle 接力，但它只在 !currentAnim 时才起 idle，
   // 而 currentAnim 播完并不清空 → 点一次菜单动画就永远停在最后一帧。
-  // 现在一律「播完直接接 playIdle（idle 自己首尾相接）」，不再依赖定时器接力。
+  // 现在的规矩：**播完一律走 afterAnim**——autoIdle 开着才接 idle，否则回静态立绘。
+  // （以前是「播完直接接 playIdle，idle 首尾相接」，等于桌宠自己在轮播动画，会和 AI 行为动作抢台。）
   let currentAnim = ''
   let currentKind = ''
+  // 自动轮播开关（2026-10-30 关掉）：以前 playIdle 首尾相接、永不停，AI 行为动作播到一半
+  // 就被 idle 接力切走，看起来像「动作没执行」。现在默认**不自动播**，只在
+  //   ① AI 行为动作点播（playAnimByName / __playIdleOnce）
+  //   ② 说话气泡（speak 池）
+  //   ③ 用户点击（click 池）
+  // 时播一段，播完回静态立绘。要恢复老行为：window.__setAutoIdle(true)。
+  let autoIdle = false
   // 素材故障冷却（修「不定时变鲸鱼」）：加载连续失败只临时跳过 5 分钟，不再永久摘除——
   // DSH 重启窗口期、端口漂移、GPU 解码 hiccup 都是暂时性的，摘除了就永远播不回来。
   let coolDown = {}   // 动画名 → 冷却到期时间戳；到期后 pickFrom 自动恢复可选
@@ -116,7 +128,29 @@
     currentAnim = ''
     currentKind = ''
   }
-  /** 播一段动画。onEnd 缺省 = 播完接 idle 循环。
+  /** 一段动画播完之后去哪：autoIdle 开着接下一段 idle，否则**定格成静态立绘**。
+   *  2026-10-30 修：以前这里 `stopVideo()` 会藏掉 video、露出 #pet 那个 🐳 emoji 圆圈，
+   *  看起来像「桌宠变成了一个蓝色圆图标」。素材包里没有 png 立绘，所以静态形象的正确做法是
+   *  让待机动画停在自己的最后一帧 —— 浏览器会保留这一帧画面，就是鲸鱼娘本人。
+   *  emoji 只在「素材表为空 / 全部素材加载失败」时兜底（stopVideo 仍保留那条路）。 */
+  function afterAnim() {
+    if (autoIdle) { playIdle(); return }
+    if (isIdleFrame(currentAnim)) { currentAnim = ''; currentKind = 'still'; return } // 本来就在播待机：直接停在末帧
+    playStill()
+  }
+  /** 待机帧：判断当前这段是不是待机池里的（是就不用换段，原地定格最自然）。 */
+  function isIdleFrame(name) {
+    return Boolean(name) && (pools.idle || []).includes(name) && video.style.display !== 'none'
+  }
+  /** 摆静态立绘：播一段待机动画，播完停在末帧（不循环、不接下一段）。 */
+  function playStill() {
+    const name = pickFrom('idle')
+    if (!name) { stopVideo(); return } // 待机池全在冷却 / 没有 idle 素材：退回 emoji 兜底
+    // kind 用 'idle'：这样播放中**单击还能打断**（`__playClick` 只放行 idle），
+    // 播完再标成 'still' 表示「现在是定格立绘、没在播」。
+    playAnim(name, () => { currentAnim = ''; currentKind = 'still' }, 'idle')
+  }
+  /** 播一段动画。onEnd 缺省 = 播完走 afterAnim。
    *  kind 只用于「谁可以打断谁」：单击可以打断 idle，说话/点播播放中不被打断。 */
   function playAnim(name, onEnd, kind) {
     const url = packAnims[name]
@@ -126,7 +160,7 @@
     pet.style.display = 'none'
     video.classList.remove('squashing')
     video.style.display = 'block'
-    video.onended = () => { const f = onEnd; onEnd = null; (f || playIdle)() }
+    video.onended = () => { const f = onEnd; onEnd = null; (f || afterAnim)() }
     // 真正播起来了：清连续失败计数、清这段的重试标记与冷却（修「同段二次失败不再重试」）
     video.onplaying = () => { failStreak = 0; delete video.dataset.retried; delete coolDown[name] }
     // 素材 404 / 坏文件：先带随机串重试一次（插件刚重启、素材路由还没注册的情况很常见）。
@@ -148,7 +182,7 @@
       if (failStreak < FAIL_STREAK_MAX) {
         const pool = (kindNow === 'speak' || kindNow === 'click') ? kindNow : 'idle'
         const alt = pickFrom(pool)
-        if (alt) { playAnim(alt, playIdle, pool); return }
+        if (alt) { playAnim(alt, null, pool); return }
       }
       scheduleIdle()
     }
@@ -162,16 +196,50 @@
   function playIdle() {
     const name = pickFrom('idle')
     if (!name) { stopVideo(); scheduleIdle(); return } // 全在冷却：鲸鱼兜底 + 定时重试（冷却到期自动复活）
-    playAnim(name, playIdle, 'idle') // idle 池首尾相接
+    playAnim(name, null, 'idle') // 播完走 afterAnim：autoIdle 才继续接，否则停在这一段末尾回静态
   }
   let idleTimer = null
   function scheduleIdle() {
     clearTimeout(idleTimer)
+    if (!autoIdle) return // 自动轮播关着：不排下一段（动作全交给 AI 行为 / 说话 / 点击）
     if (!hasAnims()) return
     idleTimer = setTimeout(() => {
       idleTimer = null
       if (!currentAnim) playIdle() // 真没在播才起 idle；在播的那段结束后自己会接力
     }, 6000 + Math.random() * 8000)
+  }
+  // 主进程/调试用：恢复自动轮播 / 单播一段 idle 池动画（AI 的 idle_anim 动作走这条）
+  window.__setAutoIdle = (v) => { autoIdle = !!v; if (autoIdle && !currentAnim) playIdle(); else if (!autoIdle) scheduleIdle() }
+  window.__playIdleOnce = () => { const name = pickFrom('idle'); return name ? playAnim(name, null, 'idle') : false }
+
+  // ---------- 跑动动画（一移动就循环播「原地漂浮踏步」） ----------
+  // 主进程 moveWindowTo 在真正开始位移时 __startMoveAnim(id)，停下时 __stopMoveAnim()。
+  // id 由主进程按**右键菜单同源**的方式换算（动作 → 待机 → 原地漂浮踏步 = anim-021）。
+  // 为什么要循环：这段素材是「原地」踏步，播一次只有几秒，横跨屏幕要几十秒（50px/s），
+  // 不循环就会出现「走到一半站着不动、窗口还在慢慢飘」的诡异画面。
+  // 抢占规则：移动一发生就播，不等说话/点击动画播完——不然 50px/s 走 10 秒里前几秒
+  // 全被台词动画占着，看起来就像「移动时播了别的动作」。
+  let moveAnimId = ''
+  let moving = false
+  let moveTimer = null
+  function moveTick() {
+    clearTimeout(moveTimer); moveTimer = null
+    if (!moving) return
+    if (!moveAnimId || !packAnims[moveAnimId]) { moveTimer = setTimeout(moveTick, 400); return } // 素材表还没推下来 / 包里没这段：稍后再看
+    playAnim(moveAnimId, () => { moveTimer = setTimeout(moveTick, 0) }, 'move')
+  }
+  window.__startMoveAnim = (id) => {
+    if (id) moveAnimId = String(id)
+    if (moving) return true
+    moving = true
+    moveTick()
+    return true
+  }
+  window.__stopMoveAnim = () => {
+    if (!moving) return
+    moving = false
+    clearTimeout(moveTimer); moveTimer = null
+    if (currentAnim === moveAnimId) afterAnim() // 只在跑动动画还在播时才收：别把气泡动画打断
   }
 
   // ---------- 气泡（主动事件 / 碎碎念）：优先播点播 anim（P2），否则从 speak 池抽一段 ----------
@@ -186,7 +254,7 @@
     // 起播动画：点播优先，其次 speak 池；点播 + 有回执号时把它带回给主进程（POST /playback）
     const name = (anim && packAnims[anim]) ? anim : pickFrom('speak')
     const played = (anim && playbackId && packAnims[anim]) ? { anim, playbackId } : null
-    if (name) playAnim(name, playIdle, 'speak')
+    if (name) playAnim(name, null, 'speak')
     return played
   }
   function hide() { bubble.classList.remove('show') }
@@ -221,13 +289,13 @@
     if (currentAnim && currentKind !== 'idle') return false // 说话/点播动画播放中不打断（idle 可以被打断）
     clearTimeout(idleTimer)
     const name = pickFrom('click')
-    return name ? playAnim(name, playIdle, 'click') : false
+    return name ? playAnim(name, null, 'click') : false
   }
   // 右键「动作」子菜单点播：任意已知动画强制插播，播完接回 idle（绝不留在最后一帧）
   window.__playAnim = (name) => {
     if (!name || !packAnims[name]) return false
     clearTimeout(idleTimer)
-    return playAnim(name, playIdle, 'menu')
+    return playAnim(name, null, 'menu')
   }
   // 自检/调试用：当前在播什么、地址表里有多少段、几段在冷却（右键菜单不通时先看这个）
   window.__playAnimInfo = () => ({ anim: currentAnim, kind: currentKind, count: Object.keys(packAnims).length, cooling: Object.keys(coolDown).length })
@@ -291,7 +359,7 @@
     // 原地轻点（位移 < 6px）：当单击互动，播 click 池动作（仿 dsh-pet 的 clicks）
     const p0 = d.trail[0]
     const moved = Math.hypot(e.clientX - p0.x, e.clientY - p0.y)
-    if (moved < 6) { window.__playClick && window.__playClick(); drop(); return }
+    if (moved < 6) { window.__playClick && window.__playClick(); drop(); window.petBridge && window.petBridge.reportClick && window.petBridge.reportClick(); return }
     if (!P || !window.petBridge) return
     const params = physicsParams || P.DEFAULT_PHYSICS
     const trail = P.trimTrail(d.trail, Date.now())
@@ -321,6 +389,12 @@
     if (dragging) return // 拖拽中保持可交互，避免窗口中途变穿透把拖拽弄丢
     updateHit(e.clientX, e.clientY)
   })
+
+  // ---------- 兜底：素材表迟迟没来（插件离线 / 端口未就绪）才露 emoji，别让窗口一直空着 ----------
+  // 正常情况下 __setPack 一到就 playStill()，这里只是「1.5 秒还没有任何素材」时的保命显示。
+  setTimeout(() => {
+    if (!hasAnims() && !currentAnim) pet.style.display = 'flex'
+  }, 1500)
 </script>
 </body>
 </html>
