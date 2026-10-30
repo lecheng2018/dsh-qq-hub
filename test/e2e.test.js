@@ -80,6 +80,7 @@ async function brain({ preset, text, images, callTool }) {
   if (text.includes('跑个慢任务')) { await new Promise((r) => setTimeout(r, 1500)); return '慢任务跑完了' }
   if (text.includes('改成快的')) return '好 改成快的'
   if (text.includes('语音说你好')) return '你好呀'
+  if (text.includes('语音带引用')) return '<voice>晚安啦 做个好梦</voice>'
   if (text.includes('晚安')) return '<voice>晚安啦 做个好梦</voice>'
   if (text.includes('没人叫你')) return '[沉默]'
   if (images.length) return '这表情好可爱|||哪来的'
@@ -488,6 +489,26 @@ test('语音：回复里的 <voice> 变成 QQ 语音条', async () => {
   await until(() => sentTo('private', OWNER).some((c) => c.params.message[0].type === 'record'), 20000)
   const rec = sentTo('private', OWNER).find((c) => c.params.message[0].type === 'record')
   assert.match(rec.params.message[0].data.file, /^base64:\/\//)
+})
+
+test('引用 + 语音：语音条单独一条发，不和引用/@ 拼在同一条（issue #103）', async () => {
+  const http = await import('node:http')
+  // 用本地 HTTP TTS 避免依赖各平台的 TTS（Windows 语音在 Linux 上不可用）
+  const srv = http.createServer((req, res) => { res.setHeader('content-type', 'audio/wav'); res.end(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(2000)])) })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  await fake.call('/save', { voice: { engine: 'http', http: { urlTemplate: `http://127.0.0.1:${srv.address().port}/tts?text={text}` } } })
+  try {
+    const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+    const before = mock.calls.length
+    mock.push(grp('557', '999', at('语音带引用'), 'xiaoming'))
+    await until(() => mock.calls.slice(before).some((c) => c.action === 'send_group_msg' && (c.params.message || []).some((s) => s.type === 'record')), 20000)
+    const recs = mock.calls.slice(before).filter((c) => c.action === 'send_group_msg' && (c.params.message || []).some((s) => s.type === 'record'))
+    assert.equal(recs.length, 1, '语音条应该只发一条')
+    assert.deepEqual(recs[0].params.message.map((s) => s.type), ['record'], '语音条必须单独一条，不能带引用/@：' + JSON.stringify(recs[0].params.message.map((s) => s.type)))
+  } finally {
+    srv.close()
+    await fake.call('/save', { voice: { engine: 'windows' } })
+  }
 })
 
 test('听语音：收到语音先转文字再交给她', async () => {
