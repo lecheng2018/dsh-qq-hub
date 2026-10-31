@@ -125,6 +125,15 @@ npm test
 - **协作 / 交流 QQ 群**：**554850395**（项目维护和想法讨论都在这里；装不上、报错了也可以进来问，尽量先带上面板「日志」里的报错和版本号）
 - **GitHub**：[issue](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/issues) 报 bug / 提需求，[PR](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/pulls) 提代码；提之前先翻一下有没有重复。贡献者名单见版本说明和 PR 记录。
 
+## Star 趋势
+
+<a href="https://www.star-history.com/?repos=accomplish07zrh-eng%2Fdsh-aurabot-qq&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=accomplish07zrh-eng/dsh-aurabot-qq&type=date&theme=dark&legend=top-left" />
+    <img alt="Star 趋势" src="https://api.star-history.com/svg?repos=accomplish07zrh-eng/dsh-aurabot-qq&type=date&legend=top-left" />
+  </picture>
+</a>
+
 ## 桌宠的来源
 
 桌面上的那只小鱼和侧栏「桌宠」页**不是本项目自研的设计**：客户端形态（Electron 透明置顶窗、HTTP 长轮询、气泡与右键菜单）、
