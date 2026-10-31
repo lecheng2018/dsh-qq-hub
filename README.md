@@ -122,8 +122,10 @@ npm test
 
 ## 联系我们
 
-- **协作 / 交流 QQ 群**：**554850395**（项目维护和想法讨论都在这里；装不上、报错了也可以进来问，尽量先带上面板「日志」里的报错和版本号）
+- **QQ 交流群**：扫下面的二维码加入（项目维护和想法讨论都在这里；装不上、报错了也可以进来问，尽量先带上面板「日志」里的报错和版本号）
 - **GitHub**：[issue](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/issues) 报 bug / 提需求，[PR](https://github.com/accomplish07zrh-eng/dsh-aurabot-qq/pulls) 提代码；提之前先翻一下有没有重复。贡献者名单见版本说明和 PR 记录。
+
+<img src="assets/qq-group.jpg" alt="QQ 交流群二维码" width="240" />
 
 ## Star 趋势
 
