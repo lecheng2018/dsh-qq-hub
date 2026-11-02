@@ -122,7 +122,7 @@ test('P0：host.json + host-token 落盘；端口从 Host 头学习并重写', a
   assert.ok(existsSync(hostFile))
   const h1 = JSON.parse(readFileSync(hostFile, 'utf8'))
   assert.equal(h1.version, 1)
-  assert.equal(h1.api, '/aurabot/api')
+  assert.equal(h1.api, '/qq-hub/api')
   assert.equal(h1.token, env.token, 'host.json 里的 token 与 host-token 一致')
   assert.equal(h1.baseUrl, null, '端口未注入时写 null（客户端 readHost 对 null 等待，不再写假 :0 造成自举死锁）')
   assert.equal(env.exports.status().portReady, false, 'status 报「端口未就绪」')
@@ -240,7 +240,7 @@ test('TTS：voice 产物即刻转存 pet/voice/<sha1>.wav，audio.url 走 /audio
   assert.equal(r.via, 'pet')
   const audio = r.message.audio
   assert.ok(audio, 'voice 模式给出音频')
-  assert.match(audio.url, /^\/aurabot\/api\/audio\/[a-f0-9]{40}\.wav\?token=/)
+  assert.match(audio.url, /^\/qq-hub\/api\/audio\/[a-f0-9]{40}\.wav\?token=/)
   assert.ok(!audio.url.includes('voice-cache'), '不能直接指 voice-cache（24h 清理会 404）')
   const stored = env.api.dataDir('voice', `${audio.key}.wav`)
   assert.ok(existsSync(stored), `转存文件在 pet 数据目录：${stored}`)

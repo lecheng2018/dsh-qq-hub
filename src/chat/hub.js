@@ -1,7 +1,7 @@
 // 消息中枢：QQ 会话 ↔ DSH 会话。
 //   收：OneBot 事件 → 白名单 / 群聊策略 → 拼好文案（带发言人、群上下文、图片、语音转写）→ 喂进对应 DSH 会话
 //   发：DSH 会话一轮结束 → 取最终正文 → 拆条 / 语音 / 表情 → 发回原来的 QQ 会话
-// 每个 QQ 会话一个 DSH 会话，统一放在「Aurabot · QQ」工作区，主人可以在 DSH 侧栏点开看、插手。
+// 每个 QQ 会话一个 DSH 会话，统一放在「QQ Hub」工作区，主人可以在 DSH 侧栏点开看、插手。
 
 import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -30,11 +30,11 @@ import { backfillNoticeBlock } from './backfill.js'
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
 const LEGACY_WORKSPACE = 'C:\\Aurabot\\qq-chats'
-export const WORKSPACE_DIR = process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
+export const WORKSPACE_DIR = process.env.QQ_HUB_WORKSPACE || process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
 /** 现在用的工作区目录：面板里填了就用填的，否则默认。 */
 export const workspaceDirOf = (cfg) => String(cfg?.workspaceDir || '').trim() || WORKSPACE_DIR
 export const WORKSPACE_TITLE = 'QQ Hub'
-const SOURCE_KIND = 'aurabot'
+const SOURCE_KIND = 'qq-hub'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const sessionKey = (id) => {
@@ -425,7 +425,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     try {
       offs.push(agent.ctx.systemPrompt.context({
-        name: 'aurabot-context',
+        name: 'qq-hub-context',
         order: 905,
         text: () => {
           const parts = []

@@ -1,6 +1,6 @@
-// Aurabot 扩展模块的类型提示（插件每次启动会更新这个文件，别改它）。
+// QQ Hub 扩展模块的类型提示（插件每次启动会更新这个文件，别改它）。
 // 用法：在模块入口文件 export default 的上一行写
-//   /** @type {import('../aurabot').AurabotModule} */
+//   /** @type {import('../qq-hub').QQHubModule} */
 // VS Code 等编辑器就会给 api.* 补全和参数说明。完整说明见同目录的 API.md。
 
 export type ChatId = `private:${string}` | `group:${string}` | `system:${string}`
@@ -222,7 +222,7 @@ export interface Setting {
   options?: (string | { value: any; label: string })[]
 }
 
-export interface AurabotModule {
+export interface QQHubModule {
   /** 小写字母开头，小写字母 / 数字 / -；和文件夹名一样。和内置模块同名 = 替换它 */
   id: string
   name?: string

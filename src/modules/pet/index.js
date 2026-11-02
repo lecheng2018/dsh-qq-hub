@@ -3,13 +3,13 @@
 // ⚠ 来源与许可（别误当成自研）：桌宠的客户端形态（Electron 透明置顶窗 + 长轮询 + 气泡）、拖拽物理、
 // pet pack 目录约定、以及工作状态六档 / 碎碎念动画的命名约定，都移植自 dsh-pet
 // （https://github.com/PC2005-cloud/dsh-pet ，作者 PC2005-cloud，代码 MIT）。
-// 本项目做的是把它接进 Aurabot 的模块体系（api.route 长轮询、载体互斥、面板设置、DSH 会话事件联动）。
+// 本项目做的是把它接进 QQ Hub 的模块体系（api.route 长轮询、载体互斥、面板设置、DSH 会话事件联动）。
 // 形象/动画素材（「大肥鱼」）是 CC BY-NC-SA 4.0：体积大（50MB+）不进本仓库，由插件**启动时自动下载**落位
 // 到数据目录 packs/（用户零操作；下载失败回落客户端内置形象）。默认地址是独立素材仓库
 // dsh-aurabot-qq-mods（GitHub archive zip 直链，可在面板设置里换成任意镜像/Gitee 地址），署名见 THIRD-PARTY-NOTICES.md。
 //
 // 作用：给「主动搭话」提供一个桌面悬浮窗载体。插件侧只做三件事：
-//   1. 在 /aurabot/api/* 挂一组 HTTP 长轮询接口（内置模块 route 无前缀；api.route 没有 WebSocket/SSE，R6）；
+//   1. 在 /qq-hub/api/* 挂一组 HTTP 长轮询接口（内置模块 route 无前缀；api.route 没有 WebSocket/SSE，R6）；
 //   2. 往自己的数据目录写 host.json（baseUrl+token 的桌宠发现契约，见 docs/PET_MODULE_API.md）；
 //   3. 暴露 dispatch({text,...})：carrier=pet 且桌宠在线 → 推气泡；离线 → 回落 QQ；永不双发。
 // 数据一律写 api.dataDir()（模块文件夹本身不写数据——会被拍快照；api.dataDir 已带模块名 pet）。
@@ -151,7 +151,7 @@ export default {
         // 真实端口由宿主启动时经 setWebPort() 注入，Host 头学习保留作漂移纠正。
         baseUrl: knownPort ? `http://127.0.0.1:${knownPort}` : null,
         token: token(),
-        api: `/aurabot/api`,
+        api: `/qq-hub/api`,
         pluginVersion: api.version,
         updatedAt: new Date(now).toISOString(),
       }
@@ -428,7 +428,7 @@ export default {
         if (!existsSync(dest)) writeFileSync(dest, buf)
         pruneVoiceDir()
         registerAudioRoute(key, dest)
-        return { key: key.replace(/\.wav$/, ''), url: `/aurabot/api/audio/${key}?token=${token()}`, durationMs: Math.max(1200, Math.round(buf.length / 32)) }
+        return { key: key.replace(/\.wav$/, ''), url: `/qq-hub/api/audio/${key}?token=${token()}`, durationMs: Math.max(1200, Math.round(buf.length / 32)) }
       } catch (error) {
         api.log.warn('转存桌宠语音失败：', String(error?.message || error))
         return null
@@ -1978,7 +1978,7 @@ export default {
       learnHost(req)
       const s = api.settings()
       api.core.http.send(res, 200, {
-        ok: true, name: 'aurabot-pet', version: api.version,
+        ok: true, name: 'qq-hub-pet', version: api.version,
         online: online(), focus: focusOn(), bootId, seq,
         carrier: s.carrier, modality: s.modality, fallbackToQQ: s.petFallbackToQQ !== false,
         pack: activePack(), playbackCount: playbacks.length,

@@ -18,7 +18,7 @@
  *   · 本文件负责「该不该轮到」「这次想做什么」「让她怎么说」。
  *
  * 来源：逻辑移植自 Mieksido/surfcore 的 purpose-engine（MIT），署名与许可原文见
- * THIRD-PARTY-NOTICES.md；已按 Aurabot 的模块与配置语境改写。
+ * THIRD-PARTY-NOTICES.md；已按 QQ Hub 的模块与配置语境改写。
  */
 
 export const PURPOSE_STATE_VERSION = 1;
