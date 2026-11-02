@@ -2,15 +2,9 @@
 // 只读写宿主半边的 /aurabot/api/* 接口，不直接碰会话和 QQ。
 // 视觉：沿用 DSH 的主题变量（--dsw-alias-*），浅色 / 深色自动跟随；点缀用大肥鱼的深蓝、海蓝、白。
 
-const registerClientModule = (factory) => {
-  if (typeof window !== 'undefined' && window.__ModuleLoader__ && window.__ModuleLoader__.load) {
-    try { window.__ModuleLoader__.load({ id: 'dsh-qq-hub', factory }) } catch {}
-    try { window.__ModuleLoader__.load({ id: 'dsh-qq-agent', factory }) } catch {}
-    try { window.__ModuleLoader__.load({ id: 'dsh-aurabot-qq', factory }) } catch {}
-  }
-}
-
-registerClientModule((require) => {
+window.__ModuleLoader__.load({
+  id: 'dsh-qq-hub',
+  factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
     const React = require('react')
