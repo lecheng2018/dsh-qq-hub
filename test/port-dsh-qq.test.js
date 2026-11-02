@@ -12,19 +12,20 @@ import completeGuard from '../src/modules/complete-guard/index.js'
 import securityLock from '../src/modules/security-lock/index.js'
 import memoryPrivacy from '../src/modules/memory-privacy/index.js'
 import slangLearner from '../src/modules/slang-learner/index.js'
+import scheduler from '../src/modules/scheduler/index.js'
 import { BUILTINS } from '../src/modules/index.js'
 
 // ---------- 1. 模块清单 ----------
-test('五个移植模块都注册进了 BUILTINS，id 不重复', () => {
+test('移植模块都注册进了 BUILTINS，id 不重复', () => {
   const ids = BUILTINS.map((m) => m.id)
-  for (const id of ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'slang-learner']) {
+  for (const id of ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'slang-learner', 'scheduler']) {
     assert.ok(ids.includes(id), `${id} 没注册`)
   }
   assert.equal(new Set(ids).size, ids.length, 'id 有重复')
 })
 
 test('每个模块的定义完整：id / name / api / setup / settings', () => {
-  for (const def of [tokenGuardian, completeGuard, securityLock, memoryPrivacy, slangLearner]) {
+  for (const def of [tokenGuardian, completeGuard, securityLock, memoryPrivacy, slangLearner, scheduler]) {
     assert.match(def.id, /^[a-z][a-z0-9-]{1,39}$/)
     assert.ok(def.name && def.name.length > 0)
     assert.equal(def.api, 1)

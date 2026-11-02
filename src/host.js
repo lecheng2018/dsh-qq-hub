@@ -30,6 +30,7 @@ import { listPersonas, readPersona, savePersona, deletePersona, currentPersonaTe
 import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
+import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from './chat/backfill.js'
 import { BUILTINS } from './modules/index.js'
 
 export const name = 'aurabot'
@@ -114,6 +115,75 @@ export function apply(ctx) {
   let pendingEvents = []
   let hub = null
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
+
+  // 断线消息补收（Backfill）追踪器
+  const gapTracker = createUpstreamGapTracker({
+    file: dataDir('upstream-seen.json'),
+    gapMs: Number(cfg.backfill?.gapMs) || 120_000,
+    onError: (err) => log.debug('gapTracker 出错:', err.message)
+  })
+  const seenIds = createSeenMessageIds()
+  let backfilling = false
+
+  async function triggerBackfill({ since, gapMs }) {
+    if (backfilling || cfg.backfill?.enabled === false) return
+    backfilling = true
+    const settle = Number(cfg.backfill?.settleMs) || 10_000
+    if (settle > 0) await new Promise((r) => setTimeout(r, settle))
+    try {
+      log.info(`[backfill] 发现连接断档约 ${describeDuration(gapMs)}，开始拉取错过的历史消息...`)
+      const groups = (cfg.allow?.groups || []).map(String)
+      const privates = (cfg.allow?.private || []).map(String)
+      const botQQ = String(cfg.botQQ || '')
+
+      for (const gid of groups) {
+        try {
+          const res = await onebot.call('get_group_msg_history', { group_id: Number(gid), count: 30 })
+          const msgs = Array.isArray(res?.messages) ? res.messages : []
+          const { items } = selectBackfill(msgs, {
+            key: `group:${gid}`,
+            since,
+            selfId: botQQ,
+            seen: seenIds,
+            config: cfg.backfill
+          })
+          for (const it of items) {
+            seenIds.add(`group:${gid}`, it.event.message_id)
+            await hub.onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+          }
+        } catch (e) {
+          log.debug(`[backfill] 拉取群 ${gid} 历史失败:`, e.message)
+        }
+      }
+      for (const uid of privates) {
+        try {
+          const res = await onebot.call('get_friend_msg_history', { user_id: Number(uid), count: 20 })
+          const msgs = Array.isArray(res?.messages) ? res.messages : []
+          const { items, skippedCommands } = selectBackfill(msgs, {
+            key: `private:${uid}`,
+            since,
+            selfId: botQQ,
+            seen: seenIds,
+            config: cfg.backfill
+          })
+          if (skippedCommands.length && String(uid) === String(cfg.ownerQQ)) {
+            const cmds = skippedCommands.map((c) => `「${c.text}」`).join('、')
+            await hub.sendText(`private:${uid}`, `⚠️ 断线期间（约 ${describeDuration(gapMs)}）收到的管理命令 ${cmds} 未执行；如需执行请重新发送。`)
+          }
+          for (const it of items) {
+            seenIds.add(`private:${uid}`, it.event.message_id)
+            await hub.onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+          }
+        } catch (e) {
+          log.debug(`[backfill] 拉取私聊 ${uid} 历史失败:`, e.message)
+        }
+      }
+    } catch (err) {
+      log.warn('[backfill] 补收历史消息异常:', err.message)
+    } finally {
+      backfilling = false
+    }
+  }
   async function checkLogin() {
     verifying = true
     pendingEvents = []
@@ -150,6 +220,14 @@ export function apply(ctx) {
   /** 核对通过后的事件都在这里处理（onEvent 直接调，核对期间攒下的也会补到这里）。 */
   function handleEvent(ev) {
     if (!hub) return
+    const gap = gapTracker.notePacket()
+    if (gap && cfg.backfill?.enabled !== false) {
+      triggerBackfill(gap)
+    }
+    if (ev.post_type === 'message' && ev.message_id) {
+      const key = ev.message_type === 'group' ? `group:${ev.group_id}` : `private:${ev.user_id}`
+      seenIds.add(key, ev.message_id)
+    }
     // 模块能看到所有原始事件（加群、撤回、好友申请……），只看不拦
     mods?.emit('onebot', ev)
     if (ev.post_type === 'message' || ev.post_type === 'message_sent') {
