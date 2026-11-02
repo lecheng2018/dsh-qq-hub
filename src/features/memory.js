@@ -758,7 +758,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   function relatedTo(chatId, transcript) {
     const ppl = new Set([...String(transcript).matchAll(/\((\d{5,})\)/g)].map((m) => m[1]))
     if (chatId.startsWith('private:')) ppl.add(chatId.slice(8))
-    const items = load().items.filter((m) => !m.invalidAt && m.source !== 'event' && m.source !== 'diary')
+    // 只在本聊天可见的记忆里挑：以前这里是全量 load().items，
+    // 只要聊天记录里出现了某人的 QQ，就会把「关于这个人」的记忆全部捞进来 ——
+    // 包括别的作用域的。实测陌生群提一句主人的 QQ，就能把主人私聊的「猫叫粥粥」
+    // 当成已知事实喂给提炼模型，接着被写进这个群的新记忆。
+    // 作用域：这个聊天自己的 + global。qzone / 推断不出作用的走私聊与 global 两路。
+    const scope = scopeFromChatId(chatId)
+    const items = load().items.filter((m) => {
+      if (m.invalidAt || m.source === 'event' || m.source === 'diary') return false
+      const sc = String(m.scope || '').trim()
+      if (!sc) return false // 无 scope 老数据：不参与提炼（宁可不给）
+      if (sc === 'global') return true
+      return scope ? sc === scope : false
+    })
     const out = items.filter((m) => m.about && ppl.has(String(m.about))).sort((a, b) => b.at - a.at).slice(0, 10)
     // 用当前聊天的索引：提炼 A 群聊天时，不该把主人私聊或 B 群的记忆当成「已知事实」喂给模型
     for (const h of search(indexFor(chatId), String(transcript).slice(-1500), { limit: 8, minScore: 0.5 })) {

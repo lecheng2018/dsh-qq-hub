@@ -149,8 +149,12 @@ test('群里拿不到任何私聊记忆（本轮最关键的隔离）', () => {
   assert.equal(isVisible({ scope: 'global' }, chat), true)
 })
 
-test('没写作用域的按全局处理，system 会话看不到任何分层记忆', () => {
-  assert.equal(isVisible({ text: 'x' }, { kind: 'group', groupId: '1' }), true)
+test('没写作用域的一律不可见（不再按全局放行），system 会话看不到任何分层记忆', () => {
+  // 以前这里是 assert true —— 把「没写 scope」当 global 处理。
+  // 但忘了写 scope 的老条目会因此对所有人可见，正是跨聊天泄漏的口子。
+  // 现在和 features/memory.js 的 scopeVisible 同一口径：认不出来源就不给。
+  assert.equal(isVisible({ text: 'x' }, { kind: 'group', groupId: '1' }), false)
+  assert.equal(isVisible({ text: 'x' }, { kind: 'private', userId: '1' }), false)
   assert.deepEqual(visibleScopes({ kind: 'system' }), [])
   assert.equal(isVisible({ scope: 'global' }, { kind: 'system' }), false)
 })
