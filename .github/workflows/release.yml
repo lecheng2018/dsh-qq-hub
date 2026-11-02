@@ -64,16 +64,20 @@ jobs:
 
           git fetch --tags --force || true
 
-          # 幂等保护：当前提交已经有完全一致的版本 tag → 说明这个版本发过了，跳过
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
-            TAG_COMMIT=$(git rev-list -n 1 "${TAG}" 2>/dev/null || echo "")
-            if [ "${TAG_COMMIT}" = "${GITHUB_SHA}" ]; then
-              echo "当前提交 ${GITHUB_SHA} 已存在 tag ${TAG}，跳过重复发布"
-              SKIP=true
-            elif [[ "${GITHUB_REF}" != refs/tags/* ]]; then
-              # main push 但没改 version：不再追加 build.N 污染 Release 列表，直接跳过
-              echo "package.json version 仍是 ${VERSION} 且 tag ${TAG} 已指向其他提交；如需重新发版请更新 version 或打 tag"
-              SKIP=true
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # tag 推送 = 明确的发版意图，无条件发布
+            echo "由 tag ${GITHUB_REF_NAME} 触发，直接发布"
+          else
+            # main push：幂等保护，避免重复发版污染 Release 列表
+            if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+              TAG_COMMIT=$(git rev-list -n 1 "${TAG}" 2>/dev/null || echo "")
+              if [ "${TAG_COMMIT}" = "${GITHUB_SHA}" ]; then
+                echo "当前提交 ${GITHUB_SHA} 已存在 tag ${TAG}，跳过重复发布"
+                SKIP=true
+              else
+                echo "package.json version 仍是 ${VERSION} 且 tag ${TAG} 已指向其他提交；如需重新发版请更新 version 或打 tag"
+                SKIP=true
+              fi
             fi
           fi
 
