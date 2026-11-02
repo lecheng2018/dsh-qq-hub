@@ -40,6 +40,13 @@ function scopeFromChatId(chatId) {
   return null
 }
 
+// 推不出作用域时的兜底：落到主人私聊。
+// 注意：新代码里「无 scope 的条目对任何人都不可见」（scopeVisible 里明确 return false），
+// 所以这里不兜底的话，这些老记忆会静默消失 —— 既不是 global，也不是任何人的。
+// 按「宁可少给，不可多给」的原则，认不出来源的一律先留在主人私聊，需要时再手动放出去。
+const OWNER_QQ = String(process.env.OWNER_QQ || '2471784685')
+const FALLBACK = 'private:' + OWNER_QQ
+
 const noScope = items.filter((m) => !m.scope)
 console.log('无 scope 的老条目：' + noScope.length)
 
@@ -48,7 +55,7 @@ let fixable = 0
 for (const m of noScope) {
   const sc = scopeFromChatId(m.chatId)
   if (sc) fixable++
-  const k = sc || ('(推不出，保持 global: ' + (m.chatId || '无 chatId') + ')')
+  const k = sc || ('(' + FALLBACK + ' ← 推不出，落到主人私聊)' + (m.chatId ? ' chatId=' + m.chatId : ''))
   if (!buckets[k]) buckets[k] = []
   buckets[k].push(m)
 }
@@ -63,7 +70,10 @@ for (const [k, list] of Object.entries(buckets)) {
   if (list.length > 5) console.log('      … 还有 ' + (list.length - 5) + ' 条')
 }
 
-console.log('\n可自动归档：' + fixable + ' 条；推不出作用域（保持 global）：' + (noScope.length - fixable) + ' 条')
+console.log('\n按 chatId 能还原：' + fixable + ' 条；推不出、落到 ' + FALLBACK + '：' + (noScope.length - fixable) + ' 条')
+if (noScope.length > fixable) {
+  console.log('（这些条目在修复后的代码里本来会对所有人不可见，兜底后只留在主人私聊，不会漏到群里）')
+}
 
 // ---------------- 人物小档案（profiles）也需要按作用域归档 ----------------
 // 之前的漏洞：小档案只按 QQ 号存一份，私聊里聊出来的「兜里只有十块钱」这类私事
@@ -113,12 +123,11 @@ console.log('\n已备份到：' + bak)
 let n = 0
 for (const m of items) {
   if (m.scope) continue
-  const sc = scopeFromChatId(m.chatId)
-  if (!sc) continue
-  m.scope = sc
+  // 推不出来源也要落一个明确的作用域，否则这些记忆等于被静默丢弃
+  m.scope = scopeFromChatId(m.chatId) || FALLBACK
   n++
 }
 s.profiles = profItems
 s.rev = (s.rev || 0) + 1
 writeFileSync(FILE, JSON.stringify(s, null, 2), 'utf8')
-console.log('已归档 ' + n + ' 条。重启 DSH 后生效。')
+console.log('已归档 ' + n + ' 条（其中来源不明、落到 ' + FALLBACK + ' 的见上方分布）。重启 DSH 后生效。')
