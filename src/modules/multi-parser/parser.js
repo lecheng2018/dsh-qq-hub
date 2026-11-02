@@ -476,8 +476,9 @@ async function parseGithub(url) {
 let cachedDouyinTtwid = ''
 let ttwidExpireAt = 0
 
-async function getDouyinTtwid() {
-  if (cachedDouyinTtwid && Date.now() < ttwidExpireAt) return cachedDouyinTtwid
+async function getDouyinTtwid(force = false) {
+  if (!force && cachedDouyinTtwid && Date.now() < ttwidExpireAt) return cachedDouyinTtwid
+  if (force) cachedDouyinTtwid = ''
   try {
     const regRes = await fetch('https://ttwid.bytedance.com/ttwid/union/register/', {
       method: 'POST',
@@ -504,87 +505,95 @@ async function getDouyinTtwid() {
 }
 
 async function parseDouyin(url, cookie = '', rawText = '') {
-  try {
-    let workId = ''
-    const idMatch = url.match(/\/(?:video|note|slides)\/(\d+)/i) || url.match(/[?&]aweme_id=(\d+)/i) || url.match(/[?&]itemId=(\d+)/i)
-    if (idMatch) workId = idMatch[1]
+  // 最多两次：第二次强制刷新 ttwid，抵消匿名凭据偶发失效
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      let workId = ''
+      const idMatch = url.match(/\/(?:video|note|slides)\/(\d+)/i) || url.match(/[?&]aweme_id=(\d+)/i) || url.match(/[?&]itemId=(\d+)/i)
+      if (idMatch) workId = idMatch[1]
 
-    const ttwid = await getDouyinTtwid()
-    const cookieHeader = [cookie, ttwid ? `ttwid=${ttwid}` : ''].filter(Boolean).join('; ')
-    const headers = {
-      'User-Agent': UA_MOBILE,
-      Referer: 'https://www.iesdouyin.com/',
-    }
-    if (cookieHeader) headers.Cookie = cookieHeader
+      const ttwid = await getDouyinTtwid(attempt === 2)
+      const cookieHeader = [cookie, ttwid ? `ttwid=${ttwid}` : ''].filter(Boolean).join('; ')
+      const headers = {
+        'User-Agent': UA_MOBILE,
+        Referer: 'https://www.iesdouyin.com/',
+      }
+      if (cookieHeader) headers.Cookie = cookieHeader
 
-    const targetUrl = workId ? `https://www.iesdouyin.com/share/video/${workId}/` : url
-    const res = await fetch(targetUrl, {
-      headers,
-      signal: AbortSignal.timeout(8000),
-    })
-    const html = await res.text()
+      const targetUrl = workId ? `https://www.iesdouyin.com/share/video/${workId}/` : url
+      const res = await fetch(targetUrl, {
+        headers,
+        signal: AbortSignal.timeout(8000),
+      })
+      const html = await res.text()
 
-    const routerMatch = html.match(/window\._ROUTER_DATA\s*=\s*(.*?);?<\/script>/s)
-    if (routerMatch) {
-      try {
-        const data = JSON.parse(routerMatch[1].trim())
-        const loaderData = data.loaderData || {}
-        for (const k in loaderData) {
-          if (k.startsWith('video_') || k.startsWith('note_') || k.startsWith('slides_')) {
-            const item = loaderData[k]?.videoInfoRes?.item_list?.[0]
-            if (item) {
-              const title = item.desc || '抖音作品'
-              const author = item.author?.nickname || '抖音创作者'
-              const playUrls = item.video?.play_addr?.url_list || []
-              const rawVideoUrl = playUrls[0] || ''
-              const videoUrl = rawVideoUrl ? rawVideoUrl.replace('playwm', 'play') : ''
-              const cover = item.video?.cover?.url_list?.[0] || ''
-              const images = (item.images || []).map((img) => img?.url_list?.[0]).filter(Boolean)
+      const routerMatch = html.match(/window\._ROUTER_DATA\s*=\s*(.*?);?<\/script>/s)
+      if (routerMatch) {
+        try {
+          const data = JSON.parse(routerMatch[1].trim())
+          const loaderData = data.loaderData || {}
+          for (const k in loaderData) {
+            if (k.startsWith('video_') || k.startsWith('note_') || k.startsWith('slides_')) {
+              const item = loaderData[k]?.videoInfoRes?.item_list?.[0]
+              if (item) {
+                const title = item.desc || '抖音作品'
+                const author = item.author?.nickname || '抖音创作者'
+                const playUrls = item.video?.play_addr?.url_list || []
+                const rawVideoUrl = playUrls[0] || ''
+                const videoUrl = rawVideoUrl ? rawVideoUrl.replace('playwm', 'play') : ''
+                const cover = item.video?.cover?.url_list?.[0] || ''
+                const images = (item.images || []).map((img) => img?.url_list?.[0]).filter(Boolean)
 
-              return {
-                platform: 'douyin',
-                platformName: '抖音',
-                type: images.length ? 'gallery' : 'video',
-                title,
-                author,
-                summary: title,
-                cover: cover || images[0] || '',
-                images: images.length ? images : (cover ? [cover] : []),
-                videoUrl,
-                url,
-                stat: `点赞: ${item.statistics?.digg_count || 0} · 评论: ${item.statistics?.comment_count || 0}`,
+                return {
+                  platform: 'douyin',
+                  platformName: '抖音',
+                  type: images.length ? 'gallery' : 'video',
+                  title,
+                  author,
+                  summary: title,
+                  cover: cover || images[0] || '',
+                  images: images.length ? images : (cover ? [cover] : []),
+                  videoUrl,
+                  url,
+                  stat: `点赞: ${item.statistics?.digg_count || 0} · 评论: ${item.statistics?.comment_count || 0}`,
+                }
               }
             }
           }
-        }
-      } catch {}
-    }
+        } catch {}
+      }
 
-    // 口令文本解析兜底：从「看看【...的作品】标题」中提取
-    let authorFallback = '抖音创作者'
-    let titleFallback = '抖音视频'
-    if (rawText) {
-      const authorM = rawText.match(/【(.*?)的作品】/)
-      if (authorM) authorFallback = authorM[1].trim()
-      const textM = rawText.match(/【.*?的作品】\s*(.*?)(?:https?:\/\/|$)/)
-      if (textM && textM[1].trim()) titleFallback = textM[1].trim()
-    }
+      // 第一次尝试没拿到数据（ttwid 抖动等）：继续循环走第二次强制刷新
+      if (attempt === 1) continue
 
-    return {
-      platform: 'douyin',
-      platformName: '抖音',
-      type: 'video',
-      title: titleFallback,
-      author: authorFallback,
-      summary: titleFallback,
-      cover: '',
-      images: [],
-      videoUrl: '',
-      url,
+      // 口令文本解析兜底：从「看看【...的作品】标题」中提取
+      let authorFallback = '抖音创作者'
+      let titleFallback = '抖音视频'
+      if (rawText) {
+        const authorM = rawText.match(/【(.*?)的作品】/)
+        if (authorM) authorFallback = authorM[1].trim()
+        const textM = rawText.match(/【.*?的作品】\s*(.*?)(?:https?:\/\/|$)/)
+        if (textM && textM[1].trim()) titleFallback = textM[1].trim()
+      }
+
+      return {
+        platform: 'douyin',
+        platformName: '抖音',
+        type: 'video',
+        title: titleFallback,
+        author: authorFallback,
+        summary: titleFallback,
+        cover: '',
+        images: [],
+        videoUrl: '',
+        url,
+        fallback: true,
+      }
+    } catch {
+      if (attempt === 2) return null
     }
-  } catch {
-    return null
   }
+  return null
 }
 
 async function parseHeybox(url, cookie = '') {
