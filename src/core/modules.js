@@ -598,7 +598,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         routes: [...routes].filter(([, r]) => r.id === id).map(([p]) => p.replace('/aurabot/api', '')),
         settings: rec?.source === 'user' || (!rec && u) ? (def.settings || []) : [],
         defaults: def.defaults || {},
-        panel: Boolean(rec?.source === 'user' && def.panel),
+        panel: Boolean(def.panel && (rec?.source === 'user' || rec?.source === 'builtin')),
         tab: def.tab || '',
         keepPanel: Boolean(def.keepPanel),
         startedAt: rec?.startedAt || 0,
@@ -616,13 +616,24 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     return names
   }
 
-  /** 自己写的模块的面板代码（panel.js），面板拿去执行。 */
+  /**
+   * 模块的面板代码（panel.js），面板拿去执行。
+   * 自己写的模块从数据目录读；内置模块从插件 src/modules/<id>/ 读（内置的自定义面板也是这个机制，接口 v1 内只加不改）。
+   */
   function panelSource(id) {
     const rec = live.get(id)
-    if (!rec || rec.source !== 'user' || !rec.def.panel) return null
-    const u = userSeen.get(id)
-    const file = typeof rec.def.panel === 'string' ? resolve(u.dir, rec.def.panel) : join(u.dir, 'panel.js')
-    if (!file.startsWith(u.dir) || !existsSync(file)) return null
+    if (!rec || !rec.def.panel) return null
+    if (rec.source === 'user') {
+      const u = userSeen.get(id)
+      if (!u) return null
+      const file = typeof rec.def.panel === 'string' ? resolve(u.dir, rec.def.panel) : join(u.dir, 'panel.js')
+      if (!file.startsWith(u.dir) || !existsSync(file)) return null
+      return readFileSync(file, 'utf8')
+    }
+    if (rec.source !== 'builtin') return null
+    const base = join(BUILTIN_DIR, id)
+    const file = typeof rec.def.panel === 'string' ? resolve(base, rec.def.panel) : join(base, 'panel.js')
+    if (!file.startsWith(base) || !existsSync(file)) return null
     return readFileSync(file, 'utf8')
   }
 
