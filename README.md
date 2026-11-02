@@ -15,6 +15,19 @@
 QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插件 (Cordis 4) ⇄ DSH 会话 (预设物理隔离)
 ```
 
+> [!NOTE]
+> ### 🧬 项目血缘与独立演进说明
+> 
+> 本项目最初脱胎于优秀的上游开源项目 **[aureth-labs/dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)**（社区俗称“大肥鱼”），继承了其灵动可爱的拟人化社交设计、微内核扩展机制与多模态交互底子。
+> 
+> **为什么要独立发展？**  
+> 上游原版的核心定位是“纯轻量陪伴型社交聊天机器人”（注重日常闲聊、空间动态、桌面宠物等）；  
+> 而我们在实际高频使用中，将其深度重构并演进为一个**兼具生产力派活的工业级 DSH QQ Agent 综合终端**——加入了**多选交互提问状态机 (`ask_user_question`)、高危工具审批流 (`approval/request`)、离线断线消息补收 (`backfill`)、全功能通用定时调度器 (`scheduler` / `/remind`)、TOTP 手机动态口令权限锁、10 大平台内容无水印解析 (`multi-parser`)**，并全面完成了全量代码审计与 16 项高/中危缺陷加固。  
+> 
+> 功能边界与底层架构已实质性超越了原版闲聊机器人的设计初衷，上游不再适合承载如此重度的生产力与自动化代码。为了更自主地进行技术演进、保障独立的 CI/CD 自动化发版，并让社区更清晰地辨识其“QQ 生产力中枢”的定位，本项目正式独立为 **DSH-QQ-Hub**。  
+> 
+> 我们由衷感谢原作者团队在 DSH 插件机制与陪伴玩法上的开拓性探索！
+
 ---
 
 ## 📌 本次修改清单（v1.2.0 重构、加固与文档完善）
@@ -475,6 +488,8 @@ npm test
 ## 📄 开源许可与致谢
 
 - 插件本体源码采用 [MIT License](LICENSE) 授权开源；
+- 本项目最初基于 [aureth-labs/dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)（MIT）发展并重构独立，致谢原作者团队的优秀基石；
 - 桌面宠物客户端设计移植自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT）；
+- 多平台内容解析引擎设计参考了 [astrbot_plugin_multi_parser](https://github.com/Qfxaile/astrbot_plugin_multi_parser)（MIT）；
 - 「大肥鱼」形象与动画素材遵循 [CC BY-NC-SA 4.0](THIRD-PARTY-NOTICES.md) 许可，严禁商用；
 - 感谢 [DeepSeek Harness](https://github.com/deepseek-ai) 官方及开源社区贡献者的支持与启发！
