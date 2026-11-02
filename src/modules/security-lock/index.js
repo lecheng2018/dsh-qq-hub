@@ -208,7 +208,7 @@ export default {
     api.onDispose(() => clearInterval(timer))
 
     // ---- 面板接口 ----
-    api.route('/status', () => ({
+    api.route('/security-lock/status', () => ({
       ok: true,
       enabled: api.settings().enabled,
       locked: locked(),
@@ -217,13 +217,13 @@ export default {
       otpauth: st.secret ? otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'aurabot')) : '',
     }))
     // 面板要的：otpauth 链接 + 密钥本体（面板画成二维码，主机下拉就能扫码）
-    api.route('/otpauth', () => ({
+    api.route('/security-lock/otpauth', () => ({
       ok: true,
       secret: st.secret,
       otpauth: otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'aurabot')),
       account: String(api.config()?.ownerQQ || 'aurabot'),
     }))
-    api.route('/reset-secret', () => {
+    api.route('/security-lock/reset-secret', () => {
       st.secret = newSecret()
       st.unlockedUntil = 0
       st.usedSteps = []

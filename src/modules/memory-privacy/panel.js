@@ -6,11 +6,11 @@ return function MemoryPrivacyPanel(props) {
   const { Card, Btn, Empty } = ui
   const [d, setD] = useState(null)
   const [busy, setBusy] = useState('')
-  const load = () => call('/stats').then((r) => setD(r)).catch(() => setD({ ok: false }))
+  const load = () => call('/memory-privacy/stats').then((r) => setD(r)).catch(() => setD({ ok: false }))
   useEffect(() => { load() }, [])
   const del = async (id) => {
     setBusy(id)
-    try { const r = await call('/delete', { id }); props.toast && props.toast(r.ok ? '删掉了' : '没成功', r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') }
+    try { const r = await call('/memory-privacy/delete', { id }); props.toast && props.toast(r.ok ? '删掉了' : '没成功', r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') }
   }
   if (!d) return h(Card, { title: '分层情况' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '分层情况' }, h('div', { className: 'ab-note err' }, '读不到（扩展模块没在跑？）'))

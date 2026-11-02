@@ -132,12 +132,12 @@ export default {
       return [{ type: 'text', text: `（这个群的黑话，看懂了就用，别硬拗：${body}）` }, ...content]
     })
 
-    api.route('/list', (req) => {
+    api.route('/slang-learner/list', (req) => {
       const gid = String(req?.query?.gid || '')
       if (gid) return { ok: true, gid, pending: pending(gid), approved: db.approved[gid] || {} }
       return { ok: true, groups: Object.keys(db.approved), pendingCounts: Object.fromEntries(Object.keys(db.counts).map((g) => [g, pending(g).length])) }
     })
-    api.route('/approve', (req) => {
+    api.route('/slang-learner/approve', (req) => {
       const gid = String(req?.query?.gid || '')
       const word = String(req?.query?.word || '')
       const meaning = String(req?.query?.meaning || '')

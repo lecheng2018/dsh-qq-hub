@@ -153,7 +153,7 @@ export default {
     api.rule(() => '如果上下文里出现了「更早聊天的摘要」，说明更早的历史已经被压成摘要：把摘要当自己的记忆使用，不要追问细节。')
 
     // 面板：各聊天用量一览 + 立即压缩一个聊天
-    api.route('/status', () => {
+    api.route('/token-guardian/status', () => {
       const rows = Object.entries(state).map(([chatId, st]) => ({
         chatId,
         chars: Number(st.chars || 0),
@@ -165,7 +165,7 @@ export default {
       })).sort((a, b) => b.tokens - a.tokens).slice(0, 30)
       return { ok: true, threshold: api.settings().threshold, items: rows }
     })
-    api.route('/compact-now', async (req) => {
+    api.route('/token-guardian/compact-now', async (req) => {
       const chatId = String(req?.query?.chatId || '')
       if (!chatId) return { ok: false, message: '要先说压缩哪个聊天' }
       const ok = await compact(chatId, { chatId })

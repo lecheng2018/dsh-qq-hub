@@ -135,13 +135,13 @@ export default {
     api.rule(() => '你有一份按聊天分开的记忆。私聊里听到的事只在那个私聊里提；群里的只在那群里提。被追问别处的私事就说不方便讲。')
 
     // 面板：看 / 删
-    api.route('/list', (req) => {
+    api.route('/memory-privacy/list', (req) => {
       const s = load()
       const all = String(req?.query?.all || '') === '1'
       return { ok: true, items: all ? s.items : s.items.filter((m) => String(m.scope).startsWith('private:')).map((m) => ({ ...m, text: '（私聊内容，面板不预览）' })) }
     })
     // 面板：作用域汇总（私聊内容默认不预览，只给条数；全局和本群可以看）
-    api.route('/stats', () => {
+    api.route('/memory-privacy/stats', () => {
       const s = load()
       const by = {}
       for (const m of s.items) {
@@ -155,7 +155,7 @@ export default {
         globalItems: s.items.filter((m) => String(m.scope || 'global') === 'global').slice(-50).map((m) => ({ id: m.id, text: m.text, at: m.at })),
       }
     })
-    api.route('/delete', (req) => {
+    api.route('/memory-privacy/delete', (req) => {
       const id = String(req?.query?.id || '')
       const s = load()
       s.items = s.items.filter((m) => m.id !== id)
