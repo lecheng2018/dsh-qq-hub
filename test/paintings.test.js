@@ -50,7 +50,7 @@ test('文件名里的时间和提示词能解析出来', () => {
   assert.equal(new Date(m.at).getDate(), 28)
 })
 
-test('路径安全：挡住 ../、绝对路径和非图片', () => {
+test('路径安全：挡住 ../、绝对路径和非图片', { skip: process.platform !== 'win32' && '这条断言用了 Windows 盘符语义（C:\\Windows\\x.png），Linux 上 isAbsolute/basename 不按 Windows 规则判断' }, () => {
   assert.equal(safeName('../secret.png'), '')
   assert.equal(safeName('..\\secret.png'), '')
   assert.equal(safeName('C:\\Windows\\x.png'), '')
