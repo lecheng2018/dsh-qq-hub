@@ -128,7 +128,7 @@ export function createBrowser({ profileDir, browserPath = () => '', log } = {}) 
 
   async function attach(port) {
     const { page, extra } = pickPage(await getJson(`http://127.0.0.1:${port}/json/list`))
-    for (const t of extra) await fetch(`http://127.0.0.1:${port}/json/close/${t.id}`).catch(() => {})
+    for (const t of extra) await fetch(`http://127.0.0.1:${port}/json/close/${t.id}`, { signal: AbortSignal.timeout(3000) }).catch(() => {})
     let target = page
     if (!target) target = await getJson(`http://127.0.0.1:${port}/json/new?about:blank`).catch(() => null)
     if (!target?.webSocketDebuggerUrl) throw new Error('浏览器里没有能控制的标签页')

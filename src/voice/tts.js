@@ -30,7 +30,13 @@ function run(cmd, args, { timeoutMs = 60000, input, env } = {}) {
       return
     }
     const t = setTimeout(() => {
-      try { child.kill() } catch (e) {}
+      try {
+        if (process.platform === 'win32' && child.pid) {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+        } else {
+          child.kill('SIGKILL')
+        }
+      } catch (e) {}
       err += '\n超时'
     }, timeoutMs)
     child.stdout.on('data', (d) => { out += d })
