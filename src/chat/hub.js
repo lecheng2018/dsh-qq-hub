@@ -25,6 +25,7 @@ import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
 import { createQuestionRegistry } from './questions.js'
 import { createApprovalRegistry } from './approvals.js'
+import { backfillNoticeBlock } from './backfill.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
@@ -1069,7 +1070,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return out
   }
 
-  async function onMessage(event) {
+  async function onMessage(event, opts = {}) {
     selfId = String(event.self_id || selfId || getConfig().botQQ)
     const cfg = getConfig()
     const msg = parseMessageEvent(event, selfId, { faceName: faces.nameOf })
@@ -1268,6 +1269,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     lastChatAt = now
     if (msg.kind === 'private' && msg.userId === cfg.ownerQQ) lastOwnerChatAt = now
     onActivity?.({ kind: 'in', chatId: msg.chatId, userId: msg.userId, nickname: msg.nickname, text, direct: msg.kind === 'private' || msg.mentioned || mode === 'must', owner: isOwner(cfg, msg.userId) })
+
+    if (opts.backfill) {
+      content.unshift({
+        type: 'text',
+        text: backfillNoticeBlock({ gapMs: opts.gapMs || 120_000, count: 1, earliestAgeMs: opts.earliestAgeMs || 0 })
+      })
+    }
 
     enqueue({ chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId, nickname: msg.nickname }, content, msg.userId, wantsVoice(msg.text), mode, { stickerPick })
   }
