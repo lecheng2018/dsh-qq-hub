@@ -41,7 +41,17 @@ export default {
             importance: { type: 'number', description: '0~1，约定、关系、核心喜好写高一点，随口一提写低一点，不确定写 0.5' },
           },
           required: ['text'],
-          execute: async ({ text, about, importance }) => memory.add({ text, aboutName: about || '', about: chat.kind === 'private' ? chat.userId : '', importance: importance ?? 0.5, source: 'tool', chatId: current }),
+          execute: async ({ text, about, importance }) => memory.add({
+            text,
+            aboutName: about || '',
+            about: chat.kind === 'private' ? chat.userId : '',
+            importance: importance ?? 0.5,
+            source: 'tool',
+            chatId: current,
+            // 私聊记的只在这个私聊可见，群里记的只在这个群可见（global 才到处可见）。
+            // 不这样打标，私聊说的「我的猫叫粥粥」会在群里被检索出来 —— 记忆隔离就形同虚设。
+            scope: memory.scopeOfChat(chat),
+          }),
         }),
         defineTool({
           name: 'recall_memory',
