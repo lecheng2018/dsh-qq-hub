@@ -116,6 +116,8 @@ jobs:
           mkdir -p dist
           npm pack --pack-destination dist
           TGZ=$(ls dist/*.tgz | head -n 1)
+          # 版本名 + 免版本名双资产：市场 tarball 可用 latest/download/ 免腐烂链接
+          cp "${TGZ}" dist/dsh-qq-hub.tgz
           echo "tgz_path=${TGZ}" >> "$GITHUB_OUTPUT"
           echo "Packaged plugin: ${TGZ}"
           ls -lh dist/
@@ -125,7 +127,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dsh-plugin-tarball
-          path: dist/*.tgz
+          path: |
+            dist/*.tgz
+            !dist/dsh-qq-hub.tgz
 
       - name: Publish GitHub Release
         if: steps.meta.outputs.skip != 'true'
@@ -134,7 +138,9 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Release ${{ steps.meta.outputs.tag }}
           body_path: RELEASE_NOTES.md
-          files: ${{ steps.pack.outputs.tgz_path }}
+          files: |
+            ${{ steps.pack.outputs.tgz_path }}
+            dist/dsh-qq-hub.tgz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
