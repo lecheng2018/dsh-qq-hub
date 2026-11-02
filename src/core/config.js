@@ -214,7 +214,7 @@ export const DEFAULTS = {
     sendMedia: true,             // 媒体发送开关（是否向 QQ 发送解析后的视频或图文）
     forwardMode: 'threshold',    // threshold / always / never
     imageThreshold: 2,           // 超过几张图自动转合并转发卡片
-    maxVideoMB: 50,              // 视频直接发送上限 (MB)
+    maxVideoMB: 100,             // 视频直接发送上限 (MB)
     videoOverLimit: 'direct_link', // direct_link / group_file / notice
     platforms: {
       bilibili: true,
@@ -475,7 +475,7 @@ export function normalize(raw) {
   mp.sendMedia = bool(mp.sendMedia, true)
   mp.forwardMode = ['threshold', 'always', 'never'].includes(mp.forwardMode) ? mp.forwardMode : 'threshold'
   mp.imageThreshold = num(mp.imageThreshold, 2, 1, 30)
-  mp.maxVideoMB = num(mp.maxVideoMB, 50, 5, 500)
+  mp.maxVideoMB = num(mp.maxVideoMB, 100, 5, 500)
   mp.videoOverLimit = ['direct_link', 'group_file', 'notice'].includes(mp.videoOverLimit) ? mp.videoOverLimit : 'direct_link'
   if (!isObj(mp.platforms)) mp.platforms = {}
   for (const k of ['bilibili', 'douyin', 'redbook', 'weibo', 'zhihu', 'wechat', 'tieba', 'fanqie', 'github', 'xiaoheihe']) {

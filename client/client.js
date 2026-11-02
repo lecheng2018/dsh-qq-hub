@@ -3089,7 +3089,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Row, {
             label: '单视频直接发送上限 (MB)',
             hint: '低于此体积直接在聊天中发送原生播放视频气泡，超过则执行超限动作。',
-          }, f.num('multiParser.maxVideoMB', { min: 5, max: 200, step: 5, fallback: 50 })),
+          }, f.num('multiParser.maxVideoMB', { min: 5, max: 200, step: 5, fallback: 100 })),
           h(Row, {
             label: '视频超限处理动作',
             hint: '当视频体积超出上限时采取的动作。',

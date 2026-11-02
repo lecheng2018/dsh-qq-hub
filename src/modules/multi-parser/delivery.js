@@ -38,7 +38,7 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
 
   const forwardMode = cfg.forwardMode || 'threshold'
   const threshold = Number(cfg.imageThreshold) || 2
-  const maxVideoMB = Number(cfg.maxVideoMB) || 50
+  const maxVideoMB = Number(cfg.maxVideoMB) || 100
   const videoOverLimit = cfg.videoOverLimit || 'direct_link'
 
   const selfId = String(api.config().botQQ || '10000')

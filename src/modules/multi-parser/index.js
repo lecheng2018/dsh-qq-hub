@@ -22,7 +22,7 @@ export default {
     sendMedia: true,
     forwardMode: 'threshold',
     imageThreshold: 2,
-    maxVideoMB: 50,
+    maxVideoMB: 100,
     videoOverLimit: 'direct_link',
   },
   setup(api) {
@@ -46,6 +46,7 @@ export default {
     }
 
     // 🌟 AI 上下文注入机制：大模型对话前，若当前聊天有新鲜解析的内容，自动拼入提示词
+    // 注意：视频类结果不注入——AI 看不到视频内容，注入只会让她对着链接干瞪眼
     api.context(({ chat }) => {
       const c = cfg()
       if (!c.enabled || !c.feedToAi) return ''
@@ -54,6 +55,8 @@ export default {
       if (!recent || Date.now() - recent.at > 3 * 60_000) return ''
 
       const r = recent.result
+      if (r.type === 'video') return ''
+
       const statLine = r.stat ? `\n数据：${r.stat}` : ''
       return `【系统提示：对方刚才在聊天中分享了一条来自 ${r.platformName} 的链接】\n` +
              `标题：《${r.title}》\n` +
