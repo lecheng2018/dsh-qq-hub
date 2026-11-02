@@ -240,12 +240,15 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     if (id.startsWith('private:') || id.startsWith('group:')) return id
     return 'global'
   }
-  /** 这条记忆在 chat 这个聊天里能不能被想起 */
+  /** 这条记忆在 chat 这个聊天里能不能被想起。
+   *  没有 scope 的老数据按「只属于记下它的那个聊天」处理：宁可少给，不可多给。
+   *  老数据若真是该公开的（她自己的设定等），迁移时显式标成 global 即可。 */
   function scopeVisible(scope, chat) {
-    const sc = String(scope || 'global')
-    if (sc === 'global') return true
+    const raw = String(scope || '').trim()
+    if (!raw) return false // 老数据无作用域：一律不跨聊天可见（以前当 global 放行，是跨群泄漏的主因）
+    if (raw === 'global') return true
     if (!chat || chat.kind === 'system') return false
-    return sc === scopeOfChat(chat)
+    return raw === scopeOfChat(chat)
   }
 
   function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '' }) {
@@ -262,7 +265,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       save(s)
       return { ok: true, message: '✓', updated: dup.id }
     }
-    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: String(scope || 'global'), at: Date.now(), hits: 0 }
+    // 落库作用域：显式给了就用；否则按 chatId 推断（private:xxx / group:xxx）；都推断不出来才算 global
+    const finalScope = String(scope || '').trim() || scopeFromChatId(chatId)
+    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0 }
     s.items.push(item)
     if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
     save(s)
@@ -301,15 +306,24 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return n
   }
 
-  /** 她自己做过的事（唱了歌、在空间评论了谁……）：记成「经历」，最近一天的会常驻在上下文里。 */
-  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45 }) {
-    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event' })
+  /** 她自己做过的事（唱了歌、在空间评论了谁……）：记成「经历」，最近一天的会常驻在上下文里。
+   *  scope / chat 决定这条经历属于哪个聊天：B 站、空间这类发生在她自己身上的事用 global（谁问都能提），
+   *  单聊里「给你唱了首歌」这种必须留在那个私聊 —— 否则陌生人加群就能问出她和主人之间发生了什么。 */
+  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '' }) {
+    // 优先级：显式 scope > 当前 chat > chatId 推断 > global（她自己身上发生的事，如刷 B 站）
+    const sc = String(scope || '').trim() || (chat ? scopeOfChat(chat) : scopeFromChatId(chatId))
+    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: sc })
   }
 
-  /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。 */
-  function recentEvents(hours = 24, limit = 4) {
+  /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。
+   *  传了 chat 就只返回这个聊天可见的（和 recall 用同一套 scopeVisible），不传保持老行为。 */
+  function recentEvents(hours = 24, limit = 4, chat = null) {
     const since = Date.now() - hours * 3600_000
-    return load().items.filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since).sort((a, b) => b.at - a.at).slice(0, limit)
+    return load().items
+      .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since)
+      .filter((m) => (chat ? scopeVisible(m.scope, chat) : true))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, limit)
   }
 
   function update(id, patch) {
@@ -518,7 +532,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人。）')
     }
     // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）
-    const recent = recentEvents()
+    const recent = recentEvents(24, 4, chat)
     if (recent.length) parts.push('（你最近做过的事：' + recent.map((m) => `${agoText(m.at)}${m.text}`).join('；') + '。聊到了可以自然提起。）')
     // 注意：随每条消息变化的「相关记忆」不放在这里（#79）——运行时上下文快照每轮都会追加到历史，
     // 内容一变就多一份快照；放在用户消息里（recallHint）只占当轮，不会越滚越大。
@@ -597,7 +611,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const q = String(queryText || '').trim()
     if (!q) return ''
     const backdrop = groupBackdrop(chat, q)
-    const recent = recentEvents()
+    const recent = recentEvents(24, 4, chat)
     const shown = new Set(recent.map((m) => m.id))
     const about = chat && chat.kind === 'private' ? chat.userId : undefined
     // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
