@@ -11,21 +11,28 @@
 
 export const SILENCE = '[沉默]'
 
-/** 去掉 Markdown 痕迹，保留文字本身。 */
+/** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
 export function stripMarkdown(text) {
-  return String(text || '')
-    .replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, '$1')
-    .replace(/`([^`\n]+)`/g, '$1')
-    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
-    .replace(/__([^_\n]+)__/g, '$1')
-    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^\s*[-*+]\s+/gm, '')
-    .replace(/^\s*>\s?/gm, '')
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 $2')
-    .replace(/[ \t]+$/gm, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  let s = String(text || '')
+  s = s.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, '$1')
+  s = s.replace(/`([^`\n]+)`/g, '$1')
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '$1')
+  s = s.replace(/__([^_\n]+)__/g, '$1')
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+  s = s.replace(/^#{1,6}\s+/gm, '')
+  s = s.replace(/^\s*[-*+]\s+/gm, '')
+  s = s.replace(/^\s*>\s?/gm, '')
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 $2')
+
+  // 核心排版：数字列表项（1. 2. 3. 等）前面如果不是空行，自动补空行，强制撑开呼吸感
+  s = s.replace(/([^\n])\r?\n(\d+[.、]\s*)/g, '$1\n\n$2')
+
+  // 分割线转为清晰的 QQ 细分割线
+  s = s.replace(/^[*-]{3,}$/gm, '━━━━━━━━━━━━━━')
+
+  s = s.replace(/[ \t]+$/gm, '')
+  s = s.replace(/\n{3,}/g, '\n\n')
+  return s.trim()
 }
 
 /** 是不是「这次不说话」。 */
