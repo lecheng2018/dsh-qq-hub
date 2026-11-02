@@ -120,9 +120,20 @@ export async function fetchImage(src, o = {}) {
     return buf
   }
   if (/^https?:\/\//i.test(s)) {
-    await assertPublicUrl(s)
-    const r = await fetch(s, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'follow' })
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    let currentUrl = s
+    let redirects = 0
+    let r = null
+    while (redirects < 5) {
+      await assertPublicUrl(currentUrl)
+      r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual' })
+      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
+        currentUrl = new URL(r.headers.get('location'), currentUrl).href
+        redirects++
+      } else {
+        break
+      }
+    }
+    if (!r || !r.ok) throw new Error(`HTTP ${r ? r.status : 'unknown'}`)
     const len = Number(r.headers.get('content-length') || 0)
     if (len > maxBytes) throw new Error('太大了')
     const reader = r.body.getReader()

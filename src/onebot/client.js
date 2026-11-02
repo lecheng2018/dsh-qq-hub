@@ -28,6 +28,8 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
   let ws = null
   let stopped = true
   let timer = null
+  let pingTimer = null
+  let lastMessageAt = 0
   let backoff = RECONNECT_MIN
   let state = 'stopped'
   let echoSeq = 0
@@ -133,10 +135,20 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
     ws = sock
     sock.onopen = () => {
       backoff = RECONNECT_MIN
+      lastMessageAt = Date.now()
       setState('connected')
       log.info('已连上 QQ 网关（WS）')
+      clearInterval(pingTimer)
+      pingTimer = setInterval(() => {
+        if (ws && ws.readyState === 1 && Date.now() - lastMessageAt > 90_000) {
+          log?.warn?.('QQ 网关 90 秒内无任何心跳/事件包，判定半开连接假死，强制重连')
+          try { ws.close() } catch {}
+        }
+      }, 30_000)
+      pingTimer.unref?.()
     }
     sock.onmessage = (ev) => {
+      lastMessageAt = Date.now()
       let data
       try { data = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8')) } catch (error) { return }
       if (data && data.echo && pending.has(data.echo)) {
@@ -152,6 +164,7 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
       }
     }
     sock.onclose = (ev) => {
+      clearInterval(pingTimer)
       if (ws === sock) ws = null
       for (const [k, p] of pending) {
         clearTimeout(p.t)
@@ -168,6 +181,7 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
 
   function schedule() {
     clearTimeout(timer)
+    clearInterval(pingTimer)
     if (stopped) return
     timer = setTimeout(connect, backoff)
     backoff = Math.min(RECONNECT_MAX, backoff * 2)
@@ -184,6 +198,7 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
     stop() {
       stopped = true
       clearTimeout(timer)
+      clearInterval(pingTimer)
       setState('stopped')
       try { ws?.close() } catch (error) {}
       ws = null

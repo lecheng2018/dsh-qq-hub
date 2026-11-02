@@ -1664,8 +1664,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const e = m.chats[chatId]
     if (!e) return false
     Promise.resolve(reg?.archiveSession?.(e.sessionId)).catch((error) => log.debug('归档会话失败：', error.message))
-    sessionToChat.delete(sessionKey(e.sessionId))
-    turnState.delete(sessionKey(e.sessionId))
+    const k = sessionKey(e.sessionId)
+    sessionToChat.delete(k)
+    turnState.delete(k)
+    const prev = mounted.get(k)
+    if (prev) {
+      for (const off of prev.offs) { try { if (typeof off === 'function') off() } catch {} }
+      mounted.delete(k)
+    }
     delete m.chats[chatId]
     saveMap(m)
     log.info(`${chatId} 重新开始`)
@@ -1685,8 +1691,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       } catch (error) {
         log.debug('归档会话失败：', error.message)
       }
-      sessionToChat.delete(sessionKey(e.sessionId))
-      turnState.delete(sessionKey(e.sessionId))
+      const k = sessionKey(e.sessionId)
+      sessionToChat.delete(k)
+      turnState.delete(k)
+      const prev = mounted.get(k)
+      if (prev) {
+        for (const off of prev.offs) { try { if (typeof off === 'function') off() } catch {} }
+        mounted.delete(k)
+      }
       delete m.chats[chatId]
       n++
     }

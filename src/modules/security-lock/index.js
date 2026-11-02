@@ -16,7 +16,6 @@
 
 import { createHmac, randomInt, timingSafeEqual } from 'node:crypto'
 import { readJson, writeJson } from '../../core/store.js'
-import { dataDir } from '../../core/store.js'
 
 const ID = 'security-lock'
 const STEP = 30 // 秒
