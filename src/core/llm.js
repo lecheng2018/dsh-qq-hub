@@ -146,14 +146,14 @@ export async function askModel (dsh, o) {
   const t = defaultModel(dsh, o.cfg)
   if (!t) throw new Error('拿不到默认模型')
   let content = [{ type: 'text', text: o.text }]
-  for (const img of o.images || []) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'aurabot-image' })
+  for (const img of o.images || []) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-image' })
   // 图片要先交给 DSH 的附件服务登记成附件块，模型适配层只认附件
   if (content.length > 1) {
     const att = dsh.attachments || dsh.get('attachments')
     if (!att || typeof att.admitPromptContent !== 'function') throw new Error('宿主没有附件服务，看不了图')
     content = await att.admitPromptContent(content)
   }
-  const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'aurabot' } }]
+  const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
   const base = {
     provider: t.provider,
     model: t.model,

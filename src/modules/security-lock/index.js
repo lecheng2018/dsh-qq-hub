@@ -5,7 +5,7 @@
 // - 提权后有存活时间（dsh-qq 是 30 分钟），超时自动降回低权限
 // - AI 自己无法提权，只能"申请"；审批消息根本不进模型上下文，免疫提示词注入
 //
-// aurabot 里权限由 access.js 的 level（full / social / chat）决定，
+// qq-hub 里权限由 access.js 的 level（full / social / chat）决定，
 // 这个模块不改 access.js，而是叠加一层「时间锁」：
 // 1. 主人私聊默认也算「上锁」状态（比 full 更保守，可配置成默认不上锁）
 // 2. 主人发 /unlock 得到一次性码 → 用手机 Authenticator 算 6 位 TOTP → /unlock 码 TOTP
@@ -78,9 +78,9 @@ export function verifyTotp(secret, code, { now = Date.now(), window = 1 } = {}) 
 }
 
 /** otpauth:// 链接，手机验证器扫码用（二维码由面板画）。 */
-export function otpauthUrl(secret, account = 'aurabot') {
-  const label = encodeURIComponent(`Aurabot:${account}`)
-  const params = new URLSearchParams({ secret, issuer: 'Aurabot', algorithm: 'SHA1', digits: String(DIGITS), period: String(STEP) })
+export function otpauthUrl(secret, account = 'qq-hub') {
+  const label = encodeURIComponent(`QQ Hub:${account}`)
+  const params = new URLSearchParams({ secret, issuer: 'QQ Hub', algorithm: 'SHA1', digits: String(DIGITS), period: String(STEP) })
   return `otpauth://totp/${label}?${params.toString()}`
 }
 
@@ -213,14 +213,14 @@ export default {
       locked: locked(),
       remainingMin: remainingMin(),
       hasSecret: Boolean(st.secret),
-      otpauth: st.secret ? otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'aurabot')) : '',
+      otpauth: st.secret ? otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'qq-hub')) : '',
     }))
     // 面板要的：otpauth 链接 + 密钥本体（面板画成二维码，主机下拉就能扫码）
     api.route('/security-lock/otpauth', () => ({
       ok: true,
       secret: st.secret,
-      otpauth: otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'aurabot')),
-      account: String(api.config()?.ownerQQ || 'aurabot'),
+      otpauth: otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'qq-hub')),
+      account: String(api.config()?.ownerQQ || 'qq-hub'),
     }))
     api.route('/security-lock/reset-secret', () => {
       st.secret = newSecret()
@@ -229,7 +229,7 @@ export default {
       st.pending = null
       save()
       audit('重置密钥', '旧的口令全部作废')
-      return { ok: true, otpauth: otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'aurabot')) }
+      return { ok: true, otpauth: otpauthUrl(st.secret, String(api.config()?.ownerQQ || 'qq-hub')) }
     })
 
     return {

@@ -126,7 +126,7 @@ test('otpauth:// 链接能给出手机验证器要的参数', () => {
   assert.ok(url.includes(`secret=${secret}`))
   assert.ok(url.includes('digits=6'))
   assert.ok(url.includes('period=30'))
-  assert.ok(url.includes('issuer=Aurabot'))
+  assert.ok(url.includes('issuer=QQ+Hub'))
 })
 
 // ---------- 4. 记忆分层（dsh-qq memory-policy.js） ----------

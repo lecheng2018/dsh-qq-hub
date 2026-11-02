@@ -50,7 +50,7 @@ test('前端按模块来源拼出的路由能命中真实路由', () => {
     const m = list.find((x) => x.id === id)
     // 和 client/client.js 里的算法保持一致
     const base = m.builtin && m.running === 'builtin' ? '' : '/ext/' + m.id
-    const url = '/aurabot/api' + base + p
+    const url = '/qq-hub/api' + base + p
     assert.ok(api.modules.hasRoute(url), `${id} 的面板路由 ${url} 应该存在`)
   }
 })

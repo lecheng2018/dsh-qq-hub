@@ -1,4 +1,4 @@
-// Aurabot 桌宠「形象包元数据」纯函数（UMD：主进程 require / 渲染页 <script> / 单测 new Function 都能用）。
+// QQ Hub 桌宠「形象包元数据」纯函数（UMD：主进程 require / 渲染页 <script> / 单测 new Function 都能用）。
 //
 // 为什么单独成文件：/config 的 pack.animations 只给 idle / speak / click 三个池，
 // 但右键「动作」菜单要列**包里所有**动画（default 包 106 段里只有 26 段在池里）。

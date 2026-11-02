@@ -4,7 +4,7 @@
 // 「因为……」「然后……」「1.」「首先」这类连接词上，自己察觉不到，QQ 里就是
 // 一句说一半的话。它的做法是把这类结尾识别出来，让模型接着说完。
 //
-// aurabot 里 DSH 的 turn/end 已经带了 reason.kind（'max-tokens' 等），
+// qq-hub 里 DSH 的 turn/end 已经带了 reason.kind（'max-tokens' 等），
 // 但那段逻辑写死在 hub.js 里。这个模块用纯函数做同样的判断，并对外暴露
 // shouldContinue(text, reasonKind) 给别的模块/面板用，同时把判断结果记到日志，
 // 让人一眼看出「这次是不是被截断了」。
