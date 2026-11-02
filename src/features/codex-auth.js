@@ -247,7 +247,7 @@ export function createCodexAuth ({ log, fetchImpl, openUrl, createServerImpl = c
           }
           const code = url.searchParams.get('code') || ''
           if (!code) return html(400, '没有 code')
-          html(200, '<h2>已收到授权结果</h2><p>回到 Aurabot 面板查看登录结果。</p>')
+          html(200, '<h2>已收到授权结果</h2><p>回到 QQ Hub 面板查看登录结果。</p>')
           try { server.close() } catch (error) {}
           settle({ code })
         } catch (error) {

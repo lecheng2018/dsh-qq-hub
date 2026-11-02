@@ -1,8 +1,8 @@
-// Aurabot · 宿主半边（DSH 插件入口）
+// QQ Hub · 宿主半边（DSH 插件入口）
 //
 // 让 DSH 里的 AI 以独立 QQ 号「大肥鱼」住在 QQ 里：
-//   SnowLuma（OneBot v11）⇄ 本插件 ⇄ DSH 会话（Aurabot 自带的 preset + 人格）
-// 面板在侧栏「自动化任务」下面（网页半边见 client/client.js），这里提供它要的 /aurabot/api/* 接口。
+//   SnowLuma（OneBot v11）⇄ 本插件 ⇄ DSH 会话（QQ Hub 自带的 preset + 人格）
+// 面板在侧栏「自动化任务」下面（网页半边见 client/client.js），这里提供它要的 /qq-hub/api/* 接口。
 //
 // 这个文件只管「核心」：配置、QQ 网关、聊天中枢、人格、面板接口、模块内核和联动。
 // 表情、语音、记忆、空间、B 站、翻唱、生图……都是模块（src/modules/），能单独关掉，也能用自己写的替换。
@@ -33,10 +33,10 @@ import { createDangerGuard } from './security/danger.js'
 import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from './chat/backfill.js'
 import { BUILTINS } from './modules/index.js'
 
-export const name = 'aurabot'
+export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
 // cordis 4 的 Fiber._refresh() 会对 inject 里每个 key 做「实现必须存在」判定，
-// 缺一个就把 epoch 设成 INACTIVE，插件永远不启动（这正是之前 /aurabot/api/* 全 404 的根因）。
+// 缺一个就把 epoch 设成 INACTIVE，插件永远不启动（这正是之前 /qq-hub/api/* 全 404 的根因）。
 // userQuestions 在 0.2.2-alpha.2 运行时并不存在，所以只能运行时探测（见 setupUserQuestions）。
 export const inject = ['agents', 'sessions', 'webServer', 'timer', 'workspaceRegistry', 'attachments', 'systemPrompt', 'llm']
 
@@ -45,7 +45,7 @@ const PKG = (() => {
   try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) } catch (error) { return { version: '?' } }
 })()
 const VERSION = PKG.version
-const PREFIX = '/aurabot/api'
+const PREFIX = '/qq-hub/api'
 
 export function apply(ctx) {
   const logger = createLogger({ dsh: ctx })
@@ -72,20 +72,20 @@ export function apply(ctx) {
   secrets()
   seedPersonas()
 
-  // ---------- 人格与规则：通过提示词变量注入到 Aurabot 的两个 preset ----------
-  const variable = (n, fn) => ctx.effect(() => ctx.systemPrompt.variable(n, fn), `aurabot: 变量 ${n}`)
+  // ---------- 人格与规则：通过提示词变量注入到 QQ Hub 的三个 preset ----------
+  const variable = (n, fn) => ctx.effect(() => ctx.systemPrompt.variable(n, fn), `qq-hub: 变量 ${n}`)
   const rulesOpts = (kind) => (mods ? { off: mods.builtinOff(), extra: mods.rules(kind) } : {})
   // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
   const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
-  variable('aurabot_persona', () => rewrite('persona', currentPersonaText(cfg.persona.current)))
-  variable('aurabot_rules_private', () => {
+  variable('qq_hub_persona', () => rewrite('persona', currentPersonaText(cfg.persona.current)))
+  variable('qq_hub_rules_private', () => {
     const base = rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private')
     // 危险命令确认开着时补一句：被拦下要如实告诉主人，别绕着写
     return base + (cfg.security && cfg.security.dangerConfirm
       ? '\n【危险命令】终端命令如果被安全策略拦下（删根目录/格式化/关机/下载后直接执行等），把命令原文和原因如实告诉主人，等主人回复「确认」后再重试；不要换一种写法绕过。'
       : '')
   })
-  variable('aurabot_rules_social', () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'))
+  variable('qq_hub_rules_social', () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'))
 
   // ---------- QQ 网关 ----------
   const snowluma = createSnowLumaManager({
@@ -397,7 +397,7 @@ export function apply(ctx) {
       send(res, 200, { ok: false, message: redact(String(error && error.message ? error.message : error)) })
     }
   }
-  const route = (path, handler) => ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: PREFIX + path, handler: (req, res) => answer(res, () => handler(req, res)) }), `aurabot: 路由 ${path}`)
+  const route = (path, handler) => ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: PREFIX + path, handler: (req, res) => answer(res, () => handler(req, res)) }), `qq-hub: 路由 ${path}`)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
@@ -406,7 +406,7 @@ export function apply(ctx) {
       try { path = new URL(req.url, 'http://x').pathname } catch (error) {}
       return mods.handle(path, req, res)
     }),
-  }), 'aurabot: 模块接口')
+  }), 'qq-hub: 模块接口')
 
   // ---------- 模块 ----------
   const core = {
@@ -445,7 +445,7 @@ export function apply(ctx) {
     let off = null
     try { off = ctx.on('tools/pre-execute', (exec, next) => dangerGuard.preExecute(exec, next)) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
-  }, 'aurabot: 危险命令确认')
+  }, 'qq-hub: 危险命令确认')
 
   const sessionKey = (id) => {
     const s = String(id ?? '')
@@ -485,7 +485,7 @@ export function apply(ctx) {
       log.debug('挂通用审批流失败：', error.message)
     }
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
-  }, 'aurabot: 通用工具审批')
+  }, 'qq-hub: 通用工具审批')
 
   // ---------- 交互式提问 (userQuestions / ask_user_question) ----------
   // 接入 DSH 官方 userQuestions seam：当模型通过 ask_user_question 提问时，格式化为 A/B/C 选项卡发往 QQ
@@ -523,7 +523,7 @@ export function apply(ctx) {
             }
           })
           return () => { try { if (typeof off === 'function') off() } catch (error) {} }
-        }, 'aurabot: QQ交互提问提供方')
+        }, 'qq-hub: QQ交互提问提供方')
         log.info('已成功注册 QQ userQuestions 交互提问提供方')
       } catch (error) {
         log.debug('注册 userQuestions 失败：', error.message)
@@ -567,7 +567,7 @@ export function apply(ctx) {
       try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
     })
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
-  }, 'aurabot: 盯会话')
+  }, 'qq-hub: 盯会话')
 
   // ---------- 启动 / 看门狗 ----------
   async function watchdog() {
@@ -593,14 +593,14 @@ export function apply(ctx) {
     }
   }
   const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
-  ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'aurabot: 看门狗')
+  ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'qq-hub: 看门狗')
   setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   ctx.effect(() => () => {
     hub.disposeRecentMedia()
     mods.dispose()
     onebot.stop()
     snowluma.dispose()
-  }, 'aurabot: 收尾')
+  }, 'qq-hub: 收尾')
 
   // ---------- 面板接口 ----------
   let consentCache = { at: 0, value: null }

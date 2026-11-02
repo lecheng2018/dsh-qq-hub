@@ -1,9 +1,9 @@
 // 联动：让 DSH 里别的插件、别的会话，还有电脑上别的程序也能用她。
 //
-// 1. 别的 DSH 插件：ctx.get('aurabot') 拿到服务对象（同一个进程里直接调，不用密钥）
-// 2. DSH 里别的会话（比如平时写代码的会话）：面板里打开后，注册几个全局工具（aurabot_*），
+// 1. 别的 DSH 插件：ctx.get('qq-hub') 拿到服务对象（同一个进程里直接调，不用密钥）
+// 2. DSH 里别的会话（比如平时写代码的会话）：面板里打开后，注册几个全局工具（qq_hub_*），
 //    那边的 AI 能让她发 QQ、查她的记忆、调用模块。她自己的 QQ 会话里会屏蔽这些工具。
-// 3. 别的程序：开放 HTTP 接口 /aurabot/api/open/*，要带密钥（请求头 Authorization: Bearer 密钥）
+// 3. 别的程序：开放 HTTP 接口 /qq-hub/api/open/*，要带密钥（请求头 Authorization: Bearer 密钥）
 //
 // 能发给谁：白名单里的人和群（或者只能发给主人，看设置）。总开关、试运行照常管着。
 
@@ -88,9 +88,9 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
     hub,
   }
   try {
-    if (typeof ctx.provide === 'function') ctx.provide('aurabot', service)
+    if (typeof ctx.provide === 'function') ctx.provide('qq-hub', service)
   } catch (error) {
-    log.debug('没能登记 aurabot 服务：', error.message)
+    log.debug('没能登记 qq-hub 服务：', error.message)
   }
 
   // ---------- 2. 给 DSH 别的会话的全局工具 ----------
@@ -98,20 +98,20 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
   function builtinTools() {
     return [
       defineTool({
-        name: 'aurabot_qq_send',
-        description: '让 QQ 上的「大肥鱼」（Aurabot 插件里的 AI 伙伴）替你发一条 QQ 消息。target 写 private:QQ号 或 group:群号，不填就发给主人。text 是要发的话，可以用 ||| 分多条、<voice>…</voice> 发语音。',
+        name: 'qq_hub_qq_send',
+        description: '让 QQ 上的「大肥鱼」（QQ Hub 插件里的 AI 伙伴）替你发一条 QQ 消息。target 写 private:QQ号 或 group:群号，不填就发给主人。text 是要发的话，可以用 ||| 分多条、<voice>…</voice> 发语音。',
         properties: { target: str('private:QQ号 / group:群号，可不填（发给主人）'), text: str('要发的话') },
         required: ['text'],
         execute: async (args) => ops.send(args),
       }),
       defineTool({
-        name: 'aurabot_status',
+        name: 'qq_hub_status',
         description: '看看 QQ 上的「大肥鱼」现在的状态：在不在线、心情、开着哪些模块。',
         execute: async () => ops.info(),
       }),
       defineTool({
-        name: 'aurabot_call',
-        description: '调用大肥鱼某个模块导出的函数（高级）。比如 module=memory, method=recall, args=["香菜"] 查她的记忆；module=memory, method=add, args=[{"text":"…"}] 让她记住一件事。模块和函数列表用 aurabot_status 看，说明在她的数据目录 modules/API.md。',
+        name: 'qq_hub_call',
+        description: '调用大肥鱼某个模块导出的函数（高级）。比如 module=memory, method=recall, args=["香菜"] 查她的记忆；module=memory, method=add, args=[{"text":"…"}] 让她记住一件事。模块和函数列表用 qq_hub_status 看，说明在她的数据目录 modules/API.md。',
         properties: { module: str('模块 id'), method: str('函数名'), args: { type: 'array', items: {}, description: '参数列表' } },
         required: ['module', 'method'],
         execute: async (args) => ops.call(args),
@@ -162,7 +162,7 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
     if (!cfg.bridge.http || !cfg.bridge.token) return false
     const h = req.headers || {}
     const auth = String(h.authorization || h.Authorization || '')
-    let given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : String(h['x-aurabot-token'] || '')
+    let given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : String(h['x-qq-hub-token'] || '')
     if (!given) try { given = new URL(req.url, 'http://x').searchParams.get('token') || '' } catch (error) {}
     const a = Buffer.from(given)
     const b = Buffer.from(cfg.bridge.token)
@@ -191,10 +191,10 @@ function safeJson(v) {
 function examples(base, token) {
   const t = token || '<密钥>'
   return {
-    curl: `curl -X POST ${base}/aurabot/api/open/send -H "Authorization: Bearer ${t}" -H "content-type: application/json" -d "{\\"text\\":\\"下班啦\\"}"`,
-    powershell: `Invoke-RestMethod -Method Post -Uri ${base}/aurabot/api/open/send -Headers @{Authorization='Bearer ${t}'} -ContentType 'application/json' -Body '{"text":"下班啦"}'`,
-    python: `import requests\nrequests.post("${base}/aurabot/api/open/send", headers={"Authorization": "Bearer ${t}"}, json={"text": "下班啦"})`,
+    curl: `curl -X POST ${base}/qq-hub/api/open/send -H "Authorization: Bearer ${t}" -H "content-type: application/json" -d "{\\"text\\":\\"下班啦\\"}"`,
+    powershell: `Invoke-RestMethod -Method Post -Uri ${base}/qq-hub/api/open/send -Headers @{Authorization='Bearer ${t}'} -ContentType 'application/json' -Body '{"text":"下班啦"}'`,
+    python: `import requests\nrequests.post("${base}/qq-hub/api/open/send", headers={"Authorization": "Bearer ${t}"}, json={"text": "下班啦"})`,
     // 不写进 inject：写了就变成「没装 Aurabot 这个插件就不启动」；用的时候再 ctx.get
-    plugin: `// 别的 DSH 插件里\nexport function apply(ctx) {\n  // 用的时候再拿（Aurabot 没装 / 没启动时是 undefined）\n  ctx.get('aurabot')?.send({ text: '构建完成啦' })\n}`,
+    plugin: `// 别的 DSH 插件里\nexport function apply(ctx) {\n  // 用的时候再拿（Aurabot 没装 / 没启动时是 undefined）\n  ctx.get('qq-hub')?.send({ text: '构建完成啦' })\n}`,
   }
 }
