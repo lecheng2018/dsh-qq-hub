@@ -8,9 +8,14 @@ export function dshHome() {
   return process.env.DSH_HOME || join(homedir(), '.dsh')
 }
 
-/** 插件所有数据都放这儿：~/.dsh/plugins-data/aurabot/ */
+/** 插件所有数据放这儿：优先 ~/.dsh/plugins-data/dsh-qq-agent/，老用户无缝沿用 aurabot/ */
 export function dataDir(...parts) {
-  const base = process.env.AURABOT_DATA_DIR || join(dshHome(), 'plugins-data', 'aurabot')
+  const envDir = process.env.DSH_QQ_AGENT_DATA_DIR || process.env.AURABOT_DATA_DIR
+  if (envDir) return join(envDir, ...parts)
+  const home = join(dshHome(), 'plugins-data')
+  const newBase = join(home, 'dsh-qq-agent')
+  const legacyBase = join(home, 'aurabot')
+  const base = existsSync(newBase) || !existsSync(legacyBase) ? newBase : legacyBase
   return join(base, ...parts)
 }
 
