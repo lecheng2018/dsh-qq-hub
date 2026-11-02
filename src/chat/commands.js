@@ -33,7 +33,7 @@ const ALIASES = {
   模型: 'model', 换模型: 'model',
   唱: 'sing', 点歌: 'sing', 翻唱: 'sing',
   状态: 'status', 心情: 'mood', 日记: 'diary', 记住: 'remember', 记一下: 'remember',
-  重开: 'reset', 开机: 'on', 关机: 'off', 帮助: 'help', 命令: 'help', h: 'help',
+  重开: 'reset', 清空: 'new', 忘掉: 'new', 清记忆: 'new', 开机: 'on', 关机: 'off', 帮助: 'help', 命令: 'help', h: 'help',
 }
 
 const COMMANDS = {
@@ -49,7 +49,8 @@ const COMMANDS = {
   mood: '看她现在的心情',
   diary: '马上写一篇空间日记',
   remember: '让她记住一件事，如 /remember 我不吃香菜',
-  reset: '这个聊天重新开始（旧的对话在 DSH 侧栏里还能找回）',
+  reset: '这个聊天重新开始（旧的对话在 DSH 侧栏里还能找回；记忆不动）',
+  new: '清空这个聊天的记忆（小档案、相处经验、说话方式一起清）；对话不动，要重开对话用 /reset',
   on: '打开总开关',
   off: '关掉总开关（之后除了命令什么都不回）',
 }
@@ -196,6 +197,22 @@ export async function runCommand(cmd, msg, deps) {
     case 'reset':
       hub.resetChat(msg.chatId)
       return '好，我们重新开始'
+    case 'new': {
+      // 清当前聊天的记忆：条目 + 小档案 + 相处经验 + 说话方式。
+      // 和 /reset 分工：/reset 重开对话（记忆不动），/new 清记忆（对话不动）。旧会话残留的记忆只能靠它清掉。
+      if (!memory) return '记忆模块关着'
+      if (typeof memory.clearScope !== 'function') return '这个版本的记忆模块不支持清理'
+      const chat = { chatId: msg.chatId, kind: msg.kind, userId: msg.userId, groupId: msg.groupId }
+      const r = memory.clearScope(chat)
+      const n = (r.items || 0) + (r.profile || 0) + (r.insights || 0) + (r.style || 0)
+      if (!n) return '这个聊天的记忆本来就是空的'
+      const bits = []
+      if (r.items) bits.push(`${r.items} 条记忆`)
+      if (r.profile) bits.push(`${r.profile} 份小档案`)
+      if (r.insights) bits.push(`${r.insights} 条相处经验`)
+      if (r.style) bits.push(`${r.style} 条说话方式`)
+      return `清掉了这个聊天的 ${bits.join('、')}。别处和 global 的记忆没动`
+    }
     case 'on':
       setConfig({ ...cfg, enabled: true })
       return cfg.dryRun ? '总开关打开了（现在是试运行，我说的话只进日志）' : '我上线啦'
