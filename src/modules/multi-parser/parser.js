@@ -6,12 +6,30 @@
 const UA_PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
 
-/** 从文本中提取所有 HTTP/HTTPS 链接 */
+/** 从文本或口令中提取所有链接（兼容带协议与不带协议的分享短链） */
 export function extractUrls(text) {
   const s = String(text || '')
-  const re = /https?:\/\/[^\s<>\[\](){}，。！？、；：'\"`]+/gi
-  const matches = s.match(re) || []
-  return [...new Set(matches.map((u) => u.replace(/[)\]}>，。！？、；：'\"`]+$/, '')))]
+  const urls = []
+
+  // 1. 标准 http / https 链接
+  const reHttp = /https?:\/\/[^\s<>\[\](){}，。！？、；：'\"`]+/gi
+  const mHttp = s.match(reHttp) || []
+  for (const u of mHttp) {
+    urls.push(u.replace(/[)\]}>，。！？、；：'\"`]+$/, ''))
+  }
+
+  // 2. 识别常见的无协议口令短链（抖音 v.douyin.com / jx.douyin.com、B站 b23.tv、小红书 xhslink.com）
+  const reBare = /(?:^|[^\w/.-])((?:v|jx)\.douyin\.com\/[A-Za-z0-9_-]+\/?|b23\.tv\/[A-Za-z0-9]+\/?|xhslink\.com\/[A-Za-z0-9/_-]+\/?)/gi
+  let m
+  while ((m = reBare.exec(s)) !== null) {
+    const bare = m[1].replace(/[)\]}>，。！？、；：'\"`]+$/, '')
+    const full = 'https://' + bare
+    if (!urls.some((u) => u.includes(bare))) {
+      urls.push(full)
+    }
+  }
+
+  return [...new Set(urls)]
 }
 
 /** 跟踪 URL 的重定向，获取落地真实地址 */
@@ -45,7 +63,7 @@ export async function resolveUrl(url, maxRedirects = 5) {
  * @param {object} [opts]
  * @returns {Promise<object|null>} 返回规范化的 ParseResult 或 null
  */
-export async function parseUrl(rawUrl, { platforms = {}, cookies = {} } = {}) {
+export async function parseUrl(rawUrl, { platforms = {}, cookies = {}, rawText = '' } = {}) {
   const url = await resolveUrl(rawUrl)
 
   // 1. 哔哩哔哩 Bilibili
@@ -90,7 +108,7 @@ export async function parseUrl(rawUrl, { platforms = {}, cookies = {} } = {}) {
 
   // 9. 抖音 Douyin
   if (platforms.douyin !== false && /(?:v\.douyin\.com|douyin\.com)/i.test(url)) {
-    return await parseDouyin(url, cookies.douyin)
+    return await parseDouyin(url, cookies.douyin, rawText)
   }
 
   // 10. 小黑盒 Heybox
@@ -399,28 +417,113 @@ async function parseGithub(url) {
   }
 }
 
-async function parseDouyin(url, cookie = '') {
-  try {
-    const headers = { 'User-Agent': UA_MOBILE }
-    if (cookie) headers.Cookie = cookie
+let cachedDouyinTtwid = ''
+let ttwidExpireAt = 0
 
-    const res = await fetch(url, {
+async function getDouyinTtwid() {
+  if (cachedDouyinTtwid && Date.now() < ttwidExpireAt) return cachedDouyinTtwid
+  try {
+    const regRes = await fetch('https://ttwid.bytedance.com/ttwid/union/register/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Referer: 'https://www.iesdouyin.com/' },
+      body: JSON.stringify({ region: 'cn', aid: 1768, needFid: false, service: 'www.iesdouyin.com', union: true, fid: '' }),
+      signal: AbortSignal.timeout(5000),
+    })
+    const setCookie = regRes.headers.get('set-cookie') || ''
+    const m = setCookie.match(/ttwid=([^;]+)/)
+    if (m) cachedDouyinTtwid = m[1]
+    const regJson = await regRes.json().catch(() => ({}))
+    if (!cachedDouyinTtwid && regJson.redirect_url) {
+      const cbRes = await fetch(regJson.redirect_url, {
+        headers: { Referer: 'https://www.iesdouyin.com/' },
+        signal: AbortSignal.timeout(5000),
+      })
+      const cbCookie = cbRes.headers.get('set-cookie') || ''
+      const m2 = cbCookie.match(/ttwid=([^;]+)/)
+      if (m2) cachedDouyinTtwid = m2[1]
+    }
+    if (cachedDouyinTtwid) ttwidExpireAt = Date.now() + 24 * 3600_000
+  } catch {}
+  return cachedDouyinTtwid
+}
+
+async function parseDouyin(url, cookie = '', rawText = '') {
+  try {
+    let workId = ''
+    const idMatch = url.match(/\/(?:video|note|slides)\/(\d+)/i) || url.match(/[?&]aweme_id=(\d+)/i) || url.match(/[?&]itemId=(\d+)/i)
+    if (idMatch) workId = idMatch[1]
+
+    const ttwid = await getDouyinTtwid()
+    const cookieHeader = [cookie, ttwid ? `ttwid=${ttwid}` : ''].filter(Boolean).join('; ')
+    const headers = {
+      'User-Agent': UA_MOBILE,
+      Referer: 'https://www.iesdouyin.com/',
+    }
+    if (cookieHeader) headers.Cookie = cookieHeader
+
+    const targetUrl = workId ? `https://www.iesdouyin.com/share/video/${workId}/` : url
+    const res = await fetch(targetUrl, {
       headers,
       signal: AbortSignal.timeout(8000),
     })
     const html = await res.text()
-    const titleMatch = html.match(/<title>([^<]*)<\/title>/i)
-    const title = titleMatch ? titleMatch[1].replace(/ - 抖音$/, '').trim() : '抖音视频'
+
+    const routerMatch = html.match(/window\._ROUTER_DATA\s*=\s*(.*?);?<\/script>/s)
+    if (routerMatch) {
+      try {
+        const data = JSON.parse(routerMatch[1].trim())
+        const loaderData = data.loaderData || {}
+        for (const k in loaderData) {
+          if (k.startsWith('video_') || k.startsWith('note_') || k.startsWith('slides_')) {
+            const item = loaderData[k]?.videoInfoRes?.item_list?.[0]
+            if (item) {
+              const title = item.desc || '抖音作品'
+              const author = item.author?.nickname || '抖音创作者'
+              const playUrls = item.video?.play_addr?.url_list || []
+              const rawVideoUrl = playUrls[0] || ''
+              const videoUrl = rawVideoUrl ? rawVideoUrl.replace('playwm', 'play') : ''
+              const cover = item.video?.cover?.url_list?.[0] || ''
+              const images = (item.images || []).map((img) => img?.url_list?.[0]).filter(Boolean)
+
+              return {
+                platform: 'douyin',
+                platformName: '抖音',
+                type: images.length ? 'gallery' : 'video',
+                title,
+                author,
+                summary: title,
+                cover: cover || images[0] || '',
+                images: images.length ? images : (cover ? [cover] : []),
+                videoUrl,
+                url,
+                stat: `点赞: ${item.statistics?.digg_count || 0} · 评论: ${item.statistics?.comment_count || 0}`,
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 口令文本解析兜底：从「看看【...的作品】标题」中提取
+    let authorFallback = '抖音创作者'
+    let titleFallback = '抖音视频'
+    if (rawText) {
+      const authorM = rawText.match(/【(.*?)的作品】/)
+      if (authorM) authorFallback = authorM[1].trim()
+      const textM = rawText.match(/【.*?的作品】\s*(.*?)(?:https?:\/\/|$)/)
+      if (textM && textM[1].trim()) titleFallback = textM[1].trim()
+    }
 
     return {
       platform: 'douyin',
       platformName: '抖音',
       type: 'video',
-      title,
-      author: '抖音创作者',
-      summary: title,
+      title: titleFallback,
+      author: authorFallback,
+      summary: titleFallback,
       cover: '',
       images: [],
+      videoUrl: '',
       url,
     }
   } catch {

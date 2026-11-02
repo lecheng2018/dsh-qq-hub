@@ -122,3 +122,16 @@ test('multi-parser setup: 支持专属 Cookie 并可自动复用全局 B站/小�
   assert.equal(st.cookieStatus.weibo, true, '微博 Cookie 应该由专属配置提供')
   assert.equal(st.cookieStatus.zhihu, false, '知乎未配置')
 })
+
+test('extractUrls: 识别真实复杂的抖音分享口令及裸短链', () => {
+  const douyinCommand = '2.07 复制打开抖音，看看【天美工作室群TiMi的作品】到总裁室要走员工通道 # 谭谈交通 # 二仙桥 #... https://v.douyin.com/1tB92IqN3yM/ cnQ:/ 04/14 J@i.ca :7pm'
+  const urls = extractUrls(douyinCommand)
+  assert.equal(urls.length, 1)
+  assert.equal(urls[0], 'https://v.douyin.com/1tB92IqN3yM/')
+
+  // 无协议头口令识别
+  const bareCommand = '复制本段打开抖音，看看这个作品 v.douyin.com/1tB92IqN3yM/ 精彩内容'
+  const bareUrls = extractUrls(bareCommand)
+  assert.equal(bareUrls.length, 1)
+  assert.equal(bareUrls[0], 'https://v.douyin.com/1tB92IqN3yM/')
+})
