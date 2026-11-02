@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { appendFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
@@ -13,7 +13,7 @@ import { parseMessageEvent } from './inbound.js'
 import { parseReply, bubbleDelay, wantsVoice } from './reply.js'
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
-import { fetchImage, segmentBytes } from '../core/net.js'
+import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
@@ -986,6 +986,47 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return out
   }
 
+  /**
+   * 把这一条消息里带的文件都取下来。
+   * 只取前 3 个，单个最大 20MB；文本类直接解码成正文给她读，
+   * 其它类型落到工作目录再把路径告诉她（她自己用工具读）。
+   */
+  const TEXT_EXT = new Set(['md', 'txt', 'json', 'csv', 'log', 'yml', 'yaml', 'xml', 'html', 'htm', 'js', 'ts', 'mjs', 'cjs', 'py', 'sh', 'css', 'ini', 'toml', 'sql', 'java', 'go', 'rs', 'c', 'h', 'cpp', 'rb', 'php'])
+  const TEXT_MAX_CHARS = 60000
+
+  async function filesOf(msg) {
+    const out = []
+    for (const seg of (msg.files || []).slice(0, 3)) {
+      const d = seg.data || {}
+      const name = String(d.file_name || d.name || d.file || 'file')
+      const ext = (name.includes('.') ? name.split('.').pop() : '').toLowerCase()
+      try {
+        const buf = await fileSegmentBytes(seg, onebot, {
+          chat: { kind: msg.kind, userId: msg.userId, groupId: msg.groupId },
+          maxBytes: 20 * 1024 * 1024,
+        })
+        if (TEXT_EXT.has(ext) || (buf.length < 1024 * 1024 && !buf.includes(0))) {
+          let body = buf.toString('utf8')
+          let truncated = false
+          if (body.length > TEXT_MAX_CHARS) { body = body.slice(0, TEXT_MAX_CHARS); truncated = true }
+          out.push({ kind: 'text', name, text: body, truncated, bytes: buf.length })
+        } else {
+          // 二进制：存到工作目录，把路径给她
+          const dir = join(workspaceDirOf(getConfig()), 'qq-inbox')
+          await mkdir(dir, { recursive: true })
+          const safe = name.replace(/[\/:*?"<>|]/g, '_').slice(-100)
+          const file = join(dir, `${Date.now()}-${safe}`)
+          await writeFile(file, buf)
+          out.push({ kind: 'file', name, path: file, bytes: buf.length })
+        }
+      } catch (error) {
+        log.warn(`取文件失败（${name}）：`, error.message)
+        out.push({ kind: 'failed', name, reason: error.message })
+      }
+    }
+    return out
+  }
+
   async function onMessage(event) {
     selfId = String(event.self_id || selfId || getConfig().botQQ)
     const cfg = getConfig()
@@ -1150,6 +1191,23 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (quoted?.ok && (quoted.images.length || quoted.stickers.length) && imgs.length < 4) {
       const qImgs = await quoteImages(quoted, Math.min(2, 4 - imgs.length))
       for (const c of qImgs) content.push(c)
+    }
+    // 文件：取下来，文本类直接当正文给她读，二进制存盘只给路径
+    if (msg.files?.length) {
+      const files = await filesOf(msg)
+      for (const f of files) {
+        if (f.kind === 'text') {
+          content.push({
+            type: 'text',
+            text: `【${msg.nickname} 发来文件 ${f.name}（${Math.round(f.bytes / 1024)}KB）${f.truncated ? '，太长了只给了前 6 万字' : ''}】\n${f.text}\n【文件结束】`,
+          })
+        } else if (f.kind === 'file') {
+          content.push({ type: 'text', text: `【${msg.nickname} 发来文件 ${f.name}（${Math.round(f.bytes / 1024)}KB），已经存在 ${f.path}，要看得用工具读】` })
+        } else {
+          content.push({ type: 'text', text: `【${msg.nickname} 发来文件 ${f.name}，但没取下来：${f.reason}】` })
+        }
+      }
+      if (files.length) log.info(`${msg.chatId} 收到 ${files.length} 个文件：` + files.map((f) => f.name).join('、'))
     }
     logChat(msg.chatId, msg.nickname, text, msg.userId)
     lastChatAt = now

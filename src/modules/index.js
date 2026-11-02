@@ -18,5 +18,12 @@ import profile from './profile/index.js'
 import contacts from './contacts/index.js'
 import douyin from './douyin/index.js'
 import heybox from './heybox/index.js'
+import tokenGuardian from './token-guardian/index.js'
+import completeGuard from './complete-guard/index.js'
+import securityLock from './security-lock/index.js'
+import memoryPrivacy from './memory-privacy/index.js'
+import slangLearner from './slang-learner/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox]
+export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox,
+  // 移植自 h-D-ACE/dsh-qq 的五件套
+  tokenGuardian, completeGuard, securityLock, memoryPrivacy, slangLearner]

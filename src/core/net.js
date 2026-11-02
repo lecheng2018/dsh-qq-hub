@@ -57,6 +57,56 @@ export async function segmentBytes(seg, onebot, o = {}) {
 }
 
 /**
+ * 把一个「文件段」变成字节。
+ *
+ * 和图片不一样：QQ 的文件消息里只有 file_id，没有直链，必须再调一次接口换地址。
+ * NapCat / SnowLuma 系：
+ *   私聊 get_private_file_url { user_id, file_id }       → { url }
+ *   群聊 get_group_file_url  { group_id, file_id, busid } → { url }
+ * 换出来的地址有时效（一般 5 分钟），拿到就要马上 down，不能存着。
+ *
+ * @param {object} seg 文件段（seg.data 里应有 file_id / file_name / file_size，群聊还有 busid）
+ * @param {{call:Function}} onebot OneBot 调用器
+ * @param {{chat?:{kind:string,userId?:string,groupId?:string}, maxBytes?:number, timeoutMs?:number}} o
+ * @returns {Promise<Buffer>}
+ */
+export async function fileSegmentBytes(seg, onebot, o = {}) {
+  const d = (seg && seg.data) || {}
+  const maxBytes = o.maxBytes ?? 20 * 1024 * 1024
+
+  // 少数实现会直接给 url / base64，能用就直接用
+  for (const src of [d.url, d.base64].filter((x) => typeof x === 'string' && x.trim())) {
+    return await fetchImage(src, { ...o, maxBytes })
+  }
+
+  const fileId = String(d.file_id || d.fileId || d.id || '').trim()
+  if (!fileId) throw new Error('这个文件段没有 file_id，拿不到下载地址')
+
+  // 先按大小挡一刀，省得白跑一趟
+  const declared = Number(d.file_size ?? d.fileSize ?? 0)
+  if (declared > maxBytes) throw new Error(`文件太大了（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+
+  const chat = o.chat || {}
+  const isGroup = (chat.kind || d._kind || '') === 'group' || Boolean(chat.groupId)
+  let info = null
+  if (isGroup) {
+    info = await onebot.call('get_group_file_url', {
+      group_id: Number(chat.groupId || d.group_id || 0),
+      file_id: fileId,
+      busid: Number(d.busid ?? d.bus_id ?? 0) || 0,
+    }, { timeoutMs: 15000 })
+  } else {
+    info = await onebot.call('get_private_file_url', {
+      user_id: Number(chat.userId || d.user_id || 0),
+      file_id: fileId,
+    }, { timeoutMs: 15000 })
+  }
+  const url = info?.url || info?.file || info?.data?.url
+  if (!url) throw new Error('没能换来下载地址（接口没给 url）')
+  return await fetchImage(url, { ...o, maxBytes })
+}
+
+/**
  * @param {string} src http(s) 地址 / base64://… / file:// / 本地绝对路径
  * @param {{maxBytes?:number, timeoutMs?:number, allowLocal?:boolean}} [o]
  */
