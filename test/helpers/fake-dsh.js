@@ -53,7 +53,7 @@ export function createFakeDsh({ brain }) {
           const text = msg.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')
           const images = msg.content.filter((c) => c.type === 'image')
           const ctxText = [...contexts.values()].map((c) => c.text()).filter(Boolean).join('\n')
-          const persona = variables.get('aurabot_persona')?.() || ''
+          const persona = variables.get('qq_hub_persona')?.() || ''
           const calls = []
           const callTool = async (name, args) => {
             const t = tools.get(name)
@@ -141,14 +141,14 @@ export function createFakeDsh({ brain }) {
   }
 
   async function call(path, body, headers = {}) {
-    const full = '/aurabot/api' + path.split('?')[0]
+    const full = '/qq-hub/api' + path.split('?')[0]
     // 先精确匹配，再找最长的前缀路由（和 DSH 的网页服务一样）
     const r = routes.get(full) || [...routes.values()].filter((x) => x.kind === 'prefix' && (full === x.path || full.startsWith(x.path + '/'))).sort((a, b) => b.path.length - a.path.length)[0]
     if (!r) throw new Error('no route ' + path)
     let out = ''
     let status = 200
     const req = {
-      url: '/aurabot/api' + path,
+      url: '/qq-hub/api' + path,
       headers,
       async *[Symbol.asyncIterator]() { if (body) yield JSON.stringify(body) },
     }

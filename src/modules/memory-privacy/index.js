@@ -6,7 +6,7 @@
 //   group:<群号>  只在这个群里可见
 //   global        哪里都能用
 //
-// aurabot 的记忆本体在 features/memory.js，recall/recallHint 不区分作用域。
+// qq-hub 的记忆本体在 features/memory.js，recall/recallHint 不区分作用域。
 // 这个模块不改它，而是并列一层"作用域记忆库"：
 // - 她可以用工具把事记到某个作用域（默认：私聊记 private，群里记 group）
 // - 交给她内容时（'prompt' 事件），只把**当前聊天可见**的作用域记忆拼进去

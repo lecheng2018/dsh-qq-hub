@@ -1,6 +1,6 @@
 // 人格卡：Markdown 文件（可带 --- 头），放在 ~/.dsh/plugins-data/aurabot/personas/。
 // 首次运行时把插件自带的人格（personas/*.md）复制过去，之后以数据目录里的为准（面板可编辑）。
-// 当前人格通过 DSH 的提示词变量 {{aurabot_persona}} 注入到 Aurabot 两个 preset 的系统提示词最前面。
+// 当前人格通过 DSH 的提示词变量 {{qq_hub_persona}} 注入到 QQ Hub 三个 preset 的系统提示词最前面。
 
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -80,7 +80,7 @@ export function currentPersonaText(currentId) {
   return p ? p.body : '你是「大肥鱼」，一个住在 QQ 里、说话简短口语化的女孩子。'
 }
 
-/** Aurabot 自己的规则（输出格式、安全边界），拼在人格后面。 */
+/** QQ Hub 自己的规则（输出格式、安全边界），拼在人格后面。 */
 /**
  * opts.off：没在运行的内置模块（关了或被替换了），对应的本事就不告诉她
  * opts.extra：扩展模块补充的规则（每条一行）
