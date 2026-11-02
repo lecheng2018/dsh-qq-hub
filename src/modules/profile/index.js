@@ -10,7 +10,6 @@ import { createQqProfile } from '../../features/qq-profile.js'
 import { resolvePainting } from '../../features/paintings.js'
 import { findFfmpeg, findSharp, shrinkImage, shrinkWithSharp } from '../../core/img.js'
 import { segmentBytes } from '../../core/net.js'
-import { dataDir } from '../../core/store.js'
 
 const NICK_MAX = 36
 const SIGN_MAX = 80
@@ -64,7 +63,7 @@ export default {
       const small = await smallerForAvatar(buf, c)
       if (!small) return { ok: false, message: `这张图太大（${Math.round(buf.length / 1024)} KB），换头像最多 2 MB，本机也没有 ffmpeg / sharp 可以缩小 —— 先裁小一点再试` }
       if (c.dryRun) return { ok: true, message: `试运行：本来要换 QQ 头像（图片 ${Math.round(small.length / 1024)} KB）` }
-      const tmpDir = dataDir('tmp')
+      const tmpDir = api.dataDir('tmp')
       const tmp = join(tmpDir, `avatar-${process.pid}-${Date.now()}.jpg`)
       let lastError = null
       try {

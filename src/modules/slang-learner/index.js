@@ -5,7 +5,7 @@
 //
 // 这里同样分两步：自动收集候选 → 主人在面板/命令里批准 → 才进「交给她的话」。
 
-import { readJson, writeJson, dataDir } from '../../core/store.js'
+import { readJson, writeJson } from '../../core/store.js'
 
 const ID = 'slang-learner'
 
@@ -45,7 +45,7 @@ export default {
     { key: 'maxInPrompt', label: '提示词里最多几条', type: 'number', min: 0, max: 20, step: 1 },
   ],
   setup(api) {
-    const file = () => dataDir('slang.json')
+    const file = () => api.dataDir('slang.json')
     // { counts: { 群号: { 词: 次数 } }, approved: { 群号: { 词: { meaning, at } } } }
     let db = readJson(file(), { counts: {}, approved: {} })
     const save = () => { try { writeJson(file(), db) } catch (error) { api.log.warn('保存黑话本失败：', error.message) } }
