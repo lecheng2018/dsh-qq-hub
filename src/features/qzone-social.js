@@ -108,7 +108,8 @@ export function createQzoneSocial({ getConfig, onebot, hub, log, memory }) {
           `你要回的是这一串：\n${thread}\n\n${last.name} 刚刚说了新的话，结合说说内容和上面的评论，用你的口气接着回 TA 一句。`)
         if (!text) continue
         await sendComment(m.tid, `回复 ${last.name}：${text}`)
-        memory?.addEvent?.({ text: `在空间回复了${last.name}的评论：${text}`, about: String(last.uin), aboutName: last.name, tags: ['空间'], importance: 0.35 })
+        // 空间评论是公开行为（对方空间里本来就看得见），可以进 global；但只记「回了谁、说了什么」，不涉及主人的私事
+        memory?.addEvent?.({ text: `在空间回复了${last.name}的评论：${text}`, about: String(last.uin), aboutName: last.name, tags: ['空间'], importance: 0.35, scope: 'global' })
         record(s, { kind: 'reply', who: last.name, post: String(m.content).slice(0, 30), text })
         done++
       }
@@ -157,7 +158,8 @@ export function createQzoneSocial({ getConfig, onebot, hub, log, memory }) {
         continue
       }
       await sendComment(f.key, text, f.uin)
-      memory?.addEvent?.({ text: `在空间评论了${isOwner ? owner() : f.nickname}的说说「${content.slice(0, 24)}」：${text}`, about: String(f.uin), aboutName: f.nickname, tags: ['空间'] })
+      // 同上：公开发生在对方说说下面，算 global
+      memory?.addEvent?.({ text: `在空间评论了${isOwner ? owner() : f.nickname}的说说「${content.slice(0, 24)}」：${text}`, about: String(f.uin), aboutName: f.nickname, tags: ['空间'], scope: 'global' })
       record(s, { kind: 'comment', who: f.nickname, post: content.slice(0, 30), text })
       done++
     }
