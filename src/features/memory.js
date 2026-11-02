@@ -238,7 +238,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   function scopeFromChatId(chatId) {
     const id = String(chatId || '')
     if (id.startsWith('private:') || id.startsWith('group:')) return id
-    return 'global'
+    // 推断不出来时返回空，由调用方决定兜底（不要在这里默默升成 global —— 那是泄漏的来源）
+    return ''
   }
   /** 这条记忆在 chat 这个聊天里能不能被想起。
    *  没有 scope 的老数据按「只属于记下它的那个聊天」处理：宁可少给，不可多给。
@@ -265,8 +266,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       save(s)
       return { ok: true, message: '✓', updated: dup.id }
     }
-    // 落库作用域：显式给了就用；否则按 chatId 推断（private:xxx / group:xxx）；都推断不出来才算 global
-    const finalScope = String(scope || '').trim() || scopeFromChatId(chatId)
+    // 落库作用域：显式给了就用；否则按 chatId 推断（private:xxx / group:xxx）；
+    // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
+    const ownerQQ = String(getConfig()?.ownerQQ || '')
+    const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
     const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0 }
     s.items.push(item)
     if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
@@ -306,18 +309,29 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return n
   }
 
-  /** 她自己做过的事（唱了歌、在空间评论了谁……）：记成「经历」，最近一天的会常驻在上下文里。
-   *  scope / chat 决定这条经历属于哪个聊天：B 站、空间这类发生在她自己身上的事用 global（谁问都能提），
-   *  单聊里「给你唱了首歌」这种必须留在那个私聊 —— 否则陌生人加群就能问出她和主人之间发生了什么。 */
+  /** 她自己做过的事（唱了歌、刷了 B 站……）：记成「经历」，最近一天的会常驻在上下文里。
+   *
+   *  作用域默认落在**主人私聊**，不是 global。原因：这类经历的源头几乎都是「算法按主人的兴趣
+   *  推给她的内容」——「在B站看了《猫猫合集》」「刷到白米饭料理」表面是她的经历，
+   *  实际暴露的是主人的兴趣画像。真实事故里陌生人正是靠这类条目套出
+   *  「主人爱看猫狗搞笑合集」「对白米饭感兴趣」「对 NAS 自建感兴趣」。
+   *
+   *  所以：默认 private:<主人QQ>；要公开进所有聊天，必须显式传 scope: 'global'
+   *  （只有「在别人空间公开评论」这种对方本来就看得见的事才配）。 */
   function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '' }) {
-    // 优先级：显式 scope > 当前 chat > chatId 推断 > global（她自己身上发生的事，如刷 B 站）
+    // 优先级：显式 scope > 当前 chat > chatId 推断 > 主人私聊（兜底不再是 global）
     const sc = String(scope || '').trim() || (chat ? scopeOfChat(chat) : scopeFromChatId(chatId))
-    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: sc })
+    const ownerScope = String(getConfig()?.ownerQQ || '')
+    const finalScope = sc === 'global' ? 'global' : sc || (ownerScope ? `private:${ownerScope}` : 'global')
+    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: finalScope })
   }
 
   /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。
-   *  传了 chat 就只返回这个聊天可见的（和 recall 用同一套 scopeVisible），不传保持老行为。 */
+   *  传了 chat 就只返回这个聊天可见的（和 recall 用同一套 scopeVisible），不传保持老行为。
+   *  群聊一律返回空：她的「近况」在群里没有任何正当用途，只会变成谈资
+   *  （「我最近在 B 站看猫猫」= 直接暴露主人的兴趣画像），所以连 global 也不注入。 */
   function recentEvents(hours = 24, limit = 4, chat = null) {
+    if (chat && chat.kind === 'group') return []
     const since = Date.now() - hours * 3600_000
     return load().items
       .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since)
@@ -891,10 +905,45 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return hits.length ? Math.min(1, hits[0].score / 3) : 0
   }
 
+  /**
+   * 清空某个聊天的记忆（/new 命令用）：只删这个作用域的东西，别的聊天不受影响。
+   * 一起清掉三样，否则「清了记忆」她还会按旧档案和旧经验说话：
+   *   1) 这个作用域下的记忆条目  2) 这个人的小档案  3) 相处经验 + 说话方式
+   * 属于 global 的记忆不动（她自己的设定、公开发生的事）。注意 B 站/抖音这类浏览记录
+   * 默认就落在主人私聊，所以执行 /new 会一并清掉 —— 这正是想要的效果。
+   * @returns {{items:number, profile:number, insights:number, style:number}} 各清了多少
+   */
+  function clearScope(chat) {
+    const scope = scopeOfChat(chat)
+    const key = personKey(chat)
+    const s = load()
+    const before = s.items.length
+    // 只删 scope 完全等于当前聊天的；global 与别人的私聊一律保留
+    s.items = s.items.filter((m) => String(m.scope || '') !== scope)
+    const items = before - s.items.length
+    let profile = 0
+    if (key || scope) {
+      s.profiles = s.profiles || {}
+      for (const k of Object.keys(s.profiles)) {
+        const p = s.profiles[k]
+        const pScope = p?.scope || (k.includes('@') ? k.slice(k.lastIndexOf('@') + 1) : 'global')
+        if (pScope === scope) { delete s.profiles[k]; profile++ }
+      }
+    }
+    let insights = 0
+    let style = 0
+    if (key && s.insights && s.insights[key]) { insights = s.insights[key].length; delete s.insights[key] }
+    if (key && s.styles && s.styles[key]) { style = (s.styles[key] || []).length; delete s.styles[key] }
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    recallLog.length = 0 // 面板上「最近想起了什么」也一起清掉，免得还显示着删掉的条目
+    return { scope, items, profile, insights, style }
+  }
+
   return {
     recallHint,
     scopeOfChat, scopeVisible,
-    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
+    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope,
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {
