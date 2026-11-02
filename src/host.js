@@ -338,6 +338,14 @@ export function apply(ctx) {
   // 这里只拦 bash / pwsh 的危险命令，其它工具和普通命令原样放行。
   dangerGuard = createDangerGuard({
     getConfig,
+    // 权限锁（security-lock 模块）启用时，锁着就不放行危险命令
+    securityLock: () => {
+      try {
+        const m = mods?.use?.('security-lock')
+        if (!m || typeof m.locked !== 'function') return null
+        return { locked: m.locked(), remainingMin: m.remainingMin }
+      } catch (error) { return null }
+    },
     log: logger.child('危险命令'),
     deliver: (chatId, text) => hub.sendText(chatId, text),
     chatOfSession: (sessionId) => { try { return hub.chatOfSession?.(sessionId) || '' } catch (error) { return '' } },
