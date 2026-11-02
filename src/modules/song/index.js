@@ -27,7 +27,9 @@ export default {
         // 唱过的歌记成她的经历：私聊记到对方头上
         const uid = String(chatId).startsWith('private:') ? String(chatId).slice(8) : ''
         const who = uid === String(cfg.ownerQQ) ? cfg.ownerName || '主人' : uid ? '对方' : '群里'
-        memory.addEvent?.({ text: `给${who}唱了《${title}》`, about: uid, tags: ['唱歌'], importance: 0.5 })
+        // 作用域跟着聊天走：私聊里唱的只在那个人私聊可见，群里唱的只在那群可见
+        const sc = String(chatId).startsWith('private:') || String(chatId).startsWith('group:') ? String(chatId) : 'global'
+        memory.addEvent?.({ text: `给${who}唱了《${title}》`, about: uid, tags: ['唱歌'], importance: 0.5, scope: sc, chatId })
         api.emit('song/sung', { title, chatId })
       },
     })
