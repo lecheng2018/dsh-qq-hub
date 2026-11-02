@@ -14,7 +14,7 @@
 //
 // 这样即使 BM25 记忆库被套话，敏感内容根本不在上下文里。
 
-import { readJson, writeJson, dataDir } from '../../core/store.js'
+import { readJson, writeJson } from '../../core/store.js'
 import { randomUUID } from 'node:crypto'
 
 const ID = 'memory-privacy'
@@ -69,7 +69,7 @@ export default {
     { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '私聊记成 private、群聊记成 group' },
   ],
   setup(api) {
-    const file = () => dataDir('scoped.json')
+    const file = () => api.dataDir('scoped.json')
     // { items: [{ id, text, scope, aboutName, importance, at }] }
     const load = () => readJson(file(), { items: [] })
     const save = (s) => { try { writeJson(file(), s) } catch (error) { api.log.warn('保存分层记忆失败：', error.message) } }

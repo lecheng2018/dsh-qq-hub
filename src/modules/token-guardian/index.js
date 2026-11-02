@@ -12,7 +12,7 @@
 //
 // 设计原则：默认关闭，主人在面板里打开才生效。
 
-import { readJson, writeJson, dataDir } from '../../core/store.js'
+import { readJson, writeJson } from '../../core/store.js'
 
 const ID = 'token-guardian'
 
@@ -43,8 +43,8 @@ export default {
     { key: 'summaryMaxChars', label: '摘要最大字数', type: 'number', min: 200, max: 4000, step: 100 },
   ],
   setup(api) {
-    const stateFile = () => dataDir('state.json')
-    const summaryFile = () => dataDir('summary.json')
+    const stateFile = () => api.dataDir('state.json')
+    const summaryFile = () => api.dataDir('summary.json')
     /**
      * 只留「值是正经对象」的条目。老版本或异常退出可能把 null / 字符串写进 JSON，
      * 读回来之后 Object.entries 会给出 null，estimate(st.chars) 直接抛

@@ -109,7 +109,7 @@ export default {
     { key: 'codeTtlSeconds', label: '一次性码有效期（秒）', type: 'number', min: 30, max: 900, step: 30 },
   ],
   setup(api) {
-    const stateFile = () => dataDir('state.json')
+    const stateFile = () => api.dataDir('state.json')
     // { secret, unlockedUntil, usedSteps: [], pending: { code, at } }
     let st = readJson(stateFile(), { secret: '', unlockedUntil: 0, usedSteps: [], pending: null })
     const save = () => { try { writeJson(stateFile(), st) } catch (error) { api.log.warn('保存权限锁状态失败：', error.message) } }

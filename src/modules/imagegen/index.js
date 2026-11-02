@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 import { createImageGen, drawResultBlocks, drawToolMessage, imageToolBlock } from '../../features/imagegen.js'
 import { listPaintings, openPaintFolder, paintingPath, rememberPainting, removePainting, savePainting } from '../../features/paintings.js'
 import { defineTool, str } from '../../tools/tools.js'
-import { dataDir } from '../../core/store.js'
 import { mimeOf } from '../../chat/inbound.js'
 
 export default {
@@ -39,7 +38,7 @@ export default {
     api.route('/image/gallery', async (req) => {
       const q = api.core.http.query(req)
       const limit = q && q.limit ? Number(q.limit) : api.config().imageGen.galleryShown
-      return { ok: true, ...listPaintings({ limit }), dir: dataDir('imagegen') }
+      return { ok: true, ...listPaintings({ limit }), dir: api.dataDir('imagegen') }
     })
     api.route('/image/gallery/image', async (req, res) => {
       const p = paintingPath(api.core.http.query(req).file)
