@@ -207,6 +207,28 @@ export const DEFAULTS = {
     keepWork: false, // 留着中间文件（调试用）
     pypiMirror: 'auto', // 安装时用的下载源：auto = 先测一下，官方源慢就用国内镜像；cn = 一直用国内镜像；off = 只用官方源
   },
+  // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
+  multiParser: {
+    enabled: false,              // 模块总开关，默认关
+    feedToAi: true,              // 🌟 AI 注入开关（把标题、作者、正文摘要喂给当前大模型会话让它读懂并接话）
+    sendMedia: true,             // 媒体发送开关（是否向 QQ 发送解析后的视频或图文）
+    forwardMode: 'threshold',    // threshold / always / never
+    imageThreshold: 2,           // 超过几张图自动转合并转发卡片
+    maxVideoMB: 50,              // 视频直接发送上限 (MB)
+    videoOverLimit: 'direct_link', // direct_link / group_file / notice
+    platforms: {
+      bilibili: true,
+      douyin: true,
+      redbook: true,
+      weibo: true,
+      zhihu: true,
+      wechat: true,
+      tieba: true,
+      fanqie: true,
+      github: true,
+      xiaoheihe: true,
+    },
+  },
   tabs: {}, // 面板记住的小偏好
   // 模块：内置的和数据目录 modules/ 里自己写的。{ 模块id: { enabled, useBuiltin } }，没写的算开着
   // useBuiltin：自己写了同名模块，但想先用回内置的
@@ -437,6 +459,20 @@ export function normalize(raw) {
   }
   if (!isObj(c.ext)) c.ext = {}
   for (const k of Object.keys(c.ext)) if (!isObj(c.ext[k])) delete c.ext[k] // 传 null = 删掉这个模块的设置
+  if (!isObj(c.multiParser)) c.multiParser = {}
+  const mp = c.multiParser
+  mp.enabled = bool(mp.enabled, false)
+  mp.feedToAi = bool(mp.feedToAi, true)
+  mp.sendMedia = bool(mp.sendMedia, true)
+  mp.forwardMode = ['threshold', 'always', 'never'].includes(mp.forwardMode) ? mp.forwardMode : 'threshold'
+  mp.imageThreshold = num(mp.imageThreshold, 2, 1, 30)
+  mp.maxVideoMB = num(mp.maxVideoMB, 50, 5, 500)
+  mp.videoOverLimit = ['direct_link', 'group_file', 'notice'].includes(mp.videoOverLimit) ? mp.videoOverLimit : 'direct_link'
+  if (!isObj(mp.platforms)) mp.platforms = {}
+  for (const k of ['bilibili', 'douyin', 'redbook', 'weibo', 'zhihu', 'wechat', 'tieba', 'fanqie', 'github', 'xiaoheihe']) {
+    mp.platforms[k] = bool(mp.platforms[k], true)
+  }
+
   c.safeMode = bool(c.safeMode, false)
   c.bridge.dshTools = bool(c.bridge.dshTools, false)
   c.bridge.http = bool(c.bridge.http, false)
