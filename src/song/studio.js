@@ -627,28 +627,49 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     return { PATH: p.bin + ';' + process.env.PATH, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
   }
 
-  async function ffprobeDuration(file) {
+  async function ffprobeDuration(file, timeoutMs = 15000) {
     // ffmpeg -i 会把时长打在 stderr 里，退出码是 1，这里自己接
     return new Promise((resolve) => {
       const c = spawn(P().ffmpeg, ['-hide_banner', '-i', file], { windowsHide: true })
       let s = ''
+      const timer = setTimeout(() => {
+        try { c.kill('SIGKILL') } catch {}
+        resolve(0)
+      }, timeoutMs)
+      timer.unref?.()
       c.stderr.on('data', (b) => { s += b })
       c.on('exit', () => {
+        clearTimeout(timer)
         const m = s.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
         resolve(m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0)
       })
-      c.on('error', () => resolve(0))
+      c.on('error', () => {
+        clearTimeout(timer)
+        resolve(0)
+      })
     })
   }
 
   /** 人声轨的平均音量（dB）；纯音乐分出来的人声几乎是静音。 */
-  async function meanVolume(file) {
+  async function meanVolume(file, timeoutMs = 15000) {
     return new Promise((resolve) => {
       const c = spawn(P().ffmpeg, ['-hide_banner', '-i', file, '-af', 'volumedetect', '-f', 'null', '-'], { windowsHide: true })
       let s = ''
+      const timer = setTimeout(() => {
+        try { c.kill('SIGKILL') } catch {}
+        resolve(0)
+      }, timeoutMs)
+      timer.unref?.()
       c.stderr.on('data', (b) => { s += b })
-      c.on('exit', () => { const m = s.match(/mean_volume:\s*(-?[\d.]+|-inf)/); resolve(m ? (m[1] === '-inf' ? -200 : Number(m[1])) : 0) })
-      c.on('error', () => resolve(0))
+      c.on('exit', () => {
+        clearTimeout(timer)
+        const m = s.match(/mean_volume:\s*(-?[\d.]+|-inf)/)
+        resolve(m ? (m[1] === '-inf' ? -200 : Number(m[1])) : 0)
+      })
+      c.on('error', () => {
+        clearTimeout(timer)
+        resolve(0)
+      })
     })
   }
 
@@ -780,6 +801,7 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     if (!voice && !local?.active('song')) throw new Error('还没有可用的音色模型')
     const pitch = Number.isFinite(Number(job.pitch)) ? Math.max(-24, Math.min(24, Math.round(Number(job.pitch)))) : Number(c.pitch) || 0
     const dir = join(work(), Date.now().toString(36))
+    if (current) current.dir = dir
     mkdirSync(dir, { recursive: true })
     current.stage = '下载歌曲'
     const song = job.file || (await download(job, dir))
@@ -830,8 +852,9 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
       history.unshift({ at: Date.now(), title: job.title || job.query, voice: r.voice, pitch: r.pitch, ok: true, message: `用时 ${Math.round((Date.now() - current.startedAt) / 1000)} 秒` })
       log.info(`翻唱完成：「${job.title || job.query}」`)
       onSung?.(job.title || job.query, job.chatId)
-      if (!cfg().keepWork) try { rmSync(r.dir, { recursive: true, force: true }) } catch (error) {}
+      if (!cfg().keepWork && r?.dir) try { rmSync(r.dir, { recursive: true, force: true }) } catch (error) {}
     } catch (error) {
+      if (!cfg().keepWork && current?.dir) try { rmSync(current.dir, { recursive: true, force: true }) } catch (err) {}
       const why = explainSongError(error.message)
       history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, message: why })
       log.warn(`翻唱失败：「${job.query}」：`, error.message)
