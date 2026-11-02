@@ -188,3 +188,39 @@ test('clearScope 对群聊只清那个群', () => {
   assert.equal(store.recall('聚餐', { chat: g1 }).length, 0, '一群的记忆清掉了')
   assert.ok(store.recall('开黑', { chat: g2 }).some((h) => h.it.text.includes('开黑')), '二群的记忆不受影响')
 })
+
+// ---------- 越权读取：索引本身按作用域构建 ----------
+// 这一组对应真实事故的直接推力：陌生群提到主人私聊里出现过的词，
+// 她的「话题相关度」被抬高，于是主动开口，开口内容来自私聊记忆。
+
+test('topicScore 只在当前聊天可见的记忆里算（陌生群拿不到主人私聊的话题）', () => {
+  store.add({ text: '主人在折腾 NAS 自建影音库和 Docker 部署', about: String(cfg.ownerQQ), importance: 0.9,
+              source: 'tool', chatId: PRIVATE.chatId, scope: store.scopeOfChat(PRIVATE) })
+  const stranger = { chatId: 'group:333444555', kind: 'group', groupId: '333444555' }
+  assert.equal(store.topicScore('你们有玩 NAS 的吗', stranger), 0, '陌生群不该因为主人私聊的记忆而「感兴趣」')
+  assert.equal(store.topicScore('Docker 怎么部署', stranger), 0, '同上，Docker 也不行')
+  assert.ok(store.topicScore('NAS', PRIVATE) > 0, '主人私聊里应该算得出相关度')
+})
+
+test('topicScore 不传 chat 时 fail-closed 返回 0', () => {
+  assert.equal(store.topicScore('NAS'), 0, '不知道在哪个聊天，就当不相关')
+  assert.equal(store.topicScore('NAS', null), 0, '显式 null 同样为 0')
+})
+
+test('索引按作用域隔离：别的私聊的记忆搜不出来', () => {
+  const other = { chatId: 'private:40004', kind: 'private', userId: '40004' }
+  assert.equal(store.topicScore('NAS', other), 0, '别人的私聊也不该命中主人的记忆')
+})
+
+test('contextFor 群聊不拼 global 小档案（不把主人画像搬进陌生群）', () => {
+  store.setProfile(String(cfg.ownerQQ), '他做跨境电商，熬夜，爱看猫狗', '', 'global')
+  const group = { chatId: 'group:333444555', kind: 'group', groupId: '333444555' }
+  const ctx = store.contextFor(group, 's-prof')
+  assert.ok(!ctx.includes('跨境电商') && !ctx.includes('熬夜'), '群聊上下文里不该出现 global 档案：' + ctx)
+})
+
+test('relatedTo 不把别处的记忆当成已知事实喂给归纳模型', () => {
+  const stranger = { chatId: 'group:333444555', kind: 'group', groupId: '333444555' }
+  const rel = store.relatedTo(stranger.chatId, '大家在聊 NAS 和 Docker 怎么玩')
+  assert.ok(!rel.some((m) => String(m.text).includes('NAS')), '提炼陌生群聊天时不该看到主人私聊的记忆')
+})
