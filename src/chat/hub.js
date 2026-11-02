@@ -1177,7 +1177,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       // 群里最近在聊的（窗口内最后几条）和她有多相关
       const recentTexts = (groupBuf.get(msg.groupId) || []).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0
-      try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' ')) : 0 } catch (error) {}
+      // 带上当前群：话题相关度只在这个群可见的记忆里算，主人私聊记的东西不该让她在这个群「感兴趣」
+      const memChat = { chatId: msg.chatId, kind: 'group', groupId: msg.groupId }
+      try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0 } catch (error) {}
       const quotedBot = await repliedToBot(msg.replyId, msg)
       const decision = decideGroupReply({
         policy: pol,
