@@ -4,6 +4,13 @@ import { nextOccurrence, parseCron } from '../src/modules/scheduler/schedule.js'
 import { parseRemindCommand } from '../src/modules/scheduler/commands.js'
 import { createSchedulerEngine } from '../src/modules/scheduler/engine.js'
 import { zonedParts, zonedToUtc } from '../src/modules/scheduler/time.js'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { unlinkSync } from 'node:fs'
+
+// 跨平台临时文件：原先硬编码 E:/work/... 会在 Linux/macOS 上把「E:」当成字面目录名
+// 在仓库里递归建出空壳 E:/work/dsh-aurabot-qq/test，污染工作区与打包产物。
+const tmpSchedulerFile = () => join(tmpdir(), `aurabot-test-scheduler-${process.pid}-${Date.now()}.json`)
 
 test('schedule: once 一次性任务计算', () => {
   const tz = 'Asia/Shanghai'
@@ -73,7 +80,7 @@ test('createSchedulerEngine: 增删改与到期触发', async () => {
 
   const engine = createSchedulerEngine({
     tz: 'Asia/Shanghai',
-    file: 'E:/work/dsh-aurabot-qq/test/.tmp-scheduler.json'
+    file: tmpSchedulerFile()
   })
 
   // 添加一个 10秒后到期的任务
@@ -96,5 +103,5 @@ test('createSchedulerEngine: 增删改与到期触发', async () => {
   assert.equal(engine.remove(task.id), true)
   assert.equal(engine.count(), 0)
 
-  try { import('node:fs').then(fs => fs.unlinkSync('E:/work/dsh-aurabot-qq/test/.tmp-scheduler.json')) } catch {}
+  try { unlinkSync(engine.file || tmpSchedulerFile()) } catch {}
 })
