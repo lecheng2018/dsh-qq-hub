@@ -185,10 +185,10 @@ test('权限档位：主人私聊完整，群聊永远受限', () => {
   assert.equal(levelFor(cfg, { kind: 'private', userId: '10000001' }), 'full')
   assert.equal(levelFor({ ...cfg, ownerLevel: 'chat' }, { kind: 'private', userId: '10000001' }), 'chat')
   assert.equal(levelFor(cfg, { kind: 'group', userId: '10000001' }), 'social')
-  assert.equal(presetFor('full'), 'aurabot-private')
-  assert.equal(presetFor('full', { longTasks: true }), 'aurabot-private-long')
-  assert.equal(presetFor('social', { longTasks: true }), 'aurabot-social')
-  assert.equal(presetFor('social'), 'aurabot-social')
+  assert.equal(presetFor('full'), 'qq-hub-private')
+  assert.equal(presetFor('full', { longTasks: true }), 'qq-hub-private-long')
+  assert.equal(presetFor('social', { longTasks: true }), 'qq-hub-social')
+  assert.equal(presetFor('social'), 'qq-hub-social')
 })
 
 test('群管发起人校验：只认主人', () => {

@@ -143,11 +143,11 @@ test('模块接管消息、改写回复、加命令；她的规则里有模块�
   mock.push(priv('/diary'))
   await until(() => globalThis.__wrote === 1)
 
-  const rules = fake.variables.get('aurabot_rules_private')()
+  const rules = fake.variables.get('qq_hub_rules_private')()
   assert.match(rules, /你会说回声/)
   assert.doesNotMatch(rules, /你会刷 B 站/, 'B 站模块关着就不说她会刷 B 站')
   // 主人私聊会话：有模块的工具，没有关掉模块的工具
-  const agent = [...fake.agents.values()].find((a) => a.preset === 'aurabot-private')
+  const agent = [...fake.agents.values()].find((a) => a.preset === 'qq-hub-private')
   assert.ok(agent.tools.has('echo_tool'))
   assert.ok(!agent.tools.has('bili_watch'))
   assert.ok(agent.tools.has('remember'))
@@ -190,12 +190,12 @@ test('复制内置模块来改：复制出来的能直接跑（连翻唱这种�
     const r = (await fake.call('/modules/fork', { id })).json()
     assert.equal(r.ok, true, r.message)
     const code = readdirSync(modDir(id), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => readFileSync(join(modDir(id), e.name), 'utf8')).join('\n')
-    assert.match(code, /globalThis\.aurabot\.lib/)
+    assert.match(code, /globalThis\.qqHub\.lib/)
     assert.doesNotMatch(code, /from '\.\.\//, '没有指回插件目录的相对路径')
     assert.equal((await mod(id)).running, 'user', (await mod(id)).error)
   }
   assert.ok(existsSync(join(modDir('song'), 'studio.js')))
-  assert.match(readFileSync(join(modDir('song'), 'studio.js'), 'utf8'), /new URL\('song\/fetch_file\.py', globalThis\.aurabot\.src\)/)
+  assert.match(readFileSync(join(modDir('song'), 'studio.js'), 'utf8'), /new URL\('song\/fetch_file\.py', globalThis\.qqHub\.src\)/)
   assert.equal((await fake.call('/song/status')).json().ok, true)
   // 说明文档放进了 modules/
   assert.match(readFileSync(join(dataDir, 'modules', 'API.md'), 'utf8'), /api\.on\('message'/)
@@ -265,20 +265,20 @@ test('联动：开放接口要密钥，只能发给白名单，能调模块', as
 })
 
 test('联动：别的 DSH 插件能 ctx.get(aurabot)；打开后 DSH 会话有全局工具，她自己的 QQ 会话屏蔽掉', async () => {
-  const svc = fake.ctx.get('aurabot')
+  const svc = fake.ctx.get('qq-hub')
   assert.ok(svc && typeof svc.send === 'function')
   assert.equal(svc.use('echo').shout('a'), 'A')
   assert.equal(fake.ctx.globalTools.size, 0, '默认不挂全局工具')
   await fake.call('/save', { bridge: { dshTools: true } })
-  assert.ok(fake.ctx.globalTools.has('aurabot_qq_send'))
+  assert.ok(fake.ctx.globalTools.has('qq_hub_qq_send'))
   assert.ok(fake.ctx.globalTools.has('echo_dsh'), '模块加的联动工具也挂上了')
-  const r = await fake.ctx.globalTools.get('aurabot_qq_send').execute({ text: '从 DSH 发的' })
+  const r = await fake.ctx.globalTools.get('qq_hub_qq_send').execute({ text: '从 DSH 发的' })
   assert.equal(r.ok, true)
   await until(() => sentTo(OWNER).includes('从 DSH 发的'))
   // 她的 QQ 会话下一轮重挂工具时屏蔽联动工具
   mock.push(priv('在吗'))
-  const agent = [...fake.agents.values()].find((a) => a.preset === 'aurabot-private')
-  await until(() => agent.denied.has('aurabot_qq_send'))
+  const agent = [...fake.agents.values()].find((a) => a.preset === 'qq-hub-private')
+  await until(() => agent.denied.has('qq_hub_qq_send'))
   await fake.call('/save', { bridge: { dshTools: false } })
   assert.equal(fake.ctx.globalTools.size, 0)
 })
@@ -295,13 +295,13 @@ test('改她怎么想、怎么说：群聊决定、提示词、拆条、最终�
     api.on('poke', async (ev) => { await api.sendText('private:' + ev.user_id, '别戳'); return true })
   } }`)
   await until(async () => (await mod('hooks-demo'))?.running === 'user')
-  assert.match(fake.variables.get('aurabot_persona')(), /【模块人格】/)
-  assert.match(fake.variables.get('aurabot_rules_social')(), /【模块规则 social】/)
+  assert.match(fake.variables.get('qq_hub_persona')(), /【模块人格】/)
+  assert.match(fake.variables.get('qq_hub_rules_social')(), /【模块规则 social】/)
 
   mock.push(priv('钩子测试'))
   await until(() => sentTo(OWNER).includes('尾巴'))
   assert.ok(sentTo(OWNER).includes('第二条!'), '最终发送被改写')
-  const agent = [...fake.agents.values()].find((a) => a.preset === 'aurabot-private')
+  const agent = [...fake.agents.values()].find((a) => a.preset === 'qq-hub-private')
   assert.ok(agent.events.some((e) => e.type === 'model/selection' && e.data.model === 'hooked'), '私聊换成了模块指定的模型')
 
   mock.push({ message_type: 'group', sub_type: 'normal', group_id: 777, user_id: 123456, message_id: 99, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '强制回一下' } }] })
@@ -311,7 +311,7 @@ test('改她怎么想、怎么说：群聊决定、提示词、拆条、最终�
   await until(() => sentTo(OWNER).includes('别戳'))
   rmSync(modDir('hooks-demo'), { recursive: true, force: true })
   await until(async () => !(await mod('hooks-demo')))
-  assert.doesNotMatch(fake.variables.get('aurabot_persona')(), /【模块人格】/, '模块删掉后改写也撤掉了')
+  assert.doesNotMatch(fake.variables.get('qq_hub_persona')(), /【模块人格】/, '模块删掉后改写也撤掉了')
 })
 
 test('多文件模块：改了哪个文件都重新加载；模块自己装的 npm 包找得到', async () => {
@@ -353,7 +353,7 @@ test('模拟测试：消息、命令、她的回复都走一遍模块，但不�
   const t = (await fake.call('/modules/tool', { as: 'owner', kind: 'private', name: 'echo_tool', args: {} })).json()
   assert.equal(t.result.ok, true)
   assert.equal(mock.calls.filter((x) => /^send_/.test(x.action)).length, mock.calls.slice(0, before).filter((x) => /^send_/.test(x.action)).length, '没有真的发消息')
-  assert.ok(existsSync(join(dataDir, 'modules', 'aurabot.d.ts')), '类型提示放好了')
+  assert.ok(existsSync(join(dataDir, 'modules', 'qq-hub.d.ts')), '类型提示放好了')
 })
 
 test('只看 API.md 从零写出来的模块（查天气）能直接加载：命令、工具、设置都挂上了', async () => {
@@ -364,7 +364,7 @@ test('只看 API.md 从零写出来的模块（查天气）能直接加载：命
   assert.deepEqual(m.tools, ['weather_now'])
   assert.equal(m.settings.length, 3)
   assert.equal(api.getConfig().ext.weather.city, '北京', '默认值写进了配置')
-  assert.match(fake.variables.get('aurabot_rules_private')(), /你会查天气/)
+  assert.match(fake.variables.get('qq_hub_rules_private')(), /你会查天气/)
 })
 
 test('api.reply 在群里以引用回复发出；api.isOwner 认得主人', async () => {

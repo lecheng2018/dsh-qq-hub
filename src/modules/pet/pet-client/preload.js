@@ -1,4 +1,4 @@
-// Aurabot 桌宠预加载脚本（模板/生成物）：给渲染页开一个极小的受控桥。
+// QQ Hub 桌宠预加载脚本（模板/生成物）：给渲染页开一个极小的受控桥。
 // 只暴露拖拽/抛掷需要的四样东西，不给 Node 能力（contextIsolation 保持开着）。
 const { contextBridge, ipcRenderer } = require('electron')
 

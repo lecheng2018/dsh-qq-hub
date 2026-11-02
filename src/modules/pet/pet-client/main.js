@@ -1,6 +1,6 @@
-// Aurabot 桌宠客户端（Electron 主进程）—— 本文件是模板/生成物：
-// 由插件「桌宠」模块 POST /aurabot/api/ext/pet/client/install 生成到
-//   <Aurabot 数据目录>/modules-data/pet/app/
+// QQ Hub 桌宠客户端（Electron 主进程）—— 本文件是模板/生成物：
+// 由插件「桌宠」模块 POST /qq-hub/api/ext/pet/client/install 生成到
+//   <QQ Hub 数据目录>/modules-data/pet/app/
 // 运行前在本机装 Electron（插件本体不引入任何 npm 依赖）：
 //   cd <app 目录> && npm init -y && npm i -D electron && npx electron main.js
 //
@@ -57,7 +57,7 @@ function readHost() {
     const h = JSON.parse(fs.readFileSync(HOST_FILE, 'utf8'))
     if (!/^https?:\/\/127\.0\.0\.1(:\d+)?$/i.test(String(h.baseUrl || ''))) return null // 端口未知：等插件第一次被请求
     if (!/^[a-f0-9]{32,80}$/.test(String(h.token || ''))) return null
-    if (!/^\/.+/.test(String(h.api || ''))) h.api = '/aurabot/api/ext/pet'
+    if (!/^\/.+/.test(String(h.api || ''))) h.api = '/qq-hub/api/ext/pet'
     return { baseUrl: String(h.baseUrl).replace(/\/+$/, ''), token: h.token, api: h.api }
   } catch { return null }
 }
@@ -1649,7 +1649,7 @@ function createTray() {
     const img = nativeImage.createFromBuffer(Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAEUlEQVR42mNk+M9Qz4AFMGETAG1hCQeukhTbAAAAAElFTkSuQmCC', 'base64'))
     tray = new Tray(img)
-    tray.setToolTip('Aurabot 桌宠')
+    tray.setToolTip('QQ Hub 桌宠')
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '显示 / 隐藏', click: () => (win ? (win.isVisible() ? win.hide() : win.show()) : createWindow()) },
       { label: '收起气泡', click: hideBubble },
@@ -1662,7 +1662,7 @@ function createTray() {
 app.on('second-instance', () => { if (win) { win.show(); win.focus() } })
 app.whenReady().then(() => {
   // Windows 上没设 AppUserModelID 时系统通知会被静默丢掉（完工提醒依赖它）
-  try { app.setAppUserModelId('com.aurabot.pet') } catch {}
+  try { app.setAppUserModelId('com.qqhub.pet') } catch {}
   createWindow()
   createTray()
   refreshConfig()
