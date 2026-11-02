@@ -123,15 +123,29 @@ test('multi-parser setup: 支持专属 Cookie 并可自动复用全局 B站/小�
   assert.equal(st.cookieStatus.zhihu, false, '知乎未配置')
 })
 
-test('extractUrls: 识别真实复杂的抖音分享口令及裸短链', () => {
+test('extractUrls: 识别真实复杂的各平台分享口令与短链 (抖音/小红书/微博/知乎/B站/贴吧/番茄)', () => {
+  // 1. 抖音口令
   const douyinCommand = '2.07 复制打开抖音，看看【天美工作室群TiMi的作品】到总裁室要走员工通道 # 谭谈交通 # 二仙桥 #... https://v.douyin.com/1tB92IqN3yM/ cnQ:/ 04/14 J@i.ca :7pm'
-  const urls = extractUrls(douyinCommand)
-  assert.equal(urls.length, 1)
-  assert.equal(urls[0], 'https://v.douyin.com/1tB92IqN3yM/')
+  assert.deepEqual(extractUrls(douyinCommand), ['https://v.douyin.com/1tB92IqN3yM/'])
 
-  // 无协议头口令识别
-  const bareCommand = '复制本段打开抖音，看看这个作品 v.douyin.com/1tB92IqN3yM/ 精彩内容'
-  const bareUrls = extractUrls(bareCommand)
-  assert.equal(bareUrls.length, 1)
-  assert.equal(bareUrls[0], 'https://v.douyin.com/1tB92IqN3yM/')
+  // 2. 小红书口令（带表情、口令码、中文字符紧贴）
+  const xhsCommand = '42 你的小可爱发布了一篇小红书笔记，快来看吧！ 😆 hIqX8wQ12345 😆 http://xhslink.com/a/bCdEfG，复制本条信息，打开【小红书】App查看精彩内容！'
+  assert.deepEqual(extractUrls(xhsCommand), ['http://xhslink.com/a/bCdEfG'])
+
+  // 3. 微博短链 (t.cn 单字母短域名及裸短链)
+  const weiboCommand = '微博分享：今天吃了超好吃的大餐 http://t.cn/A6xxxxxx 值得推荐！'
+  assert.deepEqual(extractUrls(weiboCommand), ['http://t.cn/A6xxxxxx'])
+  assert.deepEqual(extractUrls('快来看 t.cn/A6yyyyyy 精彩微博'), ['https://t.cn/A6yyyyyy'])
+
+  // 4. B站口令与纯 BV 号
+  const biliCommand = '来看这期超强剪辑【某某作品】 https://b23.tv/BV1xx411c7mD 也可以点此播放'
+  assert.deepEqual(extractUrls(biliCommand), ['https://b23.tv/BV1xx411c7mD'])
+  assert.deepEqual(extractUrls('群友发了这期 BV1xx411c7mD 快去看'), ['https://www.bilibili.com/video/BV1xx411c7mD'])
+
+  // 5. 贴吧与番茄小说分享文案
+  const tiebaCommand = '老哥们看我这个配置行不行 百度贴吧:https://tieba.baidu.com/p/1234567890?share=1'
+  assert.deepEqual(extractUrls(tiebaCommand), ['https://tieba.baidu.com/p/1234567890?share=1'])
+
+  const fanqieCommand = '我在番茄免费小说看《大奉打更人》，强烈推荐！ https://changdunovel.com/t/abcxyz/ 点击阅读'
+  assert.deepEqual(extractUrls(fanqieCommand), ['https://changdunovel.com/t/abcxyz/'])
 })
