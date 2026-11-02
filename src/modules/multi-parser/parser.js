@@ -6,20 +6,20 @@
 const UA_PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
 
-/** 从文本或口令中提取所有链接（兼容带协议与不带协议的分享短链） */
+/** 从文本或口令中提取所有链接（兼容带协议、不带协议的分享短链与纯 BV 号） */
 export function extractUrls(text) {
   const s = String(text || '')
   const urls = []
 
-  // 1. 标准 http / https 链接
-  const reHttp = /https?:\/\/[^\s<>\[\](){}，。！？、；：'\"`]+/gi
+  // 1. 标准 HTTP/HTTPS 链接（支持单字母短域名如 t.cn, x.com，排除中文字符与表情）
+  const reHttp = /https?:\/\/(?:[a-zA-Z0-9][-a-zA-Z0-9_]*\.)*[a-zA-Z0-9][-a-zA-Z0-9_]*\.[a-zA-Z0-9]{2,8}(?::\d+)?(?:\/[^\s<>\[\](){}，。！？、；：'\"`\u4e00-\u9fa5\ud800-\udfff]*)?/gi
   const mHttp = s.match(reHttp) || []
   for (const u of mHttp) {
     urls.push(u.replace(/[)\]}>，。！？、；：'\"`]+$/, ''))
   }
 
-  // 2. 识别常见的无协议口令短链（抖音 v.douyin.com / jx.douyin.com、B站 b23.tv、小红书 xhslink.com）
-  const reBare = /(?:^|[^\w/.-])((?:v|jx)\.douyin\.com\/[A-Za-z0-9_-]+\/?|b23\.tv\/[A-Za-z0-9]+\/?|xhslink\.com\/[A-Za-z0-9/_-]+\/?)/gi
+  // 2. 匹配常见无协议前缀的平台短链 (t.cn / v.douyin.com / b23.tv / xhslink.com / tb.cn / bili2233.cn)
+  const reBare = /(?:^|[^\w/.-])((?:v|jx)\.douyin\.com\/[A-Za-z0-9_-]+\/?|b23\.tv\/[A-Za-z0-9]+\/?|bili2233\.cn\/[A-Za-z0-9]+\/?|xhslink\.(?:com|cn)\/[A-Za-z0-9/_-]+\/?|t\.cn\/[A-Za-z0-9]+\/?|tb\.cn\/[A-Za-z0-9]+\/?)/gi
   let m
   while ((m = reBare.exec(s)) !== null) {
     const bare = m[1].replace(/[)\]}>，。！？、；：'\"`]+$/, '')
@@ -29,18 +29,26 @@ export function extractUrls(text) {
     }
   }
 
+  // 3. 匹配纯 BV 号（口令中未带任何链接的场景）
+  const reBv = /(?:^|[^\w/.-])(BV[0-9A-Za-z]{10})(?:[^\w/.-]|$)/i
+  const mBv = s.match(reBv)
+  if (mBv && !urls.some((u) => u.includes(mBv[1]))) {
+    urls.push(`https://www.bilibili.com/video/${mBv[1]}`)
+  }
+
   return [...new Set(urls)]
 }
 
-/** 跟踪 URL 的重定向，获取落地真实地址 */
+/** 跟踪 URL 的重定向，获取落地真实地址（支持移动端短链跳转） */
 export async function resolveUrl(url, maxRedirects = 5) {
-  let cur = url
+  let cur = String(url || '').trim()
   let count = 0
   while (count < maxRedirects) {
     try {
+      // 许多短链服务（微博 t.cn、小红书 xhslink、B站 b23.tv）对 HEAD 请求会拒绝或不跳转，优先采用带 Range 的 GET 请求
       const res = await fetch(cur, {
-        method: 'HEAD',
-        headers: { 'User-Agent': UA_MOBILE },
+        method: 'GET',
+        headers: { 'User-Agent': UA_MOBILE, Range: 'bytes=0-10' },
         redirect: 'manual',
         signal: AbortSignal.timeout(6000),
       })
@@ -64,24 +72,33 @@ export async function resolveUrl(url, maxRedirects = 5) {
  * @returns {Promise<object|null>} 返回规范化的 ParseResult 或 null
  */
 export async function parseUrl(rawUrl, { platforms = {}, cookies = {}, rawText = '' } = {}) {
-  const url = await resolveUrl(rawUrl)
+  let url = await resolveUrl(rawUrl)
 
-  // 1. 哔哩哔哩 Bilibili
-  if (platforms.bilibili !== false && /(?:b23\.tv|bilibili\.com)/i.test(url)) {
+  // 知乎外链跳板 link.zhihu.com/?target=... 还原真实目标
+  if (/link\.zhihu\.com/i.test(url)) {
+    try {
+      const u = new URL(url)
+      const target = u.searchParams.get('target')
+      if (target) url = await resolveUrl(decodeURIComponent(target))
+    } catch {}
+  }
+
+  // 1. 哔哩哔哩 Bilibili (支持 b23.tv / bili2233.cn / bilibili.com)
+  if (platforms.bilibili !== false && /(?:b23\.tv|bili2233\.cn|bilibili\.com)/i.test(url)) {
     return await parseBilibili(url, cookies.bilibili)
   }
 
-  // 2. 微博 Weibo
-  if (platforms.weibo !== false && /(?:weibo\.com|weibo\.cn)/i.test(url)) {
-    return await parseWeibo(url, cookies.weibo)
+  // 2. 微博 Weibo (支持 t.cn / weibo.com / weibo.cn / card.weibo.com)
+  if (platforms.weibo !== false && /(?:weibo\.com|weibo\.cn|t\.cn)/i.test(url)) {
+    return await parseWeibo(url, cookies.weibo, rawText)
   }
 
-  // 3. 小红书 RedBook
-  if (platforms.redbook !== false && /(?:xhslink\.com|xiaohongshu\.com)/i.test(url)) {
-    return await parseRedBook(url, cookies.redbook)
+  // 3. 小红书 RedBook (支持 xhslink.com / xhslink.cn / xiaohongshu.com / xiaohongshu.cn)
+  if (platforms.redbook !== false && /(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com|xiaohongshu\.cn)/i.test(url)) {
+    return await parseRedBook(url, cookies.redbook, rawText)
   }
 
-  // 4. 知乎 Zhihu
+  // 4. 知乎 Zhihu (支持 zhihu.com / zhuanlan.zhihu.com)
   if (platforms.zhihu !== false && /zhihu\.com/i.test(url)) {
     return await parseZhihu(url, cookies.zhihu)
   }
@@ -91,12 +108,12 @@ export async function parseUrl(rawUrl, { platforms = {}, cookies = {}, rawText =
     return await parseWechat(url)
   }
 
-  // 6. 百度贴吧 Tieba
-  if (platforms.tieba !== false && /tieba\.baidu\.com/i.test(url)) {
+  // 6. 百度贴吧 Tieba (支持 tieba.baidu.com / tb.cn)
+  if (platforms.tieba !== false && /(?:tieba\.baidu\.com|tb\.cn)/i.test(url)) {
     return await parseTieba(url, cookies.tieba)
   }
 
-  // 7. 番茄小说 Fanqie
+  // 7. 番茄小说 Fanqie (支持 changdunovel.com / fanqienovel.com)
   if (platforms.fanqie !== false && /(?:changdunovel\.com|fanqienovel\.com)/i.test(url)) {
     return await parseFanqie(url)
   }
@@ -106,13 +123,13 @@ export async function parseUrl(rawUrl, { platforms = {}, cookies = {}, rawText =
     return await parseGithub(url)
   }
 
-  // 9. 抖音 Douyin
-  if (platforms.douyin !== false && /(?:v\.douyin\.com|douyin\.com)/i.test(url)) {
+  // 9. 抖音 Douyin (支持 v.douyin.com / jx.douyin.com / douyin.com / iesdouyin.com)
+  if (platforms.douyin !== false && /(?:v\.douyin\.com|jx\.douyin\.com|douyin\.com|iesdouyin\.com)/i.test(url)) {
     return await parseDouyin(url, cookies.douyin, rawText)
   }
 
-  // 10. 小黑盒 Heybox
-  if (platforms.xiaoheihe !== false && /xiaoheihe\.cn/i.test(url)) {
+  // 10. 小黑盒 Heybox (支持 xiaoheihe.cn / heybox.com.cn)
+  if (platforms.xiaoheihe !== false && /(?:xiaoheihe\.cn|heybox\.com\.cn)/i.test(url)) {
     return await parseHeybox(url, cookies.xiaoheihe)
   }
 
@@ -168,51 +185,70 @@ async function parseBilibili(url, cookie = '') {
   }
 }
 
-async function parseWeibo(url, cookie = '') {
+async function parseWeibo(url, cookie = '', rawText = '') {
   const idMatch = url.match(/(?:status|detail|\d+)\/([0-9A-Za-z]+)/) || url.match(/weibo\.com\/\d+\/([0-9A-Za-z]+)/)
-  if (!idMatch) return null
-  const id = idMatch[1]
+  const id = idMatch ? idMatch[1] : ''
 
   try {
-    const headers = {
-      'User-Agent': UA_MOBILE,
-      Referer: `https://m.weibo.cn/detail/${id}`,
-      'X-Requested-With': 'XMLHttpRequest',
-      'MWeibo-Pwa': '1',
+    if (id) {
+      const headers = {
+        'User-Agent': UA_MOBILE,
+        Referer: `https://m.weibo.cn/detail/${id}`,
+        'X-Requested-With': 'XMLHttpRequest',
+        'MWeibo-Pwa': '1',
+      }
+      if (cookie) headers.Cookie = cookie
+
+      const res = await fetch(`https://m.weibo.cn/statuses/show?id=${id}`, {
+        headers,
+        signal: AbortSignal.timeout(8000),
+      })
+      const json = await res.json()
+      const d = json?.data
+      if (d) {
+        const cleanText = (d.text || '').replace(/<[^>]+>/g, '').trim()
+        const images = (d.pics || []).map((p) => p.large?.url || p.url).filter(Boolean)
+        const videoUrl = d.page_info?.urls?.mp4_720p_mp4 || d.page_info?.urls?.mp4_hd_mp4 || d.page_info?.media_info?.stream_url_hd || ''
+
+        return {
+          platform: 'weibo',
+          platformName: '微博',
+          type: videoUrl ? 'video' : (images.length ? 'gallery' : 'post'),
+          title: `${d.user?.screen_name || '微博博主'} 的微博`,
+          author: d.user?.screen_name || '',
+          summary: cleanText.slice(0, 300),
+          cover: images[0] || d.page_info?.page_pic?.url || '',
+          images,
+          videoUrl,
+          url: `https://weibo.com/${d.user?.id}/${d.bid || id}`,
+          stat: `转发: ${d.reposts_count || 0} · 评论: ${d.comments_count || 0} · 点赞: ${d.attitudes_count || 0}`,
+        }
+      }
     }
-    if (cookie) headers.Cookie = cookie
+  } catch {}
 
-    const res = await fetch(`https://m.weibo.cn/statuses/show?id=${id}`, {
-      headers,
-      signal: AbortSignal.timeout(8000),
-    })
-    const json = await res.json()
-    const d = json?.data
-    if (!d) return null
+  // 口令兜底提取
+  let titleFallback = '微博内容'
+  if (rawText) {
+    const textM = rawText.match(/(?:微博|分享)[:：]?\s*(.*?)(?:https?:\/\/|t\.cn|$)/i)
+    if (textM && textM[1].trim()) titleFallback = textM[1].trim()
+  }
 
-    const cleanText = (d.text || '').replace(/<[^>]+>/g, '').trim()
-    const images = (d.pics || []).map((p) => p.large?.url || p.url).filter(Boolean)
-    const videoUrl = d.page_info?.urls?.mp4_720p_mp4 || d.page_info?.urls?.mp4_hd_mp4 || d.page_info?.media_info?.stream_url_hd || ''
-
-    return {
-      platform: 'weibo',
-      platformName: '微博',
-      type: videoUrl ? 'video' : (images.length ? 'gallery' : 'post'),
-      title: `${d.user?.screen_name || '微博博主'} 的微博`,
-      author: d.user?.screen_name || '',
-      summary: cleanText.slice(0, 300),
-      cover: images[0] || d.page_info?.page_pic?.url || '',
-      images,
-      videoUrl,
-      url: `https://weibo.com/${d.user?.id}/${d.bid || id}`,
-      stat: `转发: ${d.reposts_count || 0} · 评论: ${d.comments_count || 0} · 点赞: ${d.attitudes_count || 0}`,
-    }
-  } catch {
-    return null
+  return {
+    platform: 'weibo',
+    platformName: '微博',
+    type: 'post',
+    title: titleFallback,
+    author: '微博用户',
+    summary: titleFallback,
+    cover: '',
+    images: [],
+    videoUrl: '',
+    url,
   }
 }
 
-async function parseRedBook(url, cookie = '') {
+async function parseRedBook(url, cookie = '', rawText = '') {
   try {
     const headers = { 'User-Agent': UA_MOBILE, Referer: 'https://www.xiaohongshu.com/' }
     if (cookie) headers.Cookie = cookie
@@ -243,8 +279,28 @@ async function parseRedBook(url, cookie = '') {
       images,
       url,
     }
-  } catch {
-    return null
+  } catch {}
+
+  // 口令兜底提取
+  let titleFallback = '小红书笔记'
+  let authorFallback = '小红书创作者'
+  if (rawText) {
+    const authorM = rawText.match(/(\S+)发布了一篇小红书笔记/)
+    if (authorM) authorFallback = authorM[1].trim()
+    const textM = rawText.match(/【(.*?)】/)
+    if (textM) titleFallback = textM[1].trim()
+  }
+
+  return {
+    platform: 'redbook',
+    platformName: '小红书',
+    type: 'post',
+    title: titleFallback,
+    author: authorFallback,
+    summary: titleFallback,
+    cover: '',
+    images: [],
+    url,
   }
 }
 
