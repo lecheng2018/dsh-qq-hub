@@ -261,3 +261,15 @@ test('无 scope 的老记忆不会出现在任何作用域索引里（迁移必�
     else process.env.AURABOT_DATA_DIR = prev
   }
 })
+
+test('relatedTo 不会因聊天里出现某人 QQ 就捞出别的作用域的记忆', () => {
+  // 真实场景：陌生群里有人提到主人的 QQ，提炼时不能把主人私聊的记忆当已知事实
+  store.add({ text: '审计用隐私样例：猫叫粥粥', about: String(cfg.ownerQQ), importance: 0.9,
+              source: 'tool', chatId: 'private:' + cfg.ownerQQ, scope: 'private:' + cfg.ownerQQ })
+  const stranger = 'group:333444555'
+  const rel = store.relatedTo(stranger, `(${cfg.ownerQQ}) 刚才说他在忙`)
+  assert.ok(!rel.some((m) => String(m.text).includes('粥粥')), '陌生群不该捞到主人私聊的记忆：' + JSON.stringify(rel))
+  // 主人私聊自己提炼时应该能看到
+  const own = store.relatedTo('private:' + cfg.ownerQQ, `(${cfg.ownerQQ}) 我在忙`)
+  assert.ok(own.some((m) => String(m.text).includes('粥粥')), '主人私聊自己提炼时应该看得到')
+})
