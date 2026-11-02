@@ -25,37 +25,12 @@ export default {
     maxVideoMB: 50,
     videoOverLimit: 'direct_link',
   },
-  settings: [
-    { key: 'enabled', label: '启用内容解析', type: 'switch', hint: '自动识别消息中的多平台链接并解析' },
-    { key: 'feedToAi', label: '注入大模型上下文 (AI 看懂链接)', type: 'switch', hint: '开启后将解析出的标题与摘要自动喂给 AI，让她能看懂群友分享并参与讨论' },
-    { key: 'sendMedia', label: '发送解析媒体到 QQ', type: 'switch', hint: '将解析出的高清图集、无水印视频卡片发回 QQ' },
-    {
-      key: 'forwardMode', label: '图文发送策略', type: 'select',
-      options: [
-        { value: 'threshold', label: '超过图片阈值时合并转发 (推荐)' },
-        { value: 'always', label: '总是使用合并转发卡片' },
-        { value: 'never', label: '逐条发送普通消息' },
-      ],
-      hint: '多图时是否打包为 QQ 聊天记录合并转发卡片（防刷屏）',
-    },
-    { key: 'imageThreshold', label: '合并转发图片张数门槛', type: 'number', min: 1, max: 20, step: 1, hint: '图片张数达到此阈值时转为合并转发卡片' },
-    { key: 'maxVideoMB', label: '视频直接发送上限 (MB)', type: 'number', min: 5, max: 200, step: 5, hint: '超过此体积将转为下载直链或上传群文件' },
-    {
-      key: 'videoOverLimit', label: '视频超限处理动作', type: 'select',
-      options: [
-        { value: 'direct_link', label: '发送下载直链' },
-        { value: 'group_file', label: '上传至群文件 (群聊有效)' },
-        { value: 'notice', label: '仅提示视频超限' },
-      ],
-    },
-  ],
   setup(api) {
     // chatId -> { at, result } 记录最近解析的内容
     const recentParsed = new Map()
 
     const cfg = () => {
       const g = api.config().multiParser || {}
-      const s = api.settings()
       const full = api.config()
       const rawCookies = g.cookies || {}
       const cookies = {
@@ -67,7 +42,7 @@ export default {
         tieba: rawCookies.tieba || '',
         xiaoheihe: rawCookies.xiaoheihe || full.heybox?.cookie || '',
       }
-      return { ...s, ...g, platforms: g.platforms || {}, cookies }
+      return { ...g, platforms: g.platforms || {}, cookies }
     }
 
     // 🌟 AI 上下文注入机制：大模型对话前，若当前聊天有新鲜解析的内容，自动拼入提示词
