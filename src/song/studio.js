@@ -360,7 +360,16 @@ function run(cmd, args, { cwd, env, log, onLine, timeoutMs = 30 * 60_000 } = {})
     }
     child.stdout.on('data', feed)
     child.stderr.on('data', feed)
-    const timer = setTimeout(() => { try { child.kill() } catch (error) {} }, timeoutMs)
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform === 'win32' && child.pid) {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
+        } else {
+          child.kill('SIGKILL')
+        }
+      } catch (error) {}
+      reject(new Error(`${basename(cmd)} 执行超时（${timeoutMs}ms）`))
+    }, timeoutMs)
     child.on('error', (e) => { clearTimeout(timer); reject(e) })
     child.on('exit', (code) => {
       clearTimeout(timer)
