@@ -51,9 +51,10 @@ const clip = (text, n = 300) => (text.length > n ? text.slice(0, n) + '…' : te
  * @param {(sessionId:string) => string} o.chatOfSession DSH session → QQ chatId
  * @param {() => string} o.ownerQQ 主人 QQ 号
  * @param {number} [o.timeoutMs] 等确认的超时（默认 60 秒）
+ * @param {() => ({ locked: boolean, remainingMin: () => number }|null)} [o.securityLock] 权限锁（没启用时为 null）
  * @param {object} [o.log]
  */
-export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ, timeoutMs = 60_000, log } = {}) {
+export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ, timeoutMs = 60_000, securityLock, log } = {}) {
   const pending = new Map() // chatId → { resolve, timer }
 
   function cleanup (chatId, value) {
@@ -77,6 +78,16 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     const command = String(exec.arguments && exec.arguments.command || '')
     const danger = isDangerousCommand(command)
     if (!danger) return next()
+    // 权限锁优先：锁着的时候，危险命令连「发确认」这一步都不给，直接拦下，
+    // 提示主人先在私聊里 /unlock（手机 TOTP 口令），免得手机不在身边被人绕过确认。
+    const lock = typeof securityLock === 'function' ? securityLock() : null
+    if (lock && lock.locked) {
+      log?.warn?.(`权限锁拦下危险命令（${danger.label}）：${clip(command, 120)}`)
+      return {
+        kind: 'deny',
+        reason: `权限锁锁着，这条危险命令（${danger.label}）不放行。请主人在私聊里发 /unlock，用手机上的 6 位口令解锁后再试。`
+      }
+    }
     const sessionId = exec.agent && exec.agent.session && exec.agent.session.id
     const chatId = chatOfSession ? String(chatOfSession(sessionId) || '') : ''
     const owner = String(ownerQQ ? ownerQQ() : '')
