@@ -65,6 +65,42 @@ for (const [k, list] of Object.entries(buckets)) {
 
 console.log('\n可自动归档：' + fixable + ' 条；推不出作用域（保持 global）：' + (noScope.length - fixable) + ' 条')
 
+// ---------------- 人物小档案（profiles）也需要按作用域归档 ----------------
+// 之前的漏洞：小档案只按 QQ 号存一份，私聊里聊出来的「兜里只有十块钱」这类私事
+// 会被 group:xxx 的会话通过 profileOf(qq) 读到 —— 这就是群里答出私聊猫名的真正原因。
+// 现在档案键是 "qq@scope"。下面把老的无作用域档案体检出来，让你决定怎么处理。
+
+const profItems = s.profiles && typeof s.profiles === 'object' ? s.profiles : {}
+const oldProfs = Object.entries(profItems).filter(([k, p]) => !p || !p.scope)
+console.log('')
+console.log('人物小档案：共 ' + Object.keys(profItems).length + ' 份，其中无作用域（老格式）：' + oldProfs.length + ' 份')
+for (const [k, p] of oldProfs) {
+  const t = String((p && p.text) || '').slice(0, 60)
+  console.log('  · qq=' + k + '  ' + t + ((p && p.text && p.text.length > 60) ? '…' : ''))
+  console.log('      私聊里攒的档案如果含私事，建议改成 private:<QQ>；只在群里了解的，改成 group:<群号>；')
+  console.log('      确实谁都能知道的（比如「主人」是他本人这种），保持 global。')
+}
+if (oldProfs.length) {
+  console.log('')
+  console.log('提示：这些老档案现在按 global 处理，仍然哪里都能读到。')
+  console.log('      要收紧，可以把对应条目手动改成：')
+  for (const [k] of oldProfs) {
+    console.log('        "profiles": { "' + k + '@private:<该QQ>": { ... } }')
+  }
+}
+
+
+// --write 时把无作用域的老档案迁到 private:<QQ>（最保守：私聊攒的私事先只留在私聊）
+if (WRITE && oldProfs.length) {
+  for (const [k, p] of oldProfs) {
+    const qq = String((p && p.qq) || k).split('@')[0]
+    const newKey = qq + '@private:' + qq
+    profItems[newKey] = { ...p, qq, scope: 'private:' + qq }
+    delete profItems[k]
+  }
+  console.log('   → 已把 ' + oldProfs.length + ' 份老档案迁到 private:<QQ>（群里不再读得到）')
+}
+
 if (!WRITE) {
   console.log('\n这是体检模式，没有改任何东西。确认无误后加 --write 执行。')
   process.exit(0)
@@ -82,6 +118,7 @@ for (const m of items) {
   m.scope = sc
   n++
 }
+s.profiles = profItems
 s.rev = (s.rev || 0) + 1
 writeFileSync(FILE, JSON.stringify(s, null, 2), 'utf8')
 console.log('已归档 ' + n + ' 条。重启 DSH 后生效。')
