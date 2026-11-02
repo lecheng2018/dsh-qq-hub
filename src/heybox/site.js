@@ -73,6 +73,8 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     } catch { return '' }
   }
 
+  const hasLogin = () => Boolean(cookie())
+
   function getClient() {
     const c = cookie()
     if (!client || c !== clientCookie) {

@@ -208,6 +208,8 @@ export function createBiliApi({ getCookie, log, fetchImpl = fetch }) {
     if (!csrf) throw new Error('没登录 B 站（Cookie 里要有 bili_jct）')
     const r = await fetchImpl(imageUrl, { headers: { 'user-agent': UA }, signal: AbortSignal.timeout(20000) })
     if (r.ok === false || (typeof r.status === 'number' && (r.status < 200 || r.status >= 300))) throw new Error('图片下载失败：HTTP ' + r.status)
+    const len = Number(r.headers?.get?.('content-length') || 0)
+    if (len > FACE_MAX) throw new Error('图片超过 2MB，B 站不收')
     let type = String(r.headers?.get?.('content-type') || '').split(';')[0].trim()
     const buf = Buffer.from(await r.arrayBuffer())
     if (!buf.length) throw new Error('图片是空的')

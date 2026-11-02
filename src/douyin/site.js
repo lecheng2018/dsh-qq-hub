@@ -569,6 +569,14 @@ export function createSite({ browser, log }) {
     const direct = s.match(/douyin\.com\/user\/(MS4w[\w-]+)/)?.[1] || (/^MS4w[\w-]+$/.test(s) ? s : '')
     if (direct) return user(direct)
     if (/^https?:\/\//i.test(s)) {
+      try {
+        const u = new URL(s)
+        if (!/(^|\.)douyin\.com$/i.test(u.hostname) && !/(^|\.)iesdouyin\.com$/i.test(u.hostname)) {
+          throw new Error('只支持抖音官方主页或短链（douyin.com / v.douyin.com）')
+        }
+      } catch (err) {
+        throw new Error(err.message || '无效的主页链接')
+      }
       await b.goto(s)
       for (let i = 0; i < 10; i++) {
         const href = String(await b.evaluate('location.href').catch(() => ''))

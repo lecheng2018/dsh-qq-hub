@@ -1,0 +1,100 @@
+name: Release DSH Plugin
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Test Suite
+        run: |
+          node --test "test/**/*.test.js"
+
+      - name: Determine Version and Tag
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          
+          # 检查标签是否在远端已存在
+          git fetch --tags || true
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "")
+            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
+              TAG="${TAG}-build.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
+          
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Target tag: ${TAG} (Package version: ${VERSION})"
+
+      - name: Extract Release Notes
+        id: changelog
+        run: |
+          node -e '
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+          const sections = changelog.split(/\r?\n##\s+/).slice(1);
+          const target = sections.find(s => {
+            const title = s.split(/\r?\n/)[0].trim();
+            return title === pkg.version || title === "v" + pkg.version;
+          }) || sections.find(s => s.split(/\r?\n/)[0].trim() === "未发布") || sections[0];
+          
+          let notes = "详见版本提交明细。";
+          if (target) {
+            notes = target.split(/\r?\n/).slice(1).join("\n").trim();
+          }
+          fs.writeFileSync("RELEASE_NOTES.md", notes, "utf8");
+          '
+          echo "=== RELEASE_NOTES.md Preview ==="
+          head -n 25 RELEASE_NOTES.md
+
+      - name: Pack DSH Plugin (.tgz)
+        id: pack
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          TGZ=$(ls dist/*.tgz | head -n 1)
+          echo "tgz_path=${TGZ}" >> "$GITHUB_OUTPUT"
+          echo "Packaged plugin: ${TGZ}"
+          ls -lh dist/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-plugin-tarball
+          path: dist/*.tgz
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Release ${{ steps.meta.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: ${{ steps.pack.outputs.tgz_path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
