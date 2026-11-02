@@ -71,7 +71,7 @@ export default {
         if (!sent) return { ok: false, message: '画好了，但没有发到 QQ（请检查试运行和网关）' }
         const saved = savePainting(buf, String(prompt || ''))
         if (saved) api.log.debug(`生图已存盘：${saved}`)
-        try { memory.addEvent?.({ text: `按提示词画了一张图（不一定等于实际画面）：${String(prompt).slice(0, 120)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4 }) }
+        try { memory.addEvent?.({ text: `按提示词画了一张图（不一定等于实际画面）：${String(prompt).slice(0, 120)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4, chat, chatId: chat.chatId }) }
         catch (error) { api.log.warn('生图已发送，但经历没记下来：', error.message) }
         let visual = (await hub.canSeeImages(chat)) === true
         // 「让她画完自己看一眼」是总开关：关掉就当没视觉能力处理 —— 不给图、也不给路径。
