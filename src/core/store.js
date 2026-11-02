@@ -8,14 +8,15 @@ export function dshHome() {
   return process.env.DSH_HOME || join(homedir(), '.dsh')
 }
 
-/** 插件所有数据放这儿：优先 ~/.dsh/plugins-data/dsh-qq-agent/，老用户无缝沿用 aurabot/ */
+/** 插件所有数据放这儿：优先 ~/.dsh/plugins-data/dsh-qq-hub/，老用户无缝沿用历史目录 */
 export function dataDir(...parts) {
-  const envDir = process.env.DSH_QQ_AGENT_DATA_DIR || process.env.AURABOT_DATA_DIR
+  const envDir = process.env.DSH_QQ_HUB_DATA_DIR || process.env.DSH_QQ_AGENT_DATA_DIR || process.env.AURABOT_DATA_DIR
   if (envDir) return join(envDir, ...parts)
   const home = join(dshHome(), 'plugins-data')
-  const newBase = join(home, 'dsh-qq-agent')
+  const newBase = join(home, 'dsh-qq-hub')
+  const agentBase = join(home, 'dsh-qq-agent')
   const legacyBase = join(home, 'aurabot')
-  const base = existsSync(newBase) || !existsSync(legacyBase) ? newBase : legacyBase
+  const base = existsSync(newBase) ? newBase : (existsSync(agentBase) ? agentBase : (existsSync(legacyBase) ? legacyBase : newBase))
   return join(base, ...parts)
 }
 

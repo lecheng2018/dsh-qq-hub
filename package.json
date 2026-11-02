@@ -1,7 +1,7 @@
 {
-  "name": "dsh-qq-agent",
+  "name": "dsh-qq-hub",
   "version": "1.2.0",
-  "description": "DSH (DeepSeek Harness) 旗舰级 QQ Agent 终端与多模态智能伙伴插件（经 SnowLuma / OneBot v11 接 QQ）",
+  "description": "DSH (DeepSeek Harness) 旗舰级 QQ Hub 终端与多模态智能伙伴插件（经 SnowLuma / OneBot v11 接 QQ）",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -32,7 +32,9 @@
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
+    "dsh-hub",
     "dsh-agent",
+    "qq-hub",
     "qq-agent",
     "qq",
     "onebot"
@@ -51,9 +53,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/lecheng2018/dsh-qq-agent.git"
+    "url": "https://github.com/lecheng2018/dsh-qq-hub.git"
   },
-  "homepage": "https://github.com/lecheng2018/dsh-qq-agent",
+  "homepage": "https://github.com/lecheng2018/dsh-qq-hub",
   "engines": {
     "node": ">=22.13.0"
   }

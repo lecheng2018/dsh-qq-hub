@@ -8,13 +8,13 @@
 #    人格通过提示词变量 {{aurabot_persona}} 放在系统提示词最前面（由插件注册，面板切换人格即时生效）。
 - insert:
     - id: aurabot
-      name: dsh-qq-agent
+      name: dsh-qq-hub
     - id: preset-aurabot-private
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: aurabot-private
-        name: QQ Agent · 主人私聊
-        description: QQ Agent 在 QQ 上和主人私聊时用：人格 + 完整工具
+        name: QQ Hub · 主人私聊
+        description: QQ Hub 在 QQ 上和主人私聊时用：人格 + 完整工具
         order: 60
         plugins:
           - id: persona
@@ -64,7 +64,7 @@
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: aurabot-private-long
-        name: QQ Agent · 主人私聊（长任务模式）
+        name: QQ Hub · 主人私聊（长任务模式）
         description: 主人私聊 + 后台任务（jobs）和定时任务（schedule）：长任务跑完会自动唤醒汇报
         order: 62
         plugins:
@@ -120,7 +120,7 @@
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: aurabot-social
-        name: QQ Agent · 群聊
+        name: QQ Hub · 群聊
         description: QQ 群和陌生人私聊时用：人格 + 只有 QQ 社交工具，没有任何电脑操作能力
         order: 61
         plugins:
