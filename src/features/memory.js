@@ -387,26 +387,45 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   // ---------- 人物小档案：每个人一小段印象（是谁、什么关系、喜好、近况），聊天时常驻 ----------
-  function profileOf(qq) {
-    return (load().profiles || {})[String(qq)] || null
+  // 档案按「QQ + 作用域」存：私聊里对她的印象不外流到群里，群里认识的也不带到私聊。
+  // 键形如 "444555666@private:444555666" / "444555666@group:222333444" / "444555666@global"。
+  // 老数据（只按 QQ 号存的）一律当 global，仍然哪里都能用，不会突然失忆。
+  function profileKeyOf(qq, scope) {
+    const q = String(qq || '')
+    if (!q) return ''
+    return `${q}@${scope || 'global'}`
   }
-  function setProfile(qq, text, name = '') {
+  /** 取这个 QQ 在某个作用域下的档案；scope 为空时返回 global 那份（面板/兼容用）。 */
+  function profileOf(qq, scope) {
+    const all = load().profiles || {}
+    const key = profileKeyOf(qq, scope)
+    if (key && all[key]) return all[key]
+    if (scope) return null
+    // 没给作用域：退回老的按 QQ 号存的那份（兼容旧调用与旧数据）
+    return all[String(qq)] || null
+  }
+  function setProfile(qq, text, name = '', scope = '') {
     const s = load()
     s.profiles = s.profiles || {}
+    const key = profileKeyOf(qq, scope)
     const t = String(text || '').trim().slice(0, 200)
-    if (t) s.profiles[String(qq)] = { text: t, name: name || s.profiles[String(qq)]?.name || '', at: Date.now() }
-    else delete s.profiles[String(qq)]
+    const prev = s.profiles[key]
+    if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now() }
+    else delete s.profiles[key]
     s.rev = (s.rev || 0) + 1
     save(s)
   }
 
-  /** 按这个人的记忆重写小档案（记忆少于 3 条的不写）。 */
-  async function buildProfile(qq) {
+  /** 按这个人的记忆重写小档案（记忆少于 3 条的不写）。scope 限定只用哪个作用域的记忆来写。 */
+  async function buildProfile(qq, scope = '') {
     const cfg = getConfig()
-    const mine = load().items.filter((m) => !m.invalidAt && String(m.about) === String(qq)).sort((a, b) => a.at - b.at)
+    const mine = load().items
+      .filter((m) => !m.invalidAt && String(m.about) === String(qq))
+      .filter((m) => !scope || String(m.scope || 'global') === String(scope) || String(m.scope || 'global') === 'global')
+      .sort((a, b) => a.at - b.at)
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
-    const old = profileOf(qq)?.text || ''
+    const old = profileOf(qq, scope)?.text || ''
     const out = await askModel(dsh, {
       cfg,
       system: '你是「大肥鱼」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
@@ -416,7 +435,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     })
     const text = String(out || '').trim().replace(/^[「"]|[」"]$/g, '')
     if (!text) throw new Error('模型没写出东西，等会儿再试')
-    setProfile(qq, text, name)
+    setProfile(qq, text, name, scope)
     return true
   }
 
@@ -427,7 +446,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const parts = []
     // 对这个人（群里是正在说话的几个人）的印象，不用等关键词碰上
     const people = chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3) : chat.userId ? [chat.userId] : []
-    const profs = people.map((qq) => profileOf(qq)).filter(Boolean)
+    // 档案按当前聊天作用域取：群聊只拿本群里认识的印象，私聊只拿这个私聊的，
+    // 再加上 global（她自己设定、大家都该知道的）。私聊里的私事不会进群聊。
+    const pScope = scopeOfChat(chat)
+    // 当前聊天作用域的档案 + global 档案都要带上（不是二选一）：
+    // 群聊里既要知道「在这个群里认识到的 TA」，也要知道「TA 本来是谁」这种通用档案。
+    const profs = people
+      .map((qq) => {
+        const local = profileOf(qq, pScope)
+        const glob = pScope === 'global' ? null : profileOf(qq, 'global')
+        if (local && glob && local.text !== glob.text) return { ...local, text: `${local.text}；${glob.text}` }
+        return local || glob
+      })
+      .filter(Boolean)
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
     const ins = insightsOf(personKey(chat))
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
@@ -697,13 +728,29 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       if (days) await learnSelfStyle()
       // 这次记忆有变化的人，重写人物小档案（每次最多 8 个人）
       const live = load()
-      const touched = [...new Set(live.items.filter((m) => m.about && (m.at >= startedAt || (m.invalidAt || 0) >= startedAt)).map((m) => String(m.about)))]
+      const touched = [...new Set(live.items
+        .filter((m) => m.about && (m.at >= startedAt || (m.invalidAt || 0) >= startedAt))
+        .map((m) => profileKeyOf(m.about, String(m.scope || 'global'))))]
       // 还没有小档案、但已经记了不少事的人也补上（刚升级时一次补几个，按记得的多少排）
+      // 关键：按「QQ + 作用域」分组重建，绝不能用全部记忆混写一份 ——
+      // 混写会把私聊里的私事写进一份所有聊天都能读的档案，群聊照样套得到。
       const count = new Map()
-      for (const m of live.items) if (m.about && !m.invalidAt) count.set(String(m.about), (count.get(String(m.about)) || 0) + 1)
-      const missing = [...count].filter(([qq, n]) => n >= 3 && !(live.profiles || {})[qq] && !touched.includes(qq)).sort((x, y) => y[1] - x[1]).map(([qq]) => qq)
-      for (const qq of [...touched, ...missing].slice(0, 8)) {
-        try { if (await buildProfile(qq)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
+      for (const m of live.items) {
+        if (!m.about || m.invalidAt) continue
+        const sc = String(m.scope || 'global')
+        const key = profileKeyOf(m.about, sc)
+        count.set(key, (count.get(key) || 0) + 1)
+      }
+      const missing = [...count]
+        .filter(([key, n]) => n >= 3 && !(live.profiles || {})[key] && !touched.some((t) => t === key))
+        .sort((x, y) => y[1] - x[1])
+        .map(([key]) => key)
+      const targets = [...new Set([...touched, ...missing])].slice(0, 8)
+      for (const key of targets) {
+        const at = key.lastIndexOf('@')
+        const qq = at > 0 ? key.slice(0, at) : key
+        const scope = at > 0 ? key.slice(at + 1) : 'global'
+        try { if (await buildProfile(qq, scope)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
       }
       const s = load()
       // 遗忘：不重要、很久没被想起的自动记忆清掉，记忆库不会越堆越乱
@@ -781,8 +828,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     recallHint,
     scopeOfChat, scopeVisible,
     add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
-    profiles: () => { const s = load(); return Object.entries(s.profiles || {}).map(([qq, p]) => ({ qq, ...p })).sort((a, b) => b.at - a.at) },
-    setProfile, buildProfile,
+    profiles: () => {
+      const s = load()
+      return Object.entries(s.profiles || {}).map(([key, p]) => {
+        // key 形如 "qq@scope"；老数据是纯 qq（无 @），按 global 处理
+        const at = key.lastIndexOf('@')
+        const qq = p.qq || (at > 0 ? key.slice(0, at) : key)
+        const scope = p.scope || (at > 0 ? key.slice(at + 1) : 'global')
+        return { key, qq, scope, ...p, qq, scope }
+      }).sort((a, b) => b.at - a.at)
+    },
+    profileOf, profileKeyOf, setProfile, buildProfile,
     recalls: () => recallLog.slice(),
     styles: () => load().styles || {},
     setStyle: (key, list) => setStyle(key, (list || []).map(String)),

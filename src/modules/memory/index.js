@@ -59,7 +59,8 @@ export default {
           properties: { query: str('想找什么') },
           required: ['query'],
           execute: async ({ query }) => {
-            const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）' })
+            // chat 一定要传：不传就跨作用域召回，群里能把私聊记的事翻出来
+            const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
             return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
           },
         }),
@@ -85,13 +86,13 @@ export default {
     api.route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
     api.route('/profiles/save', async (req) => {
       const b = await http.body(req)
-      memory.setProfile(String(b.qq || ''), String(b.text || ''))
+      memory.setProfile(String(b.qq || ''), String(b.text || ''), '', String(b.scope || ''))
       return { ok: true, message: b.text ? '小档案已保存' : '小档案已清空' }
     })
     api.route('/profiles/rebuild', async (req) => {
       const b = await http.body(req)
       try {
-        return (await memory.buildProfile(String(b.qq || ''))) ? { ok: true, message: '按记忆重写好了' } : { ok: false, message: '关于 TA 的记忆还太少（至少 3 条）' }
+        return (await memory.buildProfile(String(b.qq || ''), String(b.scope || ''))) ? { ok: true, message: '按记忆重写好了' } : { ok: false, message: '关于 TA 的记忆还太少（至少 3 条）' }
       } catch (error) {
         return { ok: false, message: error.message }
       }
