@@ -11,7 +11,7 @@ return function SecurityLockPanel(props) {
   const { Card, Btn, Empty } = ui
   const [d, setD] = useState(null)
   const [busy, setBusy] = useState('')
-  const load = () => call('/status').then((r) => setD(r)).catch(() => setD({ ok: false }))
+  const load = () => call('/security-lock/status').then((r) => setD(r)).catch(() => setD({ ok: false }))
   useEffect(() => { load() }, [])
   if (!d) return h(Card, { title: '绑定与状态' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '绑定与状态' }, h('div', { className: 'ab-note err' }, '读不到状态（扩展模块没在跑？）'))
@@ -34,7 +34,7 @@ return function SecurityLockPanel(props) {
         onClick: async () => {
           if (!confirm('重置之后手机上旧的验证码全部作废，要用新密钥重新绑。确定？')) return
           setBusy('reset')
-          try { const r = await call('/reset-secret', {}); props.toast && props.toast(r.ok ? '换了新密钥，重新绑一下' : '没成功', r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') }
+          try { const r = await call('/security-lock/reset-secret', {}); props.toast && props.toast(r.ok ? '换了新密钥，重新绑一下' : '没成功', r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') }
         },
       }, busy === 'reset' ? '换着呢…' : '重置密钥')),
     h('div', { className: 'ab-small ab-muted', style: { marginTop: 10, lineHeight: 1.7 } },

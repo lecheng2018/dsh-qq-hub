@@ -1,6 +1,6 @@
 // 预算守门员的面板：各聊天用量进度条 + 一键压缩。
 // 约定：panel.js 拿到的 4 个参数是 (React, h, ui, call)；最后 return 一个组件函数。
-// call 已经绑好本模块：call('/status') → GET /ext/token-guardian/status
+// call 已经绑好本模块：call('/token-guardian/status') → GET /aurabot/api/token-guardian/status
 
 const { useState, useEffect } = React
 const fmt = (n) => (n >= 10000 ? Math.round(n / 1000) + 'k' : String(n))
@@ -10,7 +10,7 @@ return function TokenGuardianPanel(props) {
   const { Card, Btn, Empty } = ui
   const [d, setD] = useState(null)
   const [busy, setBusy] = useState('')
-  const load = () => call('/status').then((r) => r && r.ok !== false && setD(r)).catch(() => setD({ ok: false, items: [] }))
+  const load = () => call('/token-guardian/status').then((r) => r && r.ok !== false && setD(r)).catch(() => setD({ ok: false, items: [] }))
   useEffect(() => { load() }, [])
   if (!d) return h(Card, { title: '用量' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '用量' }, h('div', { className: 'ab-note err' }, '读不到用量（扩展模块没在跑？）'))
@@ -24,7 +24,7 @@ return function TokenGuardianPanel(props) {
           h('span', { className: 'ab-small ab-muted' }, `${fmt(it.tokens)} / ${fmt(d.threshold)}`),
           h(Btn, {
             small: true, disabled: busy === it.chatId,
-            onClick: async () => { setBusy(it.chatId); try { const r = await call('/compact-now', { chatId: it.chatId }); props.toast && props.toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') } },
+            onClick: async () => { setBusy(it.chatId); try { const r = await call('/token-guardian/compact-now', { chatId: it.chatId }); props.toast && props.toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') } },
           }, busy === it.chatId ? '压着呢…' : '现在压一次')),
         h('div', { style: { height: 6, borderRadius: 3, background: 'var(--ab-line, #e5e7eb)', marginTop: 4 } },
           h('div', { style: { height: 6, borderRadius: 3, width: pct + '%', background: pct >= 100 ? '#ef4444' : pct > 60 ? '#f59e0b' : '#22c55e' } })),

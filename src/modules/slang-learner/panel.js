@@ -8,7 +8,7 @@ return function SlangPanel(props) {
   const [gid, setGid] = useState('')
   const [busy, setBusy] = useState('')
   const [draft, setDraft] = useState({}) // word → 意思
-  const load = (g) => call('/list' + (g ? '?gid=' + encodeURIComponent(g) : '')).then((r) => { setD(r); if (r && r.gid) setGid(r.gid) }).catch(() => setD({ ok: false }))
+  const load = (g) => call('/slang-learner/list' + (g ? '?gid=' + encodeURIComponent(g) : '')).then((r) => { setD(r); if (r && r.gid) setGid(r.gid) }).catch(() => setD({ ok: false }))
   useEffect(() => { load('') }, [])
   if (!d) return h(Card, { title: '群黑话' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '群黑话' }, h('div', { className: 'ab-note err' }, '读不到黑话本（扩展模块没在跑？）'))
@@ -31,7 +31,7 @@ return function SlangPanel(props) {
     setBusy(word)
     try {
       const meaning = String(draft[word] || '')
-      const r = await call('/approve', { gid: d.gid, word, meaning })
+      const r = await call('/slang-learner/approve', { gid: d.gid, word, meaning })
       props.toast && props.toast(r.ok ? `通过了「${word}」` : (r.message || '没成功'), r.ok ? 'ok' : 'err')
       await load(d.gid)
     } finally { setBusy('') }

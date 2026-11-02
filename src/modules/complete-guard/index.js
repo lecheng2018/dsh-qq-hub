@@ -75,7 +75,7 @@ export default {
     api.rule(() => '一次没说完的长内容，先说结论、分点讲；如果确实太长，先说「我分两段说」，不要停在「因为」「然后」这种半句上。')
 
     // 面板 / 别的模块可以直接问
-    api.route('/last', (req) => ({ ok: true, items: Object.fromEntries(lastResult) }))
+    api.route('/complete-guard/last', (req) => ({ ok: true, items: Object.fromEntries(lastResult) }))
 
     return {
       looksLikeUnfinished,
