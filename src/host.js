@@ -33,6 +33,10 @@ import { createDangerGuard } from './security/danger.js'
 import { BUILTINS } from './modules/index.js'
 
 export const name = 'aurabot'
+// 注意：不要把 userQuestions 写进 inject。
+// cordis 4 的 Fiber._refresh() 会对 inject 里每个 key 做「实现必须存在」判定，
+// 缺一个就把 epoch 设成 INACTIVE，插件永远不启动（这正是之前 /aurabot/api/* 全 404 的根因）。
+// userQuestions 在 0.2.2-alpha.2 运行时并不存在，所以只能运行时探测（见 setupUserQuestions）。
 export const inject = ['agents', 'sessions', 'webServer', 'timer', 'workspaceRegistry', 'attachments', 'systemPrompt', 'llm']
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -408,7 +412,11 @@ export function apply(ctx) {
   // ---------- 交互式提问 (userQuestions / ask_user_question) ----------
   // 接入 DSH 官方 userQuestions seam：当模型通过 ask_user_question 提问时，格式化为 A/B/C 选项卡发往 QQ
   function setupUserQuestions() {
-    const uq = ctx.userQuestions || ctx.get?.('userQuestions')
+    // 读 ctx.userQuestions 时如果没在 inject 里声明，Cordis 会直接抛，所以整段包起来，
+    // 而且做成「有就接、没有就跳过」，绝不能让交互提问这个可选能力把整个插件带崩。
+    let uq = null
+    try { uq = ctx.userQuestions } catch (error) { log.debug('DSH 没提供 userQuestions（跳过交互提问桥接）：', error.message) }
+    if (!uq) { try { uq = ctx.get?.('userQuestions') } catch (error) {} }
     if (!uq) return
     if (uq.provider) {
       const orig = uq.provider
