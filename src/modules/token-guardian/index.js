@@ -45,9 +45,22 @@ export default {
   setup(api) {
     const stateFile = () => dataDir('state.json')
     const summaryFile = () => dataDir('summary.json')
+    /**
+     * 只留「值是正经对象」的条目。老版本或异常退出可能把 null / 字符串写进 JSON，
+     * 读回来之后 Object.entries 会给出 null，estimate(st.chars) 直接抛
+     * "Cannot read properties of null (reading 'chars')"，把整个面板搞挂。
+     */
+    const cleanMap = (raw) => {
+      const out = {}
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out
+      for (const [k, v] of Object.entries(raw)) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = v
+      }
+      return out
+    }
     // sessionKey → { chars, lastAt, lastCompactAt, turns }
-    let state = readJson(stateFile(), {})
-    let summaries = readJson(summaryFile(), {}) // sessionKey → { text, at }
+    let state = cleanMap(readJson(stateFile(), {}))
+    let summaries = cleanMap(readJson(summaryFile(), {})) // sessionKey → { text, at }
     let timer = null
 
     const persist = () => { try { writeJson(stateFile(), state) } catch (error) { api.log.warn('保存状态失败：', error.message) } }
@@ -93,7 +106,7 @@ export default {
       if (!body) return false
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
       persistSummary()
-      const st = state[sessionKey] || {}
+      const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
       // 压缩完相当于把历史折成摘要，把估算值重置成摘要本身的规模
       st.chars = Math.round(body.length * 1.2)
       st.lastCompactAt = Date.now()
@@ -112,6 +125,7 @@ export default {
       const hub = api.core.hub
       const now = Date.now()
       for (const [key, st] of Object.entries(state)) {
+        if (!st || typeof st !== 'object') { delete state[key]; continue }
         const tokens = estimate(st.chars)
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
@@ -127,7 +141,7 @@ export default {
     api.on('activity', (a) => {
       if (!a || !a.chatId) return
       const key = String(a.chatId)
-      const st = state[key] || { chars: 0, lastAt: 0, lastCompactAt: 0, turns: 0 }
+      const st = state[key] && typeof state[key] === 'object' ? state[key] : { chars: 0, lastAt: 0, lastCompactAt: 0, turns: 0 }
       // 粗略累加：一条消息的正文 + 固定开销（角色、系统提示、工具清单都算在里）
       st.chars = Number(st.chars || 0) + String(a.text || '').length + 160
       st.lastAt = Date.now()
@@ -154,7 +168,9 @@ export default {
 
     // 面板：各聊天用量一览 + 立即压缩一个聊天
     api.route('/token-guardian/status', () => {
-      const rows = Object.entries(state).map(([chatId, st]) => ({
+      const rows = Object.entries(state)
+        .filter(([, st]) => st && typeof st === 'object')
+        .map(([chatId, st]) => ({
         chatId,
         chars: Number(st.chars || 0),
         tokens: estimate(st.chars),
@@ -180,7 +196,7 @@ export default {
         properties: {},
         required: [],
         execute: async () => {
-          const st = state[String(chat.chatId)] || {}
+          const st = state[String(chat.chatId)] && typeof state[String(chat.chatId)] === 'object' ? state[String(chat.chatId)] : {}
           const cfg = api.settings()
           return {
             ok: true,
