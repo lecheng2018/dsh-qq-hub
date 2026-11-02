@@ -26,6 +26,7 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ Aurabot 插件
 - **通用工具审批流 (`src/chat/approvals.js`)**：接入 DSH `approval/request` 瀑布流。执行敏感工具前向主人私聊推送编号审批卡（`#1`、`#2`...），展示真实脱敏命令与原因，支持回复「通过 #1」「拒绝 2」「放行」即时批复，带 60 秒超时自动拦截。
 - **断线消息自动补收 (`src/chat/backfill.js`)**：检测到连接断档（>2 分钟）并在恢复后，自动拉取错过的群聊与私聊历史；严格执行安全命令隔离，严禁执行迟到命令与审批，注入带时间戳的上下文提示词。
 - **全功能通用定时调度器 (`src/modules/scheduler/`)**：移植完整调度引擎，支持 `once`、`in 30m`、`daily`、`workdays`、`weekly`、`interval` 与 `Cron`；提供主人私聊 `/remind` 管理指令，并向模型暴露 `schedule_reminder` 原生工具。
+- **多平台内容解析器 (`src/modules/multi-parser/`)**：移植自 astrbot_plugin_multi_parser，自动识别 10+ 平台链接（B站/微博/小红书/知乎/微信/贴吧/番茄/GitHub等），提取无水印视频与高清图集；支持合并转发防刷屏、大视频转群文件；集成独立 AI 上下文注入开关 (`feedToAi`)，并在控制面板「平台」页新增专属设置选项卡。
 
 ### 2. DSH 增强五件套模块内置化
 - **`security-lock`**：纯 `node:crypto` 实现 RFC 6238 TOTP 手机动态口令，提供 `/unlock` 提权与 30 分钟生命周期。
