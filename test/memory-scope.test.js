@@ -224,3 +224,40 @@ test('relatedTo 不把别处的记忆当成已知事实喂给归纳模型', () =
   const rel = store.relatedTo(stranger.chatId, '大家在聊 NAS 和 Docker 怎么玩')
   assert.ok(!rel.some((m) => String(m.text).includes('NAS')), '提炼陌生群聊天时不该看到主人私聊的记忆')
 })
+
+// ---------- 老数据迁移后的行为 ----------
+// 对应 scripts/fix-memory-scope.mjs：线上曾有一批 chatId 全空、无 scope 的老记忆。
+// 新代码对「无 scope」一律不可见，所以迁移必须给它们落一个明确作用域，
+// 否则这批记忆会静默消失（不报错，就是没了）。
+
+test('迁移后：来源不明的老记忆落在主人私聊，群里看不到', () => {
+  const stranger = { chatId: 'group:888888888', kind: 'group', groupId: '888888888' }
+  // 迁移脚本把无来源条目兜底到 private:<主人QQ>（这里是 cfg.ownerQQ = 10001）
+  const owner = { chatId: 'private:' + cfg.ownerQQ, kind: 'private', userId: String(cfg.ownerQQ) }
+  store.add({ text: '迁移兜底的主人私事样例', about: String(cfg.ownerQQ), importance: 0.9,
+              source: 'auto', chatId: '', scope: `private:${cfg.ownerQQ}` })
+  assert.ok(store.recall('兜底', { chat: owner }).length > 0, '迁移后主人私聊还认得这条')
+  assert.equal(store.recall('兜底', { chat: stranger }).length, 0, '陌生群拿不到')
+  assert.ok(!store.contextFor(stranger, 'sx2').includes('兜底'), '陌生群上下文里也没有')
+})
+
+test('无 scope 的老记忆不会出现在任何作用域索引里（迁移必须跑的原因）', async () => {
+  // 用独立目录，避免污染本文件共享的记忆库
+  const { mkdtempSync: mk, writeFileSync } = await import('node:fs')
+  const alone = mk(join(tmpdir(), 'ab-noscope-'))
+  writeFileSync(join(alone, 'memories.json'), JSON.stringify({
+    items: [{ id: 'raw01', text: '没人认领的老记忆', importance: 0.9, source: 'auto', chatId: '', at: Date.now() }],
+  }), 'utf8')
+  const prev = process.env.AURABOT_DATA_DIR
+  process.env.AURABOT_DATA_DIR = alone
+  const s3 = createMemoryStore({ dsh: { get: () => null }, getConfig: () => cfg,
+    hub: { ask: noop, speakersOf: () => [] }, log: { info: noop, warn: noop, debug: noop, error: noop } })
+  try {
+    const own = { chatId: 'private:' + cfg.ownerQQ, kind: 'private', userId: String(cfg.ownerQQ) }
+    assert.ok(!s3.indexFor(own).docs.some((x) => x.it.id === 'raw01'), '主人私聊的索引里也不该有它')
+    assert.ok(!s3.indexFor('global').docs.some((x) => x.it.id === 'raw01'), 'global 索引里也不该有它')
+  } finally {
+    if (prev === undefined) delete process.env.AURABOT_DATA_DIR
+    else process.env.AURABOT_DATA_DIR = prev
+  }
+})
