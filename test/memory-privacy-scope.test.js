@@ -57,3 +57,13 @@ test('scopeOf 按聊天类型给出正确作用域', () => {
   assert.equal(scopeOf(GROUP), 'group:1124211723')
   assert.equal(scopeOf(SYSTEM), 'global')
 })
+
+test('autoScope 关掉时写进 global 是已知的降级行为（不是默认路径）', () => {
+  // 面板里 autoScope:false 会让新记忆一律落 global，等于放弃隔离。
+  // 这里钉住「关掉后确实会公开」这个事实，防止有人误以为关了也还安全。
+  const written = 'global' // 对应 add() 里 autoScope ? scopeOf(chat) : 'global'
+  for (const chat of [OWNER, STRANGER, GROUP, OTHER_GROUP]) {
+    assert.equal(isVisible({ text: 'x', scope: written }, chat), true,
+      '写进 global 后任何聊天都看得到 —— 这就是关掉 autoScope 的代价')
+  }
+})
