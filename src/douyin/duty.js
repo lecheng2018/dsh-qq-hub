@@ -14,6 +14,8 @@ const clip = (t, max) => [...String(t ?? '').replace(/\s+/g, ' ').trim()].slice(
 // 这些错误说明今天别再动手了：验证码、操作太频繁、账号被限制
 const STOP_RE = /验证|频繁|稍后再试|异常|限制|风控/
 const NAME = { like: '点赞', comment: '评论' }
+/** 主人私聊的记忆作用域：抖音私信、分享给主人这类私事只记在这里，群里问不出来。 */
+const ownerScope = (cfg) => (cfg?.ownerQQ ? `private:${cfg.ownerQQ}` : 'global')
 
 /** 从模型输出里取 JSON（对象或数组），取不到返回 fallback。 */
 export function pickJson(out, fallback) {
@@ -198,7 +200,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         log.warn('QQ 上分享抖音视频失败：', error.message)
       }
     }
-    if (via.length) memory?.addEvent?.({ text: `把抖音上《${v.title}》分享给了${owner()}${via.includes('douyin') ? '（抖音私信）' : ''}：${text.slice(0, 40)}`, tags: ['抖音'], importance: 0.45 })
+    if (via.length) memory?.addEvent?.({ text: `把抖音上《${v.title}》分享给了${owner()}${via.includes('douyin') ? '（抖音私信）' : ''}：${text.slice(0, 40)}`, tags: ['抖音'], importance: 0.45, scope: ownerScope(getConfig()) })
     return { ok: via.length > 0, via }
   }
 
@@ -463,7 +465,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       }
       await site.sendDm(say)
       record(s, { kind: 'dm-out', text: say, title: u.nickname })
-      memory?.addEvent?.({ text: `在抖音给${u.nickname}发了私信：${say.slice(0, 50)}`, tags: ['抖音'], importance: 0.4 })
+      // 抖音私信是一对一的私密对话：只让主人私聊看得到，别让群里问出来
+      memory?.addEvent?.({ text: `在抖音给${u.nickname}发了私信：${say.slice(0, 50)}`, tags: ['抖音'], importance: 0.4, scope: ownerScope(getConfig()) })
       return { ok: true, message: `发给「${u.nickname}」了`, nickname: u.nickname }
     } catch (error) {
       log.warn('主动发抖音私信没成：', error.message)
@@ -588,7 +591,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         if (sent < lines.length) await sleep(between(800, 2500))
       }
       done()
-      memory?.addEvent?.({ text: `在抖音私信里回了${owner()}：${lines.join(' ').slice(0, 60)}`, tags: ['抖音'], importance: 0.4 })
+      memory?.addEvent?.({ text: `在抖音私信里回了${owner()}：${lines.join(' ').slice(0, 60)}`, tags: ['抖音'], importance: 0.4, scope: ownerScope(getConfig()) })
       return { ok: true, replied: sent }
     } catch (error) {
       // 发过一部分或发送状态不确定时不整轮重试，避免前半句或整句重复。
