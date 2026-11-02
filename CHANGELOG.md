@@ -1,5 +1,49 @@
 # 更新记录
 
+## 1.2.0
+
+- **新增：交互式提问卡片与多选作答系统 (`ask_user_question`)**：
+  - 原生接入 DSH `ctx.userQuestions` 抽象（自适应宿主提供方与无头常驻模式）；
+  - 遇到模型调用提问时，格式化为带 `A. / B. / C.` 选项的 QQ 消息卡片发出，保留题目、补充说明与单选/多选标注；
+  - 宽容作答解析引擎：支持单字母（A/b）、字母连写（A,C / ac）、数字编号、选项文本与模糊匹配，未命中项作为 custom 自由作答回填；
+  - 5 分钟超时兜底与即时确认回执，彻底解决问答弹不出与任务挂死痛点。新增 6 条单元测试。
+
+- **新增：通用工具审批流与审批卡 (`approval/request`)**：
+  - 接入 DSH 官方 `approval/request` waterfall 瀑布流，敏感工具调用自动挂起等待主人审批；
+  - 推送带独立编号（#1, #2...）的审批卡至主人私聊，展示工具名、脱敏命令及调用原因；
+  - 支持回复「通过 #1」「拒绝 2」「放行」等指令批复；
+  - 深度联动 `security-lock` 权限锁，锁定时强制拦截通过操作并提示主人先发 `/unlock` 验 TOTP 动态口令；60 秒超时自动拦截。新增 5 条单元测试。
+
+- **新增：断线消息自动补收与命令防重放 (`backfill`)**：
+  - 维护 `upstream-seen.json` 持久化时间戳，基于心跳与事件间隔（默认 > 2 分钟）自动判定离线断档（合盖睡眠/网关重启）；
+  - 连接恢复稳定后，自动通过 OneBot `get_group_msg_history` / `get_friend_msg_history` 捞回断线期间错过的消息；
+  - 安全隔离：补收到的斜杠命令、动态码、审批回复一律拦截不执行并私聊提示主人；向模型注入自然补收提示词，防止错把迟到消息当实时消息。新增 5 条单元测试。
+
+- **新增：全功能通用定时任务与调度引擎 (`scheduler`)**：
+  - 移植自 dsh-qq 完整调度引擎：支持 `once`（指定日期时间）、`in 30m`（相对延时）、`daily`（每日时刻）、`workdays`（工作日避开周末）、`weekly`（每周几几点）、`interval` 及标准 5 段 `Cron` 调度；
+  - 主人私聊原生管理指令：`/remind in 30m 喝水`、`/remind once 2026-11-05 09:30 检查周报`、`/remind list`、`/remind del 1`、`/remind on/off 1`；
+  - 面向大模型暴露原生 `schedule_reminder` 工具，AI 可以在对话中主动帮主人定提醒，到点系统自动通过 QQ 发送卡片提醒。新增 5 条单元测试。
+
+- **新增：DSH 增强五件套内置模块**：
+  - `security-lock`：纯 `node:crypto` 实现 RFC 6238 TOTP 手机动态口令，支持 `/unlock` 认证与 30 分钟提权存活；
+  - `token-guardian`：基于会话 Token 估算，达阈值自动在空闲期调用 DSH compaction 压缩历史；
+  - `complete-guard`：检测 Agent 回复是否悬挂在连接词或未闭合括号上，识别截断并告警；
+  - `memory-privacy`：`private` / `group` / `global` 三作用域隔离，防止群聊套出私聊记忆；
+  - `slang-learner`：自动提取群聊候选词，主人审核后按群注入上下文。
+
+- **全量安全审计与系统稳定性加固**：
+  - 修复 `heybox` 模块 `hasLogin` 缺失引发的定时器崩溃 BUG；
+  - 修复 `douyin` 受控浏览器导航与 `net.js` 302 重定向跟随引发的内网 SSRF 风险；
+  - 修复 `studio.js` 中 `ffmpeg` 提取信息无超时死锁问题（加 15s 超时强杀）；
+  - 修复 `memory` 记忆库 `recall` 命中统计高频覆写导致的并发数据丢失，解耦为内存防抖回写；
+  - 修复 Windows 下 `writeJson` 原子改名 `renameSync` 缺少重试导致的 `EPERM` 偶发崩溃；
+  - 补齐 OAuth 报错分支端口释放与翻唱报错临时目录清理；
+  - 为 OneBot 客户端引入 90s 心跳保活看门狗，防 TCP 半开假死。
+
+- **新增：CI/CD 自动打包与 GitHub Release 工作流 (`.github/workflows/release.yml`)**：
+  - main 分支有 push 时自动触发全量测试，验证 0 fail 后自动构建 `.tgz` DSH 插件包；
+  - 自动从 `CHANGELOG.md` 提取当版更新日志并发布 GitHub Release，附带 tarball 安装包。
+
 ## 未发布
 
 - **偷表情新增三种模式 + `qq_collect_sticker` 工具**：面板「表情包 → 怎么偷」可选「全都偷」（默认，保持原行为）、「她挑」（先把表情记下来并给她一句轻提示，她喜欢才凭编号收）、「只听主人的」（只有主人私聊 / 这一轮只有主人说话时才提示并允许她收；有别人在场就要主人发话）。后两种模式下表情按会话暂存、30 分钟内有效、重启不丢；她可以用新工具 `qq_collect_sticker` 按编号收（也能收自己刚画的图），并顺手收藏到 QQ。新增 11 条回归测试。
