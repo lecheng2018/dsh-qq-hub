@@ -325,7 +325,8 @@ export function apply(ctx) {
     contextProviders: [(args) => mods.contextFor(args)],
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
-    memoryScore: (text) => use('memory')?.topicScore?.(text) ?? 0,
+    // 传 chat：话题相关度只在当前聊天可见的记忆里算，别处的记忆不该让她在群里「感兴趣」
+    memoryScore: (text, chat) => use('memory')?.topicScore?.(text, chat) ?? 0,
     // QQ 里的主人命令（模块加的命令优先）
     onCommand: async (msg) => {
       const cmd = parseCommand(msg.text, mods.commands())
