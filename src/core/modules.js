@@ -596,7 +596,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         tools: rec ? toolNames(rec) : [],
         commands: rec ? rec.commands.map((c) => c.name) : [],
         routes: [...routes].filter(([, r]) => r.id === id).map(([p]) => p.replace('/aurabot/api', '')),
-        settings: rec?.source === 'user' || (!rec && u) ? (def.settings || []) : [],
+        // 内置模块也要把设置项透出去（面板靠这个渲染开关）；之前只给了用户模块，内置的设置项全成了空数组
+        settings: def.settings || [],
         defaults: def.defaults || {},
         panel: Boolean(def.panel && (rec?.source === 'user' || rec?.source === 'builtin')),
         tab: def.tab || '',
