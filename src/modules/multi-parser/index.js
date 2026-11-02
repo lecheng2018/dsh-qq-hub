@@ -99,7 +99,7 @@ export default {
 
       for (const rawUrl of urls.slice(0, 3)) {
         try {
-          const result = await parseUrl(rawUrl, { platforms: c.platforms, cookies: c.cookies })
+          const result = await parseUrl(rawUrl, { platforms: c.platforms, cookies: c.cookies, rawText: msg.text })
           if (!result) continue
 
           handledAny = true
@@ -124,12 +124,14 @@ export default {
     // 面板测试接口：手动输入链接测试解析效果
     api.route('/multi-parser/test', async (req) => {
       const body = await api.core.http.body(req)
-      const url = String(body.url || '').trim()
-      if (!url) return { ok: false, message: '请提供测试链接' }
+      const input = String(body.url || '').trim()
+      if (!input) return { ok: false, message: '请提供测试链接或口令文本' }
 
       try {
         const c = cfg()
-        const result = await parseUrl(url, { platforms: c.platforms, cookies: c.cookies })
+        const urls = extractUrls(input)
+        const targetUrl = urls[0] || input
+        const result = await parseUrl(targetUrl, { platforms: c.platforms, cookies: c.cookies, rawText: input })
         if (!result) return { ok: false, message: '暂不支持该平台链接或解析失败' }
         return { ok: true, result }
       } catch (err) {
