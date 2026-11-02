@@ -76,7 +76,10 @@ export function search(idx, query, o = {}) {
       const f = d.tf.get(t)
       if (!f) continue
       const n = idx.df.get(t) || 0
-      const idf = Math.log(1 + (idx.N - n + 0.5) / (n + 0.5))
+      // IDF 下限：语料很少时（比如某个群只有一两条记忆），标准 BM25 的 IDF
+      // 会趋近 0，导致「唯一记得的那条」反而检不出来 —— 等于失忆。
+      // 按作用域分索引后这种情况很常见，所以给 IDF 兜一个下限，保证单词命中也有分。
+      const idf = Math.max(0.6, Math.log(1 + (idx.N - n + 0.5) / (n + 0.5)))
       const part = idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * d.len / idx.avgLen))
       s += part
       why.push([t, part])
@@ -170,6 +173,8 @@ export function parseReflection(out) {
 
 export function createMemoryStore({ dsh, getConfig, hub, log }) {
   const file = () => dataDir('memories.json')
+  // 作用域索引缓存（按 scope 分组）；任何写入都会 clear
+  const cache = new Map() // scope -> { stamp, count, idx }
   const load = () => readJson(file(), () => ({ items: [] }))
 
   const pendingHitUpdates = new Map()
@@ -214,14 +219,55 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
     }
     writeJson(file(), s)
-    cache = null
+    cache.clear()
   }
-  let cache = null // { stamp, idx }
-  const index = () => {
+  /**
+   * 记忆索引。**必须带作用域**：索引只包含这个聊天看得见的条目。
+   *
+   * 这是整个隔离方案的地基。以前 index() 用全量 items 建索引，
+   * 于是所有基于它的检索（recall、topicScore、relatedTo、面板搜索）天然跨域，
+   * 谁忘了在调用点补过滤，谁就是一条泄漏通道 —— 实测陌生群提到「NAS」「Docker」
+   * 就能通过 topicScore 命中主人的私聊记忆，把她的插话概率往上抬。
+   *
+   * 现在改成：索引按作用域分组构建并缓存，接口强制传 chat 或 scope。
+   * 传 'global' 只拿 global；传 null/undefined 返回空索引（fail-closed，宁可不给）。
+   */
+  /**
+   * 全量索引：**只在主人自己的管理路径用**（面板列表、导出、/new 之类）。
+   * 任何面向聊天内容生成的检索都必须走 indexFor(chat)，否则就是跨域。
+   */
+  const indexAll = () => {
     const s = load()
-    const stamp = s.items.length + ':' + (s.items.at(-1)?.id || '') + ':' + (s.rev || 0)
-    if (!cache || cache.stamp !== stamp) cache = { stamp, idx: buildIndex(s.items) }
-    return cache.idx
+    const stamp = (s.rev || 0) + ':' + s.items.length
+    const hit = cache.get('__all__')
+    if (hit && hit.stamp === stamp) return hit.idx
+    const idx = buildIndex(s.items)
+    cache.set('__all__', { stamp, idx })
+    return idx
+  }
+  function scopeKeyOf(chatOrScope) {
+    if (chatOrScope === 'global') return 'global'
+    if (chatOrScope && typeof chatOrScope === 'object') return scopeOfChat(chatOrScope)
+    // 字符串形式的作用域（'private:123' / 'group:456'）也认
+    if (typeof chatOrScope === 'string' && chatOrScope.trim()) return chatOrScope.trim()
+    return '' // 没给作用域：下面会被当成空索引
+  }
+  function indexFor(chatOrScope) {
+    const scope = scopeKeyOf(chatOrScope)
+    if (!scope) return buildIndex([]) // fail-closed：没说清楚给谁看，就什么都不给
+    const s = load()
+    // 可看见的条目：本作用域的 + global（global 处处可见）
+    const visible = s.items.filter((m) => {
+      const sc = String(m.scope || '').trim()
+      if (!sc) return false // 无作用域老数据：不再当 global 放行
+      return sc === 'global' || sc === scope
+    })
+    const stamp = s.rev || 0
+    const hit = cache.get(scope)
+    if (hit && hit.stamp === stamp && hit.count === s.items.length) return hit.idx
+    const idx = buildIndex(visible)
+    cache.set(scope, { stamp, count: s.items.length, idx })
+    return idx
   }
 
   /**
@@ -402,11 +448,13 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     // 作用域过滤：拿不到当前聊天（chat=null）就不限，保持老调用方行为；
     // 传了 chat 就只留这个聊天可见的（私聊作用域的条目在群里会被物理过滤掉，模型套话也拿不到）。
     const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat)) : list)
-    const hits = scoped(search(index(), query, { about, limit: chat ? max * 3 : max })).slice(0, max)
+    // 索引本身就按作用域建：传了 chat 只检索它看得见的条目（双保险，scoped 再滤一次）
+    const idx = chat ? indexFor(chat) : indexAll()
+    const hits = scoped(search(idx, query, { about, limit: chat ? max * 3 : max })).slice(0, max)
     // 这一句没想起几条（「嗯嗯」「然后呢」）：用上一句再找找，分数打折
     if (context && hits.length < max) {
       const have = new Set(hits.map((h) => h.it.id))
-      for (const h of scoped(search(index(), context, { about, limit: max * 3, minScore: 0.5 }))) {
+      for (const h of scoped(search(idx, context, { about, limit: max * 3, minScore: 0.5 }))) {
         if (hits.length >= max) break
         if (!have.has(h.it.id)) hits.push({ ...h, score: h.score * 0.6, why: [...(h.why || []), '（上一句）'] })
       }
@@ -497,9 +545,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   /** 按这个人的记忆重写小档案（记忆少于 3 条的不写）。scope 限定只用哪个作用域的记忆来写。 */
   async function buildProfile(qq, scope = '') {
     const cfg = getConfig()
+    // 只用「这个作用域自己的」记忆写档案。
+    // 以前还会把 global 记忆也喂进来（`|| scope === 'global'`），后果是：
+    // 在陌生群里给主人写档案时，会把主人私聊里的私事混进去，提炼成一条 global 档案，
+    // 于是「私事 → global → 哪里都能读」—— 等于绕过了所有隔离。
+    // global 档案该由 global 自己那条线维护，不该由别的聊天代写。
     const mine = load().items
       .filter((m) => !m.invalidAt && String(m.about) === String(qq))
-      .filter((m) => !scope || String(m.scope || 'global') === String(scope) || String(m.scope || 'global') === 'global')
+      .filter((m) => (scope ? String(m.scope || '') === String(scope) : true))
       .sort((a, b) => a.at - b.at)
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
@@ -527,8 +580,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     // 档案按当前聊天作用域取：群聊只拿本群里认识的印象，私聊只拿这个私聊的，
     // 再加上 global（她自己设定、大家都该知道的）。私聊里的私事不会进群聊。
     const pScope = scopeOfChat(chat)
-    // 当前聊天作用域的档案 + global 档案都要带上（不是二选一）：
-    // 群聊里既要知道「在这个群里认识到的 TA」，也要知道「TA 本来是谁」这种通用档案。
+    // 当前聊天作用域的档案 + global 档案（不是二选一）：
+    // global 档案是**显式标注为公开的那部分**（她自己是谁、大家都该知道的），哪里都能读。
+    // 真正要防的是「私事被自动提炼成 global」——那在 buildProfile 里堵，
+    // 而不是把 global 整个禁掉（禁掉会让所有正常的人设也读不到）。
     const profs = people
       .map((qq) => {
         const local = profileOf(qq, pScope)
@@ -705,7 +760,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     if (chatId.startsWith('private:')) ppl.add(chatId.slice(8))
     const items = load().items.filter((m) => !m.invalidAt && m.source !== 'event' && m.source !== 'diary')
     const out = items.filter((m) => m.about && ppl.has(String(m.about))).sort((a, b) => b.at - a.at).slice(0, 10)
-    for (const h of search(index(), String(transcript).slice(-1500), { limit: 8, minScore: 0.5 })) {
+    // 用当前聊天的索引：提炼 A 群聊天时，不该把主人私聊或 B 群的记忆当成「已知事实」喂给模型
+    for (const h of search(indexFor(chatId), String(transcript).slice(-1500), { limit: 8, minScore: 0.5 })) {
       if (out.length >= 15) break
       if (!out.some((m) => m.id === h.it.id) && h.it.source !== 'event' && h.it.source !== 'diary') out.push(h.it)
     }
@@ -899,9 +955,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     }
   }
 
-  /** 群聊话题和记忆库有多相关（0~1），给插话判断用。 */
-  function topicScore(text) {
-    const hits = search(index(), text, { limit: 1, minScore: 0.01 })
+  /**
+   * 群聊话题和这个聊天里的记忆有多相关（0~1），给插话判断用。
+   *
+   * **必须传 chat**。以前不传，查的是全量索引：陌生群只要提到主人私聊里出现过
+   * 的词（实测「NAS」0.13、「Docker」0.25），插话相关度就被抬高 50% 权重下的对应值，
+   * 她会因此主动开口，而开口的内容来自主人的私聊记忆 —— 事故的直接推力。
+   * 现在按当前聊天的索引算，别处记的东西不会让她在陌生群里「感兴趣」。
+   */
+  function topicScore(text, chat = null) {
+    if (!chat) return 0 // fail-closed：不知道在哪个聊天，就当不相关
+    const hits = search(indexFor(chat), text, { limit: 1, minScore: 0.01 })
     return hits.length ? Math.min(1, hits[0].score / 3) : 0
   }
 
@@ -943,7 +1007,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   return {
     recallHint,
     scopeOfChat, scopeVisible,
-    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope,
+    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll,
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {
@@ -970,7 +1034,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       const textOf = new Map(items.map((m) => [m.id, m.text]))
       const withBy = (m) => (m.supersededBy ? { ...m, supersededText: textOf.get(m.supersededBy) || '' } : m)
       if (!q) return items.slice().sort((a, b) => (Boolean(a.invalidAt) - Boolean(b.invalidAt)) || b.at - a.at).map(withBy)
-      return search(index(), q, { limit: 100, minScore: 0.01, includeInvalid: true }).map((h) => withBy({ ...h.it, score: Number(h.score.toFixed(2)) }))
+      // 面板搜索：主人自己看全库，这里有意识地用全量索引
+      return search(indexAll(), q, { limit: 100, minScore: 0.01, includeInvalid: true }).map((h) => withBy({ ...h.it, score: Number(h.score.toFixed(2)) }))
     },
     stats: () => {
       const items = load().items
