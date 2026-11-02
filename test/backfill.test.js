@@ -8,6 +8,13 @@ import {
   describeDuration,
   backfillNoticeBlock
 } from '../src/chat/backfill.js'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { unlinkSync } from 'node:fs'
+
+// 跨平台临时文件：原先硬编码 E:/work/... 会在 Linux/macOS 上把「E:」当成字面目录名，
+// 在仓库里递归建出空壳 E:/work/dsh-aurabot-qq/test，污染工作区与打包产物。
+const tmpUpstreamFile = () => join(tmpdir(), `aurabot-test-upstream-${process.pid}-${Date.now()}.json`)
 
 test('isCommandLike: 识别命令/动态码/审批指令，不误判普通聊天', () => {
   // 斜杠命令
@@ -51,7 +58,7 @@ test('createSeenMessageIds: 消息去重与容量上限', () => {
 test('createUpstreamGapTracker: 断档检测', () => {
   let currentTime = 1000_000
   const tracker = createUpstreamGapTracker({
-    file: 'E:/work/dsh-aurabot-qq/test/.tmp-upstream.json',
+    file: tmpUpstreamFile(),
     gapMs: 120_000,
     now: () => currentTime
   })
@@ -71,7 +78,7 @@ test('createUpstreamGapTracker: 断档检测', () => {
   assert.equal(gap.since, 1030_000)
 
   // 清理临时文件
-  try { import('node:fs').then(fs => fs.unlinkSync('E:/work/dsh-aurabot-qq/test/.tmp-upstream.json')) } catch {}
+  try { unlinkSync(tracker.file || tmpUpstreamFile()) } catch {}
 })
 
 test('selectBackfill: 从历史中筛选、去重与命令隔离', () => {
