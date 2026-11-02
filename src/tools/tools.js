@@ -1,4 +1,4 @@
-// 工具的写法。具体的工具都在各个模块里（src/modules/*），按会话注册（agent.ctx.tools.register），只出现在 Aurabot 的会话里。
+// 工具的写法。具体的工具都在各个模块里（src/modules/*），按会话注册（agent.ctx.tools.register），只出现在 QQ Hub 的会话里。
 // 工具定义一旦确定尽量别改：改一次，DeepSeek 的前缀缓存就失效一次。
 
 /**

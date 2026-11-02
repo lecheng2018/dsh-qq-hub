@@ -94,7 +94,7 @@ async function brain({ preset, text, images, callTool }) {
   if (text.includes('没人叫你')) return '[沉默]'
   if (images.length) return '这表情好可爱|||哪来的'
   if (text.includes('[语音]')) return '白米饭yyds'
-  if (text.includes('在吗')) return preset === 'aurabot-private' ? '在呢|||刚睡醒 嗯…' : '在呀'
+  if (text.includes('在吗')) return preset === 'qq-hub-private' ? '在呢|||刚睡醒 嗯…' : '在呀'
   return '嗯'
 }
 
@@ -158,10 +158,10 @@ const text = (t) => [{ type: 'text', data: { text: t } }]
 const sentTo = (kind, id) => mock.calls.filter((c) => c.action === `send_${kind}_msg` && String(c.params[kind === 'group' ? 'group_id' : 'user_id']) === String(id))
 
 test('人格与规则通过提示词变量注入', () => {
-  assert.match(fake.variables.get('aurabot_persona')(), /大肥鱼/)
-  assert.match(fake.variables.get('aurabot_persona')(), /鲸鱼/)
-  assert.match(fake.variables.get('aurabot_rules_social')(), /没有任何电脑操作能力/)
-  assert.match(fake.variables.get('aurabot_rules_private')(), /10000001/)
+  assert.match(fake.variables.get('qq_hub_persona')(), /大肥鱼/)
+  assert.match(fake.variables.get('qq_hub_persona')(), /鲸鱼/)
+  assert.match(fake.variables.get('qq_hub_rules_social')(), /没有任何电脑操作能力/)
+  assert.match(fake.variables.get('qq_hub_rules_private')(), /10000001/)
 })
 
 test('主人私聊「在吗」：建会话（完整权限 preset）、按 ||| 拆两条发回', async () => {
@@ -170,7 +170,7 @@ test('主人私聊「在吗」：建会话（完整权限 preset）、按 ||| �
   const msgs = sentTo('private', OWNER).map((c) => c.params.message[0].data.text)
   assert.deepEqual(msgs.slice(0, 2), ['在呢', '刚睡醒 嗯…'])
   const turn = fake.turns.at(-1)
-  assert.equal(turn.preset, 'aurabot-private')
+  assert.equal(turn.preset, 'qq-hub-private')
   assert.ok(mock.sent('set_input_status').some((c) => c.params.user_id === Number(OWNER) && c.params.event_type === 1), '等回复时显示正在输入')
   assert.match(turn.userText, /^【私聊】xiaoming\(10000001\)：在吗/)
   const ws = fake.workspaces[0]
@@ -226,7 +226,7 @@ test('群聊：没叫她不回；@她必回（群聊 preset，无本地工具）
   mock.push(grp('555', '777', [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' 在吗' } }]))
   await until(() => sentTo('group', '555').length >= 1)
   const turn = fake.turns.at(-1)
-  assert.equal(turn.preset, 'aurabot-social')
+  assert.equal(turn.preset, 'qq-hub-social')
   assert.match(turn.userText, /@了你/)
   assert.match(turn.userText, /今天天气不错/, '带上了群里刚才的聊天')
   const reply = sentTo('group', '555').at(-1).params.message
@@ -718,7 +718,7 @@ test('面板接口：概览、人格切换', async () => {
   assert.equal(saved.ok, true)
   const used = (await fake.call('/persona/use', { id: 'test2' })).json()
   assert.equal(used.ok, true)
-  assert.match(fake.variables.get('aurabot_persona')(), /小蓝/)
+  assert.match(fake.variables.get('qq_hub_persona')(), /小蓝/)
   await fake.call('/persona/use', { id: 'dafeiyu' })
 })
 
@@ -1097,12 +1097,12 @@ test('主人私聊可以查询最新 QQ 资料，关闭资料模块后查询工�
   assert.equal(c.result.profile.nickname, expected.nickname)
   assert.equal(c.result.profile.signature, expected.long_nick)
   assert.equal(mock.sent('get_stranger_info').at(-1).params.no_cache, true)
-  assert.match(fake.variables.get('aurabot_rules_private')(), /qq_get_profile/)
-  assert.doesNotMatch(fake.variables.get('aurabot_rules_social')(), /qq_get_profile/)
+  assert.match(fake.variables.get('qq_hub_rules_private')(), /qq_get_profile/)
+  assert.doesNotMatch(fake.variables.get('qq_hub_rules_social')(), /qq_get_profile/)
   try {
     await fake.call('/save', { modules: { profile: { enabled: false } } })
     await until(() => !api.modules.use('profile'))
-    assert.doesNotMatch(fake.variables.get('aurabot_rules_private')(), /qq_get_profile/)
+    assert.doesNotMatch(fake.variables.get('qq_hub_rules_private')(), /qq_get_profile/)
     mock.push(priv(OWNER, text('查看QQ资料测试 模块关闭')))
     const unavailable = await lastCall('模块关闭')
     assert.equal(unavailable.result.message, 'no such tool')
@@ -1132,7 +1132,7 @@ test('#58 在 DSH 会话窗口里直接打字：这一轮按主人说的算（�
   assert.equal(r.ok, true, JSON.stringify(r))
   // 从 QQ 转进来的消息（source.kind = 'aurabot'）不会误标成「面板里直接打字」
   api.hub.onSessionEvent({ id: sid }, { type: 'turn/end', data: { turn: 999999, reason: { kind: 'completed' } } })
-  api.hub.onSessionEvent({ id: sid }, { type: 'user/message', data: { role: 'user', source: { kind: 'aurabot' }, content: [{ type: 'text', text: 'x' }] } })
+  api.hub.onSessionEvent({ id: sid }, { type: 'user/message', data: { role: 'user', source: { kind: 'qq-hub' }, content: [{ type: 'text', text: 'x' }] } })
   assert.equal(api.hub.turnSendersAllOwner(sid), true, '主人私聊里还有 #90 的安全兜底：这里只可能是主人说话')
 })
 

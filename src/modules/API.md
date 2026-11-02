@@ -1,4 +1,4 @@
-# Aurabot 扩展接口说明（插件 v{{VERSION}} · 扩展接口 v{{API}}）
+# QQ Hub 扩展接口说明（插件 v{{VERSION}} · 扩展接口 v{{API}}）
 
 > 这个文件由插件维护，每次启动都会更新成当前版本，**别改它**（改了也会被覆盖）。
 > 你自己写的模块放在和它同一个文件夹（`modules/`）里，插件升级不会动。
@@ -31,7 +31,7 @@
 `modules/hello/index.mjs`：
 
 ```js
-/** @type {import('../aurabot').AurabotModule} */   // 有这一行，编辑器就有补全（类型在 modules/aurabot.d.ts）
+/** @type {import('../qq-hub').QQHubModule} */   // 有这一行，编辑器就有补全（类型在 modules/qq-hub.d.ts）
 export default {
   id: 'hello',          // 和文件夹名一样
   name: '打招呼',
@@ -100,12 +100,12 @@ export default {
 
 | | |
 |---|---|
-| `api.config()` | 插件的整份配置（只读，看 `~/.dsh/plugins-data/aurabot/config.json`） |
+| `api.config()` | 插件的整份配置（只读，看 `~/.dsh/plugins-data/dsh-qq-hub/config.json`） |
 | `api.setConfig(patch)` | 改配置：传对象就深合并，传函数 `(cfg) => 新cfg` 就整个换 |
 | `api.settings()` | 这个模块的设置（`defaults` + 面板里填的） |
 | `api.saveSettings(patch)` | 改这个模块的设置 |
 | `api.dir` | 模块自己的文件夹（读自带的数据文件用） |
-| `api.dataDir(...路径)` | 这个模块专用的数据文件夹（`plugins-data/aurabot/modules-data/<id>/`），自动建好 |
+| `api.dataDir(...路径)` | 这个模块专用的数据文件夹（`plugins-data/dsh-qq-hub/modules-data/<id>/`），自动建好 |
 | `api.log.info / warn / error / debug(...)` | 写日志（面板「日志」页能看，自动脱敏） |
 
 **发消息**（总开关、试运行照常管着：关着 / 试运行时只写日志）
@@ -147,7 +147,7 @@ export default {
 | `api.command({ name, aliases, desc, run(arg, msg) })` | 主人在 QQ 里发 `/name 参数` 时调用，`run` 返回的文字直接回到**发命令的那个聊天**（群里发就回群里）。名字可以是中文（`name: '天气'`），中文命令后面可以不加空格（`/天气北京`）；`arg` 是命令名后面剩下的全部文字，已经去掉首尾空格。**只认主人**：别人发 `/xxx` 当普通消息处理。和内置命令同名时你的优先 |
 | `api.every(毫秒, fn, 名字?)` | 定时任务（名字用在出错日志里） |
 | `api.later(毫秒, fn)` | 过一会儿做一次 |
-| `api.route('/路径', async (req, res) => 返回值)` | 加一个网页接口：地址是 `/aurabot/api/ext/<id>/路径`；返回对象就当 JSON 回；要自己回（比如图片）就用 `api.core.http.send(res, 200, buf, 'image/png')` |
+| `api.route('/路径', async (req, res) => 返回值)` | 加一个网页接口：地址是 `/qq-hub/api/ext/<id>/路径`；返回对象就当 JSON 回；要自己回（比如图片）就用 `api.core.http.send(res, 200, buf, 'image/png')` |
 | `api.onDispose(fn)` | 模块停下时要做的收尾 |
 
 **别的模块和插件内部**（全开放）
@@ -331,7 +331,7 @@ return function Panel({ settings, save, toast }) {
 3. 改，保存。几秒内面板显示「用的是你的版本」
 4. 想临时用回内置的：那一行的「用内置的」开关；想彻底不要了：删掉文件夹
 
-复制出来的文件里，原来指向插件其他文件的 `import`，改成了 `const { … } = __lib('core/store.js')` 的写法（`globalThis.aurabot.lib`），所以放在 `modules/` 里也能找到插件的源码。
+复制出来的文件里，原来指向插件其他文件的 `import`，改成了 `const { … } = __lib('core/store.js')` 的写法（`globalThis.qqHub.lib`），所以放在 `modules/` 里也能找到插件的源码。
 
 **你的版本加载失败时，会先自动用回内置的**（面板上能看到报错），所以写坏了不会让她突然少一项本事。
 

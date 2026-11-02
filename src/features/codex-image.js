@@ -16,7 +16,7 @@ export function createCodexImage({ auth, fetchImpl, log }) {
       if (!accountId) throw new Error('登录信息里没有账号 ID，去生图页重新登录 ChatGPT')
       return fetchImpl('https://chatgpt.com/backend-api/codex/images/generations', {
         method: 'POST',
-        headers: { authorization: `Bearer ${access}`, 'chatgpt-account-id': accountId, accept: 'application/json', 'content-type': 'application/json', originator: 'pi', 'x-codex-image-turn-id': randomUUID(), 'user-agent': 'aurabot-qq' },
+        headers: { authorization: `Bearer ${access}`, 'chatgpt-account-id': accountId, accept: 'application/json', 'content-type': 'application/json', originator: 'pi', 'x-codex-image-turn-id': randomUUID(), 'user-agent': 'qq-hub' },
         body: JSON.stringify(body), signal: AbortSignal.timeout(180000),
       })
     }

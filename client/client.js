@@ -1,5 +1,5 @@
-// Aurabot · 网页半边：侧栏「自动化任务」下面的「Aurabot」入口 + 整页面板（顶部标签切换功能）。
-// 只读写宿主半边的 /aurabot/api/* 接口，不直接碰会话和 QQ。
+// QQ Hub · 网页半边：侧栏「自动化任务」下面的「QQ Hub」入口 + 整页面板（顶部标签切换功能）。
+// 只读写宿主半边的 /qq-hub/api/* 接口，不直接碰会话和 QQ。
 // 视觉：沿用 DSH 的主题变量（--dsw-alias-*），浅色 / 深色自动跟随；点缀用大肥鱼的深蓝、海蓝、白。
 
 window.__ModuleLoader__.load({
@@ -11,8 +11,8 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React
     const h = React.createElement
     const inject = ['slots']
-    const PANEL_ID = 'aurabot'
-    const API = '/aurabot/api'
+    const PANEL_ID = 'qq-hub'
+    const API = '/qq-hub/api'
 
     // ---------------- 小工具 ----------------
     const get = (p) => fetch(API + p, { cache: 'no-store' }).then((r) => r.json()).catch((e) => ({ ok: false, message: '连不上插件：' + e.message }))
@@ -375,9 +375,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 `
     function useStyle() {
       useEffect(() => {
-        if (document.getElementById('aurabot-style')) return
+        if (document.getElementById('qq-hub-style')) return
         const el = document.createElement('style')
-        el.id = 'aurabot-style'
+        el.id = 'qq-hub-style'
         el.textContent = CSS
         document.head.appendChild(el)
       }, [])
@@ -558,7 +558,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     const navIcon = (d) => h('svg', { viewBox: '0 0 24 24', 'aria-hidden': true }, h('path', { d }))
 
     function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
-      const [last, setLast] = useState(() => { try { return JSON.parse(localStorage.getItem('aurabot.navlast') || '{}') || {} } catch (e) { return {} } })
+      const [last, setLast] = useState(() => { try { return JSON.parse(localStorage.getItem('qq-hub.navlast') || '{}') || {} } catch (e) { return {} } })
       const [find, setFind] = useState(null) // null = 没开；字符串 = 正在搜的字
       const [hi, setHi] = useState(0)
       const box = useRef(null)
@@ -571,7 +571,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         if (!curGroup || last[curGroup.id] === cur.id) return
         const next = { ...last, [curGroup.id]: cur.id }
         setLast(next)
-        try { localStorage.setItem('aurabot.navlast', JSON.stringify(next)) } catch (e) {}
+        try { localStorage.setItem('qq-hub.navlast', JSON.stringify(next)) } catch (e) {}
       }, [cur.id])
       const openGroup = (g) => go((g.list.find((t) => t.id === last[g.id]) || g.list[0]).id)
       const toggleFind = () => { setFind((f) => (f === null ? '' : null)); setHi(0) }
@@ -595,7 +595,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         .filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || '', t.id].join(' ').toLowerCase().includes(q))
       const pick = (t) => { setFind(null); go(t.id) }
       const tabBtn = (t) => h('button', { key: t.id, type: 'button', role: 'tab', 'aria-selected': cur.id === t.id, className: cx('ab-tab', cur.id === t.id && 'on'), onClick: () => go(t.id) }, t.label, mark(t))
-      return h('nav', { className: 'ab-nav', ref: box, 'aria-label': 'Aurabot 功能' },
+      return h('nav', { className: 'ab-nav', ref: box, 'aria-label': 'QQ Hub 功能' },
         h('div', { className: 'ab-nav-top' },
           h('div', { className: 'ab-nav-groups', role: 'tablist', 'aria-label': '功能分组' }, groups.map((g) => h('button', {
             key: g.id, type: 'button', role: 'tab', 'aria-selected': g.id === curGroup.id, className: cx('ab-grp', g.id === curGroup.id && 'on'),
@@ -625,7 +625,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     class TabBoundary extends React.Component {
       constructor(p) { super(p); this.state = { error: null } }
       static getDerivedStateFromError(error) { return { error } }
-      componentDidCatch(error) { try { localStorage.setItem('aurabot.tab', 'overview') } catch (e) {} }
+      componentDidCatch(error) { try { localStorage.setItem('qq-hub.tab', 'overview') } catch (e) {} }
       render() {
         if (!this.state.error) return this.props.children
         return h(Card, { title: '这一页出错了' },
@@ -645,12 +645,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       useEffect(() => {
         get('/update/check').then(setUpd).catch(() => {})
         let seen = null
-        try { seen = localStorage.getItem('aurabot.seenVersion') } catch (e) {}
+        try { seen = localStorage.getItem('qq-hub.seenVersion') } catch (e) {}
         if (seen && seen !== st.version) get('/changelog').then((r) => r.notes && setNotes(r.notes))
         // 第一次打开（新安装）不弹更新说明，直接记下当前版本
-        else if (!seen) { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} }
+        else if (!seen) { try { localStorage.setItem('qq-hub.seenVersion', st.version) } catch (e) {} }
       }, [st.version])
-      const dismiss = () => { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} setNotes(null) }
+      const dismiss = () => { try { localStorage.setItem('qq-hub.seenVersion', st.version) } catch (e) {} setNotes(null) }
       return h(Fragment, null,
         notes ? h('div', { className: 'ab-note' },
           h('div', { className: 'ab-flex' }, h('b', null, '已更新到 v' + st.version), h('div', { className: 'ab-spacer' }), h(Btn, { small: true, kind: 'ghost', onClick: dismiss }, '知道了')),
@@ -804,7 +804,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(OneBotFields, { draft, f }),
           h(Row, { label: '机器人 QQ 号' }, f.text('botQQ')),
           testBtns) :
-        h(Card, { title: '接上 QQ（SnowLuma）', desc: 'SnowLuma 是让机器人号上线的 QQ 网关。按协议规定它需要你自己下载、解压并同意它的用户协议；控制台密码、启动、接入、断线重连都交给 Aurabot。',
+        h(Card, { title: '接上 QQ（SnowLuma）', desc: 'SnowLuma 是让机器人号上线的 QQ 网关。按协议规定它需要你自己下载、解压并同意它的用户协议；控制台密码、启动、接入、断线重连都交给 QQ Hub。',
           },
           h('div', { className: 'ab-steps' },
             h('div', { className: cx('ab-step', sl.installed && 'done') }, h('div', null,
@@ -966,7 +966,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const [edit, setEdit] = useState(null) // { id, name, tags, secs }
       const [dirty, setDirty] = useState(false)
       const [pending, setPending] = useState({}) // 节的 k → { text, view: 'new' | 'old' } AI 润色还没选定的
-      const [whole, setWhole] = useState(() => { try { return localStorage.getItem('aurabot.persona.whole') === '1' } catch (e) { return false } })
+      const [whole, setWhole] = useState(() => { try { return localStorage.getItem('qq-hub.persona.whole') === '1' } catch (e) { return false } })
       const load = async (id) => {
         const r = await get('/persona/get?id=' + encodeURIComponent(id))
         if (r.ok) { setEdit({ id: r.persona.id, name: r.persona.name, tags: (r.persona.tags || []).join('，'), secs: splitPersona(r.persona.body) }); setDirty(false); setPending({}) }
@@ -999,7 +999,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         if (view === 'new') updSec(s.k, { text: pending[s.k].text })
       }
       const flip = (s) => setPending({ ...pending, [s.k]: { ...pending[s.k], view: pending[s.k].view === 'new' ? 'old' : 'new' } })
-      const setMode = (w) => { if (w && waiting) { toast('先把 AI 润色的那几节选定一版', 'err'); return } setWhole(w); try { localStorage.setItem('aurabot.persona.whole', w ? '1' : '0') } catch (e) {} }
+      const setMode = (w) => { if (w && waiting) { toast('先把 AI 润色的那几节选定一版', 'err'); return } setWhole(w); try { localStorage.setItem('qq-hub.persona.whole', w ? '1' : '0') } catch (e) {} }
       const titles = edit ? edit.secs.map((s) => s.title) : []
       const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))
       return h('div', { className: 'ab-persona' },
@@ -2382,7 +2382,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', null, s.install.message),
             h('div', { className: 'ab-flex', style: { marginTop: 8 } },
               h(Btn, { small: true, kind: 'primary', onClick: async () => { const r = await post('/song/install'); toast(r.message); setTimeout(load, 800) } }, '再试一次'),
-              h(Btn, { small: true, onClick: () => { try { navigator.clipboard.writeText(['Aurabot ' + st.version + ' 翻唱安装失败', s.install.message, '', s.install.error || '', '', ...(s.install.log || []).slice(-30)].join('\n')); toast('报错复制好了，发给作者就行', 'ok') } catch (e) { toast('复制失败，展开「详细日志」手动复制吧', 'err') } } }, '复制报错'),
+              h(Btn, { small: true, onClick: () => { try { navigator.clipboard.writeText(['QQ Hub ' + st.version + ' 翻唱安装失败', s.install.message, '', s.install.error || '', '', ...(s.install.log || []).slice(-30)].join('\n')); toast('报错复制好了，发给作者就行', 'ok') } catch (e) { toast('复制失败，展开「详细日志」手动复制吧', 'err') } } }, '复制报错'),
               h('span', { className: 'ab-muted ab-small' }, '已经下好的部分不会重下'))) : null,
         ),
         h(VoiceImport, { s, toast, onChange: load }),
@@ -2622,7 +2622,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       useEffect(() => {
         let alive = true
         fetch(API + '/modules/panel?id=' + encodeURIComponent(m.id) + '&t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.text() : Promise.reject(new Error('读不到 panel.js')))).then((src) => {
-          // 内置模块的路由在 /aurabot/api/ 下（没有 /ext/ 前缀），用户自己写的才在 /ext/<id> 下
+          // 内置模块的路由在 /qq-hub/api/ 下（没有 /ext/ 前缀），用户自己写的才在 /ext/<id> 下
           const base = m.builtin && m.running === 'builtin' ? '' : '/ext/' + m.id
           const call = (p, body) => (body === undefined ? get(base + p) : post(base + p, body))
           const ui = { Card, Btn, Switch, Row, Empty, Select, Seg, Range }
@@ -3348,7 +3348,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [auto, setAuto] = useState(true)
       const load = useCallback(() => get('/logs?limit=400&level=' + level + '&area=' + area).then((r) => setItems(r.entries || [])), [level, area])
       useEffect(() => { load(); if (!auto) return; const t = setInterval(load, 3000); return () => clearInterval(t) }, [load, auto])
-      return h(Card, { title: '日志', desc: '所有后台动作都在这里，令牌和密码已自动打码。完整日志文件在 %USERPROFILE%\\.dsh\\plugins-data\\aurabot\\logs\\。',
+      return h(Card, { title: '日志', desc: '所有后台动作都在这里，令牌和密码已自动打码。完整日志文件在 %USERPROFILE%\\.dsh\\plugins-data\\dsh-qq-hub\\logs\\（老安装为 aurabot\\）。',
         right: h('div', { className: 'ab-flex' },
           h(Select, { value: level, onChange: setLevel, width: 110, options: [['debug', '全部'], ['info', '一般'], ['warn', '警告'], ['error', '错误']].map(([value, label]) => ({ value, label })) }),
           h(Select, { value: area, onChange: setArea, width: 130, options: [['', '所有模块'], ['core', '核心'], ['chat', '聊天'], ['onebot', 'QQ 网关'], ['snowluma', 'SnowLuma'], ['sticker', '表情'], ['qzone', '空间'], ['voice', '语音'], ['imagegen', '生图'], ['speakup', '搭话']].map(([value, label]) => ({ value, label })) }),
@@ -3361,8 +3361,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
     const WIZ_STEPS = ['你们的 QQ 号', '接 QQ 网关', '启动并同意协议', '连上机器人号', '完成']
 
     function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
-      const [step, setStep] = useState(() => { try { return Number(localStorage.getItem('aurabot.wiz') || 0) } catch (e) { return 0 } })
-      const go = (i) => { setStep(i); try { localStorage.setItem('aurabot.wiz', String(i)) } catch (e) {} }
+      const [step, setStep] = useState(() => { try { return Number(localStorage.getItem('qq-hub.wiz') || 0) } catch (e) { return 0 } })
+      const go = (i) => { setStep(i); try { localStorage.setItem('qq-hub.wiz', String(i)) } catch (e) {} }
       const f = useField(draft, setDraft)
       const sl = st.snowluma
       const conn = st.onebot.state === 'connected'
@@ -3381,7 +3381,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const useExisting = async () => {
         const r = await post('/setup/done', { existingConnection: true })
         toast(r.message, r.ok ? 'ok' : 'err')
-        if (r.ok) { try { localStorage.removeItem('aurabot.wiz') } catch (e) {} reload(); onClose && onClose() }
+        if (r.ok) { try { localStorage.removeItem('qq-hub.wiz') } catch (e) {} reload(); onClose && onClose() }
       }
       const body = [
         // 0. QQ 号
@@ -3451,17 +3451,17 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             : h(Btn, { kind: 'primary', onClick: async () => {
               if (!(await save({ ...draft, enabled: true, dryRun: live === 'dry' }))) return
               const r = await post('/setup/done'); toast(r.message, r.ok ? 'ok' : 'err')
-              if (r.ok) { try { localStorage.removeItem('aurabot.wiz') } catch (e) {} reload(); onClose && onClose() }
+              if (r.ok) { try { localStorage.removeItem('qq-hub.wiz') } catch (e) {} reload(); onClose && onClose() }
             } }, '完成，让大肥鱼上线')))
     }
 
     // ---------------- 面板主体 ----------------
-    function AurabotPage() {
+    function QQHubPage() {
       useStyle()
       const [st, setSt] = useState(null)
       const [err, setErr] = useState('')
       const [draft, setDraft] = useState(null)
-      const [tab, setTab] = useState(() => { try { return localStorage.getItem('aurabot.tab') || 'overview' } catch (e) { return 'overview' } })
+      const [tab, setTab] = useState(() => { try { return localStorage.getItem('qq-hub.tab') || 'overview' } catch (e) { return 'overview' } })
       const [toastMsg, setToastMsg] = useState(null)
       const [wizardOpen, setWizardOpen] = useState(false)
       const toastTimer = useRef(null)
@@ -3483,7 +3483,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         if (!dirtyRef.current) setDraft(clone(r.config))
       }, [])
       useEffect(() => { reload(); const t = setInterval(reload, 5000); return () => clearInterval(t) }, [reload])
-      const go = (id) => { setTab(id); try { localStorage.setItem('aurabot.tab', id) } catch (e) {} }
+      const go = (id) => { setTab(id); try { localStorage.setItem('qq-hub.tab', id) } catch (e) {} }
       // 标签多、一屏放不下：滚轮横着滚，选中的标签自动滚进视野
       const tabsRef = useRef(null)
       useEffect(() => {
@@ -3595,13 +3595,13 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const slots = ctx.get('slots')
       if (slots === undefined) return
       // 写法同 DSH 自带的「自动化任务」（order 10）和「插件」（order 0）：排在它们后面
-      slots.inject('main', () => slots.register({ name: 'main', key: PANEL_ID }, AurabotPage))
+      slots.inject('main', () => slots.register({ name: 'main', key: PANEL_ID }, QQHubPage))
       slots.inject('sidebar.panellist', () => slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: () => 'QQ Hub' }, WhaleIcon))
     }
 
     exports.apply = apply
     exports.inject = inject
-    exports.AurabotPage = AurabotPage
+    exports.QQHubPage = AurabotPage
     exports.WhaleIcon = WhaleIcon
     return module.exports
   },

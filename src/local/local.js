@@ -84,7 +84,7 @@ export function createLocal({ getConfig, log }) {
   /** 复制给 DSH 的话：让它读说明、改脚本。 */
   function promptFor(slot) {
     const s = SLOTS[slot]
-    return `帮我修改 Aurabot（大肥鱼 QQ 插件）的本地接口脚本：${pathOf(slot)}\n`
+    return `帮我修改 QQ Hub（QQ 插件）的本地接口脚本：${pathOf(slot)}\n`
       + `先读同一个文件夹里的「${README}」了解参数和返回值的约定，再把这个脚本改成调用我电脑上的${s.title}：\n`
       + `【这里写你用的是什么、地址、模型和关键参数，例如：${s.example}】\n`
       + '只改这一个脚本，不要动插件本身的代码；改完告诉我怎么测试。'
