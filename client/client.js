@@ -3117,6 +3117,38 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         ),
 
         h(Card, {
+          title: '平台 Cookies 配置（可选）',
+          desc: '为部分平台提供登录后的 Cookie，以获取更高清晰度媒体、避免接口风控或解除未登录限制。留空的平台将走免登录公开接口。',
+        },
+          [
+            { key: 'bilibili', label: 'B站 Cookie', hint: '用于解析高清视频流及动态；留空自动复用「B站」页已配 Cookie', fallback: (d) => Boolean(d.bili?.cookie || d.bili?.sessdata) },
+            { key: 'weibo', label: '微博 Cookie', hint: '填写包含 SUB 的 Cookie，可避免微博移动端接口触发 403/418 风控' },
+            { key: 'redbook', label: '小红书 Cookie', hint: '填写包含 a1、web_session 的 Cookie，提升笔记图集提取稳定性' },
+            { key: 'zhihu', label: '知乎 Cookie', hint: '填写包含 z_c0 的 Cookie，用于获取知乎完整回答与文章' },
+            { key: 'tieba', label: '百度贴吧 Cookie', hint: '填写包含 BDUSS 的 Cookie，用于获取贴吧高清原图' },
+            { key: 'xiaoheihe', label: '小黑盒 Cookie', hint: '留空自动复用「小黑盒」页已配 Cookie', fallback: (d) => Boolean(d.heybox?.cookie) },
+            { key: 'douyin', label: '抖音 Cookie', hint: '选填，用于抖音网页端接口鉴权' },
+          ].map((cp) => {
+            const isSet = Boolean(getPath(draft, `multiParser.cookies.${cp.key}Set`))
+            const isFallback = !isSet && cp.fallback && cp.fallback(draft)
+            const statusBadge = isSet
+              ? h('span', { className: 'ab-small', style: { color: 'var(--ab-ok)', marginLeft: 8 } }, '✓ 已专属配置')
+              : (isFallback ? h('span', { className: 'ab-small', style: { color: 'var(--ab-sea)', marginLeft: 8 } }, '✓ 自动复用全局') : null)
+
+            return h(Row, {
+              key: cp.key,
+              label: h('span', null, cp.label, statusBadge),
+              hint: cp.hint,
+            },
+              f.text(`multiParser.cookies.${cp.key}`, {
+                type: 'password',
+                placeholder: (isSet || isFallback) ? '●●●●●●（已生效，留空保持不变）' : '粘贴整串 Cookie 或关键字段',
+              })
+            )
+          })
+        ),
+
+        h(Card, {
           title: '在线测试解析',
           desc: '粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。',
         },

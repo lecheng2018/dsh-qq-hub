@@ -228,6 +228,15 @@ export const DEFAULTS = {
       github: true,
       xiaoheihe: true,
     },
+    cookies: {
+      bilibili: '',   // B站 Cookie，留空自动复用 bili.cookie
+      weibo: '',      // 微博 Cookie (SUB 等)
+      redbook: '',    // 小红书 Cookie (a1, web_session 等)
+      zhihu: '',      // 知乎 Cookie (z_c0 等)
+      tieba: '',      // 百度贴吧 Cookie (BDUSS 等)
+      douyin: '',     // 抖音 Cookie
+      xiaoheihe: '',  // 小黑盒 Cookie，留空自动复用 heybox.cookie
+    },
   },
   tabs: {}, // 面板记住的小偏好
   // 模块：内置的和数据目录 modules/ 里自己写的。{ 模块id: { enabled, useBuiltin } }，没写的算开着
@@ -472,6 +481,10 @@ export function normalize(raw) {
   for (const k of ['bilibili', 'douyin', 'redbook', 'weibo', 'zhihu', 'wechat', 'tieba', 'fanqie', 'github', 'xiaoheihe']) {
     mp.platforms[k] = bool(mp.platforms[k], true)
   }
+  if (!isObj(mp.cookies)) mp.cookies = {}
+  for (const k of ['bilibili', 'weibo', 'redbook', 'zhihu', 'tieba', 'douyin', 'xiaoheihe']) {
+    mp.cookies[k] = String(mp.cookies[k] || '').trim()
+  }
 
   c.safeMode = bool(c.safeMode, false)
   c.bridge.dshTools = bool(c.bridge.dshTools, false)
@@ -482,7 +495,19 @@ export function normalize(raw) {
 }
 
 // 面板里不回传原文的字段：路径（几层都行）
-const SECRETS = [['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'], ['imageGen', 'apiKey'], ['song', 'neteaseCookie'], ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'], ['heybox', 'cookie'], ['bridge', 'token']]
+const SECRETS = [
+  ['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'],
+  ['imageGen', 'apiKey'], ['song', 'neteaseCookie'],
+  ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'],
+  ['heybox', 'cookie'], ['bridge', 'token'],
+  ['multiParser', 'cookies', 'bilibili'],
+  ['multiParser', 'cookies', 'weibo'],
+  ['multiParser', 'cookies', 'redbook'],
+  ['multiParser', 'cookies', 'zhihu'],
+  ['multiParser', 'cookies', 'tieba'],
+  ['multiParser', 'cookies', 'douyin'],
+  ['multiParser', 'cookies', 'xiaoheihe'],
+]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
 export function registerSecretField(path) { extraSecrets.set(path.join('\u0000'), path) }
