@@ -462,7 +462,8 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     bump('post')
     const url = id ? `${WEB_BASE}/app/bbs/link/${id}` : ''
     pushHistory({ kind: 'post', linkId: id, title: t })
-    memory?.addEvent?.({ text: `我在小黑盒发了一帖《${t}》`, tags: ['小黑盒'], importance: 0.5 })
+    // 发帖是公开行为（论坛上人人可见），可以进 global
+    memory?.addEvent?.({ text: `我在小黑盒发了一帖《${t}》`, tags: ['小黑盒'], importance: 0.5, scope: 'global' })
 
     const inline = blocks[0]?.type === 'html' ? (blocks[0].text.match(/<img /g) || []).length : 0
     return {
@@ -545,6 +546,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     // 想留下的东西写进记忆
     try {
       const t = String(out || '').trim()
+      // 逛圈是「看了什么」→ 默认落主人私聊（不传 scope），别把兴趣画像带进群
       if (t && t.length > 10) memory?.addEvent?.({ text: `我在小黑盒逛了一圈：${t.slice(0, 120)}`, tags: ['小黑盒'], importance: 0.45 })
     } catch { /* 记忆模块没在跑就算了 */ }
 
