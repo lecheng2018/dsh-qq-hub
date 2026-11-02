@@ -118,8 +118,73 @@ test('recentEvents 带 chat 时按作用域过滤，不带时保持老行为', (
   assert.ok(store.recentEvents(24, 20).some((m) => m.text.includes('稻香')), '不传 chat 时保持老行为')
 })
 
-test('全局经历（她自己做过的事）谁都能提到', () => {
-  store.addEvent({ text: '她在B站看了《测试视频》', tags: ['B站'], importance: 0.4, scope: 'global' })
-  const strangerRecent = store.recentEvents(24, 20, { chatId: 'group:99999', kind: 'group', groupId: '99999' })
-  assert.ok(strangerRecent.some((m) => m.text.includes('测试视频')), 'global 经历应该进得了陌生群上下文')
+test('经历默认落主人私聊，不是 global（B站/抖音这类兴趣画像不外泄）', () => {
+  store.addEvent({ text: '在B站看了《猫猫合集》', tags: ['B站'], importance: 0.4 })
+  const row = store.list().find((m) => m.text.includes('猫猫合集'))
+  assert.ok(row, '经历应该写进去了')
+  assert.equal(row.scope, `private:${cfg.ownerQQ}`, '没传 scope 的经历必须落主人私聊，不能是 global')
+})
+
+test('群聊不注入任何经历（连 global 也不给谈资）', () => {
+  store.addEvent({ text: '她在B站看了公开的《测试视频》', tags: ['B站'], importance: 0.4, scope: 'global' })
+  const group = { chatId: 'group:99999', kind: 'group', groupId: '99999' }
+  assert.deepEqual(store.recentEvents(24, 20, group), [], '群聊里 recentEvents 应恒为空')
+  const ctx = store.contextFor(group, 's-norecent')
+  assert.ok(!ctx.includes('测试视频'), '群聊上下文里不该出现任何经历：' + ctx)
+  assert.ok(!ctx.includes('猫猫合集'), '群里更不能出现主人的兴趣：' + ctx)
+})
+
+test('主人私聊里仍然能看到自己的经历（global 和私聊的都给）', () => {
+  // 注意：cfg.ownerQQ 是 10001，默认兜底落 private:10001，所以这里用主人私聊来看
+  const OWNER = { chatId: `private:${cfg.ownerQQ}`, kind: 'private', userId: String(cfg.ownerQQ) }
+  const recent = store.recentEvents(24, 20, OWNER)
+  assert.ok(recent.some((m) => m.text.includes('猫猫合集')), '主人私聊能看到自己的经历')
+  assert.ok(recent.some((m) => m.text.includes('测试视频')), '主人私聊也能看到 global 经历')
+  // 别人的私聊看不到主人的经历
+  const other = store.recentEvents(24, 20, OTHER)
+  assert.ok(!other.some((m) => m.text.includes('猫猫合集')), '别人的私聊看不到主人的经历')
+})
+
+// ---------- /new：清当前聊天的记忆 ----------
+
+test('clearScope 只清当前聊天，别的私聊和 global 不动', () => {
+  const owner = { chatId: `private:${cfg.ownerQQ}`, kind: 'private', userId: String(cfg.ownerQQ) }
+  const other = { chatId: 'private:40004', kind: 'private', userId: '40004' }
+
+  store.add({ text: '主人的猫叫粥粥', about: String(cfg.ownerQQ), importance: 0.8, source: 'tool', chatId: owner.chatId, scope: store.scopeOfChat(owner) })
+  store.add({ text: '别人的狗叫豆豆', about: '40004', importance: 0.8, source: 'tool', chatId: other.chatId, scope: store.scopeOfChat(other) })
+  store.add({ text: '我叫大肥鱼', importance: 0.9, source: 'tool', scope: 'global' })
+
+  const r = store.clearScope(owner)
+  assert.ok(r.items >= 1, '应该清掉了主人的条目，实际清了 ' + r.items)
+
+  assert.equal(store.recall('猫叫什么', { chat: owner }).length, 0, '主人的记忆清空了')
+  assert.ok(store.recall('狗叫什么', { chat: other }).some((h) => h.it.text.includes('豆豆')), '别人的记忆不能跟着没')
+  assert.ok(store.recall('大肥鱼', { chat: owner }).length > 0, 'global 记忆（她自己的设定）必须保留')
+})
+
+test('clearScope 连小组档案、相处经验、说话方式一起清（否则清了还在按旧印象说话）', () => {
+  const owner = { chatId: `private:${cfg.ownerQQ}`, kind: 'private', userId: String(cfg.ownerQQ) }
+  const key = `qq:${cfg.ownerQQ}`
+  store.setProfile(String(cfg.ownerQQ), '他最近在戒辣', '', store.scopeOfChat(owner))
+  store.setInsights(key, ['他喜欢被吐槽'])
+  store.setStyle(key, ['爱用 hhh'])
+
+  const r = store.clearScope(owner)
+  assert.ok(r.profile >= 1, '小档案应该被清了')
+  assert.ok(r.insights >= 1, '相处经验应该被清了')
+  assert.ok(r.style >= 1, '说话方式应该被清了')
+  assert.equal(store.insights().find((x) => x.key === key), undefined, '相处经验确实没了')
+  assert.equal(store.styles()[key], undefined, '说话方式确实没了')
+})
+
+test('clearScope 对群聊只清那个群', () => {
+  const g1 = { chatId: 'group:30003', kind: 'group', groupId: '30003' }
+  const g2 = { chatId: 'group:50005', kind: 'group', groupId: '50005' }
+  store.add({ text: '一群周末聚餐', importance: 0.7, source: 'tool', chatId: g1.chatId, scope: store.scopeOfChat(g1) })
+  store.add({ text: '二群下周开黑', importance: 0.7, source: 'tool', chatId: g2.chatId, scope: store.scopeOfChat(g2) })
+
+  store.clearScope(g1)
+  assert.equal(store.recall('聚餐', { chat: g1 }).length, 0, '一群的记忆清掉了')
+  assert.ok(store.recall('开黑', { chat: g2 }).some((h) => h.it.text.includes('开黑')), '二群的记忆不受影响')
 })
