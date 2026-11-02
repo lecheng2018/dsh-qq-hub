@@ -9,8 +9,10 @@ export function parseWav(buf) {
     const id = buf.toString('ascii', off, off + 4)
     const size = buf.readUInt32LE(off + 4)
     const start = off + 8
-    if (id === 'fmt ') fmt = { format: buf.readUInt16LE(start), channels: buf.readUInt16LE(start + 2), rate: buf.readUInt32LE(start + 4), bits: buf.readUInt16LE(start + 14) }
-    else if (id === 'data') data = buf.subarray(start, Math.min(buf.length, start + size))
+    if (id === 'fmt ') {
+      if (size < 16 || start + 16 > buf.length) throw new Error('损坏的 fmt 块')
+      fmt = { format: buf.readUInt16LE(start), channels: buf.readUInt16LE(start + 2), rate: buf.readUInt32LE(start + 4), bits: buf.readUInt16LE(start + 14) }
+    } else if (id === 'data') data = buf.subarray(start, Math.min(buf.length, start + size))
     off = start + size + (size & 1)
   }
   if (!fmt || !data) throw new Error('WAV 缺 fmt 或 data')
@@ -40,6 +42,7 @@ export function buildWav(samples, rate) {
 /** 混成单声道并线性重采样到 target Hz。 */
 export function toMono16k(buf, target = 16000) {
   const { channels, rate, data } = parseWav(buf)
+  if (!channels || !rate || channels < 1 || rate < 1) throw new Error('非法音频声道或采样率')
   const frames = Math.floor(data.length / (2 * channels))
   const mono = new Float64Array(frames)
   for (let i = 0; i < frames; i++) {

@@ -29,11 +29,24 @@ export function readJson(file, fallback) {
   }
 }
 
+export function renameWithRetry(from, to, attempts = 4) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      renameSync(from, to)
+      return
+    } catch (err) {
+      if (i === attempts - 1 || (err.code !== 'EPERM' && err.code !== 'EBUSY')) throw err
+      const end = Date.now() + 25
+      while (Date.now() < end) {}
+    }
+  }
+}
+
 export function writeJson(file, value) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}`
   writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
-  renameSync(tmp, file)
+  renameWithRetry(tmp, file)
 }
 
 export { existsSync }

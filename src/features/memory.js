@@ -171,7 +171,48 @@ export function parseReflection(out) {
 export function createMemoryStore({ dsh, getConfig, hub, log }) {
   const file = () => dataDir('memories.json')
   const load = () => readJson(file(), () => ({ items: [] }))
+
+  const pendingHitUpdates = new Map()
+  let hitFlushTimer = null
+
+  function scheduleFlushHits() {
+    if (hitFlushTimer) return
+    hitFlushTimer = setTimeout(() => {
+      hitFlushTimer = null
+      flushHits()
+    }, 5000)
+    hitFlushTimer.unref?.()
+  }
+
+  function flushHits() {
+    if (!pendingHitUpdates.size) return
+    const s = load()
+    let changed = false
+    for (const [id, delta] of pendingHitUpdates) {
+      const m = s.items.find((x) => x.id === id)
+      if (!m) continue
+      if (delta.hitDays) m.hitDays = (m.hitDays || 0) + delta.hitDays
+      m.hits = (m.hits || 0) + delta.hits
+      m.lastHit = delta.lastHit
+      changed = true
+    }
+    pendingHitUpdates.clear()
+    if (changed) writeJson(file(), s)
+  }
+
   const save = (s) => {
+    if (pendingHitUpdates.size) {
+      for (const [id, delta] of pendingHitUpdates) {
+        const m = s.items.find((x) => x.id === id)
+        if (m) {
+          if (delta.hitDays) m.hitDays = (m.hitDays || 0) + delta.hitDays
+          m.hits = (m.hits || 0) + delta.hits
+          m.lastHit = delta.lastHit
+        }
+      }
+      pendingHitUpdates.clear()
+      if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
+    }
     writeJson(file(), s)
     cache = null
   }
@@ -345,16 +386,25 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     recallLog.unshift({ at: Date.now(), where, query: String(query).slice(0, 120), hits: hits.map((h) => ({ id: h.it.id, text: h.it.text, score: Number(h.score.toFixed(2)), why: h.why || [] })) })
     recallLog.length = Math.min(recallLog.length, 20)
     if (hits.length) {
-      const s = load()
+      const now = Date.now()
+      const todayStr = new Date().toDateString()
       for (const h of hits) {
-        const m = s.items.find((x) => x.id === h.it.id)
-        if (!m) continue
-        // 强度按「被想起过几天」算，同一天想起多次只算一次
-        if (!m.lastHit || new Date(m.lastHit).toDateString() !== new Date().toDateString()) m.hitDays = (m.hitDays || 0) + 1
-        m.hits = (m.hits || 0) + 1
-        m.lastHit = Date.now()
+        const id = h.it.id
+        const cur = pendingHitUpdates.get(id) || {
+          hits: 0,
+          lastHit: 0,
+          hitDays: 0,
+          lastDayStr: h.it.lastHit ? new Date(h.it.lastHit).toDateString() : ''
+        }
+        cur.hits += 1
+        cur.lastHit = now
+        if (cur.lastDayStr !== todayStr) {
+          cur.hitDays += 1
+          cur.lastDayStr = todayStr
+        }
+        pendingHitUpdates.set(id, cur)
       }
-      writeJson(file(), s) // 只改命中计数，不动索引
+      scheduleFlushHits()
     }
     return hits
   }
@@ -618,7 +668,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       temperature: 0.2,
     })
     const m = out.match(/\[[\s\S]*\]/)
-    const arr = m ? JSON.parse(m[0]) : []
+    let arr = []
+    if (m) {
+      try { arr = JSON.parse(m[0]) } catch { arr = [] }
+    }
     let n = 0
     for (const x of arr.slice(0, 12)) {
       if (!x || !x.text) continue

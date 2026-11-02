@@ -239,7 +239,12 @@ export function createCodexAuth ({ log, fetchImpl, openUrl, createServerImpl = c
           const gotState = url.searchParams.get('state') || ''
           if (gotState !== state) return html(400, 'state 不匹配')
           const err = url.searchParams.get('error')
-          if (err) { html(400, '登录没有完成，请回面板重新登录'); settle({ error: '授权未完成' }); return }
+          if (err) {
+            html(400, '登录没有完成，请回面板重新登录')
+            try { server.close() } catch (error) {}
+            settle({ error: '授权未完成' })
+            return
+          }
           const code = url.searchParams.get('code') || ''
           if (!code) return html(400, '没有 code')
           html(200, '<h2>已收到授权结果</h2><p>回到 Aurabot 面板查看登录结果。</p>')
