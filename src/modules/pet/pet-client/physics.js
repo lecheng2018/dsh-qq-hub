@@ -1,4 +1,4 @@
-// Aurabot 桌宠拖拽物理（纯逻辑，零依赖）—— 从 dsh-pet（MIT License，
+// QQ Hub 桌宠拖拽物理（纯逻辑，零依赖）—— 从 dsh-pet（MIT License，
 // https://github.com/PC2005-cloud/dsh-pet 的 src/shared/physics/{spring,throw,release,squash,constants}.ts）
 // 去 TypeScript 化移植的单文件版；只保留单屏场景用得上的部分：
 //   · springStep / softClampSpeed   跟手弹簧与软钳速

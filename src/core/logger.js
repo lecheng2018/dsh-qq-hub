@@ -36,11 +36,11 @@ export function createLogger({ dsh, retainDays = 14 } = {}) {
     ring.push(entry)
     if (ring.length > RING) ring.shift()
     try {
-      appendFileSync(join(dir(), `aurabot-${day}.log`), `${day} ${time} [${level}] [${area}] ${text}\n`, 'utf8')
+      appendFileSync(join(dir(), `qq-hub-${day}.log`), `${day} ${time} [${level}] [${area}] ${text}\n`, 'utf8')
     } catch (error) {}
     try {
       const fn = level === 'error' ? dsh?.logger?.error : level === 'warn' ? dsh?.logger?.warn : dsh?.logger?.info
-      if (level !== 'debug') fn?.call(dsh.logger, `aurabot[${area}]: ${text}`)
+      if (level !== 'debug') fn?.call(dsh.logger, `qq-hub[${area}]: ${text}`)
     } catch (error) {}
     for (const l of listeners) {
       try { l(entry) } catch (error) {}

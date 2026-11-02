@@ -1,6 +1,6 @@
 // 预算守门员的面板：各聊天用量进度条 + 一键压缩。
 // 约定：panel.js 拿到的 4 个参数是 (React, h, ui, call)；最后 return 一个组件函数。
-// call 已经绑好本模块：call('/token-guardian/status') → GET /aurabot/api/token-guardian/status
+// call 已经绑好本模块：call('/token-guardian/status') → GET /qq-hub/api/token-guardian/status
 
 const { useState, useEffect } = React
 const fmt = (n) => (n >= 10000 ? Math.round(n / 1000) + 'k' : String(n))

@@ -24,7 +24,7 @@ const BUILTIN_DIR = join(SRC, 'modules')
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/
 const ENTRY = ['index.mjs', 'index.js']
 const DOC = 'API.md'
-const TYPES = 'aurabot.d.ts'
+const TYPES = 'qq-hub.d.ts'
 
 export const userDir = () => dataDir('modules')
 
@@ -141,9 +141,9 @@ export function rewriteImports(code, fromKey, keep = new Set()) {
   // 插件里带的数据文件（new URL('./x.py', import.meta.url)）：指回插件目录
   out = out.replace(/new URL\(\s*['"](\.\.?\/[^'"]*)['"]\s*,\s*import\.meta\.url\s*\)/g, (m, spec) => {
     const key = target(spec)
-    return key ? `new URL('${key}', globalThis.aurabot.src)` : m
+    return key ? `new URL('${key}', globalThis.qqHub.src)` : m
   })
-  if (out !== code) out = "const __lib = globalThis.aurabot.lib // 插件内部源码（复制出来后靠它找到插件里的文件）\n" + out
+  if (out !== code) out = "const __lib = globalThis.qqHub.lib // 插件内部源码（复制出来后靠它找到插件里的文件）\n" + out
   return out
 }
 
@@ -247,7 +247,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         return track(() => clearTimeout(t))
       },
       route: (path, handler) => {
-        const full = '/aurabot/api' + prefix + (String(path).startsWith('/') ? path : '/' + path)
+        const full = '/qq-hub/api' + prefix + (String(path).startsWith('/') ? path : '/' + path)
         const cur = routes.get(full)
         if (cur && cur.id !== id && live.has(cur.id)) throw new Error(`接口 ${full} 已经被模块「${cur.id}」占了`)
         routes.set(full, { id, handler: guard(`接口 ${path}`, handler) })
@@ -416,7 +416,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     for (const def of builtins) if (wanted(def.id, users) === 'builtin') startSync(def)
     return (async () => {
       await loadLib()
-      globalThis.aurabot = { lib, src: pathToFileURL(SRC).href, version, apiVersion: API_VERSION, modules: publicHandle }
+      const g = { lib, src: pathToFileURL(SRC).href, version, apiVersion: API_VERSION, modules: publicHandle }
+      globalThis.qqHub = g
+      if (!globalThis.aurabot) globalThis.aurabot = g // 兼容更早 fork 出去的用户模块（它们引用 globalThis.aurabot）
       installDocs()
       await sync()
       watching = setInterval(() => { sync().catch((error) => log.warn('检查模块变化出错：', error.message)) }, 3000)
@@ -595,7 +597,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         errors: rec ? rec.errors : [],
         tools: rec ? toolNames(rec) : [],
         commands: rec ? rec.commands.map((c) => c.name) : [],
-        routes: [...routes].filter(([, r]) => r.id === id).map(([p]) => p.replace('/aurabot/api', '')),
+        routes: [...routes].filter(([, r]) => r.id === id).map(([p]) => p.replace('/qq-hub/api', '')),
         // 内置模块也要把设置项透出去（面板靠这个渲染开关）；之前只给了用户模块，内置的设置项全成了空数组
         settings: def.settings || [],
         defaults: def.defaults || {},
@@ -668,7 +670,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         const spec = relFrom.startsWith('.') ? relFrom : './' + relFrom
         code = code.split(`'${spec}'`).join(`'./${n2}'`)
       }
-      writeFileSync(join(dir, name), `// 从 Aurabot v${version} 的内置模块「${b.name}」复制出来的，改了就替换内置的。\n// 原文件：src/${key}\n` + code, 'utf8')
+      writeFileSync(join(dir, name), `// 从 QQ Hub v${version} 的内置模块「${b.name}」复制出来的，改了就替换内置的。\n// 原文件：src/${key}\n` + code, 'utf8')
     }
     setConfig({ ...getConfig(), modules: { ...getConfig().modules, [id]: { ...modCfg(id), useBuiltin: false, forkedFrom: b.version || version } } })
     installDocs()
@@ -682,7 +684,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const doc = readFileSync(join(BUILTIN_DIR, DOC), 'utf8').replaceAll('{{VERSION}}', version).replaceAll('{{API}}', String(API_VERSION)).replace('{{LIB}}', libKeys().map((k) => '- `' + k + '`').join('\n'))
       const dest = join(userDir(), DOC)
       if (!existsSync(dest) || readFileSync(dest, 'utf8') !== doc) writeFileSync(dest, doc, 'utf8')
-      // 类型提示：模块开头写 /** @type {import('../aurabot').AurabotModule} */，编辑器就有补全
+      // 类型提示：模块开头写 /** @type {import('../qq-hub').QQHubModule} */，编辑器就有补全
       const types = readFileSync(join(BUILTIN_DIR, TYPES), 'utf8')
       const tdest = join(userDir(), TYPES)
       if (!existsSync(tdest) || readFileSync(tdest, 'utf8') !== types) writeFileSync(tdest, types, 'utf8')
@@ -691,7 +693,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
 
   function promptFor(id) {
     const dir = id ? join(userDir(), id) : userDir()
-    return `帮我修改 Aurabot（大肥鱼 QQ 插件）的扩展模块：${dir}\n`
+    return `帮我修改 QQ Hub（QQ 插件）的扩展模块：${dir}\n`
       + `先完整读一遍「${join(userDir(), DOC)}」了解模块怎么写、能用哪些接口，再按我的要求改：\n`
       + '【这里写你想让她多会什么、改成什么样】\n'
       + `只改 ${userDir()} 里的文件，不要动插件本身的代码；改完保存会自动重新加载，到面板「扩展」页看有没有报错，再告诉我怎么试。`

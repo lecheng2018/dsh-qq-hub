@@ -448,7 +448,7 @@ async function parseGithub(url) {
 
   try {
     const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-      headers: { 'User-Agent': 'aurabot-plugin' },
+      headers: { 'User-Agent': 'qq-hub-plugin' },
       signal: AbortSignal.timeout(8000),
     })
     const d = await res.json()
