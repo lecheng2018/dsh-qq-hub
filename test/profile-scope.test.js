@@ -50,3 +50,21 @@ test('按作用域查不到别的聊天的档案', () => {
   assert.equal(mem.profileOf('444555666', 'private:999999'), null, '别人的私聊不该读到这份档案')
   assert.ok(mem.profileOf('444555666', 'private:444555666'), '自己的私聊能读到')
 })
+
+test('写档案不混入别的作用域的记忆（防私事被提炼成 global）', async () => {
+  let seen = ''
+  const mem2 = createMemoryStore({
+    dsh: { get: () => null }, getConfig: () => cfg,
+    hub: { ask: async (_d, o) => { seen = o.text; return '一段档案' }, speakersOf: () => [] },
+    log: { info: noop, warn: noop, debug: noop, error: noop },
+  })
+  // 私聊里三条私事
+  for (const t of ['兜里只有十块钱', '猫叫粥粥', '凌晨三点还在熬夜']) {
+    mem2.add({ text: t, about: '444555666', importance: 0.8, source: 'tool', chatId: P.chatId, scope: mem2.scopeOfChat(P) })
+  }
+  // 在陌生群里给同一个人写档案
+  const g2 = { chatId: 'group:333444555', kind: 'group', groupId: '333444555' }
+  await mem2.buildProfile('444555666', mem2.scopeOfChat(g2))
+  assert.ok(!seen.includes('十块钱'), '写群档案时不该看到主人私聊的私事：' + seen)
+  assert.ok(!seen.includes('粥粥'), '同上，猫名也不该出现')
+})
