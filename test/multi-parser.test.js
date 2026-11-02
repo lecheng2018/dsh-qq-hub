@@ -85,3 +85,40 @@ test('multi-parser setup: feedToAi 开关控制上下文注入', async () => {
   mockApi.settings = () => ({ enabled: true, feedToAi: false })
   assert.equal(contextProvider({ chat: { chatId: 'group:123456' } }), '')
 })
+
+test('multi-parser setup: 支持专属 Cookie 并可自动复用全局 B站/小黑盒 Cookie', async () => {
+  let contextProvider = null
+  let statusHandler = null
+
+  const mockApi = {
+    config: () => ({
+      bili: { cookie: 'SESSDATA=bili_global_123' },
+      heybox: { cookie: 'pkey=heybox_global_456' },
+      multiParser: {
+        enabled: true,
+        feedToAi: true,
+        cookies: {
+          weibo: 'SUB=weibo_sub_789',
+        },
+      },
+    }),
+    settings: () => ({
+      enabled: true,
+      feedToAi: true,
+    }),
+    context: (fn) => { contextProvider = fn },
+    on: () => {},
+    route: (path, fn) => {
+      if (path === '/multi-parser/status') statusHandler = fn
+    },
+    log: { info() {}, debug() {}, warn() {} },
+  }
+
+  multiParser.setup(mockApi)
+  assert.ok(statusHandler)
+  const st = await statusHandler()
+  assert.equal(st.cookieStatus.bilibili, true, 'B站 Cookie 应该自动复用全局')
+  assert.equal(st.cookieStatus.xiaoheihe, true, '小黑盒 Cookie 应该自动复用全局')
+  assert.equal(st.cookieStatus.weibo, true, '微博 Cookie 应该由专属配置提供')
+  assert.equal(st.cookieStatus.zhihu, false, '知乎未配置')
+})

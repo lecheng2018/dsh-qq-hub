@@ -56,7 +56,18 @@ export default {
     const cfg = () => {
       const g = api.config().multiParser || {}
       const s = api.settings()
-      return { ...s, ...g, platforms: g.platforms || {} }
+      const full = api.config()
+      const rawCookies = g.cookies || {}
+      const cookies = {
+        bilibili: rawCookies.bilibili || full.bili?.cookie || (full.bili?.sessdata ? `SESSDATA=${full.bili.sessdata}` : ''),
+        douyin: rawCookies.douyin || '',
+        redbook: rawCookies.redbook || '',
+        weibo: rawCookies.weibo || '',
+        zhihu: rawCookies.zhihu || '',
+        tieba: rawCookies.tieba || '',
+        xiaoheihe: rawCookies.xiaoheihe || full.heybox?.cookie || '',
+      }
+      return { ...s, ...g, platforms: g.platforms || {}, cookies }
     }
 
     // 🌟 AI 上下文注入机制：大模型对话前，若当前聊天有新鲜解析的内容，自动拼入提示词
@@ -88,7 +99,7 @@ export default {
 
       for (const rawUrl of urls.slice(0, 3)) {
         try {
-          const result = await parseUrl(rawUrl, { platforms: c.platforms })
+          const result = await parseUrl(rawUrl, { platforms: c.platforms, cookies: c.cookies })
           if (!result) continue
 
           handledAny = true
@@ -117,7 +128,8 @@ export default {
       if (!url) return { ok: false, message: '请提供测试链接' }
 
       try {
-        const result = await parseUrl(url, { platforms: cfg().platforms })
+        const c = cfg()
+        const result = await parseUrl(url, { platforms: c.platforms, cookies: c.cookies })
         if (!result) return { ok: false, message: '暂不支持该平台链接或解析失败' }
         return { ok: true, result }
       } catch (err) {
@@ -127,10 +139,21 @@ export default {
 
     // 面板状态接口
     api.route('/multi-parser/status', async () => {
+      const c = cfg()
+      const ck = c.cookies || {}
       return {
         ok: true,
-        active: cfg().enabled,
+        active: c.enabled,
         recentCount: recentParsed.size,
+        cookieStatus: {
+          bilibili: Boolean(ck.bilibili),
+          weibo: Boolean(ck.weibo),
+          redbook: Boolean(ck.redbook),
+          zhihu: Boolean(ck.zhihu),
+          tieba: Boolean(ck.tieba),
+          douyin: Boolean(ck.douyin),
+          xiaoheihe: Boolean(ck.xiaoheihe),
+        },
         platforms: [
           'bilibili (B站)', 'weibo (微博)', 'redbook (小红书)', 'zhihu (知乎)',
           'wechat (微信公众号)', 'tieba (百度贴吧)', 'fanqie (番茄小说)',
@@ -140,7 +163,7 @@ export default {
     })
 
     return {
-      parse: (url) => parseUrl(url, { platforms: cfg().platforms }),
+      parse: (url) => parseUrl(url, { platforms: cfg().platforms, cookies: cfg().cookies }),
       recent: () => [...recentParsed.values()],
     }
   },

@@ -45,27 +45,27 @@ export async function resolveUrl(url, maxRedirects = 5) {
  * @param {object} [opts]
  * @returns {Promise<object|null>} 返回规范化的 ParseResult 或 null
  */
-export async function parseUrl(rawUrl, { platforms = {} } = {}) {
+export async function parseUrl(rawUrl, { platforms = {}, cookies = {} } = {}) {
   const url = await resolveUrl(rawUrl)
 
   // 1. 哔哩哔哩 Bilibili
   if (platforms.bilibili !== false && /(?:b23\.tv|bilibili\.com)/i.test(url)) {
-    return await parseBilibili(url)
+    return await parseBilibili(url, cookies.bilibili)
   }
 
   // 2. 微博 Weibo
   if (platforms.weibo !== false && /(?:weibo\.com|weibo\.cn)/i.test(url)) {
-    return await parseWeibo(url)
+    return await parseWeibo(url, cookies.weibo)
   }
 
   // 3. 小红书 RedBook
   if (platforms.redbook !== false && /(?:xhslink\.com|xiaohongshu\.com)/i.test(url)) {
-    return await parseRedBook(url)
+    return await parseRedBook(url, cookies.redbook)
   }
 
   // 4. 知乎 Zhihu
   if (platforms.zhihu !== false && /zhihu\.com/i.test(url)) {
-    return await parseZhihu(url)
+    return await parseZhihu(url, cookies.zhihu)
   }
 
   // 5. 微信公众号 Wechat
@@ -75,7 +75,7 @@ export async function parseUrl(rawUrl, { platforms = {} } = {}) {
 
   // 6. 百度贴吧 Tieba
   if (platforms.tieba !== false && /tieba\.baidu\.com/i.test(url)) {
-    return await parseTieba(url)
+    return await parseTieba(url, cookies.tieba)
   }
 
   // 7. 番茄小说 Fanqie
@@ -90,12 +90,12 @@ export async function parseUrl(rawUrl, { platforms = {} } = {}) {
 
   // 9. 抖音 Douyin
   if (platforms.douyin !== false && /(?:v\.douyin\.com|douyin\.com)/i.test(url)) {
-    return await parseDouyin(url)
+    return await parseDouyin(url, cookies.douyin)
   }
 
   // 10. 小黑盒 Heybox
   if (platforms.xiaoheihe !== false && /xiaoheihe\.cn/i.test(url)) {
-    return await parseHeybox(url)
+    return await parseHeybox(url, cookies.xiaoheihe)
   }
 
   return null
@@ -103,19 +103,34 @@ export async function parseUrl(rawUrl, { platforms = {} } = {}) {
 
 // ---------------- 各平台解析实现 ----------------
 
-async function parseBilibili(url) {
+async function parseBilibili(url, cookie = '') {
   const bvidMatch = url.match(/BV[0-9A-Za-z]{10}/i)
   if (!bvidMatch) return null
   const bvid = bvidMatch[0]
 
   try {
+    const headers = { 'User-Agent': UA_PC, Referer: 'https://www.bilibili.com/' }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
-      headers: { 'User-Agent': UA_PC, Referer: 'https://www.bilibili.com/' },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const json = await res.json()
     if (json.code !== 0 || !json.data) return null
     const d = json.data
+
+    let videoUrl = ''
+    if (d.cid) {
+      try {
+        const playRes = await fetch(`https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${d.cid}&qn=64&fnval=1`, {
+          headers,
+          signal: AbortSignal.timeout(6000),
+        })
+        const playJson = await playRes.json()
+        videoUrl = playJson?.data?.durl?.[0]?.url || ''
+      } catch {}
+    }
 
     return {
       platform: 'bilibili',
@@ -127,7 +142,7 @@ async function parseBilibili(url) {
       cover: d.pic,
       images: d.pic ? [d.pic] : [],
       url: `https://www.bilibili.com/video/${bvid}`,
-      videoUrl: '', // 需 SESSDATA，基础解析提供封面与摘要
+      videoUrl,
       stat: `播放: ${d.stat?.view || 0} · 弹幕: ${d.stat?.danmaku || 0}`,
     }
   } catch {
@@ -135,19 +150,22 @@ async function parseBilibili(url) {
   }
 }
 
-async function parseWeibo(url) {
+async function parseWeibo(url, cookie = '') {
   const idMatch = url.match(/(?:status|detail|\d+)\/([0-9A-Za-z]+)/) || url.match(/weibo\.com\/\d+\/([0-9A-Za-z]+)/)
   if (!idMatch) return null
   const id = idMatch[1]
 
   try {
+    const headers = {
+      'User-Agent': UA_MOBILE,
+      Referer: `https://m.weibo.cn/detail/${id}`,
+      'X-Requested-With': 'XMLHttpRequest',
+      'MWeibo-Pwa': '1',
+    }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(`https://m.weibo.cn/statuses/show?id=${id}`, {
-      headers: {
-        'User-Agent': UA_MOBILE,
-        Referer: `https://m.weibo.cn/detail/${id}`,
-        'X-Requested-With': 'XMLHttpRequest',
-        'MWeibo-Pwa': '1',
-      },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const json = await res.json()
@@ -176,10 +194,13 @@ async function parseWeibo(url) {
   }
 }
 
-async function parseRedBook(url) {
+async function parseRedBook(url, cookie = '') {
   try {
+    const headers = { 'User-Agent': UA_MOBILE, Referer: 'https://www.xiaohongshu.com/' }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(url, {
-      headers: { 'User-Agent': UA_MOBILE, Referer: 'https://www.xiaohongshu.com/' },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const html = await res.text()
@@ -209,10 +230,13 @@ async function parseRedBook(url) {
   }
 }
 
-async function parseZhihu(url) {
+async function parseZhihu(url, cookie = '') {
   try {
+    const headers = { 'User-Agent': UA_PC, Referer: 'https://www.zhihu.com/' }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(url, {
-      headers: { 'User-Agent': UA_PC, Referer: 'https://www.zhihu.com/' },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const html = await res.text()
@@ -275,14 +299,17 @@ async function parseWechat(url) {
   }
 }
 
-async function parseTieba(url) {
+async function parseTieba(url, cookie = '') {
   const tidMatch = url.match(/p\/(\d+)/)
   if (!tidMatch) return null
   const tid = tidMatch[1]
 
   try {
+    const headers = { 'User-Agent': UA_PC }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(`https://tieba.baidu.com/p/${tid}`, {
-      headers: { 'User-Agent': UA_PC },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const html = await res.text()
@@ -372,10 +399,13 @@ async function parseGithub(url) {
   }
 }
 
-async function parseDouyin(url) {
+async function parseDouyin(url, cookie = '') {
   try {
+    const headers = { 'User-Agent': UA_MOBILE }
+    if (cookie) headers.Cookie = cookie
+
     const res = await fetch(url, {
-      headers: { 'User-Agent': UA_MOBILE },
+      headers,
       signal: AbortSignal.timeout(8000),
     })
     const html = await res.text()
@@ -398,7 +428,7 @@ async function parseDouyin(url) {
   }
 }
 
-async function parseHeybox(url) {
+async function parseHeybox(url, cookie = '') {
   return {
     platform: 'xiaoheihe',
     platformName: '小黑盒',
