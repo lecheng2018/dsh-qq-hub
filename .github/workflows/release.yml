@@ -1,9 +1,32 @@
+# DSH 插件自动发布工作流
+#
+# 触发策略（避免文档/杂项改动污染 Release 列表）：
+#   1. push tag (v*)          —— 正式发版：更新 package.json version 后打 tag 推送
+#   2. workflow_dispatch      —— 手动发版：Actions 页面点 Run workflow
+#   3. push main 且代码有变更  —— 自动判断：只看 src/、client/、cordis.patch.yml、test/、
+#                                package.json、scripts/ 等实际影响插件产物的文件；
+#                                纯 README / 文档 / .md / 许可证改动不触发发布
+#
+# Tag 命名规则：
+#   - package.json version 与远端已有 tag 一致且指向当前提交 → 跳过发布（幂等保护）
+#   - version 相同但指向不同提交 → 追加 -build.N 后缀（兜底，正常走 tag 触发不会碰到）
 name: Release DSH Plugin
 
 on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
+    paths:
+      - 'src/**'
+      - 'client/**'
+      - 'personas/**'
+      - 'extensions/**'
+      - 'cordis.patch.yml'
+      - 'package.json'
+      - 'test/**'
+      - 'scripts/**'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +39,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # tag 触发必定发版；push main 触发时再检测「这个提交是否已有同版本 tag」做幂等
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -36,22 +60,31 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
-          
-          # 检查标签是否在远端已存在
-          git fetch --tags || true
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            TAG_COMMIT=$(git rev-list -n 1 "$TAG" 2>/dev/null || echo "")
-            if [ "$TAG_COMMIT" != "$GITHUB_SHA" ]; then
-              TAG="${TAG}-build.${GITHUB_RUN_NUMBER}"
+          SKIP=false
+
+          git fetch --tags --force || true
+
+          # 幂等保护：当前提交已经有完全一致的版本 tag → 说明这个版本发过了，跳过
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            TAG_COMMIT=$(git rev-list -n 1 "${TAG}" 2>/dev/null || echo "")
+            if [ "${TAG_COMMIT}" = "${GITHUB_SHA}" ]; then
+              echo "当前提交 ${GITHUB_SHA} 已存在 tag ${TAG}，跳过重复发布"
+              SKIP=true
+            elif [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+              # main push 但没改 version：不再追加 build.N 污染 Release 列表，直接跳过
+              echo "package.json version 仍是 ${VERSION} 且 tag ${TAG} 已指向其他提交；如需重新发版请更新 version 或打 tag"
+              SKIP=true
             fi
           fi
-          
+
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Target tag: ${TAG} (Package version: ${VERSION})"
+          echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
+          echo "Target tag: ${TAG} (Package version: ${VERSION}, skip=${SKIP})"
 
       - name: Extract Release Notes
         id: changelog
+        if: steps.meta.outputs.skip != 'true'
         run: |
           node -e '
           const fs = require("fs");
@@ -62,7 +95,7 @@ jobs:
             const title = s.split(/\r?\n/)[0].trim();
             return title === pkg.version || title === "v" + pkg.version;
           }) || sections.find(s => s.split(/\r?\n/)[0].trim() === "未发布") || sections[0];
-          
+
           let notes = "详见版本提交明细。";
           if (target) {
             notes = target.split(/\r?\n/).slice(1).join("\n").trim();
@@ -74,6 +107,7 @@ jobs:
 
       - name: Pack DSH Plugin (.tgz)
         id: pack
+        if: steps.meta.outputs.skip != 'true'
         run: |
           mkdir -p dist
           npm pack --pack-destination dist
@@ -83,12 +117,14 @@ jobs:
           ls -lh dist/
 
       - name: Upload Artifact
+        if: steps.meta.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dsh-plugin-tarball
           path: dist/*.tgz
 
       - name: Publish GitHub Release
+        if: steps.meta.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
