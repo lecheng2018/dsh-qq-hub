@@ -33,7 +33,7 @@ const LEGACY_WORKSPACE = 'C:\\Aurabot\\qq-chats'
 export const WORKSPACE_DIR = process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
 /** 现在用的工作区目录：面板里填了就用填的，否则默认。 */
 export const workspaceDirOf = (cfg) => String(cfg?.workspaceDir || '').trim() || WORKSPACE_DIR
-export const WORKSPACE_TITLE = 'Aurabot · QQ'
+export const WORKSPACE_TITLE = 'QQ Agent'
 const SOURCE_KIND = 'aurabot'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

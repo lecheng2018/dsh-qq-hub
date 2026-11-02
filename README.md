@@ -70,7 +70,7 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-agent
 > **离线安装**：可直接从 [Releases](https://github.com/lecheng2018/dsh-qq-agent/releases) 下载 `dsh-qq-agent-1.2.0.tgz`，执行 `dsh plugin add ./dsh-qq-agent-1.2.0.tgz`。
 
 ### 3. 网关连接与配置
-安装后重启 DSH，在左侧栏「自动化任务」下点击 **Aurabot** 打开配置面板：
+安装后重启 DSH，在左侧栏「自动化任务」下点击 **QQ Agent** 打开配置面板：
 1. 填写**机器人 QQ 号**（小号）和**你的主人 QQ 号**（管理大号）；
 2. 网关配置：
    - **SnowLuma 模式（Windows）**：填入 SnowLuma 目录，在面板内同意其用户协议（自动生成独立密码），登录机器人号后点击「接入机器人号」；

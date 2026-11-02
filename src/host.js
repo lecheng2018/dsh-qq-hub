@@ -987,7 +987,7 @@ export function apply(ctx) {
   route('/test-send', async () => {
     if (!cfg.enabled) return { ok: false, message: '先打开总开关' }
     if (cfg.dryRun) return { ok: false, message: '现在是试运行，先关掉试运行再测' }
-    const r = await hub.sendText(`private:${cfg.ownerQQ}`, '【Aurabot 自测】大肥鱼到此一游～')
+    const r = await hub.sendText(`private:${cfg.ownerQQ}`, '【QQ Agent 自测】已连通，这是一条自测消息～')
     return r ? { ok: true, message: '发给主人了，去 QQ 看看' } : { ok: false, message: '没发出去（看日志）' }
   })
 
@@ -1247,7 +1247,7 @@ export function apply(ctx) {
     }
   })
 
-  log.info(`Aurabot v${VERSION} 已加载｜总开关 ${cfg.enabled ? '开' : '关'}｜试运行 ${cfg.dryRun ? '开' : '关'}｜工作区 ${workspaceDirOf(cfg)}`)
+  log.info(`QQ Agent v${VERSION} 已加载｜总开关 ${cfg.enabled ? '开' : '关'}｜试运行 ${cfg.dryRun ? '开' : '关'}｜工作区 ${workspaceDirOf(cfg)}`)
 
   return {
     hub, onebot, snowluma, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
