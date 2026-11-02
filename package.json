@@ -1,0 +1,62 @@
+{
+  "name": "dsh-qq-hub",
+  "version": "1.2.0",
+  "description": "DSH (DeepSeek Harness) 旗舰级 QQ Hub 终端与多模态智能伙伴插件（经 SnowLuma / OneBot v11 接 QQ）",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-hub",
+    "dsh-agent",
+    "qq-hub",
+    "qq-agent",
+    "qq",
+    "onebot"
+  ],
+  "files": [
+    "extensions",
+    "src",
+    "client",
+    "personas",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/USER-MANUAL.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lecheng2018/dsh-qq-hub.git"
+  },
+  "homepage": "https://github.com/lecheng2018/dsh-qq-hub",
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
