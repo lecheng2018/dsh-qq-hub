@@ -10,6 +10,14 @@ import { createFakeDsh } from './helpers/fake-dsh.js'
 const OWNER = '10000001'
 const BOT = '20000002'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+async function localTts() {
+  const http = await import('node:http')
+  const srv = http.createServer((req, res) => { res.setHeader('content-type', 'audio/wav'); res.end(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(2000)])) })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  await fake.call('/save', { voice: { engine: 'http', http: { urlTemplate: `http://127.0.0.1:${srv.address().port}/tts?text={text}` } } })
+  return { srv, close: async () => { srv.close(); await fake.call('/save', { voice: { engine: 'windows' } }) } }
+}
+
 async function until(fn, ms = 8000) {
   const t = Date.now()
   while (Date.now() - t < ms) {
@@ -492,10 +500,15 @@ test('普通照片不收进表情库', async () => {
 })
 
 test('语音：回复里的 <voice> 变成 QQ 语音条', async () => {
-  mock.push(priv(OWNER, text('晚安')))
-  await until(() => sentTo('private', OWNER).some((c) => c.params.message[0].type === 'record'), 20000)
-  const rec = sentTo('private', OWNER).find((c) => c.params.message[0].type === 'record')
-  assert.match(rec.params.message[0].data.file, /^base64:\/\//)
+  // 默认配置是 windows 语音，Linux/macOS 上念不出来，这条要自己起一个本地 HTTP TTS
+  const tts = await localTts()
+  try {
+    const n = sentTo('private', OWNER).length
+    mock.push(priv(OWNER, text('晚安')))
+    await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'record'), 20000)
+    const rec = sentTo('private', OWNER).slice(n).find((c) => c.params.message[0].type === 'record')
+    assert.match(rec.params.message[0].data.file, /^base64:\/\//)
+  } finally { await tts.close() }
 })
 
 test('引用 + 语音：语音条单独一条发，不和引用/@ 拼在同一条（issue #103）', async () => {
@@ -749,10 +762,13 @@ test('语音发不出去时退回成发文字', async () => {
 })
 
 test('明确要语音但她只打了字：插件强制转成语音', async () => {
-  const n = sentTo('private', OWNER).length
-  mock.push(priv(OWNER, text('用语音说你好')))
-  await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'record'), 20000)
-  assert.ok(!sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'text' && c.params.message[0].data.text === '你好呀'))
+  const tts = await localTts()
+  try {
+    const n = sentTo('private', OWNER).length
+    mock.push(priv(OWNER, text('用语音说你好')))
+    await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'record'), 20000)
+    assert.ok(!sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'text' && c.params.message[0].data.text === '你好呀'))
+  } finally { await tts.close() }
 })
 
 test('连发合并：一口气发两句，她只回一次', async () => {

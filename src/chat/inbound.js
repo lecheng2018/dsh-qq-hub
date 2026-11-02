@@ -26,6 +26,7 @@ export function isStickerSegment(seg) {
  *   kind: 'private'|'group', chatId: string, userId: string, groupId: string,
  *   nickname: string, role: string, messageId: string, text: string,
  *   mentioned: boolean, replyId: string, images: object[], stickers: object[], records: object[],
+ *   forwards: string[], files: object[],
  * }}
  */
 export function parseMessageEvent(event, selfId, { faceName } = {}) {
@@ -41,6 +42,7 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
   const stickers = []
   const records = []
   const forwards = [] // 合并转发的 id
+  const files = [] // 收到的文件（要另外调接口去取下载地址）
   for (const seg of segmentsOf(event)) {
     const d = seg.data || {}
     switch (seg.type) {
@@ -77,7 +79,10 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
         texts.push('[视频]')
         break
       case 'file':
-        texts.push(`[文件 ${d.name || d.file || ''}]`)
+        // 文件本体不在消息里，只有 file_id；要另外调 get_private_file_url / get_group_file_url
+        // 去换带时效的下载地址（NapCat 系 5 分钟左右过期，必须拿到就下）。
+        files.push(seg)
+        texts.push(`[文件 ${d.file_name || d.name || d.file || ''}]`)
         break
       case 'json':
         texts.push(cardText(d.data))
@@ -115,6 +120,7 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
     stickers,
     records,
     forwards,
+    files,
   }
 }
 
