@@ -141,6 +141,8 @@ export default {
       return { ok: true, items: all ? s.items : s.items.filter((m) => String(m.scope).startsWith('private:')).map((m) => ({ ...m, text: '（私聊内容，面板不预览）' })) }
     })
     // 面板：作用域汇总（私聊内容默认不预览，只给条数；全局和本群可以看）
+    // 面板数据以「真正生效的那套」为准：主记忆库的作用域分布 + 人物小档案的作用域分布。
+    // 本模块自己的 scoped.json 只是附带的一份，模型几乎不会走它，所以面板不能只报它（否则永远 0 条）。
     api.route('/memory-privacy/stats', () => {
       const s = load()
       const by = {}
@@ -148,12 +150,43 @@ export default {
         const scope = String(m.scope || 'global')
         by[scope] = (by[scope] || 0) + 1
       }
-      return {
+      const out = {
         ok: true,
         total: s.items.length,
         scopes: Object.entries(by).map(([scope, n]) => ({ scope, n })).sort((a, b) => b.n - a.n),
         globalItems: s.items.filter((m) => String(m.scope || 'global') === 'global').slice(-50).map((m) => ({ id: m.id, text: m.text, at: m.at })),
       }
+      // 主记忆库的真实分布
+      try {
+        const memory = api.use('memory')
+        const items = (memory && typeof memory.list === 'function' ? memory.list() : []) || []
+        const mainBy = {}
+        for (const m of items) {
+          const scope = String(m.scope || 'global')
+          mainBy[scope] = (mainBy[scope] || 0) + 1
+        }
+        out.main = {
+          total: items.length,
+          scopes: Object.entries(mainBy).map(([scope, n]) => ({ scope, n })).sort((a, b) => b.n - a.n),
+          globalItems: items.filter((m) => String(m.scope || 'global') === 'global').slice(-50).map((m) => ({ id: m.id, text: m.text, at: m.at })),
+          privateCount: items.filter((m) => String(m.scope || '').startsWith('private:')).length,
+        }
+        // 人物小档案：这是之前真正泄漏的那条通道，单独列出来
+        const profs = (memory && typeof memory.profiles === 'function' ? memory.profiles() : []) || []
+        const profBy = {}
+        for (const p of profs) {
+          const scope = String(p.scope || 'global')
+          profBy[scope] = (profBy[scope] || 0) + 1
+        }
+        out.profiles = {
+          total: profs.length,
+          scopes: Object.entries(profBy).map(([scope, n]) => ({ scope, n })).sort((a, b) => b.n - a.n),
+          globalItems: profs.filter((p) => String(p.scope || 'global') === 'global').slice(-50).map((p) => ({ qq: p.qq, text: p.text, at: p.at })),
+        }
+      } catch (error) {
+        out.mainError = error.message
+      }
+      return out
     })
     api.route('/memory-privacy/delete', (req) => {
       const id = String(req?.query?.id || '')
