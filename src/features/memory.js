@@ -183,7 +183,31 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     return cache.idx
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '' }) {
+  /**
+   * 记忆作用域：私聊里记的只在那个私聊可见，群里记的只在那群可见，global 到处可见。
+   * 老数据没有 scope 字段，一律按 global（和以前行为一致，不会突然丢记忆）。
+   */
+  function scopeOfChat(chat) {
+    if (!chat || chat.kind === 'system') return 'global'
+    if (chat.kind === 'private') return `private:${chat.userId}`
+    if (chat.kind === 'group') return `group:${chat.groupId}`
+    return 'global'
+  }
+  /** 从 chatId 字符串（'private:123' / 'group:456'）反推作用域；自动整理按聊天分批跑时用。 */
+  function scopeFromChatId(chatId) {
+    const id = String(chatId || '')
+    if (id.startsWith('private:') || id.startsWith('group:')) return id
+    return 'global'
+  }
+  /** 这条记忆在 chat 这个聊天里能不能被想起 */
+  function scopeVisible(scope, chat) {
+    const sc = String(scope || 'global')
+    if (sc === 'global') return true
+    if (!chat || chat.kind === 'system') return false
+    return sc === scopeOfChat(chat)
+  }
+
+  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '' }) {
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
@@ -197,7 +221,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       save(s)
       return { ok: true, message: '✓', updated: dup.id }
     }
-    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, at: Date.now(), hits: 0 }
+    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: String(scope || 'global'), at: Date.now(), hits: 0 }
     s.items.push(item)
     if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
     save(s)
@@ -304,13 +328,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
   }
 
   const recallLog = [] // 最近几次想起了什么（给面板看）
-  function recall(query, { about, limit, where = '', context = '' } = {}) {
+  function recall(query, { about, limit, where = '', context = '', chat = null } = {}) {
     const max = limit ?? getConfig().memory.recallCount
-    const hits = search(index(), query, { about, limit: max })
+    // 作用域过滤：拿不到当前聊天（chat=null）就不限，保持老调用方行为；
+    // 传了 chat 就只留这个聊天可见的（私聊作用域的条目在群里会被物理过滤掉，模型套话也拿不到）。
+    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat)) : list)
+    const hits = scoped(search(index(), query, { about, limit: chat ? max * 3 : max })).slice(0, max)
     // 这一句没想起几条（「嗯嗯」「然后呢」）：用上一句再找找，分数打折
     if (context && hits.length < max) {
       const have = new Set(hits.map((h) => h.it.id))
-      for (const h of search(index(), context, { about, limit: max, minScore: 0.5 })) {
+      for (const h of scoped(search(index(), context, { about, limit: max * 3, minScore: 0.5 }))) {
         if (hits.length >= max) break
         if (!have.has(h.it.id)) hits.push({ ...h, score: h.score * 0.6, why: [...(h.why || []), '（上一句）'] })
       }
@@ -494,7 +521,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const about = chat && chat.kind === 'private' ? chat.userId : undefined
     // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
     const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
-    const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText }).filter((h) => !shown.has(h.it.id)).slice(0, 4)
+    const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, 4)
     if (!hits.length) return backdrop
     let body = hits.map((h) => memoryLine(h.it)).join('；')
     if (body.length > 300) body = body.slice(0, 300) + '…'
@@ -609,7 +636,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       // 旧的过时了：先标过时（这样新的不会被当成重复合并进去），再记新的
       if (op === 'outdated' && target) {
         invalidate(target.id)
-        const r = add({ text: x.text, aboutName: x.about || target.aboutName || '', about: about || target.about || '', importance: x.importance ?? target.importance ?? 0.5, source: 'auto', chatId })
+        const r = add({ text: x.text, aboutName: x.about || target.aboutName || '', about: about || target.about || '', importance: x.importance ?? target.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
         if (r.id || r.updated) {
           invalidate(target.id, r.id || r.updated)
           log.info(`记忆更新：「${target.text}」过时了 → 「${String(x.text).slice(0, 60)}」`)
@@ -617,7 +644,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
         }
         continue
       }
-      const r = add({ text: x.text, aboutName: x.about || '', about, importance: x.importance ?? 0.5, source: 'auto', chatId })
+      const r = add({ text: x.text, aboutName: x.about || '', about, importance: x.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
       if (r.ok && r.id) n++
     }
     return n
@@ -752,6 +779,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
 
   return {
     recallHint,
+    scopeOfChat, scopeVisible,
     add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit,
     profiles: () => { const s = load(); return Object.entries(s.profiles || {}).map(([qq, p]) => ({ qq, ...p })).sort((a, b) => b.at - a.at) },
     setProfile, buildProfile,

@@ -3366,7 +3366,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       // 标签页：内置的按模块在不在跑决定显示；自己写的模块有设置或面板的各占一页
       const mods = st.modules || []
       const running = (id) => { const m = mods.find((x) => x.id === id); return Boolean(m && m.running) }
-      const hasUi = (m) => m.running === 'user' && !m.builtin && ((m.settings || []).length || m.panel)
+      // 内置模块也要算「有界面」：它们和用户模块一样有 settings / panel，只是运行时 running 是 'builtin'。
+      // 老条件 m.running === 'user' 把内置模块全挡掉了 —— 这正是「五个面板一片空白、配置项一个都不出现」的根因。
+      const hasUi = (m) => Boolean(m.running) && ((m.settings || []).length > 0 || m.panel)
       // 写了 tab 的模块嵌进那个内置标签页；没写（或写的页不存在）的单独一页
       const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === m.tab))
       const extTabs = mods.filter((m) => hasUi(m) && !intoTab(m)).map((m) => ({ id: 'ext:' + m.id, label: m.name, ext: m.id }))
