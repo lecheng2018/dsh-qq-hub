@@ -5,6 +5,7 @@
 // 3. AI 原生工具：向模型注册 schedule_reminder 工具，AI 可以在对话中主动帮主人定提醒；
 // 4. 定时到达时，自动通过 QQ 发送通知卡片。
 
+import { defineTool, str } from '../../tools/tools.js'
 import { createSchedulerEngine } from './engine.js'
 import { parseRemindCommand, REMIND_HELP } from './commands.js'
 import { fmtDate, fmtTime, zonedParts } from './time.js'
@@ -117,21 +118,23 @@ export default {
     })
 
     // AI 自主登记定时任务工具
-    api.tool({
-      name: 'schedule_reminder',
-      description: '为用户设置一个未来的定时提醒或任务。当到达设定时间时，系统会自动在 QQ 发送消息提醒用户。',
-      parameters: {
-        type: 'object',
+    // 注意：这里必须用 defineTool(...) 或返回它的函数，不能直接传裸对象。
+    // 直接传对象会被当成「原生 tool 定义」校验，框架会要求 output { schema, render, presentationMeta? }，
+    // 于是报错：tool "schedule_reminder" must declare output —— 就是这个原因以前一直挂不上。
+    api.tool(({ chat }) => {
+      if (chat.kind === 'system') return []
+      return [defineTool({
+        name: 'schedule_reminder',
+        description: '为用户设置一个未来的定时提醒或任务。当到达设定时间时，系统会自动在 QQ 发送消息提醒用户。',
         properties: {
-          text: { type: 'string', description: '提醒的内容，例如"喝水"、"检查周报"、"服务器维护"' },
-          type: { type: 'string', enum: ['in', 'once', 'daily', 'workdays'], description: '调度类型：in(多少分钟/小时后)、once(指定日期时间)、daily(每天)、workdays(工作日)' },
-          delay: { type: 'string', description: '当 type 为 in 时必填，如 "30m"、"2h"、"1d"' },
-          date: { type: 'string', description: '当 type 为 once 时必填，格式 YYYY-MM-DD' },
-          time: { type: 'string', description: '时间 HH:mm，如 "09:30" 或 "18:00"' },
+          text: str('提醒的内容，例如"喝水"、"检查周报"、"服务器维护"'),
+          type: str('调度类型：in(多少分钟/小时后)、once(指定日期时间)、daily(每天)、workdays(工作日)'),
+          delay: str('当 type 为 in 时必填，如 30m、2h、1d'),
+          date: str('当 type 为 once 时必填，格式 YYYY-MM-DD'),
+          time: str('时间 HH:mm，如 09:30 或 18:00'),
         },
         required: ['text', 'type'],
-      },
-      async execute({ text, type, delay, date, time }, exec) {
+        execute: async ({ text, type, delay, date, time }, exec) => {
         let schedule
         const now = Date.now()
         if (type === 'in') {
@@ -159,7 +162,8 @@ export default {
           nextDesc = `${fmtDate(p)} ${fmtTime(p)}`
         }
         return { ok: true, taskId: t.id, message: `已成功创建提醒 #${t.id}，下一次触发时刻为：${nextDesc}` }
-      },
+        },
+      })]
     })
 
     // 面板 API 路由
