@@ -188,7 +188,9 @@ export async function runCommand(cmd, msg, deps) {
     case 'remember': {
       if (!memory) return '记忆模块关着'
       if (!cmd.arg) return '要我记住什么呀？比如 /remember 我不吃香菜'
-      const r = memory.add({ text: cmd.arg, aboutName: cfg.ownerName || '主人', about: cfg.ownerQQ, importance: 0.8, source: 'panel', chatId: msg.chatId })
+      // 作用域跟着发命令的那个聊天走：在群里 /remember 的只在那群可见
+      const sc = String(msg.chatId || '').startsWith('private:') || String(msg.chatId || '').startsWith('group:') ? String(msg.chatId) : 'global'
+      const r = memory.add({ text: cmd.arg, aboutName: cfg.ownerName || '主人', about: cfg.ownerQQ, importance: 0.8, source: 'panel', chatId: msg.chatId, scope: sc })
       return r.ok ? '记住了' : '没记上：' + (r.message || '')
     }
     case 'reset':
