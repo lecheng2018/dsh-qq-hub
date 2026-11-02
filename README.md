@@ -1,18 +1,18 @@
-# Aurabot · 住在 QQ 里的智能伙伴与 DSH Agent 交互终端
+# DSH-QQ-Agent · 住在 QQ 里的智能伙伴与 DSH Agent 交互终端
 
-[![GitHub Release](https://img.shields.io/github/v/release/lecheng2018/dsh-aurabot-qq?color=blue&logo=github)](https://github.com/lecheng2018/dsh-aurabot-qq/releases)
-[![Tests](https://img.shields.io/badge/tests-746%20passed-success?logo=node.js)](https://github.com/lecheng2018/dsh-aurabot-qq/actions)
+[![GitHub Release](https://img.shields.io/github/v/release/lecheng2018/dsh-qq-agent?color=blue&logo=github)](https://github.com/lecheng2018/dsh-qq-agent/releases)
+[![Tests](https://img.shields.io/badge/tests-746%20passed-success?logo=node.js)](https://github.com/lecheng2018/dsh-qq-agent/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DSH-Plugin-0969da)](https://github.com/deepseek-ai)
 
-**Aurabot** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。
+**DSH-QQ-Agent** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。
 
 它兼具 **顶尖的拟人化社交聊天伙伴** 与 **强大的生产力 Agent 远程交互终端** 双重能力：
 - **拟人伙伴**：有性格、有心情、懂记忆。看图、听发语音、发表情包、RVC 翻唱变声、写空间日记、刷 B 站/抖音/小黑盒，以及常驻屏幕边缘的互动桌面宠物。
 - **Agent 终端**：在手机 QQ 端直接操控 DSH。支持**交互式提问（`ask_user_question`）**、**高危工具审批流（`approval/request`）**、**断线消息自动补收（`backfill`）**、**全功能定时任务调度（`/remind`）**、**RFC 6238 TOTP 手机动态口令锁**与**私聊/群聊记忆物理隔离**。
 
 ```
-QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ Aurabot 插件 (Cordis 4) ⇄ DSH 会话 (预设物理隔离)
+QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Agent 插件 (Cordis 4) ⇄ DSH 会话 (预设物理隔离)
 ```
 
 ---
@@ -59,15 +59,15 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ Aurabot 插件
 
 #### Windows 桌面版 (PowerShell)
 ```powershell
-& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:lecheng2018/dsh-aurabot-qq
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:lecheng2018/dsh-qq-agent
 ```
 
 #### Linux / Docker / 命令行版 (Bash)
 ```bash
-dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-aurabot-qq
+dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-agent
 ```
 
-> **离线安装**：可直接从 [Releases](https://github.com/lecheng2018/dsh-aurabot-qq/releases) 下载 `dsh-aurabot-qq-1.2.0.tgz`，执行 `dsh plugin add ./dsh-aurabot-qq-1.2.0.tgz`。
+> **离线安装**：可直接从 [Releases](https://github.com/lecheng2018/dsh-qq-agent/releases) 下载 `dsh-qq-agent-1.2.0.tgz`，执行 `dsh plugin add ./dsh-qq-agent-1.2.0.tgz`。
 
 ### 3. 网关连接与配置
 安装后重启 DSH，在左侧栏「自动化任务」下点击 **Aurabot** 打开配置面板：
@@ -87,10 +87,10 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-aurabot-qq
 再次执行安装命令（自动拉取 GitHub 最新版本），随后重启 DSH 即可。所有配置、人格卡、记忆库和状态文件均受持久化保护，升级永不丢失：
 ```powershell
 # Windows
-& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:lecheng2018/dsh-aurabot-qq
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:lecheng2018/dsh-qq-agent
 
 # Linux / Docker
-dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-aurabot-qq
+dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-agent
 ```
 
 ---

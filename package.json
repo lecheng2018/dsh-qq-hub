@@ -1,7 +1,7 @@
 {
-  "name": "dsh-aurabot-qq",
+  "name": "dsh-qq-agent",
   "version": "1.2.0",
-  "description": "Aurabot：住在 QQ 里的 AI 伙伴「大肥鱼」—— DeepSeek Harness 插件（经 SnowLuma / OneBot v11 接 QQ）",
+  "description": "DSH (DeepSeek Harness) 旗舰级 QQ Agent 终端与多模态智能伙伴插件（经 SnowLuma / OneBot v11 接 QQ）",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -32,6 +32,8 @@
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
+    "dsh-agent",
+    "qq-agent",
     "qq",
     "onebot"
   ],
@@ -49,9 +51,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/lecheng2018/dsh-aurabot-qq.git"
+    "url": "https://github.com/lecheng2018/dsh-qq-agent.git"
   },
-  "homepage": "https://github.com/lecheng2018/dsh-aurabot-qq",
+  "homepage": "https://github.com/lecheng2018/dsh-qq-agent",
   "engines": {
     "node": ">=22.13.0"
   }
