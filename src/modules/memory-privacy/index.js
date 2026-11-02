@@ -74,7 +74,7 @@ export default {
     { key: 'enabled', label: '启用记忆分层', type: 'switch', hint: '关掉就只有原来的 BM25 记忆，不额外加分层内容' },
     { key: 'maxItems', label: '每次最多带几条', type: 'number', min: 0, max: 12, step: 1 },
     { key: 'maxChars', label: '内容长度上限', type: 'number', min: 100, max: 2000, step: 50 },
-    { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '私聊记成 private、群聊记成 group' },
+    { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '开（默认）：私聊记成 private、群聊记成 group。关掉后新记忆一律写进 global —— 任何聊天都能读到，等于放弃隔离，慎用' },
   ],
   setup(api) {
     const file = () => api.dataDir('scoped.json')
