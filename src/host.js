@@ -266,6 +266,13 @@ export function apply(ctx) {
       send: (message, info) => mods.filter('send', message, info),
       model: (sel, chat) => mods.filterSync('model', sel, chat),
       poke: (ev) => mods.claim('poke', ev),
+      securityLock: () => {
+        try {
+          const m = mods?.use?.('security-lock')
+          if (!m || typeof m.locked !== 'function') return null
+          return { locked: m.locked(), remainingMin: m.remainingMin }
+        } catch (error) { return null }
+      },
     },
   })
 
@@ -357,6 +364,87 @@ export function apply(ctx) {
     try { off = ctx.on('tools/pre-execute', (exec, next) => dangerGuard.preExecute(exec, next)) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'aurabot: 危险命令确认')
+
+  const sessionKey = (id) => {
+    const s = String(id ?? '')
+    return s.startsWith('session-') ? s.slice(8) : s
+  }
+
+  // ---------- 通用工具审批流 (approval/request) ----------
+  // 接入 DSH 官方 approval seam：当模型调用敏感工具触发审批时，向主人 QQ 发送审批卡（支持 TOTP 权限锁）
+  ctx.effect(() => {
+    let off = null
+    try {
+      off = ctx.on('approval/request', async (req, next) => {
+        try {
+          const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
+          const chatId = hub.chatOfSession?.(sid)
+          // 非 QQ 会话的 agent 请求，委托给下一个应答者
+          if (!chatId) return next()
+
+          let command = ''
+          let args = null
+          if (req.arguments) {
+            args = req.arguments
+            command = req.arguments.command || ''
+          }
+          return await hub.requestApproval(req, {
+            chatId,
+            sessionId: sid,
+            command,
+            args
+          })
+        } catch (error) {
+          log.warn('审批处理异常：', error.message)
+          return 'rejected'
+        }
+      })
+    } catch (error) {
+      log.debug('挂通用审批流失败：', error.message)
+    }
+    return () => { try { if (typeof off === 'function') off() } catch (error) {} }
+  }, 'aurabot: 通用工具审批')
+
+  // ---------- 交互式提问 (userQuestions / ask_user_question) ----------
+  // 接入 DSH 官方 userQuestions seam：当模型通过 ask_user_question 提问时，格式化为 A/B/C 选项卡发往 QQ
+  function setupUserQuestions() {
+    const uq = ctx.userQuestions || ctx.get?.('userQuestions')
+    if (!uq) return
+    if (uq.provider) {
+      const orig = uq.provider
+      uq.provider = {
+        async ask(req) {
+          const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
+          const chatId = hub.chatOfSession?.(sid)
+          if (chatId) {
+            return await hub.askUserQuestion(chatId, req)
+          }
+          return await orig.ask(req)
+        }
+      }
+      log.info('已将 QQ 交互提问桥接接入现有 userQuestions 提供方')
+    } else if (typeof uq.registerProvider === 'function') {
+      try {
+        ctx.effect(() => {
+          const off = uq.registerProvider({
+            async ask(req) {
+              const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
+              const chatId = hub.chatOfSession?.(sid)
+              if (chatId) {
+                return await hub.askUserQuestion(chatId, req)
+              }
+              throw new Error('当前会话不在 QQ 机器人管辖内')
+            }
+          })
+          return () => { try { if (typeof off === 'function') off() } catch (error) {} }
+        }, 'aurabot: QQ交互提问提供方')
+        log.info('已成功注册 QQ userQuestions 交互提问提供方')
+      } catch (error) {
+        log.debug('注册 userQuestions 失败：', error.message)
+      }
+    }
+  }
+  setupUserQuestions()
 
   // ---------- 桌宠端口注入（破「端口自举死锁」） ----------
   // pet 模块写 host.json 的 baseUrl 需要真实 Web 端口，而它自己监听不到（端口未知时只能写 null，
