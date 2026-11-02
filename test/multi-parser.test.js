@@ -10,15 +10,15 @@ test('multi-parser: 模块注册与定义完整性', () => {
   assert.equal(multiParser.tab, 'multiParser')
   assert.ok(BUILTINS.some((m) => m.id === 'multi-parser'), 'multi-parser 必须在 BUILTINS 列表中')
 
-  // 检查 settings 是否包含核心开关
-  const keys = multiParser.settings.map((s) => s.key)
-  assert.ok(keys.includes('enabled'))
-  assert.ok(keys.includes('feedToAi'), '必须包含 AI 注入开关 feedToAi')
-  assert.ok(keys.includes('sendMedia'))
-  assert.ok(keys.includes('forwardMode'))
-  assert.ok(keys.includes('imageThreshold'))
-  assert.ok(keys.includes('maxVideoMB'))
-  assert.ok(keys.includes('videoOverLimit'))
+  // 检查 defaults 是否包含核心开关
+  assert.equal(typeof multiParser.defaults, 'object')
+  assert.ok('enabled' in multiParser.defaults)
+  assert.ok('feedToAi' in multiParser.defaults, '必须包含 AI 注入开关 feedToAi')
+  assert.ok('sendMedia' in multiParser.defaults)
+  assert.ok('forwardMode' in multiParser.defaults)
+  assert.ok('imageThreshold' in multiParser.defaults)
+  assert.ok('maxVideoMB' in multiParser.defaults)
+  assert.ok('videoOverLimit' in multiParser.defaults)
 })
 
 test('extractUrls: 从消息文本中准确提取多平台链接并去除中文标点', () => {
