@@ -23,6 +23,8 @@ import { createFaces, textToSegments, stripFaceTags, speakableText } from './fac
 import { expandMentions, hasMention } from './mentions.js'
 import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
+import { createQuestionRegistry } from './questions.js'
+import { createApprovalRegistry } from './approvals.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
@@ -79,6 +81,26 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const STICKER_TTL = 30 * 60_000 // 和「最近图片」一个尺度
   const stashFile = () => dataDir('sticker-stash.json')
   let stashLoaded = false
+
+  // 交互式提问（User Questions）与通用工具审批（Approvals）
+  const questions = createQuestionRegistry({
+    deliver: (chatId, text) => sendText(chatId, text, undefined, [], undefined),
+    timeoutMs: Number(getConfig().questions?.timeoutMs) || 300_000,
+    log: log.child ? log.child('questions') : log
+  })
+
+  const approvals = createApprovalRegistry({
+    deliver: (chatId, text) => sendText(chatId, text, undefined, [], undefined),
+    ownerQQ: () => getConfig().ownerQQ,
+    securityLock: () => {
+      try {
+        const m = typeof hooks?.securityLock === 'function' ? hooks.securityLock() : null
+        return m
+      } catch (error) { return null }
+    },
+    timeoutMs: Number(getConfig().admin?.approvalTimeoutMs) || 60_000,
+    log: log.child ? log.child('approvals') : log
+  })
 
   function loadStash () {
     if (stashLoaded) return
@@ -756,6 +778,26 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       return
     }
+    if (event.type === 'question/requested') {
+      const qData = event.data || {}
+      if (Array.isArray(qData.questions) && qData.questions.length) {
+        questions.ask(chatId, {
+          questions: qData.questions,
+          signal: qData.signal
+        }).catch((err) => log.debug('提问事件处理异常:', err.message))
+      }
+      return
+    }
+    if (event.type === 'approval/requested') {
+      const aData = event.data || {}
+      approvals.request(aData, {
+        chatId,
+        sessionId: key,
+        command: aData.command || aData.arguments?.command,
+        args: aData.arguments
+      }).catch((err) => log.debug('审批事件处理异常:', err.message))
+      return
+    }
     if (event.type === 'turn/end') {
       slowNoticeSent.delete(key)
       running.delete(chatId)
@@ -1071,6 +1113,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       log.debug(`忽略 ${msg.chatId}（${allowed.reason}）`)
       return
     }
+
+    // 审批指令（「通过 #1」「拒绝」等）：只认主人，优先拦截处理
+    if (approvals.handleReply(msg.text, msg.userId, msg.chatId)) {
+      logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+      return
+    }
+
+    // 交互式提问（ask_user_question）：当前聊天若正等待回答，优先由提问状态机消费
+    if (questions.has(msg.chatId) && questions.handleReply(msg.chatId, msg.text)) {
+      logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+      return
+    }
+
     // 最近发来的图片 / 表情记几张（「把刚才那张存下来」时用）
     if (msg.stickers.length || msg.images.length) {
       recentMedia.remember(msg.chatId, [...msg.stickers, ...msg.images].map((seg) => ({ seg, userId: msg.userId, sticker: msg.stickers.includes(seg) })))
@@ -1595,6 +1650,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   /** 只让一个聊天重新开始：归档它的会话，下一条消息开新会话。 */
   function resetChat(chatId) {
+    questions.cancel(chatId, '会话重新开始')
     const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
     const m = map()
     const e = m.chats[chatId]
@@ -1610,6 +1666,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   /** 重新开始：把现有的 QQ 会话都归档（侧栏里还能找回），下一条消息起开新会话。 */
   function resetSessions() {
+    approvals.clear('会话重置')
     const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
     const m = map()
     let n = 0
@@ -1688,6 +1745,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       return selected ? modelVision(dsh, selected.provider, selected.model) : null
     },
     resetSessions,
+    questions,
+    approvals,
+    askUserQuestion: (chatId, req) => questions.ask(chatId, req),
+    requestApproval: (req, opts) => approvals.request(req, opts),
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
     prevTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.prevText || '',
     speakersOf: (sessionId) => turnState.get(sessionKey(sessionId))?.speakers || [],
