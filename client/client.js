@@ -1002,7 +1002,30 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const setMode = (w) => { if (w && waiting) { toast('先把 AI 润色的那几节选定一版', 'err'); return } setWhole(w); try { localStorage.setItem('qq-hub.persona.whole', w ? '1' : '0') } catch (e) {} }
       const titles = edit ? edit.secs.map((s) => s.title) : []
       const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))
-      return h('div', { className: 'ab-persona' },
+      // 按聊天换人设：私聊默认 / 群默认 / 具体某个号
+      const pm = st.config.persona || {}
+      const setPm = (k, v) => setDraft(setPath(draft, 'persona.' + k, v))
+      const personaOpts = (emptyLabel) => [{ value: '', label: emptyLabel }].concat(list.map((p) => ({ value: p.id, label: p.name })))
+      const specific = (mapKey, label, hint) => {
+        const m = pm[mapKey] || {}
+        const rows = Object.entries(m).map(([id, pid]) => h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
+          h('input', { className: 'ab-input', style: { width: 180 }, value: id, placeholder: label === '群号' ? '群号' : 'QQ 号', onChange: (e) => {
+            const m2 = { ...m }; const v = m2[id]; delete m2[id]; m2[e.target.value.replace(/\D/g, '')] = v
+            setDraft(setPath(draft, 'persona.' + mapKey, m2))
+          } }),
+          h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
+            const m2 = { ...m }
+            if (v) m2[id] = v; else delete m2[id]
+            setDraft(setPath(draft, 'persona.' + mapKey, m2))
+          } }),
+          h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删')) )
+        return h(Card, { title, desc: hint,
+          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, '': '' })) }, '＋ 添加') },
+          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, '还没单独指定'),
+          h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
+      }
+      return h('div', null,
+       h('div', { className: 'ab-persona' },
         h('div', { className: 'ab-plist' },
           list.map((p) => h('button', { key: p.id, type: 'button', className: cx('ab-pitem', sel === p.id && 'on'), onClick: () => setSel(p.id) },
             h('div', { className: 'nm' }, p.name, p.id === current ? h('span', { className: 'ab-badge' }, '正在用') : null),
@@ -1037,6 +1060,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
             h('div', { className: 'ab-spacer' }),
             h(Btn, { kind: 'primary', disabled: !dirty || !!waiting, onClick: save }, dirty ? '保存人格' : '已保存')),
         ) : h(Card, null, h(Empty, { icon: '⏳', text: '加载中…' })),
+      ),
+       h('div', { style: { height: 12 } }),
+       specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。'),
+       h('div', { style: { height: 12 } }),
+       specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。'),
       )
     }
 

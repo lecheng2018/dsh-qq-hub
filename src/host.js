@@ -26,7 +26,7 @@ import { mimeOf } from './chat/inbound.js'
 import { dataDir, ensureDir } from './core/store.js'
 import { createUpdateChecker, changelogSection } from './core/update.js'
 import { parseCommand, runCommand, createMutes, commandList } from './chat/commands.js'
-import { listPersonas, readPersona, savePersona, deletePersona, currentPersonaText, rulesText, seedPersonas } from './persona/personas.js'
+import { listPersonas, readPersona, savePersona, deletePersona, currentPersonaText, personaIdFor, rulesText, seedPersonas } from './persona/personas.js'
 import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
@@ -322,7 +322,30 @@ export function apply(ctx) {
     stickers,
     tts,
     buildTools: (where) => mods.buildTools(where),
-    contextProviders: [(args) => mods.contextFor(args)],
+    // 会话上下文：模块的（记忆、近况……）+ 这个聊天专属的人设覆盖
+    contextProviders: [
+      (args) => mods.contextFor(args),
+      // 按聊天换人设：只有这个私聊/群单独指定了人设时才注入。
+      // 没配就返回空串，全局人设仍由 preset 里的 {{qq_hub_persona}} 提供，行为完全不变。
+      ({ chat }) => {
+        try {
+          const want = personaIdFor(chat, getConfig())
+          const globalId = (getConfig().persona || {}).current || ''
+          if (!want || want === globalId) return ''
+          const p = readPersona(want)
+          if (!p || !p.body) return ''
+          // 明确覆盖：告诉模型这轮用的是哪个人设，避免和全局那段打架
+          return [
+            `【本聊天专用人设：${p.name}】`,
+            '这个聊天里你用的不是通用设定，而是下面这一套。前面若出现别的性格描述，一律以这里为准。',
+            '',
+            p.body,
+          ].join('\n')
+        } catch (error) {
+          return ''
+        }
+      },
+    ],
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
     // 传 chat：话题相关度只在当前聊天可见的记忆里算，别处的记忆不该让她在群里「感兴趣」
@@ -1015,7 +1038,8 @@ export function apply(ctx) {
   route('/persona/use', async (req) => {
     const b = await readBody(req)
     if (!readPersona(b.id)) return { ok: false, message: '没有这个人格' }
-    setConfig({ ...cfg, persona: { current: b.id } })
+    // 只改 current，别把 persona 整块替换掉——否则按聊天配的人设会被一起清空
+    setConfig({ ...cfg, persona: { ...(cfg.persona || {}), current: b.id } })
     log.info(`切换人格 → ${b.id}`)
     return { ok: true, current: b.id, message: '切换好了，下一轮回复起生效' }
   })
