@@ -14,6 +14,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { dataDir } from './store.js'
 import { registerSecretField } from './config.js'
 import { defineTool } from '../tools/tools.js'
+import { workspaceDirOf } from '../chat/hub.js'
 
 /** 扩展接口版本：只加不改。哪天不得不改已有的东西才升到 2，并在更新说明里写清楚怎么迁移。 */
 export const API_VERSION = 1
@@ -264,6 +265,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),
       // 发任意文件（文档 / 压缩包 / 音频 / 视频……）：本机绝对路径，或网关能取到的网址 / base64://
       sendFile: (chatId, file, name) => core.hub.sendFile(String(chatId), file, name),
+      // 工作区目录：要发出去的文件必须放在这（或面板里加过的目录）里，否则会被拦
+      // 模块想把下载的东西发给别人，就下到 api.workspaceDir('子目录') 下面
+      workspaceDir: (...parts) => join(workspaceDirOf(getConfig()), ...parts),
       // 把一个音频文件当语音条发出去（不走念文字）
       sendVoiceFile: (chatId, file, note) => core.hub.sendVoiceFile(String(chatId), file, note || `[${id}] 语音`),
       ask: (opts) => core.ask(typeof opts === 'string' ? { text: opts } : opts),
