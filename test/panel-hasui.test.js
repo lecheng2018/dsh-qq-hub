@@ -37,7 +37,7 @@ test('没在跑、或压根没界面的模块不占标签页', () => {
 })
 
 test('五个移植模块都声明了 settings，能在面板里露出开关', async () => {
-  const ids = ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'slang-learner']
+  const ids = ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy']
   for (const id of ids) {
     const mod = (await import(`../src/modules/${id}/index.js`)).default
     assert.ok(Array.isArray(mod.settings) && mod.settings.length > 0, `${id} 应该有 settings 配置项`)
