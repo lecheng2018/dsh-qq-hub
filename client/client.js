@@ -1384,11 +1384,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const key = (m) => m.provider + '::' + m.model
       const val = (s) => (s && s.provider && s.model ? s.provider + '::' + s.model : '')
       const toSel = (v) => { const [p, ...m] = v.split('::'); return v ? { provider: p, model: m.join('::'), reasoningEffort: '' } : { provider: '', model: '', reasoningEffort: '' } }
-      // 同 Model 页：同名不同 id（hy3 / hy3-x）要区分开，否则下拉里是两个「Hy3」
+      // 同 Model 页：只有真正同名不同模型（hy3 / hy3-x）才缀上 id 区分
       const nameCount = {}
-      for (const m of (list || [])) nameCount[m.provider + '|' + m.name] = (nameCount[m.provider + '|' + m.name] || 0) + 1
-      const labelOf = (m) => (nameCount[m.provider + '|' + m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
-      const descOf = (m) => m.provider + (m.vision === true ? ' · 能看图' : '')
+      for (const m of (list || [])) nameCount[m.name] = (nameCount[m.name] || 0) + 1
+      const labelOf = (m) => (nameCount[m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
+      const descOf = (m) => m.provider
       const base = [{ value: '', label: '跟随全局模型', desc: '上面「聊天用的模型」' }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: descOf(m), group: m.provider })))
       const optsFor = (v) => (v && !base.some((o) => o.value === v) ? base.concat([{ value: v, label: v.split('::').slice(1).join('::'), desc: '（DSH 里没找到）' }]) : base)
       const setCm = (patch) => setDraft(setPath(draft, 'chatModels', { ...cm, ...patch }))
@@ -1420,16 +1420,14 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [ping, setPing] = useState({})
       useEffect(() => { get('/models').then((r) => setList(r.list || [])) }, [])
       const key = (m) => m.provider + '::' + m.model
-      // 下拉里出现两个一模一样的「Hy3」，有两种原因，都要在这里讲清楚：
-      //   1. 同一个 provider 下同一个显示名、不同 model id（hy3 和 hy3-x 都叫 Hy3）；
-      //   2. DSH 里配了两个 provider（如 fan 和 fan-vision），模型完全一样，
-      //      区别只是后者声明了能看图。
-      // 纯同名不提示的话用户没法选，所以重名时把 model id 缀上；
-      // 另外把「能看图」直接写进描述，一眼能分出 fan / fan-vision。
+      // 后端已把「基础版 / 视觉版」（fan 与 fan-vision 这类同模型双 provider）合并成一条，
+      // 所以这里只会剩一类重名：同一个 provider 下显示名相同、但确实是不同模型
+      // （hy3 和 hy3-x 都叫 Hy3）。这种重名才需要把 model id 缀上，否则真的选不了。
+      // 不再给每一行都加「能看图」——之前那样每个模型都带一句，反而像「全都能看图」。
       const nameCount = {}
-      for (const m of (list || [])) nameCount[m.provider + '|' + m.name] = (nameCount[m.provider + '|' + m.name] || 0) + 1
-      const labelOf = (m) => (nameCount[m.provider + '|' + m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
-      const descOf = (m) => m.provider + (m.vision === true ? ' · 能看图' : '')
+      for (const m of (list || [])) nameCount[m.name] = (nameCount[m.name] || 0) + 1
+      const labelOf = (m) => (nameCount[m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
+      const descOf = (m) => m.provider
       const cur = draft.model.provider && draft.model.model ? draft.model.provider + '::' + draft.model.model : ''
       const curModel = cur && list ? list.find((m) => key(m) === cur) : null
       // reasoning === null 表示 DSH 明确说这个模型不支持思考强度（本地 Ollama 之类）
