@@ -204,3 +204,55 @@ test('draft 还是 null 时点添加不崩（配置没加载完）', () => {
   const btns = find(tree)
   assert.doesNotThrow(() => btns[0].props.onClick(), 'draft 为 null 时点添加也不能崩')
 })
+
+
+test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打号码', () => {
+  // 用户报的：空输入行、不能从已有的私聊/群里选。改成 Select 后必须能列出真实聊天。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const body = extractFn('Persona')
+  const env = makeEnv()
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
+    'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+  const chats = [
+    { chatId: 'group:333444555', kind: 'group', id: '333444555', name: 'QQ 群 · 测试群', lastAt: 2 },
+    { chatId: 'private:444555666', kind: 'private', id: '444555666', name: 'QQ · 主人私聊', lastAt: 1 },
+  ]
+  // 让 Persona 里 useEffect 立刻执行，把 chats 灌进去（这里 useState 的初值取不到，
+  // 所以直接把已知聊天做成「已经配过」的行来看下拉候选）
+  const Persona = factory(
+    env.args[0], env.args[1], env.args[2], env.args[3], env.args[4],
+    env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
+    env.args[13], env.args[14], env.args[15], env.args[16], env.args[17], env.args[18]
+  )
+  const draft = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: { 444555666: '' }, groups: {} } }
+  const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: draft }
+  const tree = Persona({ st, draft, setDraft: () => {}, toast: () => {}, reload: () => {} })
+
+  // 找渲染出来的 Select，看它是不是下拉（options 数组），而不是 input
+  // 占位组件的 type 是函数，认不出名字，改用「带 options 数组的 props」识别下拉
+  const finds = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => finds(x, out)); return out }
+    if (n.props && Array.isArray(n.props.options)) out.push(n)
+    if (n.children) n.children.forEach((x) => finds(x, out))
+    return out
+  }
+  const selects = finds(tree)
+  // 至少：两个「默认」下拉 + 行内选择下拉
+  assert.ok(selects.length >= 3, '应该有下拉选择器，实际 ' + selects.length)
+  // 每行对应的下拉必须是 Select 且带 options
+  const withOpts = selects.filter((s) => Array.isArray(s.props.options))
+  assert.ok(withOpts.length >= selects.length, '下拉都应该带 options')
+  // 不能再有把号码手打进去的 input（群号/QQ 号 placeholder）
+  const inputs = []
+  const findInput = (n) => {
+    if (!n || typeof n !== 'object') return
+    if (Array.isArray(n)) { n.forEach(findInput); return }
+    if (n.type === 'input') inputs.push(n)
+    if (n.children) n.children.forEach(findInput)
+  }
+  findInput(tree)
+  const handTyped = inputs.filter((i) => /群号|QQ 号/.test(String(i.props.placeholder || '')))
+  assert.equal(handTyped.length, 0, '不该再有手打群号/QQ 号的输入框')
+})
