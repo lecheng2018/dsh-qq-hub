@@ -312,6 +312,7 @@ function normalizePersona (p) {
     const out = {}
     if (isObj(m)) {
       for (const [k, v] of Object.entries(m)) {
+        if (String(k).startsWith('#')) continue // 临时占位行（如 #new...）绝不落盘，防止被洗成纯数字
         const key = String(k).replace(/\D/g, '')
         if (!key) continue
         // 值可以先空着：面板里「添加」一行、还没选人设就保存，那一行不该被悄悄丢掉。
@@ -678,8 +679,11 @@ export function mergeFromPanel(current, incoming) {
   if (incoming?.bili && (incoming.bili.sessdata || incoming.bili.biliJct)) next.bili.cookie = ''
   if (incoming?.group?.overrides) next.group.overrides = incoming.group.overrides
   // 按聊天选模型：两张表整张替换（deepMerge 会让删掉的条目又回来）
-  if (incoming?.chatModels?.privates) next.chatModels.privates = incoming.chatModels.privates
-  if (incoming?.chatModels?.groups) next.chatModels.groups = incoming.chatModels.groups
+  if (incoming?.chatModels?.privates !== undefined) next.chatModels.privates = incoming.chatModels.privates
+  if (incoming?.chatModels?.groups !== undefined) next.chatModels.groups = incoming.chatModels.groups
+  // 按聊天选人设：两张表整张替换（deepMerge 会让删掉的条目又回来）
+  if (incoming?.persona?.privates !== undefined) next.persona.privates = incoming.persona.privates
+  if (incoming?.persona?.groups !== undefined) next.persona.groups = incoming.persona.groups
   if (incoming?.allow) next.allow = { ...current.allow, ...incoming.allow }
   return normalize(next)
 }

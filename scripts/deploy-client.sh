@@ -9,6 +9,7 @@ DST_ROOT="/home/user/harness/.dsh/profiles/web/node_modules/dsh-qq-hub"
 FILES=(
   "client/client.js"
   "src/host.js"
+  "src/core/config.js"
   "src/core/llm.js"
   "src/core/models.js"
   "src/core/vision-helper.js"
@@ -45,6 +46,7 @@ echo
 echo "校验："
 grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
 grep -n 'onClick: () => setDraft((prev) =>' "$DST_ROOT/client/client.js" || true
+grep -n 'next.persona.groups' "$DST_ROOT/src/core/config.js" || true
 grep -n 'dedupeModelList'    "$DST_ROOT/src/host.js"      || true
 grep -n '改用原始 base64'     "$DST_ROOT/src/core/llm.js"  || true
 grep -n '保留原始 base64'     "$DST_ROOT/src/chat/hub.js"  || true
