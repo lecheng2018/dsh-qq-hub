@@ -1307,6 +1307,25 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             onChange: (v) => setDraft(setPath(draft, 'model.vision', v)),
             options: [{ value: 'auto', label: '自动' }, { value: 'on', label: '支持' }, { value: 'off', label: '不支持' }],
           })),
+          h(Row, {
+            label: '辅助看图模型',
+            hint: '主模型看不了图时，先让这个模型看一眼、转成文字再交给主模型。主模型自己能看图时不走这条，不额外花钱。',
+          }, h(Switch, {
+            value: !!draft.visionHelper.enabled,
+            onChange: (v) => setDraft(setPath(draft, 'visionHelper.enabled', v)),
+          })),
+          draft.visionHelper.enabled ? h(Row, { label: '用哪个模型看图' },
+            h(Select, {
+              value: draft.visionHelper.provider && draft.visionHelper.model ? draft.visionHelper.provider + '::' + draft.visionHelper.model : '',
+              width: 280,
+              options: [{ value: '', label: '选一个能看图的模型', desc: '要和聊天用的模型不同' }].concat((list || []).map((m) => ({ value: key(m), label: m.name, desc: m.provider, group: m.provider }))),
+              onChange: (v) => {
+                const [p, ...m] = v.split('::')
+                let d = setPath(setPath(draft, 'visionHelper.provider', v ? p : ''), 'visionHelper.model', v ? m.join('::') : '')
+                setDraft(d)
+              },
+            })
+          ) : null,
           h(Row, { label: '模型' },
             h(Select, {
               value: cur, width: 280,
