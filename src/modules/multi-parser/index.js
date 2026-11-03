@@ -19,6 +19,9 @@ export default {
   defaults: {
     enabled: false,
     feedToAi: true,
+    // 纯解析模式：解析出内容后只说这一条，不再让她接着聊
+    // （她看不到视频画面，硬聊只能靠标题和口令里的字编，容易跑偏）
+    muteAi: false,
     sendMedia: true,
     forwardMode: 'threshold',
     imageThreshold: 2,
@@ -101,7 +104,10 @@ export default {
         }
       }
 
-      // 返回 false：让普通消息继续往后流转，模型可以同时参与回复
+      // 解析成功且关掉了「让她接着聊」→ 返回 true 表示这条消息被接管，她不会再回
+      // （host 那边 claim('message') 返回真值就跳过唤醒）
+      if (handledAny && c.muteAi) return true
+      // 否则返回 false：让消息继续往后流转，模型可以同时参与回复
       return false
     })
 
