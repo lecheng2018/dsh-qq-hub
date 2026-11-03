@@ -181,7 +181,7 @@ async function runStream (llm, params) {
  * 没配 / 关着 / 调用失败都返回空串，绝不抛——调用方据此退回纯文字。
  * @returns {Promise<string>} 空串表示转述失败
  */
-async function describeWithHelper (dsh, { images, cfg, hint, log }) {
+export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
   const h = cfg && cfg.visionHelper
   if (!h || !h.enabled || !h.provider || !h.model) return ''
   if (!images || !images.length) return ''
@@ -217,7 +217,7 @@ async function describeWithHelper (dsh, { images, cfg, hint, log }) {
  * 配了辅助模型 → 转述内容 + 来源标注；没配或转述失败 → 一句如实的说明。
  * 两条路径（一开始就知道看不了 / 发了才被拒）共用这一份逻辑，避免两套写法。
  */
-async function textForBlindModel (dsh, o, target) {
+export async function textForBlindModel (dsh, o, target) {
   const h = o.cfg && o.cfg.visionHelper
   const usable = h && h.enabled && h.provider && h.model && !(h.provider === target.provider && h.model === target.model)
   const images = o.images || []
