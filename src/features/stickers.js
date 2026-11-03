@@ -77,15 +77,27 @@ export function pickEvict(items) {
 export function createStickerStore({ dsh, getConfig, onebot, log }) {
   const recent = [] // 每小时限额
 
+  // 附件服务把图登记成附件时失败（例如工作区目录不可写 → EACCES），
+  // 逐张重试只会刷满日志、一张也起不了名。失败一次就熔断，进程重启前不再试。
+  let captionBlocked = ''
+
   async function caption(buf, mime, hint) {
     try {
+      if (captionBlocked) return { name: '', tags: [] }
       // 模型看不了图就别硬发：会报错，名字也起不出来
       if ((await canSeeImages(dsh, getConfig())) === false) {
         log.debug('模型不支持看图，跳过表情起名')
         return { name: '', tags: [] }
       }
+      let imageFailed = ''
       const text = await askModel(dsh, {
         cfg: getConfig(),
+        onImageError: (error) => {
+          // 图登记不进去，这一批都别再试了，只记一条
+          imageFailed = error?.message || '图片登记失败'
+          captionBlocked = imageFailed
+          log.warn(`看图起名停用：图片没能交给模型（${imageFailed}）。修好工作区目录或重启后再试。`)
+        },
         system: '你给表情包起名字。只输出一行：不超过 12 个字的中文备注，描述这个表情表达的情绪或内容（例如「委屈巴巴的小猫」「得意地叉腰」）。然后空格，再写 1~3 个标签，从这些里挑：' + DEFAULT_TAGS.join('、') + '。格式：备注 #标签1 #标签2',
         text: hint ? `QQ 给的描述是「${hint}」。请看图起名。` : '请看图起名。',
         images: [{ data: buf.toString('base64'), mediaType: mime }],
@@ -93,6 +105,8 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         maxTokens: 1000,
         temperature: 0.2,
       })
+      // 模型根本没看到图：这时它回的名字是瞎猜的，宁可不起名
+      if (imageFailed) return { name: '', tags: [] }
       if (!text) log.warn('看图起名：模型没给出文字')
       const line = text.split(/\r?\n/).map((s) => s.trim()).find(Boolean) || ''
       const tags = [...line.matchAll(/#\s*([^\s#]+)/g)].map((m) => m[1]).filter((t) => t.length <= 6).slice(0, 3)

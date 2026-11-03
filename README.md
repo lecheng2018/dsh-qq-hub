@@ -46,7 +46,6 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 - **`token-guardian`**：估算会话上下文 Token，达阈值且空闲时自动调用 DSH compaction 压缩历史。
 - **`complete-guard`**：识别停留在连接词或未闭合括号上的截断回复，提供截断告警。
 - **`memory-privacy`**：私聊（`private`）、群聊（`group`）与全局（`global`）三层作用域隔离，群聊物理阻断私聊记忆。
-- **`slang-learner`**：自动挖掘群聊黑话，主人审核后方可注入群上下文。
 
 ### 3. 全量安全审计与稳定性加固（16 项缺陷修复）
 - **高危修复**：修复 `heybox` 模块 `hasLogin()` 未定义导致定时器抛错崩溃；修复 `douyin` 浏览器跳转与 `net.js` 302 重定向导致的内网 SSRF 风险；为 `studio.js` 的 `ffmpeg` 调用增加 15s 超时强杀防死锁；将记忆库 `recall` 统计覆写解耦为内存防抖回写，防止冲掉事实记忆。
@@ -270,7 +269,7 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 | `{{aurabot_persona}}` | `personas/dafeiyu.md` | 核心人格设定，定义语言口吻、性格特点、标记输出协议。 | 面板修改即时生效，会话重启不丢。 |
 | `{{aurabot_rules_private}}` | `src/persona/personas.js` | 主人私聊专属规则（发文件、画图、翻唱、危险命令确认约束）。 | 随配置与模块启用动态生成。 |
 | `{{aurabot_rules_social}}` | `src/persona/personas.js` | 群聊与陌生人规则（严格声明无电脑操作权限，群管需主人下令）。 | 静态规则模板。 |
-| 动态上下文块 | `agent.ctx.systemPrompt.context()` | 心情、记忆、黑话、环境信息追加于**对话最末尾**（`order: 905`）。 | 动态追加，**完全不破坏静态前缀缓存**。 |
+| 动态上下文块 | `agent.ctx.systemPrompt.context()` | 心情、记忆、环境信息追加于**对话最末尾**（`order: 905`）。 | 动态追加，**完全不破坏静态前缀缓存**。 |
 
 ### 3. 提示词编写规范与输出协议
 
@@ -459,7 +458,6 @@ src/
 │   ├── token-guardian/   # 会话 Token 估算与自动 Compaction 守门员
 │   ├── complete-guard/   # 截断回复识别与告警
 │   ├── memory-privacy/   # 记忆三层作用域物理隔离
-│   ├── slang-learner/    # 群黑话提取与审核注入
 │   └── ... (stickers, voice, mood, memory, pet, bili, song, heybox 等)
 ├── onebot/client.js      # OneBot v11 通信客户端（带 90s 心跳保活看门狗）
 └── security/danger.js    # DSH tools/pre-execute 高危终端命令拦截器
