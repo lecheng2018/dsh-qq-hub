@@ -10,7 +10,8 @@ import { pipeline } from 'node:stream/promises'
 
 /** 文件名里不能出现的字符换掉，太长就截断。 */
 export function safeName(title, awemeId, ext = '.mp4') {
-  const base = String(title || '').replace(/[\\/:*?"<>|\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+  // # 和 % 也换掉：本地 Linux 允许，但拼 URL 时 # 会当锚点截断、% 会让解码炸掉
+  const base = String(title || '').replace(/[\\/:*?"<>|#%\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
   const id = String(awemeId || '').replace(/\D/g, '') || 'video'
   return `${base ? base + '-' : ''}${id}${ext}`
 }
