@@ -59,6 +59,10 @@ export const permOf = (cfg, key) => {
 /** 这一档在这个会话里要不要挂工具。owner = 只在主人私聊里挂；all = 哪都挂；off = 不挂。 */
 export function profileToolVisible(cfg, key, chat) {
   const p = permOf(cfg, key)
+  // system 会话（定时刷小黑盒/抖音的后台轮次）是插件自己开的可信上下文，没有「外人」，
+  // 视同主人操作：修掉「定时刷里 heybox_* 工具一个都挂不上」的 bug（真实事故：
+  // 她在后台会话里说「这轮会话里这些工具都没有挂上来」，只能空手回话）。
+  if (chat.kind === 'system') return p !== 'off'
   if (p === 'all') return chat.kind === 'private' || chat.kind === 'group'
   if (p === 'owner') return chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
   return false
@@ -69,6 +73,7 @@ export function profilePermits(cfg, key, chat, allOwner) {
   const p = permOf(cfg, key)
   if (p === 'off') return { ok: false, message: '这个操作在面板里关掉了' }
   if (!profileToolVisible(cfg, key, chat)) return { ok: false, message: '这里不能做这个操作' }
-  if (p === 'owner' && !allOwner) return { ok: false, message: '只有主人私聊让我改才行' }
+  // owner 档在 system 会话放行：后台轮次没有「说话人」，且会话本身是插件按主人指令开的
+  if (p === 'owner' && chat.kind !== 'system' && !allOwner) return { ok: false, message: '只有主人私聊让我改才行' }
   return { ok: true }
 }
