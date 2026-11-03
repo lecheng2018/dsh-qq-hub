@@ -1,0 +1,86 @@
+// 把抖音视频真正下载到本地，好让 QQ 那边能当文件发出去。
+//
+// 以前只发文字摘要 + 链接，主人还得自己点开链接去看。这里补上下载这一步。
+// 只用 Node 自带的 fetch / fs，不引第三方依赖。
+
+import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+
+/** 文件名里不能出现的字符换掉，太长就截断。 */
+export function safeName(title, awemeId, ext = '.mp4') {
+  const base = String(title || '').replace(/[\\/:*?"<>|\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+  const id = String(awemeId || '').replace(/\D/g, '') || 'video'
+  return `${base ? base + '-' : ''}${id}${ext}`
+}
+
+/**
+ * 下载一个视频。
+ * @param {object} v      normalizeAweme 的结果（要带 videoUrls）
+ * @param {object} opts   { dir, maxMB, referer }
+ * @returns {Promise<{path:string, bytes:number}>}
+ */
+export async function downloadVideo(v, opts = {}) {
+  const dir = String(opts.dir || '').trim()
+  if (!dir) throw new Error('没给下载目录')
+  const maxMB = Math.max(1, Number(opts.maxMB) || 50)
+  const maxBytes = maxMB * 1024 * 1024
+  const urls = (v?.videoUrls || []).filter(Boolean)
+  if (!urls.length) throw new Error(v?.isImages ? '这是图文作品，没有视频' : '没拿到视频地址')
+
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  const name = safeName(v.title, v.awemeId)
+  const out = join(dir, name)
+
+  let lastError = null
+  for (const url of urls) {
+    // 换域名重试：抖音的直链会在 play / download 几个域名之间轮换
+    const host = new URL(url).host
+    try {
+      const ctl = new AbortController()
+      const timer = setTimeout(() => ctl.abort(), 120000)
+      const res = await fetch(url, {
+        signal: ctl.signal,
+        headers: {
+          // 不带 Referer 大概率 403；抖音自己的域名最稳
+          referer: opts.referer || 'https://www.douyin.com/',
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          range: 'bytes=0-',
+        },
+      })
+      clearTimeout(timer)
+      if (!res.ok || !res.body) throw new Error(`${host} 返回 ${res.status}`)
+
+      // 先看 Content-Length，超限就别下完再报错
+      const len = Number(res.headers.get('content-length') || 0)
+      if (len && len > maxBytes) throw new Error(`视频 ${(len / 1024 / 1024).toFixed(1)} MB，超过上限 ${maxMB} MB`)
+
+      const tmp = out + '.part'
+      try {
+        await pipeline(Readable.fromWeb(res.body), createWriteStream(tmp))
+        const size = statSync(tmp).size
+        if (size > maxBytes) {
+          rmSync(tmp, { force: true })
+          throw new Error(`视频 ${(size / 1024 / 1024).toFixed(1)} MB，超过上限 ${maxMB} MB`)
+        }
+        if (size < 1024) {
+          rmSync(tmp, { force: true })
+          throw new Error('下下来的文件太小，不像视频')
+        }
+        // 落盘改名（先删旧的同名文件，Windows 上 rename 不覆盖）
+        rmSync(out, { force: true })
+        renameSync(tmp, out)
+        return { path: out, bytes: size }
+      } catch (error) {
+        rmSync(out + '.part', { force: true })
+        throw error
+      }
+    } catch (error) {
+      lastError = error
+      // 超限是确定性错误，换域名也没用
+      if (/超过上限/.test(error.message)) throw error
+    }
+  }
+  throw new Error('视频下载失败：' + (lastError?.message || '所有地址都试过了'))
+}
