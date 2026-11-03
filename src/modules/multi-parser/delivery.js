@@ -36,6 +36,29 @@ export function tidyUrl(raw) {
 }
 
 /**
+ * 摘要有必要显示吗？
+ * 有些平台的「描述」和标题是同一段文字（抖音的 desc 本身就是标题、
+ * 小红书 og:description 常常就是标题句），照着原样再打一行「摘要」纯属重复。
+ * 只有明显比标题多出内容时才单独显示。
+ */
+export function shouldShowSummary(title, summary) {
+  const s = String(summary || '').trim()
+  if (!s) return false
+  const t = String(title || '').trim()
+  if (!t) return true
+  // 去掉空白和话题井号再比，避免「# 三角洲」和「#三角洲」被当成不一样
+  const norm = (x) => x.replace(/\s+/g, '').replace(/[#＃]/g, '')
+  const ns = norm(s)
+  const nt = norm(t)
+  if (!ns) return false
+  // 完全一样，或者说来说去就是标题里那点话 → 不重复显示
+  if (ns === nt) return false
+  if (nt && ns.startsWith(nt)) return false
+  if (nt && nt.startsWith(ns)) return false
+  return true
+}
+
+/**
  * 格式化纯文本摘要卡片。
  * @param {object} result 解析结果
  * @param {object} [opts]
@@ -47,7 +70,7 @@ export function formatCardText(result, { withLink = true } = {}) {
   parts.push(`📌【${result.platformName} · 内容解析】`)
   if (result.title) parts.push(`标题：${result.title}`)
   if (result.author) parts.push(`作者：${result.author}`)
-  if (result.summary) parts.push(`摘要：${result.summary}`)
+  if (shouldShowSummary(result.title, result.summary)) parts.push(`摘要：${result.summary}`)
   if (result.stat) parts.push(`数据：${result.stat}`)
   if (withLink) {
     const link = tidyUrl(result.url)

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { extractUrls, looksBlocked, vetResult } from '../src/modules/multi-parser/parser.js'
-import { formatCardText, probeVideoSizeMB, tidyUrl } from '../src/modules/multi-parser/delivery.js'
+import { formatCardText, probeVideoSizeMB, tidyUrl, shouldShowSummary } from '../src/modules/multi-parser/delivery.js'
 import multiParser from '../src/modules/multi-parser/index.js'
 import { BUILTINS } from '../src/modules/index.js'
 
@@ -263,4 +263,42 @@ test('formatCardText: 媒体发出去后卡片不带链接（链接只在发不�
   // 其它信息要保住
   assert.ok(noLink.includes('标题：你也变成嘉豪了不是吗'))
   assert.ok(noLink.includes('数据：点赞: 20696'))
+})
+
+test('标题和摘要重复时不要把同一句话打两遍', () => {
+  // 用户实际收到的：标题和摘要一模一样
+  const r = {
+    platformName: '抖音',
+    title: '你也变成嘉豪了不是吗 #三角洲行动',
+    author: 'kxx（三角洲行动）',
+    summary: '你也变成嘉豪了不是吗 #三角洲行动',
+    stat: '点赞: 20696 · 评论: 498',
+  }
+  const card = formatCardText(r, { withLink: false })
+  const titleCount = (card.match(/你也变成嘉豪了不是吗/g) || []).length
+  assert.equal(titleCount, 1, '同一句话只能出现一次')
+  assert.ok(!card.includes('摘要：'), '摘要与标题相同时不显示摘要行')
+  assert.ok(card.includes('标题：'))
+  assert.ok(card.includes('数据：'))
+
+  // 判定函数本身
+  assert.equal(shouldShowSummary('标题A', '标题A'), false)
+  assert.equal(shouldShowSummary('钓鱼 #日常', '钓鱼 # 日常'), false, '井号/空白差异不算不同')
+  assert.equal(shouldShowSummary('标题A', '标题A 后面还有细节'), false, '摘要只是标题加尾巴，算重复')
+  assert.equal(shouldShowSummary('标题A', ''), false)
+  assert.equal(shouldShowSummary('标题A', undefined), false)
+  // 真正独立的描述要留
+  assert.equal(shouldShowSummary('标题A', '这是一段完全不同的描述文字'), true)
+  // 没有标题时摘要照常显示
+  assert.equal(shouldShowSummary('', '一段描述'), true)
+})
+
+test('摘要有真实内容时卡片正常显示（别为了去重把信息删没了）', () => {
+  const card = formatCardText({
+    platformName: '知乎',
+    title: '如何评价某个技术方案',
+    summary: '这个问题下有很多有价值的讨论，涉及性能与可维护性的权衡。',
+    url: 'https://zhuanlan.zhihu.com/p/1',
+  })
+  assert.ok(card.includes('摘要：这个问题下有很多有价值的讨论'), '真摘要必须留着')
 })
