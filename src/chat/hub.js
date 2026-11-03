@@ -943,7 +943,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const segs = [...q.images, ...q.stickers].slice(0, take)
     if (!segs.length) return []
     if ((await canSeeImages(dsh, getConfig())) === false) return []
-    const got = await imagesOf({ stickers: [], images: segs })
+    const { images: got } = await imagesOf({ stickers: [], images: segs })
     return got.map((x, i) => ({ type: 'image', data: x.data, mediaType: x.mediaType, name: `quote-${q.uid || 'x'}-${i + 1}` }))
   }
 
@@ -1014,19 +1014,32 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return text ? String(text).trim() : ''
   }
 
+  /**
+   * 把消息里的图 / 表情包取成可以交给模型的块。
+   * 返回 { images, failed }：failed 是「有图但没取成」的张数，调用方据此补一句文字说明。
+   * 原来认不出类型就 continue 静默丢掉，模型那边只看到一句「[表情包]」，
+   * 用户看到的就是「她看不懂表情包」——所以这里必须把失败也说出去。
+   */
   async function imagesOf(msg) {
     const out = []
+    let failed = 0
     for (const seg of [...msg.stickers, ...msg.images].slice(0, 4)) {
       try {
         const buf = await segmentBytes(seg, onebot, { maxBytes: 8 * 1024 * 1024 })
         const mime = mimeOf(buf)
-        if (!mime.startsWith('image/')) continue
+        if (!mime.startsWith('image/')) {
+          // 认不出是什么图：不猜，但记账，让它变成一句「收到了但打不开」
+          failed++
+          log.warn(`${msg.chatId} 有一张图认不出类型（${buf.length} 字节，头 ${buf.slice(0, 12).toString('hex')}），没交给模型`)
+          continue
+        }
         out.push({ data: buf.toString('base64'), mediaType: mime })
       } catch (error) {
-        log.debug('图片下载失败：', error.message)
+        failed++
+        log.warn(`${msg.chatId} 图片下载失败：${error.message}`)
       }
     }
-    return out
+    return { images: out, failed }
   }
 
   /**
@@ -1235,7 +1248,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const quoted = msg.kind === 'private' && msg.replyId ? await quotedInfo(msg.replyId, msg) : null
     // 群聊：不在这里拼文案。等这段消息攒齐了（或她回完上一段），flush 时把群里新来的话一次性交给她
     const content = msg.kind === 'group' ? [] : [{ type: 'text', text: `【私聊】${msg.nickname}(${msg.userId})：` + (text || '（没有文字）') + (quoted ? '\n' + quoteInline(quoted) : '') }]
-    const imgs = await imagesOf(msg)
+    const { images: imgs, failed: imgsFailed } = await imagesOf(msg)
     if (imgs.length) {
       // 模型明确不支持看图：硬塞图片块会让整轮请求被拒（她就一个字都回不了），改成一行文字提示
       if ((await canSeeImages(dsh, cfg)) === false) {
@@ -1244,6 +1257,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       } else {
         for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
       }
+    }
+    // 有图但没取成（下载失败 / 认不出格式）：别让她以为对方没发东西
+    if (imgsFailed) {
+      content.push({ type: 'text', text: `（${msg.nickname} 还发了 ${imgsFailed} 张图片，但没取下来，你看不到。如果这轮要靠图才能答，就说你没看清，让对方再发一次）` })
+      log.info(`${msg.chatId} 有 ${imgsFailed} 张图片没取下来，已告知模型`)
     }
     // 引用里的图 / 表情包也给她看（最多 2 张，总数不超过 4；看不了图的模型靠上面的文字说明）
     if (quoted?.ok && (quoted.images.length || quoted.stickers.length) && imgs.length < 4) {
@@ -1342,7 +1360,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (!p || p.images.length >= 4) return
     try {
       if ((await canSeeImages(dsh, getConfig())) === false) return
-      const imgs = await imagesOf(msg)
+      const { images: imgs } = await imagesOf(msg)
       for (let i = 0; i < imgs.length && p.images.length < 4; i++) p.images.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
     } catch (error) {}
   }
