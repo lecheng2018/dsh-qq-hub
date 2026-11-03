@@ -40,7 +40,10 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
 
   const forwardMode = cfg.forwardMode || 'threshold'
   const threshold = Number(cfg.imageThreshold) || 2
-  const maxVideoMB = Number(cfg.maxVideoMB) || 100
+  // 下载上限要和「发文件」的上限取小：不然会下完 100MB 才在 sendFile 那里被 50MB 拦掉，
+  // 白下一遍还发不出去（以前就是这样，用户只看到一条解析卡片，视频没了）
+  const fileMaxMB = Number(api.config?.()?.files?.maxMB) || 50
+  const maxVideoMB = Math.min(Number(cfg.maxVideoMB) || 100, fileMaxMB)
   const videoOverLimit = cfg.videoOverLimit || 'direct_link'
 
   const selfId = String(api.config().botQQ || '10000')
@@ -55,6 +58,7 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
     // 而且下载下来才能确认真实体积，限额才算数。
     let localFile = ''
     let sizeMB = 0
+    let overLimit = false
     try {
       const dir = typeof api.workspaceDir === 'function'
         ? api.workspaceDir('multi-parser-media')
@@ -70,6 +74,8 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
       }
     } catch (err) {
       api.log.debug?.('[multi-parser] 视频下载失败，退回直链:', err.message)
+      // 是被体积上限挡下的：说明这视频很大，不要再拿直链去试小视频那条路
+      if (/超过上限/.test(err.message)) overLimit = true
     }
 
     // 超体积的走群文件 / 直链
@@ -97,6 +103,10 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
       await api.sendText(chatId, cardText)
       if (localFile && typeof api.sendFile === 'function') {
         await api.sendFile(chatId, localFile, safeName(result.title, vid))
+        return true
+      }
+      if (overLimit) {
+        await api.sendText(chatId, `📹 视频超出可发体积，直链播放：${videoUrl}`)
         return true
       }
       await api.sendSegments(chatId, [{ type: 'video', data: { file: videoUrl } }])
