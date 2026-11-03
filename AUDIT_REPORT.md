@@ -55,7 +55,6 @@
    - `src/modules/token-guardian/`（上下文压缩守门员）
    - `src/modules/complete-guard/`（截断回复识别）
    - `src/modules/memory-privacy/`（记忆三层作用域隔离）
-   - `src/modules/slang-learner/`（群黑话学习）
    - `src/modules/scheduler/`（全功能通用定时调度器）
 4. **外部社交与多模态子系统**：
    - `src/bili/`, `src/douyin/`, `src/heybox/`, `src/song/`, `src/voice/`, `src/features/`
