@@ -310,7 +310,15 @@ function normalizePersona (p) {
   const o = isObj(p) ? p : {}
   const mapIds = (m) => {
     const out = {}
-    if (isObj(m)) for (const [k, v] of Object.entries(m)) { const id = ok(v); if (k && id) out[String(k).replace(/\D/g, '')] = id }
+    if (isObj(m)) {
+      for (const [k, v] of Object.entries(m)) {
+        const key = String(k).replace(/\D/g, '')
+        if (!key) continue
+        // 值可以先空着：面板里「添加」一行、还没选人设就保存，那一行不该被悄悄丢掉。
+        // 空值在 personaIdFor 里会被当成「没指定」往下落，不影响行为。
+        out[key] = ok(v)
+      }
+    }
     return out
   }
   return {
