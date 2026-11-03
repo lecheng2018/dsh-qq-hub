@@ -21,7 +21,7 @@ export default {
     timezone: 'Asia/Shanghai',
   },
   settings: [
-    { key: 'enabled', label: '启用定时任务', type: 'boolean' },
+    { key: 'enabled', label: '启用定时任务', type: 'switch' },
     { key: 'timezone', label: '调度时区', type: 'text' },
   ],
   setup(api) {
