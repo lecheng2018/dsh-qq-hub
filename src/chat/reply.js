@@ -24,6 +24,14 @@ export function stripMarkdown(text) {
   s = s.replace(/^\s*>\s?/gm, '')
   s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '$1 $2')
 
+  // 破折号硬拦（主人要求禁用 ——）：提示词禁令实测压不住（群友示范+styles 强化会把它顶回来），
+  // 所以在发送出口直接替换。破折号常见两种用法：
+  //   A——B（解释/转折）→ 逗号最稳妥，任何语境都通顺
+  //   行尾挂 dash 拖音（"反正就这样——"）→ 收尾直接删掉，不留半个符号
+  // 先删行尾孤立的（包括后跟空白），再把句中的换成逗号；顺序不能反，否则行尾那个会先被换成逗号。
+  s = s.replace(/——+\s*$/gm, '')
+  s = s.replace(/——+/g, '，')
+
   // 核心排版：数字列表项（1. 2. 3. 等）前面如果不是空行，自动补空行，强制撑开呼吸感
   s = s.replace(/([^\n])\r?\n(\d+[.、]\s*)/g, '$1\n\n$2')
 
@@ -122,6 +130,35 @@ function capBubbles(items) {
  * 一段文字拆成几条气泡：真人打字是一行一条发出去的。
  * 有代码块、或者是长篇内容（比如帮主人查东西的结果）就整段发，不拆。
  */
+/** 把一个长气泡按句读硬拆成短条（群友不写长句）。仅在普通聊天路径使用；整段发（代码块/长文）不走这里。 */
+function splitLongLine(line, maxChars = 30) {
+  const s = String(line || '').trim()
+  if (!s || s.length <= maxChars) return s ? [s] : []
+  // 第一层：按句读切（保留标点在后半）
+  let parts = s.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
+  // 第二层：某个片段本身仍超长（如一句里塞了整条技术链路），按逗号/顿号/冒号再切
+  const refined = []
+  for (const p of parts) {
+    if (p.length <= maxChars) { refined.push(p); continue }
+    let buf = ''
+    for (const seg of p.split(/(?<=[，,、：:])/)) {
+      if (buf && (buf + seg).length > maxChars) { refined.push(buf); buf = seg }
+      else buf += seg
+    }
+    if (buf) refined.push(buf)
+  }
+  parts = refined
+  // 按长度聚合，避免每句都变成超短条
+  const out = []
+  let cur = ''
+  for (const p of parts) {
+    if (cur && (cur + p).length > maxChars) { out.push(cur); cur = p }
+    else cur = cur ? cur + p : p
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
 export function splitLines(text) {
   const t = String(text || '').trim()
   if (!t) return []
@@ -137,7 +174,10 @@ export function splitLines(text) {
 function pushText(items, s) {
   const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
   if (!t || isSilence(t)) return
-  for (const line of splitLines(t)) if (!isSilence(line)) items.push({ kind: 'text', value: line })
+  for (const line of splitLines(t)) {
+    // 长气泡硬拆（主人要求群友感：单条最长 ~30 字）：无论模型输出多长，到 QQ 上都是碎句
+    for (const piece of splitLongLine(line)) if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
+  }
 }
 
 /** 对方是不是明确要她发语音（「用语音说」「发个语音」「语音回我」……）。 */
