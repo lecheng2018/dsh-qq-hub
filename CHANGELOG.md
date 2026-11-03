@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.3.6
+
+- **修：发图 / 辅助看图报 `attachmentId` 本地 TypeError 的真根因**。此前只看到现象：用户发图后 DSH 框架 `dsh-llm-pi-ai` 抛 `Cannot read properties of undefined (reading 'attachmentId')`，辅助看图报 `EACCES: permission denied, open '/vol2/@appshare'`。逐层追到 DSH 官方 `@deepseek-ai/dsh-attachment-local` 才定位：保存附件时会一层层向上 `open(祖先目录, O_RDONLY)` 做 fsync 耐久性同步；fnOS 把 `/vol2/@appshare` 这类祖先设为「可穿越但不可读」（mode 000 + trim_acl），非 root 进程 open 即 EACCES，且该版本 `.pnpm` 副本的 `ensureDurableDirectory()` 未捕获此错误，整条 `admitPromptContent()` 直接失败，图片登记不出带 `attachmentId` 的附件块。
+  - 新增 `src/core/fnos-fsync-patch.js`：在插件启动时兜住「只读打开目录做 fsync」这一种 EACCES/EPERM，返回空操作 handle 让同步循环走完；写入/读取路径的其它权限错误照常抛出，不掩盖真问题。实现必须同时用 `createRequire('fs').promises` 改 CJS 数据源 + `syncBuiltinESMExports()` 刷新具名导入——只改 ESM 默认导出对 `import { open } from 'node:fs/promises'` 的附件服务**完全无效**（已实测证伪，注释里写明原因避免改回去）。`src/host.js` 在加载业务模块前调用该补丁。
+  - `src/chat/hub.js admit()`、`src/core/llm.js describeWithHelper()`：登记附件失败时不再把裸 base64 块硬塞给适配层（那正是 `attachmentId` 崩溃来源），统一退回纯文字 / 放弃本次转述，由 `textForBlindModel()` 如实说明看不到。`askModel()` 保持降级为纯文字并回调 `onImageError`。
+  - 新增 `test/fnos-fsync-patch.test.js`：用 `/tmp` 下 mode 0o111 的假祖先目录 + 本机 Harness 正在加载的 `.pnpm` 附件包，子进程隔离验证「不打补丁 → EACCES、打补丁 → 拿到 `sha256:` 正式附件 id」，并守「写路径错误不被吞」。两种情形各起独立子进程，避免全局补丁污染基线。
+  - `scripts/deploy-client.sh` 补齐 `src/core/fnos-fsync-patch.js` 同步，并把校验行改成与新契约一致（原来还在 grep 已删除的「保留原始 base64」字样）。
+  - 回归：`test/vision-helper.test.js` 第 6 条改写为新契约（登记失败 → 主模型不收裸块、不调辅助模型踩坑）。相关 9 项单测全通过；全量 79 个测试文件里，6 个依赖 mock OneBot 端口的套件在**未改动的基线 HEAD 上同样 0 通过**，判为沙箱环境限制，与本次改动无关。
+
 ## 1.3.5
 
 - **修：按群换人设删掉的群或历史残留「03」删掉保存后又出现**。根因定位：
