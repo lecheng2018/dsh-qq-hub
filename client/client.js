@@ -1011,7 +1011,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const titles = edit ? edit.secs.map((s) => s.title) : []
       const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))
       // 按聊天换人设：私聊默认 / 群默认 / 具体某个号
-      const pm = st.config.persona || {}
+      // 必须读 draft 而不是 st.config：st 是「服务端已保存」的状态，draft 才是正在编辑的。
+      // 以前读 st.config，点「＋ 添加」改的是 draft，渲染却看 st，所以永远不显示新行 ——
+      // 用户看到的就是「点了添加没有输入框也没有选择框」。
+      const pm = (draft && draft.persona) || st.config.persona || {}
       const setPm = (k, v) => {
         if (!draft) return // 配置还没加载完，点了也没地方存
         setDraft(setPath(draft, 'persona.' + k, v))
