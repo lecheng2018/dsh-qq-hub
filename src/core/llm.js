@@ -147,11 +147,24 @@ export async function askModel (dsh, o) {
   if (!t) throw new Error('拿不到默认模型')
   let content = [{ type: 'text', text: o.text }]
   for (const img of o.images || []) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-image' })
-  // 图片要先交给 DSH 的附件服务登记成附件块，模型适配层只认附件
+  // 图片要先交给 DSH 的附件服务登记成附件块，模型适配层只认附件。
+  // 登记失败（常见：工作区目录不可写 → EACCES）不该让整个后台任务炸掉——
+  // 聊天主链路（hub.js admit）和工具配图（img.js）都是「降级成纯文字」，
+  // 这里原来是直接抛，导致表情起名这类后台小任务每次失败都刷一条 warn。
   if (content.length > 1) {
     const att = dsh.attachments || dsh.get('attachments')
-    if (!att || typeof att.admitPromptContent !== 'function') throw new Error('宿主没有附件服务，看不了图')
-    content = await att.admitPromptContent(content)
+    if (!att || typeof att.admitPromptContent !== 'function') {
+      content = [{ type: 'text', text: o.text }]
+    } else {
+      try {
+        content = await att.admitPromptContent(content)
+      } catch (error) {
+        // 图给不进去就只发文字，让调用方自己决定要不要用这个结果
+        content = [{ type: 'text', text: o.text }]
+        const warn = typeof o.onImageError === 'function' ? o.onImageError : null
+        if (warn) warn(error)
+      }
+    }
   }
   const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
   const base = {

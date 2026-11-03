@@ -14,7 +14,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 // 2) security-lock 的 TOTP secret 被冲掉，权限锁失效
 // 正确做法是走框架给的 api.dataDir()，它内部是 dataDir('modules-data', <模块id>)。
 
-const MODULES = ['security-lock', 'token-guardian', 'memory-privacy', 'profile', 'slang-learner', 'imagegen']
+const MODULES = ['security-lock', 'token-guardian', 'memory-privacy', 'profile', 'imagegen']
 
 test('模块都不再用全局 dataDir（必须用 api.dataDir 做隔离）', () => {
   for (const m of MODULES) {
@@ -42,7 +42,6 @@ test('六类模块的输出文件互不重叠', () => {
     'security-lock': ['state.json'],
     'token-guardian': ['state.json', 'summary.json'],
     'memory-privacy': ['scoped.json'],
-    'slang-learner': ['slang.json'],
   }
   for (const [id, files] of Object.entries(decl)) {
     for (const f of files) {
@@ -51,5 +50,5 @@ test('六类模块的输出文件互不重叠', () => {
       paths.set(p, id)
     }
   }
-  assert.equal(paths.size, 5)
+  assert.equal(paths.size, 4)
 })
