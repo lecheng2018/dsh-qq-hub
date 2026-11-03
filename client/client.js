@@ -1079,7 +1079,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
               const m2 = { ...cur2 }
               const keep = m2[id] === undefined ? '' : m2[id]
               if (plan.action === 'clear') {
-                m2[id] = keep
+                // 清空了：占位行原地保留；已成立的群号/号码退回占位行，避免把删掉的旧号码留住
+                if (id.startsWith('#new')) {
+                  m2[id] = keep
+                } else {
+                  delete m2[id]
+                  m2['#new' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)] = keep
+                }
                 return setPath(prev, 'persona.' + mapKey, m2)
               }
               // 目标位被别的行占了：本行原地保留，不顶掉别人
