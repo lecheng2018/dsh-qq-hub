@@ -3,7 +3,7 @@
 // 以前只发文字摘要 + 链接，主人还得自己点开链接去看。这里补上下载这一步。
 // 只用 Node 自带的 fetch / fs，不引第三方依赖。
 
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -84,4 +84,79 @@ export async function downloadVideo(v, opts = {}) {
     }
   }
   throw new Error('视频下载失败：' + (lastError?.message || '所有地址都试过了'))
+}
+
+/**
+ * 删掉一个已下载的媒体文件。发完就没用了——QQ 那边已经收到，本地留着只是占盘。
+ * 只删我们自己下到媒体目录里的文件，删不掉也不该影响主流程，所以永远不抛。
+ * @returns {boolean} 是否真的删掉了
+ */
+export function discardDownloaded(file) {
+  const f = String(file || '').trim()
+  if (!f) return false
+  try {
+    if (existsSync(f)) {
+      rmSync(f, { force: true })
+      return true
+    }
+  } catch {
+    /* 删不掉就算了，下次启动扫描会兜底 */
+  }
+  return false
+}
+
+/**
+ * 兜底清扫：进程中途崩掉 / 被强杀时，下载好的文件会留在目录里没人删。
+ * 启动时扫一遍，把超过 maxAgeMs 的旧文件收掉，顺便压一下总量。
+ * @param {string} dir
+ * @param {{maxAgeMs?: number, maxBytes?: number, keep?: number}} opts
+ * @returns {{removed: number, bytes: number}}
+ */
+export function sweepMediaDir(dir, opts = {}) {
+  const out = { removed: 0, bytes: 0 }
+  const root = String(dir || '').trim()
+  if (!root) return out
+  const maxAgeMs = Number(opts.maxAgeMs) || 6 * 3600_000
+  const maxBytes = Number(opts.maxBytes) || 500 * 1024 * 1024
+  const keep = Math.max(0, Number(opts.keep) || 0)
+
+  let names = []
+  try {
+    if (!existsSync(root)) return out
+    names = readdirSync(root)
+  } catch {
+    return out
+  }
+
+  const files = []
+  for (const n of names) {
+    const full = join(root, n)
+    try {
+      const st = statSync(full)
+      if (st.isFile()) files.push({ full, size: st.size, mtime: st.mtimeMs })
+    } catch {
+      /* 跳过读不到的 */
+    }
+  }
+  // 新的在前，保留最近 keep 个
+  files.sort((a, b) => b.mtime - a.mtime)
+  const now = Date.now()
+  let total = files.reduce((n, f) => n + f.size, 0)
+
+  // 从最旧的开始删（数组倒序），keep 个最新的永远不动
+  for (let i = files.length - 1; i >= keep; i--) {
+    const f = files[i]
+    const tooOld = now - f.mtime > maxAgeMs
+    const overQuota = total > maxBytes
+    if (!tooOld && !overQuota) break
+    try {
+      rmSync(f.full, { force: true })
+      out.removed++
+      out.bytes += f.size
+      total -= f.size
+    } catch {
+      /* 删不掉就留着 */
+    }
+  }
+  return out
 }
