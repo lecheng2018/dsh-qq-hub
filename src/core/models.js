@@ -1,20 +1,30 @@
 /**
- * 把「按 provider 批量取模型」的结果摊平成一个列表，并按 provider::model 去重。
+ * 把「按 provider 批量取模型」的结果摊平成一个列表。
  *
- * 为什么要去重：DSH 的 listProviders() 有时会把同一个 provider 报两遍
- * （一次字符串、一次对象），listModels(provider) 也可能对同一个模型返回多条。
- * 原来直接 push 进列表，面板下拉里就会出现两个一模一样的「Hy3 / fan-vision」，
- * 用户以为配错了。
+ * 这里要做两件事，都是面板上能直接看到的问题：
  *
- * 只按 provider::model 去重，不按 provider 整体跳过 —— 同一个 provider
- * 第二次出现时可能带出新的模型，整段跳过会漏。
+ * 1) 同名重复：DSH 会把同一个 provider 报两遍，同一个模型也可能返回多条，
+ *    原来直接 push，下拉里就是两个一模一样的「Hy3」。
  *
- * @param {Array<{provider: string, models: Array}>} groups 每个 provider 及它返回的模型
- * @returns {Array<{provider: string, model: string, raw: any}>} 去重后的结果，保持原顺序
+ * 2) 视觉版与基础版并存：DSH 常常给同一个模型配两个 provider，
+ *    例如 fan / fan-vision（或 mini / mini-vision），模型 id 完全一样，
+ *    唯一区别是后者声明了 vision=true。对使用者来说这就是同一个模型，
+ *    列两遍纯属重复；而且一旦给每一行都标「能看图」，看起来就像
+ *    「所有模型都能看图」，反而误导。
+ *
+ *    所以按 **model id** 合并成一个条目，vision 取「任一 provider 声明能看图即算能看图」，
+ *    并记住那个能看图的 provider 作为 preferred(provider,model)。上层选模型时
+ *    优先用 preferred，拿不到才退回任意一个。
+ *
+ * 注意仍然按 provider::model 去重：真正不同 provider 提供的不同模型不会被并掉。
+ *
+ * @param {Array<{provider: string, models: Array}>} groups
+ * @returns {Array<{provider: string, model: string, vision: boolean,
+ *                  providers: string[], raw: any,
+ *                  preferred: {provider: string, model: string}}>}
  */
 export function dedupeModelList (groups) {
-  const seen = new Set()
-  const out = []
+  const byModel = new Map()
   for (const g of groups || []) {
     const provider = g && g.provider
     if (!provider) continue
@@ -22,11 +32,39 @@ export function dedupeModelList (groups) {
       if (!m) continue
       const model = m.id || m.model
       if (!model) continue
-      const k = provider + '::' + model
-      if (seen.has(k)) continue
-      seen.add(k)
-      out.push({ provider, model, raw: m })
+
+      const vision = isVisionCapable(m)
+      const hit = byModel.get(model)
+      if (!hit) {
+        byModel.set(model, {
+          provider,
+          model,
+          vision,
+          providers: [provider],
+          raw: m,
+          preferred: { provider, model },
+        })
+        continue
+      }
+      // 同一个模型又出现在另一个 provider 下：合并
+      if (!hit.providers.includes(provider)) hit.providers.push(provider)
+      if (vision && !hit.vision) {
+        // 换成能看图的那个 provider 作为首选，名字等元信息也用它
+        hit.vision = true
+        hit.provider = provider
+        hit.raw = m
+        hit.preferred = { provider, model }
+      }
     }
   }
-  return out
+  return [...byModel.values()]
+}
+
+/** 模型是否声明了能看图。DSH 的字段名可能是 vision / supportsVision / capabilities。 */
+function isVisionCapable (m) {
+  if (!m) return false
+  if (m.vision === true) return true
+  if (m.supportsVision === true) return true
+  if (Array.isArray(m.capabilities)) return m.capabilities.includes('vision')
+  return false
 }
