@@ -22,7 +22,8 @@ window.__ModuleLoader__.load({
         .catch((e) => ({ ok: false, message: '连不上插件：' + e.message }))
     const clone = (o) => JSON.parse(JSON.stringify(o))
     const setPath = (obj, path, value) => {
-      const next = clone(obj)
+      // 面板刚打开时 draft 可能还是 null，直接 clone 会在下一行炸，兜成空对象
+      const next = clone(obj == null ? {} : obj)
       let cur = next
       const ks = path.split('.')
       for (let i = 0; i < ks.length - 1; i++) cur = cur[ks[i]] = cur[ks[i]] || {}
@@ -959,7 +960,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       h('span', null, busy ? '润色中' : empty ? 'AI 写一版' : 'AI 润色'))
     }
 
-    function Persona({ st, toast, reload }) {
+    function Persona({ st, draft, setDraft, toast, reload }) {
       const [list, setList] = useState(st.personas)
       const [current, setCurrent] = useState(st.config.persona.current)
       const [sel, setSel] = useState(st.config.persona.current)
@@ -1004,13 +1005,23 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))
       // 按聊天换人设：私聊默认 / 群默认 / 具体某个号
       const pm = st.config.persona || {}
-      const setPm = (k, v) => setDraft(setPath(draft, 'persona.' + k, v))
+      const setPm = (k, v) => {
+        if (!draft) return // 配置还没加载完，点了也没地方存
+        setDraft(setPath(draft, 'persona.' + k, v))
+      }
       const personaOpts = (emptyLabel) => [{ value: '', label: emptyLabel }].concat(list.map((p) => ({ value: p.id, label: p.name })))
       const specific = (mapKey, title, hint) => {
         const m = pm[mapKey] || {}
+        // 「＋添加」插的是 #newXXX 占位键，避免多行都用空串互相覆盖；填了号才换成真号
         const rows = Object.entries(m).map(([id, pid]) => h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-          h('input', { className: 'ab-input', style: { width: 180 }, value: id, placeholder: title === '按群换人设' ? '群号' : 'QQ 号', onChange: (e) => {
-            const m2 = { ...m }; const v = m2[id]; delete m2[id]; m2[e.target.value.replace(/\D/g, '')] = v
+          h('input', { className: 'ab-input', style: { width: 180 }, value: id.startsWith('#new') ? '' : id, placeholder: title === '按群换人设' ? '群号' : 'QQ 号', onChange: (e) => {
+            const typed = e.target.value.replace(/\D/g, '')
+            const m2 = { ...m }
+            const cur = m2[id]
+            delete m2[id]
+            // 清空就把这行删掉；填了就换成真号；没填完保持占位键不丢
+            if (typed) m2[typed] = cur
+            else m2[id] = cur === undefined ? '' : cur
             setDraft(setPath(draft, 'persona.' + mapKey, m2))
           } }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
@@ -1020,7 +1031,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           } }),
           h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删')) )
         return h(Card, { title, desc: hint,
-          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, '': '' })) }, '＋ 添加') },
+          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
           rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, '还没单独指定'),
           h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
       }
