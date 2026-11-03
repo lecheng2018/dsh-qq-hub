@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { extractUrls, looksBlocked, vetResult } from '../src/modules/multi-parser/parser.js'
-import { formatCardText, probeVideoSizeMB } from '../src/modules/multi-parser/delivery.js'
+import { formatCardText, probeVideoSizeMB, tidyUrl } from '../src/modules/multi-parser/delivery.js'
 import multiParser from '../src/modules/multi-parser/index.js'
 import { BUILTINS } from '../src/modules/index.js'
 
@@ -203,4 +203,42 @@ test('vetResult: 字段结构补齐，下游不必到处判 undefined', () => {
   // images 里有 null 也要清掉
   const r2 = vetResult({ platformName: '小红书', title: '标题', summary: '有描述', images: ['a.jpg', null, '', 'b.jpg'] })
   assert.deepEqual(r2.images, ['a.jpg', 'b.jpg'])
+})
+
+test('tidyUrl: 抖音分享页的长追踪链接要压成干净短链', () => {
+  // 用户实际收到的情况：链接占 860 字、手机上二十多行，把视频挤到屏幕外
+  const long =
+    'https://www.iesdouyin.com/share/video/7679680381931408182/?from_ssr=1&did=MS4wLjABAAAA&mid=7679680381931408182' +
+    '&ts=1793668713&share_sign=inrYku3ti1kzqfAPA21A9HfJOLNseXkn3aM7N3pvlE-&utm_source=copy&utm_medium=ios&app=aweme'
+  const tidy = tidyUrl(long)
+  assert.equal(tidy, 'https://www.iesdouyin.com/share/video/7679680381931408182/')
+  assert.ok(tidy.length < 80, '压完必须明显变短')
+
+  // 短链、正常链接不能被乱动
+  assert.equal(tidyUrl('https://www.bilibili.com/video/BV1GJ411x7h7'), 'https://www.bilibili.com/video/BV1GJ411x7h7')
+  assert.equal(tidyUrl(''), '')
+  assert.equal(tidyUrl(undefined), '')
+
+  // 有语义的查询参数要留住（知乎/贴吧常靠 id 定位）
+  const keepId = tidyUrl('https://example.com/very/long/path/that/keeps/going/and/going/for/a/while/here?p=1234567890&utm_source=x&utm_medium=y')
+  assert.ok(keepId.includes('p=1234567890'), 'id 类参数要保留')
+  assert.ok(!keepId.includes('utm_source'), '追踪参数要丢掉')
+})
+
+test('formatCardText: 卡片不再被超长链接撑爆', () => {
+  const long =
+    'https://www.iesdouyin.com/share/video/7679680381931408182/?from_ssr=1&did=MS4wLjABAAAA&mid=7679680381931408182' +
+    '&ts=1793668713&share_sign=inrYku3ti1kzqfAPA21A9HfJOLNseXkn3aM7N3pvlE-&utm_source=copy&utm_medium=ios&app=aweme'
+  const card = formatCardText({
+    platformName: '抖音',
+    title: '你也变成嘉豪了不是吗 #三角洲行动',
+    author: 'kxx（三角洲行动）',
+    summary: '你也变成嘉豪了不是吗 #三角洲行动',
+    stat: '点赞: 20696 · 评论: 498',
+    url: long,
+  })
+  assert.ok(card.length < 300, `卡片应明显变短，实际 ${card.length}`)
+  assert.ok(card.includes('🔗 链接：https://www.iesdouyin.com/share/video/7679680381931408182/'))
+  assert.ok(!card.includes('utm_source'), '卡片里不能残留追踪参数')
+  assert.ok(card.startsWith('📌【抖音 · 内容解析】'))
 })
