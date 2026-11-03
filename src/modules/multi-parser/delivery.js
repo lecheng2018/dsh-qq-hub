@@ -35,16 +35,24 @@ export function tidyUrl(raw) {
   }
 }
 
-/** 格式化纯文本摘要卡片 */
-export function formatCardText(result) {
+/**
+ * 格式化纯文本摘要卡片。
+ * @param {object} result 解析结果
+ * @param {object} [opts]
+ * @param {boolean} [opts.withLink=true] 要不要带链接。视频/图片本身已经发过去了就别带，
+ *        只有发不出去（超体积、下载失败、图文兜底）时才需要拿链接兜底。
+ */
+export function formatCardText(result, { withLink = true } = {}) {
   const parts = []
   parts.push(`📌【${result.platformName} · 内容解析】`)
   if (result.title) parts.push(`标题：${result.title}`)
   if (result.author) parts.push(`作者：${result.author}`)
   if (result.summary) parts.push(`摘要：${result.summary}`)
   if (result.stat) parts.push(`数据：${result.stat}`)
-  const link = tidyUrl(result.url)
-  if (link) parts.push(`🔗 链接：${link}`)
+  if (withLink) {
+    const link = tidyUrl(result.url)
+    if (link) parts.push(`🔗 链接：${link}`)
+  }
   return parts.join('\n')
 }
 
@@ -69,6 +77,9 @@ export async function probeVideoSizeMB(url) {
  */
 export async function deliverParseResult(api, chatId, result, cfg = {}) {
   const cardText = formatCardText(result)
+  // 媒体真的发出去时用这份：不带链接
+  const cardTextNoLink = formatCardText(result, { withLink: false })
+  const cardTextVideoSent = cardTextNoLink
   const images = Array.isArray(result.images) ? result.images.filter(Boolean) : []
   const videoUrl = result.videoUrl || ''
 
@@ -134,11 +145,14 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
 
     // 正常视频：优先发本地的（能真发出去），下载失败才把直链交给网关一试
     try {
-      await api.sendText(chatId, cardText)
+      // 视频能发出去时，卡片不带链接——东西都到手了，再挂条点不开的分享链接只是占地方
       if (localFile && typeof api.sendFile === 'function') {
+        await api.sendText(chatId, cardTextVideoSent)
         await api.sendFile(chatId, localFile, safeName(result.title, vid))
         return true
       }
+      // 发不出视频：链接就是唯一的观看途径，这时候才带
+      await api.sendText(chatId, cardText)
       if (overLimit) {
         await api.sendText(chatId, `📹 视频超出可发体积，直链播放：${videoUrl}`)
         return true
@@ -160,7 +174,8 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
         data: {
           name: botName,
           uin: selfId,
-          content: [{ type: 'text', data: { text: cardText } }],
+          // 图都在卡片下面了，链接没意义
+          content: [{ type: 'text', data: { text: cardTextNoLink } }],
         },
       },
       ...images.map((img) => ({
@@ -191,8 +206,8 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
     }
   }
 
-  // 3. 普通图文发送
-  const segs = [{ type: 'text', data: { text: cardText } }]
+  // 3. 普通图文发送：带图就不需要链接；纯文字结果才给链接兜底
+  const segs = [{ type: 'text', data: { text: images.length ? cardTextNoLink : cardText } }]
   for (const img of images.slice(0, 4)) {
     segs.push({ type: 'image', data: { file: img } })
   }
