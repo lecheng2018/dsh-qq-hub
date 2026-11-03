@@ -2,6 +2,39 @@ import { downloadVideo, safeName } from '../../douyin/media.js'
 
 // 媒体投递与卡片渲染引擎：将解析结果安全转换为 QQ 消息段或合并转发卡片
 
+/** 卡片里链接最多留这么长：再长就在手机上占一大片，把媒体挤到屏幕外 */
+const MAX_URL_IN_CARD = 80
+
+/**
+ * 把链接收拾成能看的短样子。
+ * 有些平台（尤其抖音分享页）会给一条八百多字、带满 utm/share_sign 的追踪链接，
+ * 原样贴进卡片要占二十多行 —— 留着主链接，把没用的查询串去掉。
+ */
+export function tidyUrl(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return ''
+  if (s.length <= MAX_URL_IN_CARD) return s
+  try {
+    const u = new URL(s)
+    // 查询串里有语义的（视频 id / 帖子 id）留下，其余追踪参数全丢
+    const keep = ['id', 'aweme_id', 'itemId', 'p', 'bvid', 'v', 'target']
+    const kept = new URLSearchParams()
+    for (const k of keep) {
+      const v = u.searchParams.get(k)
+      if (v) kept.set(k, v)
+    }
+    const query = kept.toString() ? '?' + kept.toString() : ''
+    const bare = u.origin + u.pathname + query
+    if (bare.length <= MAX_URL_IN_CARD) return bare
+    // 路径本身就长：先截路径再拼查询串，别把 id 参数一起截掉
+    const room = MAX_URL_IN_CARD - 1 - query.length
+    if (room > u.origin.length + 4) return u.origin + u.pathname.slice(0, room - u.origin.length - 1) + '…' + query
+    return bare.slice(0, MAX_URL_IN_CARD - 1) + '…'
+  } catch {
+    return s.slice(0, MAX_URL_IN_CARD - 1) + '…'
+  }
+}
+
 /** 格式化纯文本摘要卡片 */
 export function formatCardText(result) {
   const parts = []
@@ -10,7 +43,8 @@ export function formatCardText(result) {
   if (result.author) parts.push(`作者：${result.author}`)
   if (result.summary) parts.push(`摘要：${result.summary}`)
   if (result.stat) parts.push(`数据：${result.stat}`)
-  parts.push(`🔗 链接：${result.url}`)
+  const link = tidyUrl(result.url)
+  if (link) parts.push(`🔗 链接：${link}`)
   return parts.join('\n')
 }
 
