@@ -240,6 +240,27 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return c
   }
 
+  /**
+   * 面板用：列出「机器人见过的聊天」，让人直接选，不用手打群号/QQ 号。
+   * 来源是 sessions.json（每个真正聊过的会话都会记一条），群名优先用 groupNames 里的最新值。
+   * chatId 形如 private:123 / group:456。只读，不改任何状态。
+   */
+  function knownChats () {
+    const out = []
+    try {
+      for (const [chatId, e] of Object.entries(map().chats || {})) {
+        const [kind, id] = String(chatId).split(':')
+        if (kind !== 'private' && kind !== 'group') continue
+        let name = e.title || chatId
+        if (kind === 'group' && groupNames.get(id)) name = 'QQ 群 · ' + groupNames.get(id)
+        out.push({ chatId, kind, id, name, lastAt: e.createdAt || 0 })
+      }
+    } catch (error) {
+      log.debug('读聊天列表失败：', error.message)
+    }
+    return out.sort((a, b) => b.lastAt - a.lastAt)
+  }
+
   function titleFor(chat) {
     const owner = getConfig().ownerName || '主人'
     if (chat.kind === 'system') return `QQ · ${chat.title || '后台'}`
@@ -1777,6 +1798,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     joinTopic: (gid) => groupEngaged.set(String(gid), Date.now() + ENGAGE_MS),
     leaveTopic: (gid) => groupEngaged.delete(String(gid)),
     chatOfSession,
+    knownChats,
     canSeeImages: async (chat) => {
       const cfg = getConfig()
       if (cfg.model?.vision === 'on') return true
