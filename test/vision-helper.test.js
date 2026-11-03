@@ -104,6 +104,23 @@ test('辅助模型和主模型是同一个：不自己转述给自己', async ()
   assert.equal(llm.calls.some((c) => c.model === 'vlm'), false, '同一个模型不该被当成辅助模型')
 })
 
+test('登记附件失败（EACCES）时，图片仍然要送到辅助模型 —— 这是线上真实故障', async () => {
+  // 线上日志：辅助看图模型失败（fan/glm-5.3-flash）：EACCES: permission denied, open '/vol2/@appshare'
+  // 原因是 admitPromptContent 抛错被最外层 try 吞掉，整个转述直接放弃，
+  // 结果配了辅助模型也永远用不上。正确行为：登记失败就退回原始 base64 继续发。
+  clearVisionCache()
+  const llm = makeLlm()
+  const eacces = {
+    admitPromptContent: async () => { throw new Error("EACCES: permission denied, open '/vol2/@appshare'") },
+  }
+  const dsh = { llm, attachments: eacces, get: (k) => (k === 'llm' ? llm : k === 'attachments' ? eacces : null) }
+  const out = await askModel(dsh, { cfg: cfgWith({}), text: '看看这个', images: [IMG] })
+  assert.equal(out, '猫猫可爱', '主模型仍应正常回复')
+  const helperCall = llm.calls.find((c) => c.model === 'vlm')
+  assert.ok(helperCall, '辅助模型必须被调用到，而不是被 EACCES 掐断')
+  assert.equal(helperCall.images, 1, '辅助模型必须真的收到那张图')
+})
+
 test('describeText：裁剪超长描述，保留原文', () => {
   assert.equal(describeText('短描述', 600), '短描述')
   assert.equal(describeText('', 600), '')
