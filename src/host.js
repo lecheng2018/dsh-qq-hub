@@ -681,7 +681,6 @@ export function apply(ctx) {
       count: pu?.state?.().count ?? 0,
       carrier: ext.carrier === 'pet' ? 'pet' : 'qq',
       petFallbackToQQ: ext.petFallbackToQQ !== false,
-      pacing: ['conservative', 'default', 'active'].includes(ext.pacing) ? ext.pacing : 'default',
       quietStart: quiet.quietStart,
       quietEnd: quiet.quietEnd,
       dailyMax: Number.isFinite(sp.maxPerDay) ? sp.maxPerDay : null,
@@ -738,7 +737,6 @@ export function apply(ctx) {
     if (typeof b.enabled === 'boolean') extPatch.enabled = b.enabled
     if (b.carrier === 'qq' || b.carrier === 'pet') extPatch.carrier = b.carrier
     if (typeof b.petFallbackToQQ === 'boolean') extPatch.petFallbackToQQ = b.petFallbackToQQ
-    if (['conservative', 'default', 'active'].includes(b.pacing)) extPatch.pacing = b.pacing
     if (Object.keys(extPatch).length) patch.ext = { purpose: extPatch }
     const spPatch = {}
     for (const k of ['awakeFrom', 'awakeTo', 'maxPerDay']) if (Number.isFinite(b[k])) spPatch[k] = Math.max(0, Math.floor(b[k]))
