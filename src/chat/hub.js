@@ -1587,10 +1587,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       try {
         return await att.admitPromptContent(content)
       } catch (error) {
-        log.warn('图片交给 DSH 没成功（这轮只给文字）：', error.message)
+        // 登记附件失败（典型：宿主工作区目录不可写 → EACCES: open '/vol2/@appshare'）。
+        // 以前这里把图片整块丢掉、只留文字，用户发图她永远说「看不到」，
+        // 配了辅助看图模型也永远轮不到。现在保留原始 base64 块继续往下走：
+        // 模型适配层能自己认就认，真不认会被下一层的拒收自愈接住转成文字。
+        log.warn('图片没登记成附件，先用原始数据发（不影响本轮看能不能看图）：', error.message)
+        return content
       }
     }
-    return content.filter((c) => c.type === 'text')
+    return content
   }
 
   // 私聊里等她回复时，在 QQ 上显示「对方正在输入…」（模型慢的时候让人知道她在想）
