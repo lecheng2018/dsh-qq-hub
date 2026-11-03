@@ -10,6 +10,7 @@
 // ⚠ 安全默认：总开关关、试运行开。不手动打开，一句都不会真的发到 QQ。
 
 import { readFileSync, existsSync, writeFileSync, unlinkSync, statSync, mkdirSync } from 'node:fs'
+import { dedupeModelList } from './core/models.js'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -279,14 +280,18 @@ export function apply(ctx) {
   async function listModels() {
     const llm = ctx.llm || ctx.get('llm')
     const out = []
+    // DSH 可能把同一个 provider 报两遍、同一个模型返回多条，面板下拉里就会
+    // 出现两个一模一样的「Hy3 / fan-vision」。去重逻辑抽在 core/models.js 里。
+    const groups = []
     for (const p of llm.listProviders() || []) {
       const provider = typeof p === 'string' ? p : p.provider || p.id || p.name
+      if (!provider) continue
       try {
-        for (const m of (await llm.listModels(provider)) || []) {
-          const model = m.id || m.model
-          out.push({ provider, model, name: m.name || model, reasoning: await modelReasoning(ctx, provider, model), vision: await modelVision(ctx, provider, model) })
-        }
+        groups.push({ provider, models: (await llm.listModels(provider)) || [] })
       } catch (error) {}
+    }
+    for (const { provider, model, raw } of dedupeModelList(groups)) {
+      out.push({ provider, model, name: raw.name || model, reasoning: await modelReasoning(ctx, provider, model), vision: await modelVision(ctx, provider, model) })
     }
     if (out.length) modelCache = out
     return out
