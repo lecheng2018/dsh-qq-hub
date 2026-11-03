@@ -1006,10 +1006,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const pm = st.config.persona || {}
       const setPm = (k, v) => setDraft(setPath(draft, 'persona.' + k, v))
       const personaOpts = (emptyLabel) => [{ value: '', label: emptyLabel }].concat(list.map((p) => ({ value: p.id, label: p.name })))
-      const specific = (mapKey, label, hint) => {
+      const specific = (mapKey, title, hint) => {
         const m = pm[mapKey] || {}
         const rows = Object.entries(m).map(([id, pid]) => h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-          h('input', { className: 'ab-input', style: { width: 180 }, value: id, placeholder: label === '群号' ? '群号' : 'QQ 号', onChange: (e) => {
+          h('input', { className: 'ab-input', style: { width: 180 }, value: id, placeholder: title === '按群换人设' ? '群号' : 'QQ 号', onChange: (e) => {
             const m2 = { ...m }; const v = m2[id]; delete m2[id]; m2[e.target.value.replace(/\D/g, '')] = v
             setDraft(setPath(draft, 'persona.' + mapKey, m2))
           } }),
