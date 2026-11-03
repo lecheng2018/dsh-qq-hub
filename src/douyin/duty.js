@@ -7,6 +7,9 @@ import { isSilence } from '../chat/reply.js'
 import { permOf } from '../chat/access.js'
 import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
+import { join } from 'node:path'
+import { downloadVideo, safeName } from './media.js'
+import { workspaceDirOf } from '../chat/hub.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const between = (lo, hi) => Math.floor(lo + Math.random() * (Math.max(lo, hi) - lo + 1))
@@ -192,8 +195,26 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       }
     }
     if (g.ownerQQ && (mode === 'qq' || mode === 'both' || !via.length)) {
+      // 先试着把视频本身发过去（主人要的是视频，不是链接）；
+      // 发不出去（超体积 / 下载失败 / 图文作品）再退回文字摘要 + 链接。
+      let sentMedia = false
+      if (!g.dryRun && !v.isImages) {
+        try {
+          const cfgNow = getConfig()
+          const got = await downloadVideo(v, {
+            dir: join(workspaceDirOf(cfgNow), 'douyin-media'),
+            maxMB: Number(cfgNow?.files?.maxMB) || 50,
+          })
+          await hub.sendFile(`private:${g.ownerQQ}`, got.path, safeName(v.title, v.awemeId))
+          sentMedia = true
+          log.info(`视频已下载并发给主人：${got.path}（${(got.bytes / 1024 / 1024).toFixed(1)} MB）`)
+        } catch (error) {
+          log.info(`视频没发成，改成发摘要：${error.message}`)
+        }
+      }
       try {
-        const sent = await hub.sendText(`private:${g.ownerQQ}`, `${text}\n${videoLink(v.awemeId)}`)
+        const body = sentMedia ? text : `${text}\n${videoLink(v.awemeId)}`
+        const sent = await hub.sendText(`private:${g.ownerQQ}`, body)
         if (sent || g.dryRun) via.push('qq')
         else log.warn('QQ 上分享抖音视频失败：网关没有确认发送')
       } catch (error) {
