@@ -22,7 +22,7 @@
 //     2) 改完调 syncBuiltinESMExports()，把新值推进已经创建好的 ESM 命名空间。
 //   两步缺一不可：只做 1 不做 2，已经 import 过的模块看不到新函数；只做 2 不做 1 则没有可同步的新值。
 
-import fs from 'node:fs'
+import fs, { statSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 
 let patched = false
@@ -51,10 +51,13 @@ export function patchFnosFsync() {
 
   promises.open = function (path, flags, mode) {
     return origOpen.call(this, path, flags, mode).catch((err) => {
-      // 只兜「只读打开目录做 fsync」这一种：目录不可读本就没法同步，跳过即可。
-      // 写文件、读文件的 EACCES 必须照常抛，否则会掩盖真正的权限问题。
+      // 只兜「只读打开**目录**做 fsync」这一种：不可读的祖先目录本就没法同步，跳过即可。
+      // 必须判 isDirectory：普通文件只读失败（无读权限）如果也返回空 handle，
+      // 会让调用方拿着假 handle 继续读，掩盖真正的权限/数据问题。
       if (err && (err.code === 'EACCES' || err.code === 'EPERM') && flags === fs.constants.O_RDONLY) {
-        return noopHandle()
+        try {
+          if (statSync(path).isDirectory()) return noopHandle()
+        } catch { /* 路径本身也探不到：照常抛，不兜 */ }
       }
       throw err
     })
