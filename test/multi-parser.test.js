@@ -242,3 +242,25 @@ test('formatCardText: 卡片不再被超长链接撑爆', () => {
   assert.ok(!card.includes('utm_source'), '卡片里不能残留追踪参数')
   assert.ok(card.startsWith('📌【抖音 · 内容解析】'))
 })
+
+test('formatCardText: 媒体发出去后卡片不带链接（链接只在发不出去时兜底）', () => {
+  const r = {
+    platformName: '抖音',
+    title: '你也变成嘉豪了不是吗 #三角洲行动',
+    author: 'kxx（三角洲行动）',
+    summary: '你也变成嘉豪了不是吗',
+    stat: '点赞: 20696 · 评论: 498',
+    url: 'https://www.iesdouyin.com/share/video/7679680381931408182/',
+  }
+  // 默认带链接（纯文字结果 / 兜底场景）
+  const withLink = formatCardText(r)
+  assert.ok(withLink.includes('🔗 链接：'), '默认应该带链接')
+
+  // 视频/图片已经发过去了：不要链接
+  const noLink = formatCardText(r, { withLink: false })
+  assert.ok(!noLink.includes('🔗'), '媒体已发出去时不该再有链接行')
+  assert.ok(!noLink.includes('iesdouyin.com'), '链接不该以任何形式残留')
+  // 其它信息要保住
+  assert.ok(noLink.includes('标题：你也变成嘉豪了不是吗'))
+  assert.ok(noLink.includes('数据：点赞: 20696'))
+})
