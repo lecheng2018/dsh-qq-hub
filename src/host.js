@@ -290,8 +290,21 @@ export function apply(ctx) {
         groups.push({ provider, models: (await llm.listModels(provider)) || [] })
       } catch (error) {}
     }
-    for (const { provider, model, raw } of dedupeModelList(groups)) {
-      out.push({ provider, model, name: raw.name || model, reasoning: await modelReasoning(ctx, provider, model), vision: await modelVision(ctx, provider, model) })
+    // dedupeModelList 已按 model id 合并掉「基础版 / 视觉版」这种同模型多 provider 的情况，
+    // 这里优先用能看图的那个 provider 去问细项；它答不上来再退回任意一个。
+    for (const item of dedupeModelList(groups)) {
+      const { model, raw } = item
+      // 选了能看图的那个 provider 就优先报它，免得下游又把它当看不见图的用
+      const provider = item.preferred.provider
+      // 合并时已经知道「任一 provider 说能看图」，这里再问一次只是兜底：
+      // 只有明确查到 true 才升级，查不到（undefined）保持原判定，绝不因为查不到就把 true 降级。
+      let vision = item.vision
+      if (!vision) {
+        try { if (await modelVision(ctx, provider, model) === true) vision = true } catch (error) {}
+      }
+      let reasoning = null
+      try { reasoning = await modelReasoning(ctx, provider, model) } catch (error) {}
+      out.push({ provider, model, name: raw.name || model, reasoning, vision })
     }
     if (out.length) modelCache = out
     return out
