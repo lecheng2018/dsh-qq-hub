@@ -13,7 +13,22 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
-const BASE = process.env.AURABOT_DATA_DIR || join(DSH_HOME, 'plugins-data', 'aurabot')
+
+// 数据目录必须和运行时 src/core/store.js 的 dataDir() 完全一致，否则会去错地方、找不到文件。
+// 规则（与 store.js 保持同步）：
+//   1) 环境变量 DSH_QQ_HUB_DATA_DIR / AURABOT_DATA_DIR 优先；
+//   2) 其次 ~/.dsh/plugins-data/dsh-qq-hub/（新命名空间）；
+//   3) 若新目录不存在而老的 aurabot/ 存在，则沿用 aurabot/（老用户历史数据）。
+function resolveBase() {
+  const envDir = process.env.DSH_QQ_HUB_DATA_DIR || process.env.AURABOT_DATA_DIR
+  if (envDir) return envDir
+  const home = join(DSH_HOME, 'plugins-data')
+  const newBase = join(home, 'dsh-qq-hub')
+  const legacyBase = join(home, 'aurabot')
+  return existsSync(newBase) || !existsSync(legacyBase) ? newBase : legacyBase
+}
+
+const BASE = resolveBase()
 // 记忆库文件名是 memories.json（见 src/features/memory.js 的 dataDir('memories.json')）。
 // 留个兜底：老版本可能叫 memory.json，两个都探一下。
 const CANDIDATES = [join(BASE, 'memories.json'), join(BASE, 'memory.json')]

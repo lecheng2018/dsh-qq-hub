@@ -41,6 +41,7 @@
   ],
   "files": [
     "extensions",
+    "scripts",
     "src",
     "client",
     "personas",
