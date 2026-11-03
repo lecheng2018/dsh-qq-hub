@@ -315,3 +315,24 @@ test('视频类结果不注入 AI 上下文（她看不到画面，喂标题只�
   assert.ok(!/\$\{r\.title\}/.test(videoBranch), '视频分支不能把标题喂给 AI')
   assert.ok(!/内容摘要/.test(videoBranch), '视频分支不能带摘要')
 })
+
+test('纯解析模式（muteAi）：解析成功后接管消息，不再唤醒她', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile('src/modules/multi-parser/index.js', 'utf8')
+
+  // 1. 开关要有默认值，且默认关（不改变现有行为）
+  const m = src.match(/muteAi: (true|false)/)
+  assert.ok(m, 'defaults 里必须有 muteAi')
+  assert.equal(m[1], 'false', '默认不开启，避免升级后突然不说话了')
+
+  // 2. 只有真的解析成功才接管
+  assert.ok(
+    src.includes('if (handledAny && c.muteAi) return true'),
+    '必须同时满足「解析成功」和「开了 muteAi」才接管',
+  )
+  assert.ok(src.includes('handledAny = true'), 'handledAny 在解析成功后置真')
+
+  // 3. muteAi 关着时保持老行为：return false，消息继续流转给她
+  const tail = src.slice(src.indexOf('if (handledAny && c.muteAi) return true'))
+  assert.ok(tail.includes('return false'), '关掉 muteAi 时必须 return false')
+})
