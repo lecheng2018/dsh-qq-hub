@@ -21,6 +21,11 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 for f in "${FILES[@]}"; do
   [ -f "$SRC_ROOT/$f" ] || { echo "跳过（源不存在）：$f"; continue; }
   mkdir -p "$DST_ROOT/$(dirname "$f")"
+  # 已经一致就不备份、不覆盖，避免重复跑脚本留下一堆相同的 bak 文件。
+  if [ -f "$DST_ROOT/$f" ] && cmp -s "$SRC_ROOT/$f" "$DST_ROOT/$f"; then
+    echo "无需变更 $f"
+    continue
+  fi
   if [ -f "$DST_ROOT/$f" ]; then
     cp -p "$DST_ROOT/$f" "$DST_ROOT/$f.bak-$STAMP"
   fi
@@ -32,12 +37,14 @@ for f in "${FILES[@]}"; do
   else
     chown user:user "$DST_ROOT/$f" 2>/dev/null || true
   fi
-  echo "已部署 $f"
+  cmp -s "$SRC_ROOT/$f" "$DST_ROOT/$f" || { echo "部署后校验不一致：$f"; exit 1; }
+  echo "已部署并校验 $f"
 done
 
 echo
 echo "校验："
 grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
+grep -n 'onClick: () => setDraft((prev) =>' "$DST_ROOT/client/client.js" || true
 grep -n 'dedupeModelList'    "$DST_ROOT/src/host.js"      || true
 grep -n '改用原始 base64'     "$DST_ROOT/src/core/llm.js"  || true
 grep -n '保留原始 base64'     "$DST_ROOT/src/chat/hub.js"  || true
