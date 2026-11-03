@@ -474,3 +474,65 @@ test('「＋ 添加」也用函数式更新（否则会把刚填的群号顶掉�
   const m = /onClick: \(\) => setDraft\(\(prev\) =>/.exec(body)
   assert.ok(m, '「＋ 添加」要用 setDraft((prev) => ...)，不能拿渲染时的旧 draft 快照')
 })
+
+test('手输清空已有群号时：退回占位行，绝不把原号码留住（避免「03」输入框清空后复活）', () => {
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
+    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+  const body = extractFn('Persona')
+
+  // 前置：草稿里有一个历史遗留的 '03'
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: { '03': '' } } }
+  const setDraft = (v) => { const n = typeof v === 'function' ? v(state) : v; if (n) state = n }
+
+  let typing = {}
+  const hooks = []
+  const useStateImpl = (init) => {
+    const idx = hooks.length; hooks.push(idx)
+    if (idx === 2) return [typing, (u) => { typing = typeof u === 'function' ? u(typing) : u }]
+    return [typeof init === 'function' ? init() : init, () => {}]
+  }
+
+  const mkEnv = () => {
+    const h = (type, props, ...kids) => ({ $$el: true, type: typeof type === 'string' ? type : (type && type.name) || 'fn', props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) })
+    const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
+    const comps = {}; ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch'].forEach((n) => { comps[n] = mk(n) })
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+      'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
+      'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
+      'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+      comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
+      (...a) => a.filter(Boolean).join(' '),
+      (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },
+      (o, path) => path.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o),
+      (o) => JSON.parse(JSON.stringify(o)),
+      () => Promise.resolve({ ok: false }), () => Promise.resolve({ ok: false }),
+      { getItem: () => null, setItem: () => {} })
+  }
+
+  const props = () => ({ st: { personas: [], config: { persona: state.persona } }, draft: state, setDraft, toast: () => {}, reload: () => {} })
+
+  const findInput = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => findInput(x, out)); return out }
+    if (n.type === 'input' && n.props && n.props.onBlur) out.push(n)
+    if (n.children) n.children.forEach((x) => findInput(x, out))
+    return out
+  }
+
+  hooks.length = 0
+  const Persona = mkEnv()
+  let tree = Persona(props())
+  const inputs = findInput(tree)
+  assert.ok(inputs.length >= 1, '应该有号码输入框')
+
+  // 用户把 '03' 全删掉变空串，然后失焦
+  inputs[0].props.onChange({ target: { value: '' } })
+  inputs[0].props.onBlur({ currentTarget: { value: '' } })
+
+  const groups = state.persona.groups
+  assert.equal(groups['03'], undefined, '03 绝不能再作为 key 保留在 groups 里')
+  const keys = Object.keys(groups)
+  assert.equal(keys.length, 1, '应该保留一行')
+  assert.ok(keys[0].startsWith('#new'), '原本已成立的号码清空后应当退回 #new 占位行，实际：' + keys[0])
+})
