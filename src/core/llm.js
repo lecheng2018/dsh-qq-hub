@@ -1,6 +1,7 @@
 // 直接问一次宿主模型（不进会话）：给表情起备注、心情判断、记忆提炼等后台小任务用。
 
 import { randomUUID } from 'node:crypto'
+import { DESCRIBE_SYSTEM, describePrompt, describeText, wrapForMain } from './vision-helper.js'
 
 export function defaultModel(dsh, cfg) {
   if (cfg?.model?.provider && cfg?.model?.model) return { provider: cfg.model.provider, model: cfg.model.model }
@@ -176,6 +177,58 @@ async function runStream (llm, params) {
 }
 
 /**
+ * 主模型看不了图时，请辅助视觉模型「看一眼」，返回一段文字描述。
+ * 没配 / 关着 / 调用失败都返回空串，绝不抛——调用方据此退回纯文字。
+ * @returns {Promise<string>} 空串表示转述失败
+ */
+async function describeWithHelper (dsh, { images, cfg, hint, log }) {
+  const h = cfg && cfg.visionHelper
+  if (!h || !h.enabled || !h.provider || !h.model) return ''
+  if (!images || !images.length) return ''
+  const llm = dsh.llm || dsh.get('llm')
+  if (!llm || typeof llm.stream !== 'function') return ''
+  const take = images.slice(0, Math.max(1, Number(h.maxImages) || 4))
+  try {
+    let content = [{ type: 'text', text: describePrompt({ count: take.length, hint }) }]
+    for (const img of take) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-helper' })
+    // 图片同样要先登记成附件；登记不了就没法让辅助模型看
+    const att = dsh.attachments || dsh.get('attachments')
+    if (att && typeof att.admitPromptContent === 'function') content = await att.admitPromptContent(content)
+    const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
+    const out = await runStream(llm, {
+      provider: h.provider,
+      model: h.model,
+      system: DESCRIBE_SYSTEM,
+      messages,
+      maxTokens: 1200,
+      temperature: 0.2,
+    })
+    return describeText(out, h.maxChars)
+  } catch (error) {
+    // 辅助模型挂了不能拖垮主流程：记一条，退回纯文字
+    log?.warn?.(`辅助看图模型失败（${h.provider}/${h.model}）：${error.message}`)
+    markVisionUnsupported(h.provider, h.model)
+    return ''
+  }
+}
+
+/**
+ * 主模型看不了图时，这一轮该给它什么文字。
+ * 配了辅助模型 → 转述内容 + 来源标注；没配或转述失败 → 一句如实的说明。
+ * 两条路径（一开始就知道看不了 / 发了才被拒）共用这一份逻辑，避免两套写法。
+ */
+async function textForBlindModel (dsh, o, target) {
+  const h = o.cfg && o.cfg.visionHelper
+  const usable = h && h.enabled && h.provider && h.model && !(h.provider === target.provider && h.model === target.model)
+  const images = o.images || []
+  if (usable && images.length) {
+    const description = await describeWithHelper(dsh, { images, cfg: o.cfg, hint: o.text, log: o.log })
+    if (description) return o.text + '\n' + wrapForMain(description, { count: images.length })
+  }
+  return o.text + '\n（对方发了图片，但你现在看不到，也读不到描述）'
+}
+
+/**
  * @param {object} dsh 宿主 ctx
  * @param {{system:string, text:string, images?:Array<{data:string, mediaType:string}>, maxTokens?:number, temperature?:number, reasoningEffort?:string, cfg?:object}} o
  * @returns {Promise<string>}
@@ -215,6 +268,14 @@ export async function askModel (dsh, o) {
     maxTokens: o.maxTokens || 600,
     temperature: o.temperature ?? 0.3,
   }
+  // 主模型看不了图（面板声明 off / 元数据说不支持 / 之前被真实拒收过）且配了辅助模型：
+  // 先请辅助模型把画面转述成文字，再让主模型读文字。这样文字对话能力完全不受影响。
+  // 注意：只在「明确不支持」时才走这条路；不知道（null）仍然先按原样发，交给下面的拒收自愈处理。
+  const imgCount = (o.images || []).length
+  if (imgCount && (await canSeeImages(dsh, o.cfg)) === false) {
+    content = [{ type: 'text', text: await textForBlindModel(dsh, o, t) }]
+    base.messages = [{ ...messages[0], content }]
+  }
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
   const hasImage = content.length > 1
   let droppedImage = false
@@ -233,7 +294,9 @@ export async function askModel (dsh, o) {
       if (!droppedImage && hasImage && isImageRejected(error)) {
         markVisionUnsupported(t.provider, t.model)
         droppedImage = true
-        base.messages = [{ ...messages[0], content: content.filter((c) => c.type !== 'image') }]
+        // 主模型刚被证实看不了图：如果有辅助模型，立刻转述一次，别让这轮白丢图
+        content = [{ type: 'text', text: await textForBlindModel(dsh, o, t) }]
+        base.messages = [{ ...messages[0], content }]
         const warn = typeof o.onImageError === 'function' ? o.onImageError : null
         if (warn) warn(error)
         continue
