@@ -961,6 +961,13 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     }
 
     function Persona({ st, draft, setDraft, toast, reload }) {
+      // 机器人见过的群和私聊：用于「按聊天换人设」直接选，不用手打号码
+      const [chats, setChats] = useState([])
+      useEffect(() => {
+        let alive = true
+        get('/panel/chats').then((r) => { if (alive && r && r.ok && Array.isArray(r.chats)) setChats(r.chats) }).catch(() => {})
+        return () => { alive = false }
+      }, [])
       const [list, setList] = useState(st.personas)
       const [current, setCurrent] = useState(st.config.persona.current)
       const [sel, setSel] = useState(st.config.persona.current)
@@ -1012,27 +1019,41 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const personaOpts = (emptyLabel) => [{ value: '', label: emptyLabel }].concat(list.map((p) => ({ value: p.id, label: p.name })))
       const specific = (mapKey, title, hint) => {
         const m = pm[mapKey] || {}
-        // 「＋添加」插的是 #newXXX 占位键，避免多行都用空串互相覆盖；填了号才换成真号
-        const rows = Object.entries(m).map(([id, pid]) => h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-          h('input', { className: 'ab-input', style: { width: 180 }, value: id.startsWith('#new') ? '' : id, placeholder: title === '按群换人设' ? '群号' : 'QQ 号', onChange: (e) => {
-            const typed = e.target.value.replace(/\D/g, '')
-            const m2 = { ...m }
-            const cur = m2[id]
-            delete m2[id]
-            // 清空就把这行删掉；填了就换成真号；没填完保持占位键不丢
-            if (typed) m2[typed] = cur
-            else m2[id] = cur === undefined ? '' : cur
-            setDraft(setPath(draft, 'persona.' + mapKey, m2))
-          } }),
+        const wantKind = mapKey === 'groups' ? 'group' : 'private'
+        // 可选对象：机器人见过的群 / 私聊。已选过的从候选里剔掉，避免重复选同一个。
+        const picked = new Set(Object.keys(m).filter((k) => !k.startsWith('#new')))
+        const candidates = (chats || []).filter((c) => c.kind === wantKind && !picked.has(c.id))
+          .map((c) => ({ value: c.id, label: c.name }))
+        const rows = Object.entries(m).map(([id, pid]) => {
+          const isNew = id.startsWith('#new')
+          const cur = isNew ? '' : id
+          // 已经配过、但当前不在「见过的聊天」里的（比如老配置手填的号），也要能显示出来
+          const opts = [{ value: '', label: wantKind === 'group' ? '选一个群' : '选一个人' }]
+            .concat(candidates)
+          if (cur && !opts.some((o) => o.value === cur)) {
+            const known = (chats || []).find((c) => c.id === cur)
+            opts.push({ value: cur, label: known ? known.name : (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
+          }
+          return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
+            h(Select, { value: cur, width: 240, options: opts, onChange: (v) => {
+              const m2 = { ...m }
+              const keep = m2[id]
+              delete m2[id]
+              if (v) m2[v] = keep || ''
+              else m2[id] = keep === undefined ? '' : keep
+              setDraft(setPath(draft, 'persona.' + mapKey, m2))
+            } }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
             const m2 = { ...m }
             if (v) m2[id] = v; else delete m2[id]
             setDraft(setPath(draft, 'persona.' + mapKey, m2))
           } }),
-          h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删')) )
+          h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删'))
+        })
+        const noMore = candidates.length === 0
         return h(Card, { title, desc: hint,
-          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
-          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, '还没单独指定'),
+          right: h(Btn, { small: true, disabled: noMore, title: noMore ? '没有更多可选的聊天了' : '', onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
+          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，暂时没有可选的。' : '还没单独指定'),
           h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
       }
       return h('div', null,

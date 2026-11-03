@@ -740,6 +740,15 @@ export function apply(ctx) {
 
   // ---------- 面板代理：目的引擎 / 桌宠 ----------
   // 统一走 /panel/* 前缀，避免和模块自注册的 /purpose/*、/pet/* 路由撞名；模块缺新接口时降级返回 available:false。
+  // 面板「按聊天换人设」用：把机器人见过的群和私聊列出来，直接选，不用手打号码
+  route('/panel/chats', async () => {
+    try {
+      const list = typeof hub.knownChats === 'function' ? hub.knownChats() : []
+      return { ok: true, chats: list }
+    } catch (error) {
+      return { ok: false, chats: [], error: error.message }
+    }
+  })
   route('/panel/purpose/status', async () => ({ ok: true, purpose: purposeOverview(), pet: petStatus() }))
   route('/panel/purpose/preview', async () => {
     const pu = use('purpose')
