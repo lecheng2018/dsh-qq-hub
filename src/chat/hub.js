@@ -17,7 +17,7 @@ import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
-import { defaultModel, pickReasoningEffort, canSeeImages, modelVision } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags, speakableText } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
@@ -1071,6 +1071,28 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const TEXT_EXT = new Set(['md', 'txt', 'json', 'csv', 'log', 'yml', 'yaml', 'xml', 'html', 'htm', 'js', 'ts', 'mjs', 'cjs', 'py', 'sh', 'css', 'ini', 'toml', 'sql', 'java', 'go', 'rs', 'c', 'h', 'cpp', 'rb', 'php'])
   const TEXT_MAX_CHARS = 60000
 
+  /**
+   * 主模型看不了图时，这一批图片该变成什么文字。
+   * 配了辅助看图模型就请它转述（带来源标注）；没配/失败就给一句如实的说明。
+   * 私聊和群聊共用一份，避免两处写法不一致（以前群聊直接丢掉，连提示都没有）。
+   * @returns {Promise<string>} 要拼进提示词的文字（永不为空）
+   */
+  async function imageTextFor (imgs, nickname, cfg, hint) {
+    const h = cfg && cfg.visionHelper
+    const usable = h && h.enabled && h.provider && h.model
+    if (usable && imgs.length) {
+      try {
+        const desc = await describeWithHelper(dsh, { images: imgs, cfg, hint, log })
+        if (desc) {
+          return `（${nickname} 发了 ${imgs.length} 张图片。你的模型看不了图，下面由另一个模型看过之后转述给你，别当成你亲眼见过：\n${desc}）`
+        }
+      } catch (error) {
+        log.debug('辅助看图失败：', error.message)
+      }
+    }
+    return `（${nickname} 发了 ${imgs.length} 张图片，你现在的模型看不了图，只能知道有这么回事）`
+  }
+
   async function filesOf(msg) {
     const out = []
     for (const seg of (msg.files || []).slice(0, 3)) {
@@ -1271,10 +1293,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const content = msg.kind === 'group' ? [] : [{ type: 'text', text: `【私聊】${msg.nickname}(${msg.userId})：` + (text || '（没有文字）') + (quoted ? '\n' + quoteInline(quoted) : '') }]
     const { images: imgs, failed: imgsFailed } = await imagesOf(msg)
     if (imgs.length) {
-      // 模型明确不支持看图：硬塞图片块会让整轮请求被拒（她就一个字都回不了），改成一行文字提示
+      // 模型明确不支持看图：硬塞图片块会让整轮请求被拒（她就一个字都回不了）。
+      // 配了辅助看图模型就请它转述成文字，没配才退回一句说明。
       if ((await canSeeImages(dsh, cfg)) === false) {
-        content.push({ type: 'text', text: `（${msg.nickname} 发了 ${imgs.length} 张图片，你现在的模型看不了图，只能知道有这么回事）` })
-        log.debug(`模型不支持看图：${msg.chatId} 的 ${imgs.length} 张图换成文字提示`)
+        const note = await imageTextFor(imgs, msg.nickname, cfg, text)
+        // 群聊的正文统一由 groupPrompt 从缓冲里拼，这里若 push 进 content 会和那段重复一遍；
+        // 所以群聊挂到那条消息上，私聊才直接 push。
+        if (msg.kind === 'group' && groupEntry) groupEntry.picNote = note
+        else content.push({ type: 'text', text: note })
+        log.debug(`模型不支持看图：${msg.chatId} 的 ${imgs.length} 张图已转成文字`)
       } else {
         for (let i = 0; i < imgs.length; i++) content.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
       }
@@ -1378,10 +1405,25 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   /** 没触发回复的群消息带的图：如果正有一段在等她回，把图也带上（最多 4 张）。 */
   async function addGroupImages(msg) {
     const p = pending.get(msg.chatId)
-    if (!p || p.images.length >= 4) return
+    if (!p) return
     try {
-      if ((await canSeeImages(dsh, getConfig())) === false) return
       const { images: imgs } = await imagesOf(msg)
+      if (!imgs.length) return
+      // 模型看不了图：以前这里直接 return，图被无声吞掉，她根本不知道群里有人发了图。
+      // 现在配上辅助看图模型就转述成文字挂在这段待回上，没配也至少留一句「有人发了图」。
+      if ((await canSeeImages(dsh, getConfig())) === false) {
+        const nick = msg.nickname || msg.userId
+        const note = await imageTextFor(imgs, nick, getConfig(), msg.text)
+        // 挂到群里那条消息上，groupPrompt 拼这一段时会原样带出来
+        const buf = groupBuf.get(msg.groupId) || []
+        const hit = buf.findLast?.((x) => String(x.uid) === String(msg.userId) && !x.fed)
+        if (hit) hit.picNote = note
+        else buf.push({ t: Date.now(), uid: msg.userId, nick, text: '', picNote: note })
+        groupBuf.set(msg.groupId, buf)
+        log.debug(`群 ${msg.chatId}：${imgs.length} 张图看不了，已转成文字备注`)
+        return
+      }
+      if (p.images.length >= 4) return
       for (let i = 0; i < imgs.length && p.images.length < 4; i++) p.images.push({ type: 'image', data: imgs[i].data, mediaType: imgs[i].mediaType, name: `qq-${msg.messageId}-${i + 1}` })
     } catch (error) {}
   }
@@ -1400,7 +1442,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const infos = await Promise.all(need.map((x) => quotedInfo(x.replyId, chat)))
       need.forEach((x, i) => { x.quote = infos[i] })
     }
-    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}`
+    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}${x.picNote ? '\n    ' + x.picNote : ''}`
     // 新消息带编号，她想专门回某一条时可以引用；编号 → QQ 消息 ID 记下来，发的时候换成引用
     const refs = {}
     const numbered = fresh.map((x, i) => {

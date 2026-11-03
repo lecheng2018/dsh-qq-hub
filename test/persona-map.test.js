@@ -45,3 +45,15 @@ test('system 会话只走全局', () => {
   const c = cfg({ groupDefault: 'grp' })
   assert.equal(personaIdFor({ kind: 'system' }, c), 'dafeiyu')
 })
+
+
+test('还没选人设就保存：那一行不能被悄悄丢掉（否则面板「添加」等于没用）', async () => {
+  const { normalize } = await import('../src/core/config.js')
+  const c = normalize({ persona: { current: 'dafeiyu', privates: { 2471784685: '' }, groups: { 1124211723: 'dafeiyu' } } })
+  assert.ok('2471784685' in c.persona.privates, '空值行必须保留，用户回头能继续选')
+  assert.equal(c.persona.privates['2471784685'], '', '空值就是空值')
+  assert.equal(c.persona.groups['1124211723'], 'dafeiyu', '已选的要保留')
+  // 空值不能影响实际生效的人设
+  const { personaIdFor } = await import('../src/persona/personas.js')
+  assert.equal(personaIdFor({ kind: 'private', userId: '2471784685' }, c), 'dafeiyu', '空值 → 往下落到全局')
+})
