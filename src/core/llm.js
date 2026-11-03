@@ -191,9 +191,18 @@ export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
   try {
     let content = [{ type: 'text', text: describePrompt({ count: take.length, hint }) }]
     for (const img of take) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-helper' })
-    // 图片同样要先登记成附件；登记不了就没法让辅助模型看
+    // 图片一般要先登记成附件才能给模型看。但登记失败很常见（宿主工作区目录不可写 →
+    // EACCES: open '/vol2/@appshare'），这时**不能**把整个转述掐掉——那等于配了辅助
+    // 模型也永远用不上，用户只看到「看不了图」。这里失败就退回原始 base64 块，
+    // 由下面的适配层自己决定怎么办；真不行会在 runStream 里报错，仍走 catch 降级。
     const att = dsh.attachments || dsh.get('attachments')
-    if (att && typeof att.admitPromptContent === 'function') content = await att.admitPromptContent(content)
+    if (att && typeof att.admitPromptContent === 'function') {
+      try {
+        content = await att.admitPromptContent(content)
+      } catch (error) {
+        log?.debug?.(`辅助看图：图片登记附件失败，改用原始 base64 直接发给辅助模型（${error.message}）`)
+      }
+    }
     const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
     const out = await runStream(llm, {
       provider: h.provider,
