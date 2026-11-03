@@ -253,6 +253,50 @@ test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打�
     if (n.children) n.children.forEach(findInput)
   }
   findInput(tree)
-  const handTyped = inputs.filter((i) => /群号|QQ 号/.test(String(i.props.placeholder || '')))
-  assert.equal(handTyped.length, 0, '不该再有手打群号/QQ 号的输入框')
+  // 有候选、且已选定时用下拉；手输输入框只出现在「没有候选」或用户主动选「手动输入」时
+  assert.ok(selects.length > 0, '有已知聊天时应该渲染下拉')
+})
+
+
+test('开关用的是 Switch 的 on，不是 value（写错会点了没反应）', () => {
+  // 这类 bug 语法检查抓不到：Switch({on}) 收到 value 时 on 恒为 undefined，
+  // 点击只触发 onChange(true)，显示状态永远不变。
+  const bad = src.match(/h\(Switch,\s*\{[^}]*value:/)
+  assert.equal(bad, null, 'Switch 不能传 value，必须传 on')
+})
+
+
+test('一个候选都没有时，「＋ 添加」依然可点、且给出输入框', () => {
+  // 用户实际遇到的就是这个：/panel/chats 没数据 → candidates 为空 →
+  // 以前按钮 disabled，点了毫无反应。这条守住它。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const body = extractFn('Persona')
+  const env = makeEnv()
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
+    'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+  const Persona = factory(...env.args)
+  // chats 为空（接口没返回数据）
+  const draft = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {} } }
+  const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: draft }
+  let called = 0
+  const setDraft = () => { called++ }
+  const tree = Persona({ st, draft, setDraft, toast: () => {}, reload: () => {} })
+
+  // Card 的按钮挂在 props.right 上
+  const findBtns = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => findBtns(x, out)); return out }
+    if (n.props && n.props.onClick && JSON.stringify(n.children || []).includes('添加')) out.push(n)
+    if (n.props && n.props.right && n.props.right.props && n.props.right.props.onClick) {
+      if (JSON.stringify(n.props.right.children || []).includes('添加')) out.push(n.props.right)
+    }
+    if (n.children) n.children.forEach((x) => findBtns(x, out))
+    return out
+  }
+  const btns = findBtns(tree)
+  assert.ok(btns.length >= 2, '两张卡都应该有添加按钮')
+  assert.equal(btns[0].props.disabled, undefined, '没有候选时也不能禁用添加按钮')
+  btns[0].props.onClick()
+  assert.ok(called > 0, '点下去必须真的改动草稿')
 })
