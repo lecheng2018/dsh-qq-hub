@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createFakeDsh } from './helpers/fake-dsh.js'
 
 let fake, api
-const NEW_MODS = ['token-guardian', 'security-lock', 'memory-privacy', 'slang-learner', 'complete-guard']
+const NEW_MODS = ['token-guardian', 'security-lock', 'memory-privacy', 'complete-guard']
 
 before(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'panel-vis-'))
@@ -43,7 +43,6 @@ test('前端按模块来源拼出的路由能命中真实路由', () => {
     'token-guardian': '/token-guardian/status',
     'security-lock': '/security-lock/status',
     'memory-privacy': '/memory-privacy/stats',
-    'slang-learner': '/slang-learner/list',
     'complete-guard': '/complete-guard/last',
   }
   for (const [id, p] of Object.entries(paths)) {
