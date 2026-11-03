@@ -12,6 +12,31 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const inject = ['slots']
     const PANEL_ID = 'qq-hub'
+
+    /**
+     * 把用户在「按聊天换人设」里敲的号码洗干净，并算出它该落到哪个 key 上。
+     *
+     * 单独拎出来是因为这里踩过两个坑，都要靠测试守住：
+     *   1. 不能把占位 key（`#newm5k03ab`）拿去 replace(/\D/g,'')——那会洗出 `03`，
+     *      界面上莫名冒出一行「03」。要洗的是**用户敲的内容**，不是 key。
+     *   2. 目标 key 已被别的行占用时不能覆盖，否则「选一个群以后，再选一个把前面的顶掉」。
+     *
+     * @param {{map:object, id:string, raw:string}} o
+     * @returns {{action:'keep'|'clear'|'move', key?:string, value?:string}}
+     *   keep  —— 值没变，只清暂存
+     *   clear —— 号码被清空，本行原地退回占位
+     *   move  —— 落成新 key（key 可能与 id 相同，表示原地改写）
+     */
+    function planPersonaRow ({ map, id, raw }) {
+      const digits = String(raw || '').replace(/\D/g, '')
+      const m = map || {}
+      const keep = m[id] === undefined ? '' : m[id]
+      if (!digits) return { action: 'clear' }
+      if (digits === id) return { action: 'keep' }
+      // 目标行已被占用（且不是本行）→ 不顶掉别人，本行留成占位
+      if (m[digits] !== undefined && digits !== id) return { action: 'clear' }
+      return { action: 'move', key: digits, value: keep }
+    }
     const API = '/qq-hub/api'
 
     // ---------------- 小工具 ----------------
@@ -969,6 +994,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         return () => { alive = false }
       }, [])
       const [list, setList] = useState(st.personas)
+      // 「按聊天换人设」里手输号码的暂存：key 是那一行的行标识，值是正在敲的文本。
+      // 不能每敲一个字就改配置里的 key —— 那样 key 一变这一行就会被重建，
+      // 光标丢失、而且 #newxxx 这种占位 key 被 replace(/\D/g,'') 洗过会变成
+      // 纯数字（用户看到的「03」就是这么来的）。改成敲完（回车或失焦）才落盘。
+      const [typing, setTyping] = useState({})
       const [current, setCurrent] = useState(st.config.persona.current)
       const [sel, setSel] = useState(st.config.persona.current)
       const [edit, setEdit] = useState(null) // { id, name, tags, secs }
@@ -1032,33 +1062,61 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           const cur = isNew ? '' : id
           // 这一行是不是「手动输入号码」：占位行、或号不在已知聊天里，都当手输
           const known = (chats || []).find((c) => c.id === cur)
-          const manual = !cur || !known
+          // typing 里有值＝用户主动点了「手动输入号码」，这时即使这一行已经有群号也要显示输入框
+          const manual = !cur || !known || typing[id] !== undefined
           const opts = [{ value: '', label: wantKind === 'group' ? '选一个群' : '选一个人' }]
             .concat(candidates)
             .concat([{ value: '__manual__', label: '手动输入号码…' }])
           if (cur && !known) {
             opts.splice(opts.length - 1, 0, { value: cur, label: (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
           }
-          const setRowId = (v) => {
+          /**
+           * 把这一行的号码落成新的 key。
+           *
+           * 关键：只在「敲完」时调用（回车、失焦、或者从下拉里选定），
+           * 绝不在每个 onChange 里调用。以前是逐字 setRowId，导致
+           *   1. key 每敲一个字就变 → 这一行被 React 重建，光标丢失；
+           *   2. '#newm5k03ab' 被 replace(/\D/g,'') 洗成 '03'，界面上莫名冒出「03」。
+           * 新 key 取不到时保留占位行，别把用户这一行弄丢。
+           */
+          const commitRow = (raw) => {
+            const plan = planPersonaRow({ map: m, id, raw })
+            const clearTyping = () => setTyping((t) => { const n = { ...t }; delete n[id]; return n })
+            if (plan.action === 'keep') return clearTyping()
             const m2 = { ...m }
-            const keep = m2[id]
+            const keep = m2[id] === undefined ? '' : m2[id]
+            if (plan.action === 'clear') {
+              // 清空了：占位行原地保留，已成立的群号退回占位行，避免整行消失
+              m2[id] = keep
+              setDraft(setPath(draft, 'persona.' + mapKey, m2))
+              return clearTyping()
+            }
             delete m2[id]
-            if (v === '__manual__') m2[id] = keep === undefined ? '' : keep
-            else if (v) m2[v] = keep || ''
-            else m2[id] = keep === undefined ? '' : keep
+            m2[plan.key] = keep
             setDraft(setPath(draft, 'persona.' + mapKey, m2))
+            clearTyping()
           }
+          const typed = typing[id]
+          const shown = typed !== undefined ? typed : cur
           return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
             manual
               // 没有候选（还没聊过）或用户主动选了「手动输入」：给普通输入框，别让这一行变成死的
               ? h('input', {
-                className: 'ab-input', style: { width: 240 }, value: cur, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
+                className: 'ab-input', style: { width: 240 }, value: shown, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
+                // 敲的时候只存进暂存，不动配置里的 key
                 onChange: (e) => {
-                  const typed = e.target.value.replace(/\D/g, '')
-                  setRowId(typed)
+                  const v = e.target.value.replace(/\D/g, '')
+                  setTyping((t) => ({ ...t, [id]: v }))
                 },
+                // 回车或失焦才算敲完，这时才落成真正的群号
+                onKeyDown: (e) => { if (e.key === 'Enter') commitRow(e.currentTarget.value) },
+                onBlur: (e) => commitRow(e.currentTarget.value),
               })
-              : h(Select, { value: cur, width: 240, options: opts, onChange: setRowId }),
+              : h(Select, { value: cur, width: 240, options: opts, onChange: (v) => {
+                // 下拉里选「手动输入」：留在本行，让上面的输入框出现
+                if (v === '__manual__') { setTyping((t) => ({ ...t, [id]: '' })); return }
+                commitRow(v)
+              } }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
             const m2 = { ...m }
             if (v) m2[id] = v; else delete m2[id]
@@ -1326,7 +1384,12 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const key = (m) => m.provider + '::' + m.model
       const val = (s) => (s && s.provider && s.model ? s.provider + '::' + s.model : '')
       const toSel = (v) => { const [p, ...m] = v.split('::'); return v ? { provider: p, model: m.join('::'), reasoningEffort: '' } : { provider: '', model: '', reasoningEffort: '' } }
-      const base = [{ value: '', label: '跟随全局模型', desc: '上面「聊天用的模型」' }].concat((list || []).map((m) => ({ value: key(m), label: m.name, desc: m.provider, group: m.provider })))
+      // 同 Model 页：同名不同 id（hy3 / hy3-x）要区分开，否则下拉里是两个「Hy3」
+      const nameCount = {}
+      for (const m of (list || [])) nameCount[m.provider + '|' + m.name] = (nameCount[m.provider + '|' + m.name] || 0) + 1
+      const labelOf = (m) => (nameCount[m.provider + '|' + m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
+      const descOf = (m) => m.provider + (m.vision === true ? ' · 能看图' : '')
+      const base = [{ value: '', label: '跟随全局模型', desc: '上面「聊天用的模型」' }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: descOf(m), group: m.provider })))
       const optsFor = (v) => (v && !base.some((o) => o.value === v) ? base.concat([{ value: v, label: v.split('::').slice(1).join('::'), desc: '（DSH 里没找到）' }]) : base)
       const setCm = (patch) => setDraft(setPath(draft, 'chatModels', { ...cm, ...patch }))
       const rows = [['private', cm.privates || {}], ['group', cm.groups || {}]].flatMap(([kind, m]) => Object.entries(m).map(([id, sel]) => ({ kind, id, sel })))
@@ -1357,6 +1420,16 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [ping, setPing] = useState({})
       useEffect(() => { get('/models').then((r) => setList(r.list || [])) }, [])
       const key = (m) => m.provider + '::' + m.model
+      // 下拉里出现两个一模一样的「Hy3」，有两种原因，都要在这里讲清楚：
+      //   1. 同一个 provider 下同一个显示名、不同 model id（hy3 和 hy3-x 都叫 Hy3）；
+      //   2. DSH 里配了两个 provider（如 fan 和 fan-vision），模型完全一样，
+      //      区别只是后者声明了能看图。
+      // 纯同名不提示的话用户没法选，所以重名时把 model id 缀上；
+      // 另外把「能看图」直接写进描述，一眼能分出 fan / fan-vision。
+      const nameCount = {}
+      for (const m of (list || [])) nameCount[m.provider + '|' + m.name] = (nameCount[m.provider + '|' + m.name] || 0) + 1
+      const labelOf = (m) => (nameCount[m.provider + '|' + m.name] > 1 ? m.name + '（' + m.model + '）' : m.name)
+      const descOf = (m) => m.provider + (m.vision === true ? ' · 能看图' : '')
       const cur = draft.model.provider && draft.model.model ? draft.model.provider + '::' + draft.model.model : ''
       const curModel = cur && list ? list.find((m) => key(m) === cur) : null
       // reasoning === null 表示 DSH 明确说这个模型不支持思考强度（本地 Ollama 之类）
@@ -1398,7 +1471,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h(Select, {
               value: draft.visionHelper.provider && draft.visionHelper.model ? draft.visionHelper.provider + '::' + draft.visionHelper.model : '',
               width: 280,
-              options: [{ value: '', label: '选一个能看图的模型', desc: '要和聊天用的模型不同' }].concat((list || []).map((m) => ({ value: key(m), label: m.name, desc: m.provider, group: m.provider }))),
+              options: [{ value: '', label: '选一个能看图的模型', desc: '要和聊天用的模型不同' }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: descOf(m), group: m.provider }))),
               onChange: (v) => {
                 const [p, ...m] = v.split('::')
                 let d = setPath(setPath(draft, 'visionHelper.provider', v ? p : ''), 'visionHelper.model', v ? m.join('::') : '')
@@ -1409,7 +1482,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Row, { label: '模型' },
             h(Select, {
               value: cur, width: 280,
-              options: [{ value: '', label: '跟随 DSH 默认', desc: '和你在 DSH 里平时用的一样' }].concat((list || []).map((m) => ({ value: key(m), label: m.name, desc: m.provider, group: m.provider }))),
+              options: [{ value: '', label: '跟随 DSH 默认', desc: '和你在 DSH 里平时用的一样' }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: descOf(m), group: m.provider }))),
               onChange: (v) => { const [p, ...m] = v.split('::'); setDraft(setPath(setPath(draft, 'model.provider', v ? p : ''), 'model.model', v ? m.join('::') : '')) },
             }),
             cur ? h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, '测速') : null,
@@ -1419,7 +1492,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '可用的模型', desc: '点「测速」会真的问一次模型（花一点点额度），看它回一句话要多久。' },
           list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { text: 'DSH 没有列出模型' }) :
             h('table', { className: 'ab-table' }, h('tbody', null, list.map((m) => h('tr', { key: key(m) },
-              h('td', null, m.name), h('td', { className: 'ab-muted' }, m.provider),
+              h('td', null, labelOf(m)), h('td', { className: 'ab-muted' }, m.provider),
               h('td', null, ping[key(m)] || ''),
               h('td', { style: { textAlign: 'right' } }, h(Btn, { small: true, kind: 'ghost', onClick: () => test(m) }, '测速'), h(Btn, { small: true, kind: 'ghost', onClick: () => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') } }, '用这个')))))),
         ),
