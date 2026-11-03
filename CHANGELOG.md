@@ -33,7 +33,7 @@
 - **测试**：新增记忆作用域、老数据迁移、内容解析与抖音媒体等回归用例；另有 `test/scope-migration-script.test.js` 专项守住迁移脚本与运行时数据目录的一致性。
 
 - **修：目的引擎的设置项补全，并修掉面板不认识的 `type: 'boolean'`**：上一条删掉手写卡后，投递载体 / 桌宠离线回落 / 每日上限这三个引擎**仍在读取**的字段失去了面板入口，现补进 `purpose` 模块的 settings。同时发现面板 `field()` 只认 `switch/number/select/textarea/password/text`，写 `boolean` 会**退化成空文本框**——`purpose` 的「启用目的引擎」和 `scheduler` 的「启用定时任务」都踩了这个坑，已改为 `switch`。
-  - 顺带查明：手写卡里的「节奏预设」（`ext.pacing`）**引擎从来没读过**，只在 `host.js` 里存取与回显，属无效开关，故不迁移。
+  - 顺带查明：手写卡里的「节奏预设」（`ext.pacing`）**引擎从来没读过**，只在 `host.js` 里存取与回显，属无效开关，故不迁移；并把 `host.js` 里对应的读写与回显一并删除，配置文件不再留一个永远回 `'default'` 的死字段。
 - **修：面板里「目的引擎」出现两套**：`client.js` 里手写了一张「目的引擎（实验）」卡片，而 `purpose` 模块本身声明了 `tab: 'speakup'` + 4 个 settings，也会在「主动搭话」页渲染一张同名卡——于是同一页出现两个同名面板，两边的开关各写各的字段、互不同步。现在删掉手写那张，配置统一由模块的 `settings` 渲染（`enabled`/`minMaterials`/`initialDelayMinutes`/`maxCandidates`）。后端 `/panel/purpose/*` 代理保留，桌宠卡片仍在用它的 `status`。新增 `test/panel-purpose-single.test.js` 守住不复现。
 - **修：表情「看图起名」失败时刷屏**：`askModel` 把图片交给 DSH 附件服务登记时，一旦失败（实测 `EACCES: permission denied, open '/vol2/@appshare'`，工作区不可写）会**直接抛错**，而后台逐张起名每失败一张就 `warn` 一条，日志被刷满且一张也起不了名。现在两处都改：`llm.js` 降级为「只发文字」并回调 `onImageError`（与 `hub.js` 聊天主链路、`img.js` 工具配图的既有降级口径一致）；`stickers.js` 收到该回调后熔断，本轮不再重试，且**图片没送进去就不起名**（否则模型是瞎猜的），只记一条 warn 说明原因。
 - **移除：群黑话本（`slang-learner`）模块**：实测工作不正常，按主人要求下掉。同时清理了 `src/modules/index.js` 的注册、5 个模块/面板/隔离测试里的引用与 README 说明。
