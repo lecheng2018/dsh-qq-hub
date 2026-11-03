@@ -120,3 +120,66 @@ test('工具看图能力按当前聊天选的模型判断', async () => {
 })
 
 after(() => fake.dispose())
+
+// ---- 方案 B：元数据没说、但模型真拒收图片时，失败一次就记住，之后不再浪费一轮 ----
+const { askModel, markVisionUnsupported, visionRejectedFor } = await import(`file:///${REPO}/src/core/llm.js`)
+
+/** 造一个会「收到 image 就报错」的 llm：记录被调用了几次、最后一次带了几个图片块。 */
+function rejectingLlm () {
+  const calls = []
+  const llm = {
+    calls,
+    async resolveModelInfo () { return {} }, // 关键：元数据里没有 inputModalities → 探测返回 null
+    async *stream (params) {
+      const content = params.messages[0].content || []
+      const images = content.filter((c) => c.type === 'image').length
+      calls.push({ images })
+      if (images > 0) throw new Error('Invalid content type: image_url is not supported by this model')
+      yield { type: 'text-delta', text: '只有文字也能答' }
+    },
+  }
+  return llm
+}
+
+// 假附件服务：原样放行，让图片块真的到达 stream（否则 askModel 会先降级成纯文字）
+const passThroughAttachments = { admitPromptContent: async (content) => content }
+
+test('元数据没说 + 真拒收图片：自动去掉图片重试一次，并把能力记成不支持', async () => {
+  clearVisionCache()
+  const llm = rejectingLlm()
+  const dsh = { llm, attachments: passThroughAttachments, get: (k) => (k === 'llm' ? llm : k === 'attachments' ? passThroughAttachments : null) }
+  const out = await askModel(dsh, {
+    cfg: { model: { provider: 'p', model: 'blind-hidden', vision: 'auto' } },
+    system: 's', text: '看图', images: [{ data: 'AAAA', mediaType: 'image/png' }],
+  })
+  assert.equal(out, '只有文字也能答', '去掉图片后应拿到文字回复，而不是整轮失败')
+  assert.deepEqual(llm.calls.map((c) => c.images), [1, 0], '第一次带图、第二次不带图')
+  assert.equal(visionRejectedFor('p', 'blind-hidden'), true, '应记住这个模型不收图片')
+  // 记住之后，探测直接返回 false，不再走「先失败一轮」的老路
+  assert.equal(await modelVision(dsh, 'p', 'blind-hidden'), false, '记住后探测应为 false')
+})
+
+test('不是图片问题导致的报错：不吞掉，原样抛出', async () => {
+  clearVisionCache()
+  const llm = {
+    async resolveModelInfo () { return {} },
+    async *stream () { throw new Error('rate limit exceeded') },
+  }
+  const dsh = { llm, attachments: passThroughAttachments, get: (k) => (k === 'llm' ? llm : k === 'attachments' ? passThroughAttachments : null) }
+  await assert.rejects(
+    () => askModel(dsh, {
+      cfg: { model: { provider: 'p', model: 'busy', vision: 'auto' } },
+      text: '看图', images: [{ data: 'AAAA', mediaType: 'image/png' }],
+    }),
+    /rate limit/,
+    '普通报错必须原样抛，不能当成看图失败',
+  )
+})
+
+test('markVisionUnsupported 只影响那一个模型，别的模型不受牵连', async () => {
+  clearVisionCache()
+  const dsh = stub(async () => ({}))
+  markVisionUnsupported('p', 'm-bad')
+  assert.equal(await modelVision(dsh, 'p', 'm-bad'), false)
+  assert.equal(await modelVision(dsh, 'p', 'm-other'), null, '同 provider 的别的模型不该被连带')
+})

@@ -21,13 +21,38 @@ export function defaultModel(dsh, cfg) {
 const VISION_TTL = 10 * 60_000
 const visionCache = new Map() // `provider::model` → { at, value }
 
+// 「被模型拒收过图片」的模型：元数据没说，但真发图会被拒。照 reasoning effort 的做法，
+// 失败一次就记住，之后直接按「不支持」处理，不用每次都先失败一轮。
+// 只在进程内记（重启自动忘），因为元数据可能随 DSH 升级而补全。
+const visionRejected = new Set()
+
+/** 清空视觉能力缓存（含「被拒收过」的记忆）。测试与面板改设置时用。 */
 export function clearVisionCache () {
   visionCache.clear()
+  visionRejected.clear()
+}
+
+/**
+ * 记下「这个模型收到图片会被拒」。下一次 modelVision 直接返回 false。
+ * 给 askModel 的图片降级重试用；单独调用也可以（例如调用方自己探到了拒收）。
+ */
+export function markVisionUnsupported (provider, model) {
+  if (!provider || !model) return
+  const key = `${provider}::${model}`
+  visionRejected.add(key)
+  visionCache.set(key, { at: Date.now(), value: false })
+}
+
+/** 这个模型是不是被记成「发图会被拒」了。 */
+export function visionRejectedFor (provider, model) {
+  return visionRejected.has(`${provider}::${model}`)
 }
 
 /** 这个模型能看图吗。null = 不知道。 */
 export async function modelVision (dsh, provider, model) {
   const key = `${provider}::${model}`
+  // 被模型真实拒收过 → 无论元数据怎么说都不再发图（元数据滞后于实际能力时这是唯一可靠信号）
+  if (visionRejected.has(key)) return false
   const hit = visionCache.get(key)
   if (hit && Date.now() - hit.at < VISION_TTL) return hit.value
   let value = null
@@ -120,6 +145,21 @@ const isUnsupportedEffort = (error) => {
   return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort|reasoning effort/i.test(msg)
 }
 
+/**
+ * 这次报错是不是「模型不收图片」。各家措辞不同：
+ *   OpenAI 系：Invalid content type / expected text / image_url is not supported
+ *   Anthropic：image ... not supported / does not support images
+ *   国内网关：multimodal not supported / content must be text / 不支持图片 / 不支持多媒体
+ * 判定保守：只认明确和「图/多模态」相关的错误，避免把普通报错误判成看图失败。
+ */
+const isImageRejected = (error) => {
+  const msg = String((error && (error.message || error.code)) || '')
+  if (!msg) return false
+  if (/image_input|image_url|input_image|multimodal|multi-modal/i.test(msg)) return true
+  if (/不支持(图片|图像|多模态|视觉)/.test(msg)) return true
+  return /\bimage(s)?\b/i.test(msg) && /not support|unsupported|invalid|cannot|can't|must be text|expect(ed)? text/i.test(msg)
+}
+
 async function runStream (llm, params) {
   let out = ''
   for await (const chunk of llm.stream(params)) {
@@ -176,6 +216,8 @@ export async function askModel (dsh, o) {
     temperature: o.temperature ?? 0.3,
   }
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
+  const hasImage = content.length > 1
+  let droppedImage = false
   for (let attempt = 0; ; attempt++) {
     try {
       return await runStream(llm, effort ? { ...base, reasoningEffort: effort } : base)
@@ -184,6 +226,16 @@ export async function askModel (dsh, o) {
       if (attempt === 0 && effort && isUnsupportedEffort(error)) {
         cacheReasoning(t.provider, t.model, null)
         effort = undefined
+        continue
+      }
+      // 元数据没说、但模型收到图就拒（DeepSeek 这类没声明 inputModalities 的最常见）：
+      // 记住这个模型看不了图，去掉图片再来一次，让调用方至少拿到文字回复。
+      if (!droppedImage && hasImage && isImageRejected(error)) {
+        markVisionUnsupported(t.provider, t.model)
+        droppedImage = true
+        base.messages = [{ ...messages[0], content: content.filter((c) => c.type !== 'image') }]
+        const warn = typeof o.onImageError === 'function' ? o.onImageError : null
+        if (warn) warn(error)
         continue
       }
       throw error
