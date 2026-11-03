@@ -3,6 +3,7 @@
 // 别的模块（空间日记、B 站、翻唱）会往这里记她的经历；记忆模块关着时它们自己跳过。
 
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
+import { currentPersonaText } from '../../persona/personas.js'
 import { defineTool, str } from '../../tools/tools.js'
 
 export default {
@@ -14,7 +15,7 @@ export default {
   files: ['features/memory.js'],
   setup(api) {
     const { hub, http } = api.core
-    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log })
+    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log, personaText: () => currentPersonaText(api.config().persona.current) })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
     // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照
