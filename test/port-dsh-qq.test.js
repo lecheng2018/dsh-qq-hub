@@ -6,26 +6,24 @@ import assert from 'node:assert/strict'
 import { looksLikeUnfinished } from '../src/modules/complete-guard/index.js'
 import { newSecret, totpAt, verifyTotp, otpauthUrl, base32Decode } from '../src/modules/security-lock/index.js'
 import { visibleScopes, isVisible, scopeOf } from '../src/modules/memory-privacy/index.js'
-import { candidatesFrom } from '../src/modules/slang-learner/index.js'
 import tokenGuardian from '../src/modules/token-guardian/index.js'
 import completeGuard from '../src/modules/complete-guard/index.js'
 import securityLock from '../src/modules/security-lock/index.js'
 import memoryPrivacy from '../src/modules/memory-privacy/index.js'
-import slangLearner from '../src/modules/slang-learner/index.js'
 import scheduler from '../src/modules/scheduler/index.js'
 import { BUILTINS } from '../src/modules/index.js'
 
 // ---------- 1. 模块清单 ----------
 test('移植模块都注册进了 BUILTINS，id 不重复', () => {
   const ids = BUILTINS.map((m) => m.id)
-  for (const id of ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'slang-learner', 'scheduler']) {
+  for (const id of ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'scheduler']) {
     assert.ok(ids.includes(id), `${id} 没注册`)
   }
   assert.equal(new Set(ids).size, ids.length, 'id 有重复')
 })
 
 test('每个模块的定义完整：id / name / api / setup / settings', () => {
-  for (const def of [tokenGuardian, completeGuard, securityLock, memoryPrivacy, slangLearner, scheduler]) {
+  for (const def of [tokenGuardian, completeGuard, securityLock, memoryPrivacy, scheduler]) {
     assert.match(def.id, /^[a-z][a-z0-9-]{1,39}$/)
     assert.ok(def.name && def.name.length > 0)
     assert.equal(def.api, 1)
@@ -166,23 +164,6 @@ test('scopeOf 按聊天给出正确的作用域，null 不炸', () => {
   assert.equal(scopeOf(null), 'global')
 })
 
-// ---------- 5. 群黑话本（dsh-qq slang-learner.js） ----------
-test('能从一句话里挑出候选词（中文 2~4 字、英文整词）', () => {
-  const c = candidatesFrom('这个 yyds 真的绝了，贴贴')
-  assert.ok(c.includes('yyds'))
-  assert.ok(c.some((x) => x.length >= 2 && x.length <= 4))
-})
-
-test('候选词只保留 2~6 字中文，不会把整句当词', () => {
-  const c = candidatesFrom('今天天气真不错我们去公园散步吧')
-  for (const w of c) assert.ok(w.length >= 2 && w.length <= 4, w)
-})
-
-test('空输入返回空数组，不报错', () => {
-  assert.deepEqual(candidatesFrom(''), [])
-  assert.deepEqual(candidatesFrom(null), [])
-})
-
 // ---------- 6. 预算守门员（dsh-qq auto-compact.js） ----------
 test('token 估算：字符数换算成 token，空值算 0', () => {
   const est = tokenGuardian.setup.length ? null : null
@@ -206,8 +187,7 @@ test('权限锁默认关闭、有效期 30 分钟', () => {
   assert.equal(securityLock.defaults.lockByDefault, true)
 })
 
-test('记忆分层和黑话本默认开启（纯增益、不改她的回复）', () => {
+test('记忆分层和完整守卫默认开启（纯增益、不改她的回复）', () => {
   assert.equal(memoryPrivacy.defaults.enabled, true)
-  assert.equal(slangLearner.defaults.enabled, true)
   assert.equal(completeGuard.defaults.enabled, true)
 })
