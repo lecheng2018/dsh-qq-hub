@@ -3601,7 +3601,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
 
     exports.apply = apply
     exports.inject = inject
-    exports.QQHubPage = AurabotPage
+    exports.QQHubPage = QQHubPage
     exports.WhaleIcon = WhaleIcon
     return module.exports
   },
