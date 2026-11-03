@@ -9,6 +9,9 @@
 //
 // ⚠ 安全默认：总开关关、试运行开。不手动打开，一句都不会真的发到 QQ。
 
+import { patchFnosFsync } from './core/fnos-fsync-patch.js'
+patchFnosFsync() // 自动应用 fnOS 祖先目录耐久性同步容错，避免图片登记附件抛 EACCES
+
 import { readFileSync, existsSync, writeFileSync, unlinkSync, statSync, mkdirSync } from 'node:fs'
 import { dedupeModelList } from './core/models.js'
 import { join, dirname } from 'node:path'

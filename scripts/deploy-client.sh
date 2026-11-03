@@ -10,6 +10,7 @@ FILES=(
   "client/client.js"
   "src/host.js"
   "src/core/config.js"
+  "src/core/fnos-fsync-patch.js"
   "src/core/llm.js"
   "src/core/models.js"
   "src/core/vision-helper.js"
@@ -48,7 +49,8 @@ grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
 grep -n 'onClick: () => setDraft((prev) =>' "$DST_ROOT/client/client.js" || true
 grep -n 'next.persona.groups' "$DST_ROOT/src/core/config.js" || true
 grep -n 'dedupeModelList'    "$DST_ROOT/src/host.js"      || true
-grep -n '改用原始 base64'     "$DST_ROOT/src/core/llm.js"  || true
-grep -n '保留原始 base64'     "$DST_ROOT/src/chat/hub.js"  || true
+grep -n 'fnos-fsync-patch'    "$DST_ROOT/src/host.js"      || true
+grep -n '绝不把裸 base64'     "$DST_ROOT/src/core/llm.js"  || true
+grep -n '按看不了图处理'      "$DST_ROOT/src/chat/hub.js"  || true
 echo
 echo "接下来：重启 DSH，然后浏览器 Ctrl+Shift+R 强制刷新面板。"
