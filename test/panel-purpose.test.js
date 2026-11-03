@@ -65,7 +65,6 @@ test('/state 聚合 purpose 字段（独立模块，默认关也不炸）', asyn
   assert.ok(st.purpose, 'purpose 聚合字段存在')
   assert.equal(st.purpose.available, true, 'purpose 模块已提供 status()')
   assert.equal(st.purpose.enabled, false, '目的引擎默认关')
-  assert.equal(st.purpose.pacing, 'default')
   assert.equal(st.purpose.dailyMax, 4, 'dailyMax 取自 speakUp.maxPerDay 默认值')
   assert.equal(st.purpose.quietStart, '23:00', '安静时段由醒着窗口 8~23 推算')
   assert.equal(st.purpose.quietEnd, '08:00')
@@ -84,12 +83,11 @@ test('面板代理 /panel/purpose/status：聚合 purpose + pet，token 已脱�
 })
 
 test('开关与调参透传：/panel/purpose/config 写 ext.purpose.*，醒着窗口写 speakUp.*', async () => {
-  const r = await call('/panel/purpose/config', { enabled: true, carrier: 'pet', petFallbackToQQ: false, pacing: 'conservative', awakeFrom: 9, awakeTo: 22, maxPerDay: 2 })
+  const r = await call('/panel/purpose/config', { enabled: true, carrier: 'pet', petFallbackToQQ: false, awakeFrom: 9, awakeTo: 22, maxPerDay: 2 })
   assert.equal(r.ok, true)
   assert.equal(r.purpose.enabled, true)
   assert.equal(r.purpose.carrier, 'pet')
   assert.equal(r.purpose.petFallbackToQQ, false)
-  assert.equal(r.purpose.pacing, 'conservative')
   assert.equal(r.purpose.awakeFrom, 9)
   assert.equal(r.purpose.awakeTo, 22)
   assert.equal(r.purpose.quietStart, '22:00', '安静时段随醒着窗口重推')
@@ -98,7 +96,6 @@ test('开关与调参透传：/panel/purpose/config 写 ext.purpose.*，醒着�
   // 落盘位置：引擎开关/载体进 ext.purpose，醒着窗口/每日上限进 speakUp（保持单一真相）
   const saved = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8'))
   assert.equal(saved.ext.purpose.enabled, true)
-  assert.equal(saved.ext.purpose.pacing, 'conservative')
   assert.equal(saved.ext.purpose.carrier, 'pet')
   assert.equal(saved.speakUp.awakeFrom, 9)
   // 透传到 /state（面板另一处数据源一致）
@@ -109,7 +106,7 @@ test('开关与调参透传：/panel/purpose/config 写 ext.purpose.*，醒着�
   const bad = await call('/panel/purpose/config', { carrier: 'wechat' })
   assert.equal(bad.ok, false)
   // 关回去，不污染别的用例
-  const back = await call('/panel/purpose/config', { enabled: false, carrier: 'qq', petFallbackToQQ: true, pacing: 'default' })
+  const back = await call('/panel/purpose/config', { enabled: false, carrier: 'qq', petFallbackToQQ: true })
   assert.equal(back.ok, true)
   assert.equal(back.purpose.enabled, false)
   assert.equal(back.purpose.carrier, 'qq')
