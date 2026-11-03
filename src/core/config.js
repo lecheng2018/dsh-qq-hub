@@ -6,7 +6,18 @@ import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS, profilePermDefault } fr
 import { normalizeChatModels } from '../chat/chat-model.js'
 import { DIARY_AUDIENCES } from '../features/qzone-audience.js'
 
-export const DEFAULTS = {
+// 配置结构版本：改了字段语义/默认值要 +1，方便将来按版本迁移老配置。
+export const CONFIG_VERSION = 1
+
+// 默认值一旦被外面改到，所有新装的用户都会跟着错，所以冻住。
+// 注意要做「深」冻结，否则嵌套对象（model、visionHelper 等）仍然可改。
+const deepFreeze = (o) => {
+  if (!o || typeof o !== 'object' || Object.isFrozen(o)) return o
+  for (const v of Object.values(o)) deepFreeze(v)
+  return Object.freeze(o)
+}
+
+const DEFAULTS_RAW = {
   enabled: false, // 总开关：关着一句都不发
   dryRun: true, // 试运行：只记日志不真发
   setupDone: false, // 首次使用向导走完了没有
@@ -40,6 +51,10 @@ export const DEFAULTS = {
     wsToken: '',
   },
   model: { provider: '', model: '', reasoningEffort: 'low', vision: 'auto' }, // 留空 = 跟随 DSH 默认；vision: auto/on/off
+  // 辅助看图模型（可选）：主模型看不了图时，临时把图片交给这个模型「看一眼」，
+  // 把看到的内容转成文字交给主模型。主模型自己就能看图时不走这条路。
+  // provider/model 留空 = 没配；只比较「同一个模型」还是「不同模型」，不做任何能力猜测。
+  visionHelper: { enabled: false, provider: '', model: '', maxImages: 4, maxChars: 600, keepOriginal: true },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒；群里等得久一点，把一段话攒齐
@@ -253,6 +268,8 @@ export const DEFAULTS = {
   },
 }
 
+export const DEFAULTS = deepFreeze(DEFAULTS_RAW)
+
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v)
 
 function deepMerge(base, over) {
@@ -286,6 +303,14 @@ export function normalize(raw) {
   if (c.workspaceDir && !/^([a-zA-Z]:[\\/]|\/)/.test(c.workspaceDir)) c.workspaceDir = ''
   // 视觉能力：auto = 问 DSH 的模型元数据；on / off = 主人手动声明（覆盖元数据）
   c.model.vision = c.model.vision === 'on' || c.model.vision === 'off' ? c.model.vision : 'auto'
+  // 辅助看图模型：参数都有上下界，避免面板填出离谱值把上下文撑爆
+  if (!isObj(c.visionHelper)) c.visionHelper = {}
+  c.visionHelper.enabled = bool(c.visionHelper.enabled, false)
+  c.visionHelper.provider = String(c.visionHelper.provider || '').trim()
+  c.visionHelper.model = String(c.visionHelper.model || '').trim()
+  c.visionHelper.maxImages = Math.round(num(c.visionHelper.maxImages, 4, 1, 8))
+  c.visionHelper.maxChars = Math.round(num(c.visionHelper.maxChars, 600, 100, 2000))
+  c.visionHelper.keepOriginal = bool(c.visionHelper.keepOriginal, true)
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
