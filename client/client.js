@@ -1027,22 +1027,35 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         const rows = Object.entries(m).map(([id, pid]) => {
           const isNew = id.startsWith('#new')
           const cur = isNew ? '' : id
-          // 已经配过、但当前不在「见过的聊天」里的（比如老配置手填的号），也要能显示出来
+          // 这一行是不是「手动输入号码」：占位行、或号不在已知聊天里，都当手输
+          const known = (chats || []).find((c) => c.id === cur)
+          const manual = !cur || !known
           const opts = [{ value: '', label: wantKind === 'group' ? '选一个群' : '选一个人' }]
             .concat(candidates)
-          if (cur && !opts.some((o) => o.value === cur)) {
-            const known = (chats || []).find((c) => c.id === cur)
-            opts.push({ value: cur, label: known ? known.name : (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
+            .concat([{ value: '__manual__', label: '手动输入号码…' }])
+          if (cur && !known) {
+            opts.splice(opts.length - 1, 0, { value: cur, label: (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
+          }
+          const setRowId = (v) => {
+            const m2 = { ...m }
+            const keep = m2[id]
+            delete m2[id]
+            if (v === '__manual__') m2[id] = keep === undefined ? '' : keep
+            else if (v) m2[v] = keep || ''
+            else m2[id] = keep === undefined ? '' : keep
+            setDraft(setPath(draft, 'persona.' + mapKey, m2))
           }
           return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-            h(Select, { value: cur, width: 240, options: opts, onChange: (v) => {
-              const m2 = { ...m }
-              const keep = m2[id]
-              delete m2[id]
-              if (v) m2[v] = keep || ''
-              else m2[id] = keep === undefined ? '' : keep
-              setDraft(setPath(draft, 'persona.' + mapKey, m2))
-            } }),
+            manual
+              // 没有候选（还没聊过）或用户主动选了「手动输入」：给普通输入框，别让这一行变成死的
+              ? h('input', {
+                className: 'ab-input', style: { width: 240 }, value: cur, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
+                onChange: (e) => {
+                  const typed = e.target.value.replace(/\D/g, '')
+                  setRowId(typed)
+                },
+              })
+              : h(Select, { value: cur, width: 240, options: opts, onChange: setRowId }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
             const m2 = { ...m }
             if (v) m2[id] = v; else delete m2[id]
@@ -1052,8 +1065,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         })
         const noMore = candidates.length === 0
         return h(Card, { title, desc: hint,
-          right: h(Btn, { small: true, disabled: noMore, title: noMore ? '没有更多可选的聊天了' : '', onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
-          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，暂时没有可选的。' : '还没单独指定'),
+          // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
+          // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
+          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
+          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，点「＋ 添加」手输号码就行。' : '还没单独指定'),
           h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
       }
       return h('div', null,
@@ -1371,7 +1386,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             label: '辅助看图模型',
             hint: '主模型看不了图时，先让这个模型看一眼、转成文字再交给主模型。主模型自己能看图时不走这条，不额外花钱。',
           }, h(Switch, {
-            value: !!draft.visionHelper.enabled,
+            // Switch 用的是 on 不是 value：写错了 on 永远是 undefined，
+            // 点了只会触发 onChange(true)，显示状态不变，看起来就是「开关点了没反应」
+            on: !!draft.visionHelper.enabled,
             onChange: (v) => setDraft(setPath(draft, 'visionHelper.enabled', v)),
           })),
           draft.visionHelper.enabled ? h(Row, { label: '用哪个模型看图' },
