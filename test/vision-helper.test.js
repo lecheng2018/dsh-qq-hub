@@ -104,21 +104,25 @@ test('辅助模型和主模型是同一个：不自己转述给自己', async ()
   assert.equal(llm.calls.some((c) => c.model === 'vlm'), false, '同一个模型不该被当成辅助模型')
 })
 
-test('登记附件失败（EACCES）时，图片仍然要送到辅助模型 —— 这是线上真实故障', async () => {
+test('登记附件失败（EACCES）时，askModel 退回纯文字，绝不把裸 base64 块交给 DSH 适配层', async () => {
   // 线上日志：辅助看图模型失败（fan/glm-5.3-flash）：EACCES: permission denied, open '/vol2/@appshare'
-  // 原因是 admitPromptContent 抛错被最外层 try 吞掉，整个转述直接放弃，
-  // 结果配了辅助模型也永远用不上。正确行为：登记失败就退回原始 base64 继续发。
+  // 真实 DSH 的 collectImageRefs 只认 { attachment: { attachmentId } }，裸 base64 会本地 TypeError。
+  // 因此登记失败的正确兜底是：askModel 主链路退回纯文字（由 textForBlindModel 如实说明看不到），
+  // 而不是硬发裸块；hub.js 的 admit() / describeWithHelper() 另有真实附件修复路径（fnos-fsync-patch.js）。
   clearVisionCache()
   const llm = makeLlm()
   const eacces = {
     admitPromptContent: async () => { throw new Error("EACCES: permission denied, open '/vol2/@appshare'") },
   }
+  let warned = ''
   const dsh = { llm, attachments: eacces, get: (k) => (k === 'llm' ? llm : k === 'attachments' ? eacces : null) }
-  const out = await askModel(dsh, { cfg: cfgWith({}), text: '看看这个', images: [IMG] })
+  const out = await askModel(dsh, { cfg: cfgWith({}), text: '看看这个', images: [IMG], onImageError: (e) => { warned = e.message } })
   assert.equal(out, '猫猫可爱', '主模型仍应正常回复')
-  const helperCall = llm.calls.find((c) => c.model === 'vlm')
-  assert.ok(helperCall, '辅助模型必须被调用到，而不是被 EACCES 掐断')
-  assert.equal(helperCall.images, 1, '辅助模型必须真的收到那张图')
+  assert.match(warned, /EACCES/, '要通过 onImageError 告知调用方图片没送进去')
+  const mainCall = llm.calls.find((c) => c.model === 'text-only')
+  assert.ok(mainCall, '主模型必须被调用')
+  assert.equal(mainCall.images, 0, '主模型绝不收到裸 base64 图片块')
+  assert.equal(llm.calls.some((c) => c.model === 'vlm'), false, '登记失败时不该让辅助模型去踩裸块崩溃')
 })
 
 test('describeText：裁剪超长描述，保留原文', () => {
