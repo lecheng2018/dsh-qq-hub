@@ -1587,12 +1587,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       try {
         return await att.admitPromptContent(content)
       } catch (error) {
-        // 登记附件失败（典型：宿主工作区目录不可写 → EACCES: open '/vol2/@appshare'）。
-        // 以前这里把图片整块丢掉、只留文字，用户发图她永远说「看不到」，
-        // 配了辅助看图模型也永远轮不到。现在保留原始 base64 块继续往下走：
-        // 模型适配层能自己认就认，真不认会被下一层的拒收自愈接住转成文字。
-        log.warn('图片没登记成附件，先用原始数据发（不影响本轮看能不能看图）：', error.message)
-        return content
+        // 登记附件失败：DSH 适配层只认 attachmentId，裸 base64 会抛
+        // Cannot read properties of undefined (reading 'attachmentId')，所以不能原样返回图片。
+        // 退回纯文字，交给 imageTextFor/textForBlindModel 如实说明看不到。
+        // 线上 EACCES 根因由 fnos-fsync-patch.js 在插件启动时修好，正常不会再走到这里。
+        log.warn('图片没登记成附件，本轮按看不了图处理：', error.message)
+        return [{ type: 'text', text: (content.find((c) => c && c.type === 'text') || {}).text || '' }]
       }
     }
     return content
