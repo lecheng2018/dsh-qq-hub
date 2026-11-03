@@ -118,10 +118,22 @@ test('祖先目录不可读时，补丁让附件登记成功', { skip: ATT_LIB ?
   })
 })
 
-test('补丁只兜只读打开，不掩盖写入路径的真实权限错误', async () => {
+test('补丁只兜只读打开目录，不掩盖写入路径与只读普通文件的真实权限错误', async () => {
   const { patchFnosFsync } = await import(`file://${PATCH}`)
   assert.equal(patchFnosFsync(), true, '补丁应该装上')
   const fs = require('node:fs')
   // 写路径失败必须照常抛，绝不能返回 noop handle 掩盖问题
   await assert.rejects(() => fs.promises.open('/vol2/@appshare/__nope__/x', fs.constants.O_WRONLY), '写文件失败不能被吞掉')
+  // 只读打开一个「存在但不可读的普通文件」也必须照常抛（不能把假 handle 交给调用方）
+  const dir = mkdtempSync(join(tmpdir(), 'fnos-patch-file-'))
+  const file = join(dir, 'secret.txt')
+  const { writeFileSync } = require('node:fs')
+  writeFileSync(file, 'x')
+  chmodSync(file, 0o000)
+  try {
+    await assert.rejects(() => fs.promises.open(file, fs.constants.O_RDONLY), '只读普通文件 EACCES 不能被吞')
+  } finally {
+    chmodSync(file, 0o644)
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
