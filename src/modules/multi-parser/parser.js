@@ -6,6 +6,36 @@
 const UA_PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
 
+/** 反爬 / 验证 / 风控页面常见的标题与正文特征：抓到的其实是拦截页，不是内容 */
+const BLOCK_PATTERNS = [
+  /安全验证/, /验证码/, /人机验证/, /访问过于频繁/, /请求异常/, /环境异常/,
+  /请开启\s*JavaScript/i, /Just a moment/i, /Attention Required/i,
+  /Enable JavaScript and cookies/i, /Access Denied/i, /403 Forbidden/i,
+  /页面不存在/, /内容不存在/, /该内容已被删除/, /已删除/, /404 Not Found/i,
+  /登录后查看/, /请先登录/, /Sign in to continue/i,
+]
+
+/** 判断抓下来的标题/正文是不是拦截页（是的话这次解析就当失败，别把验证页发给用户） */
+export function looksBlocked(...texts) {
+  const blob = texts.filter(Boolean).join(' ')
+  if (!blob.trim()) return false
+  return BLOCK_PATTERNS.some((re) => re.test(blob))
+}
+
+/** 判断抓下来的内容是不是空壳（除了平台名啥也没有），空壳就算失败 */
+function looksEmpty(result) {
+  if (!result) return true
+  const title = String(result.title || '').trim()
+  const summary = String(result.summary || '').trim()
+  const genericTitles = ['微博内容', '知乎内容', '贴吧帖子', '小红书笔记', '抖音视频', '番茄小说', '黑盒内容', '微信公众号文章', 'GitHub 仓库']
+  // 标题还是套话、摘要也空、又没有图 → 等于没解析出东西
+  const titleIsGeneric = !title || genericTitles.includes(title) || title === result.platformName
+  const noMedia = !(result.images?.length) && !result.videoUrl
+  // 摘要就是标题、且标题是套话：兜底分支把标题抄进摘要了，看着「有内容」其实啥也没有
+  const summaryIsJustTitl = titleIsGeneric && (!summary || summary === title)
+  return (titleIsGeneric && !summary && noMedia) || (summaryIsJustTitl && noMedia)
+}
+
 /** 从文本或口令中提取所有链接（兼容带协议、不带协议的分享短链与纯 BV 号） */
 export function extractUrls(text) {
   const s = String(text || '')
@@ -85,55 +115,74 @@ export async function parseUrl(rawUrl, { platforms = {}, cookies = {}, rawText =
 
   // 1. 哔哩哔哩 Bilibili (支持 b23.tv / bili2233.cn / bilibili.com)
   if (platforms.bilibili !== false && /(?:b23\.tv|bili2233\.cn|bilibili\.com)/i.test(url)) {
-    return await parseBilibili(url, cookies.bilibili)
+    return vetResult(await parseBilibili(url, cookies.bilibili))
   }
 
   // 2. 微博 Weibo (支持 t.cn / weibo.com / weibo.cn / card.weibo.com)
   if (platforms.weibo !== false && /(?:weibo\.com|weibo\.cn|t\.cn)/i.test(url)) {
-    return await parseWeibo(url, cookies.weibo, rawText)
+    return vetResult(await parseWeibo(url, cookies.weibo, rawText))
   }
 
   // 3. 小红书 RedBook (支持 xhslink.com / xhslink.cn / xiaohongshu.com / xiaohongshu.cn)
   if (platforms.redbook !== false && /(?:xhslink\.com|xhslink\.cn|xiaohongshu\.com|xiaohongshu\.cn)/i.test(url)) {
-    return await parseRedBook(url, cookies.redbook, rawText)
+    return vetResult(await parseRedBook(url, cookies.redbook, rawText))
   }
 
   // 4. 知乎 Zhihu (支持 zhihu.com / zhuanlan.zhihu.com)
   if (platforms.zhihu !== false && /zhihu\.com/i.test(url)) {
-    return await parseZhihu(url, cookies.zhihu)
+    return vetResult(await parseZhihu(url, cookies.zhihu))
   }
 
   // 5. 微信公众号 Wechat
   if (platforms.wechat !== false && /mp\.weixin\.qq\.com/i.test(url)) {
-    return await parseWechat(url)
+    return vetResult(await parseWechat(url))
   }
 
   // 6. 百度贴吧 Tieba (支持 tieba.baidu.com / tb.cn)
   if (platforms.tieba !== false && /(?:tieba\.baidu\.com|tb\.cn)/i.test(url)) {
-    return await parseTieba(url, cookies.tieba)
+    return vetResult(await parseTieba(url, cookies.tieba))
   }
 
   // 7. 番茄小说 Fanqie (支持 changdunovel.com / fanqienovel.com)
   if (platforms.fanqie !== false && /(?:changdunovel\.com|fanqienovel\.com)/i.test(url)) {
-    return await parseFanqie(url)
+    return vetResult(await parseFanqie(url))
   }
 
   // 8. GitHub
   if (platforms.github !== false && /github\.com/i.test(url)) {
-    return await parseGithub(url)
+    return vetResult(await parseGithub(url))
   }
 
   // 9. 抖音 Douyin (支持 v.douyin.com / jx.douyin.com / douyin.com / iesdouyin.com)
   if (platforms.douyin !== false && /(?:v\.douyin\.com|jx\.douyin\.com|douyin\.com|iesdouyin\.com)/i.test(url)) {
-    return await parseDouyin(url, cookies.douyin, rawText)
+    return vetResult(await parseDouyin(url, cookies.douyin, rawText))
   }
 
   // 10. 小黑盒 Heybox (支持 xiaoheihe.cn / heybox.com.cn)
   if (platforms.xiaoheihe !== false && /(?:xiaoheihe\.cn|heybox\.com\.cn)/i.test(url)) {
-    return await parseHeybox(url, cookies.xiaoheihe)
+    return vetResult(await parseHeybox(url, cookies.xiaoheihe))
   }
 
   return null
+}
+
+/**
+ * 在 parseUrl 结果出去之前统一体检。
+ * 反爬验证页（「百度安全验证」这种）和空壳结果直接丢掉 —— 以前会被原样发成一张垃圾卡片。
+ */
+export function vetResult(result) {
+  if (!result) return null
+  if (looksBlocked(result.title, result.summary)) return null
+  if (looksEmpty(result)) return null
+  // 字段结构补齐，下游不用再到处判 undefined
+  return {
+    ...result,
+    author: result.author || '',
+    summary: result.summary || '',
+    cover: result.cover || '',
+    images: Array.isArray(result.images) ? result.images.filter(Boolean) : [],
+    videoUrl: typeof result.videoUrl === 'string' ? result.videoUrl : '',
+  }
 }
 
 // ---------------- 各平台解析实现 ----------------
