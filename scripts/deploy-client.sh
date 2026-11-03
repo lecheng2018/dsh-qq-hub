@@ -1,23 +1,45 @@
 #!/usr/bin/env bash
-# 把本仓库的 client/client.js 部署到 DSH 线上运行目录。
+# 把本仓库的改动部署到 DSH 线上运行目录。
 # 该目录属 Harness，普通账号不可写，必须 sudo 执行。
 set -euo pipefail
-SRC="/home/user/repos/dsh-qq-hub/client/client.js"
-DST_DIR="/home/user/harness/.dsh/profiles/web/node_modules/dsh-qq-hub/client"
-DST="$DST_DIR/client.js"
+SRC_ROOT="/home/user/repos/dsh-qq-hub"
+DST_ROOT="/home/user/harness/.dsh/profiles/web/node_modules/dsh-qq-hub"
 
-[ -f "$SRC" ] || { echo "找不到源文件：$SRC"; exit 1; }
-[ -d "$DST_DIR" ] || { echo "找不到目标目录：$DST_DIR"; exit 1; }
+# 只同步真正会变、且改过的文件；不动 node_modules / 用户数据
+FILES=(
+  "client/client.js"
+  "src/host.js"
+  "src/core/llm.js"
+  "src/core/models.js"
+  "src/core/vision-helper.js"
+  "src/chat/hub.js"
+)
+
+[ -d "$DST_ROOT" ] || { echo "找不到目标目录：$DST_ROOT"; exit 1; }
 
 STAMP=$(date +%Y%m%d-%H%M%S)
-cp -p "$DST" "$DST.bak-$STAMP"
-echo "已备份 → $DST.bak-$STAMP"
+for f in "${FILES[@]}"; do
+  [ -f "$SRC_ROOT/$f" ] || { echo "跳过（源不存在）：$f"; continue; }
+  mkdir -p "$DST_ROOT/$(dirname "$f")"
+  if [ -f "$DST_ROOT/$f" ]; then
+    cp -p "$DST_ROOT/$f" "$DST_ROOT/$f.bak-$STAMP"
+  fi
+  cp "$SRC_ROOT/$f" "$DST_ROOT/$f"
+  # 保持原来的属主/权限，避免 Harness 读不了
+  if [ -f "$DST_ROOT/$f.bak-$STAMP" ]; then
+    chown --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
+    chmod --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
+  else
+    chown user:user "$DST_ROOT/$f" 2>/dev/null || true
+  fi
+  echo "已部署 $f"
+done
 
-cp "$SRC" "$DST"
-chown --reference="$DST.bak-$STAMP" "$DST" 2>/dev/null || true
-chmod --reference="$DST.bak-$STAMP" "$DST" 2>/dev/null || true
-
-echo "已部署。校验："
-grep -n 'const pm = ' "$DST"
 echo
-echo "接下来：重启 DSH，然后在浏览器里 Ctrl+Shift+R 强制刷新面板。"
+echo "校验："
+grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
+grep -n 'dedupeModelList'    "$DST_ROOT/src/host.js"      || true
+grep -n '改用原始 base64'     "$DST_ROOT/src/core/llm.js"  || true
+grep -n '保留原始 base64'     "$DST_ROOT/src/chat/hub.js"  || true
+echo
+echo "接下来：重启 DSH，然后浏览器 Ctrl+Shift+R 强制刷新面板。"
