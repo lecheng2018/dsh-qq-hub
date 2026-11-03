@@ -603,7 +603,9 @@ async function parseDouyin(url, cookie = '', rawText = '') {
                   cover: cover || images[0] || '',
                   images: images.length ? images : (cover ? [cover] : []),
                   videoUrl,
-                  url,
+                  // 分享链接带一堆 ssr / utm / share_sign 追踪参数，原样塞进卡片能有 860 字、
+                  // 在手机上占二十多行，把视频挤到屏幕外面。压成干净短链。
+                  url: `https://www.iesdouyin.com/share/video/${workId}/`,
                   stat: `点赞: ${item.statistics?.digg_count || 0} · 评论: ${item.statistics?.comment_count || 0}`,
                 }
               }
@@ -635,7 +637,7 @@ async function parseDouyin(url, cookie = '', rawText = '') {
         cover: '',
         images: [],
         videoUrl: '',
-        url,
+        url: workId ? `https://www.iesdouyin.com/share/video/${workId}/` : url,
         fallback: true,
       }
     } catch {
