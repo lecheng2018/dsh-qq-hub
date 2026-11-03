@@ -302,3 +302,16 @@ test('摘要有真实内容时卡片正常显示（别为了去重把信息删�
   })
   assert.ok(card.includes('摘要：这个问题下有很多有价值的讨论'), '真摘要必须留着')
 })
+
+test('视频类结果不注入 AI 上下文（她看不到画面，喂标题只会让她瞎猜）', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile('src/modules/multi-parser/index.js', 'utf8')
+  // 注入回调里必须同时用 videoUrl 和 type 判，不能只判 type
+  const ctxBlock = src.slice(src.indexOf('api.context('), src.indexOf('// 监听进站消息'))
+  assert.ok(/r\.videoUrl/.test(ctxBlock), '注入判断必须检查 videoUrl')
+  assert.ok(/r\.type === 'video'/.test(ctxBlock), '也要检查 type')
+  // 视频分支不能再把 title 拼进去
+  const videoBranch = ctxBlock.slice(ctxBlock.indexOf("r.type === 'video'"), ctxBlock.indexOf('const statLine'))
+  assert.ok(!/\$\{r\.title\}/.test(videoBranch), '视频分支不能把标题喂给 AI')
+  assert.ok(!/内容摘要/.test(videoBranch), '视频分支不能带摘要')
+})
