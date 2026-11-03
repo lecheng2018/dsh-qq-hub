@@ -171,7 +171,18 @@ export function parseReflection(out) {
   }
 }
 
-export function createMemoryStore({ dsh, getConfig, hub, log }) {
+export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
+  /** 从人设文本里抽「禁止」类硬规则行，给 style 学习当护栏（人设没写或没传 personaText 就返回空）。 */
+  const personaGuard = () => {
+    try {
+      const t = String(personaText?.() || '')
+      if (!t) return ''
+      const lines = t.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 80 && /禁止|不要|不许|不得|别成|别用|别刻意/.test(l))
+      if (!lines.length) return ''
+      return lines.slice(0, 12).join('\n')
+    } catch { return '' }
+  }
+
   const file = () => dataDir('memories.json')
   // 作用域索引缓存（按 scope 分组）；任何写入都会 clear
   const cache = new Map() // scope -> { stamp, count, idx }
@@ -598,7 +609,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     const sty = styleOf(personKey(chat))
     const self = styleOf('self')
     if (sty.length || self.length) {
-      parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人。）')
+      parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
     }
     // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）
     const recent = recentEvents(24, 4, chat)
@@ -704,6 +715,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
       system: '你是「大肥鱼」，在回顾自己和' + who + '的相处。输出一个 JSON 对象 {"insights":[...],"style":[...]}。\n'
         + 'insights：「怎么相处更好」的经验。概括性的、可复用的相处之道（比如「他累的时候不想多聊，简单安慰就好」「喜欢被吐槽，不喜欢太正经」），不要记具体事件和事实细节；和已有经验重复的合并，过时或被证伪的删掉，不超过 8 条，每条不超过 30 字。\n'
         + 'style：' + who + '的说话方式，以及你和' + who + '聊天时可以自然贴近的地方（比如「消息很短，常一句话分几条发」「爱用“hhh”和“草”」「不爱用标点」「喜欢叠字」），只写说话的形式和习惯，不写内容；不超过 5 条，每条不超过 30 字。\n'
+        + (personaGuard() ? '人设硬性规则（style 不得与它冲突；被禁止的标点、格式、长度，对方用得再多也不许学）：\n' + personaGuard() + '\n' : '')
         + '只输出这个 JSON 对象。',
       text: `已有经验：\n${old.map((x) => '- ' + x.text).join('\n') || '（还没有）'}\n\n已记下的说话方式：\n${oldStyle.map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n最近的聊天：\n${transcript}`,
       maxTokens: 1500,
@@ -926,7 +938,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     try {
       const out = await askModel(dsh, {
         cfg: getConfig(),
-        system: '你是「大肥鱼」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。',
+        system: '你是「大肥鱼」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。' + (personaGuard() ? ' 注意：下面这些人设硬性规则优先级最高，学到的说法不得与它冲突：' + personaGuard() : ''),
         text: `已经养成的：\n${styleOf('self').map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}`,
         maxTokens: 800,
         temperature: 0.3,
