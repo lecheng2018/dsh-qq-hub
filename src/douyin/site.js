@@ -76,6 +76,14 @@ export function normalizeAweme(raw) {
     music: a.music?.title ? clean(`${a.music.title}${a.music.author ? ' - ' + a.music.author : ''}`, 60) : '',
     isImages: Array.isArray(a.images) && a.images.length > 0,
     createdAt: num(a.create_time) * 1000,
+    // 视频直链：优先无水印的 play_addr，退到 download_addr。
+    // 以前这里没取，所以只能把链接发过去，没法把视频本身发过去。
+    videoUrls: [
+      ...(a.video?.play_addr?.url_list || []),
+      ...(a.video?.download_addr?.url_list || []),
+      ...(a.video?.play_addr_h264?.url_list || []),
+    ].map((u) => String(u || '')).filter((u) => /^https?:\/\//.test(u)),
+    images: (a.images || []).map((im) => im?.url_list?.[im.url_list.length - 1] || '').filter(Boolean),
   }
 }
 
