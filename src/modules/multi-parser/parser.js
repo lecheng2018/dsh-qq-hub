@@ -313,8 +313,13 @@ async function parseRedBook(url, cookie = '', rawText = '') {
     const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/i) || html.match(/<meta\s+name="og:description"\s+content="([^"]*)"/i)
     const imgMatches = [...html.matchAll(/https:\/\/[^"'\s]+\.xhscdn\.com\/[^"'\s]+/gi)].map((m) => m[0])
 
-    const title = titleMatch ? titleMatch[1].replace(/ - 小红书$/, '').trim() : '小红书笔记'
     const desc = descMatch ? descMatch[1].trim() : ''
+    // 匿名访问时 og:title 常常就是站点名「小红书」，这种没信息量，改用描述首句
+    let title = titleMatch ? titleMatch[1].replace(/\s*-\s*小红书$/, '').trim() : ''
+    if (!title || /^小红书$/.test(title) || /^小红书\s*[-_|]/.test(title)) {
+      const firstLine = desc.split(/[\n。！!？?]/)[0].trim()
+      title = firstLine ? firstLine.slice(0, 40) : '小红书笔记'
+    }
     const images = [...new Set(imgMatches)].slice(0, 9)
 
     return {
@@ -599,7 +604,8 @@ async function parseDouyin(url, cookie = '', rawText = '') {
                   type: images.length ? 'gallery' : 'video',
                   title,
                   author,
-                  summary: title,
+                  // desc 本身就是标题，再抄一遍摘要就重复了；作品没有独立描述就留空
+                  summary: '',
                   cover: cover || images[0] || '',
                   images: images.length ? images : (cover ? [cover] : []),
                   videoUrl,
