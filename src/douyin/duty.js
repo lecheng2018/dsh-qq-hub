@@ -8,7 +8,7 @@ import { permOf } from '../chat/access.js'
 import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
 import { join } from 'node:path'
-import { downloadVideo, safeName } from './media.js'
+import { downloadVideo, safeName, discardDownloaded } from './media.js'
 import { workspaceDirOf } from '../chat/hub.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -199,17 +199,22 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       // 发不出去（超体积 / 下载失败 / 图文作品）再退回文字摘要 + 链接。
       let sentMedia = false
       if (!g.dryRun && !v.isImages) {
+        let downloaded = ''
         try {
           const cfgNow = getConfig()
           const got = await downloadVideo(v, {
             dir: join(workspaceDirOf(cfgNow), 'douyin-media'),
             maxMB: Number(cfgNow?.files?.maxMB) || 50,
           })
+          downloaded = got.path
           await hub.sendFile(`private:${g.ownerQQ}`, got.path, safeName(v.title, v.awemeId))
           sentMedia = true
           log.info(`视频已下载并发给主人：${got.path}（${(got.bytes / 1024 / 1024).toFixed(1)} MB）`)
         } catch (error) {
           log.info(`视频没发成，改成发摘要：${error.message}`)
+        } finally {
+          // 发完即删：主人那边已经收到视频了，本地留着只是白占盘
+          if (downloaded && discardDownloaded(downloaded)) log.info(`已清理本地视频：${downloaded}`)
         }
       }
       try {

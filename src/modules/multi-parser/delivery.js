@@ -1,4 +1,4 @@
-import { downloadVideo, safeName } from '../../douyin/media.js'
+import { downloadVideo, safeName, discardDownloaded } from '../../douyin/media.js'
 
 // 媒体投递与卡片渲染引擎：将解析结果安全转换为 QQ 消息段或合并转发卡片
 
@@ -146,44 +146,52 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
       if (/超过上限/.test(err.message)) overLimit = true
     }
 
-    // 超体积的走群文件 / 直链
-    if (sizeMB > maxVideoMB) {
-      if (videoOverLimit === 'group_file' && chatId.startsWith('group:')) {
-        const gid = Number(chatId.slice(6))
-        try {
-          await api.sendText(chatId, `${cardText}\n⏳ 视频约 ${sizeMB}MB，正在上传至群文件...`)
-          await api.onebot('upload_group_file', {
-            group_id: gid,
-            file: localFile || videoUrl,
-            name: safeName(result.title, vid),
-          })
-          return true
-        } catch (err) {
-          api.log.debug('[multi-parser] 上传群文件失败，回退直链:', err.message)
+      try {
+      // 超体积的走群文件 / 直链
+      if (sizeMB > maxVideoMB) {
+        if (videoOverLimit === 'group_file' && chatId.startsWith('group:')) {
+          const gid = Number(chatId.slice(6))
+          try {
+            await api.sendText(chatId, `${cardText}\n⏳ 视频约 ${sizeMB}MB，正在上传至群文件...`)
+            await api.onebot('upload_group_file', {
+              group_id: gid,
+              file: localFile || videoUrl,
+              name: safeName(result.title, vid),
+            })
+            return true
+          } catch (err) {
+            api.log.debug('[multi-parser] 上传群文件失败，回退直链:', err.message)
+          }
         }
+        await api.sendText(chatId, `${cardText}\n📹 视频较大（约 ${sizeMB}MB），直链播放：${videoUrl}`)
+        return true
       }
-      await api.sendText(chatId, `${cardText}\n📹 视频较大（约 ${sizeMB}MB），直链播放：${videoUrl}`)
-      return true
-    }
 
-    // 正常视频：优先发本地的（能真发出去），下载失败才把直链交给网关一试
-    try {
-      // 视频能发出去时，卡片不带链接——东西都到手了，再挂条点不开的分享链接只是占地方
-      if (localFile && typeof api.sendFile === 'function') {
-        await api.sendText(chatId, cardTextVideoSent)
-        await api.sendFile(chatId, localFile, safeName(result.title, vid))
+      // 正常视频：优先发本地的（能真发出去），下载失败才把直链交给网关一试
+      try {
+        // 视频能发出去时，卡片不带链接——东西都到手了，再挂条点不开的分享链接只是占地方
+        if (localFile && typeof api.sendFile === 'function') {
+          await api.sendText(chatId, cardTextVideoSent)
+          await api.sendFile(chatId, localFile, safeName(result.title, vid))
+          return true
+        }
+        // 发不出视频：链接就是唯一的观看途径，这时候才带
+        await api.sendText(chatId, cardText)
+        if (overLimit) {
+          await api.sendText(chatId, `📹 视频超出可发体积，直链播放：${videoUrl}`)
+          return true
+        }
+        await api.sendSegments(chatId, [{ type: 'video', data: { file: videoUrl } }])
         return true
+      } catch (err) {
+        api.log.debug('[multi-parser] 发送视频失败，回退发图文:', err.message)
       }
-      // 发不出视频：链接就是唯一的观看途径，这时候才带
-      await api.sendText(chatId, cardText)
-      if (overLimit) {
-        await api.sendText(chatId, `📹 视频超出可发体积，直链播放：${videoUrl}`)
-        return true
+    } finally {
+      // 发完即删：QQ 那边已经收到了，本地再留一份只是占盘。
+      // 用 finally 是为了把上面每条 return 分支都盖住，不会漏。
+      if (localFile && discardDownloaded(localFile)) {
+        api.log.debug?.(`[multi-parser] 已清理本地视频：${localFile}`)
       }
-      await api.sendSegments(chatId, [{ type: 'video', data: { file: videoUrl } }])
-      return true
-    } catch (err) {
-      api.log.debug('[multi-parser] 发送视频失败，回退发图文:', err.message)
     }
   }
 

@@ -6,6 +6,7 @@
 
 import { extractUrls, parseUrl } from './parser.js'
 import { deliverParseResult } from './delivery.js'
+import { sweepMediaDir } from '../../douyin/media.js'
 
 const ID = 'multi-parser'
 
@@ -31,6 +32,18 @@ export default {
   setup(api) {
     // chatId -> { at, result } 记录最近解析的内容
     const recentParsed = new Map()
+
+    // 启动兜底：正常情况下视频发完就删了，这里只收进程中途崩掉留下的孤儿文件。
+    // 按 6 小时 + 500MB 双阈值扫，超出的清掉，免得长期跑把盘吃满。
+    try {
+      const dir = typeof api.workspaceDir === 'function' ? api.workspaceDir('multi-parser-media') : ''
+      if (dir) {
+        const r = sweepMediaDir(dir, { maxAgeMs: 6 * 3600_000, maxBytes: 500 * 1024 * 1024 })
+        if (r.removed) api.log.info(`[multi-parser] 启动清理：删掉 ${r.removed} 个残留视频（${(r.bytes / 1024 / 1024).toFixed(1)} MB）`)
+      }
+    } catch (err) {
+      api.log.debug?.('[multi-parser] 启动清理跳过：', err.message)
+    }
 
     const cfg = () => {
       const g = api.config().multiParser || {}
