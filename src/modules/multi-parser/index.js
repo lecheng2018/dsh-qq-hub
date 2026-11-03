@@ -55,7 +55,13 @@ export default {
       if (!recent || Date.now() - recent.at > 3 * 60_000) return ''
 
       const r = recent.result
-      if (r.type === 'video') return ''
+      // 视频一律不注入：她看不到画面，把标题喂给她只会让她对着几个字瞎猜
+      // （以前只判 type==='video'，但抖音的 type 由 images.length 决定，
+      //   带封面的作品会变成 gallery 从而漏进来，她就照着标题在那儿编）
+      if (r.videoUrl || r.type === 'video') {
+        // 只告诉她「收到一条视频」这个事实，不给标题、作者、数据，免得她去猜内容
+        return `【系统提示：对方刚发来一条${r.platformName}视频，已经直接发到聊天里了。你没法看视频画面，所以不要猜测或编造视频内容，也不要就视频里的具体信息提问或装作看过。】`
+      }
 
       const statLine = r.stat ? `\n数据：${r.stat}` : ''
       return `【系统提示：对方刚才在聊天中分享了一条来自 ${r.platformName} 的链接】\n` +
