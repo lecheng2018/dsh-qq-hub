@@ -103,7 +103,7 @@ SOFTWARE.
 - `src/modules/security-lock/`：RFC 6238 TOTP 手机动态口令验证及 30 分钟降权时间锁；
 - `src/modules/token-guardian/`：会话上下文 Token 估算与自动 Compaction 触发机制；
 - `src/modules/memory-privacy/`：记忆三层作用域隔离；
-- `src/modules/slang-learner/`：群黑话收集与审核流程；
+- ~~`src/modules/slang-learner/`：群黑话收集与审核流程~~（该模块后续已从本项目移除，此条保留用于说明移植来源）；
 - `src/core/store.js`：Windows 下 `renameWithRetry` 容错重试机制。
 
 ### 原始 MIT 许可证文本
