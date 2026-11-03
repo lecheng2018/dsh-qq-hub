@@ -300,3 +300,44 @@ test('一个候选都没有时，「＋ 添加」依然可点、且给出输入�
   btns[0].props.onClick()
   assert.ok(called > 0, '点下去必须真的改动草稿')
 })
+
+
+test('点「＋ 添加」后必须真的多出一行（渲染读 draft 而不是 st.config）', () => {
+  // 用户报的：点了添加什么都没有。根因是渲染读已保存的 st.config，
+  // 而按钮改的是 draft，两者脱节 → 新行永远不显示。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const body = extractFn('Persona')
+  const env = makeEnv()
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
+    'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+  const Persona = factory(...env.args)
+
+  const saved = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {} } }
+  const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: saved }
+
+  const flat = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => flat(x, out)); return out }
+    if (typeof n.type === 'string') out.push(n.type)
+    if (n.props && n.props.className === 'ab-input') out.push('__INPUT__')
+    if (n.children) n.children.forEach((x) => flat(x, out))
+    return out
+  }
+  const has = (tree, s) => JSON.stringify(tree).includes(s)
+
+  // 第一次渲染：草稿里没有分流行
+  const t1 = Persona({ st, draft: { persona: { ...saved.persona } }, setDraft: () => {}, toast: () => {}, reload: () => {} })
+  // 没候选、也没分行时，提示是「机器人还没在群里说过话…」；有候选时是「还没单独指定」。
+  // 两种都算「没有行」，这里只要求不是空的、且没有渲染出输入框。
+  assert.ok(!flat(t1).includes('__INPUT__'), '初始不该有输入框')
+  assert.ok(has(t1, '添加') || has(t1, '还没'), '初始应有提示文案')
+
+  // 模拟点了添加之后：draft 里多了一个 #new 占位行
+  const draft2 = { persona: { ...saved.persona, groups: { '#newabc': '' } } }
+  const t2 = Persona({ st, draft: draft2, setDraft: () => {}, toast: () => {}, reload: () => {} })
+  // 有占位行后，提示文案让位给真正的一行；核心是下面必须出现输入框
+  assert.ok(!has(t2, '还没单独指定') || flat(t2).includes('__INPUT__'), '点添加后不该还停在旧提示')
+  // 占位行没有已知聊天可选 → 应该给出号码输入框
+  assert.ok(flat(t2).includes('__INPUT__'), '必须渲染出输入框，实际：' + flat(t2).join(','))
+})
