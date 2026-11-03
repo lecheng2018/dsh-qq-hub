@@ -335,7 +335,8 @@ test('#6 改资料权限：默认仅主人私聊；所有人含群；关了都�
   const all = normalize({ ownerQQ: '1', profilePerms: { qqNickname: 'all' } })
   assert.equal(profileToolVisible(all, 'qqNickname', group), true)
   assert.equal(profilePermits(all, 'qqNickname', otherPm, false).ok, true)
-  assert.equal(profileToolVisible(all, 'qqNickname', { kind: 'system' }), false)
+  // system 会话（定时刷等后台轮次）现在要挂工具：插件自己开的可信上下文，视同主人（修复：定时刷里 heybox_* 挂不上）
+  assert.equal(profileToolVisible(all, 'qqNickname', { kind: 'system' }), true)
   const off = normalize({ ownerQQ: '1', profilePerms: { qqNickname: 'off' } })
   assert.equal(profileToolVisible(off, 'qqNickname', ownerPm), false)
   assert.equal(profilePermits(off, 'qqNickname', ownerPm, true).ok, false)
