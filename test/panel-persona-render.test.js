@@ -147,8 +147,16 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
     cur[ks[ks.length - 1]] = value
     return next
   }
+  // setDraft 现在是函数式更新（setDraft(prev => next)），桩要能接住两种形式：
+  // 传函数就喂它当前值、收集返回值；传值就直接收集。
   const seen = []
-  const setDraft = (v) => seen.push(v)
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: {} } }
+  const setDraft = (v) => {
+    const next = typeof v === 'function' ? v(state) : v
+    if (next === undefined || next === null) return
+    state = next
+    seen.push(next)
+  }
   const Persona = factory(
     env.args[0], env.args[1], env.args[2], env.args[3], env.args[4],
     env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
@@ -340,4 +348,129 @@ test('点「＋ 添加」后必须真的多出一行（渲染读 draft 而不是
   assert.ok(!has(t2, '还没单独指定') || flat(t2).includes('__INPUT__'), '点添加后不该还停在旧提示')
   // 占位行没有已知聊天可选 → 应该给出号码输入框
   assert.ok(flat(t2).includes('__INPUT__'), '必须渲染出输入框，实际：' + flat(t2).join(','))
+})
+
+test('手输群号：敲进去、失焦之后不能消失（用户报的「离开输入框字样就消失」）', () => {
+  // 根因：用渲染时的旧 draft 快照重建 map —— commitRow 把 key 从 #newabc 改成群号，
+  // 另一个控件的 onChange 随后拿旧快照重建，就把刚填的号抹掉了。
+  // 现在全改成 setDraft(prev => ...)，这里按真实调用顺序模拟一遍。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
+    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+  const body = extractFn('Persona')
+
+  // draft 与 typing 都要有真状态，否则只能测到「函数被调用过」
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: { '#newabc': '' } } }
+  const setDraft = (v) => { const n = typeof v === 'function' ? v(state) : v; if (n) state = n }
+  // Persona 里 useState 的调用顺序：0 chats / 1 list / 2 typing / 3 current / 4 sel / 5 edit / 6 dirty / 7 pending / 8 whole
+  let typing = {}
+  const hooks = []
+  const useStateImpl = (init) => {
+    const idx = hooks.length
+    hooks.push(idx)
+    if (idx === 2) return [typing, (u) => { typing = typeof u === 'function' ? u(typing) : u }]
+    return [typeof init === 'function' ? init() : init, () => {}]
+  }
+
+  const mkEnv = () => {
+    const h = (type, props, ...kids) => ({ $$el: true, type: typeof type === 'string' ? type : (type && type.name) || 'fn', props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) })
+    const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
+    const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch']
+    const comps = {}; names.forEach((n) => { comps[n] = mk(n) })
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+      'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
+      'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
+      'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+      comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
+      (...a) => a.filter(Boolean).join(' '),
+      (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },
+      (o, path) => path.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o),
+      (o) => JSON.parse(JSON.stringify(o)),
+      () => Promise.resolve({ ok: false }), () => Promise.resolve({ ok: false }),
+      { getItem: () => null, setItem: () => {} })
+  }
+
+  const props = () => ({ st: { personas: [], config: { persona: state.persona } }, draft: state, setDraft, toast: () => {}, reload: () => {} })
+
+  const findInput = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => findInput(x, out)); return out }
+    if (n.type === 'input' && n.props && n.props.onBlur) out.push(n)
+    if (n.children) n.children.forEach((x) => findInput(x, out))
+    return out
+  }
+
+  hooks.length = 0
+  let Persona = mkEnv()
+  let tree = Persona(props())
+  const inputs = findInput(tree)
+  assert.ok(inputs.length >= 1, '应该有手输号码的输入框（下拉框已按要求去掉），实际 ' + inputs.length)
+
+  inputs[0].props.onChange({ target: { value: '615693464' } })   // 敲
+  inputs[0].props.onBlur({ currentTarget: { value: '615693464' } }) // 失焦
+
+  const groups = state.persona.groups
+  assert.equal(groups['615693464'], '', '群号必须真的落进配置，实际：' + JSON.stringify(groups))
+  assert.ok(!('#newabc' in groups), '占位行应已被替换，实际：' + JSON.stringify(groups))
+
+  // 重渲染后群号必须还在（这就是「离开输入框就消失」的直接回归点）
+  tree = Persona(props())
+  const j = JSON.stringify(tree)
+  assert.ok(j.includes('615693464'), '重新渲染后群号不能消失')
+})
+
+test('分流人设里所有写回都用函数式更新（旧快照重建会抹掉刚填的群号）', () => {
+  // 这是「离开输入框字样就消失」的根因回归锁：
+  // 只要 specific() 区块里出现 setDraft(setPath(draft, ...))，
+  // 就意味着有控件在用渲染时的旧 draft 快照重建 map，
+  // 它和后一个控件的写回会互相覆盖，用户填的群号就会消失。
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  assert.ok(a > 0, '找不到 specific()')
+  // 花括号配平，取出整个 specific 函数体
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  // 注释里会提到这个旧写法（就是为了说明为什么不能用），先剥掉注释再查
+  const body = src2.slice(a, end)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  const bad = body.match(/setDraft\s*\(\s*setPath\s*\(\s*draft\b/g) || []
+  assert.equal(bad.length, 0, 'specific() 里不能再有 setDraft(setPath(draft, ...))，要写 setDraft(prev => ...)，发现 ' + bad.length + ' 处')
+  // 同时确认确实用了函数式更新
+  assert.ok(/setDraft\(\(prev\) =>/.test(body), 'specific() 里应当用 setDraft((prev) => ...) 写回')
+})
+
+test('分流人设只用手输输入框，不再给选群下拉（用户要求去掉）', () => {
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  const body = src2.slice(a, end)
+  assert.ok(/placeholder: wantKind === 'group' \? '填群号' : '填 QQ 号'/.test(body), '应当有手输群号/QQ 号的输入框')
+  // specific() 内部：行内人格下拉 1 个 + 底部「默认」人格下拉 1 个 = 2
+  // 关键是不能再有「选群/选人」那个 Select（options 来自 chats 候选）
+  const selCount = (body.match(/h\(Select,/g) || []).length
+  assert.equal(selCount, 2, 'specific() 里只该剩两个「选人格」下拉，选群/选人下拉必须去掉，实际 ' + selCount)
+  assert.ok(!/candidates/.test(body), '不该再有选群候选列表了')
+  assert.ok(!/__manual__/.test(body), '不该再有「手动输入…」这个下拉项了')
+})
+
+test('「＋ 添加」也用函数式更新（否则会把刚填的群号顶掉）', () => {
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  const body = src2.slice(a, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  // 「＋ 添加」按钮的 onClick 必须以 setDraft((prev) => 开头
+  const m = /onClick: \(\) => setDraft\(\(prev\) =>/.exec(body)
+  assert.ok(m, '「＋ 添加」要用 setDraft((prev) => ...)，不能拿渲染时的旧 draft 快照')
 })

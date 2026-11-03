@@ -1046,89 +1046,94 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       // 用户看到的就是「点了添加没有输入框也没有选择框」。
       const pm = (draft && draft.persona) || st.config.persona || {}
       const setPm = (k, v) => {
-        if (!draft) return // 配置还没加载完，点了也没地方存
-        setDraft(setPath(draft, 'persona.' + k, v))
+        setDraft((prev) => (prev ? setPath(prev, 'persona.' + k, v) : prev))
       }
       const personaOpts = (emptyLabel) => [{ value: '', label: emptyLabel }].concat(list.map((p) => ({ value: p.id, label: p.name })))
       const specific = (mapKey, title, hint) => {
         const m = pm[mapKey] || {}
         const wantKind = mapKey === 'groups' ? 'group' : 'private'
-        // 可选对象：机器人见过的群 / 私聊。已选过的从候选里剔掉，避免重复选同一个。
-        const picked = new Set(Object.keys(m).filter((k) => !k.startsWith('#new')))
-        const candidates = (chats || []).filter((c) => c.kind === wantKind && !picked.has(c.id))
-          .map((c) => ({ value: c.id, label: c.name }))
         const rows = Object.entries(m).map(([id, pid]) => {
           const isNew = id.startsWith('#new')
           const cur = isNew ? '' : id
-          // 这一行是不是「手动输入号码」：占位行、或号不在已知聊天里，都当手输
-          const known = (chats || []).find((c) => c.id === cur)
-          // typing 里有值＝用户主动点了「手动输入号码」，这时即使这一行已经有群号也要显示输入框
-          const manual = !cur || !known || typing[id] !== undefined
-          const opts = [{ value: '', label: wantKind === 'group' ? '选一个群' : '选一个人' }]
-            .concat(candidates)
-            .concat([{ value: '__manual__', label: '手动输入号码…' }])
-          if (cur && !known) {
-            opts.splice(opts.length - 1, 0, { value: cur, label: (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
-          }
+          // 用户明确要求：这里只要输入框，不要选群下拉。
+          // 下拉看着方便，实际上既拿不全群（只列聊过的），选中后还会因为
+          // 拿旧配置重建 map 把刚填的号码冲掉，不如直接手输来得可靠。
+          const typed = typing[id]
+          const shown = typed !== undefined ? typed : cur
           /**
            * 把这一行的号码落成新的 key。
            *
-           * 关键：只在「敲完」时调用（回车、失焦、或者从下拉里选定），
-           * 绝不在每个 onChange 里调用。以前是逐字 setRowId，导致
-           *   1. key 每敲一个字就变 → 这一行被 React 重建，光标丢失；
-           *   2. '#newm5k03ab' 被 replace(/\D/g,'') 洗成 '03'，界面上莫名冒出「03」。
-           * 新 key 取不到时保留占位行，别把用户这一行弄丢。
+           * 关键点（这里踩过两次）：
+           *   1. 只看用户敲的内容，绝不去 replace(/\D/g,'') 一个占位 key，
+           *      否则 '#newm5k03ab' 会被洗成 '503'，界面莫名冒出一行「03」。
+           *   2. 必须用 setDraft 的函数式更新。以前写 setDraft(setPath(draft, ...))，
+           *      draft 是渲染时的旧快照，紧接着另一个控件的 onChange 也用旧快照重建，
+           *      后写的那次就把刚填的群号抹掉了 —— 这就是「离开输入框字样就消失」。
            */
           const commitRow = (raw) => {
             const plan = planPersonaRow({ map: m, id, raw })
-            const clearTyping = () => setTyping((t) => { const n = { ...t }; delete n[id]; return n })
-            if (plan.action === 'keep') return clearTyping()
-            const m2 = { ...m }
-            const keep = m2[id] === undefined ? '' : m2[id]
-            if (plan.action === 'clear') {
-              // 清空了：占位行原地保留，已成立的群号退回占位行，避免整行消失
-              m2[id] = keep
-              setDraft(setPath(draft, 'persona.' + mapKey, m2))
-              return clearTyping()
-            }
-            delete m2[id]
-            m2[plan.key] = keep
-            setDraft(setPath(draft, 'persona.' + mapKey, m2))
-            clearTyping()
+            setTyping((t) => { const n = { ...t }; delete n[id]; return n })
+            if (plan.action === 'keep') return
+            setDraft((prev) => {
+              const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+              const m2 = { ...cur2 }
+              const keep = m2[id] === undefined ? '' : m2[id]
+              if (plan.action === 'clear') {
+                m2[id] = keep
+                return setPath(prev, 'persona.' + mapKey, m2)
+              }
+              // 目标位被别的行占了：本行原地保留，不顶掉别人
+              if (plan.key !== id && m2[plan.key] !== undefined) {
+                m2[id] = keep
+                return setPath(prev, 'persona.' + mapKey, m2)
+              }
+              delete m2[id]
+              m2[plan.key] = keep
+              return setPath(prev, 'persona.' + mapKey, m2)
+            })
           }
-          const typed = typing[id]
-          const shown = typed !== undefined ? typed : cur
           return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-            manual
-              // 没有候选（还没聊过）或用户主动选了「手动输入」：给普通输入框，别让这一行变成死的
-              ? h('input', {
-                className: 'ab-input', style: { width: 240 }, value: shown, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
-                // 敲的时候只存进暂存，不动配置里的 key
-                onChange: (e) => {
-                  const v = e.target.value.replace(/\D/g, '')
-                  setTyping((t) => ({ ...t, [id]: v }))
-                },
-                // 回车或失焦才算敲完，这时才落成真正的群号
-                onKeyDown: (e) => { if (e.key === 'Enter') commitRow(e.currentTarget.value) },
-                onBlur: (e) => commitRow(e.currentTarget.value),
-              })
-              : h(Select, { value: cur, width: 240, options: opts, onChange: (v) => {
-                // 下拉里选「手动输入」：留在本行，让上面的输入框出现
-                if (v === '__manual__') { setTyping((t) => ({ ...t, [id]: '' })); return }
-                commitRow(v)
-              } }),
+            h('input', {
+              className: 'ab-input', style: { width: 240 }, value: shown,
+              placeholder: wantKind === 'group' ? '填群号' : '填 QQ 号',
+              inputMode: 'numeric',
+              // 敲的时候只进暂存，不逐字改配置里的 key（否则整行被重建、光标丢失）
+              onChange: (e) => {
+                const v = e.target.value.replace(/\D/g, '')
+                setTyping((t) => ({ ...t, [id]: v }))
+              },
+              onKeyDown: (e) => { if (e.key === 'Enter') commitRow(e.currentTarget.value) },
+              onBlur: (e) => commitRow(e.currentTarget.value),
+            }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
-            const m2 = { ...m }
-            if (v) m2[id] = v; else delete m2[id]
-            setDraft(setPath(draft, 'persona.' + mapKey, m2))
+            // 同样必须函数式更新，别用旧的 m 重建
+            setDraft((prev) => {
+              const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+              const m2 = { ...cur2 }
+              if (v) m2[id] = v; else delete m2[id]
+              return setPath(prev, 'persona.' + mapKey, m2)
+            })
           } }),
-          h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删'))
+          h(Btn, { small: true, kind: 'danger', onClick: () => {
+            setTyping((t) => { const n = { ...t }; delete n[id]; return n })
+            setDraft((prev) => {
+              const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+              const m2 = { ...cur2 }
+              delete m2[id]
+              return setPath(prev, 'persona.' + mapKey, m2)
+            })
+          } }, '删'))
         })
-        const noMore = candidates.length === 0
+        // 现在只用手输，不再依赖「机器人聊过哪些群」，所以没有「没候选」这回事
+        const noMore = false
         return h(Card, { title, desc: hint,
           // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
           // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
-          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
+          right: h(Btn, { small: true, onClick: () => setDraft((prev) => {
+            // 函数式更新：新行加在「最新」的分行表上，而不是渲染时的旧快照
+            const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+            return setPath(prev, 'persona.' + mapKey, { ...cur2, ['#new' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)]: '' })
+          }) }, '＋ 添加') },
           rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，点「＋ 添加」手输号码就行。' : '还没单独指定'),
           h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
       }
