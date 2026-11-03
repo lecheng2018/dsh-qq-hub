@@ -74,6 +74,30 @@ export function deletePersona(id) {
   if (existsSync(f)) unlinkSync(f)
 }
 
+/**
+ * 按聊天选人设 id。优先级和 chatModels 完全一致：
+ *   这个群/这个人单独指定 > 群默认/私聊默认 > 全局 current
+ * 只认「指定了且非空」的层级，空串一律视为「没指定，往下落」。
+ * @param {{kind?:string, userId?:string, groupId?:string}} chat
+ * @param {object} cfg
+ * @returns {string} 人设 id（可能为空串，由调用方决定怎么兜底）
+ */
+export function personaIdFor (chat, cfg) {
+  const p = (cfg && cfg.persona) || {}
+  const kind = chat && chat.kind
+  const pick = (...ids) => ids.find((x) => typeof x === 'string' && x.trim()) || ''
+  if (kind === 'group') {
+    const gid = String((chat && chat.groupId) || '')
+    return pick(p.groups && p.groups[gid], p.groupDefault, p.current, 'dafeiyu')
+  }
+  if (kind === 'private') {
+    const uid = String((chat && chat.userId) || '')
+    return pick(p.privates && p.privates[uid], p.privateDefault, p.current, 'dafeiyu')
+  }
+  // system / 其他：只走全局
+  return pick(p.current, 'dafeiyu')
+}
+
 /** 当前人格正文；找不到就退回第一个，再不行给一句兜底，保证提示词变量永远有值。 */
 export function currentPersonaText(currentId) {
   const p = readPersona(currentId) || (listPersonas()[0] && readPersona(listPersonas()[0].id))

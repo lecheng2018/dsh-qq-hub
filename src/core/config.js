@@ -75,7 +75,15 @@ const DEFAULTS_RAW = {
     // 实验性订阅接法；登录令牌独立保存在数据目录，不进入配置。
     codex: { model: 'gpt-image-2', quality: 'auto', background: 'auto' },
   },
-  persona: { current: 'dafeiyu' },
+  // 人设：current 是全局默认；personaMap 按聊天覆盖（形状和 chatModels 一致，优先级也一样）
+  //   某个群/私聊单独指定 > 群默认/私聊默认 > current
+  persona: {
+    current: 'dafeiyu',
+    privateDefault: '', // 留空 = 用 current
+    groupDefault: '',
+    privates: {}, // { '444555666': 'persona-id' }
+    groups: {}, // { '333444555': 'persona-id' }
+  },
   // 主人私聊里问起群里的事：把最近 24 小时的群聊流水补进这一轮（默认关，开启前先把群加进白名单）
   group: { ...DEFAULT_GROUP_POLICY, overrides: {}, ownerBrief: { enabled: false, lines: 12, groups: [] } },
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
@@ -291,6 +299,29 @@ const qq = (v) => String(v ?? '').replace(/\D/g, '')
 const qqList = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[\s,，;；]+/)).map(qq).filter(Boolean))]
 const hhmm = (v, d) => (/^\d{1,2}:\d{2}$/.test(String(v)) ? String(v) : d)
 
+/**
+ * 人设配置归一化。
+ * 兼容三种老形状：字符串（直接是人设 id）、{ current }、以及新版带 personaMap 的对象。
+ * 引用了不存在的人设一律清空（回落到上一级默认），避免面板上选到一个已经删掉的人格。
+ */
+function normalizePersona (p) {
+  const ok = (id) => String(id || '').trim()
+  if (typeof p === 'string') return { current: ok(p) || 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {} }
+  const o = isObj(p) ? p : {}
+  const mapIds = (m) => {
+    const out = {}
+    if (isObj(m)) for (const [k, v] of Object.entries(m)) { const id = ok(v); if (k && id) out[String(k).replace(/\D/g, '')] = id }
+    return out
+  }
+  return {
+    current: ok(o.current) || 'dafeiyu',
+    privateDefault: ok(o.privateDefault),
+    groupDefault: ok(o.groupDefault),
+    privates: mapIds(o.privates),
+    groups: mapIds(o.groups),
+  }
+}
+
 export function normalize(raw) {
   const c = deepMerge(DEFAULTS, raw)
   c.enabled = bool(c.enabled, false)
@@ -315,6 +346,9 @@ export function normalize(raw) {
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
   c.chatModels = normalizeChatModels(c.chatModels)
+  // 人设：兼容老配置（早期直接存字符串 / 只有 current 两种形状）。
+  // 不在这里校验人设是否存在——config 不认识文件系统，校验放到 personas.js 里做。
+  c.persona = normalizePersona(c.persona)
   c.profilePerms = Object.fromEntries(PROFILE_PERM_KEYS.map((k) => [k, PROFILE_PERM_LEVELS.includes(c.profilePerms?.[k]) ? c.profilePerms[k] : profilePermDefault(k)]))
   // 旧版 douyinDm 是「回别人私信」的权限，含义已不同（现在是主动发私信），老配置一律回到默认「仅主人」
   if (isObj(raw?.profilePerms) && 'douyinDm' in raw.profilePerms) c.profilePerms.douyinDm = profilePermDefault('douyinDm')
