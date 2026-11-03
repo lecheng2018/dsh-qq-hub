@@ -128,12 +128,15 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     const d = seg.data || {}
     let buf
     try {
-      buf = await segmentBytes(seg, onebot, { maxBytes: 1.5 * 1024 * 1024 })
+      // 下载上限跟判定阈值用同一套（默认 3MB）：1.5MB 的旧上限会先把大图掐掉，轮不到尺寸判定
+      buf = await segmentBytes(seg, onebot, { maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })
     } catch (error) {
       return { ok: false, reason: '下载失败：' + error.message }
     }
     const { width, height } = imageSize(buf)
-    if (!stickerSizeOk({ width, height, bytes: buf.length })) return { ok: false, reason: `尺寸不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB）` }
+    // 尺寸阈值可由 config.stickers.maxSide / maxBytes 覆盖；默认从 520 放宽到 1200 ——
+    // 520 是老 QQ 小图时代的标准，现在 QQ 表情普遍 500~1088px，实测 58 张全被旧阈值拒收。
+    if (!stickerSizeOk({ width, height, bytes: buf.length }, { maxSide: cfg.maxSide ?? 1200, maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })) return { ok: false, reason: `尺寸不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB）` }
     const md5 = createHash('md5').update(buf).digest('hex')
     const lib = loadLibrary()
     if (lib.items.some((i) => i.md5 === md5)) return { ok: false, reason: '已经有了' }
