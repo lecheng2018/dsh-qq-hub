@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { extractUrls } from '../src/modules/multi-parser/parser.js'
+import { extractUrls, looksBlocked, vetResult } from '../src/modules/multi-parser/parser.js'
 import { formatCardText, probeVideoSizeMB } from '../src/modules/multi-parser/delivery.js'
 import multiParser from '../src/modules/multi-parser/index.js'
 import { BUILTINS } from '../src/modules/index.js'
@@ -148,4 +148,59 @@ test('extractUrls: 识别真实复杂的各平台分享口令与短链 (抖音/�
 
   const fanqieCommand = '我在番茄免费小说看《大奉打更人》，强烈推荐！ https://changdunovel.com/t/abcxyz/ 点击阅读'
   assert.deepEqual(extractUrls(fanqieCommand), ['https://changdunovel.com/t/abcxyz/'])
+})
+
+test('looksBlocked: 反爬验证页要被认出来，不能当正常内容发出去', () => {
+  // 贴吧无 cookie 时真实返回的就是这个标题
+  assert.equal(looksBlocked('百度安全验证'), true, '「百度安全验证」必须判定为拦截页')
+  assert.equal(looksBlocked('请完成人机验证'), true)
+  assert.equal(looksBlocked('访问过于频繁，请稍后再试'), true)
+  assert.equal(looksBlocked('Just a moment...'), true)
+  assert.equal(looksBlocked('Enable JavaScript and cookies to continue'), true)
+  assert.equal(looksBlocked('该内容已被删除'), true)
+  assert.equal(looksBlocked(''), false, '空文本不算拦截页')
+  // 正文里出现也不行（有时候标题正常、正文是验证页）
+  assert.equal(looksBlocked('正常标题', '请输入验证码后继续'), true)
+  // 正常内容不能误杀
+  assert.equal(looksBlocked('【官方 MV】Never Gonna Give You Up', '一首歌'), false)
+})
+
+test('vetResult: 拦截页与空壳结果一律丢弃，不发给用户', () => {
+  // 1. 反爬页：贴吧真实遇到的情况
+  assert.equal(vetResult({ platformName: '百度贴吧', title: '百度安全验证', summary: '', images: [] }), null)
+
+  // 2. 套话空壳：微博兜底分支把标题抄进摘要，看着有内容其实啥也没有
+  assert.equal(
+    vetResult({ platformName: '微博', title: '微博内容', summary: '微博内容', images: [], videoUrl: '' }),
+    null,
+    '标题和摘要都是套话时算空壳',
+  )
+  assert.equal(vetResult({ platformName: '知乎', title: '知乎内容', summary: '', images: [] }), null)
+  assert.equal(vetResult(null), null)
+
+  // 3. 有真实内容要放过
+  const ok = vetResult({
+    platformName: 'Bilibili',
+    title: '【官方 MV】Never Gonna Give You Up',
+    author: 'Rick Astley',
+    summary: '经典 MV',
+    images: ['https://i0.hdslb.com/a.jpg'],
+    videoUrl: 'https://x.bilivideo.com/a.mp4',
+  })
+  assert.ok(ok, '真内容不能被误杀')
+  assert.equal(ok.title, '【官方 MV】Never Gonna Give You Up')
+})
+
+test('vetResult: 字段结构补齐，下游不必到处判 undefined', () => {
+  // 小红书/知乎/微信/贴吧/番茄/GitHub/小黑盒 原本压根没有 videoUrl 字段
+  const r = vetResult({ platformName: 'GitHub', title: 'some/repo', url: 'https://github.com/a/b' })
+  assert.ok(r)
+  assert.equal(r.videoUrl, '', 'videoUrl 必须补成空字符串，而不是 undefined')
+  assert.deepEqual(r.images, [], 'images 必须是数组')
+  assert.equal(r.author, '')
+  assert.equal(r.summary, '')
+  assert.equal(r.cover, '')
+  // images 里有 null 也要清掉
+  const r2 = vetResult({ platformName: '小红书', title: '标题', summary: '有描述', images: ['a.jpg', null, '', 'b.jpg'] })
+  assert.deepEqual(r2.images, ['a.jpg', 'b.jpg'])
 })
