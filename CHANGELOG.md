@@ -13,6 +13,8 @@
   - 群聊上下文不再注入任何「经历」类内容；`buildProfile` 不再把 global 档案混进来。
   - 老数据迁移脚本 `scripts/fix-memory-scope.mjs` 改为「兜底落主人私聊」（原先保持 global）：先体检，确认无误再加 `--write`。
 
+- **修：迁移脚本找错了数据目录，命名空间迁移后会「找不到记忆文件」**：`scripts/fix-memory-scope.mjs` 之前把数据目录硬编码成 `plugins-data/aurabot`，而运行时 `store.js` 在命名空间迁移后优先读 `plugins-data/dsh-qq-hub`——照着文档跑迁移会直接报「找不到记忆文件」，等于迁移没跑，群聊照样能搜到老记忆。现在脚本的解析顺序与 `store.js` 完全一致（`DSH_QQ_HUB_DATA_DIR` / `AURABOT_DATA_DIR` → 新目录 → 老目录兜底），并补了 5 条回归测试守住这条一致性。
+
 - **新增：`/new` 清掉当前聊天的记忆**，与 `/reset`（只重开对话）分工。
 
 - **新增：分享抖音视频时把视频本身发过来**，不再只丢一条链接。`normalizeAweme` 提取 `videoUrls` / `images`；新增 `src/douyin/media.js`（带 referer 与 UA 下载、先查 `content-length`、`.part` 改名落位、多域名重试）；发送失败才回落到文字 + 链接。
@@ -28,7 +30,9 @@
 
 - **修：面板导出引用旧名导致整个插件加载失败**：`client/client.js` 的 `exports.QQHubPage` 误写成 `AurabotPage`，已改正；`package.json`、`src/host.js`、`client.js` 三处 id 对齐为 `qq-hub`。
 
-- **测试**：新增记忆作用域、老数据迁移、内容解析与抖音媒体等回归用例。
+- **测试**：新增记忆作用域、老数据迁移、内容解析与抖音媒体等回归用例；另有 `test/scope-migration-script.test.js` 专项守住迁移脚本与运行时数据目录的一致性。
+
+- **打包**：`files` 增加 `scripts`，安装包里自带 `scripts/fix-memory-scope.mjs`，老数据迁移不必回仓库拉脚本。
 
 - **偷表情新增三种模式 + `qq_collect_sticker` 工具**：面板「表情包 → 怎么偷」可选「全都偷」（默认，保持原行为）、「她挑」（先把表情记下来并给她一句轻提示，她喜欢才凭编号收）、「只听主人的」（只有主人私聊 / 这一轮只有主人说话时才提示并允许她收；有别人在场就要主人发话）。后两种模式下表情按会话暂存、30 分钟内有效、重启不丢；她可以用新工具 `qq_collect_sticker` 按编号收（也能收自己刚画的图），并顺手收藏到 QQ。新增 11 条回归测试。
 
