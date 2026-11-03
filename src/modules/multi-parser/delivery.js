@@ -1,3 +1,5 @@
+import { downloadVideo, safeName } from '../../douyin/media.js'
+
 // 媒体投递与卡片渲染引擎：将解析结果安全转换为 QQ 消息段或合并转发卡片
 
 /** 格式化纯文本摘要卡片 */
@@ -46,7 +48,31 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
 
   // 1. 如果包含视频
   if (videoUrl) {
-    const sizeMB = await probeVideoSizeMB(videoUrl)
+    // 用链接里的数字 id 当文件名尾巴，免得两条视频撞名互相覆盖
+    const vid = (String(result.url || '') + String(videoUrl)).match(/(\d{6,})/)?.[1] || ''
+    // 先把视频真正下到本地再发：直链直接丢给 OneBot 十有八九拉不动
+    // （抖音/B站直链都带防盗链，网关那边拿不到就会静默失败），
+    // 而且下载下来才能确认真实体积，限额才算数。
+    let localFile = ''
+    let sizeMB = 0
+    try {
+      const dir = typeof api.workspaceDir === 'function'
+        ? api.workspaceDir('multi-parser-media')
+        : ''
+      if (dir) {
+        const got = await downloadVideo(
+          { videoUrls: [videoUrl], title: result.title, awemeId: vid },
+          { dir, maxMB: maxVideoMB, referer: result.referer || undefined },
+        )
+        localFile = got.path
+        sizeMB = Math.round((got.bytes / 1024 / 1024) * 10) / 10
+        api.log.debug?.(`[multi-parser] 视频已下载：${localFile}（${sizeMB} MB）`)
+      }
+    } catch (err) {
+      api.log.debug?.('[multi-parser] 视频下载失败，退回直链:', err.message)
+    }
+
+    // 超体积的走群文件 / 直链
     if (sizeMB > maxVideoMB) {
       if (videoOverLimit === 'group_file' && chatId.startsWith('group:')) {
         const gid = Number(chatId.slice(6))
@@ -54,22 +80,25 @@ export async function deliverParseResult(api, chatId, result, cfg = {}) {
           await api.sendText(chatId, `${cardText}\n⏳ 视频约 ${sizeMB}MB，正在上传至群文件...`)
           await api.onebot('upload_group_file', {
             group_id: gid,
-            file: videoUrl,
-            name: `${(result.title || 'video').slice(0, 40)}.mp4`,
+            file: localFile || videoUrl,
+            name: safeName(result.title, vid),
           })
           return true
         } catch (err) {
           api.log.debug('[multi-parser] 上传群文件失败，回退直链:', err.message)
         }
       }
-      // 回退直链
       await api.sendText(chatId, `${cardText}\n📹 视频较大（约 ${sizeMB}MB），直链播放：${videoUrl}`)
       return true
     }
 
-    // 正常视频：发送文本 + 视频段
+    // 正常视频：优先发本地的（能真发出去），下载失败才把直链交给网关一试
     try {
       await api.sendText(chatId, cardText)
+      if (localFile && typeof api.sendFile === 'function') {
+        await api.sendFile(chatId, localFile, safeName(result.title, vid))
+        return true
+      }
       await api.sendSegments(chatId, [{ type: 'video', data: { file: videoUrl } }])
       return true
     } catch (err) {
