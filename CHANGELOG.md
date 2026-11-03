@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.3.7
+
+- **修：定时刷的后台会话拿不到模块工具**。`runSystemTurn` 建的 `system:ext-heybox` 等后台轮次里，`profileToolVisible` 对 `chat.kind==='system'` 两个分支都不命中，`heybox_hot` / `heybox_feed` / `heybox_search` 一个都挂不上，她只能回「这轮会话里这些工具都没有挂上来」。现在 system 会话视为主人上下文（off 档仍拒绝），`owner` 档也不再要求 `allOwner`。新增 `test/profile-tool-system-chat.test.js` 五条回归。
+
+- **修：表情收集阈值过时，实测 58 张全被拒**。`stickerSizeOk` 旧的 `maxSide=520` 是老 QQ 小图标准，现在 QQ 表情普遍 500~1088px。放宽为 `maxSide=1200` / `maxBytes=3MB`（可用 `config.stickers.maxSide` / `maxBytes` 覆盖），下载上限同步对齐。
+
+- **新增：长气泡硬拆**。群友不写长句：`splitLongLine` 在发送出口把超 30 字的气泡按句读（。！？；）拆条，片段仍超长再按逗号/顿号/冒号二次切。无论模型输出多长，到 QQ 上都是碎句连发（配合既有 `bubbleDelay` 打字节奏）。短句原样通过。
+
+- **新增：破折号发送端硬拦**。提示词禁令实测压不住（群友示范 + styles 自我强化会把它顶回来），`stripMarkdown` 现在把行尾孤立破折号删除、句中的替换为逗号。模型无论输出什么，破折号都到不了 QQ。
+
 ## 1.3.0
 
 本版是底层重构版：记忆从「到处补过滤」改成「结构上不可能越权」，并补齐抖音视频回发与内容解析的健壮性。**升级前请先看第一条。**
