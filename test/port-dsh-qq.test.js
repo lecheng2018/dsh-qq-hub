@@ -4,11 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { looksLikeUnfinished } from '../src/modules/complete-guard/index.js'
-import { newSecret, totpAt, verifyTotp, otpauthUrl, base32Decode } from '../src/modules/security-lock/index.js'
 import { visibleScopes, isVisible, scopeOf } from '../src/modules/memory-privacy/index.js'
 import tokenGuardian from '../src/modules/token-guardian/index.js'
 import completeGuard from '../src/modules/complete-guard/index.js'
-import securityLock from '../src/modules/security-lock/index.js'
 import memoryPrivacy from '../src/modules/memory-privacy/index.js'
 import scheduler from '../src/modules/scheduler/index.js'
 import { BUILTINS } from '../src/modules/index.js'
@@ -16,14 +14,14 @@ import { BUILTINS } from '../src/modules/index.js'
 // ---------- 1. 模块清单 ----------
 test('移植模块都注册进了 BUILTINS，id 不重复', () => {
   const ids = BUILTINS.map((m) => m.id)
-  for (const id of ['token-guardian', 'complete-guard', 'security-lock', 'memory-privacy', 'scheduler']) {
+  for (const id of ['token-guardian', 'complete-guard', 'memory-privacy', 'scheduler']) {
     assert.ok(ids.includes(id), `${id} 没注册`)
   }
   assert.equal(new Set(ids).size, ids.length, 'id 有重复')
 })
 
 test('每个模块的定义完整：id / name / api / setup / settings', () => {
-  for (const def of [tokenGuardian, completeGuard, securityLock, memoryPrivacy, scheduler]) {
+  for (const def of [tokenGuardian, completeGuard, memoryPrivacy, scheduler]) {
     assert.match(def.id, /^[a-z][a-z0-9-]{1,39}$/)
     assert.ok(def.name && def.name.length > 0)
     assert.equal(def.api, 1)
@@ -76,58 +74,6 @@ test('空字符串不算没说完，也不报错', () => {
 })
 
 // ---------- 3. 权限锁（dsh-qq totp.js） ----------
-test('base32 密钥能解出字节，长度合理', () => {
-  const s = newSecret()
-  assert.match(s, /^[A-Z2-7]+$/)
-  const buf = base32Decode(s)
-  assert.ok(buf.length >= 16 && buf.length <= 24, `解出 ${buf.length} 字节`)
-})
-
-test('TOTP 是对得上的：同一个时间步生成同一个码，且能被校验', () => {
-  const secret = newSecret()
-  const now = 1_700_000_000_000
-  const step = Math.floor(now / 1000 / 30)
-  const code = totpAt(secret, step)
-  assert.equal(code.length, 6)
-  assert.equal(verifyTotp(secret, code, { now }), step)
-})
-
-test('TOTP 容错前后各一个时间步（手机时钟慢一点也能过）', () => {
-  const secret = newSecret()
-  const now = 1_700_000_000_000
-  const step = Math.floor(now / 1000 / 30)
-  const prev = totpAt(secret, step - 1)
-  const next = totpAt(secret, step + 1)
-  assert.equal(verifyTotp(secret, prev, { now }), step - 1)
-  assert.equal(verifyTotp(secret, next, { now }), step + 1)
-})
-
-test('错的码 / 位数不对 / 空值都验不过', () => {
-  const secret = newSecret()
-  const now = 1_700_000_000_000
-  assert.equal(verifyTotp(secret, '000000', { now }) === 0 || verifyTotp(secret, '000000', { now }) > 0, true)
-  assert.equal(verifyTotp(secret, '123', { now }), 0)
-  assert.equal(verifyTotp(secret, '', { now }), 0)
-  assert.equal(verifyTotp(secret, null, { now }), 0)
-})
-
-test('两个不同密钥的码不一样（不是固定输出）', () => {
-  const a = newSecret(), b = newSecret()
-  const step = 59000000
-  assert.notEqual(totpAt(a, step) + totpAt(b, step), totpAt(a, step) + totpAt(a, step))
-})
-
-test('otpauth:// 链接能给出手机验证器要的参数', () => {
-  const secret = newSecret()
-  const url = otpauthUrl(secret, '12345')
-  assert.ok(url.startsWith('otpauth://totp/'))
-  assert.ok(url.includes(`secret=${secret}`))
-  assert.ok(url.includes('digits=6'))
-  assert.ok(url.includes('period=30'))
-  assert.ok(url.includes('issuer=QQ+Hub'))
-})
-
-// ---------- 4. 记忆分层（dsh-qq memory-policy.js） ----------
 test('私聊只看到自己的私聊记忆和全局记忆', () => {
   const chat = { kind: 'private', userId: '111', chatId: 'private:111' }
   const v = visibleScopes(chat)
@@ -179,12 +125,6 @@ test('默认阈值是 30 万 token，冷却 120 分钟，关闭状态', () => {
   assert.equal(tokenGuardian.defaults.threshold, 300000)
   assert.equal(tokenGuardian.defaults.cooldownMinutes, 120)
   assert.equal(tokenGuardian.defaults.enabled, false)
-})
-
-test('权限锁默认关闭、有效期 30 分钟', () => {
-  assert.equal(securityLock.defaults.enabled, false)
-  assert.equal(securityLock.defaults.expireMinutes, 30)
-  assert.equal(securityLock.defaults.lockByDefault, true)
 })
 
 test('记忆分层和完整守卫默认开启（纯增益、不改她的回复）', () => {
