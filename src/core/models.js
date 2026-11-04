@@ -48,9 +48,15 @@ export function dedupeModelList (groups) {
       }
       // 同一个模型又出现在另一个 provider 下：合并
       if (!hit.providers.includes(provider)) hit.providers.push(provider)
-      // 能力取并集（任一 provider 能看图就算能看图），但**首选 provider 保持不变**：
-      // 配置里存的可能是 fan 这种不带 -vision 的名字，换成 fan-vision 会让它匹配不上列表。
-      if (vision && !hit.vision) hit.vision = true
+      if (vision && !hit.vision) {
+        // 换成能看图的那个 provider 作为首选：下游要图时得用支持 vision 的那个。
+        // 代价是 config 里存的 'fan' 会匹配不上列表里的 'fan-vision' —— 这个由
+        // chat-model 的 provider 宽松匹配兜住（base 与 base-vision 视为同一家）。
+        hit.vision = true
+        hit.provider = provider
+        hit.raw = m
+        hit.preferred = { provider, model }
+      }
     }
   }
   return [...byModel.values()]
