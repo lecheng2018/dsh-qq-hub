@@ -513,6 +513,43 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         onBlur: () => setText(parse(text).join('\n')) })
     }
 
+    /** 单行版 ListArea：输入过程保留原文（逗号、空格都能敲进去），失焦才解析成列表写回。
+     * 原来直接在 onChange 里 split+filter，敲分隔符的瞬间前半段就被处理掉、光标乱跳，
+     * 没法正常输入「a, b」这样的内容。numbers=true 时只保留数字（QQ 号名单用）。 */
+    function ListInput({ value, onChange, placeholder, numbers, style }) {
+      const parse = (t) => {
+        const parts = String(t).split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean)
+        return numbers ? parts.map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4) : parts
+      }
+      const [text, setText] = useState(value.join(', '))
+      useEffect(() => { if (parse(text).join(',') !== value.join(',')) setText(value.join(', ')) }, [value.join(',')])
+      return h('input', { className: 'ab-input', style: { width: '100%', ...(style || {}) }, placeholder, value: text,
+        onChange: (e) => { setText(e.target.value); onChange(parse(e.target.value)) },
+        onBlur: () => { const t = parse(text).join(', '); setText(t); onChange(parse(t)) } })
+    }
+
+    /** 百分数行：输入过程保留原始字符串（打 0、0.、065 都不会被强行回写），
+     * 失焦时才解析写回。原来的受控 number input 每敲一键就 Number() 一次：
+     * 敲「0.」被归一成 0、光标跳到末尾，再敲就变成 065；清空时 Number('')=0
+     * 和残留的旧值打架，保存出来是 100。清空 + 失焦 = 稳定写 0。 */
+    function PercentRow({ label, value, fallback, write, remove }) {
+      const shown = () => Math.round((Number(value !== undefined && value !== null && value !== '' ? value : (fallback ?? 0)) || 0) * 100)
+      const [text, setText] = useState(String(shown()))
+      useEffect(() => { const s = String(shown()); if (parsePct(text) !== shown()) setText(s) }, [shown()])
+      const parsePct = (t) => { const n = Number(String(t).trim()); if (!Number.isFinite(n) || n < 0) return 0; const v = n > 1 ? n / 100 : n; return Math.round(Math.min(v, 1) * 100) }
+      const commit = () => {
+        const p = parsePct(text)
+        setText(String(p))
+        write(p / 100)
+      }
+      return h(Row, { label },
+        h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: text,
+          onChange: (e) => setText(e.target.value), onBlur: commit,
+          onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } } }),
+        h('span', { className: 'ab-muted' }, '% 插话'),
+        remove ? h(Btn, { small: true, kind: 'ghost', onClick: remove }, '移除') : null)
+    }
+
     // 绑定到草稿配置的控件
     function useField(draft, setDraft) {
       return {
@@ -1379,22 +1416,23 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '同类 bot 太多时不参与', desc: '同一个群里同类 bot 在刷屏时就让她闭嘴，别跟着一起刷。默认只认名字里有「肥鱼」「鲸」「fish」的；名字看不出来的 bot（比如「小鱼」）要在这里手动加号码。' },
           h(Row, { label: '启用', hint: '关掉就完全不判定，她照常按插话概率说话。' }, f.sw('group.fishGuard.enabled')),
           h(Row, { label: '按号码认同类 bot', hint: '逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）。' },
-            h('input', { className: 'ab-input', style: { width: '100%' }, placeholder: '例如 321321321, 456456456',
-              value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []).join(', '),
-              onChange: (e) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4))) })),
+            // 输入过程保留原文（能敲逗号和空格），失焦才解析写回 —— 原来逐键 split+filter，
+            // 敲到分隔符的那一刻内容就被吃掉了
+            h(ListInput, { value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []),
+              placeholder: '例如 321321321, 456456456', numbers: true,
+              onChange: (list) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', list)) })),
           h(Row, { label: '按名字认同类 bot', hint: '在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。' },
-            h('input', { className: 'ab-input', style: { width: '100%' }, placeholder: '例如 小鱼, 咸鱼罐头',
-              value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : []).join(', '),
-              onChange: (e) => setDraft((prev) => setPath(prev, 'group.fishGuard.nameSuffixes', String(e.target.value).split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean))) })),
+            h(ListInput, { value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : []),
+              placeholder: '例如 小鱼, 咸鱼罐头',
+              onChange: (list) => setDraft((prev) => setPath(prev, 'group.fishGuard.nameSuffixes', list)) })),
         ),
         h(Card, { title: '按群单独设置', desc: '某个群想让她更安静或更活跃，在这里单独设插话概率。' },
           Object.keys(overrides).length === 0 ? h('div', { className: 'ab-muted', style: { marginBottom: 10 } }, '还没有单独设置的群。') :
-            Object.entries(overrides).map(([gid, o]) => h(Row, { key: gid, label: '群 ' + gid },
+            Object.entries(overrides).map(([gid, o]) => h(PercentRow, { key: gid, label: '群 ' + gid,
+              value: o.interjectChance, fallback: draft.group.interjectChance,
               // 三个写回点全部用函数式 setDraft：旧快照会把刚删的群又写回来（与 persona 分流表同款 bug）
-              // 输入兼容两种写法：>1 当百分数（65 → 0.65），≤1 当小数（0.65 → 0.65），别再让 0.65 被 /100 两次变成 0.0065
-              h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: pct(o.interjectChance ?? draft.group.interjectChance), onChange: (e) => { const n = Number(e.target.value); const v = n > 1 ? n / 100 : n; setDraft((prev) => setPath(prev, 'group.overrides', { ...(prev.group.overrides || {}), [gid]: { ...o, interjectChance: v } })) } }),
-              h('span', { className: 'ab-muted' }, '% 插话'),
-              h(Btn, { small: true, kind: 'ghost', onClick: () => setDraft((prev) => { const n = { ...(prev.group.overrides || {}) }; delete n[gid]; return setPath(prev, 'group.overrides', n) }) }, '移除'))),
+              write: (v) => setDraft((prev) => { const cur = (prev.group.overrides || {})[gid] || {}; return setPath(prev, 'group.overrides', { ...(prev.group.overrides || {}), [gid]: { ...cur, interjectChance: v } }) }),
+              remove: () => setDraft((prev) => { const n = { ...(prev.group.overrides || {}) }; delete n[gid]; return setPath(prev, 'group.overrides', n) }) })),
           h('div', { className: 'ab-flex' }, h('input', { className: 'ab-input', placeholder: '群号', value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, '')) }),
             h(Btn, { small: true, disabled: !newGid, onClick: () => { setDraft((prev) => setPath(prev, 'group.overrides', { ...(prev.group.overrides || {}), [newGid]: { interjectChance: prev.group.interjectChance } })); setNewGid('') } }, '添加')),
         ),
@@ -2205,6 +2243,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [mem, setMem] = useState(null)
       const [stats, setStats] = useState(null)
       const [q, setQ] = useState('')
+      // 记忆条目折叠表：id → true 折叠 / false 展开；未记录的按折叠算（默认收起）
+      const [collapsed, setCollapsed] = useState({})
       const [ins, setIns] = useState(null)
       const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
       const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null) })
@@ -2257,7 +2297,14 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('div', { className: 'ab-section-title' }, '翻一翻'),
           h('input', { className: 'ab-input wide', placeholder: '搜索记忆，例如：白米饭、游戏、约定…', value: q, onChange: (e) => setQ(e.target.value) }),
           mem === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : mem.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没找到相关的记忆' : '还没有记住什么。' }) :
-            h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast })))),
+            h('div', null,
+              // 默认折叠只显「时间 + 一行预览」，几百条不再把页面拉爆；批量按钮放列表右上角
+              h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
+                h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条'),
+                h('div', { className: 'ab-spacer' }),
+                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed({}) }, '批量展开'),
+                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed(Object.fromEntries(mem.map((m) => [m.id, true]))) }, '批量折叠')),
+              h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, collapsed: collapsed[m.id] !== false, onToggle: () => setCollapsed((prev) => ({ ...prev, [m.id]: !(prev[m.id] !== false) })), onChanged: () => load(), toast }))))),
         h(RecallLog, null),
         h(MemoryImport, { toast, onDone: () => load() }),
       )
@@ -2276,13 +2323,23 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
     function ProfileRow({ p, toast, onChanged }) {
       const [text, setText] = useState(p.text)
       const [busy, setBusy] = useState(false)
+      const [confirming, setConfirming] = useState(false)
       useEffect(() => { setText(p.text) }, [p.text])
+      // 档案按「QQ+作用域」存，同一 QQ 可能有多份；删哪份必须带上 scope，
+      // 只传 qq 会把 global 那份误删（profiles/save 走的就是这个键）。
+      const del = async () => { const r = await post('/profiles/delete', { qq: p.qq, scope: p.scope }); toast(r.message, r.ok ? 'ok' : 'err'); onChanged() }
       return h('div', { className: 'ab-li', style: { alignItems: 'flex-start' } },
-        h('div', { className: 'meta' }, h('b', null, p.name || p.qq), h('br'), h('span', { className: 'ab-small' }, p.qq), h('br'), h('span', { className: 'ab-small' }, timeAgo(p.at))),
+        h('div', { className: 'meta' }, h('b', null, p.name || p.qq), h('br'), h('span', { className: 'ab-small' }, p.qq), h('br'),
+          h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11, background: p.scope === 'global' ? 'var(--ab-sea, #35506b)' : 'rgba(0,0,0,.18)' } },
+            p.scope === 'global' ? '通用' : p.scope.startsWith('group:') ? '群 ' + p.scope.slice(6) : '私聊'),
+          h('br'), h('span', { className: 'ab-small' }, timeAgo(p.at))),
         h('textarea', { className: 'ab-input wide', rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: 1 } }),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-          h(Btn, { small: true, kind: 'primary', disabled: text === p.text, onClick: async () => { const r = await post('/profiles/save', { qq: p.qq, text }); toast(r.message, 'ok'); onChanged() } }, '保存'),
-          h(Btn, { small: true, kind: 'ghost', disabled: busy, onClick: async () => { setBusy(true); const r = await post('/profiles/rebuild', { qq: p.qq }); setBusy(false); toast(r.message, r.ok ? 'ok' : 'err'); onChanged() } }, busy ? '重写中…' : '按记忆重写')))
+          h(Btn, { small: true, kind: 'primary', disabled: text === p.text, onClick: async () => { const r = await post('/profiles/save', { qq: p.qq, text, scope: p.scope }); toast(r.message, 'ok'); onChanged() } }, '保存'),
+          h(Btn, { small: true, kind: 'ghost', disabled: busy, onClick: async () => { setBusy(true); const r = await post('/profiles/rebuild', { qq: p.qq, scope: p.scope }); setBusy(false); toast(r.message, r.ok ? 'ok' : 'err'); onChanged() } }, busy ? '重写中…' : '按记忆重写'),
+          confirming
+            ? h(Btn, { small: true, kind: 'ghost', onClick: () => { setConfirming(false); del() } }, '确认删除')
+            : h(Btn, { small: true, kind: 'ghost', onClick: () => setConfirming(true) }, '删除')))
     }
 
     /** 最近几轮她想起了什么、因为哪些词想起来的。 */
@@ -2354,14 +2411,25 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [text, setText] = useState(p.list.map((x) => x.text).join('\n'))
       const changed = text !== p.list.map((x) => x.text).join('\n')
       const who = p.key.startsWith('group:') ? '群 ' + p.key.slice(6) : (p.name ? p.name + '（' + p.key.slice(3) + '）' : p.key.slice(3))
+      // 单条删除：textarea 是「一行一条」，按行号找到对应条目的 id 再删
+      const delOne = async (lineIdx) => {
+        const item = p.list[lineIdx]
+        if (!item) return
+        const r = await post('/insights/delete', { key: p.key, id: item.id })
+        toast(r.message, r.ok ? 'ok' : 'err')
+        onSaved()
+      }
       return h('div', { style: { marginBottom: 12 } },
         h('div', { className: 'ab-flex', style: { marginBottom: 6 } }, h('b', null, who), h('span', { className: 'ab-muted ab-small' }, p.list.length + ' 条'), h('div', { className: 'ab-spacer' }),
           changed ? h(Btn, { small: true, kind: 'primary', onClick: async () => { const r = await post('/insights/save', { key: p.key, list: text.split('\n') }); toast(r.message, 'ok'); onSaved() } }, '保存') : null),
+        p.list.length ? h('div', { className: 'ab-list', style: { marginBottom: 6 } }, p.list.map((x, i) => h('div', { key: x.id || i, className: 'ab-li', style: { padding: '4px 0' } },
+          h('div', { className: 'body ab-small' }, x.text),
+          h(Btn, { small: true, kind: 'ghost', onClick: () => { if (window.confirm('删掉这条相处经验？\n\n' + x.text.slice(0, 60))) delOne(i) } }, '删')))) : null,
         h('textarea', { className: 'ab-textarea', style: { minHeight: 70, fontFamily: 'inherit' }, value: text, onChange: (e) => setText(e.target.value), placeholder: '一行一条经验' }),
         h(StyleEditor, { k: p.key, label: '说话方式', list: style || [], toast, onSaved }))
     }
 
-    function MemoryRow({ m, onChanged, toast }) {
+    function MemoryRow({ m, onChanged, toast, collapsed = true, onToggle }) {
       const [edit, setEdit] = useState(false)
       const [text, setText] = useState(m.text)
       if (m.invalidAt) {
@@ -2371,11 +2439,17 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/restore', { id: m.id }); toast('恢复了', 'ok'); onChanged() } }, '恢复'),
           h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '删掉'))
       }
+      if (collapsed && !edit) {
+        // 折叠态：时间 + 一行预览，点整行展开
+        return h('div', { className: 'ab-li', style: { cursor: 'pointer', alignItems: 'center' }, onClick: onToggle, title: '点击展开' },
+          h('div', { className: 'meta' }, timeAgo(m.at)),
+          h('div', { className: 'body' }, h('span', { className: 'ab-muted' }, (m.aboutName ? '[' + m.aboutName + '] ' : '') + (m.text.length > 48 ? m.text.slice(0, 48) + '…' : m.text)), m.importance >= 0.8 ? h('span', { title: '很重要' }, ' ★') : null))
+      }
       return h('div', { className: 'ab-li' },
         h('div', { className: 'meta' }, timeAgo(m.at), h('br'), h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11 } }, SOURCE[m.source] || '记忆')),
         edit ? h('input', { className: 'ab-input wide', value: text, onChange: (e) => setText(e.target.value), onKeyDown: async (e) => { if (e.key === 'Enter') { await post('/memory/update', { id: m.id, text }); setEdit(false); toast('改好了', 'ok'); onChanged() } if (e.key === 'Escape') setEdit(false) } })
           : h('div', { className: 'body' }, m.aboutName ? h('b', null, '[' + m.aboutName + '] ') : null, m.text, m.importance >= 0.8 ? h('span', { title: '很重要' }, ' ★') : null),
-        h(Btn, { small: true, kind: 'ghost', onClick: () => setEdit(!edit) }, edit ? '取消' : '改'),
+        h(Btn, { small: true, kind: 'ghost', onClick: () => { setEdit(!edit); if (edit && onToggle) onToggle() } }, edit ? '取消' : (collapsed ? '展开' : '收起')),
         h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '忘掉'))
     }
 

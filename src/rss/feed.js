@@ -135,7 +135,10 @@ export function parseFeed(xml, { limit = 60, summaryChars = 400 } = {}) {
     // 没有标题且没有链接的条目没有价值（常见于广告位/占位符）
     if (!title && !url) continue
     const rawSummary = tagOf(b.body, ['summary', 'description', 'content:encoded', 'content'])
-    const summary = plainText(rawSummary, { keepBreaks: false }).slice(0, summaryChars)
+    // keepBreaks: HTML 列表（ol/ul 里的 li）每个 <li> 是一条独立内容（例如福利站的
+    // 「多条福利」），keepBreaks:false 会全并成一行，名称和描述直接粘连错乱
+    // （实测 saibodan：HeyGen TTS 和 Shakti (Yotta) 两条福利粘成一坨）。
+    const summary = plainText(rawSummary, { keepBreaks: true }).slice(0, summaryChars)
     const at = parseDate(tagOf(b.body, ['pubDate', 'published', 'updated', 'dc:date', 'date']))
     const guid = plainText(tagOf(b.body, ['guid', 'id'])) || url || title
     const key = `${guid}`

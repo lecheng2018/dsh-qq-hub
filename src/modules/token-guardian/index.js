@@ -223,12 +223,14 @@ export default {
         chars: Number(st.chars || 0),
         tokens: (() => {
           try {
-            const real = api.core?.telemetry?.contextOf?.(key)
+            // 这里要查的是本行 chatId 的真实用量 —— 原来写了外层不存在的变量 key
+            //（ReferenceError 被 catch 吞掉，面板永远显示估算值而不是真实 usage）。
+            const real = api.core?.telemetry?.contextOf?.(chatId)
             if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
           } catch (error) {}
           return estimate(st.chars)
         })(),
-        estimated: !(() => { try { const r = api.core?.telemetry?.contextOf?.(key); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
+        estimated: !(() => { try { const r = api.core?.telemetry?.contextOf?.(chatId); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
         compacts: Number(st.compacts || 0),
         lastAt: Number(st.lastAt || 0),
         lastCompactAt: Number(st.lastCompactAt || 0),
