@@ -187,13 +187,72 @@ function splitLongLine(line, maxChars = 30) {
 export function splitLines(text) {
   const t = String(text || '').trim()
   if (!t) return []
-  if (t.includes('```') || t.length > 240) return [t]
+  if (t.includes('```')) return [t]
+  // 像列表 / 步骤的多行内容（一大半以数字或符号开头）整段发 —— 每一项都是一个
+  // 完整信息块，拆开反而破坏对应关系；后面超长时再按条目分页，不在条目内部截断。
   const lines = t.split(/\n+/).map((s) => s.trim()).filter(Boolean)
-  if (lines.length <= 1) return lines
-  // 像列表 / 步骤的多行内容（一大半以数字或符号开头）也整段发
+  if (lines.length <= 1) {
+    // 单行（或单段无换行）：超 240 才按句号兜底切，绝不截半句
+    if (t.length <= 240) return [t]
+    return listPages([t], t)
+  }
   const listy = lines.filter((l) => /^(\d+[.、)]|[-*•·])/.test(l)).length
-  if (listy >= Math.ceil(lines.length / 2)) return [t]
-  return lines
+  if (listy >= Math.ceil(lines.length / 2)) return listPages(lines, t)
+  // 按语义块拆：优先空行（段落边界），其次单行；一行一行发是真人打字的样子，
+  // 但一整句被字符上限拦腰切断不是 —— 上限只在块本身超长时兜底。
+  // 注意保留空行信息：先按空行切大段，大段内部再按单行。
+  const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
+  const blocks = []
+  for (const p of paragraphs) {
+    const pLines = p.split(/\n+/).map((s) => s.trim()).filter(Boolean)
+    // 单行段落直接成块；多行段落整块保留（段落是完整语义）
+    // 多行段落里如果每行都是短句（≤30 字，真人打字的样子），仍按行一条条发；
+    // 只有长行组成的段落才整块保留（段落是完整语义，拆了破坏对应关系）
+    if (pLines.length > 1 && pLines.every((l) => l.length <= 30)) {
+      for (const l of pLines) blocks.push(l)
+    } else blocks.push(pLines.join('\n'))
+  }
+  const out = []
+  for (const b of blocks) {
+    // 块不超长就整块发（可以是多行的一条消息）；超长才退回按行拆
+    if (b.length <= 240) { out.push(b); continue }
+    for (const line of b.split('\n')) {
+      if (line.length <= 240) { out.push(line); continue }
+      // 单行也超长：按句号兜底切成完整句，不在半句中间截断
+      let seg = ''
+      for (const piece of line.split(/(?<=[。！？!?；;])/)) {
+        if (seg && (seg + piece).length > 240) { out.push(seg); seg = piece }
+        else seg += piece
+      }
+      if (seg) out.push(seg)
+    }
+  }
+  return out
+}
+
+/** 列表内容的分页：以「条目」为单位凑页，每页 ≤240 字，绝不把一条内容切成两半。
+ * 普通聊天不需要它（真人消息短），这是给 RSS 摘要 / 检测汇报这类「模型一次吐出
+ * 十条福利」的场景用的 —— 以前一刀切会把第 5 条福利拦腰截断。 */
+function listPages(lines, full) {
+  const pages = []
+  let buf = ''
+  for (const l of lines) {
+    if (l.length > 240) {
+      // 单条就超长：按句号切成完整句块单独成页（仍然不在条目内部截断语义句）
+      if (buf) { pages.push(buf); buf = '' }
+      let seg = ''
+      for (const piece of l.split(/(?<=[。！？!?；;])/)) {
+        if (seg && (seg + piece).length > 240) { pages.push(seg); seg = piece }
+        else seg += piece
+      }
+      if (seg) pages.push(seg)
+      continue
+    }
+    if (buf && (buf + '\n' + l).length > 240) { pages.push(buf); buf = l }
+    else buf = buf ? buf + '\n' + l : l
+  }
+  if (buf) pages.push(buf)
+  return pages
 }
 
 function pushText(items, s) {

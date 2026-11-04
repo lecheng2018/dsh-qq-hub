@@ -116,6 +116,17 @@ export default {
       memory.setInsights(String(b.key || ''), (b.list || []).map((t) => String(t).trim()).filter(Boolean))
       return { ok: true, message: '相处经验已保存' }
     })
+    // 单条删除（2026-11-04 面板只有「保存/按记忆重写」，删不掉单条）
+    api.route('/insights/delete', async (req) => {
+      const b = await http.body(req)
+      const ok = memory.removeInsight(String(b.key || ''), String(b.id || ''))
+      return ok ? { ok: true, message: '这条相处经验已删除' } : { ok: false, message: '没找到这条记录（可能已被删过）' }
+    })
+    api.route('/profiles/delete', async (req) => {
+      const b = await http.body(req)
+      memory.removeProfile(String(b.qq || ''), String(b.scope || ''))
+      return { ok: true, message: '小档案已删除' }
+    })
     api.route('/memory/extract', async (req) => {
       const b = await http.body(req)
       // 立即整理一次：连今天的也提炼（今天的聊天流水不删，写日记还要用）

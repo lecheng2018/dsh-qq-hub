@@ -412,7 +412,12 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
   /** 面板摘要（不含提示词全文）。 */
   function status() {
     const config = purposeConfig(getConfig())
-    return summarizePurposeState(loadState(config), { config })
+    // config 里挑几个调参值一并返回：面板要显示「实际生效」的参数（minMaterials/maxCandidates 等不在 state 里）
+    const sum = summarizePurposeState(loadState(config), { config })
+    sum.minMaterials = config.minMaterials
+    sum.maxCandidates = config.maxCandidates
+    sum.carrier = carrierSettings().carrier
+    return sum
   }
 
   /** 零副作用预览：真收素材、真拼提示词，但不写状态、不生成、不投递。 */
