@@ -1650,8 +1650,12 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '表情包', right: f.sw('stickers.enabled'), desc: '回复里写 <sticker:名字> 就会发对应的表情；也会按概率自动配一张。' },
           h(Row, { label: '自动配表情的概率' }, f.percent('stickers.autoChance')),
           h(Row, { label: '夹 QQ 小黄脸', hint: '回复里能夹 QQ 自带的系统表情（/捂脸 /斜眼笑 这种），和文字在同一条消息里' }, f.sw('stickers.faces')),
-          h(Row, { label: '偷表情', hint: '别人发的表情包会被收藏（普通照片不收）。' }, f.sw('stickers.collect'), h('span', { className: 'ab-muted' }, '从群里'), f.sw('stickers.fromGroups'), h('span', { className: 'ab-muted' }, '从私聊'), f.sw('stickers.fromPrivate')),
-          draft.stickers.collect ? h(Row, { label: '怎么偷', hint: '「她挑」只递给她看，喜欢才收；「只听主人的」只在主人私聊 / 这一轮只有主人时她才可自己收，有别人在场要主人发话' },
+          h(Row, { label: '偷表情', hint: '别人发的表情包会被收藏（普通照片不收）。关掉就完全不收。' }, f.sw('stickers.collect')),
+          // 来源过滤：默认值都是 true，所以用 !== false 判断「开着」（老配置里可能没有这个键）
+          draft.stickers.collect !== false ? h(Row, { label: '从哪收', hint: '两个都关等于不偷，只留一个就只从那边收。' },
+            h('span', { className: 'ab-muted' }, '群聊'), f.sw('stickers.fromGroups'),
+            h('span', { className: 'ab-muted', style: { marginLeft: 16 } }, '私聊'), f.sw('stickers.fromPrivate')) : null,
+          draft.stickers.collect !== false ? h(Row, { label: '怎么偷', hint: '「她挑」只递给她看，喜欢才收；「只听主人的」只在主人私聊 / 这一轮只有主人时她才可自己收，有别人在场要主人发话' },
             f.choices('stickers.collectMode', [
               { value: 'auto', label: '全都偷', desc: '看到就收，不用她同意（默认，保持原行为）' },
               { value: 'ask', label: '她挑', desc: '先记着，给她一句轻提示，喜欢才凭编号收' },
