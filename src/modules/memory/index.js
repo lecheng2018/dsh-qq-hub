@@ -22,7 +22,7 @@ export default {
     api.on('prompt', (content, info) => {
       try {
         if (!info || !info.chat || info.chat.kind === 'system' || !Array.isArray(content)) return content
-        const hint = memory.recallHint(info.chat, info.queryText || '', info.prevText || '')
+        const hint = memory.recallHint(info.chat, info.queryText || '', info.prevText || '', { sessionId: info.sessionId })
         if (!hint) return content
         return [{ type: 'text', text: hint }, ...content]
       } catch (error) { return content }

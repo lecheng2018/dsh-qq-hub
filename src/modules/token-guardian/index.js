@@ -58,10 +58,11 @@ export default {
       }
       return out
     }
-    // sessionKey → { chars, lastAt, lastCompactAt, turns }
+    // chatId → { chars, lastAt, lastCompactAt, turns }（1.3.10 起两处 key 都统一为 chatId）
     let state = cleanMap(readJson(stateFile(), {}))
-    let summaries = cleanMap(readJson(summaryFile(), {})) // sessionKey → { text, at }
+    let summaries = cleanMap(readJson(summaryFile(), {})) // chatId → { text, at }
     let timer = null
+    let flushTimer = null
 
     const persist = () => { try { writeJson(stateFile(), state) } catch (error) { api.log.warn('保存状态失败：', error.message) } }
     const persistSummary = () => { try { writeJson(summaryFile(), summaries) } catch (error) { api.log.warn('保存摘要失败：', error.message) } }
@@ -89,6 +90,7 @@ export default {
      * 流程：把最近聊天流水压成摘要 → 存起来由 api.context() 常驻注入 →
      *       调 hub.resetChat() 归档旧会话、开新会话（历史实打实变小，不是只贴摘要）。
      * 摘要带过去，新会话开场就知道之前聊了什么 —— 「压缩」而不是「清空」。 */
+    // sessionKey 实际就是 chatId（state/summaries 两处 key 均已统一为 chatId）
     async function compact(sessionKey, chat, meta = {}) {
       const cfg = api.settings()
       const hub = api.core.hub
@@ -100,12 +102,20 @@ export default {
         return { ok: false, reason: 'no-transcript', message: '还没聊过，没有可压缩的流水' }
       }
       let text = ''
+      // 摘要用这个聊天正在用的模型写（不是全局默认）：群里指定的模型和摘要口径要一致（P1-5）。
+      // 拿不到（没配 chatModels/老入口）就退回全局默认，行为和以前一样。
+      let askOpts = {}
+      try {
+        const t = await hub.resolveTarget?.(chat)
+        if (t && t.provider && t.model) askOpts = { provider: t.provider, model: t.model }
+      } catch (error) { api.log.debug(`${ID}：拿聊天模型失败，摘要用默认模型（${error.message}）`) }
       try {
         text = await api.ask({
           system: '你是「大肥鱼」的记忆整理助手。把下面这段聊天压缩成一份供后续对话参考的摘要：'
             + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；不要评价、不要编造、不要加标题。',
           text: transcript,
           maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars / 1.2))),
+          ...askOpts,
         })
       } catch (error) {
         const msg = String(error?.message || error)
@@ -119,22 +129,30 @@ export default {
       }
       const body = String(text || '').trim().slice(0, cfg.summaryMaxChars)
       if (!body) return { ok: false, reason: 'empty-summary', message: '模型没给出可用的摘要' }
-      summaries[sessionKey] = { text: body, at: Date.now(), chatId }
-      persistSummary()
-      // 关键一步：归档旧会话、换新会话 —— 旧历史实打实退出上下文，
-      // 摘要由 api.context() 在新会话里继续提供（7 天内有效）。
-      // 没有 QQ 会话的（理论不该发生）跳过重置，只留摘要。
+      // 摘要文本一变，DSH 会把它作为新快照追加进当前历史（旧块不删）。
+      // 所以必须「先重置会话，再落摘要」：resetChat 成功后新会话历史里只有最新这一份摘要；
+      // resetChat 失败（没 QQ 会话/归档失败）就不更新摘要 —— 宁可不压，也不让同一段历史里
+      // 同时躺着 v1/v2/v3 三份「更早聊天的摘要」让模型自己猜哪份新（P0-6）。
+      let resetOk = false
       if (chatId) {
         try {
-          if (typeof hub.resetChat === 'function' && hub.resetChat(chatId)) {
-            api.log.info(`${ID}：${chatId} 旧会话已归档，新会话由摘要续接`)
-          } else {
-            api.log.debug(`${ID}：${chatId} 无可重置的会话（可能还没建过），只留摘要`)
-          }
+          resetOk = typeof hub.resetChat === 'function' && hub.resetChat(chatId)
+          if (resetOk) api.log.info(`${ID}：${chatId} 旧会话已归档，新会话由摘要续接`)
+          else api.log.debug(`${ID}：${chatId} 无可重置的会话（可能还没建过），跳过摘要更新`)
         } catch (error) {
-          api.log.warn(`${ID}：重置会话失败（${error.message}），摘要仍保留`)
+          api.log.warn(`${ID}：重置会话失败（${error.message}），摘要仍保留旧版`)
         }
       }
+      if (!resetOk) {
+        // 没清场就不换摘要：旧摘要继续用，等下次压缩成功一起换
+        const st0 = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
+        st0.lastCompactAt = Date.now() // 记一次尝试，冷却期内不再反复打模型
+        state[sessionKey] = st0
+        persist()
+        return { ok: false, reason: 'no-reset', message: '旧会话没归档成功，摘要保持原样（防止历史里堆多份摘要）' }
+      }
+      summaries[sessionKey] = { text: body, at: Date.now(), chatId }
+      persistSummary()
       const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
       // 压缩完相当于把历史折成摘要，把估算值重置成摘要本身的规模
       st.chars = Math.round(body.length * 1.2)
@@ -201,6 +219,9 @@ export default {
 
     timer = setInterval(() => { tickOnce().catch((error) => api.log.warn(`${ID} 检查出错：`, error.message)) }, 30_000)
     timer.unref?.()
+    // state 每 5 条消息才落盘（activity 高频），崩溃最多丢 4 条计数 —— 30 秒兜底刷一次（P1-6）
+    flushTimer = setInterval(() => { try { persist() } catch (error) {} }, 30_000)
+    flushTimer.unref?.()
 
     // 摘要以运行时上下文的形式交给她（每轮都在，篇幅固定，不会越滚越大）
     api.context(({ chat }) => {
@@ -272,7 +293,7 @@ export default {
       })
     })
 
-    api.onDispose(() => { if (timer) clearInterval(timer); persist() })
+    api.onDispose(() => { if (timer) clearInterval(timer); if (flushTimer) clearInterval(flushTimer); persist() })
 
     return {
       compact,

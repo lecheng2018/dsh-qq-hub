@@ -109,7 +109,13 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
   // ---------- 素材（记忆 importance 0~1 → 引擎 0~100） ----------
   function memoryRecords() {
     try {
-      const items = memoryOf()?.list?.('') || []
+      const mem = memoryOf()
+      if (!mem) return []
+      // 后台素材采集没有 chat：只允许 global + 主人私聊域（fail-closed，不拿全库）
+      const cfg = getConfig()
+      const scopes = cfg.ownerQQ ? ['global', `private:${cfg.ownerQQ}`] : ['global']
+      const items = (mem.recall?.('最近 在做 想起 关心 日常', { limit: 200, scopes }) || [])
+        .map((h) => ({ ...h, ...(h.it || {}), text: h.text || h.it?.text }))
       return items
         .filter((m) => m && !m.invalidAt && m.text)
         .map((m) => ({

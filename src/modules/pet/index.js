@@ -1182,13 +1182,15 @@ export default {
     function memoryLines(limit = 8) {
       let mem = null
       try { mem = api.use('memory') } catch { mem = null }
-      if (!mem || typeof mem.list !== 'function') return []
+      if (!mem || typeof mem.recall !== 'function') return []
       const clip = (s, n) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t }
+      // 后台任务没有 chat：只允许 global + 主人私聊域（fail-closed，不拿全库）
+      const scopes = api.config().ownerQQ ? ['global', `private:${api.config().ownerQQ}`] : ['global']
       let items = []
       try {
         const q = String(workSnap.task || '').trim()
-        if (q) items = mem.list(q) || []
-        if (!items.length) items = mem.list('') || []
+        if (q) items = (mem.recall(q, { limit, scopes }) || []).map((h) => ({ text: h.text || h.it?.text, score: h.score, importance: h.it?.importance, at: h.it?.at })).filter((m) => m.text)
+        if (!items.length) items = (mem.recall('最近 在做 关心 想起', { limit, scopes }) || []).map((h) => ({ text: h.text || h.it?.text, score: h.score, importance: h.it?.importance, at: h.it?.at })).filter((m) => m.text)
       } catch { items = [] }
       const seen = new Set()
       return items

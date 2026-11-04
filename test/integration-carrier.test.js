@@ -65,7 +65,7 @@ function runPurpose(hub, pet, extPurpose = {}, extOverrides = {}) {
     log: { info() {}, warn() {}, debug() {} },
     isMuted: () => false,
     mood: () => null,
-    memory: () => ({ list: () => [{ id: 'm1', text: '主人喜欢打两把游戏', importance: 0.8, at: Date.now() }] }),
+    memory: () => { const items = [{ id: 'm1', text: '主人喜欢打两把游戏', importance: 0.8, at: Date.now() }]; return { list: () => items, recall: () => items.map((it) => ({ it, score: 1, why: [] })) } },
     personaText: () => '',
     pet: () => pet,
   })
