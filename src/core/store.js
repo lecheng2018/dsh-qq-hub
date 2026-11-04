@@ -47,10 +47,10 @@ export function renameWithRetry(from, to, attempts = 4) {
   }
 }
 
-export function writeJson(file, value) {
+export function writeJson(file, value, { mode = 0o644 } = {}) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}`
-  const fd = openSync(tmp, 'w')
+  const fd = openSync(tmp, 'w', mode)
   try {
     writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8')
     // rename 前 fsync：进程 kill -9 时不丢已确认写入的数据（tmp+rename 只保证不写半截，

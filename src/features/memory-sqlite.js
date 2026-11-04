@@ -4,9 +4,9 @@
 // 和现有 indexFor/recall 逻辑零改动 —— load() 返回镜像，save(s) 算 diff 增量写库。
 // 迁移：首次运行把 memories.json 一次性导入，原文件改名为 memories.json.pre-sqlite.bak（备份可回滚）。
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, renameSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, renameSync, readFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { ensureDir } from '../core/store.js'
+import { ensureDir, writeJson } from '../core/store.js'
 import { randomUUID } from 'node:crypto'
 
 const COLS = ['id', 'text', 'about', 'aboutName', 'tags', 'importance', 'source', 'chatId', 'scope', 'at', 'hits', 'hitDays', 'lastHit', 'clarity', 'invalidAt', 'pinned', 'retention', 'embeddedAt']
@@ -94,7 +94,9 @@ export function openMemoryDb(dbPath, { log } = {}) {
     lastSidecar = json
     sidecarCache = rest
     sidecarLoaded = true
-    writeFileSync(sidecarPath, json, 'utf8')
+    // 走 store.js 的 tmp+fsync+rename 原子写：sidecar 里是人物小档案/相处经验/说话方式，
+    // 写一半被 kill 再 parse 失败会整体静默清空，不能裸 writeFileSync（M1）。
+    writeJson(sidecarPath, rest)
   }
 
   // 注意：items 必须深拷贝出去。如果泄漏闭包数组的引用，调用方（add 等）push 会直接改镜像，

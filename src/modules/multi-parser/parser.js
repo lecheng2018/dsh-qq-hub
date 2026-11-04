@@ -3,6 +3,8 @@
 // 纯 Node.js 实现，零外部依赖。
 // 支持提取短链、重定向追踪、元数据提取（标题、作者、正文、高清图片、无水印视频直链）。
 
+import { assertPublicUrl } from '../../core/net.js'
+
 const UA_PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36'
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
 
@@ -69,10 +71,13 @@ export function extractUrls(text) {
   return [...new Set(urls)]
 }
 
-/** 跟踪 URL 的重定向，获取落地真实地址（支持移动端短链跳转） */
+/** 跟踪 URL 的重定向，获取落地真实地址（支持移动端短链跳转）。
+ *  每一跳都先过 assertPublicUrl（S2）：短链 302 到内网地址（rebinding/白名单成员发的恶意短链）
+ *  直接停在那里返回最后的安全地址，不跟着进内网。 */
 export async function resolveUrl(url, maxRedirects = 5) {
   let cur = String(url || '').trim()
   let count = 0
+  try { await assertPublicUrl(cur) } catch { return cur } // 入口就不合法，交由上层各平台解析器自行报错
   while (count < maxRedirects) {
     try {
       // 许多短链服务（微博 t.cn、小红书 xhslink、B站 b23.tv）对 HEAD 请求会拒绝或不跳转，优先采用带 Range 的 GET 请求
@@ -83,7 +88,12 @@ export async function resolveUrl(url, maxRedirects = 5) {
         signal: AbortSignal.timeout(6000),
       })
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-        cur = new URL(res.headers.get('location'), cur).href
+        const next = new URL(res.headers.get('location'), cur).href
+        try { await assertPublicUrl(next) } catch (error) {
+          // 下一跳指进内网：不再跟随。返回当前（公开）地址，让平台解析器拿到非目标域名而自然失败
+          return cur
+        }
+        cur = next
         count++
       } else {
         break

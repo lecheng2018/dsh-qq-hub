@@ -1,6 +1,7 @@
 // QQ 空间：发说说 + 空间日记（每天 N 次，时间窗里随机，结合当天聊天）。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
+import { guardOutbound } from '../chat/identity-guard.js'
 import { fetchImage } from '../core/net.js'
 import { resolveAudience } from './qzone-audience.js'
 
@@ -40,6 +41,19 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
     let audience
     try { audience = resolveAudience(cfg, visibility) } catch (error) { return { ok: false, message: error.message } }
     if (!cfg.enabled) return { ok: false, message: '总开关关着' }
+    // 出站身份闸（S1）：说说的可见范围由面板定，但账号标识在任何范围下都不该出去——
+    // 「仅自己可见」也会被截图转发。拦下时如实告知不发。
+    try {
+      const g = guardOutbound(text, {
+        surface: '空间说说',
+        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
+        mode: cfg.security?.identityGuard?.mode === 'warn' ? 'warn' : 'block',
+      })
+      if (g.hits.length) {
+        log.warn(`身份泄露闸拦下 → 空间说说：${g.message}`)
+        if (!g.ok) return { ok: false, message: '说说里有账号标识，没有发（账号信息不外传）' }
+      }
+    } catch (error) { log.debug('身份泄露闸判定出错：', error.message) }
     if (cfg.dryRun) {
       log.info(`试运行：本来要发说说（${audience.label}）：${text.slice(0, 60)}`)
       return { ok: true, tid: '', dryRun: true, visibility: audience.visibility, label: audience.label, target_uins: audience.target_uins || [] }
@@ -47,7 +61,7 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
     const imgs = []
     for (const src of images) {
       try {
-        imgs.push('base64://' + (await fetchImage(src, { maxBytes: 8 * 1024 * 1024 })).toString('base64'))
+        imgs.push('base64://' + (await fetchImage(src, { maxBytes: 8 * 1024 * 1024, allowLocal: true })).toString('base64'))
       } catch (error) {
         log.warn('说说配图读不到，跳过：', error.message)
       }
