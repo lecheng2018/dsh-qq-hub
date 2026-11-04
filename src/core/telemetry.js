@@ -91,6 +91,36 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
   // 不用字符数估算（实测差 5~9 倍：估算 89k 而真实 443k）。
   const latestByChat = new Map()
 
+  // 启动时从文件尾部回放，把每个聊天的「最近一次真实上下文」恢复出来。
+  // 不回放的话，重启后 latestByChat 是空的，token-guardian 会退回字符估算（差 4~9 倍），
+  // 表现为「明明 384k 却显示 95k（估算）」（2026-11-04 重启后实测）。
+  function replay() {
+    try {
+      const f = fileOf()
+      if (!existsSync(f)) return
+      const text = readFileSync(f, 'utf8')
+      // 只看尾部（文件可能有几 MB），最后 1500 行足够覆盖所有活跃聊天
+      const lines = text.slice(-400_000).split('\n')
+      for (const line of lines) {
+        if (!line.trim()) continue
+        let r
+        try { r = JSON.parse(line) } catch { continue }
+        if (!r || !r.chatId) continue
+        const prev = latestByChat.get(String(r.chatId))
+        if (prev && Number(prev.at) > Number(r.at)) continue
+        latestByChat.set(String(r.chatId), {
+          tokens: (Number(r.input) || 0) + (Number(r.cacheRead) || 0) + (Number(r.cacheWrite) || 0),
+          output: Number(r.output) || 0,
+          at: Number(r.at) || 0,
+          model: String(r.model || ''),
+        })
+      }
+    } catch (error) {
+      try { log?.debug?.('遥测回放失败：', error.message) } catch {}
+    }
+  }
+  replay()
+
   function record(row) {
     try {
       if (!enabled()) return

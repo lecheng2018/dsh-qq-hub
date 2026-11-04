@@ -23,6 +23,35 @@ function feedIdOf(url) {
   return `${host}-${Math.abs(h).toString(36).slice(0, 6)}`
 }
 
+/**
+ * 解析模型挑资讯的输出。纯函数，方便测。
+ * 模型偶尔会带 markdown 代码块或前后废话，所以只认第一个 JSON 数组。
+ * @param {string} out 模型原始输出
+ * @param {number} poolSize 候选池长度（序号越界要丢掉）
+ * @param {number} want 最多要几条
+ * @returns {Array<{index:number, say:string}>}
+ */
+export function parseDigestPick(out, poolSize, want) {
+  const text = String(out || '')
+  const m = text.match(/\[[\s\S]*\]/)
+  if (!m) return []
+  let arr
+  try { arr = JSON.parse(m[0]) } catch { return [] }
+  if (!Array.isArray(arr)) return []
+  const picked = []
+  const used = new Set()
+  for (const x of arr) {
+    const i = Number(x?.i) - 1
+    const say = String(x?.say || '').trim()
+    if (!Number.isInteger(i) || i < 0 || i >= poolSize) continue
+    if (!say || used.has(i)) continue
+    used.add(i)
+    picked.push({ index: i, say: say.slice(0, 80) })
+    if (picked.length >= Math.max(1, want)) break
+  }
+  return picked
+}
+
 export default {
   id: ID,
   name: '资讯池',
@@ -45,6 +74,59 @@ export default {
       try { writeFileSync(statusFile(), JSON.stringify(next, null, 2)) } catch (error) {}
     }
     let pulling = false
+
+    /** 每日精选：到点从池子里挑几条，让她用群友口气说出去（不是资讯播报）。 */
+    async function digest({ manual = false } = {}) {
+      const c = api.config().rss || {}
+      const d = c.digest || {}
+      if (!manual && d.enabled === false) return { ok: false, message: '每日精选没开' }
+      const items = readPool(dir())
+      if (!items.length) return { ok: false, message: '资讯池是空的，先去拉一次' }
+      const st = readStatus()
+      const readKeys = new Set((st.readKeys || []).slice(-3000))
+      const sentKeys = new Set((st.digestKeys || []).slice(-3000))
+      // 优先没发过的、没读过的
+      let pool = items.filter((r) => !sentKeys.has(String(r.key)) && !readKeys.has(String(r.key)))
+      if (!pool.length) pool = items.filter((r) => !sentKeys.has(String(r.key)))
+      if (!pool.length) return { ok: false, message: '池子里的都发过了' }
+      // 只把最近的 40 条交给模型挑（再多它也看不过来，白烧 token）
+      pool = pool.slice().sort((a, b) => (Number(b.at) || Number(b.addedAt) || 0) - (Number(a.at) || Number(a.addedAt) || 0)).slice(0, 40)
+      const want = Math.max(1, Math.min(6, Number(d.count) || 3))
+      const brief = pool.map((r, i) => `${i + 1}. 【${r.feedTitle || '订阅'}】${r.title}｜${String(r.summary || '').slice(0, 120)}`).join('\n')
+      let picked = []
+      try {
+        const out = await api.ask({
+          system: `你是「大肥鱼」，一个混在 QQ 群里的 DeepSeek 猫娘（小鲸鱼）。现在帮自己从这批资讯里挑出今天最值得聊的 ${want} 条。\n`
+            + '标准：有信息量、不平淡、群友会想接话；纯广告/软文/标题党不要。\n'
+            + `每条用你自己的口气写一句「她会在群里说的那种话」（15~30 字）：像群友随口一提，不要播报腔、不要「首先」「值得关注」「强烈推荐」、不要复述摘要、不复述数字。\n`
+            + '只输出 JSON 数组，形如 [{"i":序号,"say":"那句话"}]，不要别的字。',
+          text: brief,
+          maxTokens: 700,
+          temperature: 0.8,
+        })
+        for (const x of parseDigestPick(out, pool.length, want)) {
+          picked.push({ item: pool[x.index], say: x.say })
+        }
+      } catch (error) {
+        api.log.warn('[rss] 精选时模型调用失败，退回按时间取前几条：', error.message)
+      }
+      // 模型没给出可用结果时兜底：直接取最新的几条，别让这个功能因为一次调用失败就哑掉
+      if (!picked.length) picked = pool.slice(0, want).map((item) => ({ item, say: String(item.title || '').slice(0, 40) }))
+      const lines = picked.map((p) => p.say).join('\n')
+      const target = String(d.target || '').trim() || `private:${api.config().ownerQQ}`
+      try {
+        const chatId = /^(group|private):/.test(target) ? target : `private:${api.config().ownerQQ}`
+        await api.core.hub.sendText(chatId, lines)
+      } catch (error) {
+        return { ok: false, message: '发不出去：' + error.message }
+      }
+      st.digestKeys = [...sentKeys, ...picked.map((p) => String(p.item.key))].slice(-3000)
+      st.lastDigestAt = Date.now()
+      st.lastDigestCount = picked.length
+      writeStatus(st)
+      api.log.info(`[rss] 每日精选发了 ${picked.length} 条 → ${target}`)
+      return { ok: true, count: picked.length, text: lines }
+    }
 
     const feedsOf = () => {
       const s = (api.config().rss || {})
@@ -129,10 +211,28 @@ export default {
       pull().catch((error) => api.log.warn('[rss] 定时拉取出错：', error.message))
     }, '资讯池定时拉取')
 
+    // 每日精选：到点（默认早 9 点）从池子里挑几条发出去。
+    // 用「今天发过没」判断，不靠固定间隔 —— 重启也不重复发、不会漏。
+    api.every(60_000, () => {
+      const s = (api.config().rss || {})
+      const d = s.digest || {}
+      if (!s.enabled || d.enabled === false) return
+      const hour = Number(d.hour)
+      const want = Number.isFinite(hour) ? hour : 9
+      const now = new Date()
+      if (now.getHours() !== want) return
+      const st = readStatus()
+      const today = now.toDateString()
+      if (st.lastDigestDay === today) return // 今天已经发过
+      st.lastDigestDay = today
+      writeStatus(st)
+      digest().catch((error) => api.log.warn('[rss] 每日精选出错：', error.message))
+    }, '资讯池每日精选')
+
     // ---------- 她自己的工具 ----------
     api.tool(() => [api.defineTool({
       name: 'rss_read',
-      description: '翻资讯池：从订阅源拉回来的文章列表（标题+摘要+链接）。想找话题、找素材、看看最近有什么新鲜事时用。**只能你自己看**，别把整篇摘要复述进群。',
+      description: '翻资讯池：订阅源拉回来的文章。群友问「有什么新鲜事」「最近有啥好玩的」、你想起个话题、想找点谈资时用。**可以说出来聊**：挑一条讲标题加一两句你自己的看法就够了；别整段照抄摘要、别一口气甩一堆链接（那是资讯机器人，不是群友）。',
       properties: {
         limit: { type: 'number', description: '要几条，默认 8，最多 30' },
         keyword: { type: 'string', description: '只找标题或摘要里含这个词的（比如「AI」「显卡」）' },
@@ -180,6 +280,12 @@ export default {
         lastAdded: Number(st.lastAdded) || 0,
         lastDurationMs: Number(st.lastDurationMs) || 0,
         lastErrors: Array.isArray(st.lastErrors) ? st.lastErrors : [],
+        digest: {
+          ...(api.config().rss?.digest || {}),
+          lastAt: Number(st.lastDigestAt) || 0,
+          lastCount: Number(st.lastDigestCount) || 0,
+          lastDay: String(st.lastDigestDay || ''),
+        },
         feeds: feedsOf().map((f) => ({
           ...f,
           title: st.feeds?.[f.id]?.title || f.title || '',
@@ -190,6 +296,9 @@ export default {
     })
 
     api.route('/rss/pull', async () => pull({ manual: true }))
+
+    /** 面板「现在精选一次」：跳过排程直接跑（不跳过总开关）。 */
+    api.route('/rss/digest-now', async () => digest({ manual: true }))
 
     api.route('/rss/check', async (req) => {
       // 验证一个地址能不能拉（面板「添加前先测一下」）
