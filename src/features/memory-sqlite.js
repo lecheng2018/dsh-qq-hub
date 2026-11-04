@@ -111,7 +111,8 @@ export function openMemoryDb(dbPath, { log } = {}) {
   // （真变而 hash 不变的唯一情形：text 等长改写且 at/hits/importance/clarity 全没动 —— 现实中
   //  所有更新路径都会动 at 或 hits，可接受；万一漏了，下次全量校对会补）。
   const savedHash = new Map()
-  const hashOf = (m) => `${String(m.text || '').length * 31}_${Number(m.at || 0)}_${Number(m.hits || 0) * 7}_${Math.round(Number(m.importance || 0) * 100)}_${String(m.clarity || '')}`
+  // scope/chatId/about 变化罕见（主人换号迁移），但一旦变了必须落库——编进 hash 防快路径漏更新
+  const hashOf = (m) => `${String(m.text || '').length * 31}_${Number(m.at || 0)}_${Number(m.hits || 0) * 7}_${Math.round(Number(m.importance || 0) * 100)}_${String(m.clarity || '')}_${String(m.scope || '')}_${String(m.chatId || '')}_${String(m.about || '')}`
 
   function save(s) {
     const next = Array.isArray(s?.items) ? s.items : []
