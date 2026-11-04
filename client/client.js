@@ -517,15 +517,19 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
      * 原来直接在 onChange 里 split+filter，敲分隔符的瞬间前半段就被处理掉、光标乱跳，
      * 没法正常输入「a, b」这样的内容。numbers=true 时只保留数字（QQ 号名单用）。 */
     function ListInput({ value, onChange, placeholder, numbers, style }) {
-      const parse = (t) => {
+      const parse = (t, { strict } = {}) => {
         const parts = String(t).split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean)
-        return numbers ? parts.map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4) : parts
+        if (!numbers) return parts
+        // numbers=true：敲到一半的短数字（"123"）先留着——失焦才校验，不然输入框像键盘坏了。
+        // 提交（失焦/保存）时 strict=true，仍不足 4 位的无效片段才丢掉。
+        const cleaned = parts.map((s) => s.replace(/\D/g, ''))
+        return strict ? cleaned.filter((s) => s.length >= 4) : cleaned.filter(Boolean)
       }
       const [text, setText] = useState(value.join(', '))
-      useEffect(() => { if (parse(text).join(',') !== value.join(',')) setText(value.join(', ')) }, [value.join(',')])
+      useEffect(() => { if (parse(text, { strict: true }).join(',') !== value.join(',')) setText(value.join(', ')) }, [value.join(',')])
       return h('input', { className: 'ab-input', style: { width: '100%', ...(style || {}) }, placeholder, value: text,
-        onChange: (e) => { setText(e.target.value); onChange(parse(e.target.value)) },
-        onBlur: () => { const t = parse(text).join(', '); setText(t); onChange(parse(t)) } })
+        onChange: (e) => { setText(e.target.value); onChange(parse(e.target.value, { strict: true })) },
+        onBlur: () => { const t = parse(text, { strict: true }).join(', '); setText(t); onChange(parse(t, { strict: true })) } })
     }
 
     /** 百分数行：输入过程保留原始字符串（打 0、0.、065 都不会被强行回写），
