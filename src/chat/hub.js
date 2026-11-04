@@ -775,17 +775,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 她答「备用码」讲了四段，群里只出现第一段，用户看到的是「没回答完就停了」）。
     // 现在把多出来的并进第 3 条，宁可这一条长一点，也不让话少一半。
     if (inGroup && items.length > 3) {
-      const keep = items.slice(0, 3)
-      const rest = items.slice(3)
-      const extra = rest.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
-      const last = keep[keep.length - 1]
-      if (last && (last.kind === 'text' || last.kind === 'voice') && extra) {
-        last.value = String(last.value).replace(/\s*$/, '') + ' ' + extra
-      } else if (extra) {
-        keep.push({ kind: 'text', value: extra })
+      // 文本合并成气泡，**非文本（表情/图片/戳）保留成独立 item**。
+      // 上一版把非文本也拼成了字符串（"× y [sticker]" 这种），结果表情变成
+      // 字面文本发到群里 —— 群里真的出现了「[sticker]」这三个字（2026-11-04 事故）。
+      const nonText = items.filter((i) => i.kind !== 'text' && i.kind !== 'voice')
+      const texts = items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => String(i.value || '')).filter(Boolean)
+      // 非文本最多留 2 条（表情/图片本来就该是独立气泡），其余名额给文本
+      const keepNonText = nonText.slice(-2)
+      const textSlots = Math.max(1, 3 - keepNonText.length)
+      const mergedTexts = []
+      for (let i = 0; i < texts.length; i += 1) {
+        if (mergedTexts.length === textSlots - 1) { mergedTexts.push(texts.slice(i).join(' ')); break }
+        mergedTexts.push(texts[i])
       }
-      items = keep
-      log.info(`${chatId}：回复超过 3 条，把后 ${rest.length} 条并进第 3 条（不丢内容）`)
+      items = [...mergedTexts.map((v) => ({ kind: 'text', value: v })), ...keepNonText]
+      log.info(`${chatId}：回复超过 3 条，合并成 ${mergedTexts.length} 条文字 + ${keepNonText.length} 条非文字（不丢内容，表情原样保留）`)
     }
     // 按概率补一张表情（群里已经有两条以上就不补了）
     if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
