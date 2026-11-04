@@ -1,5 +1,45 @@
 # 更新记录
 
+## 1.3.14
+
+修「资讯池配置了订阅地址，但没有保存按钮」。
+
+### 两个 bug 叠在一起
+
+**① `ExtPanel` 没给模块 panel 传 `draft` / `setDraft`**
+
+它只传 `{ settings, draftSettings, setSettings, save, toast, reload }`。而 `panel.js` 里全程用的是 `props.draft.?rss` 和 `props.setDraft(...)` —— 全是 `undefined`，所以：
+
+- 试拉能成功（截图里那个「可以订阅：赛博鸡蛋 - 每日 AI 福利（1 条）」）
+- 但点完「添加」**写不进草稿**，列表永远显示「还没加订阅地址」
+- `setDraft` 上的 `&&` 短路让整段静默失败，连报错都没有
+
+现在 `ExtPanel` 收下并转发 `draft` / `setDraft`（只加 props，原来只用 `settings` 的模块完全不受影响）。
+
+**② `TAB_KEYS` 里没有 `rss`**
+
+`tabDirty(id)` 是 `(TAB_KEYS[id] || []).some(...)` —— 没有这个键就恒返回 `false`，于是：
+
+- 就算草稿真的改了，也不标记 dirty
+- 底部「保存设置」栏永远不出现
+- 表现就是「没有保存按钮」
+
+已补 `rss: ['rss']`。
+
+### 为什么之前没发现
+
+这两个 bug 都**不报错**。试拉那一步是独立请求，成功会正常弹「可以订阅」——看起来像成功了，但真正写草稿的动作被静默吞掉。跟 1.3.9 那批「静默丢失」是同一类。
+
+### 验证
+
+- 模拟真实交互：添加订阅 → 草稿 `rss.feeds` 有值 → `tabDirty('rss')` 返回 `true`（保存栏会出现）
+- 新增 `test/rss-panel.test.js` 四条回归：ExtPanel 传参、TAB_KEYS 有 rss、panel 走 draft 不写 ext.rss、setDraft 必须函数式
+- 全量 985 通过 / 0 失败
+
+### 顺带说明
+
+配置路径统一在 `config.rss`：面板写 `draft.rss`，模块读 `api.config().rss` —— 同一份。没有用 `settings`（那会写到 `ext.rss`，模块读不到）。
+
 ## 1.3.13
 
 资讯池加上「能流到群里」：群友问她就说出来，另外每天精选几条主动说。

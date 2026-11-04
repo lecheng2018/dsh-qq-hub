@@ -2730,7 +2730,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       static getDerivedStateFromError(error) { return { error } }
       render() { return this.state.error ? h('div', { className: 'ab-note err' }, '这个模块的面板出错了：' + String((this.state.error && this.state.error.message) || this.state.error)) : this.props.children }
     }
-    function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload }) {
+    // draft / setDraft：模块 panel 想直接改整份配置草稿时用（比如资讯池的订阅列表）。
+    // 只加 props 不改行为：原来只用 settings/draftSettings 的模块完全不受影响。
+    function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload, draft, setDraft }) {
       const [Comp, setComp] = useState(null)
       const [err, setErr] = useState('')
       useEffect(() => {
@@ -2749,7 +2751,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       if (err) return h('div', { className: 'ab-note err' }, '面板加载失败：' + err)
       if (!Comp) return h(Empty, { icon: '⏳', text: '加载中…' })
       const save = async (patch) => { const r = await post('/save', { ext: { [m.id]: patch } }); toast(r.ok === false ? r.message : '保存好了', r.ok === false ? 'err' : 'ok'); reload() }
-      return h(PanelBoundary, null, h(Comp, { settings, draftSettings, setSettings, save, toast, reload }))
+      return h(PanelBoundary, null, h(Comp, { settings, draftSettings, setSettings, save, toast, reload, draft, setDraft }))
     }
     function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
       const m = (st.modules || []).find((x) => x.id === mod)
@@ -2773,7 +2775,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           (m.settings || []).map((s) => h(Row, { key: s.key, label: s.label || s.key, hint: s.hint }, field(s))),
           (m.settings || []).length ? h('div', { className: 'ab-small ab-muted' }, '改完点下面的「保存设置」。') : null,
           (m.errors || []).length ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, '最近的报错：' + m.errors[0].message) : null) : null,
-        m.panel ? h(ExtPanel, { m, settings, draftSettings, setSettings, toast, reload }) : null)
+        m.panel ? h(ExtPanel, { m, settings, draftSettings, setSettings, toast, reload, draft, setDraft }) : null)
     }
 
     const BILI_KIND = { watch: '看了', comment: '评论', reply: '回复', share: '分享给你', shot: '发你截图', error: '没成功' }
@@ -3699,7 +3701,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
