@@ -2302,7 +2302,28 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', null,
               h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
                 h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条' + (mem.length >= 300 ? '（只显示最近 300 条，可搜索）' : ''))),
-              h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast }))))),
+              // 收纳但不折叠：按时间分段小标题（今天/昨天/近几天/本周/本月/更早），每条照样全文平铺
+              (() => {
+                const secOf = (m) => {
+                  const t = new Date(m.invalidAt || m.at); const now = new Date()
+                  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+                  const diff = (day(now) - day(t)) / 86400000
+                  if (diff <= 0) return '今天'
+                  if (diff === 1) return '昨天'
+                  if (diff <= 3) return '近几天'
+                  if (diff <= 7) return '本周'
+                  if (diff <= 31) return '本月'
+                  return '更早'
+                }
+                const order = ['今天', '昨天', '近几天', '本周', '本月', '更早']
+                const groups = new Map()
+                for (const m of mem) { const k = secOf(m); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m) }
+                return h('div', { className: 'ab-list', style: { marginTop: 8 } },
+                  order.filter((k) => groups.has(k)).flatMap((k) => [
+                    h('div', { key: 's:' + k, className: 'ab-section-title', style: { margin: '10px 0 4px' } }, k, h('span', { className: 'ab-muted ab-small', style: { marginLeft: 6 } }, groups.get(k).length + ' 条')),
+                    ...groups.get(k).map((m) => h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast })),
+                  ]))
+              })())),
         h(RecallLog, null),
         h(MemoryImport, { toast, onDone: () => load() }),
       )

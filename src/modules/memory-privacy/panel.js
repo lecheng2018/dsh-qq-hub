@@ -33,13 +33,13 @@ return function MemoryPrivacyPanel(props) {
     } finally { setBusy('') }
   }
 
-  // 查看分区：list 接口 preview=1 时私聊分区也返回原文
-  const viewScope = async (scope) => {
-    setViewing(scope)
+  // 查看分区：list 接口 preview=1 时私聊分区也返回原文（以主库为准，kind 区分记忆点/小档案）
+  const viewScope = async (scope, kind = 'memory') => {
+    setViewing({ scope, kind })
     setViewItems(null)
     try {
-      const r = await call('/memory-privacy/list')
-      setViewItems((r.items || []).filter((m) => String(m.scope || 'global') === scope))
+      const r = await call('/memory-privacy/list?scope=' + encodeURIComponent(scope) + '&kind=' + kind)
+      setViewItems(r.items || [])
     } catch (error) { setViewItems([]) }
   }
   const clearScope = async (scope, which) => {
@@ -76,7 +76,7 @@ return function MemoryPrivacyPanel(props) {
   }
 
   // 单个分区行：条数 + 查看 + 隔离开关 + 清空
-  const ScopeRow = ({ scope, n }) => {
+  const ScopeRow = ({ scope, n, kind = 'memory' }) => {
     const isGlobal = scope === 'global'
     const opened = (d.overrides || {})[scope] === 'open'
     const key = scope
@@ -84,7 +84,7 @@ return function MemoryPrivacyPanel(props) {
       h('span', { className: 'ab-small', style: { flex: 1, minWidth: 160 } },
         label(scope), ' ', h('b', null, n + ' 条'),
         opened ? h('span', { className: 'ab-small', style: { color: '#e8b339', marginLeft: 6 } }, '⚠ 不隔离') : null),
-      h(Btn, { small: true, onClick: () => viewScope(scope) }, '查看'),
+      h(Btn, { small: true, onClick: () => viewScope(scope, kind) }, '查看'),
       !isGlobal
         ? h(Btn, { small: true, disabled: busy === 'ov:' + scope, onClick: () => setOverride(scope, opened ? '' : 'open') },
             opened ? '恢复隔离' : '不隔离')
@@ -104,12 +104,12 @@ return function MemoryPrivacyPanel(props) {
         onClick: (e) => { if (e.target === e.currentTarget) setViewing(null) } },
         h('div', { style: { background: 'var(--ab-panel-bg, #1a1f2b)', borderRadius: 10, padding: 16, maxWidth: 520, width: '86%', maxHeight: '72vh', overflow: 'auto' } },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
-            h('b', { className: 'ab-small' }, '分区记忆：' + label(viewing)),
+            h('b', { className: 'ab-small' }, (viewing.kind === 'profiles' ? '小档案：' : '分区记忆：') + label(viewing.scope)),
             h(Btn, { small: true, onClick: () => setViewing(null) }, '关')),
           viewItems === null
             ? h('div', { className: 'ab-small ab-muted' }, '读着呢…')
             : viewItems.length
-              ? viewItems.slice().reverse().map((m) => h('div', { key: m.id, style: { borderBottom: '1px solid rgba(255,255,255,.08)', padding: '6px 0' } },
+              ? viewItems.slice().reverse().map((m, i) => h('div', { key: m.id || m.qq || i, style: { borderBottom: '1px solid rgba(255,255,255,.08)', padding: '6px 0' } },
                   h('div', { className: 'ab-small' }, m.text),
                   h('div', { className: 'ab-small ab-muted' }, new Date(m.at).toLocaleString(), ' · ', badge(String(m.scope || 'global')).text)))
               : h('div', { className: 'ab-small ab-muted' }, '这个分区还没有记忆')))
@@ -133,7 +133,7 @@ return function MemoryPrivacyPanel(props) {
         ? h('div', null,
             h('div', { className: 'ab-small', style: { marginBottom: 6 } }, `一共 ${profs.total} 份`),
             (profs.scopes || []).length
-              ? profs.scopes.map((s) => h(ScopeRow, { key: 'p:' + s.scope, scope: s.scope, n: s.n }))
+              ? profs.scopes.map((s) => h(ScopeRow, { key: 'p:' + s.scope, scope: s.scope, n: s.n, kind: 'profiles' }))
               : h('div', { className: 'ab-small ab-muted' }, '还没有小档案'))
         : null,
       (d.globalItems || []).length

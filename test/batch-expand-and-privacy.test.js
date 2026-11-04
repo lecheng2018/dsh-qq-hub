@@ -85,6 +85,21 @@ test('memory-privacy/list 没有 all=1 旁路：私聊打码只由 previewPrivat
   assert.match(seg, /previewPrivate/, '打码判定走 previewPrivate 开关')
   // 打码逻辑：private: 且未开 preview 才替换文本
   assert.match(seg, /startsWith\('private:'\)/, '按作用域前缀打码')
+  // 查看数据源必须是主库（scoped.json 已迁移停用，从那里查永远空）
+  assert.match(seg, /memory\.list|typeof memory\.list/, 'list 路由读主库记忆')
+  assert.doesNotMatch(seg, /s\.items\.map/, '不再从本模块 scoped.json 取条目')
+  // 支持小档案查看（kind=profiles）
+  assert.match(seg, /profiles/, '支持人物小档案查看')
+})
+
+test('client.js 记忆列表按时间收纳：有分段标题（今天/昨天/…），条目仍平铺全文', () => {
+  const src = readFileSync(join(root, 'client/client.js'), 'utf8')
+  assert.match(src, /secOf|'今天'/, '按时间分段')
+  const i = src.indexOf("翻一翻")
+  const seg = src.slice(i, i + 3000)
+  assert.match(seg, /ab-section-title/, '分段用小标题')
+  assert.match(seg, /MemoryRow/, '条目照常平铺渲染')
+  assert.doesNotMatch(seg, /setCollapsed|collapsed/, '收纳不等于折叠')
 })
 
 test('clear-main 连软删条目一起清（不加 !invalidAt 过滤）', () => {
