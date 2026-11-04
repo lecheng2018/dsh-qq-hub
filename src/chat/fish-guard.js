@@ -32,8 +32,12 @@ export const DEFAULT_FISH_GUARD = Object.freeze({
   // 名字像鱼：结尾词 / 包含词 / 开头词，任一命中就算
   // 宁可极小概率把真人认成鱼，也别漏掉同类 bot；群名判断只用「肥鱼/fish」
   namePrefixes: [],
-  nameContains: ['肥鱼'],
-  nameSuffixes: ['肥鱼', 'fish', '鱼'],
+  // 只认「同类 bot 的强特征」，不认任何带「鱼」字的名字。
+  // 教训（2026-11-04）：原来 nameSuffixes 里有单独的 '鱼'，于是群友「某鱼」（当天发了两百多条
+  // 正常聊天）被当成同类 bot，群 222333444 被判「88% 消息来自鱼」而整轮锁死。
+  // 现在要求出现「肥鱼」或「鲸」（DeepSeek 鲸鱼系 bot 的典型命名），「小鱼」「咸鱼」「摸鱼达人」都不算。
+  nameContains: ['肥鱼', '鲸'],
+  nameSuffixes: ['肥鱼', 'fish'],
   groupNameKeywords: ['肥鱼', 'fish'],
   exemptNames: [],
   exemptIds: [],
@@ -75,7 +79,8 @@ export function normalizeFishGuard(raw = {}) {
     groupNestIds: cleanList(src.groupNestIds, 200).filter((x) => /^\d{4,15}$/.test(x)),
     namePrefixes: cleanList(src.namePrefixes ?? DEFAULT_FISH_GUARD.namePrefixes),
     nameContains: cleanList(src.nameContains ?? DEFAULT_FISH_GUARD.nameContains),
-    nameSuffixes: cleanList(src.nameSuffixes ?? DEFAULT_FISH_GUARD.nameSuffixes),
+    // 空数组 = 用默认（面板里留空不该等于「谁都不算同类」）
+    nameSuffixes: cleanList(src.nameSuffixes).length ? cleanList(src.nameSuffixes) : [...DEFAULT_FISH_GUARD.nameSuffixes],
     groupNameKeywords: cleanList(src.groupNameKeywords ?? DEFAULT_FISH_GUARD.groupNameKeywords),
     exemptNames: cleanList(src.exemptNames, 200),
     exemptIds: cleanList(src.exemptIds, 200).filter((x) => /^\d{4,15}$/.test(x)),
