@@ -2290,6 +2290,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('input', { className: 'ab-input sm', type: 'time', value: times[1] || '16:00', onChange: (e) => setTime(1, e.target.value) }),
             h(Btn, { small: true, onClick: async () => { toast('正在整理，可能要一两分钟…'); const r = await post('/memory/extract', {}); toast(r.message); load(); loadIns() } }, '现在整理一次')),
           h(Row, { label: '每轮最多想起几条' }, f.range('memory.recallCount', 0, 12, 1, (v) => v + ' 条')),
+          h(OwnerMigrate, { toast, onChanged: () => load() }),
           h('div', { className: 'ab-section-title' }, '手动加一条'),
           h('div', { className: 'ab-flex' },
             h('input', { className: 'ab-input', style: { flex: '2 1 260px' }, placeholder: '要她记住的事，例如：主人不吃香菜', value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }),
@@ -2373,6 +2374,27 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'body' },
               h('div', { className: 'ab-muted ab-small' }, '「' + r.query.slice(0, 60) + (r.query.length > 60 ? '…' : '') + '」'),
               r.hits.length ? r.hits.map((x) => h('div', { key: x.id, style: { marginTop: 3 } }, '· ' + x.text, h('span', { className: 'ab-muted ab-small' }, '  ← ' + (x.why.join('、') || '—') + ' · ' + x.score))) : h('div', { className: 'ab-muted', style: { marginTop: 3 } }, '这次什么都没想起来'))))))
+    }
+
+    /** 主人换号迁移：旧 QQ 号名下的私聊记忆整体搬到新号。 */
+    function OwnerMigrate({ toast, onChanged }) {
+      const [from, setFrom] = useState('')
+      const [to, setTo] = useState('')
+      const doMove = async () => {
+        if (!/^\d{5,}$/.test(from) || !/^\d{5,}$/.test(to)) { toast('两边都要填 QQ 号'); return }
+        if (!confirm('把 ' + from + ' 名下的私聊记忆全部搬给 ' + to + '？')) return
+        const r = await post('/memory/reassign-owner', { from, to })
+        toast(r.message || (r.ok ? '搬好了' : '没搬成'))
+        if (r.ok) { setFrom(''); setTo(''); onChanged() }
+      }
+      return h('div', null,
+        h('div', { className: 'ab-section-title' }, '主人换号迁移'),
+        h('div', { className: 'ab-flex', style: { alignItems: 'center' } },
+          h('input', { className: 'ab-input sm', placeholder: '旧 QQ 号', value: from, onChange: (e) => setFrom(e.target.value) }),
+          h('span', { className: 'ab-muted' }, '→'),
+          h('input', { className: 'ab-input sm', placeholder: '新 QQ 号', value: to, onChange: (e) => setTo(e.target.value) }),
+          h(Btn, { small: true, disabled: !from || !to, onClick: doMove }, '迁移记忆')),
+        h('div', { className: 'ab-muted ab-small', style: { marginTop: 4 } }, '换了 QQ 号用这个：旧号私聊里的记忆（包括记在你名下的小档案）会整体搬到新号，一次就好。'))
     }
 
     /** 导入旧档案：粘贴或上传文字，模型挑出值得记的，勾选后存进记忆库。 */
