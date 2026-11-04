@@ -1910,10 +1910,63 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     turnState.set(sessionKey(sessionId), { lastTurn: -1, text: '', senders: new Set(senders.map(String)) })
   }
 
+  /**
+   * 把面板里配的模型**立刻**应用到所有已有的 QQ 会话。
+   *
+   * 平时改完配置要等对方发下一条消息才切（ensureSession 里比对 m.chats[chatId].model），
+   * 冷群可能几小时都不动 —— 主人看到的就是「配了没生效，得去 DSH 会话里手动换」。
+   * 这里主动遍历一遍，把差异一次性抹平。
+   * @returns {Promise<{applied:number, skipped:number, failed:number, detail:Array}>}
+   */
+  async function syncAllModels() {
+    const m = map()
+    const detail = []
+    let applied = 0
+    let skipped = 0
+    let failed = 0
+    for (const [chatId, entry] of Object.entries(m.chats || {})) {
+      if (!entry || !entry.sessionId) { skipped += 1; continue }
+      const kind = chatId.startsWith('group:') ? 'group' : chatId.startsWith('private:') ? 'private' : 'system'
+      const chat = kind === 'group'
+        ? { chatId, kind, groupId: chatId.slice(6) }
+        : kind === 'private'
+          ? { chatId, kind, userId: chatId.slice(8) }
+          : { chatId, kind: 'system', noTools: true }
+      try {
+        const target = await resolveTarget(chat)
+        const want = keyOf(target)
+        if (!want) { skipped += 1; continue }
+        if (entry.model === want) { skipped += 1; continue }
+        const agent = await resolveAgent(entry.sessionId)
+        if (!applyModel(agent, target)) { failed += 1; detail.push({ chatId, want, ok: false }); continue }
+        entry.model = want
+        applied += 1
+        detail.push({ chatId, want, ok: true })
+      } catch (error) {
+        failed += 1
+        detail.push({ chatId, ok: false, error: error.message })
+        // 会话已经失效（归档/删了）：把映射删掉，让下一条消息按当前配置重建，
+        // 否则它会一直挂在表里、每次都切不动，主人看到的就是「配了永远不生效」。
+        if (/not found|不存在|已归档|no session/i.test(String(error.message || ''))) {
+          delete m.chats[chatId]
+          detail[detail.length - 1].dropped = true
+        }
+      }
+    }
+    const dropped = detail.filter((x) => x.dropped).length
+    if (applied || dropped) {
+      saveMap(m)
+      if (applied) log.info(`按面板配置切换了 ${applied} 个会话的模型`)
+      if (dropped) log.info(`${dropped} 个会话已失效，清掉映射让下次按新配置重建`)
+    }
+    return { applied, skipped, failed, dropped, detail }
+  }
+
   return {
     // 仅关闭本中枢持有的短期媒体缓存，迟到的事件不能重新写入。
     disposeRecentMedia: () => recentMedia.dispose(),
     modelFor: targetModel,
+    syncAllModels,
     /** 这个聊天最近发来的图片 / 表情（新的在后面），可选只要某人发的 */
     recentMedia: (chatId, userId) => recentMedia.get(chatId, userId),
     stickerOf,
