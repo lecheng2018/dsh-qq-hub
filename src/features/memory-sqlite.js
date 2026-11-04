@@ -4,7 +4,7 @@
 // 和现有 indexFor/recall 逻辑零改动 —— load() 返回镜像，save(s) 算 diff 增量写库。
 // 迁移：首次运行把 memories.json 一次性导入，原文件改名为 memories.json.pre-sqlite.bak（备份可回滚）。
 import { DatabaseSync } from 'node:sqlite'
-import { existsSync, renameSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, renameSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { ensureDir } from '../core/store.js'
 import { randomUUID } from 'node:crypto'
@@ -38,6 +38,10 @@ export function openMemoryDb(dbPath, { log } = {}) {
   // 一次性迁移：老 memories.json 还在且没迁过 → 导入并备份
   const migrated = db.prepare("SELECT v FROM meta WHERE k='migratedAt'").get()
   const jsonPath = join(dirname(dbPath), 'memories.json')
+  // 迁移失败时不能「嘴上说退回 JSON，实际拿着空库跑」——那样旧 memories.json 里的记忆
+  // 看似全丢（实际在文件里，但本进程再也不读它）。这里直接把刚建的空库删掉，调用方
+  // 捕获异常后退回 JSON 路径，行为和日志一致。
+  let failed = false
   if (!migrated && existsSync(jsonPath)) {
     try {
       const old = JSON.parse(readFileSync(jsonPath, 'utf8'))
@@ -54,8 +58,14 @@ export function openMemoryDb(dbPath, { log } = {}) {
       try { renameSync(jsonPath, jsonPath + '.pre-sqlite.bak') } catch (error) { log?.warn?.('备份 memories.json 失败：', error.message) }
       log?.info?.(`记忆库：已把 ${n} 条记忆从 memories.json 迁移到 SQLite（原文件备份为 memories.json.pre-sqlite.bak）`)
     } catch (error) {
-      log?.warn?.('记忆库迁移失败（继续用 JSON）：', error.message)
+      log?.warn?.('记忆库迁移失败，退回 JSON 存储（数据库未启用）：', error.message)
+      failed = true
     }
+  }
+  if (failed) {
+    try { db.close() } catch {}
+    for (const suffix of ['', '-wal', '-shm']) { try { rmSync(dbPath + suffix, { force: true }) } catch {} }
+    throw new Error('记忆库迁移失败，已回退 JSON 存储')
   }
 
   // 内存镜像：load() 直接返回它，省掉每次全表读
@@ -107,12 +117,11 @@ export function openMemoryDb(dbPath, { log } = {}) {
     return true
   }
 
-  // 落库快照 hash：id → (text.length*31 + at + hits*7 + importance*100)。hash 相同就当没变跳过
-  // （真变而 hash 不变的唯一情形：text 等长改写且 at/hits/importance/clarity 全没动 —— 现实中
-  //  所有更新路径都会动 at 或 hits，可接受；万一漏了，下次全量校对会补）。
+  // 落库快照（id 集合，仅配合删除路径清理），不再用 hash 快速跳过 ——
+  // hash 只能编进部分字段，invalidate()（invalidAt）、update()（about/aboutName/tags）、
+  // restore()（删 invalidAt/supersededBy）都会改 hash 看不见的字段，导致「面板改了/删了，
+  // 重启又变回去」。全字段比较 3000 条也是微秒级，不值得为它冒丢字段的风险。
   const savedHash = new Map()
-  // scope/chatId/about 变化罕见（主人换号迁移），但一旦变了必须落库——编进 hash 防快路径漏更新
-  const hashOf = (m) => `${String(m.text || '').length * 31}_${Number(m.at || 0)}_${Number(m.hits || 0) * 7}_${Math.round(Number(m.importance || 0) * 100)}_${String(m.clarity || '')}_${String(m.scope || '')}_${String(m.chatId || '')}_${String(m.about || '')}`
 
   function save(s) {
     const next = Array.isArray(s?.items) ? s.items : []
@@ -121,12 +130,10 @@ export function openMemoryDb(dbPath, { log } = {}) {
     const nextIds = new Set(next.map((m) => m.id))
     let writes = 0
     for (const it of next) {
-      const h = hashOf(it)
-      if (savedHash.get(it.id) === h && oldById.has(it.id)) continue
       const old = oldById.get(it.id)
-      if (old && eqCols(old, it)) { savedHash.set(it.id, h); continue }
+      if (old && eqCols(old, it)) continue
       upsert.run(...COLS.map((c) => c === 'tags' ? JSON.stringify(it.tags || []) : (it[c] ?? '')))
-      savedHash.set(it.id, h)
+      savedHash.set(it.id, 1)
       writes++
     }
     for (const m of items) if (!nextIds.has(m.id)) { del.run(m.id); savedHash.delete(m.id); writes++ }
