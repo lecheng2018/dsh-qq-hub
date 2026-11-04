@@ -27,6 +27,14 @@ export default {
         return [{ type: 'text', text: hint }, ...content]
       } catch (error) { return content }
     })
+    // 召回负反馈：用户说「记错了」，90 秒内注入过的记忆降权（BM25 检索补不上的反馈环）
+    api.on('activity', (a) => {
+      try {
+        if (!a || a.kind !== 'in' || !a.text) return
+        memory.reportMiss(a.chatId, a.text)
+      } catch (error) {}
+    })
+
     api.every(60_000, () => memory.tick(), '整理记忆')
 
     api.tool(({ chat }) => {
@@ -80,6 +88,11 @@ export default {
     api.route('/memory/delete', async (req) => {
       const b = await http.body(req)
       return memory.remove(b.id)
+    })
+    // 主人换号迁移：旧号名下的私聊记忆整体搬到新号（scope/about 一起改）
+    api.route('/memory/reassign-owner', async (req) => {
+      const b = await http.body(req)
+      return memory.reassignOwner(b.from, b.to)
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))

@@ -625,6 +625,54 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     return { ok: true }
   }
 
+  /** 主人换号迁移：旧 QQ 号名下的私聊记忆（private:oldQQ 作用域 + 关于旧号的小档案）整体搬到新号。 */
+  function reassignOwner(fromQQ, toQQ) {
+    const from = String(fromQQ || '').replace(/\D/g, '')
+    const to = String(toQQ || '').replace(/\D/g, '')
+    if (from.length < 5 || to.length < 5) return { ok: false, message: 'QQ 号位数不对' }
+    if (from === to) return { ok: false, message: '新旧号码一样' }
+    const s = load()
+    let moved = 0
+    for (const m of s.items) {
+      let hit = false
+      if (m.scope === `private:${from}`) { m.scope = `private:${to}`; m.chatId = `private:${to}`; hit = true }
+      if (String(m.about || '') === from) { m.about = to; hit = true }
+      if (String(m.aboutName || '') === from) { m.aboutName = to; hit = true }
+      if (hit) moved++
+    }
+    if (moved) { s.rev = (s.rev || 0) + 1; save(s) }
+    log.info(`主人迁移：${from} → ${to}，搬了 ${moved} 条记忆`)
+    return { ok: true, moved, message: `搬了 ${moved} 条记忆到 ${to}` }
+  }
+
+  // 召回负反馈（#5）：用户明显说「记错了」，最近注入过的记忆要降权——BM25 补不上的那半环。
+  const MISS_RE = /(记错|不是这[个样]|谁跟你说的?|乱记|瞎记|胡说|没有?这回事|记岔|搞错|什么跟什么|不对吧|才不是)/
+  function reportMiss(chatId, text) {
+    const t = String(text || '')
+    if (!t || !MISS_RE.test(t)) return 0
+    const now = Date.now()
+    let touched = 0
+    for (const entry of recallLog) {
+      if (now - Number(entry.at || 0) > 90_000) continue
+      if (chatId && entry.where && entry.where !== chatId) continue
+      for (const h of entry.hits || []) {
+        const s = load()
+        const it = s.items.find((x) => x.id === h.id)
+        if (!it) continue
+        const before = Number(it.importance) || 0.5
+        const after = Math.max(0.1, Math.round((before * 0.8) * 100) / 100)
+        if (after === before) continue
+        it.importance = after
+        s.rev = (s.rev || 0) + 1
+        save(s)
+        log.info(`召回纠错：「${String(it.text).slice(0, 40)}」重要性 ${before} → ${after}（用户说记错了）`)
+        touched++
+      }
+      if (touched) break // 只纠最近一次召回
+    }
+    return touched
+  }
+
   const recallLog = [] // 最近几次想起了什么（给面板看）
   function recall(query, { about, limit, where = '', context = '', chat = null, scopes = null } = {}) {
     const max = limit ?? getConfig().memory.recallCount
@@ -940,8 +988,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   async function extractLines(chatId, lines) {
     const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
     const isQzone = chatId === 'qzone'
-    // 空间动态一条就可能有料；聊天至少要几句
-    if (talk.filter((l) => l.who !== 'bot').length < (isQzone ? 1 : 3)) return { ok: false, message: '内容太少', added: 0, insights: 0 }
+    // 空间动态一条就可能有料；聊天至少要几句（3 行太少——「早」「早」「哈哈」也够得着，
+    // 模型硬凑出「群里早上打招呼」占配额，2026-11-05 复盘）
+    if (talk.filter((l) => l.who !== 'bot').length < (isQzone ? 1 : 6)) return { ok: false, message: '内容太少', added: 0, insights: 0 }
+    // 纯寒暄快筛：全是短招呼/语气词就没有提炼价值，不浪费一次模型调用（模型见了硬话也会凑记忆）
+    const nonBot = talk.filter((l) => l.who !== 'bot')
+    if (!isQzone && nonBot.length <= 12) {
+      const substantive = nonBot.filter((l) => {
+        const t = String(l.text).trim()
+        if (t.length >= 12) return true
+        return !/^(早|晚上好|中午好|早安|晚安|哈+|嘿+|嗯+|哦+|在吗|在|来了|吃了吗|睡了|哈哈+|呵呵|666+|好滴|好的|OK|ok|行|嗯嗯|诶|欸|？|\?|~|…|。)+[~！!。～\s]*$/.test(t)
+      })
+      if (substantive.length === 0) return { ok: false, message: '都是寒暄，没什么可记', added: 0, insights: 0 }
+    }
     // 带上 QQ 号，模型才能把事记到人头上（群聊、空间里说话的人很多）
     const line = (l) => (l.who === 'bot' ? '我' : l.uid ? `${l.who}(${l.uid})` : l.who) + '：' + l.text
     try {
@@ -949,7 +1008,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       const chunks = []
       for (let i = 0; i < talk.length; i += 80) chunks.push(talk.slice(i, i + 80))
       let n = 0
-      for (const part of chunks.slice(-3)) n += await extractFacts(chatId, part.map(line).join('\n'))
+      // 全量分段提炼（原来只挖最后 3 块=240 行，长群聊前半场直接丢）。
+      // 上限 8 块：一天超过 640 行的活跃群，太老的流水价值也低，砍掉头部。
+      for (const part of chunks.slice(-8)) n += await extractFacts(chatId, part.map(line).join('\n'))
       log.info(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${n} 条新记忆`)
       if (isQzone) return { ok: true, added: n, insights: 0 }
       // 顺便回顾一次相处经验（用全天的聊天，最多最近 120 行）
@@ -1247,7 +1308,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   return {
     recallHint,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll,
+    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss,
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {
