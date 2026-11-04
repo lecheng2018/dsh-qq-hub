@@ -108,8 +108,17 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
         if (!r || !r.chatId) continue
         const prev = latestByChat.get(String(r.chatId))
         if (prev && Number(prev.at) > Number(r.at)) continue
+        const ctx0 = (Number(r.input) || 0) + (Number(r.cacheRead) || 0) + (Number(r.cacheWrite) || 0)
+        // 入向 0 token 的记录不能拿来当「当前上下文」：那通常是 provider 这次没上报，
+        // 用它覆盖会把之前测到的真实值（比如 384k）冲成 0，token-guardian 又退回字符估算。
+        if (ctx0 <= 0) continue
+        // 小请求（标题生成、摘要、插件内部小调用）也走同一个 chatId，
+        // 它们只有几百 token，会把群聊 406k 的真实上下文冲成 128（2026-11-04 实测）。
+        // 上下文不会一轮之内掉一半，小于旧值 60% 的当噪音跳过；真压缩了走 clear()。
+        const prevTok = prev ? Number(prev.tokens) || 0 : 0
+        if (prevTok > 0 && ctx0 < prevTok * 0.6) continue
         latestByChat.set(String(r.chatId), {
-          tokens: (Number(r.input) || 0) + (Number(r.cacheRead) || 0) + (Number(r.cacheWrite) || 0),
+          tokens: ctx0,
           output: Number(r.output) || 0,
           at: Number(r.at) || 0,
           model: String(r.model || ''),
@@ -153,12 +162,17 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
       appendFileSync(fileOf(), `${JSON.stringify(line)}\n`, 'utf8')
       // 顺手记下这个聊天的真实上下文（供 token-guardian 判定要不要压）
       if (line.chatId) {
-        latestByChat.set(String(line.chatId), {
-          tokens: u.input + u.cacheRead + u.cacheWrite,
-          output: u.output,
-          at: line.at,
-          model: line.model,
-        })
+        const ctxNow = u.input + u.cacheRead + u.cacheWrite
+        // 同样：入向 0 token 不覆盖已有的真实值（provider 偶尔只报 output）
+        const prevTok = Number(latestByChat.get(String(line.chatId))?.tokens) || 0
+        if (ctxNow > 0 && !(prevTok > 0 && ctxNow < prevTok * 0.6)) {
+          latestByChat.set(String(line.chatId), {
+            tokens: ctxNow,
+            output: u.output,
+            at: line.at,
+            model: line.model,
+          })
+        }
       }
     } catch (error) {
       try { log?.debug?.('遥测写入失败：', error.message) } catch {}
@@ -204,6 +218,11 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
     }
   }
 
+  /** 清掉某个聊天的记录（压缩/重开会话后调用，让下次请求重新测真实值）。 */
+  function clear(chatId) {
+    latestByChat.delete(String(chatId || ''))
+  }
+
   /** 这个聊天最近一次请求的真实上下文大小（token）；没有就 null。 */
   function contextOf(chatId) {
     const v = latestByChat.get(String(chatId || ''))
@@ -215,5 +234,5 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
     return [...latestByChat.entries()].map(([chatId, v]) => ({ chatId, ...v }))
   }
 
-  return { record, summary, fileOf, contextOf, allContexts }
+  return { record, summary, fileOf, contextOf, allContexts, clear }
 }
