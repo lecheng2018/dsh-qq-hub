@@ -103,50 +103,24 @@ export default {
       return { ok: true, message: '✓', id: item.id }
     }
 
-    function listFor(chat, limit = 4) {
-      const now = Date.now()
-      const cfg = api.settings()
-      // 单会话隔离 override：某个作用域强制「不隔离」→ global 也可见
-      //（例：某个群想让她知道主人私聊里的事 —— 在面板里把 group:xxx 设为 open）
-      const scope = scopeOf(chat)
-      const forcedOpen = String(overrides[scope] || '') === 'open'
-      let pool = load().items.filter((m) => isVisible(m, chat) || (forcedOpen && m.scope !== scope))
-      const picked = pool
-        .map((m) => ({ ...m, score: (0.6 + 0.8 * (Number(m.importance) || 0.5)) * (0.6 + 0.4 * Math.exp(-(now - m.at) / (30 * 24 * 3600_000))) }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit)
-      // 兜底：分层记忆不够时补 global（globalFallback=0 不补）
-      const fb = Math.max(0, Math.min(12, Number(cfg.globalFallback) || 0))
-      if (picked.length < limit && fb > 0) {
-        const have = new Set(picked.map((m) => m.id))
-        const globals = pool.filter((m) => String(m.scope || '') === 'global')
-        // global 本来就可见时 isVisible 已放过来了；这里补的是「隔离开的 global 之外」的情况
-        const extra = load().items
-          .filter((m) => String(m.scope || '') === 'global' && !have.has(m.id))
-          .map((m) => ({ ...m, score: (0.6 + 0.8 * (Number(m.importance) || 0.5)) * (0.6 + 0.4 * Math.exp(-(now - m.at) / (30 * 24 * 3600_000))) }))
-          .sort((a, b) => b.score - a.score)
-          .slice(0, Math.min(fb, limit - picked.length))
-        picked.push(...extra)
-      }
-      return picked
-    }
-
-    // 单会话隔离 override：scope → 'open'（强制不隔离，global 可见）/ ''（默认隔离）
-    // 存在 settings.json 的 modules.memory-privacy.overrides 里
+    // 单会话隔离 override：scope → 'open'（强制不隔离）/ ''（默认隔离）
+    // 存在 settings.json 的 modules.memory-privacy.overrides 里。
+    // P0-4 合并平行库后，「不隔离」必须挂在主库上才生效（以前这里的 listFor 是死代码，开关是假的）：
+    // 注册进主库 scopeVisible —— 被设为 open 的聊天额外可见主人私聊作用域的记忆。
+    // 只放行 private:<主人QQ>，别的私聊/别的群仍然不可见（以前 m.scope !== scope 会把所有其他域全放过）。
     const overridesOf = () => {
       try { return api.settings().overrides || {} } catch (error) { return {} }
     }
     let overrides = {}
     try { overrides = overridesOf() } catch (error) {}
-
-    /** 过滤日志：投喂前把被拦下的跨域记忆记下来，方便排查「私聊记忆有没有漏到群里」。
-     * 只在面板要看的时候现算（filterLog 存最近 200 条），不落盘 —— 排查工具，不是审计需求。 */
-    const filterLog = []
-    function recordFilter(chat, blocked) {
-      if (!blocked.length) return
-      filterLog.push({ at: Date.now(), chat: chat?.chatId || '', kind: chat?.kind || '', blocked: blocked.slice(0, 10).map((m) => ({ id: m.id, scope: m.scope, text: String(m.text || '').slice(0, 50) })) })
-      if (filterLog.length > 200) filterLog.splice(0, filterLog.length - 200)
-    }
+    try {
+      const memory = api.use('memory')
+      memory?.registerScopeOverride?.((scope, chat) => {
+        const ownerQQ = String(api.config().ownerQQ || '')
+        if (!ownerQQ || !chat) return false
+        return String(overrides[scopeOf(chat)] || '') === 'open' && scope === `private:${ownerQQ}`
+      })
+    } catch (error) { api.log?.warn?.('隔离开关接主库失败：' + error.message) }
 
     // ---- P0-4：合并平行库。主记忆库（features/memory.js）已经按同一口径做作用域隔离
     //（scopeVisible/indexFor/recall scopes），这层独立的 scoped.json 是重复实现：
@@ -281,10 +255,8 @@ export default {
       if (!scope) return { ok: false, message: '要先说清哪个分区' }
       overrides[scope] = mode === 'open' ? 'open' : ''
       try { api.saveSettings({ overrides }) } catch (error) { return { ok: false, message: '保存失败：' + error.message } }
-      return { ok: true, message: mode === 'open' ? `${scope} 已改为不隔离（global 可见）` : `${scope} 恢复隔离` }
+      return { ok: true, message: mode === 'open' ? `${scope} 已改为不隔离（主人私聊的记忆对这个聊天可见）` : `${scope} 恢复隔离` }
     })
-    // 过滤日志：最近 200 次投喂中每次被拦掉的跨域记忆
-    api.route('/memory-privacy/filter-log', () => ({ ok: true, items: filterLog.slice().reverse() }))
     // 面板：作用域汇总（私聊内容默认不预览，只给条数；全局和本群可以看）
     // 面板数据以「真正生效的那套」为准：主记忆库的作用域分布 + 人物小档案的作用域分布。
     // 本模块自己的 scoped.json 只是附带的一份，模型几乎不会走它，所以面板不能只报它（否则永远 0 条）。
@@ -346,6 +318,6 @@ export default {
     const memory = api.use('memory')
     if (memory?.add) migrateIntoMain(memory)
 
-    return { add, listFor, scopeOf, visibleScopes, isVisible }
+    return { add, scopeOf, visibleScopes, isVisible }
   },
 }
