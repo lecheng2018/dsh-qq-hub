@@ -13,13 +13,47 @@
 import { randomUUID } from 'node:crypto'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { askModel } from '../core/llm.js'
+import { openMemoryDb } from './memory-sqlite.js'
+import { conceptsOf } from './memory-concepts.js'
 
 // ---------------- 纯函数：切词与打分 ----------------
 
 const STOP = new Set('的了是我你他她它们在有和就不也都很吗吧呢啊呀哦嗯这那个一上下来去说要会能着过'.split(''))
 
-/** 切词：英文/数字整词；中文连续段拆成二元字组（单字段保留单字，去掉停用字）。 */
-export function tokenize(text) {
+// ---------------- 作用域配额（P1-2） ----------------
+// 全局 3000 条上限的问题：多群+多私聊很快顶满，然后按重要度整体裁，
+// 可能把某个作用域整段清空，还没有日志。改成每个作用域独立配额。
+export const SCOPE_QUOTAS = { global: 500, group: 400, private: 300 }
+const TOTAL_CAP = 6000 // 兜底：所有作用域加起来也别无限涨
+
+export function quotaForScope(scope) {
+  const s = String(scope || '')
+  if (s.startsWith('group:')) return SCOPE_QUOTAS.group
+  if (s.startsWith('private:')) return SCOPE_QUOTAS.private
+  return SCOPE_QUOTAS.global
+}
+
+/** 超配额时淘汰：优先 auto 来源、低 importance、低 retention（老且不常想起）。返回淘汰条数。 */
+export function evictScopeItems(items, scope, quota, now = Date.now()) {
+  const inScope = items.filter((m) => m.scope === scope)
+  if (inScope.length <= quota) return 0
+  const victims = inScope
+    .slice()
+    .sort((a, b) =>
+      (Number(a.importance || 0.5) - Number(b.importance || 0.5))
+      || ((b.source === 'auto' ? 1 : 0) - (a.source === 'auto' ? 1 : 0))
+      || (Number(a.at || 0) - Number(b.at || 0)))
+    .slice(0, inScope.length - quota)
+    .map((m) => m.id)
+  const kill = new Set(victims)
+  let removed = 0
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (kill.has(items[i].id)) { items.splice(i, 1); removed++ }
+  }
+  return removed
+}
+
+/** 切词：英文/数字整词；中文连续段拆成二元字组（单字段保留单字，去掉停用字）。 */export function tokenize(text) {
   const out = []
   const s = String(text || '').toLowerCase()
   for (const m of s.matchAll(/[a-z0-9_]{2,}|[一-鿿]+/g)) {
@@ -32,6 +66,29 @@ export function tokenize(text) {
 }
 
 /** 两段文字有多像（字组 Jaccard），用于去重。 */
+// ---------------- 否定/反义校验（P1-3） ----------------
+// Jaccard 0.6 会把「养猫/养狗」「喜欢钓鱼/不喜欢钓鱼」判成重复，
+// 保留较长那句等于把事实改错。相似但否定词状态不一致的，强制当新条目存。
+const NEG_WORDS = ['不', '没', '别', '莫', '无', '未', '戒', '停', '取消了', '不再', '已经不', '讨厌', '恨']
+// 常见反义词对：同一句式换了关键名词（猫↔狗）语义就反了，也不能合并
+const ANT_PAIRS = [['猫', '狗'], ['猫', '犬'], ['狗', '犬'], ['男', '女'], ['来', '去'], ['买', '卖'], ['吃', '吐'],
+  ['喜欢', '讨厌'], ['爱', '恨'], ['在', '不在'], ['会', '不会'], ['有', '没有'], ['是', '不是'], ['开了', '关了'],
+  ['工作', '辞职'], ['上学', '辍学'], ['结婚', '离婚'], ['搬来', '搬走']]
+
+/** 两句相似文本的「极性」是否一致：否定词命中集合 + 反义词对；scope/about 不同也算不一致。 */
+export function contradicts(aText, bText, aAbout = '', bAbout = '', aScope = '', bScope = '') {
+  if (aScope !== bScope) return true
+  if (aAbout && bAbout && aAbout !== bAbout) return true
+  const a = String(aText || ''); const b = String(bText || '')
+  const hits = (t) => NEG_WORDS.filter((w) => t.includes(w)).join('|')
+  if (hits(a) !== hits(b)) return true
+  for (const [x, y] of ANT_PAIRS) {
+    if ((a.includes(x) && b.includes(y) && !a.includes(y) && !b.includes(x))
+      || (a.includes(y) && b.includes(x) && !a.includes(x) && !b.includes(y))) return true
+  }
+  return false
+}
+
 export function similarity(a, b) {
   const A = new Set(tokenize(a))
   const B = new Set(tokenize(b))
@@ -49,7 +106,10 @@ export function buildIndex(items) {
     const tf = new Map()
     for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1)
     for (const t of tf.keys()) df.set(t, (df.get(t) || 0) + 1)
-    return { it, tf, len: toks.length || 1 }
+    // 概念集合（P2-1）：「他最近过得怎么样」和「阿强搬家到上海」没有共同字词，
+    // 但共享「近况/居住」概念 —— 靠这个重叠把纯语义提问捞回来。
+    const concepts = conceptsOf(`${it.text} ${(it.tags || []).join(' ')}`)
+    return { it, tf, len: toks.length || 1, concepts }
   })
   const avgLen = docs.reduce((s, d) => s + d.len, 0) / (docs.length || 1)
   return { docs, df, avgLen, N: docs.length }
@@ -64,6 +124,7 @@ export function buildIndex(items) {
  */
 export function search(idx, query, o = {}) {
   const q = [...new Set(tokenize(query))]
+  const qConcepts = conceptsOf(query)
   const now = o.now ?? Date.now()
   const aboutSet = new Set((Array.isArray(o.about) ? o.about : o.about ? [o.about] : []).map(String))
   const k1 = 1.4
@@ -87,10 +148,17 @@ export function search(idx, query, o = {}) {
     const it = d.it
     if (it.invalidAt && !o.includeInvalid) continue
     const aboutHit = Boolean(it.about) && aboutSet.has(String(it.about))
-    if (s <= 0 && !aboutHit) continue
+    // 概念重叠（P2-1）：查询与记忆没有共同字词时的语义兜底。重叠比例当分。
+    let conceptScore = 0
+    if (qConcepts.size && d.concepts?.size) {
+      let overlap = 0
+      for (const c of qConcepts) if (d.concepts.has(c)) overlap++
+      if (overlap) conceptScore = overlap / Math.min(qConcepts.size, d.concepts.size)
+    }
+    if (s <= 0 && !aboutHit && conceptScore <= 0) continue
     const importance = 0.6 + 0.8 * (Number(it.importance) || 0.5)
-    const score = (s + (aboutHit ? 0.8 : 0)) * importance * (0.55 + 0.45 * retention(it, now))
-    scored.push({ it, score, why: why.sort((x, y) => y[1] - x[1]).slice(0, 3).map((w) => w[0]).concat(aboutHit ? ['（关于这个人）'] : []) })
+    const score = (s + (aboutHit ? 0.8 : 0) + conceptScore * 1.2) * importance * (0.55 + 0.45 * retention(it, now))
+    scored.push({ it, score, why: why.sort((x, y) => y[1] - x[1]).slice(0, 3).map((w) => w[0]).concat(aboutHit ? ['（关于这个人）'] : []).concat(conceptScore > 0.3 ? ['（语义相关）'] : []) })
   }
   scored.sort((x, y) => y.score - x.score)
   return scored.filter((x) => x.score >= (o.minScore ?? 0.35)).slice(0, o.limit ?? 6)
@@ -222,9 +290,45 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   }
 
   const file = () => dataDir('memories.json')
+  /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
+  function evictIfNeeded(s, scope) {
+    // 快路径：库还没大到可能超配额就别扫（单群 400 / 全库 6000）
+    if (s.items.length <= 400) return
+    const quota = quotaForScope(scope)
+    const removed = evictScopeItems(s.items, scope, quota)
+    if (removed > 0) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
+    // 全库兜底上限：防极端情况（大量小作用域）无限涨
+    if (s.items.length > TOTAL_CAP) {
+      const victims = s.items.slice().sort((a, b) => (Number(a.importance || 0.5) - Number(b.importance || 0.5)) || (Number(a.at || 0) - Number(b.at || 0)))
+        .slice(0, s.items.length - TOTAL_CAP).map((m) => m.id)
+      const kill = new Set(victims)
+      let n = 0
+      for (let i = s.items.length - 1; i >= 0; i--) { if (kill.has(s.items[i].id)) { s.items.splice(i, 1); n++ } }
+      if (n > 0) log?.info?.(`记忆库：全库超过兜底上限 ${TOTAL_CAP} 条，淘汰 ${n} 条`)
+    }
+  }
   // 作用域索引缓存（按 scope 分组）；任何写入都会 clear
   const cache = new Map() // scope -> { stamp, count, idx }
-  const load = () => readJson(file(), () => ({ items: [] }))
+  // tokenize 结果缓存（id → Set）：add 的 dup 预筛每次扫几百上千条，重复切词是纯浪费。
+  // 写入路径清（save 后条目可能变），读路径随便缓存。
+  const tokCache = new Map()
+  const tokOf = (m) => {
+    let t = tokCache.get(m.id)
+    if (!t) { t = new Set(tokenize(m.text)); tokCache.set(m.id, t) }
+    return t
+  }
+  // 存储层（P1-1）：SQLite 单表 + 内存镜像。load() 返回镜像（不再整读 541KB），
+  // save() 算 diff 增量写库（不再整份重写）。db 打不开（老 Node/文件锁）自动退回 JSON 全量读写。
+  let store = null
+  try {
+    store = openMemoryDb(dataDir('memories.db'), { log })
+  } catch (error) {
+    log?.warn?.('SQLite 记忆库打不开，退回 JSON 存储：', error.message)
+    store = null
+  }
+  const jsonLoad = () => readJson(file(), () => ({ items: [] }))
+  const jsonSave = (s) => writeJson(file(), s)
+  const load = () => (store ? store.load() : jsonLoad())
 
   const pendingHitUpdates = new Map()
   let hitFlushTimer = null
@@ -251,7 +355,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       changed = true
     }
     pendingHitUpdates.clear()
-    if (changed) writeJson(file(), s)
+    if (changed) save(s)
   }
 
   const save = (s) => {
@@ -267,8 +371,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       pendingHitUpdates.clear()
       if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
     }
-    writeJson(file(), s)
+    if (store) store.save(s)
+    else jsonSave(s)
     cache.clear()
+    if (tokCache.size > 8000) tokCache.clear() // 防 id 无限积累；条目改文本概率低，粗放即可
   }
   /**
    * 记忆索引。**必须带作用域**：索引只包含这个聊天看得见的条目。
@@ -351,8 +457,22 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
-    // 去重：很像的就更新旧的（时间、重要程度取新），不重复存
-    const dup = s.items.find((m) => !m.invalidAt && similarity(m.text, t) >= 0.6 && (!about || !m.about || m.about === String(about)))
+    // 去重：很像的就更新旧的（时间、重要程度取新），不重复存。
+    // 但否定词/反义状态不一致（养猫 vs 养狗、喜欢 vs 不喜欢）不算重复 —— 语义反转不能合并（P1-3）。
+    const ownerQQ0 = String(getConfig()?.ownerQQ || '')
+    const scopeGuess = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ0 ? `private:${ownerQQ0}` : 'global')
+    // dup 只可能出现在同一作用域里（跨 scope 条目互相看不见，合并了也是泄漏）
+    const scopeItems = s.items.filter((m) => String(m.scope || '') === scopeGuess)
+    const tToks = new Set(tokenize(t))
+    const maybe = (m) => {
+      if (m.invalidAt) return false
+      if (!about || !m.about || m.about === String(about)) {
+        for (const w of tokOf(m)) if (tToks.has(w)) return true
+      }
+      return false
+    }
+    const dup = scopeItems.find((m) => maybe(m) && similarity(m.text, t) >= 0.6
+      && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || '')))
     if (dup) {
       dup.text = t.length >= dup.text.length ? t : dup.text
       dup.at = Date.now()
@@ -367,7 +487,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
     const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0, clarity: 'vivid' }
     s.items.push(item)
-    if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
+    evictIfNeeded(s, finalScope)
     save(s)
     return { ok: true, message: '✓', id: item.id }
   }
@@ -492,14 +612,27 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   }
 
   const recallLog = [] // 最近几次想起了什么（给面板看）
-  function recall(query, { about, limit, where = '', context = '', chat = null } = {}) {
+  function recall(query, { about, limit, where = '', context = '', chat = null, scopes = null } = {}) {
     const max = limit ?? getConfig().memory.recallCount
     // 作用域过滤：拿不到当前聊天（chat=null）就不限，保持老调用方行为；
     // 传了 chat 就只留这个聊天可见的（私聊作用域的条目在群里会被物理过滤掉，模型套话也拿不到）。
-    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat)) : list)
+    // 后台任务（没有 chat 概念）必须显式传 scopes 数组声明可见域（如 ['global','private:10000001']），
+    // 否则一律拒绝（fail-closed）——防止后台路径拿到全库。
+    const inScopes = (scope) => Array.isArray(scopes) && scopes.includes(String(scope))
+    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat))
+      : Array.isArray(scopes) ? list.filter((h) => inScopes(h.it.scope))
+      : [])
     // 索引本身就按作用域建：传了 chat 只检索它看得见的条目（双保险，scoped 再滤一次）
-    const idx = chat ? indexFor(chat) : indexAll()
-    const hits = scoped(search(idx, query, { about, limit: chat ? max * 3 : max })).slice(0, max)
+    // scopes 数组模式：逐个作用域取索引合并检索（候选仍然只有声明过的域，不会碰到别的私聊）
+    let idx
+    if (chat) idx = indexFor(chat)
+    else if (Array.isArray(scopes)) {
+      idx = buildIndex(scopes.flatMap((sc) => {
+        const i = indexFor(sc)
+        return i ? i.docs.map((d) => d.it) : []
+      }))
+    } else idx = buildIndex([]) // 没声明可见域的后台调用：什么都不给
+    const hits = scoped(search(idx, query, { about, limit: chat || Array.isArray(scopes) ? max * 3 : max })).slice(0, max)
     // 这一句没想起几条（「嗯嗯」「然后呢」）：用上一句再找找，分数打折
     if (context && hits.length < max) {
       const have = new Set(hits.map((h) => h.it.id))
@@ -599,9 +732,11 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     // 在陌生群里给主人写档案时，会把主人私聊里的私事混进去，提炼成一条 global 档案，
     // 于是「私事 → global → 哪里都能读」—— 等于绕过了所有隔离。
     // global 档案该由 global 自己那条线维护，不该由别的聊天代写。
+    // scope 为空必须拒绝（fail-closed）：兜不住空 scope 就退化成全库，跨域污染重演。
+    if (!String(scope || '').trim()) throw new Error('没说清用哪个作用域的记忆（private:/group:/global），拒绝重写')
     const mine = load().items
       .filter((m) => !m.invalidAt && String(m.about) === String(qq))
-      .filter((m) => (scope ? String(m.scope || '') === String(scope) : true))
+      .filter((m) => String(m.scope || '') === String(scope))
       .sort((a, b) => a.at - b.at)
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
@@ -723,7 +858,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
    * 这一轮聊到的事相关的记忆（#79）：内容随每条消息变化，所以由模块在「交给她的内容」里附上，
    * 不放进每轮都会追加的运行时上下文快照。最多 4 条、总长 ≤ 300 字。
    */
-  function recallHint(chat, queryText, prevText = '') {
+  function recallHint(chat, queryText, prevText = '', { sessionId } = {}) {
     const cfg = getConfig().memory
     if (!cfg.enabled) return ''
     const q = String(queryText || '').trim()
@@ -731,10 +866,25 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const backdrop = groupBackdrop(chat, q)
     const recent = recentEvents(24, 4, chat)
     const shown = new Set(recent.map((m) => m.id))
-    const about = chat && chat.kind === 'private' ? chat.userId : undefined
+    // 说话人消解（P2-2）：群聊里「他养了什么」的「他」是这一轮在说话的人 ——
+    // 把 speakersOf 当 about 数组传下去，检索时关于这些人的记忆加分。
+    const about = chat && chat.kind === 'private' ? chat.userId
+      : chat && chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3)
+      : undefined
     // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
     const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
     const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, 4)
+    // 泛问兜底（P2-1）：「他最近怎么样」和记忆没有任何字词/概念重叠，recall 严格按相关性返回空，
+    // 模型会完全失忆。注入场景退而求其次给这个作用域最近的重要记忆（明确检索/清空契约不受影响）。
+    if (!hits.length) {
+      const now = Date.now()
+      const fallback = (chat ? indexFor(chat).docs : [])
+        .filter((d) => !d.it.invalidAt && !shown.has(d.it.id))
+        .sort((a, b) => (Number(b.it.importance) || 0.5) - (Number(a.it.importance) || 0.5) || b.it.at - a.it.at)
+        .slice(0, 2)
+        .map((d) => ({ it: d.it, score: 0.3, why: ['（泛问兜底·最近重要）'] }))
+      hits.push(...fallback)
+    }
     if (!hits.length) return backdrop
     let body = hits.map((h) => memoryLine(h.it)).join('；')
     if (body.length > 300) body = body.slice(0, 300) + '…'
@@ -1129,5 +1279,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       const live = items.filter((m) => !m.invalidAt)
       return { count: live.length, auto: live.filter((m) => m.source === 'auto').length, events: live.filter((m) => m.source === 'event').length, outdated: items.length - live.length }
     },
+    /** 关闭存储层（宿主退出/热重载时调用；SQLite 要 close 才不落脏 WAL）。 */
+    dispose: () => { try { store?.close?.() } catch (error) {} store = null },
   }
 }

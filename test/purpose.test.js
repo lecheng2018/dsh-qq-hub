@@ -67,7 +67,14 @@ function makePurpose(hub, overrides = {}) {
     log: { info() {}, warn() {}, debug() {} },
     isMuted: () => false,
     mood: () => ({ nudge: (d, r) => nudges.push({ d, r }) }),
-    memory: () => ({ list: () => (overrides.memories ?? DEFAULT_MEMORIES).map((m) => ({ id: m.id || 'm1', text: m.text, importance: m.importance ?? 0.8, at: Date.now() })) }),
+    // P1-1 后 purpose 走 recall（scopes fail-closed）拿素材，不再用 list —— mock 同步，recall 返回 hits 结构 { it }
+    memory: () => {
+      const items = (overrides.memories ?? DEFAULT_MEMORIES).map((m) => ({ id: m.id || 'm1', text: m.text, importance: m.importance ?? 0.8, at: Date.now() }))
+      return {
+        list: () => items,
+        recall: () => items.map((it) => ({ it, score: 1, why: [] })),
+      }
+    },
     personaText: () => overrides.persona || '',
   })
   return { p, cfg, nudges }
