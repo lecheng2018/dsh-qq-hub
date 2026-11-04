@@ -191,9 +191,19 @@ export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
   try {
     let content = [{ type: 'text', text: describePrompt({ count: take.length, hint }) }]
     for (const img of take) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-helper' })
-    // 图片同样要先登记成附件；登记不了就没法让辅助模型看
+    // 图片要先登记成 DSH 附件块；失败则这次转述直接放弃（返回空串），
+    // 由 textForBlindModel 如实告知看不到，绝不把裸 base64 塞给适配层。
+    // 线上 EACCES 根因由 fnos-fsync-patch.js 在插件启动时修好，正常不会再走到这里。
     const att = dsh.attachments || dsh.get('attachments')
-    if (att && typeof att.admitPromptContent === 'function') content = await att.admitPromptContent(content)
+    if (!att || typeof att.admitPromptContent !== 'function') return ''
+    try {
+      content = await att.admitPromptContent(content)
+    } catch (error) {
+      // DSH 底层适配层（dsh-llm-pi-ai）强依赖 block.attachment.attachmentId，
+      // 登记附件一旦失败不能强行传裸图片块调用 runStream，否则会抛 Cannot read properties of undefined (reading 'attachmentId')
+      log?.warn?.(`辅助看图：图片登记附件失败（${error.message}），跳过调用避免 DSH 框架抛 attachmentId 异常`)
+      return ''
+    }
     const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
     const out = await runStream(llm, {
       provider: h.provider,
@@ -207,7 +217,10 @@ export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
   } catch (error) {
     // 辅助模型挂了不能拖垮主流程：记一条，退回纯文字
     log?.warn?.(`辅助看图模型失败（${h.provider}/${h.model}）：${error.message}`)
-    markVisionUnsupported(h.provider, h.model)
+    // 只有当模型真正返回拒收图片的错误时，才记录该模型不支持视觉；本地 JS 异常或附件异常绝不误杀模型能力
+    if (/image.*not supported|invalid content type|unsupported.*image/i.test(error.message)) {
+      markVisionUnsupported(h.provider, h.model)
+    }
     return ''
   }
 }
