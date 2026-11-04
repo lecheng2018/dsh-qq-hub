@@ -23,7 +23,7 @@ function seedMemories(dir, items) {
 }
 
 function run(home, args = [], extraEnv = {}) {
-  const env = { ...process.env, HOME: home, PATH: process.env.PATH }
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: process.env.PATH }
   delete env.DSH_QQ_HUB_DATA_DIR
   delete env.AURABOT_DATA_DIR
   delete env.DSH_HOME

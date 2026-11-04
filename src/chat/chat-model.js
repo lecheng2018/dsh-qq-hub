@@ -56,7 +56,15 @@ export function normalizeChatModels(raw) {
 export function resolveChatModel(cfg, chat, available = null) {
   if (!chat) return null
   const c = normalizeChatModels(cfg?.chatModels)
-  const ok = (s) => Boolean(s) && (!Array.isArray(available) || available.length === 0 || available.some((m) => m.provider === s.provider && m.model === s.model))
+  // provider 宽松匹配：列表里的条目可能来自「能看图」的那个 provider（fan-vision），
+  // 而配置里存的是基础版（fan）。两者是同一个模型的两种声明，不该判成「模型已不在 DSH 里」，
+  // 否则她明明选了模型却静默退回全局默认（2026-11-04 模型去重接线后暴露出来的）。
+  const sameProvider = (a, b) => {
+    const x = String(a || '').replace(/-vision$/i, '')
+    const y = String(b || '').replace(/-vision$/i, '')
+    return x !== '' && x === y
+  }
+  const ok = (s) => Boolean(s) && (!Array.isArray(available) || available.length === 0 || available.some((m) => (m.provider === s.provider || sameProvider(m.provider, s.provider)) && m.model === s.model))
   let order = []
   if (chat.kind === 'private') order = [['private', c.privates[String(chat.userId ?? '')]], ['privateDefault', normalizeSelection(c.privateDefault)]]
   else if (chat.kind === 'group') order = [['group', c.groups[String(chat.groupId ?? '')]], ['groupDefault', normalizeSelection(c.groupDefault)]]
