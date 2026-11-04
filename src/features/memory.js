@@ -292,9 +292,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   const file = () => dataDir('memories.json')
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
   function evictIfNeeded(s, scope) {
-    // 快路径：库还没大到可能超配额就别扫（单群 400 / 全库 6000）
-    if (s.items.length <= 400) return
+    // 快路径：这个作用域还没大到可能超它自己的配额就别扫（M3：按 scope 配额判断，不再按全库长度）
     const quota = quotaForScope(scope)
+    const inScope = s.items.reduce((n, m) => n + (String(m.scope || '') === String(scope) ? 1 : 0), 0)
+    if (inScope <= quota) return
     const removed = evictScopeItems(s.items, scope, quota)
     if (removed > 0) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
     // 全库兜底上限：防极端情况（大量小作用域）无限涨
@@ -532,9 +533,12 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   }
 
   /** 导入旧档案第二步：把勾选的候选存进记忆库。 */
-  function importCommit(items) {
+  /** 面板导入（M6）：scope 可选 'global'（所有聊天可见）或 private（默认，只主人私聊）。
+   *  她自己的设定/公开常识应选 global，否则群里想起不来。 */
+  function importCommit(items, { scope = 'private' } = {}) {
+    const want = scope === 'global' ? 'global' : ''
     let n = 0
-    for (const c of items || []) if (add({ text: c.text, aboutName: c.aboutName || '', importance: c.importance ?? 0.5, source: 'import' }).id) n++
+    for (const c of items || []) if (add({ text: c.text, aboutName: c.aboutName || '', importance: c.importance ?? 0.5, source: 'import', ...(want ? { scope: want } : {}) }).id) n++
     return n
   }
 
@@ -562,9 +566,31 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   function recentEvents(hours = 24, limit = 4, chat = null) {
     if (chat && chat.kind === 'group') return []
     const since = Date.now() - hours * 3600_000
+    // 无 chat 的调用（后台任务）一律空——fail-closed（M4）；后台要读就用 recentEventsFor 显式声明域。
+    if (!chat) return []
     return load().items
       .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since)
-      .filter((m) => (chat ? scopeVisible(m.scope, chat) : true))
+      .filter((m) => scopeVisible(m.scope, chat))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, limit)
+  }
+
+  /** 后台任务专用读（M4）：和 recall 的 scopes 语义一致。不给 scopes 一律返回空（fail-closed），
+   *  面板主人自用的 list() 不受影响。后台轮（B 站选关键词等）要读兴趣画像必须显式声明可见域。 */
+  function listFor(scopes, { limit = 200 } = {}) {
+    const want = [...(Array.isArray(scopes) ? scopes : scopes ? [scopes] : [])].map((x) => String(x ?? '').trim()).filter(Boolean)
+    if (!want.length) return []
+    const items = load().items.filter((m) => !m.invalidAt && want.includes(String(m.scope || '')))
+    return items.sort((a, b) => (Number(b.importance) || 0) - (Number(a.importance) || 0) || b.at - a.at).slice(0, limit)
+  }
+
+  /** 后台任务专用：显式声明可见域的事件流水（与 listFor 同语义，不给域一律空）。 */
+  function recentEventsFor(scopes, hours = 24, limit = 4) {
+    const want = new Set([...(Array.isArray(scopes) ? scopes : scopes ? [scopes] : [])].map((x) => String(x ?? '').trim()).filter(Boolean))
+    if (!want.size) return []
+    const since = Date.now() - hours * 3600_000
+    return load().items
+      .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since && want.has(String(m.scope || '')))
       .sort((a, b) => b.at - a.at)
       .slice(0, limit)
   }
@@ -1308,7 +1334,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   return {
     recallHint,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss,
+    add, addEvent, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {
@@ -1340,6 +1366,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     },
     /** 删一个人物小档案：profileKeyOf(qq, scope) 命中才删，text 传空字符串即删。 */
     removeProfile: (qq, scope) => { setProfile(qq, '', '', scope); return true },
+    /** 后台任务专用读（M4）：和 recall 的 scopes 语义一致。不给 scopes 一律返回空（fail-closed），
+     *  面板主人自用的 list() 不受影响。后台轮（B 站选关键词等）要读兴趣画像必须显式声明可见域。 */
     list: (q) => {
       const items = load().items
       // 面板里过时的也列出来（排在后面），能看到被哪条取代、能恢复

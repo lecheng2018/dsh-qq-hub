@@ -116,8 +116,9 @@ export default {
       try { return { ok: true, list: await memory.importCandidates(String(b.text || '').slice(0, 30000)) } } catch (error) { return { ok: false, message: error.message, list: [] } }
     })
     api.route('/memory/import/commit', async (req) => {
-      const n = memory.importCommit((await http.body(req)).items || [])
-      return { ok: true, message: `存进记忆库 ${n} 条` }
+      const b = await http.body(req)
+      const n = memory.importCommit(b.items || [], { scope: b.scope === 'global' ? 'global' : 'private' })
+      return { ok: true, message: `存进记忆库 ${n} 条${b.scope === 'global' ? '（所有聊天可见）' : ''}` }
     })
     api.route('/style/save', async (req) => {
       const b = await http.body(req)

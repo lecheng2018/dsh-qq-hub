@@ -126,15 +126,15 @@ test('createApprovalRegistry: 权限锁锁定时阻止放行并提示解锁', as
     reason: '测试权限锁'
   }, { chatId: 'private:10001', sessionId: 'sess-1' })
 
-  // 主人回复通过，但权限锁锁着
-  const handled = registry.handleReply('通过', ownerQQ, 'private:10001')
+  // 主人回复「通过 #3」（审计后不再支持无编号自动选中，防止「可以/ok」宽匹配误批）
+  const handled = registry.handleReply('通过 #3', ownerQQ, 'private:10001')
   assert.equal(handled, true) // 消费了消息
   assert.equal(registry.count(), 1) // 并没有被放行，依然挂起
   assert.match(sent[1].text, /权限锁当前处于锁定状态/)
 
   // 主人输入口令解锁了权限锁
   locked = false
-  const handledAgain = registry.handleReply('通过', ownerQQ, 'private:10001')
+  const handledAgain = registry.handleReply('通过 #3', ownerQQ, 'private:10001')
   assert.equal(handledAgain, true)
   assert.equal(registry.count(), 0) // 放行成功
 })

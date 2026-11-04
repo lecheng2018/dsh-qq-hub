@@ -118,7 +118,10 @@ test('检索：同时偏向好几个说话人（群里这一段谁在说）', as
 
 test('经历：她做过的事常驻上下文；群里优先想起正在说话的人', () => {
   mem.addEvent({ text: '给主人唱了《小幸运》', about: '10000001', tags: ['唱歌'] })
-  assert.equal(mem.recentEvents()[0].text, '给主人唱了《小幸运》')
+  // M4 后 recentEvents 无 chat 即空（fail-closed）；事件常驻上下文走 contextFor 内部的显式域路径
+  assert.equal(mem.recentEvents().length, 0)
+  const ownerScope = mem.recentEventsFor(['global', 'private:10000001'])
+  assert.equal(ownerScope[0]?.text, '给主人唱了《小幸运》')
   const ctx = mem.contextFor({ kind: 'private', userId: '10000001', chatId: 'private:10000001' }, 's1')
   assert.match(ctx, /你最近做过的事：刚才给主人唱了《小幸运》/)
   mem.add({ text: '阿花最近在减肥', about: '30000003', aboutName: '阿花', importance: 0.6, source: 'tool' })

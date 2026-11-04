@@ -109,13 +109,15 @@ test('私聊里的经历不会出现在陌生群的 recallHint 里', () => {
   assert.ok(!hint.includes('稻香'), '陌生群提示词里不该有：' + hint)
 })
 
-test('recentEvents 带 chat 时按作用域过滤，不带时保持老行为', () => {
+test('recentEvents 带 chat 时按作用域过滤，不带时 fail-closed 返回空（M4）', () => {
   const strangerRecent = store.recentEvents(24, 20, { chatId: 'group:99999', kind: 'group', groupId: '99999' })
   assert.ok(!strangerRecent.some((m) => m.text.includes('稻香')), '陌生群看不到私聊经历')
   const ownRecent = store.recentEvents(24, 20, PRIVATE)
   assert.ok(ownRecent.some((m) => m.text.includes('稻香')), '本人私聊能看得到')
-  // 老调用（不传 chat）不过滤，保持向后兼容
-  assert.ok(store.recentEvents(24, 20).some((m) => m.text.includes('稻香')), '不传 chat 时保持老行为')
+  // M4 收紧后：不传 chat（后台任务）一律空；后台要读走 recentEventsFor 显式声明域
+  assert.equal(store.recentEvents(24, 20).length, 0, '不传 chat 时 fail-closed')
+  assert.ok(store.recentEventsFor(['private:20002'], 24, 20).some((m) => m.text.includes('稻香')), '显式声明域能看到')
+  assert.equal(store.recentEventsFor([], 24, 20).length, 0, '不给域一律空')
 })
 
 test('经历默认落主人私聊，不是 global（B站/抖音这类兴趣画像不外泄）', () => {

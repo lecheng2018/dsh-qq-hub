@@ -512,7 +512,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         const guard = checkIdentityLeak(text, {
           surface: tgt.kind === 'group' ? '群消息' : '私聊消息',
           ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-          allowIds: ownGroup ? [ownGroup] : [],
+          allowIds: [ownGroup, ...(tgt.kind === 'private' ? [cfg.ownerQQ] : [])].filter(Boolean),
           mode: igCfg.mode === 'warn' ? 'warn' : 'block',
         })
         if (guard.hits.length) {
@@ -747,7 +747,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   async function sendImage(chatId, src, replyId, userId) {
     try {
-      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024 })
+      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024, allowLocal: true })
       return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${src.slice(-40)}`)
     } catch (error) {
       log.warn('图片发不出去：', error.message)
@@ -1071,7 +1071,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (localApi?.active('asr')) {
         try {
           const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
-          const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024 })
+          const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: true })
           const { writeFileSync, mkdirSync } = await import('node:fs')
           const { join } = await import('node:path')
           const dir = localApi.dir() + '/out'
@@ -1118,7 +1118,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       throw new Error(`识别模型还在准备（${prov.preparation.phase}）`)
     }
     const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
-    const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024 })
+    const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: true })
     const spec = stt.resolve({ audio: new Uint8Array(toMono16k(raw)) })
     const r = await stt.transcribe(spec, AbortSignal.timeout(60000))
     const text = typeof r === 'string' ? r : r?.text || r?.transcript
