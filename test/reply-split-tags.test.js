@@ -27,22 +27,34 @@ test('硬拆不会把 <sticker:…> 标签切坏（它会被正确提取成表�
   }
 })
 
-test('拆出来的每一条都不能以逗号/顿号/冒号结尾（线上 bug）', () => {
-  const out = textsOf('今天我去了那个新开的商场，里面人特别多而且到处都在排队，还碰到大学同学了，他说最近换了工作')
-  assert.ok(out.length >= 2, '这么长应该拆开')
-  for (const t of out) {
-    assert.equal(/[，,、：:；;]$/.test(t), false, '这条以逗号结尾了：' + JSON.stringify(t))
-  }
-})
-
 test('短句原样通过，不该乱切', () => {
   assert.deepEqual(textsOf('草'), ['草'])
   assert.deepEqual(textsOf('不告诉你'), ['不告诉你'])
 })
 
-test('硬拆后的每一条都不超 30 字（除非单句本身超长）', () => {
-  const out = textsOf('今天我去了那个新开的商场，里面人特别多而且到处都在排队，还碰到大学同学了')
+test('完整句子不切碎：45 字的一句话整条发（不按逗号劈）', () => {
+  const raw = '今天我去了那个新开的商场，里面人特别多而且到处都在排队，还碰到大学同学了'
+  const out = textsOf(raw)
+  assert.deepEqual(out, [raw], '完整的一句话不该被切成多段')
+})
+
+test('只有真长句（> 60 字）才切，且切开处不带逗号', () => {
+  const raw = '这件事我先说清楚一下，第一是那个价格确实比上代贵了不少，第二是它的跑分虽然高但是我实际用起来感觉差别没那么大，第三是如果你只是日常用完全没必要换'
+  const out = textsOf(raw)
+  assert.ok(out.length >= 2, '这么长应该切')
   for (const t of out) {
-    assert.ok(t.length <= 30, '这条超了 30 字：' + t.length + ' ' + JSON.stringify(t))
+    assert.equal(/[，,、：:；;]$/.test(t), false, '切开处不能以逗号结尾：' + JSON.stringify(t))
+  }
+})
+
+test('群里一段回复超过 3 条时，多出来的并进第 3 条而不是丢掉', () => {
+  // 这是 2026-11-04 线上事故的形状：她答「备用码」讲了四段，群里只出现第一段，
+  // 用户看到的是「一个问题没回答完就停了」。截断在 hub.js 的 slice(0,3)。
+  // 这里守的是 reply 层不把内容提前切成更多段，hub 层负责合并不丢弃。
+  const raw = '备用码是 Google 给的一次性码，一共十个，手机丢了也能登录一个 路径在账号→安全性→两步验证→备用码，可以下载或打印 你现在验证器异常进不去设置页，先用短信那条路重置两步验证，再重新生成'
+  const all = parseReply(raw).items.filter((i) => i.kind === 'text').map((i) => i.value).join('')
+  // 无论切成几条，所有内容都必须在（不能有任何一段人间蒸发）
+  for (const piece of ['备用码是', '一共十个', '手机丢了', '路径在账号', '可以下载或打印', '验证器异常', '短信那条路', '重新生成']) {
+    assert.ok(all.includes(piece), `内容「${piece}」被丢了：` + JSON.stringify(all))
   }
 })

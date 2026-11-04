@@ -22,6 +22,7 @@ import { createHub, workspaceDirOf } from './chat/hub.js'
 import { createLocal, fileOf, toImageBuffer } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
 import { defaultModel, askModel, modelReasoning, modelVision, clearReasoningCache, clearVisionCache } from './core/llm.js'
+import { dedupeModelList } from './core/models.js'
 import { mimeOf } from './chat/inbound.js'
 import { dataDir, ensureDir } from './core/store.js'
 import { createUpdateChecker, changelogSection } from './core/update.js'
@@ -286,15 +287,33 @@ export function apply(ctx) {
    */
   async function listModels() {
     const llm = ctx.llm || ctx.get('llm')
-    const out = []
+    // 先按 provider 收集原始清单，再统一去重：
+    // DSH 里同一个模型常挂在两个 provider 下（fan / fan-vision、mini / mini-vision…），
+    // 唯一区别是后者声明了 vision=true。对使用者来说那就是同一个模型，列两遍只会让人困惑
+    // （2026-11-04 主人反馈：可用模型后面加个 vision 就重复显示）。
+    // 注意 dedupeModelList 早就写好了，但一直没接到这里 —— 所以列表从来没去过重。
+    const groups = []
     for (const p of llm.listProviders() || []) {
       const provider = typeof p === 'string' ? p : p.provider || p.id || p.name
       try {
-        for (const m of (await llm.listModels(provider)) || []) {
-          const model = m.id || m.model
-          out.push({ provider, model, name: m.name || model, reasoning: await modelReasoning(ctx, provider, model), vision: await modelVision(ctx, provider, model) })
-        }
+        const models = (await llm.listModels(provider)) || []
+        groups.push({ provider, models })
       } catch (error) {}
+    }
+    const out = []
+    for (const g of dedupeModelList(groups)) {
+      const model = g.model
+      const seenProviders = Array.isArray(g.providers) && g.providers.length ? g.providers : [g.provider]
+      // 合并后的条目可能聚合了多个 provider：任一能看图就算能看图
+      let vision = g.vision === true
+      if (!vision) {
+        for (const pv of seenProviders) {
+          try { if (await modelVision(ctx, pv, model)) { vision = true; break } } catch (error) {}
+        }
+      }
+      let reasoning = null
+      try { reasoning = await modelReasoning(ctx, g.provider, model) } catch (error) {}
+      out.push({ provider: g.provider, model, name: g.name || model, reasoning, vision, providers: seenProviders })
     }
     if (out.length) modelCache = out
     return out
