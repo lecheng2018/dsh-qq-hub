@@ -1325,6 +1325,8 @@ export function apply(ctx) {
 
   return {
     hub, onebot, snowluma, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
+    // 遥测（只观察）：暴露给面板/诊断/测试，模块内部走 api.core.telemetry
+    telemetry,
     get stickers() { return use('stickers') },
     get qzone() { return use('diary') },
     get mood() { return use('mood') },
