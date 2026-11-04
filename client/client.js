@@ -2302,7 +2302,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
               h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
                 h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条'),
                 h('div', { className: 'ab-spacer' }),
-                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed({}) }, '批量展开'),
+                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed(Object.fromEntries(mem.map((m) => [m.id, false]))) }, '批量展开'),
                 h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed(Object.fromEntries(mem.map((m) => [m.id, true]))) }, '批量折叠')),
               h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, collapsed: collapsed[m.id] !== false, onToggle: () => setCollapsed((prev) => ({ ...prev, [m.id]: !(prev[m.id] !== false) })), onChanged: () => load(), toast }))))),
         h(RecallLog, null),
@@ -2449,7 +2449,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h('div', { className: 'meta' }, timeAgo(m.at), h('br'), h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11 } }, SOURCE[m.source] || '记忆')),
         edit ? h('input', { className: 'ab-input wide', value: text, onChange: (e) => setText(e.target.value), onKeyDown: async (e) => { if (e.key === 'Enter') { await post('/memory/update', { id: m.id, text }); setEdit(false); toast('改好了', 'ok'); onChanged() } if (e.key === 'Escape') setEdit(false) } })
           : h('div', { className: 'body' }, m.aboutName ? h('b', null, '[' + m.aboutName + '] ') : null, m.text, m.importance >= 0.8 ? h('span', { title: '很重要' }, ' ★') : null),
-        h(Btn, { small: true, kind: 'ghost', onClick: () => { setEdit(!edit); if (edit && onToggle) onToggle() } }, edit ? '取消' : (collapsed ? '展开' : '收起')),
+        h(Btn, { small: true, kind: 'ghost', onClick: () => { if (collapsed && !edit && onToggle) onToggle(); else setEdit(!edit) } }, edit ? '取消' : (collapsed ? '展开' : '改一下')),
         h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '忘掉'))
     }
 
