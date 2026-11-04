@@ -123,7 +123,7 @@ test('配置里有分流人设时也能渲染（空 map / 有内容的 map 都�
   const Persona = factory(...env.args)
   const st = {
     personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }],
-    config: { persona: { current: 'dafeiyu', privateDefault: 'dafeiyu', groupDefault: '', privates: { 444555666: 'dafeiyu' }, groups: { 333444555: 'dafeiyu' } } },
+    config: { persona: { current: 'dafeiyu', privateDefault: 'dafeiyu', groupDefault: '', privates: { 10000001: 'dafeiyu' }, groups: { 333444555: 'dafeiyu' } } },
   }
   const draft = st.config
   assert.doesNotThrow(() => Persona({ st, draft, setDraft: () => {}, toast: () => {}, reload: () => {} }))
@@ -148,7 +148,8 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
     return next
   }
   const seen = []
-  const setDraft = (v) => seen.push(v)
+  // setDraft 可能是值，也可能是 (prev)=>newValue（函数式更新）；测试要两种都还原
+  const setDraft = (v) => seen.push(typeof v === 'function' ? v(draft) : v)
   const Persona = factory(
     env.args[0], env.args[1], env.args[2], env.args[3], env.args[4],
     env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
@@ -216,7 +217,7 @@ test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打�
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const chats = [
     { chatId: 'group:333444555', kind: 'group', id: '333444555', name: 'QQ 群 · 测试群', lastAt: 2 },
-    { chatId: 'private:444555666', kind: 'private', id: '444555666', name: 'QQ · 主人私聊', lastAt: 1 },
+    { chatId: 'private:10000001', kind: 'private', id: '10000001', name: 'QQ · 主人私聊', lastAt: 1 },
   ]
   // 让 Persona 里 useEffect 立刻执行，把 chats 灌进去（这里 useState 的初值取不到，
   // 所以直接把已知聊天做成「已经配过」的行来看下拉候选）
@@ -225,7 +226,7 @@ test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打�
     env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
     env.args[13], env.args[14], env.args[15], env.args[16], env.args[17], env.args[18]
   )
-  const draft = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: { 444555666: '' }, groups: {} } }
+  const draft = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: { 10000001: '' }, groups: {} } }
   const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: draft }
   const tree = Persona({ st, draft, setDraft: () => {}, toast: () => {}, reload: () => {} })
 
@@ -299,4 +300,11 @@ test('一个候选都没有时，「＋ 添加」依然可点、且给出输入�
   assert.equal(btns[0].props.disabled, undefined, '没有候选时也不能禁用添加按钮')
   btns[0].props.onClick()
   assert.ok(called > 0, '点下去必须真的改动草稿')
+})
+
+test('分流人设必须读 draft（读 st.config 会让「＋ 添加」永远不显示新行，已复发）', () => {
+  const src = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
+  const fn = src.slice(src.indexOf('function Persona('), src.indexOf('function Persona(') + 12000)
+  assert.ok(/const pm = \(draft && draft\.persona\) \|\| st\.config\.persona/.test(fn),
+    '分流表必须优先读 draft.persona：读 st.config 时点「＋ 添加」改了 draft 但渲染看的是已保存配置，新行永远出不来')
 })

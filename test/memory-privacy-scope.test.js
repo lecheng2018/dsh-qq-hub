@@ -6,7 +6,7 @@ import { isVisible, scopeOf, visibleScopes } from '../src/modules/memory-privacy
 // 它自己的 isVisible/scopeOf 也曾把「没有 scope」当成 global 放行，
 // 这批用例就是钉住这个口径。
 
-const OWNER = { chatId: 'private:444555666', kind: 'private', userId: '444555666' }
+const OWNER = { chatId: 'private:10000001', kind: 'private', userId: '10000001' }
 const STRANGER = { chatId: 'private:99998888', kind: 'private', userId: '99998888' }
 const GROUP = { chatId: 'group:333444555', kind: 'group', groupId: '333444555' }
 const OTHER_GROUP = { chatId: 'group:222333444', kind: 'group', groupId: '222333444' }
@@ -20,7 +20,7 @@ test('无 scope 的条目对任何人都不再可见（以前被当 global 放�
 })
 
 test('private 条目只在自己的私聊可见', () => {
-  const item = { text: '猫叫粥粥', scope: 'private:444555666' }
+  const item = { text: '猫叫粥粥', scope: 'private:10000001' }
   assert.equal(isVisible(item, OWNER), true, '主人私聊可见')
   assert.equal(isVisible(item, STRANGER), false, '别人私聊不可见')
   assert.equal(isVisible(item, GROUP), false, '群里不可见')
@@ -39,7 +39,7 @@ test('global 条目处处可见', () => {
 })
 
 test('system 会话看不到任何分层记忆', () => {
-  for (const sc of ['global', 'private:444555666', 'group:333444555']) {
+  for (const sc of ['global', 'private:10000001', 'group:333444555']) {
     assert.equal(isVisible({ text: 'x', scope: sc }, SYSTEM), false)
   }
   assert.deepEqual(visibleScopes(SYSTEM), [])
@@ -53,7 +53,7 @@ test('认不出的聊天类型不会把内容写进 global', () => {
 })
 
 test('scopeOf 按聊天类型给出正确作用域', () => {
-  assert.equal(scopeOf(OWNER), 'private:444555666')
+  assert.equal(scopeOf(OWNER), 'private:10000001')
   assert.equal(scopeOf(GROUP), 'group:333444555')
   assert.equal(scopeOf(SYSTEM), 'global')
 })
