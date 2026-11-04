@@ -17,7 +17,7 @@ before(() => {
     chats: {
       'group:1124211723': { sessionId: 's1', preset: 'x', level: 'social', createdAt: 300, title: 'QQ 群 · 老名字' },
       'group:987654321': { sessionId: 's2', preset: 'x', level: 'social', createdAt: 100, title: 'QQ 群 · 987654321' },
-      'private:2471784685': { sessionId: 's3', preset: 'x', level: 'chat', createdAt: 200, title: 'QQ · 主人私聊' },
+      'private:10000001': { sessionId: 's3', preset: 'x', level: 'chat', createdAt: 200, title: 'QQ · 主人私聊' },
       'system:diary': { sessionId: 's4', preset: 'x', level: 'chat', createdAt: 50, title: 'QQ · 后台' },
     },
   }), 'utf8')
@@ -29,7 +29,7 @@ test('knownChats 从 sessions.json 读出群和私聊，排除 system 会话', a
   const { createHub } = await import(`file:///${REPO}/src/chat/hub.js`)
   const hub = createHub({
     dsh: { get: () => null, llm: null },
-    getConfig: () => ({ ownerQQ: '2471784685', ownerName: '主人', model: {}, group: {}, merge: {}, voice: {} }),
+    getConfig: () => ({ ownerQQ: '10000001', ownerName: '主人', model: {}, group: {}, merge: {}, voice: {} }),
     log: { debug() {}, info() {}, warn() {}, error() {}, child() { return this } },
     onebot: null, stickers: null, tts: null,
     buildTools: () => [], contextProviders: [], onActivity: () => {},
@@ -50,9 +50,9 @@ test('knownChats 从 sessions.json 读出群和私聊，排除 system 会话', a
   // 按 createdAt 倒序：300 的群排第一
   assert.equal(list[0].id, '1124211723', '最近的排前面')
 
-  const pv = list.find((x) => x.id === '2471784685')
-  assert.ok(pv, '私聊 2471784685 必须在列表里')
-  assert.equal(pv.chatId, 'private:2471784685')
+  const pv = list.find((x) => x.id === '10000001')
+  assert.ok(pv, '私聊 10000001 必须在列表里')
+  assert.equal(pv.chatId, 'private:10000001')
 })
 
 test('sessions.json 不存在时返回空数组，不抛', async () => {

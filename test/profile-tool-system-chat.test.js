@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { profileToolVisible, profilePermits } from '../src/chat/access.js'
 
-const cfg = { ownerQQ: '2471784685', profilePerms: { heyboxBrowse: 'owner', heyboxPost: 'off' } }
+const cfg = { ownerQQ: '10000001', profilePerms: { heyboxBrowse: 'owner', heyboxPost: 'off' } }
 
 test('system 后台会话：owner 档工具要挂上（定时刷小黑盒的命脉）', () => {
   const chat = { chatId: 'system:ext-heybox', kind: 'system' }
@@ -34,7 +34,7 @@ test('QQ 侧语义不变：群聊和陌生人私聊仍然不可见', () => {
 })
 
 test('QQ 侧语义不变：主人私聊照常放行', () => {
-  const chat = { chatId: 'private:2471784685', kind: 'private', userId: '2471784685' }
+  const chat = { chatId: 'private:10000001', kind: 'private', userId: '10000001' }
   assert.equal(profileToolVisible(cfg, 'heyboxBrowse', chat), true)
   assert.equal(profilePermits(cfg, 'heyboxBrowse', chat, true).ok, true)
 })

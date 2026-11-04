@@ -10,6 +10,28 @@ import { sweepMediaDir } from '../../douyin/media.js'
 
 const ID = 'multi-parser'
 
+
+/**
+ * 这个聊天里要不要提供解析（纯函数，方便测）。
+ *
+ * 分三层：群开不开 → 私聊开不开 → 这个群有没有被单独关掉。
+ * 默认全开，行为不变；关掉后**连链接都不碰**（不发卡片、不下载、不占带宽）。
+ * @param {{kind?:string, chatId?:string, groupId?:string}} msg
+ * @param {object} c multi-parser 配置
+ */
+export function allowedHere(msg, c = {}) {
+  const kind = msg && msg.kind
+  if (kind === 'group') {
+    if (c.inGroups === false) return false
+    const gid = String((msg && (msg.groupId || (String(msg.chatId || '').startsWith('group:') ? String(msg.chatId).slice(6) : ''))) || '')
+    const off = Array.isArray(c.disabledGroups) ? c.disabledGroups.map(String) : []
+    return !(gid && off.includes(gid))
+  }
+  if (kind === 'private') return c.inPrivate !== false
+  // system 后台轮次不解析
+  return false
+}
+
 export default {
   id: ID,
   name: '内容解析',
@@ -91,6 +113,8 @@ export default {
     api.on('message', async (msg) => {
       const c = cfg()
       if (!c.enabled) return false
+      // 群/私聊分流：群里不想让她解析时连链接都不碰（不然还是会发卡片、下载视频、占带宽）
+      if (!allowedHere(msg, c)) return false
 
       const urls = extractUrls(msg.text)
       if (!urls.length) return false

@@ -146,7 +146,9 @@ test('遗忘：不重要、两个月没想起过的自动记忆忘掉，自己�
   assert.equal(shouldForget({ source: 'auto', importance: 0.4, at: old, lastHit: Date.now() }), false, '最近被想起过')
   assert.equal(shouldForget({ source: 'auto', importance: 0.8, at: old }), false, '重要的不忘')
   assert.equal(shouldForget({ source: 'tool', importance: 0.3, at: old }), false)
-  assert.equal(shouldForget({ source: 'event', importance: 0.3, at: old }), false)
+  // 新语义（移植 surfcore 记忆卡）：经历类也走四档清晰度，90 天后 trace 且衰减到极低 → 会忘
+  assert.equal(shouldForget({ source: 'event', importance: 0.3, at: old, ownerQQ: '1' }), true)
+  assert.equal(shouldForget({ source: 'event', importance: 0.3, at: old, about: '1', ownerQQ: '1' }), false, '主人的经历不忘')
 })
 
 test('想起来的记忆带时间；最近想起了什么有记录（含想不起来的那次）', async () => {
