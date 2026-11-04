@@ -40,7 +40,11 @@ const DEFAULTS_RAW = {
   // 用量遥测（只观察）：写在 <dataDir>/telemetry.jsonl，超 4MB 轮转
   telemetry: { enabled: true },
   // 资讯池：订阅源只把内容拉进池子，不主动推送（她自己按需查）
-  rss: { enabled: false, intervalMinutes: 30, feeds: [], maxPerFeed: 50, summaryChars: 400, poolMaxItems: 2000 },
+  rss: {
+    enabled: false, intervalMinutes: 30, feeds: [], maxPerFeed: 50, summaryChars: 400, poolMaxItems: 2000,
+    // 每日精选：到点挑几条让她用群友口气说出去（默认关，开了才有）
+    digest: { enabled: false, hour: 9, count: 3, target: '' },
+  },
   security: {
     dangerConfirm: false,
     // 身份泄露闸（移植自 surfcore）：出站前扫主人的 QQ 号 / 别的群号
@@ -411,6 +415,12 @@ export function normalize(raw) {
     if (!url) return null
     return { url, title: String(f.title || '').slice(0, 120), enabled: f.enabled !== false }
   }).filter(Boolean).slice(0, 50)
+  // 每日精选
+  if (!isObj(c.rss.digest)) c.rss.digest = {}
+  c.rss.digest.enabled = bool(c.rss.digest.enabled, false)
+  c.rss.digest.hour = num(c.rss.digest.hour, 9, 0, 23)
+  c.rss.digest.count = num(c.rss.digest.count, 3, 1, 6)
+  c.rss.digest.target = String(c.rss.digest.target || '').trim().slice(0, 60)
   // 群发送配额（QQ 每分钟 10 条，超了消息会真丢）
   if (!isObj(g.quota)) g.quota = {}
   g.quota.enabled = bool(g.quota.enabled, true)

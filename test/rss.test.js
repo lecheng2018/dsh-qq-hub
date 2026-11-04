@@ -4,12 +4,14 @@
 // 推送会占 QQ 每分钟 10 条的配额（我们已经在限流边缘），而且刷屏跟群友感是反的。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseFeed, decodeEntities, plainText, parseDate } from '../src/rss/feed.js'
 import { mergeIntoPool, readPool, queryPool, poolStats, writePool } from '../src/rss/pool.js'
 import { checkFeedUrl, isPrivateHost } from '../src/rss/fetch.js'
+import { parseDigestPick } from '../src/modules/rss/index.js'
+import { createTelemetry } from '../src/core/telemetry.js'
 
 // ── 解析 ──────────────────────────────────────────────────────────────────
 
@@ -173,4 +175,42 @@ test('SSRF：私网判定覆盖 IPv4-mapped 与 .local', () => {
   assert.equal(isPrivateHost('printer.local'), true)
   assert.equal(isPrivateHost('fc00::1'), true)
   assert.equal(isPrivateHost('example.com'), false)
+})
+// ── 每日精选 ──────────────────────────────────────────────────────────────
+
+test('精选解析：正常 JSON 数组按序号取', () => {
+  const r = parseDigestPick('[{"i":1,"say":"那个芯片挺猛的"},{"i":3,"say":"周刊又在讲 AI"}]', 5, 3)
+  assert.equal(r.length, 2)
+  assert.equal(r[0].index, 0)
+  assert.equal(r[1].say, '周刊又在讲 AI')
+})
+
+test('精选解析：模型裹了代码块或前后废话也能认出来', () => {
+  assert.equal(parseDigestPick('```json\n[{"i":2,"say":"好使"}]\n```', 5, 3).length, 1)
+  assert.equal(parseDigestPick('好的，我挑这几条：\n[{"i":1,"say":"看到了"}]\n希望有用', 5, 3).length, 1)
+})
+
+test('精选解析：序号越界/重复/超 count 都处理掉（别把错条目发到群里）', () => {
+  assert.equal(parseDigestPick('[{"i":99,"say":"越界"}]', 3, 3).length, 0, '越界要丢')
+  assert.equal(parseDigestPick('[{"i":1,"say":"A"},{"i":1,"say":"B"}]', 5, 3).length, 1, '重复只留一条')
+  assert.equal(parseDigestPick('[{"i":1,"say":"a"},{"i":2,"say":"b"},{"i":3,"say":"c"},{"i":4,"say":"d"}]', 5, 2).length, 2, '超 want 截断')
+})
+
+test('精选解析：模型没给 JSON 时返回空（让调用方走兜底）', () => {
+  assert.equal(parseDigestPick('我挑不出来', 5, 3).length, 0)
+  assert.equal(parseDigestPick('', 5, 3).length, 0)
+})
+
+// ── 遥测回放（重启后真实用量要能恢复）────────────────────────────────────
+
+test('遥测回放：重启后从文件恢复每个聊天的真实上下文', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rss-replay-'))
+  const rows = [
+    { v: 1, at: 1000, chatId: 'group:A', input: 1000, cacheRead: 383000, cacheWrite: 0, output: 10 },
+    { v: 1, at: 2000, chatId: 'group:A', input: 1000, cacheRead: 443000, cacheWrite: 0, output: 20 },
+  ]
+  writeFileSync(join(dir, 'telemetry.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  const t = createTelemetry({ dir: () => dir })
+  assert.ok(t.contextOf('group:A'), '重启后要能查到')
+  assert.equal(t.contextOf('group:A').tokens, 444000, '取 at 最大的那条，不是先遇到的')
 })
