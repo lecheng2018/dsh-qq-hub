@@ -116,3 +116,54 @@ test('宿主没有能力查询接口（老版本 DSH）：维持老行为，照�
   await askModel(dsh, { cfg: CFG, text: '在吗', reasoningEffort: 'max' })
   assert.equal(calls[0].reasoningEffort, 'max', '查不了就别偷偷丢掉用户配置')
 })
+
+test('空正文自动重试：推理模型只思考不答题时，再要一次并加压提示', async () => {
+  clearReasoningCache()
+  const calls = []
+  const dsh = {
+    get: (n) => (n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo () { return { reasoning: { efforts: ['low', 'medium', 'high'], default: 'low' } } },
+      async *stream (params) {
+        calls.push(params)
+        if (calls.length === 1) { yield { type: 'finish', reason: { kind: 'stop' } }; return }
+        yield { type: 'text-delta', text: '档案内容' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    },
+  }
+  const out = await askModel(dsh, { cfg: CFG, text: '写点什么', reasoningEffort: 'low' })
+  assert.equal(out, '档案内容')
+  assert.equal(calls.length, 2, '空正文后重试了一次')
+  assert.match(calls[1].messages[0].content[0].text, /直接写出结果本身/, '重试时带上加压提示')
+})
+
+test('空正文只重试一次：连续两轮都空就照实返回空', async () => {
+  clearReasoningCache()
+  const calls = []
+  const dsh = {
+    get: (n) => (n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo () { return {} },
+      async *stream (params) { calls.push(params); yield { type: 'finish', reason: { kind: 'stop' } } },
+    },
+  }
+  const out = await askModel(dsh, { cfg: CFG, text: '写点什么' })
+  assert.equal(out, '')
+  assert.equal(calls.length, 2, '只重试一次')
+})
+
+test('带图的请求不触发空正文重试（图片路径有自己的兜底）', async () => {
+  clearReasoningCache()
+  const calls = []
+  const dsh = {
+    get: (n) => (n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo () { return {} },
+      async *stream (params) { calls.push(params); yield { type: 'finish', reason: { kind: 'stop' } } },
+    },
+  }
+  const out = await askModel(dsh, { cfg: CFG, text: '看图', images: [{ data: Buffer.from('x').toString('base64'), mediaType: 'image/png' }] })
+  assert.equal(out, '')
+  assert.equal(calls.length, 1)
+})
