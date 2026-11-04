@@ -35,7 +35,6 @@ import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from './chat/backfill.js'
-import { createTelemetry } from './core/telemetry.js'
 import { BUILTINS } from './modules/index.js'
 
 export const name = 'qq-hub'
@@ -128,13 +127,6 @@ export function apply(ctx) {
     onError: (err) => log.debug('gapTracker 出错:', err.message)
   })
   const seenIds = createSeenMessageIds()
-  // 上下文/费用遥测（只观察，不改行为）。usage 由 DSH 的 assistant/message 事件提供
-  const telemetry = createTelemetry({
-    dir: () => dataDir(),
-    log,
-    enabled: () => cfg.telemetry?.enabled !== false,
-    prices: () => (cfg.telemetry?.prices || undefined),
-  })
   let backfilling = false
 
   async function triggerBackfill({ since, gapMs }) {
@@ -476,7 +468,6 @@ export function apply(ctx) {
     http: { body: readBody, raw: readRaw, query, send },
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
-    telemetry,
   }
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overview() })
@@ -614,21 +605,6 @@ export function apply(ctx) {
       } catch (error) {
         log.warn('会话事件处理出错：', error.message)
       }
-      // 遥测：assistant/message 带厂商上报的 usage，攒着算每天花了多少（纯旁路，永不抛）
-      try {
-        const d = event && event.data
-        if (event.type === 'assistant/message' && d && d.usage) {
-          const sid = session && session.id
-          telemetry.record({
-            sessionId: sid ? String(sid) : '',
-            chatId: (sid && hub.chatOfSession?.(String(sid))) || '',
-            kind: (sid && String(sid).includes('system')) ? 'system' : 'chat',
-            provider: (cfg.model && cfg.model.provider) || '',
-            model: (cfg.model && cfg.model.model) || '',
-            usage: d.usage,
-          })
-        }
-      } catch (error) { log.debug('遥测记录出错：', error.message) }
       // 桌宠的「干活状态」动画 / 结束提醒：把同一条事件顺手转给 pet 模块（模块没开就是 null，纯旁路）
       try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
     })
@@ -1360,8 +1336,6 @@ export function apply(ctx) {
 
   return {
     hub, onebot, snowluma, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
-    // 遥测（只观察）：暴露给面板/诊断/测试，模块内部走 api.core.telemetry
-    telemetry,
     get stickers() { return use('stickers') },
     get qzone() { return use('diary') },
     get mood() { return use('mood') },

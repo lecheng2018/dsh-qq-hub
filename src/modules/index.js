@@ -23,7 +23,6 @@ import completeGuard from './complete-guard/index.js'
 import memoryPrivacy from './memory-privacy/index.js'
 import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
-import telemetry from './telemetry/index.js'
 import rss from './rss/index.js'
 
 export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox,
@@ -31,7 +30,5 @@ export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, ima
   tokenGuardian, completeGuard, memoryPrivacy, scheduler,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器
   multiParser,
-  // 用量遥测（移植自 surfcore 的 context-telemetry 思路，只观察不改行为）
-  telemetry,
   // 资讯池：RSS/Atom 订阅拉进池子，她自己按需查（不主动推送）
   rss]

@@ -11,7 +11,6 @@ import { parseFeed, decodeEntities, plainText, parseDate } from '../src/rss/feed
 import { mergeIntoPool, readPool, queryPool, poolStats, writePool } from '../src/rss/pool.js'
 import { checkFeedUrl, isPrivateHost } from '../src/rss/fetch.js'
 import { parseDigestPick } from '../src/modules/rss/index.js'
-import { createTelemetry } from '../src/core/telemetry.js'
 
 // ── 解析 ──────────────────────────────────────────────────────────────────
 
@@ -199,18 +198,4 @@ test('精选解析：序号越界/重复/超 count 都处理掉（别把错条�
 test('精选解析：模型没给 JSON 时返回空（让调用方走兜底）', () => {
   assert.equal(parseDigestPick('我挑不出来', 5, 3).length, 0)
   assert.equal(parseDigestPick('', 5, 3).length, 0)
-})
-
-// ── 遥测回放（重启后真实用量要能恢复）────────────────────────────────────
-
-test('遥测回放：重启后从文件恢复每个聊天的真实上下文', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rss-replay-'))
-  const rows = [
-    { v: 1, at: 1000, chatId: 'group:A', input: 1000, cacheRead: 383000, cacheWrite: 0, output: 10 },
-    { v: 1, at: 2000, chatId: 'group:A', input: 1000, cacheRead: 443000, cacheWrite: 0, output: 20 },
-  ]
-  writeFileSync(join(dir, 'telemetry.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
-  const t = createTelemetry({ dir: () => dir })
-  assert.ok(t.contextOf('group:A'), '重启后要能查到')
-  assert.equal(t.contextOf('group:A').tokens, 444000, '取 at 最大的那条，不是先遇到的')
 })
