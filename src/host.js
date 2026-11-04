@@ -769,7 +769,16 @@ export function apply(ctx) {
     const changedConn = before.gateway !== cfg.gateway || ['httpUrl', 'wsUrl', 'httpToken', 'wsToken', 'dir'].some((k) => before.snowluma[k] !== cfg.snowluma[k])
     // 换了模型：思考强度和「能不能看图」的探测结果都得重来，不然要等 10 分钟缓存过期
     const changedModel = before.model.provider !== cfg.model.provider || before.model.model !== cfg.model.model
+      // 按聊天分的模型表变了也算（否则只改群默认、全局没动时缓存不会刷新）
+      || JSON.stringify(before.chatModels) !== JSON.stringify(cfg.chatModels)
     if (changedModel) { clearReasoningCache(); clearVisionCache() }
+    // 模型配置一改就直接同步到已有会话：平时要等对方发下一条消息才切，
+    // 冷群几小时不动，主人看到的就是「配了没生效」。
+    if (changedModel) {
+      Promise.resolve().then(() => hub.syncAllModels?.()).then((r) => {
+        if (r && r.applied) log.info(`[模型] 保存后同步了 ${r.applied} 个会话`)
+      }).catch((error) => log.debug('保存后同步模型失败：', error.message))
+    }
     if (changedConn || before.botQQ !== cfg.botQQ) wrongAccount = ''
     if (changedConn && onebot.state !== 'stopped') onebot.restart()
     if (!before.enabled && cfg.enabled) setTimeout(safe(watchdog, '看门狗'), 100)
@@ -1263,6 +1272,22 @@ export function apply(ctx) {
   open('/events', async (req) => bridge.ops.events(query(req)))
 
   // 模型：列出 DSH 里可用的模型，测一下哪个回得快
+  /** 把面板配的模型立刻应用到所有已有 QQ 会话（不用等对方发下一条消息）。 */
+  route('/models/apply', async () => {
+    try {
+      const r = await hub.syncAllModels()
+      if (r.applied) log.info(`[模型] 按面板配置切换了 ${r.applied} 个会话`)
+      // 消息要如实反映：有失败就说失败，别在失败时还说「都和配置一致」
+      const parts = []
+      if (r.applied) parts.push(`切换了 ${r.applied} 个会话`)
+      if (r.failed) parts.push(`${r.failed} 个切不了（会话可能已失效，发条消息让它重建）`)
+      if (!r.applied && !r.failed) parts.push(`没有需要切的会话（都和配置一致）`)
+      return { ok: r.failed === 0, ...r, message: parts.join('；') }
+    } catch (error) {
+      return { ok: false, message: error.message }
+    }
+  })
+
   route('/models', async (req) => {
     try {
       if (new URL(req.url, 'http://x').searchParams.get('refresh') === '1') { clearReasoningCache(); clearVisionCache() }

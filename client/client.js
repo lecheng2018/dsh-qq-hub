@@ -1443,6 +1443,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
     function Model({ draft, setDraft, toast }) {
       const [list, setList] = useState(null)
       const [ping, setPing] = useState({})
+      // 「立刻应用到所有会话」的忙碌态
+      const [applying, setApplying] = useState(false)
       useEffect(() => { get('/models').then((r) => setList(r.list || [])) }, [])
       const key = (m) => m.provider + '::' + m.model
       // 后端已把「基础版 / 视觉版」（fan 与 fan-vision 这类同模型双 provider）合并成一条，
@@ -1512,6 +1514,17 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             cur && ping[cur] ? h('span', { className: 'ab-muted ab-small' }, ping[cur]) : null),
         ),
         h(ChatModels, { draft, setDraft, list }),
+        // 模型配置默认「等对方发下一条消息才切」，冷群可能几小时不动。
+        // 这个按钮主动把配置抹平到所有已有会话，省得去 DSH 会话里一个个换。
+        h(Card, { title: '应用到现有会话', desc: '这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去 —— 保存设置之后点。' },
+          h(Btn, { small: true, disabled: applying, onClick: async () => {
+            setApplying(true)
+            try {
+              const r = await post('/models/apply', {})
+              toast(r?.ok ? (r.message || '切好了') : (r?.message || '没切成'), r?.ok ? 'ok' : 'err')
+            } finally { setApplying(false) }
+          } }, applying ? '切着呢…' : '立刻应用到所有会话'),
+          h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。')),
         h(Card, { title: '可用的模型', desc: '点「测速」会真的问一次模型（花一点点额度），看它回一句话要多久。' },
           list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { text: 'DSH 没有列出模型' }) :
             h('table', { className: 'ab-table' }, h('tbody', null, list.map((m) => h('tr', { key: key(m) },
