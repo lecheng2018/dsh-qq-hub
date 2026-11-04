@@ -24,6 +24,7 @@ import memoryPrivacy from './memory-privacy/index.js'
 import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
 import telemetry from './telemetry/index.js'
+import rss from './rss/index.js'
 
 export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
@@ -31,4 +32,6 @@ export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, ima
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器
   multiParser,
   // 用量遥测（移植自 surfcore 的 context-telemetry 思路，只观察不改行为）
-  telemetry]
+  telemetry,
+  // 资讯池：RSS/Atom 订阅拉进池子，她自己按需查（不主动推送）
+  rss]
