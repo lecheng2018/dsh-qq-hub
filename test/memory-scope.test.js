@@ -273,3 +273,31 @@ test('relatedTo 不会因聊天里出现某人 QQ 就捞出别的作用域的记
   const own = store.relatedTo('private:' + cfg.ownerQQ, `(${cfg.ownerQQ}) 我在忙`)
   assert.ok(own.some((m) => String(m.text).includes('粥粥')), '主人私聊自己提炼时应该看得到')
 })
+
+// ---------- P0-1：后台任务（heybox / pet / purpose）不许拿到别的私聊的记忆 ----------
+// 后台任务没有 chat 概念，以前走 list('')/recall 无 chat = 全库索引，会把别的私聊的记忆拼进 prompt。
+// 现在 recall 增加 scopes 参数：后台调用必须显式声明可见域，没声明一律不给（fail-closed）。
+test('P0-1：recall 无 chat 无 scopes 时什么都不给（fail-closed）', () => {
+  store.add({ text: '病人甲的小黑盒偏好是射击类', about: '30000003', importance: 0.8,
+              source: 'tool', chatId: 'private:30000003', scope: 'private:30000003' })
+  const leaked = store.recall('小黑盒 偏好', { limit: 6 })
+  assert.equal(leaked.length, 0, '没声明可见域的后台调用不能拿到全库')
+})
+
+test('P0-1：scopes 显式声明 global+主人私聊 后，只拿到这两个域', () => {
+  const got = store.recall('小黑盒 偏好', { limit: 6, scopes: ['global', 'private:10001'] })
+  assert.ok(!got.some((h) => h.it.text.includes('射击类')), '别的私聊的记忆不许出现')
+  store.add({ text: '主人喜欢射击类小游戏', about: '10001', importance: 0.8,
+              source: 'tool', chatId: 'private:10001', scope: 'private:10001' })
+  const ok = store.recall('射击类', { limit: 6, scopes: ['global', 'private:10001'] })
+  assert.ok(ok.some((h) => h.it.text.includes('射击类')), '主人私聊域自己的记忆应该能拿到')
+})
+
+// ---------- P0-2：档案重写不许跨作用域 ----------
+test('P0-2：buildProfile 不带 scope 直接拒绝（fail-closed）', async () => {
+  await assert.rejects(
+    () => store.buildProfile('10001', ''),
+    /作用域/,
+    '空 scope 必须拒绝，不能退化成全库写 global'
+  )
+})

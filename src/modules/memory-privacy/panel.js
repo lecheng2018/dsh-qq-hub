@@ -18,7 +18,6 @@ return function MemoryPrivacyPanel(props) {
   const [busy, setBusy] = useState('')
   const [viewing, setViewing] = useState(null)   // 正在查看的分区 scope
   const [viewItems, setViewItems] = useState(null)
-  const [log, setLog] = useState(null)
   const [confirming, setConfirming] = useState('') // 清空二次确认
   const load = () => call('/memory-privacy/stats').then((r) => setD(r)).catch(() => setD({ ok: false }))
   useEffect(() => { load() }, [])
@@ -58,10 +57,6 @@ return function MemoryPrivacyPanel(props) {
       toast(r.message || '已切换', r.ok ? 'ok' : 'err')
       await load()
     } finally { setBusy('') }
-  }
-  const loadLog = async () => {
-    setLog(null)
-    try { const r = await call('/memory-privacy/filter-log'); setLog(r.items || []) } catch (error) { setLog([]) }
   }
 
   if (!d) return h(Card, { title: '分层情况' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
@@ -148,15 +143,8 @@ return function MemoryPrivacyPanel(props) {
               h('span', { className: 'ab-small', style: { flex: 1 } }, m.text),
               h(Btn, { small: true, disabled: busy === m.id, onClick: () => del(m.id) }, busy === m.id ? '…' : '删'))))
         : null),
-    h(Card, { title: '跨域过滤日志', desc: '最近 200 次给模型投喂记忆时，每次被拦掉的跨域条目（比如群里被拦下的私聊记忆）。用来确认隔离真的在起作用。' },
-      h(Btn, { small: true, onClick: loadLog }, '刷新日志'),
-      log === null
-        ? h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '点「刷新日志」查看')
-        : log.length
-          ? log.slice(0, 50).map((e, i) => h('div', { key: i, className: 'ab-small', style: { borderBottom: '1px solid rgba(255,255,255,.08)', padding: '6px 0' } },
-              h('div', null, new Date(e.at).toLocaleString(), ' · ', e.kind === 'group' ? '群聊' : '私聊', '（' + (e.chat || '?') + '）拦掉 ', e.blocked.length, ' 条'),
-              e.blocked.map((b, j) => h('div', { key: j, className: 'ab-small ab-muted', style: { paddingLeft: 12 } }, `[${b.scope}] ${b.text}`))))
-          : h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '暂无拦截记录——最近投喂时没有跨域记忆被拦')),
+    h(Card, { title: '跨域隔离说明', desc: '记忆过滤现在在主记忆库（recallHint/检索）发生：私聊记忆只进对应私聊的检索索引，群聊物理上拿不到。单会话隔离开关（上面每行的「不隔离」）是唯一的例外通道，开了会在状态列标黄。' },
+      h('div', { className: 'ab-small ab-muted' }, '旧版「每轮固定注入 4 条分层记忆」已停用：主库按查询检索 + 作用域过滤更准，也不占每轮上下文。scoped.json 的存量条目已一次性迁移进主库（作用域原样保留）。')),
     viewer,
   )
 }

@@ -367,7 +367,7 @@ export function apply(ctx) {
           // 明确覆盖：告诉模型这轮用的是哪个人设，避免和全局那段打架
           return [
             `【本聊天专用人设：${p.name}】`,
-            '这个聊天里你用的不是通用设定，而是下面这一套。前面若出现别的性格描述，一律以这里为准。',
+            '这个聊天里你用的是下面这一套，不是通用设定。历史里若出现更早的【本聊天专用人设】段落，那是换人设之前的旧人设，全部作废，不要模仿也不要仲裁；从本段开始只按下面这一套说话。',
             '',
             p.body,
           ].join('\n')
@@ -1087,7 +1087,17 @@ export function apply(ctx) {
   route('/persona/save', async (req) => {
     const b = await readBody(req)
     const p = savePersona(b.id, b)
-    return { ok: true, persona: p, message: '人格已保存，下一轮起生效' }
+    // 人设正文变了：还在用旧正文的会话要重置（P1-4）。静态前缀 {{qq_hub_persona}} 是建会话时
+    // 固化的，光改文件旧会话拿不到；不重置的话新旧两段人设会在历史里打架（P0-5 同根因）。
+    let reset = 0
+    try {
+      for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
+        if (entry.personaId === b.id) { hub.resetChat(chatId); reset++ }
+      }
+    } catch (error) {
+      log.debug('人设保存后重置会话出错：', error.message)
+    }
+    return { ok: true, persona: p, message: reset > 0 ? `人格已保存，${reset} 个正在用的会话已重置，下一轮起生效` : '人格已保存，下一轮起生效' }
   })
   route('/persona/delete', async (req) => {
     const b = await readBody(req)

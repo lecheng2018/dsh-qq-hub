@@ -2317,7 +2317,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       useEffect(() => { load() }, [])
       return h(Card, { title: '人物小档案', desc: '她对每个人的印象：是谁、什么关系、喜好、最近在忙什么。和谁聊天就带上谁的那份（群里带上正在说话的几个人），不用等对方提到关键词她才想起来。每次整理记忆时，记忆有变化的人会按新记忆重写；你也可以直接改。' },
         list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { icon: '🌱', text: '还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。' }) :
-          h('div', { className: 'ab-list' }, list.map((p) => h(ProfileRow, { key: p.qq, p, toast, onChanged: load }))))
+          h('div', { className: 'ab-list' }, list.map((p) => h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load }))))
     }
 
     function ProfileRow({ p, toast, onChanged }) {

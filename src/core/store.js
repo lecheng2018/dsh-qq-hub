@@ -1,6 +1,6 @@
 // 数据目录、JSON 读写（UTF-8 无 BOM、先写临时文件再改名）。
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, openSync, closeSync, fsyncSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 
@@ -50,7 +50,15 @@ export function renameWithRetry(from, to, attempts = 4) {
 export function writeJson(file, value) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}`
-  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
+  const fd = openSync(tmp, 'w')
+  try {
+    writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8')
+    // rename 前 fsync：进程 kill -9 时不丢已确认写入的数据（tmp+rename 只保证不写半截，
+    // 但页缓存没刷的话重启后 rename 的文件内容可能是旧的 —— P1-6 持久化窗口）
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   renameWithRetry(tmp, file)
 }
 

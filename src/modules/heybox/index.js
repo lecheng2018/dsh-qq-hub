@@ -19,7 +19,7 @@ export default {
     const hb = createHeybox({ getConfig: api.config, hub, memory: api.lazy('memory'), log: api.log })
 
     // 定时自己逛一圈（只读，不写）
-    api.every(60_000, () => hb.tick({ memory: api.use('memory'), owner: api.config().ownerName || '' }), '刷小黑盒')
+    api.every(60_000, () => hb.tick({ memory: api.use('memory'), owner: api.config().ownerName || '', ownerQQ: api.config().ownerQQ || '' }), '刷小黑盒')
 
     api.tool(({ chat, sessionId }) => {
       const cfg = api.config()

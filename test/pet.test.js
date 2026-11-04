@@ -68,7 +68,16 @@ function startModule({ settings = {}, hooks } = {}) {
   const thinkCalls = []
   api.use = (id) => (id === 'mood' ? { current: () => moodValue }
     : id === 'voice' ? { speak: async () => ({ file: voiceFile, engine: 'fake' }) }
-      : id === 'memory' ? { list: (q) => (q ? memItems.filter((m) => String(m.text).includes(q)) : memItems.slice()) }
+      : id === 'memory' ? {
+          // P1-1 后产品侧走 mem.recall(q, { limit, scopes })（hits 结构 { it }），list 保留兼容旧调用
+          list: (q) => (q ? memItems.filter((m) => String(m.text).includes(q)) : memItems.slice()),
+          recall: (q, o = {}) => {
+            const kw = String(q || '').split(/\s+/).filter(Boolean)
+            const hits = memItems.filter((m) => kw.some((k) => String(m.text).includes(k)))
+            const list = hits.length ? hits : memItems // 真实库对泛问有概念兜底，mock 对齐
+            return list.slice(0, o.limit ?? 10).map((it) => ({ it, score: 1, why: [] }))
+          },
+        }
         : null)
   api.has = (id) => (id === 'mood') || (id === 'voice' && Boolean(voiceFile)) || (id === 'memory' && memItems.length > 0)
   // 对齐 modules.js 的 api.think：后台系统回合（工作区里能看到这条会话的思考过程）
