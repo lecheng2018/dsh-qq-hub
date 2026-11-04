@@ -307,8 +307,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const preset = presetFor(level, cfg)
     let entry = map().chats[chat.chatId]
     // 人设变了（面板里切了本聊天专用人设/全局人设）也换新会话：旧历史里的人设块清不掉，
-    // 留着会让模型逐条仲裁新旧人设。首次 entry 为空或没记 personaId 不触发（老会话不动）。
+    // 留着会让模型逐条仲裁新旧人设。entry 没记 personaId 的老会话只补记基线不重置
+    //（没法知道它当年用的哪张卡，乱重置会误伤没换过人设的群）。
     const wantPersona = personaIdFor(chat, cfg)
+    if (entry && !entry.personaId && wantPersona) {
+      entry.personaId = wantPersona
+    }
     if (entry && entry.personaId && entry.personaId !== wantPersona) {
       log.info(`${chat.chatId} 的人设从 ${entry.personaId} 切到 ${wantPersona}，开新会话`)
       resetChat(chat.chatId)
