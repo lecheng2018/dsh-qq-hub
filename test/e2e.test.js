@@ -201,10 +201,11 @@ test('系统会话超时会及时返回，晚到的回复不会发到 QQ', async
   await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 50 }), /上一轮还没结束/)
   // key：同一个模块的多种后台用途各走一条会话（桌宠的「碎碎念」和「行为大脑」就是这种关系）。
   // 上面那条还挂着没结束，这里换 key 必须能立刻跑起来——不再撞「上一轮还没结束」。
-  const before = fake.workspaces[0].sessionIds.length
+  const before = fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0)
   const keyed = await api.hub.runSystemTurn('timeout-test', '另一种用途', '三', { timeoutMs: 4000, key: 'behavior' })
   assert.equal(typeof keyed, 'string', '带 key 的后台回合要能独立跑完')
-  assert.equal(fake.workspaces[0].sessionIds.length, before + 1, '带 key 的后台回合应该单独开一条会话')
+  // 每个聊天有专属工作区（灵魂记忆按聊天分池），系统后台走主工作区——总数跨所有工作区统计
+  assert.equal(fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0), before + 1, '带 key 的后台回合应该单独开一条会话')
   await sleep(2800)
   // 只看这次迟到的回复有没有被发出去：别的用例可能刚好在这 2.8 秒里发消息，用全局条数判断会误报
   const late = mock.sent('send_private_msg').filter((c) => JSON.stringify(c.params || {}).includes('想好了'))
