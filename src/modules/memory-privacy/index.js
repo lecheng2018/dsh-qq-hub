@@ -209,13 +209,20 @@ export default {
     // 私聊条目默认打码（只给条数），previewPrivate=true（面板设置里的调试开关）才返回原文。
     // 没有 query 旁路：以前 ?all=1 能直接绕过打码，开关成了摆设。
     api.route('/memory-privacy/list', (req) => {
-      const s = load()
+      const q = req?.query || {}
+      const scope = String(q.scope || '')
+      const kind = String(q.kind || 'memory') // memory=主库记忆点 / profiles=人物小档案
       const cfg = api.settings()
       const preview = Boolean(cfg.previewPrivate)
-      const items = s.items.map((m) => {
-        if (preview || !String(m.scope).startsWith('private:')) return m
-        return { ...m, text: '（私聊内容，面板不预览）' }
-      })
+      const mask = (m) => (preview || !String(m.scope).startsWith('private:') ? m : { ...m, text: '（私聊内容，面板不预览）' })
+      // 查看、条数都以主记忆库为准（scoped.json 已迁移停用，永远查不出东西）
+      const memory = api.use('memory')
+      if (kind === 'profiles') {
+        const profs = (memory && typeof memory.profiles === 'function' ? memory.profiles() : []) || []
+        const items = profs.filter((p) => !scope || String(p.scope || 'global') === scope).map(mask)
+        return { ok: true, preview, items }
+      }
+      const items = (memory && typeof memory.list === 'function' ? memory.list() : []).filter((m) => !scope || String(m.scope || 'global') === scope).map(mask)
       return { ok: true, preview, items }
     })
     // 单分区清空：删掉某个作用域（private:xxx / group:xxx / global）的全部条目。
