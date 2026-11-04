@@ -43,7 +43,7 @@
 
 ### 模块数
 
-23 个内置模块（新增 telemetry，移除 security-lock）。
+24 个内置模块（新增 telemetry，移除 security-lock）。
 
 ## 1.3.7
 
