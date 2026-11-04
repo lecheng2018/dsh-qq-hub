@@ -224,10 +224,20 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   // ---------- 工作区与会话 ----------
-  async function ensureWorkspace() {
+  // 每个聊天一个子工作区：DSH 的灵魂记忆（dsh-soul）按会话 cwd 聚合（projectScope = hash(cwd)），
+  // 所有聊天共用一个工作区时，灵魂库会把 A 群的「上次会话摘要」注入进 B 群（跨群串台，实测：
+  // 赛博鸡蛋群的「鲸叫」梗进了另一个群的开场白）。子目录在主工作区内部，发文件白名单不受影响。
+  const CHAT_WS_PREFIX = 'chat-'
+  function chatWorkspaceDir(chatId) {
+    const root = workspaceDirOf(getConfig())
+    const safe = String(chatId || '').replace(/[^a-zA-Z0-9_-]/g, '_')
+    return join(root, CHAT_WS_PREFIX + safe)
+  }
+  async function ensureWorkspace(chat) {
     const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
     if (!reg) throw new Error('宿主没有 workspaceRegistry')
-    const dir = workspaceDirOf(getConfig())
+    // 没带 chat（启动期预热等）用主工作区；带 chat 就用该聊天专属子工作区
+    const dir = chat?.chatId && !chat.chatId.startsWith('system:') ? chatWorkspaceDir(chat.chatId) : workspaceDirOf(getConfig())
     mkdirSync(dir, { recursive: true })
     const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
     let ws = reg.list().find((w) => norm(w.path) === norm(dir))
@@ -273,7 +283,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   async function createSession(chat, level) {
-    const ws = await ensureWorkspace()
+    const ws = await ensureWorkspace(chat)
     const preset = presetFor(level, getConfig())
     const r = await controller().create({ workspaceId: ws.id, agentPreset: preset })
     const sid = String(r.sessionId)
