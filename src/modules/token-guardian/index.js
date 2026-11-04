@@ -133,6 +133,9 @@ export default {
       state[sessionKey] = st
       persist()
       api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens * 1.2 : st.chars)} token`}`)
+      // 会话已经重置：清掉 telemetry 里这个聊天的旧上下文，让下次请求重新测真实值。
+      // 不清的话，一个 406k 的旧值会一直挂着，压缩完还按它判定，就会反复压。
+      try { api.core?.telemetry?.clear?.(chatId) } catch (error) {}
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return true
     }
