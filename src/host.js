@@ -757,6 +757,23 @@ export function apply(ctx) {
     }
     if (changedConn || before.botQQ !== cfg.botQQ) wrongAccount = ''
     if (changedConn && onebot.state !== 'stopped') onebot.restart()
+    // 人设配置变了（全局 current / 分群分流表 / 群·私聊默认）：受影响的会话立刻重置。
+    // 旧历史里的人设块清不掉，模型每轮花上万 token 仲裁「我到底是谁」（P0-5 同根因）。
+    // agentFor 的 hook 下一轮也会兜底，这里提前到保存动作本身，冷群不用等消息进来。
+    const personaChanged = JSON.stringify(before.persona || {}) !== JSON.stringify(cfg.persona || {})
+    if (personaChanged) {
+      let reset = 0
+      try {
+        for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
+          if (!entry.personaId) continue
+          const want = personaIdFor({ kind: chatId.startsWith('group:') ? 'group' : chatId.startsWith('private:') ? 'private' : 'system', groupId: chatId.slice(6), userId: chatId.slice(8) }, cfg)
+          if (want && entry.personaId !== want) { hub.resetChat(chatId); reset++ }
+        }
+      } catch (error) {
+        log.debug('人设配置变更后重置会话出错：', error.message)
+      }
+      if (reset) log.info(`[人设] 配置变更，重置了 ${reset} 个会话`)
+    }
     if (!before.enabled && cfg.enabled) setTimeout(safe(watchdog, '看门狗'), 100)
     if (before.enabled && !cfg.enabled) onebot.stop()
     log.info(`设置已保存｜总开关 ${cfg.enabled ? '开' : '关'}｜试运行 ${cfg.dryRun ? '开' : '关'}`)
@@ -1087,7 +1104,17 @@ export function apply(ctx) {
     // 只改 current，别把 persona 整块替换掉——否则按聊天配的人设会被一起清空
     setConfig({ ...cfg, persona: { ...(cfg.persona || {}), current: b.id } })
     log.info(`切换人格 → ${b.id}`)
-    return { ok: true, current: b.id, message: '切换好了，下一轮回复起生效' }
+    // 切完立刻重置正在用全局人设的会话：旧历史里的人设块清不掉，模型会逐条仲裁新旧人设
+    //（agentFor 里按 personaId 比对的 hook 下一轮也会触发，这里提前到保存动作本身）。
+    let reset = 0
+    try {
+      for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
+        if (entry.personaId && entry.personaId === (cfg.persona && cfg.persona.current)) { hub.resetChat(chatId); reset++ }
+      }
+    } catch (error) {
+      log.debug('切换人格后重置会话出错：', error.message)
+    }
+    return { ok: true, current: b.id, message: reset > 0 ? `切换好了，${reset} 个正在用的会话已重置，下一轮起生效` : '切换好了，下一轮回复起生效' }
   })
   // 人格页「AI 润色」：只改面板上这一节的文字，不保存；用不用由主人在面板里选
   route('/persona/polish', async (req) => {
