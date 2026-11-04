@@ -558,7 +558,10 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   // 防重入：runSystemTurn 一轮最长 240s，而 tick 每 60s 被叫一次。
   // 没有这把锁时，上一轮没跑完 tick 又起一轮，日志里连刷
   // 「这个后台会话的上一轮还没结束」（2026-11-04 17:27~17:35 连续 5 次）。
-  let dutyInFlight = false
+  // 锁不能放闭包里：模块热重载会换一套闭包，旧一轮还在跑、新闭包的锁是 false，
+  // 下一轮 tick 又起一个 runDuty，两个后台会话并发。挂到进程级单例上才跨重载。
+  const flight = (globalThis.__qqhubHeyboxDuty ??= { inFlight: false })
+  const dutyInFlight = () => flight.inFlight
 
   async function tick({ memory, owner, ownerQQ = '' } = {}) {
     const c = getConfig().heybox || {}
@@ -572,7 +575,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       writeState(st)
       return
     }
-    dutyInFlight = true
+    flight.inFlight = true
     try {
       const r = await runDuty({ memory, owner, ownerQQ })
       if (!r.ok) { st.lastSkipReason = r.message; writeState(st) }
@@ -582,7 +585,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       writeState(st)
       log?.warn?.('小黑盒后台会话失败：' + e.message)
     } finally {
-      dutyInFlight = false
+      flight.inFlight = false
     }
   }
 

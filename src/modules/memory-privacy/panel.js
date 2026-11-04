@@ -38,7 +38,7 @@ return function MemoryPrivacyPanel(props) {
     setViewing(scope)
     setViewItems(null)
     try {
-      const r = await call('/memory-privacy/list?all=1&preview=1')
+      const r = await call('/memory-privacy/list')
       setViewItems((r.items || []).filter((m) => String(m.scope || 'global') === scope))
     } catch (error) { setViewItems([]) }
   }
