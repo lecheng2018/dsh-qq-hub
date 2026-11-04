@@ -1681,10 +1681,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       try {
         return await att.admitPromptContent(content)
       } catch (error) {
-        log.warn('图片交给 DSH 没成功（这轮只给文字）：', error.message)
+        // 登记附件失败：DSH 适配层只认 attachmentId，裸 base64 会抛
+        // Cannot read properties of undefined (reading 'attachmentId')，所以不能原样返回图片。
+        // 退回纯文字，交给 imageTextFor/textForBlindModel 如实说明看不到。
+        // 线上 EACCES 根因由 fnos-fsync-patch.js 在插件启动时修好，正常不会再走到这里。
+        log.warn('图片没登记成附件，本轮按看不了图处理：', error.message)
+        return [{ type: 'text', text: (content.find((c) => c && c.type === 'text') || {}).text || '' }]
       }
     }
-    return content.filter((c) => c.type === 'text')
+    return content
   }
 
   // 私聊里等她回复时，在 QQ 上显示「对方正在输入…」（模型慢的时候让人知道她在想）

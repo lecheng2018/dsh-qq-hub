@@ -9,7 +9,11 @@
 //
 // ⚠ 安全默认：总开关关、试运行开。不手动打开，一句都不会真的发到 QQ。
 
+import { patchFnosFsync } from './core/fnos-fsync-patch.js'
+patchFnosFsync() // 自动应用 fnOS 祖先目录耐久性同步容错，避免图片登记附件抛 EACCES
+
 import { readFileSync, existsSync, writeFileSync, unlinkSync, statSync, mkdirSync } from 'node:fs'
+import { dedupeModelList } from './core/models.js'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -22,7 +26,6 @@ import { createHub, workspaceDirOf } from './chat/hub.js'
 import { createLocal, fileOf, toImageBuffer } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
 import { defaultModel, askModel, modelReasoning, modelVision, clearReasoningCache, clearVisionCache } from './core/llm.js'
-import { dedupeModelList } from './core/models.js'
 import { mimeOf } from './chat/inbound.js'
 import { dataDir, ensureDir } from './core/store.js'
 import { createUpdateChecker, changelogSection } from './core/update.js'
@@ -287,34 +290,34 @@ export function apply(ctx) {
    */
   async function listModels() {
     const llm = ctx.llm || ctx.get('llm')
-    // 先按 provider 收集原始清单，再统一去重：
-    // DSH 里同一个模型常挂在两个 provider 下（fan / fan-vision、mini / mini-vision…），
-    // 唯一区别是后者声明了 vision=true。对使用者来说那就是同一个模型，列两遍只会让人困惑
-    // （2026-11-04 主人反馈：可用模型后面加个 vision 就重复显示）。
-    // 注意 dedupeModelList 早就写好了，但一直没接到这里 —— 所以列表从来没去过重。
+    const out = []
+    // DSH 可能把同一个 provider 报两遍、同一个模型返回多条，面板里就会出现
+    // 两个一模一样的「Hy3 / fan-vision」。去重逻辑抽在 core/models.js 里。
+    // （1.3.6 就接线了；真正的根因是这份远端修复一直没合并进本地运行的那份。）
     const groups = []
     for (const p of llm.listProviders() || []) {
       const provider = typeof p === 'string' ? p : p.provider || p.id || p.name
+      if (!provider) continue
       try {
-        const models = (await llm.listModels(provider)) || []
-        groups.push({ provider, models })
+        groups.push({ provider, models: (await llm.listModels(provider)) || [] })
       } catch (error) {}
     }
-    const out = []
-    for (const g of dedupeModelList(groups)) {
-      const model = g.model
-      const seenProviders = Array.isArray(g.providers) && g.providers.length ? g.providers : [g.provider]
-      // 合并后的条目可能聚合了多个 provider：任一能看图就算能看图
-      let vision = g.vision === true
+    // dedupeModelList 已按 model id 合并掉「基础版 / 视觉版」这种同模型多 provider 的情况，
+    // 这里优先用能看图的那个 provider 去问细项；它答不上来再退回任意一个。
+    for (const item of dedupeModelList(groups)) {
+      const { model, raw } = item
+      // 选了能看图的那个 provider 就优先报它，免得下游又把它当看不见图的用
+      const provider = item.preferred.provider
+      // 合并时已经知道「任一 provider 说能看图」，这里再问一次只是兜底：
+      // 只有明确查到 true 才升级，查不到（undefined）保持原判定，绝不因为查不到就把 true 降级。
+      let vision = item.vision
       if (!vision) {
-        for (const pv of seenProviders) {
-          try { if (await modelVision(ctx, pv, model)) { vision = true; break } } catch (error) {}
-        }
+        try { if (await modelVision(ctx, provider, model) === true) vision = true } catch (error) {}
       }
       let reasoning = null
-      try { reasoning = await modelReasoning(ctx, g.provider, model) } catch (error) {}
-      out.push({ provider: g.provider, model, name: g.name || model, reasoning, vision, providers: seenProviders })
-    }
+      try { reasoning = await modelReasoning(ctx, provider, model) } catch (error) {}
+      // providers：合并前的全部来源（面板/诊断能看到这个模型到底挂在几家下）
+      out.push({ provider, model, name: raw.name || model, reasoning, vision, providers: item.providers })    }
     if (out.length) modelCache = out
     return out
   }
