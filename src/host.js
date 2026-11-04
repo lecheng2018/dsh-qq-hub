@@ -451,7 +451,17 @@ export function apply(ctx) {
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
       let path = ''
-      try { path = new URL(req.url, 'http://x').pathname } catch (error) {}
+      let qs = {}
+      try {
+        const u = new URL(req.url, 'http://x')
+        path = u.pathname
+        qs = Object.fromEntries(u.searchParams)
+      } catch (error) {}
+      // 模块的 handler 拿到的 req 是原始 IncomingMessage，**没有 query 属性**。
+      // 以前模块里写 `req?.query?.xxx` 全是 undefined（token-guardian 的「现在压一次」、
+      // memory-privacy 的 id/all、telemetry 的 days 都中招，2026-11-04 排查）。
+      // 这里统一挂上去，内置模块和用户自写的扩展都能直接用 req.query。
+      try { req.query = qs } catch (error) {}
       return mods.handle(path, req, res)
     }),
   }), 'qq-hub: 模块接口')

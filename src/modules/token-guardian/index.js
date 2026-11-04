@@ -77,7 +77,9 @@ export default {
         const rows = []
         for (let i = days.length - 1; i >= 0 && rows.join('').length < maxChars * 2; i--) {
           const list = hub.chatLogOf ? hub.chatLogOf(days[i]) : []
-          for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${r.who === 'self' ? '你' : '对方'}：${r.text}`)
+          // chatlog 里 bot 自己的 who 是 'bot'（不是 'self'）：判错了会让摘要里全是「对方」，
+          // 分不清哪句是她说的，摘要质量直接废掉一半。
+          for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${(r.who === 'bot' || r.who === 'self') ? '你' : '对方'}：${r.text}`)
         }
         return rows.join('\n').slice(-maxChars)
       } catch (error) { return '' }
@@ -147,11 +149,18 @@ export default {
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
-        let chat = null
-        try { chat = hub.chatOfSession?.(key) } catch (error) {}
-        // sessionKey 在某些路径下就是 chatId；两种形态都兼容
-        const chatId = typeof chat === 'string' ? chat : (st.chatId || key)
-        await compact(key, chat && typeof chat === 'object' ? chat : { chatId })
+        // state 的 key 就是 chatId（'activity' 里直接拿 a.chatId 当 key），直接用，
+        // **不要拿 chatId 去问 hub.chatOfSession()** —— 那个函数要的是 sessionId，
+        // 传 chatId 进去恒返回空串 ''，而 typeof '' === 'string' 成立，
+        // 于是 chatId 被置空、compact() 因为「没有流水」直接 return false。
+        // 这就是「自动压缩从来不工作」的真正原因（2026-11-04 排查）。
+        let chatId = String(st.chatId || key || '')
+        // 只有 key 不是 chatId 形态时才去反查（兼容历史上按 sessionId 记账的情况）
+        if (!/^(group|private):/.test(chatId)) {
+          try { const c = hub.chatOfSession?.(key); if (typeof c === 'string' && c) chatId = c } catch (error) {}
+        }
+        if (!chatId) continue
+        await compact(key, { chatId })
       }
     }
 
@@ -199,7 +208,13 @@ export default {
       return { ok: true, threshold: api.settings().threshold, items: rows }
     })
     api.route('/token-guardian/compact-now', async (req) => {
-      const chatId = String(req?.query?.chatId || '')
+      // 面板的 call(p, body) 会发 POST 把参数放 body；手输链接则是 GET 带 query。
+      // 原来只读 query，面板点按钮永远拿不到 chatId，于是恒定回「要先说压缩哪个聊天」
+      // （2026-11-04 主人反馈：手动点压一次也不行）。两边都要读。
+      const q = req?.query?.chatId || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
+      const chatId = String(q || body?.chatId || '')
       if (!chatId) return { ok: false, message: '要先说压缩哪个聊天' }
       const ok = await compact(chatId, { chatId })
       return ok ? { ok: true, message: '压缩好了' } : { ok: false, message: '这次没压成（没有聊天流水或请求失败，看日志）' }
