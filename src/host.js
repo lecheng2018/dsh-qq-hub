@@ -607,6 +607,20 @@ export function apply(ctx) {
       }
       // 桌宠的「干活状态」动画 / 结束提醒：把同一条事件顺手转给 pet 模块（模块没开就是 null，纯旁路）
       try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
+      // 真实用量信号：assistant/message 带 usage，转给模块（token-guardian 判定压缩用）。
+      // 纯内存转发，不落盘、不开关、面板无痕 —— 用量遥测面板功能已按需求移除。
+      try {
+        const d = event && event.data
+        if (event.type === 'assistant/message' && d && d.usage) {
+          const sid = session && session.id
+          mods.emit('session/usage', {
+            sessionId: sid ? String(sid) : '',
+            chatId: (sid && hub.chatOfSession?.(String(sid))) || '',
+            model: (cfg.model && cfg.model.model) || '',
+            usage: d.usage,
+          })
+        }
+      } catch (error) { log.debug?.('用量转发出错：', error.message) }
     })
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'qq-hub: 盯会话')
