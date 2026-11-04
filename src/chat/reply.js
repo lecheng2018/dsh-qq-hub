@@ -136,7 +136,7 @@ function splitLongLine(line, maxChars = 30) {
   if (!s || s.length <= maxChars) return s ? [s] : []
   // 标签保护：<face:捂脸> / <sticker:x> / <voice>…</voice> 内部有冒号，
   // 按标点切会把 '<face:' 和 '捂脸>' 拆到两条里（线上真实事故）。
-  // 占位符用纯文本（绝不用 空字符 这类控制字符——会把源文件写成 binary）。
+  // 占位符用纯文本（绝不用控制字符——会把源文件写成 binary）。
   const tags = []
   const canGuard = !s.includes('~~X')
   const guarded = canGuard
@@ -145,32 +145,44 @@ function splitLongLine(line, maxChars = 30) {
         return '~~X' + (tags.length - 1) + 'X~~'
       })
     : s
-  // ① 按句读切（句号/问号/感叹号/分号优先：这些断了是自然的）
-  let parts = guarded.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
-  // ② 某个片段仍超长：按逗号/顿号/冒号再切
+  // ① 只在**句号类**标点处切（。！？；）：这些断了是自然的。
+  //    逗号不是句子边界，在逗号处切会把一句话劈成两截
+  //    （"Astra 压我一头" / "Code Arena 登顶" / "API 贵 2.5 倍" 那种碎裂感）。
+  const parts = guarded.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
+  // ② 单句仍超 hardMax（约两倍）才按逗号切 —— 这种是真长句（并列项、绕弯的长解释）。
+  //    hardMax 取 maxChars 的 2 倍：宁可发一条 45 字的长消息，也不要半句话。
+  const hardMax = Math.max(maxChars * 2, 40)
   const refined = []
   for (const p of parts) {
-    if (p.length <= maxChars) { refined.push(p); continue }
+    if (p.length <= hardMax) { refined.push(p); continue }
     let buf = ''
     for (const seg of p.split(/(?<=[，,、：:])/)) {
-      if (buf && (buf + seg).length > maxChars) { refined.push(buf); buf = seg }
+      if (buf && (buf + seg).length > hardMax) { refined.push(buf); buf = seg }
       else buf += seg
     }
     if (buf) refined.push(buf)
+    // 长句被切开的地方要补上句末感：以逗号结尾的改成句号（"…差别没那么大。" 是通顺的），
+    // 顿号/冒号/分号结尾的直接去掉（那是并列中途，不该带标点收尾）。
+    for (let i = 0; i < refined.length - 1; i += 1) {
+      refined[i] = refined[i].replace(/[，,]\s*$/, '。').replace(/[、：:；;]\s*$/, '')
+    }
   }
-  parts = refined
-  // ③ 聚合回不超过 maxChars 的条
+  // ③ 聚合：只有**很短的片段**才跟前后挤成一条（避免「草」「好」一字一条刷屏）。
+  //    完整句子一律单独成条，不硬塞 —— 两句完整的话挤在一条里比分开更像机器人。
   const out = []
   let cur = ''
-  for (const p of parts) {
-    if (cur && (cur + p).length > maxChars) { out.push(cur); cur = p }
-    else cur = cur ? cur + p : p
+  const shortLimit = Math.max(6, Math.floor(maxChars / 2))
+  for (const p of refined) {
+    if (!cur) { cur = p; continue }
+    if (cur.length <= shortLimit || p.length <= shortLimit) {
+      if ((cur + p).length <= maxChars) { cur += p; continue }
+    }
+    out.push(cur)
+    cur = p
   }
   if (cur) out.push(cur)
-  // ④ 收尾清理：一条不该以逗号/顿号/冒号/分号结尾（那是被硬切断的痕迹，没有活人感）
-  const tidied = out.map((t) => String(t).replace(/[，,、：:；;]+\s*$/, '').trim()).filter(Boolean)
-  // ⑤ 还原标签
-  return tidied.map((t) => (canGuard ? t.replace(/~~X(\d+)X~~/g, (_, i) => tags[Number(i)] ?? '') : t))
+  // ④ 还原标签（不删结尾逗号：既然不在逗号处断，就不会有半句）
+  return out.map((t) => (canGuard ? t.replace(/~~X(\d+)X~~/g, (_, i) => tags[Number(i)] ?? '') : t))
 }
 export function splitLines(text) {
   const t = String(text || '').trim()
