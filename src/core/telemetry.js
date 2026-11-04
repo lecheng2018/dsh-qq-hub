@@ -86,6 +86,11 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
    * @param {{sessionId?:string, chatId?:string, kind?:string, model?:string, provider?:string,
    *          usage:object, durationMs?:number, toolCalls?:number}} row
    */
+  // 每个聊天最近一次的**真实上下文大小**（本次请求发进去多少 token）。
+  // 这是压缩判定最准的口径：input + cacheRead + cacheWrite 就是这次装配出来的全部上下文，
+  // 不用字符数估算（实测差 5~9 倍：估算 89k 而真实 443k）。
+  const latestByChat = new Map()
+
   function record(row) {
     try {
       if (!enabled()) return
@@ -116,6 +121,15 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
         toolCalls: Number.isFinite(row.toolCalls) ? Math.round(row.toolCalls) : null,
       }
       appendFileSync(fileOf(), `${JSON.stringify(line)}\n`, 'utf8')
+      // 顺手记下这个聊天的真实上下文（供 token-guardian 判定要不要压）
+      if (line.chatId) {
+        latestByChat.set(String(line.chatId), {
+          tokens: u.input + u.cacheRead + u.cacheWrite,
+          output: u.output,
+          at: line.at,
+          model: line.model,
+        })
+      }
     } catch (error) {
       try { log?.debug?.('遥测写入失败：', error.message) } catch {}
     }
@@ -160,5 +174,16 @@ export function createTelemetry({ dir, log, enabled = () => true, prices = () =>
     }
   }
 
-  return { record, summary, fileOf }
+  /** 这个聊天最近一次请求的真实上下文大小（token）；没有就 null。 */
+  function contextOf(chatId) {
+    const v = latestByChat.get(String(chatId || ''))
+    return v || null
+  }
+
+  /** 全部聊天的真实上下文快照（面板/诊断用）。 */
+  function allContexts() {
+    return [...latestByChat.entries()].map(([chatId, v]) => ({ chatId, ...v }))
+  }
+
+  return { record, summary, fileOf, contextOf, allContexts }
 }
