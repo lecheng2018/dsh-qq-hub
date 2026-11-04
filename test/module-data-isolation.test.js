@@ -14,7 +14,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 // 2) security-lock 的 TOTP secret 被冲掉，权限锁失效
 // 正确做法是走框架给的 api.dataDir()，它内部是 dataDir('modules-data', <模块id>)。
 
-const MODULES = ['security-lock', 'token-guardian', 'memory-privacy', 'profile', 'imagegen']
+const MODULES = ['token-guardian', 'memory-privacy', 'profile', 'imagegen']  // security-lock 已移除
 
 test('模块都不再用全局 dataDir（必须用 api.dataDir 做隔离）', () => {
   for (const m of MODULES) {

@@ -83,7 +83,10 @@ export default {
       } catch (error) { return '' }
     }
 
-    /** 真正做一次提前压缩。 */
+    /** 真正做一次提前压缩。
+     * 流程：把最近聊天流水压成摘要 → 存起来由 api.context() 常驻注入 →
+     *       调 hub.resetChat() 归档旧会话、开新会话（历史实打实变小，不是只贴摘要）。
+     * 摘要带过去，新会话开场就知道之前聊了什么 —— 「压缩」而不是「清空」。 */
     async function compact(sessionKey, chat) {
       const cfg = api.settings()
       const hub = api.core.hub
@@ -106,6 +109,20 @@ export default {
       if (!body) return false
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
       persistSummary()
+      // 关键一步：归档旧会话、换新会话 —— 旧历史实打实退出上下文，
+      // 摘要由 api.context() 在新会话里继续提供（7 天内有效）。
+      // 没有 QQ 会话的（理论不该发生）跳过重置，只留摘要。
+      if (chatId) {
+        try {
+          if (typeof hub.resetChat === 'function' && hub.resetChat(chatId)) {
+            api.log.info(`${ID}：${chatId} 旧会话已归档，新会话由摘要续接`)
+          } else {
+            api.log.debug(`${ID}：${chatId} 无可重置的会话（可能还没建过），只留摘要`)
+          }
+        } catch (error) {
+          api.log.warn(`${ID}：重置会话失败（${error.message}），摘要仍保留`)
+        }
+      }
       const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
       // 压缩完相当于把历史折成摘要，把估算值重置成摘要本身的规模
       st.chars = Math.round(body.length * 1.2)

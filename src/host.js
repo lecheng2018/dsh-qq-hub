@@ -31,6 +31,7 @@ import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from './chat/backfill.js'
+import { createTelemetry } from './core/telemetry.js'
 import { BUILTINS } from './modules/index.js'
 
 export const name = 'qq-hub'
@@ -123,6 +124,13 @@ export function apply(ctx) {
     onError: (err) => log.debug('gapTracker 出错:', err.message)
   })
   const seenIds = createSeenMessageIds()
+  // 上下文/费用遥测（只观察，不改行为）。usage 由 DSH 的 assistant/message 事件提供
+  const telemetry = createTelemetry({
+    dir: () => dataDir(),
+    log,
+    enabled: () => cfg.telemetry?.enabled !== false,
+    prices: () => (cfg.telemetry?.prices || undefined),
+  })
   let backfilling = false
 
   async function triggerBackfill({ since, gapMs }) {
@@ -372,13 +380,7 @@ export function apply(ctx) {
       send: (message, info) => mods.filter('send', message, info),
       model: (sel, chat) => mods.filterSync('model', sel, chat),
       poke: (ev) => mods.claim('poke', ev),
-      securityLock: () => {
-        try {
-          const m = mods?.use?.('security-lock')
-          if (!m || typeof m.locked !== 'function') return null
-          return { locked: m.locked(), remainingMin: m.remainingMin }
-        } catch (error) { return null }
-      },
+      // security-lock 模块已移除：不再提供锁状态，approvals 的锁分支自然不会触发
     },
   })
 
@@ -442,6 +444,7 @@ export function apply(ctx) {
     http: { body: readBody, raw: readRaw, query, send },
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
+    telemetry,
   }
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overview() })
@@ -451,14 +454,6 @@ export function apply(ctx) {
   // 这里只拦 bash / pwsh 的危险命令，其它工具和普通命令原样放行。
   dangerGuard = createDangerGuard({
     getConfig,
-    // 权限锁（security-lock 模块）启用时，锁着就不放行危险命令
-    securityLock: () => {
-      try {
-        const m = mods?.use?.('security-lock')
-        if (!m || typeof m.locked !== 'function') return null
-        return { locked: m.locked(), remainingMin: m.remainingMin }
-      } catch (error) { return null }
-    },
     log: logger.child('危险命令'),
     deliver: (chatId, text) => hub.sendText(chatId, text),
     chatOfSession: (sessionId) => { try { return hub.chatOfSession?.(sessionId) || '' } catch (error) { return '' } },
@@ -587,6 +582,21 @@ export function apply(ctx) {
       } catch (error) {
         log.warn('会话事件处理出错：', error.message)
       }
+      // 遥测：assistant/message 带厂商上报的 usage，攒着算每天花了多少（纯旁路，永不抛）
+      try {
+        const d = event && event.data
+        if (event.type === 'assistant/message' && d && d.usage) {
+          const sid = session && session.id
+          telemetry.record({
+            sessionId: sid ? String(sid) : '',
+            chatId: (sid && hub.chatOfSession?.(String(sid))) || '',
+            kind: (sid && String(sid).includes('system')) ? 'system' : 'chat',
+            provider: (cfg.model && cfg.model.provider) || '',
+            model: (cfg.model && cfg.model.model) || '',
+            usage: d.usage,
+          })
+        }
+      } catch (error) { log.debug('遥测记录出错：', error.message) }
       // 桌宠的「干活状态」动画 / 结束提醒：把同一条事件顺手转给 pet 模块（模块没开就是 null，纯旁路）
       try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
     })
