@@ -554,6 +554,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
       { id: 'heybox', label: '小黑盒', flag: 'heybox.enabled' },
       { id: 'multiParser', label: '内容解析', flag: 'multiParser.enabled' },
+      { id: 'rss', label: '资讯池' },
       { id: 'local', label: '本地接口' },
       { id: 'modules', label: '扩展' },
       { id: 'logs', label: '日志' },
@@ -3126,6 +3127,19 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
     }
 
     /** 「内容解析」页（移植自 astrbot_plugin_multi_parser）：B站/微博/小红书/知乎/微信/贴吧等链接自动解析，支持发图文视频与AI会话注入 */
+    /** 资讯池：主体内容由 rss 模块的 panel.js 自动 embed 到本 tab 下面，
+     *  这里只放总开关（不开这个 tab 也要能进来打开它）。 */
+    function RssPage({ draft, setDraft }) {
+      const rss = (draft && draft.rss) || {}
+      return h('div', { className: 'ab-grid' },
+        h(Card, {
+          title: '资讯池',
+          desc: '把 RSS / Atom 订阅源拉回来存进池子，她需要找话题时自己来查。不会自动发到群里，不占群消息配额。',
+          right: h(Switch, { on: rss.enabled !== false, onChange: (v) => setDraft((prev) => ({ ...(prev || {}), rss: { ...((prev || {}).rss || {}), enabled: v } })) }),
+        },
+          h('div', { className: 'ab-small ab-muted' }, rss.enabled === false ? '现在是关着的。打开上面的开关并保存，才会定时去拉订阅源。' : '开着：会按下面的间隔定时拉取。')),
+      )
+    }
     function MultiParser({ draft, setDraft, toast }) {
       const f = useField(draft, setDraft)
       const [testUrl, setTestUrl] = useState('')
@@ -3682,7 +3696,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const curTab = tabs.find((t) => t.id === tab) || tabs[0]
       const body = curTab.ext ? ExtPage : {
         overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, local: LocalApi, modules: Modules, logs: Logs,
+        stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
       const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], local: ['local'] }
