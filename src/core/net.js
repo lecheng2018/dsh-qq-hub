@@ -151,8 +151,10 @@ export async function fetchImage(src, o = {}) {
     }
     return Buffer.concat(chunks)
   }
-  // 本地文件：只在调用方明确允许时读（QQ 网关在本机，给的可能是本地缓存路径）
-  if (o.allowLocal !== false) {
+  // 本地文件：只在调用方明确允许时读（S3 防御深度：默认拒绝——QQ 网关给的 path 字段
+  // 属半可信输入，万一某实现把用户可影响的字符串放进来，不能拿本地任意文件当图片读）。
+  // 明确允许的调用点传 allowLocal: true。
+  if (o.allowLocal === true) {
     const p = s.startsWith('file://') ? fileURLToPath(s) : s
     if (/^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/')) {
       if (statSync(p).size > maxBytes) throw new Error('太大了')

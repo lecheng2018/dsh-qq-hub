@@ -91,3 +91,15 @@ export function checkIdentityLeak(text, { surface = '消息', ids = [], allowIds
   if (mode === 'warn') return { ok: true, hits, message }
   return { ok: false, hits, message }
 }
+
+/**
+ * 公开平台出站闸（S1）：B站评论/小黑盒发帖评论/空间说说评论统一走这里。
+ * 这些面比 QQ 群更公开（全网可见、不可撤回），策略从「拦下别的号」收紧为：
+ *   · 已知 ID（主人/bot 号）一律拦
+ *   · 「QQ/群号 + 数字」形态一律拦
+ *   · 裸 8~12 位数字一律拦（公开面没有「本群群号有用」的场景，allowIds 默认空）
+ * 返回 { ok, message }：ok=false 时调用方直接不发，message 给日志。
+ */
+export function guardOutbound(text, { surface = '公开平台内容', ids = [], allowIds = [], mode = 'block' } = {}) {
+  return checkIdentityLeak(text, { surface, ids, allowIds, mode })
+}

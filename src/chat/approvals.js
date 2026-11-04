@@ -169,16 +169,13 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
         return true
       }
     } else {
-      // 未带编号：如果只有一个待审批项，直接选中；如果有多个，提示输入编号
-      if (pending.size === 1) {
-        target = [...pending.values()][0]
-      } else {
-        const ids = [...pending.keys()].map((i) => `#${i}`).join('、')
-        if (typeof deliver === 'function') {
-          deliver(chatId, `⚠️ 当前有多个待审批操作（${ids}），请指定编号，例如「通过 #${[...pending.keys()][0]}」`).catch(() => {})
-        }
-        return true
+      // 未带编号：不自动选中（审计建议——宽匹配「可以/ok」可能误批别的待办项），
+      // 无论几个待审批，都回显编号与工具名让主人确认。
+      const lines = [...pending.entries()].map(([i, t]) => `#${i} ${t.toolName || '操作'}`).join('、')
+      if (typeof deliver === 'function') {
+        deliver(chatId, `⚠️ 当前有待审批操作：${lines}。请指定编号，例如「通过 #${[...pending.keys()][0]}」`).catch(() => {})
       }
+      return true
     }
 
     // 检查权限锁

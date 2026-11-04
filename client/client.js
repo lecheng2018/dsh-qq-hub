@@ -2403,6 +2403,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [busy, setBusy] = useState(false)
       const [cands, setCands] = useState(null)
       const [pick, setPick] = useState({})
+      const [scope, setScope] = useState('private')
       const readFile = () => {
         const inp = document.createElement('input')
         inp.type = 'file'
@@ -2419,7 +2420,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       }
       const commit = async () => {
         const items = cands.filter((_, i) => pick[i])
-        const r = await post('/memory/import/commit', { items })
+        const r = await post('/memory/import/commit', { items, scope })
         toast(r.message, 'ok'); setCands(null); setText(''); onDone()
       }
       return h(Card, { title: '导入旧档案', desc: '以前写过的设定、聊天笔记、别的机器人的记忆文件（txt / md），贴进来或者上传。她会挑出值得记的，你勾选以后再存进记忆库；和已有记忆重复的会自动去掉。' },
@@ -2433,6 +2434,13 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'ab-list' }, cands.map((c, i) => h('label', { key: i, className: 'ab-li', style: { cursor: 'pointer' } },
               h('input', { type: 'checkbox', checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: 'var(--ab-sea)', marginTop: 3 } }),
               h('div', { className: 'body' }, c.aboutName ? h('b', null, '[' + c.aboutName + '] ') : null, c.text, c.importance >= 0.8 ? ' ★' : '')))),
+            h('div', { className: 'ab-flex', style: { marginTop: 8 } },
+              h('label', { className: 'ab-small', style: { cursor: 'pointer' } },
+                h('input', { type: 'radio', checked: scope === 'private', onChange: () => setScope('private'), style: { accentColor: 'var(--ab-sea)' } }),
+                ' 只在她的私聊里想起（默认）'),
+              h('label', { className: 'ab-small', style: { cursor: 'pointer', marginLeft: 12 } },
+                h('input', { type: 'radio', checked: scope === 'global', onChange: () => setScope('global'), style: { accentColor: 'var(--ab-sea)' } }),
+                ' 所有聊天都能想起（她自己的设定选这个）')),
             h('div', { className: 'ab-flex', style: { marginTop: 8 } },
               h(Btn, { small: true, kind: 'primary', onClick: commit, disabled: !Object.values(pick).some(Boolean) }, '存进记忆库（' + Object.values(pick).filter(Boolean).length + ' 条）'),
               h(Btn, { small: true, kind: 'ghost', onClick: () => setCands(null) }, '取消')))) : null)

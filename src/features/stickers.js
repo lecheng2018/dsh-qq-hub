@@ -289,7 +289,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       const named = []
       for (const url of urls) {
         let buf
-        try { buf = await fetchImage(url, { maxBytes: 5 * 1024 * 1024 }) } catch (error) { failed++; continue }
+        try { buf = await fetchImage(url, { maxBytes: 5 * 1024 * 1024, allowLocal: true }) } catch (error) { failed++; continue }
         const md5 = createHash('md5').update(buf).digest('hex')
         if (loadLibrary().items.some((i) => i.md5 === md5)) { existed++; continue }
         const r = await addFromBuffer(buf, { from: 'qq', toQQ: false })

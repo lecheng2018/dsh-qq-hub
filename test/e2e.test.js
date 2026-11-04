@@ -414,7 +414,7 @@ test('空间互动：回复自己说说下的新评论、评论好友说说并�
   const st = (await fake.call('/qzone/social/state')).json()
   assert.equal(st.count, 2)
   // 她在空间评论过谁，记成了自己的经历
-  assert.ok(api.memory.recentEvents(24, 10).some((m) => m.text.includes('评论了') && m.about === OWNER))
+  assert.ok(api.memory.recentEventsFor([`private:${OWNER}`, "global"], 24, 10).some((m) => m.text.includes("评论了") && m.about === OWNER))
 })
 
 test('空间互动：别人在她的评论下面接着回她，她会接着回（一串只回一次）', async () => {

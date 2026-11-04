@@ -14,9 +14,10 @@ function decodeName(bytes, utf8Flag) {
  * 读出 zip 里的文件。
  * @param {Buffer} buf
  * @param {(name: string) => boolean} [want] 只解压想要的文件（省内存）
+ * @param {{maxBytes?: number}} [o] 解压后总大小上限（S7 zip 炸弹防护，默认 200MB）
  * @returns {Array<{name: string, data: Buffer}>}
  */
-export function readZip(buf, want = () => true) {
+export function readZip(buf, want = () => true, { maxBytes = 200 * 1024 * 1024 } = {}) {
   // 从尾部找「中央目录结束」记录
   let eocd = -1
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
@@ -26,6 +27,7 @@ export function readZip(buf, want = () => true) {
   const count = buf.readUInt16LE(eocd + 10)
   let p = buf.readUInt32LE(eocd + 16)
   const out = []
+  let total = 0
   for (let n = 0; n < count; n++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('zip 目录损坏')
     const flags = buf.readUInt16LE(p + 8)
@@ -45,8 +47,10 @@ export function readZip(buf, want = () => true) {
     const raw = buf.subarray(start, start + compSize)
     let data
     if (method === 0) data = Buffer.from(raw)
-    else if (method === 8) data = inflateRawSync(raw)
+    else if (method === 8) data = inflateRawSync(raw, { maxOutputLength: maxBytes - total })
     else throw new Error(`「${name}」用了不支持的压缩方式（${method}），请重新打包成普通 zip`)
+    total += data.length
+    if (total > maxBytes) throw new Error(`解压后的内容超过 ${Math.round(maxBytes / 1024 / 1024)}MB 上限（可能是 zip 炸弹），已中止`)
     out.push({ name, data })
   }
   return out
