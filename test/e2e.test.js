@@ -564,7 +564,11 @@ test('引用消息：私聊能看到被引用的内容；引用她自己时标�
     mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7001' } }, ...text('这个你看到了吗')]))
     await until(() => fake.turns.slice(before).some((t) => /上周说的那件事/.test(String(t.userText))), 15000)
     const t1 = fake.turns.slice(before).find((t) => /上周说的那件事/.test(String(t.userText)))
-    assert.match(String(t1.userText), /引用 主人\(10000001\) 的消息/)
+    // 主人在引用里只标「主人」，不带号码（2026-11-04 修：群里不许报主人身份）
+    assert.match(String(t1.userText), /引用 主人 的消息/)
+    // 私聊正文里带号码是正常的（私聊只有主人）；这里只要求「引用那一段」不带号码
+    const quotePart = String(t1.userText).split('引用')[1] || ''
+    assert.equal(quotePart.includes('10000001'), false, '引用的标注里不该带主人号码')
 
     before = fake.turns.length
     mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7002' } }, ...text('你还记得吗')]))

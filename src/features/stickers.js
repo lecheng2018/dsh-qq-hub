@@ -135,8 +135,9 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     }
     const { width, height } = imageSize(buf)
     // 尺寸阈值可由 config.stickers.maxSide / maxBytes 覆盖；默认从 520 放宽到 1200 ——
-    // 520 是老 QQ 小图时代的标准，现在 QQ 表情普遍 500~1088px，实测 58 张全被旧阈值拒收。
-    if (!stickerSizeOk({ width, height, bytes: buf.length }, { maxSide: cfg.maxSide ?? 1200, maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })) return { ok: false, reason: `尺寸不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB）` }
+    // 520 是老 QQ 小图时代的标准。实测今天 52 张被拒里：方形比例 36 张，最大边长 1920px、最大 553KB。
+    // 所以放到 1920（QQ 表情实际最大尺寸），仍靠 0.75~1.33 的宽高比挡掉横幅/长图。
+    if (!stickerSizeOk({ width, height, bytes: buf.length }, { maxSide: cfg.maxSide ?? 1920, maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })) return { ok: false, reason: `尺寸不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB）` }
     const md5 = createHash('md5').update(buf).digest('hex')
     const lib = loadLibrary()
     if (lib.items.some((i) => i.md5 === md5)) return { ok: false, reason: '已经有了' }

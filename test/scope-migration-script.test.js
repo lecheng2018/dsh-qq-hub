@@ -31,7 +31,7 @@ function run(home, args = [], extraEnv = {}) {
   return execFileSync(process.execPath, [SCRIPT, ...args], { env, encoding: 'utf8' })
 }
 
-const ONE = [{ text: '一条记忆', chatId: 'private:2471784685', source: 'event' }]
+const ONE = [{ text: '一条记忆', chatId: 'private:10000001', source: 'event' }]
 
 test('迁移脚本：新命名空间 dsh-qq-hub 目录下能找到记忆文件', () => {
   const home = fresh()
@@ -70,14 +70,15 @@ test('迁移脚本：--write 按 chatId 归档，来源不明的落主人私聊�
   const dir = join(home, '.dsh', 'plugins-data', 'dsh-qq-hub')
   seedMemories(dir, [
     { text: '群里的', chatId: 'group:999', source: 'event' },
-    { text: '私聊的', chatId: 'private:2471784685', source: 'event' },
+    { text: '私聊的', chatId: 'private:10000001', source: 'event' },
     { text: '来源不明', source: 'event' },
   ])
-  run(home, ['--write'])
+  // 兜底要主人 QQ 号：显式传（脚本不再写死任何人）
+  run(home, ['--write'], { OWNER_QQ: '10000001' })
   const saved = JSON.parse(readFileSync(join(dir, 'memories.json'), 'utf8'))
   const byText = Object.fromEntries(saved.items.map((m) => [m.text, m.scope]))
   assert.equal(byText['群里的'], 'group:999')
-  assert.equal(byText['私聊的'], 'private:2471784685')
-  assert.equal(byText['来源不明'], 'private:2471784685', '来源不明必须兜底到主人私聊，留空等于对所有人不可见')
+  assert.equal(byText['私聊的'], 'private:10000001')
+  assert.equal(byText['来源不明'], 'private:10000001', '来源不明必须兜底到主人私聊，留空等于对所有人不可见')
   assert.ok(readdirSync(dir).some((f) => f.includes('.bak-')), '写盘前必须先备份')
 })
