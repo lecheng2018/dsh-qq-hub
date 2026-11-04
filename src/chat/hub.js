@@ -11,6 +11,8 @@ import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
 import { parseReply, bubbleDelay, wantsVoice } from './reply.js'
+import { checkIdentityLeak } from './identity-guard.js'
+import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
 import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
@@ -93,12 +95,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const approvals = createApprovalRegistry({
     deliver: (chatId, text) => sendText(chatId, text, undefined, [], undefined),
     ownerQQ: () => getConfig().ownerQQ,
-    securityLock: () => {
-      try {
-        const m = typeof hooks?.securityLock === 'function' ? hooks.securityLock() : null
-        return m
-      } catch (error) { return null }
-    },
+    // security-lock 模块已移除：不传锁，approvals 的锁分支自然不会触发
     timeoutMs: Number(getConfig().admin?.approvalTimeoutMs) || 60_000,
     log: log.child ? log.child('approvals') : log
   })
@@ -475,6 +472,31 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const cfg = getConfig()
     const tgt = targetOf(chatId)
     if (!tgt) return null
+    // 身份泄露闸（移植自 surfcore 的 identity-guard）：出站前扫一遍「主人/别人的 QQ 号」。
+    // 群聊里报自己这个群的群号是有用的（加白名单时就要说），所以把当前群号列为允许；
+    // 主人的 QQ 号、别的群号、别人的号一律拦下——她在群里报过、在公开面报出去就收不回了。
+    try {
+      const igCfg = cfg.security?.identityGuard || {}
+      if (igCfg.enabled !== false && !force) {
+        const text = Array.isArray(message)
+          ? message.filter((s) => s && s.type === 'text').map((s) => String(s.data?.text || '')).join('')
+          : String(message || '')
+        const ownGroup = chatId.startsWith('group:') ? chatId.slice(6) : ''
+        const guard = checkIdentityLeak(text, {
+          surface: tgt.kind === 'group' ? '群消息' : '私聊消息',
+          ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
+          allowIds: ownGroup ? [ownGroup] : [],
+          mode: igCfg.mode === 'warn' ? 'warn' : 'block',
+        })
+        if (guard.hits.length) {
+          if (!guard.ok) {
+            log.warn(`身份泄露闸拦下 → ${chatId}：${guard.message}`)
+            return null
+          }
+          log.warn(`身份泄露闸（仅告警）→ ${chatId}：${guard.message}`)
+        }
+      }
+    } catch (error) { log.debug('身份泄露闸判定出错：', error.message) }
     // 扩展模块最后改一次（加签名、过滤敏感词、转发到别处……）；返回 null 就不发
     if (hooks?.send) {
       try {
@@ -938,7 +960,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return out
   }
 
-  const quoteWho = (q) => (q.isBot ? '你' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`)
+  // 引用里是主人时也不带号码（和群聊标注一个口径）
+  const quoteWho = (q) => (q.isBot ? '你' : (String(q.uid) === String(getConfig().ownerQQ || '') && getConfig().ownerQQ ? '主人' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`))
   const quoteBody = (q) => {
     const body = String(q.text || '').replace(/\[(图片|表情包)\]/g, '').trim()
     if (body) return body
@@ -1237,6 +1260,28 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const memChat = { chatId: msg.chatId, kind: 'group', groupId: msg.groupId }
       try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0 } catch (error) {}
       const quotedBot = await repliedToBot(msg.replyId, msg)
+      // 鱼群保护：同一个群里同类 bot 太多时本轮不参与（移植自 surfcore 的 fish-guard）。
+      // 被直接 @ / 引用 / 主人点名时放行（只回一句，不展开）。
+      let fishBlocked = null
+      try {
+        const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
+        if (fg.enabled) {
+          const direct = msg.mentioned || quotedBot || (isOwner(cfg, msg.userId) && msg.mentioned)
+          const density = assessFishDensity((groupBuf.get(msg.groupId) || []).map((x) => ({
+            sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
+          })), { now, guard: fg, groupId: msg.groupId })
+          if (density.blocked) {
+            fishBlocked = density
+            if (!(direct && fg.bypassDirectAddress)) {
+              log.info(`群 ${msg.groupId}：${fishGuardReasonText(density)}，本轮不参与`)
+              logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+              if (pending.has(msg.chatId)) await addGroupImages(msg)
+              return
+            }
+            log.debug(`群 ${msg.groupId}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
+          }
+        }
+      } catch (error) { log.debug('鱼群保护判定出错：', error.message) }
       const decision = decideGroupReply({
         policy: pol,
         relevance: topicRelevance(recentTexts, pol.interests, memScore),
@@ -1442,7 +1487,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const infos = await Promise.all(need.map((x) => quotedInfo(x.replyId, chat)))
       need.forEach((x, i) => { x.quote = infos[i] })
     }
-    const line = (x) => `${x.nick}(${x.uid})${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}${x.picNote ? '\n    ' + x.picNote : ''}`
+    // 主人在群里说话时不带真实号码：只标「主人」，否则别人能从提示词里读到号码。
+    // 她想 @ 主人用群名片就行（expandMentions 能对上），不需要号码。
+    const ownerQQ = String(getConfig().ownerQQ || '')
+    const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${x.nick}(${x.uid})`)
+    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}${x.picNote ? '\n    ' + x.picNote : ''}`
     // 新消息带编号，她想专门回某一条时可以引用；编号 → QQ 消息 ID 记下来，发的时候换成引用
     const refs = {}
     const numbered = fresh.map((x, i) => {

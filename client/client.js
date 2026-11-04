@@ -1011,7 +1011,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const titles = edit ? edit.secs.map((s) => s.title) : []
       const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))
       // 按聊天换人设：私聊默认 / 群默认 / 具体某个号
-      const pm = st.config.persona || {}
+      // 必须读 draft 而不是 st.config：st 是「服务端已保存」的状态，draft 才是正在编辑的。
+      // 以前读 st.config，点「＋ 添加」改的是 draft，渲染却看 st，所以永远不显示新行
+      // （用户报的「点了添加没有输入框」，已复发过一次，别再改回去）。
+      const pm = (draft && draft.persona) || st.config.persona || {}
       const setPm = (k, v) => {
         if (!draft) return // 配置还没加载完，点了也没地方存
         setDraft(setPath(draft, 'persona.' + k, v))
@@ -1020,42 +1023,29 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       const specific = (mapKey, title, hint) => {
         const m = pm[mapKey] || {}
         const wantKind = mapKey === 'groups' ? 'group' : 'private'
-        // 可选对象：机器人见过的群 / 私聊。已选过的从候选里剔掉，避免重复选同一个。
-        const picked = new Set(Object.keys(m).filter((k) => !k.startsWith('#new')))
-        const candidates = (chats || []).filter((c) => c.kind === wantKind && !picked.has(c.id))
-          .map((c) => ({ value: c.id, label: c.name }))
         const rows = Object.entries(m).map(([id, pid]) => {
           const isNew = id.startsWith('#new')
           const cur = isNew ? '' : id
-          // 这一行是不是「手动输入号码」：占位行、或号不在已知聊天里，都当手输
-          const known = (chats || []).find((c) => c.id === cur)
-          const manual = !cur || !known
-          const opts = [{ value: '', label: wantKind === 'group' ? '选一个群' : '选一个人' }]
-            .concat(candidates)
-            .concat([{ value: '__manual__', label: '手动输入号码…' }])
-          if (cur && !known) {
-            opts.splice(opts.length - 1, 0, { value: cur, label: (wantKind === 'group' ? '群 ' : 'QQ ') + cur })
-          }
-          const setRowId = (v) => {
-            const m2 = { ...m }
-            const keep = m2[id]
-            delete m2[id]
-            if (v === '__manual__') m2[id] = keep === undefined ? '' : keep
-            else if (v) m2[v] = keep || ''
-            else m2[id] = keep === undefined ? '' : keep
-            setDraft(setPath(draft, 'persona.' + mapKey, m2))
-          }
+          // 只保留号码输入框（主人要求：不要下拉）。敲的时候只更新本行暂存，
+          // 失焦或回车才落成真的 key —— 边打字边改 key 会重建整行、光标丢失，
+          // 而且占位 key（#new...）被正则洗一遍会冒出「03」这种假行。
           return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-            manual
-              // 没有候选（还没聊过）或用户主动选了「手动输入」：给普通输入框，别让这一行变成死的
-              ? h('input', {
-                className: 'ab-input', style: { width: 240 }, value: cur, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
-                onChange: (e) => {
-                  const typed = e.target.value.replace(/\D/g, '')
-                  setRowId(typed)
-                },
-              })
-              : h(Select, { value: cur, width: 240, options: opts, onChange: setRowId }),
+            h('input', {
+              className: 'ab-input', style: { width: 240 }, value: cur, placeholder: wantKind === 'group' ? '群号' : 'QQ 号',
+              onChange: (e) => {
+                const typed = e.target.value.replace(/\D/g, '')
+                setDraft((prev) => {
+                  const curM = { ...((prev.persona || {})[mapKey] || {}) }
+                  const keep = curM[id]
+                  delete curM[id]
+                  // 没输完就留占位行，输了就落成号码（号码已被别人占用时不顶掉别人）
+                  const key = typed || id
+                  if (!(typed && curM[typed] !== undefined && typed !== id)) curM[key] = keep === undefined ? '' : keep
+                  else curM[id] = keep === undefined ? '' : keep
+                  return setPath(prev, 'persona.' + mapKey, curM)
+                })
+              },
+            }),
           h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
             const m2 = { ...m }
             if (v) m2[id] = v; else delete m2[id]
@@ -1063,12 +1053,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           } }),
           h(Btn, { small: true, kind: 'danger', onClick: () => { const m2 = { ...m }; delete m2[id]; setDraft(setPath(draft, 'persona.' + mapKey, m2)) } }, '删'))
         })
-        const noMore = candidates.length === 0
+        const noMore = true // 号码只靠手输，没有候选列表可"用完"
         return h(Card, { title, desc: hint,
-          // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
-          // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
-          right: h(Btn, { small: true, onClick: () => setDraft(setPath(draft, 'persona.' + mapKey, { ...m, ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
-          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，点「＋ 添加」手输号码就行。' : '还没单独指定'),
+          // 永远可点：号码全部手输，不依赖「机器人见过的聊天」候选。
+          right: h(Btn, { small: true, onClick: () => setDraft((prev) => setPath(prev, 'persona.' + mapKey, { ...((prev.persona || {})[mapKey] || {}), ['#new' + Date.now().toString(36)]: '' })) }, '＋ 添加') },
+          rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, '还没单独指定，点「＋ 添加」手输' + (wantKind === 'group' ? '群号' : 'QQ 号') + '就行'),
           h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
       }
       return h('div', null,
@@ -1306,11 +1295,13 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '按群单独设置', desc: '某个群想让她更安静或更活跃，在这里单独设插话概率。' },
           Object.keys(overrides).length === 0 ? h('div', { className: 'ab-muted', style: { marginBottom: 10 } }, '还没有单独设置的群。') :
             Object.entries(overrides).map(([gid, o]) => h(Row, { key: gid, label: '群 ' + gid },
-              h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: pct(o.interjectChance ?? draft.group.interjectChance), onChange: (e) => setDraft(setPath(draft, 'group.overrides', { ...overrides, [gid]: { ...o, interjectChance: Number(e.target.value) / 100 } })) }),
+              // 三个写回点全部用函数式 setDraft：旧快照会把刚删的群又写回来（与 persona 分流表同款 bug）
+              // 输入兼容两种写法：>1 当百分数（65 → 0.65），≤1 当小数（0.65 → 0.65），别再让 0.65 被 /100 两次变成 0.0065
+              h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: pct(o.interjectChance ?? draft.group.interjectChance), onChange: (e) => { const n = Number(e.target.value); const v = n > 1 ? n / 100 : n; setDraft((prev) => setPath(prev, 'group.overrides', { ...(prev.group.overrides || {}), [gid]: { ...o, interjectChance: v } })) } }),
               h('span', { className: 'ab-muted' }, '% 插话'),
-              h(Btn, { small: true, kind: 'ghost', onClick: () => { const n = { ...overrides }; delete n[gid]; setDraft(setPath(draft, 'group.overrides', n)) } }, '移除'))),
+              h(Btn, { small: true, kind: 'ghost', onClick: () => setDraft((prev) => { const n = { ...(prev.group.overrides || {}) }; delete n[gid]; return setPath(prev, 'group.overrides', n) }) }, '移除'))),
           h('div', { className: 'ab-flex' }, h('input', { className: 'ab-input', placeholder: '群号', value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, '')) }),
-            h(Btn, { small: true, disabled: !newGid, onClick: () => { setDraft(setPath(draft, 'group.overrides', { ...overrides, [newGid]: { interjectChance: draft.group.interjectChance } })); setNewGid('') } }, '添加')),
+            h(Btn, { small: true, disabled: !newGid, onClick: () => { setDraft((prev) => setPath(prev, 'group.overrides', { ...(prev.group.overrides || {}), [newGid]: { interjectChance: prev.group.interjectChance } })); setNewGid('') } }, '添加')),
         ),
       )
     }
@@ -3073,6 +3064,24 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           right: f.sw('multiParser.enabled'),
           desc: '自动识别群聊和私聊中的多平台内容链接（B站、小红书、微博、知乎、抖音、公众号等），提取无水印视频、高清图集与摘要；可自动发送媒体，并可作为上下文喂给大模型。',
         },
+          h(Row, {
+            label: '群聊里提供解析',
+            hint: '关掉后群里发链接完全不管（不发卡片、不下载视频）。只想在私聊用就关掉它。',
+          }, f.sw('multiParser.inGroups')),
+          h(Row, {
+            label: '私聊里提供解析',
+            hint: '关掉后私聊发链接也不解析，只有群聊生效。',
+          }, f.sw('multiParser.inPrivate')),
+          h(Row, {
+            label: '这些群不解析',
+            hint: '群号用逗号或空格隔开。列在这里的群即使「群聊里提供解析」开着也不解析。',
+          }, h('input', {
+            className: 'ab-input',
+            style: { width: '100%' },
+            placeholder: '例如 123456789, 987654321',
+            value: (Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(', '),
+            onChange: (e) => setDraft((prev) => setPath(prev, 'multiParser.disabledGroups', String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4))),
+          })),
           h(Row, {
             label: '大模型上下文注入（AI 看懂链接）',
             hint: '🌟 核心开关：开启后，自动将解析出的标题、作者、正文摘要喂给 AI，让她能看懂群友分享并自然接话讨论；关闭则仅作为纯工具运行。',

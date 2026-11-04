@@ -59,8 +59,22 @@ function scopeFromChatId(chatId) {
 // 注意：新代码里「无 scope 的条目对任何人都不可见」（scopeVisible 里明确 return false），
 // 所以这里不兜底的话，这些老记忆会静默消失 —— 既不是 global，也不是任何人的。
 // 按「宁可少给，不可多给」的原则，认不出来源的一律先留在主人私聊，需要时再手动放出去。
-const OWNER_QQ = String(process.env.OWNER_QQ || '444555666')
-const FALLBACK = 'private:' + OWNER_QQ
+// 主人 QQ 号不写死（公开仓库不能带任何人的真实号码）。
+// 取值顺序：环境变量 OWNER_QQ → 同目录 config.json 的 ownerQQ → 报错让人手动给。
+function detectOwnerQQ() {
+  const fromEnv = String(process.env.OWNER_QQ || '').replace(/\D/g, '')
+  if (fromEnv) return fromEnv
+  try {
+    const cfg = JSON.parse(readFileSync(join(BASE, 'config.json'), 'utf8'))
+    const fromCfg = String(cfg.ownerQQ || '').replace(/\D/g, '')
+    if (fromCfg) return fromCfg
+  } catch { /* 没有 config.json 就继续往下 */ }
+  return ''
+}
+const OWNER_QQ = detectOwnerQQ()
+// 注意：这里**不在启动时就退出**。所有条目都能按 chatId 推断出作用域时，根本用不到兜底；
+// 只有真的出现「推不出来源、必须兜底」的条目时才要求提供主人号。
+const FALLBACK = OWNER_QQ ? 'private:' + OWNER_QQ : ''
 
 const noScope = items.filter((m) => !m.scope)
 console.log('无 scope 的老条目：' + noScope.length)
@@ -70,7 +84,7 @@ let fixable = 0
 for (const m of noScope) {
   const sc = scopeFromChatId(m.chatId)
   if (sc) fixable++
-  const k = sc || ('(' + FALLBACK + ' ← 推不出，落到主人私聊)' + (m.chatId ? ' chatId=' + m.chatId : ''))
+  const k = sc || (FALLBACK ? ('(' + FALLBACK + ' ← 推不出，落到主人私聊)' + (m.chatId ? ' chatId=' + m.chatId : '')) : ('(?? 推不出，且没给主人 QQ 号——加 OWNER_QQ=<你的号> 再跑)' + (m.chatId ? ' chatId=' + m.chatId : '')))
   if (!buckets[k]) buckets[k] = []
   buckets[k].push(m)
 }
@@ -129,6 +143,14 @@ if (WRITE && oldProfs.length) {
 if (!WRITE) {
   console.log('\n这是体检模式，没有改任何东西。确认无误后加 --write 执行。')
   process.exit(0)
+}
+
+// 要写盘了：这时如果还有推不出来源的条目、又没给主人 QQ 号，不能瞎写（写成空 scope = 对所有人不可见）。
+const needFallback = items.filter((m) => !m.scope && !scopeFromChatId(m.chatId))
+if (needFallback.length && !OWNER_QQ) {
+  console.error('有 ' + needFallback.length + ' 条推不出来源、需要兜底到主人私聊，但没拿到主人 QQ 号。')
+  console.error('请显式指定后重跑：OWNER_QQ=<你的号> node scripts/fix-memory-scope.mjs --write')
+  process.exit(1)
 }
 
 const bak = FILE + '.bak-' + Date.now()

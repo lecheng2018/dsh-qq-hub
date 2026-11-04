@@ -134,9 +134,20 @@ function capBubbles(items) {
 function splitLongLine(line, maxChars = 30) {
   const s = String(line || '').trim()
   if (!s || s.length <= maxChars) return s ? [s] : []
-  // 第一层：按句读切（保留标点在后半）
-  let parts = s.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
-  // 第二层：某个片段本身仍超长（如一句里塞了整条技术链路），按逗号/顿号/冒号再切
+  // 标签保护：<face:捂脸> / <sticker:x> / <voice>…</voice> 内部有冒号，
+  // 按标点切会把 '<face:' 和 '捂脸>' 拆到两条里（线上真实事故）。
+  // 占位符用纯文本（绝不用 空字符 这类控制字符——会把源文件写成 binary）。
+  const tags = []
+  const canGuard = !s.includes('~~X')
+  const guarded = canGuard
+    ? s.replace(/<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>/gi, (m) => {
+        tags.push(m)
+        return '~~X' + (tags.length - 1) + 'X~~'
+      })
+    : s
+  // ① 按句读切（句号/问号/感叹号/分号优先：这些断了是自然的）
+  let parts = guarded.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
+  // ② 某个片段仍超长：按逗号/顿号/冒号再切
   const refined = []
   for (const p of parts) {
     if (p.length <= maxChars) { refined.push(p); continue }
@@ -148,7 +159,7 @@ function splitLongLine(line, maxChars = 30) {
     if (buf) refined.push(buf)
   }
   parts = refined
-  // 按长度聚合，避免每句都变成超短条
+  // ③ 聚合回不超过 maxChars 的条
   const out = []
   let cur = ''
   for (const p of parts) {
@@ -156,9 +167,11 @@ function splitLongLine(line, maxChars = 30) {
     else cur = cur ? cur + p : p
   }
   if (cur) out.push(cur)
-  return out
+  // ④ 收尾清理：一条不该以逗号/顿号/冒号/分号结尾（那是被硬切断的痕迹，没有活人感）
+  const tidied = out.map((t) => String(t).replace(/[，,、：:；;]+\s*$/, '').trim()).filter(Boolean)
+  // ⑤ 还原标签
+  return tidied.map((t) => (canGuard ? t.replace(/~~X(\d+)X~~/g, (_, i) => tags[Number(i)] ?? '') : t))
 }
-
 export function splitLines(text) {
   const t = String(text || '').trim()
   if (!t) return []

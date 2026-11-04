@@ -20,13 +20,15 @@ import douyin from './douyin/index.js'
 import heybox from './heybox/index.js'
 import tokenGuardian from './token-guardian/index.js'
 import completeGuard from './complete-guard/index.js'
-import securityLock from './security-lock/index.js'
 import memoryPrivacy from './memory-privacy/index.js'
 import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
+import telemetry from './telemetry/index.js'
 
 export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox,
-  // 移植自 h-D-ACE/dsh-qq 的增强套件
-  tokenGuardian, completeGuard, securityLock, memoryPrivacy, scheduler,
+  // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
+  tokenGuardian, completeGuard, memoryPrivacy, scheduler,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器
-  multiParser]
+  multiParser,
+  // 用量遥测（移植自 surfcore 的 context-telemetry 思路，只观察不改行为）
+  telemetry]
