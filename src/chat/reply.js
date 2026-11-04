@@ -136,11 +136,12 @@ function splitLongLine(line, maxChars = 30) {
   if (!s || s.length <= maxChars) return s ? [s] : []
   // 标签保护：<face:捂脸> / <sticker:x> / <voice>…</voice> 内部有冒号，
   // 按标点切会把 '<face:' 和 '捂脸>' 拆到两条里（线上真实事故）。
+  // URL 同理：https:// 里的冒号和斜杠会被逗号/冒号层切坏（链接点不开）。
   // 占位符用纯文本（绝不用控制字符——会把源文件写成 binary）。
   const tags = []
   const canGuard = !s.includes('~~X')
   const guarded = canGuard
-    ? s.replace(/<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>/gi, (m) => {
+    ? s.replace(/<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>|\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
         tags.push(m)
         return '~~X' + (tags.length - 1) + 'X~~'
       })
@@ -148,7 +149,7 @@ function splitLongLine(line, maxChars = 30) {
   // ① 只在**句号类**标点处切（。！？；）：这些断了是自然的。
   //    逗号不是句子边界，在逗号处切会把一句话劈成两截
   //    （"Astra 压我一头" / "Code Arena 登顶" / "API 贵 2.5 倍" 那种碎裂感）。
-  const parts = guarded.split(/(?<=[。！？!?；;])/).map((x) => x.trim()).filter(Boolean)
+  const parts = sentencePieces(guarded).map((x) => x.trim()).filter(Boolean)
   // ② 单句仍超 hardMax（约两倍）才按逗号切 —— 这种是真长句（并列项、绕弯的长解释）。
   //    hardMax 取 maxChars 的 2 倍：宁可发一条 45 字的长消息，也不要半句话。
   const hardMax = Math.max(maxChars * 2, 40)
@@ -220,7 +221,7 @@ export function splitLines(text) {
       if (line.length <= 240) { out.push(line); continue }
       // 单行也超长：按句号兜底切成完整句，不在半句中间截断
       let seg = ''
-      for (const piece of line.split(/(?<=[。！？!?；;])/)) {
+      for (const piece of sentencePieces(line)) {
         if (seg && (seg + piece).length > 240) { out.push(seg); seg = piece }
         else seg += piece
       }
@@ -241,7 +242,7 @@ function listPages(lines, full) {
       // 单条就超长：按句号切成完整句块单独成页（仍然不在条目内部截断语义句）
       if (buf) { pages.push(buf); buf = '' }
       let seg = ''
-      for (const piece of l.split(/(?<=[。！？!?；;])/)) {
+      for (const piece of sentencePieces(l)) {
         if (seg && (seg + piece).length > 240) { pages.push(seg); seg = piece }
         else seg += piece
       }
@@ -253,6 +254,46 @@ function listPages(lines, full) {
   }
   if (buf) pages.push(buf)
   return pages
+}
+
+/** 句号兜底切分的公共实现：先按句号类标点切；某段本身还超长（英文长句/URL/无标点堆栈）
+ * 再按逗号；连逗号都没有（纯英文一整句）就按空格硬切 —— 撑爆气泡比切开更难看。
+ * 之前只有句号一层，英文长句整段原样发出去。
+ * URL 不切：空格切分时以 http(s)://、www. 开头的整段 token 原样保留（切开链接就点不开了）。 */
+function sentencePieces(line) {
+  const out = []
+  // URL 先占位再切：句号层正则里的半角 ? 会把链接的查询串切走（"…query?" / "param=1" 分家）。
+  const tags = []
+  const guarded = String(line || '').replace(/\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
+    tags.push(m)
+    return '~~Y' + (tags.length - 1) + 'Y~~'
+  })
+  const isUrlTok = (t) => /^~~Y\d+Y~~$/.test(t.trim())
+  for (const piece of guarded.split(/(?<=[。！？!?；;])/)) {
+    if (piece.length <= 240) { out.push(piece); continue }
+    let buf = ''
+    for (const seg of piece.split(/(?<=[，,、：:])/)) {
+      if (seg.length > 240) {
+        // 逗号也救不了：按空格硬切（URL/代码串整段放行，切开会坏）
+        for (const word of seg.split(/(?<=\s)/)) {
+          if (isUrlTok(word)) {
+            if (buf) { out.push(buf); buf = '' }
+            out.push(word.trim())
+            continue
+          }
+          if (buf && (buf + word).length > 240) { out.push(buf); buf = word }
+          else buf += word
+        }
+        continue
+      }
+      if (buf && (buf + seg).length > 240) { out.push(buf); buf = seg }
+      else buf += seg
+    }
+    if (buf) out.push(buf)
+  }
+  // 还原 URL 占位符
+  const restored = out.map((p) => p.replace(/~~Y(\d+)Y~~/g, (_, i) => tags[Number(i)] || ''))
+  return restored
 }
 
 function pushText(items, s) {

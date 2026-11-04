@@ -410,12 +410,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   function indexFor(chatOrScope) {
     const scope = scopeKeyOf(chatOrScope)
     if (!scope) return buildIndex([]) // fail-closed：没说清楚给谁看，就什么都不给
+    const chatLike = chatOrScope && typeof chatOrScope === 'object' ? chatOrScope : null
     const s = load()
     // 可看见的条目：本作用域的 + global（global 处处可见）
     const visible = s.items.filter((m) => {
       const sc = String(m.scope || '').trim()
       if (!sc) return false // 无作用域老数据：不再当 global 放行
-      return sc === 'global' || sc === scope
+      if (sc === 'global' || sc === scope) return true
+      // 隔离 override（memory-privacy 的「不隔离」开关）：某聊天被开放时，
+      // 放行的作用域条目也要并进索引 —— 只做 scopeVisible 不够，索引是按作用域物理建的。
+      return chatLike && scopeOverrideFn && scopeOverrideFn(sc, chatLike)
     })
     const stamp = s.rev || 0
     const hit = cache.get(scope)
@@ -444,13 +448,23 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   }
   /** 这条记忆在 chat 这个聊天里能不能被想起。
    *  没有 scope 的老数据按「只属于记下它的那个聊天」处理：宁可少给，不可多给。
-   *  老数据若真是该公开的（她自己的设定等），迁移时显式标成 global 即可。 */
+   *  老数据若真是该公开的（她自己的设定等），迁移时显式标成 global 即可。
+   *  scopeOverride（P0-4 后接 memory-privacy 的隔离开关）：某个聊天被面板设为「不隔离」时，
+   *  由模块注册的判定函数决定放行哪些别的作用域（比如让这个群看到主人私聊的记忆）。
+   *  主库不自己存开关，只提供挂点；没人注册时行为完全不变。 */
+  let scopeOverrideFn = null
+  function registerScopeOverride(fn) {
+    scopeOverrideFn = typeof fn === 'function' ? fn : null
+    cache.clear() // 放行规则变了，按作用域建的索引全部重建（否则旧索引里没有新放行的条目）
+  }
   function scopeVisible(scope, chat) {
     const raw = String(scope || '').trim()
     if (!raw) return false // 老数据无作用域：一律不跨聊天可见（以前当 global 放行，是跨群泄漏的主因）
     if (raw === 'global') return true
     if (!chat || chat.kind === 'system') return false
-    return raw === scopeOfChat(chat)
+    if (raw === scopeOfChat(chat)) return true
+    if (scopeOverrideFn && scopeOverrideFn(raw, chat)) return true
+    return false
   }
 
   function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '' }) {
@@ -1232,7 +1246,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
 
   return {
     recallHint,
-    scopeOfChat, scopeVisible,
+    scopeOfChat, scopeVisible, registerScopeOverride,
     add, addEvent, recentEvents, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll,
     profiles: () => {
       const s = load()
