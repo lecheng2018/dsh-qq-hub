@@ -44,6 +44,22 @@ export default {
   ],
   setup(api) {
     const stateFile = () => api.dataDir('state.json')
+    // 每个聊天最近一次请求的**真实上下文**（input+cacheRead+cacheWrite，厂商上报）。
+    // 只在内存里，不落盘不开关 —— 压缩判定靠它才准（字符估算差 5~9 倍，该压不压）。
+    // 重启后为空，退回字符估算，等新流量进来自然恢复。
+    const latestByChat = new Map()
+    api.on('session/usage', (u) => {
+      try {
+        if (!u || !u.chatId || !u.usage) return
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
+        const ctxNow = n(u.usage.uncachedInputTokens) + n(u.usage.cacheReadTokens) + n(u.usage.cacheWriteTokens)
+        if (ctxNow <= 0) return
+        // 入向 0/骤降的小请求（标题生成、摘要）不该覆盖大值：上下文不会一轮掉一半
+        const prevTok = Number(latestByChat.get(String(u.chatId))?.tokens) || 0
+        if (prevTok > 0 && ctxNow < prevTok * 0.6) return
+        latestByChat.set(String(u.chatId), { tokens: ctxNow, at: Date.now() })
+      } catch (error) {}
+    })
     const summaryFile = () => api.dataDir('summary.json')
     /**
      * 只留「值是正经对象」的条目。老版本或异常退出可能把 null / 字符串写进 JSON，
@@ -161,6 +177,7 @@ export default {
       state[sessionKey] = st
       persist()
       api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens * 1.2 : st.chars)} token`}`)
+      latestByChat.delete(String(chatId || ''))
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return { ok: true, chars: body.length, compacts: st.compacts }
     }
@@ -173,9 +190,13 @@ export default {
       const now = Date.now()
       for (const [key, st] of Object.entries(state)) {
         if (!st || typeof st !== 'object') { delete state[key]; continue }
-        // 按字符估算（用量遥测已按主人要求移除，回到估算口径）
+        // 优先用真实 usage（内存里的最新一次请求上下文），没有才退回字符估算
         let tokens = estimate(st.chars)
         let measured = false
+        try {
+          const real = latestByChat.get(key)
+          if (real && Number.isFinite(real.tokens) && real.tokens > 0) { tokens = real.tokens; measured = true }
+        } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
@@ -234,8 +255,14 @@ export default {
         .map(([chatId, st]) => ({
         chatId,
         chars: Number(st.chars || 0),
-        tokens: estimate(st.chars),
-        estimated: true,
+        tokens: (() => {
+          try {
+            const real = latestByChat.get(chatId)
+            if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
+          } catch (error) {}
+          return estimate(st.chars)
+        })(),
+        estimated: !(() => { try { const r = latestByChat.get(chatId); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
         compacts: Number(st.compacts || 0),
         lastAt: Number(st.lastAt || 0),
         lastCompactAt: Number(st.lastCompactAt || 0),
