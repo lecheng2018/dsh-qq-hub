@@ -2247,8 +2247,6 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [mem, setMem] = useState(null)
       const [stats, setStats] = useState(null)
       const [q, setQ] = useState('')
-      // 记忆条目折叠表：id → true 折叠 / false 展开；未记录的按折叠算（默认收起）
-      const [collapsed, setCollapsed] = useState({})
       const [ins, setIns] = useState(null)
       const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
       const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null) })
@@ -2302,13 +2300,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('input', { className: 'ab-input wide', placeholder: '搜索记忆，例如：白米饭、游戏、约定…', value: q, onChange: (e) => setQ(e.target.value) }),
           mem === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : mem.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没找到相关的记忆' : '还没有记住什么。' }) :
             h('div', null,
-              // 默认折叠只显「时间 + 一行预览」，几百条不再把页面拉爆；批量按钮放列表右上角
               h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
-                h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条'),
-                h('div', { className: 'ab-spacer' }),
-                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed(Object.fromEntries(mem.map((m) => [m.id, false]))) }, '批量展开'),
-                h(Btn, { small: true, kind: 'ghost', onClick: () => setCollapsed(Object.fromEntries(mem.map((m) => [m.id, true]))) }, '批量折叠')),
-              h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, collapsed: collapsed[m.id] !== false, onToggle: () => setCollapsed((prev) => ({ ...prev, [m.id]: !(prev[m.id] !== false) })), onChanged: () => load(), toast }))))),
+                h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条' + (mem.length >= 300 ? '（只显示最近 300 条，可搜索）' : ''))),
+              h('div', { className: 'ab-list', style: { marginTop: 8 } }, mem.map((m) => h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast }))))),
         h(RecallLog, null),
         h(MemoryImport, { toast, onDone: () => load() }),
       )
@@ -2433,7 +2427,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(StyleEditor, { k: p.key, label: '说话方式', list: style || [], toast, onSaved }))
     }
 
-    function MemoryRow({ m, onChanged, toast, collapsed = true, onToggle }) {
+    function MemoryRow({ m, onChanged, toast }) {
       const [edit, setEdit] = useState(false)
       const [text, setText] = useState(m.text)
       if (m.invalidAt) {
@@ -2443,17 +2437,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/restore', { id: m.id }); toast('恢复了', 'ok'); onChanged() } }, '恢复'),
           h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '删掉'))
       }
-      if (collapsed && !edit) {
-        // 折叠态：时间 + 一行预览，点整行展开
-        return h('div', { className: 'ab-li', style: { cursor: 'pointer', alignItems: 'center' }, onClick: onToggle, title: '点击展开' },
-          h('div', { className: 'meta' }, timeAgo(m.at)),
-          h('div', { className: 'body' }, h('span', { className: 'ab-muted' }, (m.aboutName ? '[' + m.aboutName + '] ' : '') + (m.text.length > 48 ? m.text.slice(0, 48) + '…' : m.text)), m.importance >= 0.8 ? h('span', { title: '很重要' }, ' ★') : null))
-      }
       return h('div', { className: 'ab-li' },
         h('div', { className: 'meta' }, timeAgo(m.at), h('br'), h('span', { className: 'ab-pill', style: { padding: '0 6px', fontSize: 11 } }, SOURCE[m.source] || '记忆')),
         edit ? h('input', { className: 'ab-input wide', value: text, onChange: (e) => setText(e.target.value), onKeyDown: async (e) => { if (e.key === 'Enter') { await post('/memory/update', { id: m.id, text }); setEdit(false); toast('改好了', 'ok'); onChanged() } if (e.key === 'Escape') setEdit(false) } })
           : h('div', { className: 'body' }, m.aboutName ? h('b', null, '[' + m.aboutName + '] ') : null, m.text, m.importance >= 0.8 ? h('span', { title: '很重要' }, ' ★') : null),
-        h(Btn, { small: true, kind: 'ghost', onClick: () => { if (collapsed && !edit && onToggle) onToggle(); else setEdit(!edit) } }, edit ? '取消' : (collapsed ? '展开' : '改一下')),
+        h(Btn, { small: true, kind: 'ghost', onClick: () => setEdit(!edit) }, edit ? '取消' : '改一下'),
         h(Btn, { small: true, kind: 'ghost', onClick: async () => { await post('/memory/delete', { id: m.id }); onChanged() } }, '忘掉'))
     }
 

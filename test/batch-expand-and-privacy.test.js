@@ -1,5 +1,5 @@
 // 回归（v1.3.21 复审修复）：
-// 1) 记忆库「批量展开」按钮反了 —— setCollapsed({}) 空对象下 collapsed[m.id] !== false 恒 true，展开变折叠
+// 1) 记忆库折叠收纳整个去掉（2026-11-05 用户要求：数据平铺不折叠）—— 列表直接显示全文
 // 2) memory-privacy 隔离开关是假开关（死代码 listFor 不跑）—— 现在接主库 registerScopeOverride，且只放行主人私聊
 // 3) 英文长句/URL 兜底 —— sentencePieces 空格层硬切，URL 占位不切坏
 import { test, before } from 'node:test'
@@ -11,16 +11,16 @@ import { join } from 'node:path'
 
 const root = new URL('..', import.meta.url).pathname
 
-test('client.js 批量展开按钮：展开=全部 false，折叠=全部 true（不能两个都折叠）', () => {
+test('client.js 记忆列表不折叠：没有批量展开/折叠按钮，条目直接平铺全文', () => {
   const src = readFileSync(join(root, 'client/client.js'), 'utf8')
-  const expand = src.match(/'批量展开'\)/)?.index
-  assert.ok(expand !== undefined, '批量展开按钮存在')
-  const expandSeg = src.slice(Math.max(0, expand - 200), expand)
-  assert.match(expandSeg, /m\.id, false/, '批量展开必须把每行设为 false')
-  const collapse = src.match(/'批量折叠'\)/)?.index
-  assert.ok(collapse !== undefined, '批量折叠按钮存在')
-  const collapseSeg = src.slice(Math.max(0, collapse - 200), collapse)
-  assert.match(collapseSeg, /m\.id, true/, '批量折叠必须把每行设为 true')
+  assert.doesNotMatch(src, /批量展开/, '折叠已整个去掉，不保留按钮')
+  assert.doesNotMatch(src, /批量折叠/, '折叠已整个去掉，不保留按钮')
+  assert.doesNotMatch(src, /setCollapsed/, '折叠状态表已删')
+  // MemoryRow 不再有 collapsed 分支（48 字预览那段）
+  const i = src.indexOf('function MemoryRow')
+  const seg = src.slice(i, i + 1800)
+  assert.doesNotMatch(seg, /collapsed/, 'MemoryRow 无折叠分支')
+  assert.match(seg, /m\.text/, '条目直接显示全文')
 })
 
 test('memory.js 有 registerScopeOverride 挂点（隔离开关生效通道）', async () => {
