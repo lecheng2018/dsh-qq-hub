@@ -63,7 +63,12 @@ export function pickForReply(items, replyText) {
       if (m) return m
     }
   }
-  return items[Math.floor(Math.random() * items.length)]
+  // 兜底随机挑时**只用有标签的**：库里有一批偷来的表情名字就叫「动画表情」、一个标签都没有，
+  // 挑到它们等于发一张跟上下文毫无关系的图（匹配问题里最直接的观感损失）。
+  // 都没标签才退回全库随机，至少还能发表情。
+  const tagged = items.filter((i) => (i.tags || []).length || !/^(动画表情|表情|图片|贴纸)$/.test(String(i.name || '')))
+  const pool = tagged.length ? tagged : items
+  return pool[Math.floor(Math.random() * pool.length)]
 }
 
 /** 超过上限时该清掉哪张：只看偷来的，最少被发过的里最老的那张。 */

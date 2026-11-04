@@ -111,3 +111,35 @@ export function createFaces({ onebot, log } = {}) {
     nameOf: (id) => { refresh(); return index.byId.get(String(id)) },
   }
 }
+
+/**
+ * 表情去重（发送前兜底）：她自己看不见「我一直在用同一张脸」。
+ *
+ * 实测（2026-11-04）：她一天用 130 次系统表情，前 5 个名字占 88%
+ * （得意 32 / OK 28 / 偷笑 23 / 捂脸 17 / 吃瓜 14），群里直接被吐槽「怎么老是配 ok」。
+ * 提示词里已经写了别固化，这里再兜一层确定性规则：
+ *   ① 同一条回复里同一个名字只留第一次；
+ *   ② 和上一条回复用过的相同 → 这次不夹（换不了就不夹，比重复更像真人）。
+ * 只动 <face:…> 标签，不碰正文。
+ * @param {string} text
+ * @param {Set<string>|string[]} [recent] 上一条用过的表情名（会被就地更新）
+ * @returns {{text: string, used: string[]}}
+ */
+export function dedupeFaces(text, recent) {
+  const s = String(text ?? '')
+  if (!s.includes('<face:')) return { text: s, used: [] }
+  const prev = recent instanceof Set ? recent : new Set(recent || [])
+  const seenHere = new Set()
+  const used = []
+  const out = s.replace(FACE_TAG, (whole, rawName) => {
+    const name = String(rawName || '').trim()
+    if (!name) return ''
+    if (seenHere.has(name)) return '' // 同一条里重复
+    seenHere.add(name)
+    if (prev.has(name)) return '' // 和上一条撞了：这次不夹
+    used.push(name)
+    return whole
+  })
+  // 清掉删标签后留下的多余空格
+  return { text: out.replace(/[ \t]{2,}/g, ' ').replace(/\s+([，。！？、；])/g, '$1').trim(), used }
+}

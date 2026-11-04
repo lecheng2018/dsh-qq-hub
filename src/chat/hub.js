@@ -12,6 +12,7 @@ import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
 import { parseReply, bubbleDelay, wantsVoice } from './reply.js'
 import { checkIdentityLeak } from './identity-guard.js'
+import { createGroupQuota } from './group-quota.js'
 import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
@@ -21,7 +22,7 @@ import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
 import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
-import { createFaces, textToSegments, stripFaceTags, speakableText } from './faces.js'
+import { createFaces, textToSegments, stripFaceTags, speakableText, dedupeFaces } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
 import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
@@ -170,6 +171,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
   const sentIds = new Set()
+  // 每个聊天上一条回复用过的系统表情：同一条/相邻条别重复用（实测她老配 OK/得意）
+  const lastFaces = new Map()
+  // 群发送配额：QQ 群每分钟最多 10 条，超了网关直接拒、消息真丢（2026-11-04 实测 3 条丢 2 条）
+  const groupQuota = createGroupQuota({ getConfig, log })
+  void groupQuota
   const stats = { received: 0, sent: 0, voice: 0, stickers: 0, errors: 0, day: new Date().toDateString() }
   let selfId = ''
   let lastChatAt = 0
@@ -437,7 +443,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           toolDisposers.set(dkey, off)
           offs.push(() => { toolDisposers.delete(dkey); try { off() } catch (error) {} })
         } catch (error) {
-          log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+          // 「already registered in this scope」= 同名工具的旧实例还挂在同一 scope 上；
+          // 实测功能不受影响（表情等工具照常可用，只是这一份注册失败），所以降成 debug 别刷屏。
+          // 其余错误（参数不对、ctx 没准备好）才是真要看的，保持 warn。
+          const dup = /already registered/i.test(error.message || '')
+          if (dup) log.debug(`工具 ${tool.name} 已存在同名实例，跳过重复注册`)
+          else log.warn(`工具 ${tool.name} 挂不上：`, error.message)
         }
       }
     }
@@ -523,8 +534,18 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     const action = tgt.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
     const params = tgt.kind === 'group' ? { group_id: Number(tgt.id), message } : { user_id: Number(tgt.id), message }
+    // 群消息走配额器：快满就等窗口，被限流就等一个窗口重试（否则消息真的丢）
+    const doCall = () => onebot.call(action, params)
     try {
-      const r = await onebot.call(action, params)
+      const gr = tgt.kind === 'group'
+        ? await groupQuota.send(tgt.id, doCall)
+        : { ok: true, result: await doCall() }
+      if (!gr.ok) {
+        bump('errors')
+        log.warn(`发到 ${chatId} 失败：`, gr.error?.message || '未知')
+        return null
+      }
+      const r = gr.result
       if (r && r.message_id !== undefined) {
         sentIds.add(String(r.message_id))
         if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
@@ -545,7 +566,18 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   async function sendText(chatId, text, replyId, missed, userId) {
     // 文字里的 <face:名字> 换成 QQ 系统表情，和文字在同一条消息里；系统表情关着就去掉标签
-    let segs = getConfig().stickers.faces ? textToSegments(text, faces.idOf) : [{ type: 'text', data: { text: stripFaceTags(text) } }]
+    let body = text
+    if (getConfig().stickers.faces) {
+      // 表情别固化：同一条内重复、或与上一条撞名的，这次不夹（提示词劝不住就靠这层兜底）
+      const d = dedupeFaces(body, lastFaces.get(chatId) || new Set())
+      if (d.text !== body) {
+        body = d.text
+        if (!body) return null
+      }
+      lastFaces.set(chatId, new Set(d.used))
+    }
+    let segs = getConfig().stickers.faces ? textToSegments(body, faces.idOf) : [{ type: 'text', data: { text: stripFaceTags(body) } }]
+    text = body
     // 群里的 @名字 / <at:QQ号> 换成真 @（对方会收到提醒）
     if (chatId.startsWith('group:') && hasMention(text)) segs = expandMentions(segs, await membersOf(chatId.slice(6)), missed)
     if (!segs.length || (segs.length === 1 && segs[0].type === 'text' && !segs[0].data.text.trim())) return null
@@ -738,8 +770,23 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance * mood().voice) items = [{ kind: 'voice', value: all }]
     }
     const inGroup = chatId.startsWith('group:')
-    // 群里别刷屏：一段最多 3 条
-    if (inGroup && items.length > 3) items = items.slice(0, 3)
+    // 群里别刷屏：一段最多 3 条 —— 但**超出的部分不能丢**。
+    // 原来这里直接 slice(0,3)，第 4 条起静默消失（2026-11-04 真实事故：
+    // 她答「备用码」讲了四段，群里只出现第一段，用户看到的是「没回答完就停了」）。
+    // 现在把多出来的并进第 3 条，宁可这一条长一点，也不让话少一半。
+    if (inGroup && items.length > 3) {
+      const keep = items.slice(0, 3)
+      const rest = items.slice(3)
+      const extra = rest.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
+      const last = keep[keep.length - 1]
+      if (last && (last.kind === 'text' || last.kind === 'voice') && extra) {
+        last.value = String(last.value).replace(/\s*$/, '') + ' ' + extra
+      } else if (extra) {
+        keep.push({ kind: 'text', value: extra })
+      }
+      items = keep
+      log.info(`${chatId}：回复超过 3 条，把后 ${rest.length} 条并进第 3 条（不丢内容）`)
+    }
     // 按概率补一张表情（群里已经有两条以上就不补了）
     if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
@@ -1260,28 +1307,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const memChat = { chatId: msg.chatId, kind: 'group', groupId: msg.groupId }
       try { memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0 } catch (error) {}
       const quotedBot = await repliedToBot(msg.replyId, msg)
-      // 鱼群保护：同一个群里同类 bot 太多时本轮不参与（移植自 surfcore 的 fish-guard）。
-      // 被直接 @ / 引用 / 主人点名时放行（只回一句，不展开）。
-      let fishBlocked = null
-      try {
-        const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
-        if (fg.enabled) {
-          const direct = msg.mentioned || quotedBot || (isOwner(cfg, msg.userId) && msg.mentioned)
-          const density = assessFishDensity((groupBuf.get(msg.groupId) || []).map((x) => ({
-            sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
-          })), { now, guard: fg, groupId: msg.groupId })
-          if (density.blocked) {
-            fishBlocked = density
-            if (!(direct && fg.bypassDirectAddress)) {
-              log.info(`群 ${msg.groupId}：${fishGuardReasonText(density)}，本轮不参与`)
-              logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
-              if (pending.has(msg.chatId)) await addGroupImages(msg)
-              return
-            }
-            log.debug(`群 ${msg.groupId}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
-          }
-        }
-      } catch (error) { log.debug('鱼群保护判定出错：', error.message) }
       const decision = decideGroupReply({
         policy: pol,
         relevance: topicRelevance(recentTexts, pol.interests, memScore),
@@ -1311,6 +1336,26 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         if (pending.has(msg.chatId)) await addGroupImages(msg)
         return
       }
+      // 鱼群保护：同一个群里同类 bot 太多时本轮不参与（移植自 surfcore 的 fish-guard）。
+      // 放在「决定要说话」之后才算 —— 本来就决定不说的群（插话关着）不该白算、也不该刷日志。
+      try {
+        const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
+        if (fg.enabled) {
+          const direct = decision.mode === 'must'
+          const density = assessFishDensity((groupBuf.get(msg.groupId) || []).map((x) => ({
+            sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
+          })), { now, guard: fg, groupId: msg.groupId })
+          if (density.blocked) {
+            if (!(direct && fg.bypassDirectAddress)) {
+              log.info(`群 ${msg.groupId}：${fishGuardReasonText(density)}，本轮不参与`)
+              logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+              if (pending.has(msg.chatId)) await addGroupImages(msg)
+              return
+            }
+            log.debug(`群 ${msg.groupId}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
+          }
+        }
+      } catch (error) { log.debug('鱼群保护判定出错：', error.message) }
       groupEntry.direct = Boolean(msg.messageId && msg.messageId !== '0' && msg.userId && (msg.mentioned || quotedBot))
       mode = decision.mode
       log.info(`群 ${msg.groupId}：${decision.reason} → 交给她`)
