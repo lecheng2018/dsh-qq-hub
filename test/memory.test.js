@@ -53,7 +53,11 @@ before(async () => {
   ;({ createMemoryStore } = await import('../src/features/memory.js'))
   ;({ normalize } = await import('../src/core/config.js'))
   cfg = normalize({ model: { provider: 'p', model: 'm' } })
-  mem = createMemoryStore({ dsh, getConfig: () => cfg, hub, log: { info() {}, warn() {}, debug() {} } })
+  mem = createMemoryStore({
+    dsh, getConfig: () => cfg, hub, log: { info() {}, warn() {}, debug() {} },
+    // 模拟用户场景：人设里明令禁止破折号，但主人自己爱用——看 style 学习会不会把它学回去
+    personaText: () => '【绝对禁止】\n- 禁止使用破折号 ——\n- 禁止 Markdown 列表',
+  })
 })
 
 test('默认一天整理两次；老配置的单个时间自动变成两个', () => {
@@ -78,6 +82,9 @@ test('整理：提炼记忆、相处经验和说话方式；同一天再整理�
 
   logs.get(today).push(line('周末去爬山'), line('你去不去'), line('hhh 来嘛'))
   await mem.consolidate({ includeToday: true })
+  const styleAsk = asked.find((a) => a.system.includes('{"insights"'))
+  assert.match(styleAsk.system + styleAsk.text, /不得与它冲突/, 'style 学习提示必须带人设护栏')
+  assert.match(styleAsk.system + styleAsk.text, /禁止使用破折号/, '护栏里要有人设的具体禁令')
   const last = asked.filter((a) => a.system.includes('整理长期记忆')).at(-1)
   assert.ok(last.text.includes('爬山') && !last.text.includes('爱吃辣'), '只处理新的那几行')
 })
@@ -87,6 +94,7 @@ test('说话方式会进到聊天上下文里', () => {
   assert.match(ctx, /说话方式/)
   assert.match(ctx, /hhh/)
   assert.match(ctx, /别刻意模仿/)
+  assert.match(ctx, /完全以人设为准/, 'styles 注入必须带上人设优先声明')
 })
 
 test('过了一天的流水整理完删掉', async () => {
