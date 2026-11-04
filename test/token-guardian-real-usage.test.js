@@ -42,3 +42,13 @@ test('token-guardian 判定优先读 telemetry 的真实值', () => {
   assert.match(src, /measured = true/, '要标记用的是真实值')
   assert.match(src, /estimated:/, 'status 要告诉面板这条是估算还是实测')
 })
+
+test('status 路由按本行 chatId 查真实用量（不再引用未定义的 key）', () => {
+  const src = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
+  // 2026-11-04 事故：status 的 map 里写了 `contextOf?.(key)`，key 是 activity 回调里的
+  // 局部变量，路由作用域里没有 —— ReferenceError 被 catch 静默吞掉，
+  // 面板永远 estimated:true，真实 usage 从未显示过。
+  const statusBlock = src.split("api.route('/token-guardian/status'")[1] || ''
+  assert.ok(statusBlock.includes('contextOf?.(chatId)'), 'status 里要用循环变量的 chatId')
+  assert.ok(!/\bcontextOf\?\.\(key\)/.test(statusBlock), 'status 里不能再出现未定义的 key')
+})

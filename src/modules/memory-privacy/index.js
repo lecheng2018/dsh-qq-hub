@@ -69,12 +69,18 @@ export default {
     maxChars: 400,
     /** 默认作用域：私聊记 private，群里记 group */
     autoScope: true,
+    /** 私聊分区在面板里预览（默认关：面板不是 she 用的，打开方便调试） */
+    previewPrivate: false,
+    /** 分层记忆不足时，允许补几条 global 兜底（0=不补） */
+    globalFallback: 0,
   },
   settings: [
     { key: 'enabled', label: '启用记忆分层', type: 'switch', hint: '关掉就只有原来的 BM25 记忆，不额外加分层内容' },
-    { key: 'maxItems', label: '每次最多带几条', type: 'number', min: 0, max: 12, step: 1 },
-    { key: 'maxChars', label: '内容长度上限', type: 'number', min: 100, max: 2000, step: 50 },
+    { key: 'maxItems', label: '每次最多带几条', type: 'number', min: 0, max: 12, step: 1, hint: '0~12，填 0 等于不投喂分层记忆' },
+    { key: 'maxChars', label: '内容长度上限', type: 'number', min: 100, max: 2000, step: 50, hint: '100~2000' },
     { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '开（默认）：私聊记成 private、群聊记成 group。关掉后新记忆一律写进 global —— 任何聊天都能读到，等于放弃隔离，慎用' },
+    { key: 'previewPrivate', label: '面板预览私聊分区', type: 'switch', hint: '打开后面板能看到私聊记忆原文（调试用；面板只有你能开）' },
+    { key: 'globalFallback', label: 'global 兜底条数', type: 'number', min: 0, max: 12, step: 1, hint: '分层记忆不够时补几条 global（0=不补，默认不补）' },
   ],
   setup(api) {
     const file = () => api.dataDir('scoped.json')
@@ -99,17 +105,58 @@ export default {
 
     function listFor(chat, limit = 4) {
       const now = Date.now()
-      return load().items
-        .filter((m) => isVisible(m, chat))
+      const cfg = api.settings()
+      // 单会话隔离 override：某个作用域强制「不隔离」→ global 也可见
+      //（例：某个群想让她知道主人私聊里的事 —— 在面板里把 group:xxx 设为 open）
+      const scope = scopeOf(chat)
+      const forcedOpen = String(overrides[scope] || '') === 'open'
+      let pool = load().items.filter((m) => isVisible(m, chat) || (forcedOpen && m.scope !== scope))
+      const picked = pool
         .map((m) => ({ ...m, score: (0.6 + 0.8 * (Number(m.importance) || 0.5)) * (0.6 + 0.4 * Math.exp(-(now - m.at) / (30 * 24 * 3600_000))) }))
         .sort((a, b) => b.score - a.score)
         .slice(0, limit)
+      // 兜底：分层记忆不够时补 global（globalFallback=0 不补）
+      const fb = Math.max(0, Math.min(12, Number(cfg.globalFallback) || 0))
+      if (picked.length < limit && fb > 0) {
+        const have = new Set(picked.map((m) => m.id))
+        const globals = pool.filter((m) => String(m.scope || '') === 'global')
+        // global 本来就可见时 isVisible 已放过来了；这里补的是「隔离开的 global 之外」的情况
+        const extra = load().items
+          .filter((m) => String(m.scope || '') === 'global' && !have.has(m.id))
+          .map((m) => ({ ...m, score: (0.6 + 0.8 * (Number(m.importance) || 0.5)) * (0.6 + 0.4 * Math.exp(-(now - m.at) / (30 * 24 * 3600_000))) }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, Math.min(fb, limit - picked.length))
+        picked.push(...extra)
+      }
+      return picked
+    }
+
+    // 单会话隔离 override：scope → 'open'（强制不隔离，global 可见）/ ''（默认隔离）
+    // 存在 settings.json 的 modules.memory-privacy.overrides 里
+    const overridesOf = () => {
+      try { return api.settings().overrides || {} } catch (error) { return {} }
+    }
+    let overrides = {}
+    try { overrides = overridesOf() } catch (error) {}
+
+    /** 过滤日志：投喂前把被拦下的跨域记忆记下来，方便排查「私聊记忆有没有漏到群里」。
+     * 只在面板要看的时候现算（filterLog 存最近 200 条），不落盘 —— 排查工具，不是审计需求。 */
+    const filterLog = []
+    function recordFilter(chat, blocked) {
+      if (!blocked.length) return
+      filterLog.push({ at: Date.now(), chat: chat?.chatId || '', kind: chat?.kind || '', blocked: blocked.slice(0, 10).map((m) => ({ id: m.id, scope: m.scope, text: String(m.text || '').slice(0, 50) })) })
+      if (filterLog.length > 200) filterLog.splice(0, filterLog.length - 200)
     }
 
     // ---- 交给她内容时，只拼当前聊天可见的作用域记忆 ----
     api.on('prompt', (content, info) => {
       const cfg = api.settings()
       if (!cfg.enabled || !info?.chat || info.chat.kind === 'system' || !Array.isArray(content)) return content
+      // 先算「被拦下哪些」，有拦截才记日志（全放行不记，避免刷屏）
+      const all = load().items
+      const vis = new Set(listFor(info.chat, Number(cfg.maxItems)).map((m) => m.id))
+      const blocked = all.filter((m) => !vis.has(m.id) && m.scope !== 'global' && m.scope !== scopeOf(info.chat))
+      recordFilter(info.chat, blocked)
       const items = listFor(info.chat, Number(cfg.maxItems))
       if (!items.length) return content
       let body = items.map((m) => `- ${m.text}`).join('\n')
@@ -146,8 +193,56 @@ export default {
     api.route('/memory-privacy/list', (req) => {
       const s = load()
       const all = String(req?.query?.all || '') === '1'
-      return { ok: true, items: all ? s.items : s.items.filter((m) => String(m.scope).startsWith('private:')).map((m) => ({ ...m, text: '（私聊内容，面板不预览）' })) }
+      const cfg = api.settings()
+      // 私聊分区预览：默认只给条数（文本打码），previewPrivate 打开后看原文（调试用）
+      const preview = Boolean(cfg.previewPrivate)
+      return { ok: true, preview, items: all || preview ? s.items : s.items.filter((m) => String(m.scope).startsWith('private:')).map((m) => ({ ...m, text: '（私聊内容，面板不预览）' })) }
     })
+    // 单分区清空：删掉某个作用域（private:xxx / group:xxx / global）的全部条目。
+    // 只动本模块 scoped.json；主记忆库的清空另有 /memory-privacy/clear-main。
+    api.route('/memory-privacy/clear-scope', async (req) => {
+      const q = req?.query?.scope || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
+      const scope = String(q || body?.scope || '')
+      if (!scope) return { ok: false, message: '要先说清哪个分区' }
+      const s = load()
+      const before = s.items.length
+      s.items = s.items.filter((m) => m.scope !== scope)
+      save(s)
+      return { ok: true, message: `已清空 ${before - s.items.length} 条（${scope}）` }
+    })
+    // 主记忆库按作用域清空（同样二次确认在前端做）
+    api.route('/memory-privacy/clear-main', async (req) => {
+      const q = req?.query?.scope || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
+      const scope = String(q || body?.scope || '')
+      if (!scope) return { ok: false, message: '要先说清哪个分区' }
+      const memory = api.use('memory')
+      if (!memory?.list) return { ok: false, message: '主记忆库没在跑' }
+      let n = 0
+      for (const m of memory.list() || []) {
+        if (String(m.scope || '') === scope && !m.invalidAt) {
+          try { memory.remove(m.id); n += 1 } catch (error) {}
+        }
+      }
+      return { ok: true, message: `主记忆库已清空 ${n} 条（${scope}）` }
+    })
+    // 单会话隔离开关：scope → open（不隔离）/隔离（默认）。存进模块 settings。
+    api.route('/memory-privacy/set-override', async (req) => {
+      const q = req?.query?.scope || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
+      const scope = String(q || body?.scope || '')
+      const mode = String(body?.mode ?? req?.query?.mode ?? '')
+      if (!scope) return { ok: false, message: '要先说清哪个分区' }
+      overrides[scope] = mode === 'open' ? 'open' : ''
+      try { api.saveSettings({ overrides }) } catch (error) { return { ok: false, message: '保存失败：' + error.message } }
+      return { ok: true, message: mode === 'open' ? `${scope} 已改为不隔离（global 可见）` : `${scope} 恢复隔离` }
+    })
+    // 过滤日志：最近 200 次投喂中每次被拦掉的跨域记忆
+    api.route('/memory-privacy/filter-log', () => ({ ok: true, items: filterLog.slice().reverse() }))
     // 面板：作用域汇总（私聊内容默认不预览，只给条数；全局和本群可以看）
     // 面板数据以「真正生效的那套」为准：主记忆库的作用域分布 + 人物小档案的作用域分布。
     // 本模块自己的 scoped.json 只是附带的一份，模型几乎不会走它，所以面板不能只报它（否则永远 0 条）。
@@ -161,6 +256,7 @@ export default {
       const out = {
         ok: true,
         total: s.items.length,
+        overrides,
         scopes: Object.entries(by).map(([scope, n]) => ({ scope, n })).sort((a, b) => b.n - a.n),
         globalItems: s.items.filter((m) => String(m.scope || 'global') === 'global').slice(-50).map((m) => ({ id: m.id, text: m.text, at: m.at })),
       }

@@ -1104,6 +1104,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       return Object.entries(s.insights || {}).map(([key, list]) => ({ key, name: (s.insightNames || {})[key] || '', list }))
     },
     setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
+    /** 删一条相处经验：insights[key] 是 {id,text,at} 数组，按 id 摘掉一条。 */
+    removeInsight: (key, id) => {
+      const s = load()
+      const list = (s.insights || {})[key] || []
+      const next = list.filter((x) => String(x.id) !== String(id))
+      if (next.length === list.length) return false
+      setInsights(key, next, (s.insightNames || {})[key] || '')
+      return true
+    },
+    /** 删一个人物小档案：profileKeyOf(qq, scope) 命中才删，text 传空字符串即删。 */
+    removeProfile: (qq, scope) => { setProfile(qq, '', '', scope); return true },
     list: (q) => {
       const items = load().items
       // 面板里过时的也列出来（排在后面），能看到被哪条取代、能恢复
