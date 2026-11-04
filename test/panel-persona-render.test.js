@@ -147,9 +147,16 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
     cur[ks[ks.length - 1]] = value
     return next
   }
+  // setDraft 现在是函数式更新（setDraft(prev => next)），桩要能接住两种形式：
+  // 传函数就喂它当前值、收集返回值；传值就直接收集。
   const seen = []
-  // setDraft 可能是值，也可能是 (prev)=>newValue（函数式更新）；测试要两种都还原
-  const setDraft = (v) => seen.push(typeof v === 'function' ? v(draft) : v)
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: {} } }
+  const setDraft = (v) => {
+    const next = typeof v === 'function' ? v(state) : v
+    if (next === undefined || next === null) return
+    state = next
+    seen.push(next)
+  }
   const Persona = factory(
     env.args[0], env.args[1], env.args[2], env.args[3], env.args[4],
     env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
@@ -302,9 +309,230 @@ test('一个候选都没有时，「＋ 添加」依然可点、且给出输入�
   assert.ok(called > 0, '点下去必须真的改动草稿')
 })
 
-test('分流人设必须读 draft（读 st.config 会让「＋ 添加」永远不显示新行，已复发）', () => {
-  const src = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
-  const fn = src.slice(src.indexOf('function Persona('), src.indexOf('function Persona(') + 12000)
-  assert.ok(/const pm = \(draft && draft\.persona\) \|\| st\.config\.persona/.test(fn),
-    '分流表必须优先读 draft.persona：读 st.config 时点「＋ 添加」改了 draft 但渲染看的是已保存配置，新行永远出不来')
+
+test('点「＋ 添加」后必须真的多出一行（渲染读 draft 而不是 st.config）', () => {
+  // 用户报的：点了添加什么都没有。根因是渲染读已保存的 st.config，
+  // 而按钮改的是 draft，两者脱节 → 新行永远不显示。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const body = extractFn('Persona')
+  const env = makeEnv()
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
+    'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+  const Persona = factory(...env.args)
+
+  const saved = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {} } }
+  const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: saved }
+
+  const flat = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => flat(x, out)); return out }
+    if (typeof n.type === 'string') out.push(n.type)
+    if (n.props && n.props.className === 'ab-input') out.push('__INPUT__')
+    if (n.children) n.children.forEach((x) => flat(x, out))
+    return out
+  }
+  const has = (tree, s) => JSON.stringify(tree).includes(s)
+
+  // 第一次渲染：草稿里没有分流行
+  const t1 = Persona({ st, draft: { persona: { ...saved.persona } }, setDraft: () => {}, toast: () => {}, reload: () => {} })
+  // 没候选、也没分行时，提示是「机器人还没在群里说过话…」；有候选时是「还没单独指定」。
+  // 两种都算「没有行」，这里只要求不是空的、且没有渲染出输入框。
+  assert.ok(!flat(t1).includes('__INPUT__'), '初始不该有输入框')
+  assert.ok(has(t1, '添加') || has(t1, '还没'), '初始应有提示文案')
+
+  // 模拟点了添加之后：draft 里多了一个 #new 占位行
+  const draft2 = { persona: { ...saved.persona, groups: { '#newabc': '' } } }
+  const t2 = Persona({ st, draft: draft2, setDraft: () => {}, toast: () => {}, reload: () => {} })
+  // 有占位行后，提示文案让位给真正的一行；核心是下面必须出现输入框
+  assert.ok(!has(t2, '还没单独指定') || flat(t2).includes('__INPUT__'), '点添加后不该还停在旧提示')
+  // 占位行没有已知聊天可选 → 应该给出号码输入框
+  assert.ok(flat(t2).includes('__INPUT__'), '必须渲染出输入框，实际：' + flat(t2).join(','))
+})
+
+test('手输群号：敲进去、失焦之后不能消失（用户报的「离开输入框字样就消失」）', () => {
+  // 根因：用渲染时的旧 draft 快照重建 map —— commitRow 把 key 从 #newabc 改成群号，
+  // 另一个控件的 onChange 随后拿旧快照重建，就把刚填的号抹掉了。
+  // 现在全改成 setDraft(prev => ...)，这里按真实调用顺序模拟一遍。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
+    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+  const body = extractFn('Persona')
+
+  // draft 与 typing 都要有真状态，否则只能测到「函数被调用过」
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: { '#newabc': '' } } }
+  const setDraft = (v) => { const n = typeof v === 'function' ? v(state) : v; if (n) state = n }
+  // Persona 里 useState 的调用顺序：0 chats / 1 list / 2 typing / 3 current / 4 sel / 5 edit / 6 dirty / 7 pending / 8 whole
+  let typing = {}
+  const hooks = []
+  const useStateImpl = (init) => {
+    const idx = hooks.length
+    hooks.push(idx)
+    if (idx === 2) return [typing, (u) => { typing = typeof u === 'function' ? u(typing) : u }]
+    return [typeof init === 'function' ? init() : init, () => {}]
+  }
+
+  const mkEnv = () => {
+    const h = (type, props, ...kids) => ({ $$el: true, type: typeof type === 'string' ? type : (type && type.name) || 'fn', props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) })
+    const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
+    const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch']
+    const comps = {}; names.forEach((n) => { comps[n] = mk(n) })
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+      'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
+      'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
+      'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+      comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
+      (...a) => a.filter(Boolean).join(' '),
+      (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },
+      (o, path) => path.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o),
+      (o) => JSON.parse(JSON.stringify(o)),
+      () => Promise.resolve({ ok: false }), () => Promise.resolve({ ok: false }),
+      { getItem: () => null, setItem: () => {} })
+  }
+
+  const props = () => ({ st: { personas: [], config: { persona: state.persona } }, draft: state, setDraft, toast: () => {}, reload: () => {} })
+
+  const findInput = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => findInput(x, out)); return out }
+    if (n.type === 'input' && n.props && n.props.onBlur) out.push(n)
+    if (n.children) n.children.forEach((x) => findInput(x, out))
+    return out
+  }
+
+  hooks.length = 0
+  let Persona = mkEnv()
+  let tree = Persona(props())
+  const inputs = findInput(tree)
+  assert.ok(inputs.length >= 1, '应该有手输号码的输入框（下拉框已按要求去掉），实际 ' + inputs.length)
+
+  inputs[0].props.onChange({ target: { value: '615693464' } })   // 敲
+  inputs[0].props.onBlur({ currentTarget: { value: '615693464' } }) // 失焦
+
+  const groups = state.persona.groups
+  assert.equal(groups['615693464'], '', '群号必须真的落进配置，实际：' + JSON.stringify(groups))
+  assert.ok(!('#newabc' in groups), '占位行应已被替换，实际：' + JSON.stringify(groups))
+
+  // 重渲染后群号必须还在（这就是「离开输入框就消失」的直接回归点）
+  tree = Persona(props())
+  const j = JSON.stringify(tree)
+  assert.ok(j.includes('615693464'), '重新渲染后群号不能消失')
+})
+
+test('分流人设里所有写回都用函数式更新（旧快照重建会抹掉刚填的群号）', () => {
+  // 这是「离开输入框字样就消失」的根因回归锁：
+  // 只要 specific() 区块里出现 setDraft(setPath(draft, ...))，
+  // 就意味着有控件在用渲染时的旧 draft 快照重建 map，
+  // 它和后一个控件的写回会互相覆盖，用户填的群号就会消失。
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  assert.ok(a > 0, '找不到 specific()')
+  // 花括号配平，取出整个 specific 函数体
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  // 注释里会提到这个旧写法（就是为了说明为什么不能用），先剥掉注释再查
+  const body = src2.slice(a, end)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  const bad = body.match(/setDraft\s*\(\s*setPath\s*\(\s*draft\b/g) || []
+  assert.equal(bad.length, 0, 'specific() 里不能再有 setDraft(setPath(draft, ...))，要写 setDraft(prev => ...)，发现 ' + bad.length + ' 处')
+  // 同时确认确实用了函数式更新
+  assert.ok(/setDraft\(\(prev\) =>/.test(body), 'specific() 里应当用 setDraft((prev) => ...) 写回')
+})
+
+test('分流人设只用手输输入框，不再给选群下拉（用户要求去掉）', () => {
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  const body = src2.slice(a, end)
+  assert.ok(/placeholder: wantKind === 'group' \? '填群号' : '填 QQ 号'/.test(body), '应当有手输群号/QQ 号的输入框')
+  // specific() 内部：行内人格下拉 1 个 + 底部「默认」人格下拉 1 个 = 2
+  // 关键是不能再有「选群/选人」那个 Select（options 来自 chats 候选）
+  const selCount = (body.match(/h\(Select,/g) || []).length
+  assert.equal(selCount, 2, 'specific() 里只该剩两个「选人格」下拉，选群/选人下拉必须去掉，实际 ' + selCount)
+  assert.ok(!/candidates/.test(body), '不该再有选群候选列表了')
+  assert.ok(!/__manual__/.test(body), '不该再有「手动输入…」这个下拉项了')
+})
+
+test('「＋ 添加」也用函数式更新（否则会把刚填的群号顶掉）', () => {
+  const src2 = src
+  const a = src2.indexOf('const specific = (mapKey, title, hint) => {')
+  let d = 0, end = -1
+  for (let q = src2.indexOf('{', a); q < src2.length; q++) {
+    if (src2[q] === '{') d++
+    else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
+  }
+  const body = src2.slice(a, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  // 「＋ 添加」按钮的 onClick 必须以 setDraft((prev) => 开头
+  const m = /onClick: \(\) => setDraft\(\(prev\) =>/.exec(body)
+  assert.ok(m, '「＋ 添加」要用 setDraft((prev) => ...)，不能拿渲染时的旧 draft 快照')
+})
+
+test('手输清空已有群号时：退回占位行，绝不把原号码留住（避免「03」输入框清空后复活）', () => {
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
+    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+  const body = extractFn('Persona')
+
+  // 前置：草稿里有一个历史遗留的 '03'
+  let state = { persona: { current: 'dafeiyu', groupDefault: '', privateDefault: '', privates: {}, groups: { '03': '' } } }
+  const setDraft = (v) => { const n = typeof v === 'function' ? v(state) : v; if (n) state = n }
+
+  let typing = {}
+  const hooks = []
+  const useStateImpl = (init) => {
+    const idx = hooks.length; hooks.push(idx)
+    if (idx === 2) return [typing, (u) => { typing = typeof u === 'function' ? u(typing) : u }]
+    return [typeof init === 'function' ? init() : init, () => {}]
+  }
+
+  const mkEnv = () => {
+    const h = (type, props, ...kids) => ({ $$el: true, type: typeof type === 'string' ? type : (type && type.name) || 'fn', props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) })
+    const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
+    const comps = {}; ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch'].forEach((n) => { comps[n] = mk(n) })
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+      'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
+      'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
+      'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+      comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
+      (...a) => a.filter(Boolean).join(' '),
+      (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },
+      (o, path) => path.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o),
+      (o) => JSON.parse(JSON.stringify(o)),
+      () => Promise.resolve({ ok: false }), () => Promise.resolve({ ok: false }),
+      { getItem: () => null, setItem: () => {} })
+  }
+
+  const props = () => ({ st: { personas: [], config: { persona: state.persona } }, draft: state, setDraft, toast: () => {}, reload: () => {} })
+
+  const findInput = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out
+    if (Array.isArray(n)) { n.forEach((x) => findInput(x, out)); return out }
+    if (n.type === 'input' && n.props && n.props.onBlur) out.push(n)
+    if (n.children) n.children.forEach((x) => findInput(x, out))
+    return out
+  }
+
+  hooks.length = 0
+  const Persona = mkEnv()
+  let tree = Persona(props())
+  const inputs = findInput(tree)
+  assert.ok(inputs.length >= 1, '应该有号码输入框')
+
+  // 用户把 '03' 全删掉变空串，然后失焦
+  inputs[0].props.onChange({ target: { value: '' } })
+  inputs[0].props.onBlur({ currentTarget: { value: '' } })
+
+  const groups = state.persona.groups
+  assert.equal(groups['03'], undefined, '03 绝不能再作为 key 保留在 groups 里')
+  const keys = Object.keys(groups)
+  assert.equal(keys.length, 1, '应该保留一行')
+  assert.ok(keys[0].startsWith('#new'), '原本已成立的号码清空后应当退回 #new 占位行，实际：' + keys[0])
 })
