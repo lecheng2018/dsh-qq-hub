@@ -249,8 +249,10 @@ export async function textForBlindModel (dsh, o, target) {
 export async function askModel (dsh, o) {
   const llm = dsh.llm || dsh.get('llm')
   if (!llm || typeof llm.stream !== 'function') throw new Error('宿主没有 llm 服务')
-  const t = defaultModel(dsh, o.cfg)
-  if (!t) throw new Error('拿不到默认模型')
+  const t = { ...defaultModel(dsh, o.cfg) }
+  // 调用方显式指定 provider/model 时优先（如 token-guardian 摘要用聊天当前模型，P1-5）
+  if (o.provider && o.model) { t.provider = o.provider; t.model = o.model }
+  if (!t.provider || !t.model) throw new Error('拿不到默认模型')
   let content = [{ type: 'text', text: o.text }]
   for (const img of o.images || []) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-image' })
   // 图片要先交给 DSH 的附件服务登记成附件块，模型适配层只认附件。

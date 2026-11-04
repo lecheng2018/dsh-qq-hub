@@ -514,15 +514,17 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   //   · 记忆是全局一份，但后台 system 会话不会自动带记忆、也不会被提取，
   //     所以这里手动 recall 拼进 prompt，想留下的再用 memory.add 写回去。
 
-  async function runDuty({ memory, owner = '' } = {}) {
+  async function runDuty({ memory, owner = '', ownerQQ = '' } = {}) {
     const c = getConfig().heybox || {}
     if (!c.enabled || !c.autoBrowse || !hasLogin()) return { ok: false, message: '没开或没登录' }
     if (left('browse') <= 0) return { ok: false, message: '今天逛的轮数到上限了' }
 
-    // 手动把相关记忆拼进 prompt（后台会话不会自动带）
+    // 手动把相关记忆拼进 prompt（后台会话不会自动带）。
+    // 后台任务没有 chat，必须显式声明可见域：只允许 global + 主人私聊，不能拿全库（fail-closed）。
     let about = []
     try {
-      about = memory?.recall?.('小黑盒 游戏 帖子 兴趣', { limit: 6 }) || []
+      const scopes = ownerQQ ? ['global', `private:${ownerQQ}`] : ['global']
+      about = memory?.recall?.('小黑盒 游戏 帖子 兴趣', { limit: 6, scopes }) || []
     } catch { about = [] }
     const aboutText = (Array.isArray(about) ? about : []).map((m) => '- ' + (m.text || m)).join('\n') || '（暂无）'
 
@@ -558,7 +560,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   // 「这个后台会话的上一轮还没结束」（2026-11-04 17:27~17:35 连续 5 次）。
   let dutyInFlight = false
 
-  async function tick({ memory, owner } = {}) {
+  async function tick({ memory, owner, ownerQQ = '' } = {}) {
     const c = getConfig().heybox || {}
     if (!c.enabled || !c.autoBrowse || !hasLogin()) return
     if (dutyInFlight) return
@@ -572,7 +574,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     }
     dutyInFlight = true
     try {
-      const r = await runDuty({ memory, owner })
+      const r = await runDuty({ memory, owner, ownerQQ })
       if (!r.ok) { st.lastSkipReason = r.message; writeState(st) }
       else log?.info?.('小黑盒后台会话跑完：' + r.message.slice(0, 40))
     } catch (e) {

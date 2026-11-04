@@ -228,7 +228,9 @@ test('人物小档案：按这个人的记忆写，聊天时常驻；群里带�
   mem.add({ text: '小明爱钓鱼', about: '10000001', aboutName: '小明', source: 'tool' })
   mem.add({ text: '小明是程序员', about: '10000001', aboutName: '小明', source: 'tool' })
   mem.add({ text: '小明养了一只狗', about: '10000001', aboutName: '小明', source: 'tool' })
-  assert.equal(await mem.buildProfile('10000001'), true)
+  // buildProfile 现在要求显式 scope（fail-closed）：空 scope 会退化成全库，跨域污染
+  await assert.rejects(() => mem.buildProfile('10000001'), /作用域/)
+  assert.equal(await mem.buildProfile('10000001', 'global'), true)
   assert.equal(mem.profiles()[0].qq, '10000001')
   hubState.text = '在干嘛'
   const p = mem.contextFor({ kind: 'private', userId: '10000001', chatId: 'private:10000001' }, 's6')
@@ -236,7 +238,7 @@ test('人物小档案：按这个人的记忆写，聊天时常驻；群里带�
   hubState.speakers = ['10000001']
   const g = mem.contextFor({ kind: 'group', groupId: '7', chatId: 'group:7' }, 's7')
   assert.match(g, /你对正在说话的人的印象：小明——小明是主人/)
-  assert.equal(await mem.buildProfile('99999999'), false, '记忆太少不写')
+  await assert.rejects(() => mem.buildProfile('99999999'), /作用域|太少/, '空 scope 拒绝；记忆太少也不写')
   hubState.speakers = []
   hubState.text = ''
 })

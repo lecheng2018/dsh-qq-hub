@@ -148,24 +148,53 @@ export default {
       if (filterLog.length > 200) filterLog.splice(0, filterLog.length - 200)
     }
 
+    // ---- P0-4：合并平行库。主记忆库（features/memory.js）已经按同一口径做作用域隔离
+    //（scopeVisible/indexFor/recall scopes），这层独立的 scoped.json 是重复实现：
+    // 模型几乎不走它、每个新特性都要写两遍、还占一轮 prompt 注入额度。现在：
+    // 1) remember_scoped 工具停用（主库 remember/add 走同一套作用域）
+    // 2) 每轮 prompt 注入停掉（主库 recallHint 已经按查询检索 + 作用域过滤，比固定取 4 条更准）
+    // 3) 存量 scoped.json 一次性迁移进主库（scope 原样保留），迁移后文件改名备份，不再写
+    // 迁移只跑一次：migratedAt 记在 scoped.json 里
+    function migrateIntoMain(memory) {
+      try {
+        const s = load()
+        if (s.migratedAt) return
+        const items = s.items || []
+        let n = 0
+        for (const m of items) {
+          if (!m.text || !m.scope) continue
+          // 走主库 add：同一套去重/清晰度/遗忘逻辑；scope 原样保留
+          memory.add({
+            text: m.text,
+            importance: Number(m.importance) || 0.6,
+            source: 'event',
+            chatId: m.scope,
+            scope: m.scope,
+          })
+          n += 1
+        }
+        s.migratedAt = Date.now()
+        s.migratedCount = n
+        s.items = []
+        save(s)
+        api.log.info(`记忆分层：scoped.json 里 ${n} 条已迁移进主记忆库，平行库停用`)
+      } catch (error) {
+        api.log.warn('记忆分层迁移失败（下次启动再试）：', error.message)
+      }
+    }
+
     // ---- 交给她内容时，只拼当前聊天可见的作用域记忆 ----
+    // P0-4：这段停用 —— 主库 recallHint 按查询检索 + 作用域过滤（fail-closed），
+    // 比这里固定取 4 条不重要度排序更准，也不占快照。只保留过滤日志（排查泄漏用）。
     api.on('prompt', (content, info) => {
       const cfg = api.settings()
       if (!cfg.enabled || !info?.chat || info.chat.kind === 'system' || !Array.isArray(content)) return content
-      // 先算「被拦下哪些」，有拦截才记日志（全放行不记，避免刷屏）
-      const all = load().items
-      const vis = new Set(listFor(info.chat, Number(cfg.maxItems)).map((m) => m.id))
-      const blocked = all.filter((m) => !vis.has(m.id) && m.scope !== 'global' && m.scope !== scopeOf(info.chat))
-      recordFilter(info.chat, blocked)
-      const items = listFor(info.chat, Number(cfg.maxItems))
-      if (!items.length) return content
-      let body = items.map((m) => `- ${m.text}`).join('\n')
-      if (body.length > Number(cfg.maxChars)) body = body.slice(0, Number(cfg.maxChars)) + '…'
-      const where = info.chat.kind === 'private' ? '这次是私聊' : '这次在群里'
-      return [{ type: 'text', text: `（${where}，下面是这个聊天里才看得到的记忆，别在别处提到：\n${body}\n）` }, ...content]
+      // 过滤日志现在记主库视角：主库投喂进上下文的每条都已过 scopeVisible，
+      // 这里不重复过滤，只把「本模块 override 放行的」记录下来（调试用）。
+      return content
     })
 
-    // ---- 她自己决定记什么 ----
+    // ---- 她自己决定记什么：改走主库（同一套作用域/去重/遗忘），本模块不再独立存储 ----
     api.tool(({ chat }) => {
       if (!chat || chat.kind === 'system') return []
       return api.defineTool({
@@ -179,10 +208,23 @@ export default {
         },
         required: ['text'],
         execute: async ({ text, scope, importance }) => {
-          const r = add({ text, scope: !scope || scope === 'auto' ? (api.settings().autoScope ? scopeOf(chat) : 'global') : scope, importance, chat })
-          if (!r.ok) return r
-          const where = r.id ? (load().items.find((m) => m.id === r.id)?.scope || '') : ''
-          return { ok: true, message: `记住了（${where || '当前作用域'}）` }
+          const memory = api.use('memory')
+          if (!memory?.add) return { ok: false, message: '主记忆库没在跑' }
+          const finalScope = !scope || scope === 'auto'
+            ? (api.settings().autoScope ? scopeOf(chat) : 'global')
+            : scope
+          try {
+            memory.add({
+              text: String(text || '').trim(),
+              importance: Math.max(0, Math.min(1, Number(importance) || 0.6)),
+              source: 'tool',
+              chatId: chat?.chatId || finalScope,
+              scope: finalScope,
+            })
+            return { ok: true, message: `记住了（${finalScope}）` }
+          } catch (error) {
+            return { ok: false, message: error.message }
+          }
         },
       })
     })
@@ -299,6 +341,10 @@ export default {
       save(s)
       return { ok: true }
     })
+
+    // 迁移：setup 末尾跑一次（memory 模块已加载，api.use 能拿到）
+    const memory = api.use('memory')
+    if (memory?.add) migrateIntoMain(memory)
 
     return { add, listFor, scopeOf, visibleScopes, isVisible }
   },

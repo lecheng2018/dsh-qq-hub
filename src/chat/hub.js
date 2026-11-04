@@ -28,6 +28,7 @@ import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
 import { createQuestionRegistry } from './questions.js'
 import { createApprovalRegistry } from './approvals.js'
+import { personaIdFor } from '../persona/personas.js'
 import { backfillNoticeBlock } from './backfill.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
@@ -281,8 +282,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     } catch (error) {
       log.debug('改会话标题失败：', error.message)
     }
+    // 记下建会话时生效的人设：切人设后旧历史里还躺着旧人设块，模型逐条仲裁思考暴涨，
+    // 所以 personaId 变了就整个换会话（见 agentFor）。
     const m = map()
-    m.chats[chat.chatId] = { sessionId: sid, preset, level, createdAt: Date.now(), title: titleFor(chat) }
+    m.chats[chat.chatId] = { sessionId: sid, preset, level, personaId: personaIdFor(chat, getConfig()), createdAt: Date.now(), title: titleFor(chat) }
     saveMap(m)
     log.info(`为 ${chat.chatId} 新建了 DSH 会话 ${sid.slice(-8)}（${preset}）`)
     return sid
@@ -302,8 +305,17 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const cfg = getConfig()
     const level = chat.kind === 'system' ? (chat.noTools ? 'chat' : 'social') : levelFor(cfg, chat)
     const preset = presetFor(level, cfg)
-    const entry = map().chats[chat.chatId]
-    let sid = entry && entry.preset === preset && entry.level === level ? entry.sessionId : ''
+    let entry = map().chats[chat.chatId]
+    // 人设变了（面板里切了本聊天专用人设/全局人设）也换新会话：旧历史里的人设块清不掉，
+    // 留着会让模型逐条仲裁新旧人设。首次 entry 为空或没记 personaId 不触发（老会话不动）。
+    const wantPersona = personaIdFor(chat, cfg)
+    if (entry && entry.personaId && entry.personaId !== wantPersona) {
+      log.info(`${chat.chatId} 的人设从 ${entry.personaId} 切到 ${wantPersona}，开新会话`)
+      resetChat(chat.chatId)
+      entry = null
+    }
+    let sid = entry && entry.preset === preset && entry.level === level
+      && (!entry.personaId || entry.personaId === wantPersona) ? entry.sessionId : ''
     let agent = null
     if (sid) {
       try {
@@ -2019,6 +2031,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     chatLogDays,
     deleteChatLog,
     sessions: () => map().chats,
+    resolveTarget,
     groupName,
     stats: () => ({ ...stats }),
     get lastChatAt() { return lastChatAt },
