@@ -23,6 +23,13 @@ return function RssPanel(props) {
     rss.feeds = next
     return { ...cur, rss }
   })
+  /** 改 rss 下的任意子字段（比如 digest.*）：一律函数式更新，别拿旧快照重建 */
+  const setDraftRss = (key, value) => props.setDraft && props.setDraft((prev) => {
+    const cur = prev || {}
+    const rss = { ...(cur.rss || {}) }
+    rss[key] = value
+    return { ...cur, rss }
+  })
 
   const addFeed = async () => {
     const url = String(newUrl || '').trim()
@@ -72,6 +79,45 @@ return function RssPanel(props) {
       Array.isArray(d.lastErrors) && d.lastErrors.length
         ? h('div', { className: 'ab-note err', style: { marginTop: 8 } }, '上次拉取有源失败：' + d.lastErrors.slice(0, 3).join('；'))
         : null,
+    ),
+
+    h(Card, {
+      title: '每日精选',
+      desc: '每天到点从池子里挑几条，让她用群友的口气说出来（不是资讯播报）。走的是模型筛选，每条都要调一次，所以默认关。',
+      right: h(Btn, { small: true, disabled: busy === 'digest', onClick: async () => {
+        setBusy('digest')
+        try {
+          const r = await call('/rss/digest-now')
+          props.toast && props.toast(r?.ok ? `挑了 ${r.count} 条发出去了` : (r?.message || '没挑成'), r?.ok ? 'ok' : 'err')
+          await load()
+        } finally { setBusy('') }
+      } }, busy === 'digest' ? '挑着呢…' : '现在精选一次'),
+    },
+      h(Row, { label: '开起来', hint: '关掉就只有群友问她时才查，不主动发。' },
+        h(Switch, {
+          on: props.draft?.rss?.digest?.enabled === true,
+          onChange: (v) => setDraftRss('digest', { ...(props.draft?.rss?.digest || {}), enabled: v }),
+        })),
+      h(Row, { label: '每天几点发', hint: '24 小时制。到点那一小时内会发一次，重启也不会重复发。' },
+        h('input', {
+          className: 'ab-input sm', type: 'number', min: 0, max: 23,
+          value: props.draft?.rss?.digest?.hour ?? 9,
+          onChange: (e) => setDraftRss('digest', { ...(props.draft?.rss?.digest || {}), hour: Number(e.target.value) }),
+        })),
+      h(Row, { label: '每次几条', hint: '1~6 条。太多就成资讯播报了。' },
+        h('input', {
+          className: 'ab-input sm', type: 'number', min: 1, max: 6,
+          value: props.draft?.rss?.digest?.count ?? 3,
+          onChange: (e) => setDraftRss('digest', { ...(props.draft?.rss?.digest || {}), count: Number(e.target.value) }),
+        })),
+      h(Row, { label: '发到哪', hint: '留空 = 发主人私聊。也可以填 group:群号 发到某个群。' },
+        h('input', {
+          className: 'ab-input', style: { width: '100%' }, placeholder: '留空发私聊 / group:123456789',
+          value: props.draft?.rss?.digest?.target || '',
+          onChange: (e) => setDraftRss('digest', { ...(props.draft?.rss?.digest || {}), target: e.target.value.trim() }),
+        })),
+      h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } },
+        d.digest?.lastAt ? `上次发：${ago(d.digest.lastAt)}，${d.digest.lastCount} 条` : '还没发过'),
     ),
 
     h(Card, { title: '订阅地址', desc: '填 RSS / Atom 地址。加之前会自动试拉一次，拉不通的不会加进来。' },
