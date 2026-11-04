@@ -9,7 +9,7 @@ const cfg = (p) => ({ persona: { current: 'dafeiyu', privateDefault: '', groupDe
 
 test('没配任何分流：私聊群聊都走全局人设', () => {
   const c = cfg({})
-  assert.equal(personaIdFor({ kind: 'private', userId: '444555666' }, c), 'dafeiyu')
+  assert.equal(personaIdFor({ kind: 'private', userId: '10000001' }, c), 'dafeiyu')
   assert.equal(personaIdFor({ kind: 'group', groupId: '333444555' }, c), 'dafeiyu')
 })
 
@@ -20,9 +20,9 @@ test('群默认生效，但具体群号优先于群默认', () => {
 })
 
 test('私聊默认生效，但具体 QQ 号优先', () => {
-  const c = cfg({ privateDefault: 'priv-default', privates: { '444555666': 'owner-persona' } })
+  const c = cfg({ privateDefault: 'priv-default', privates: { '10000001': 'owner-persona' } })
   assert.equal(personaIdFor({ kind: 'private', userId: '123456' }, c), 'priv-default')
-  assert.equal(personaIdFor({ kind: 'private', userId: '444555666' }, c), 'owner-persona')
+  assert.equal(personaIdFor({ kind: 'private', userId: '10000001' }, c), 'owner-persona')
 })
 
 test('群和私聊互不影响：群配置不会串到私聊', () => {
@@ -49,11 +49,11 @@ test('system 会话只走全局', () => {
 
 test('还没选人设就保存：那一行不能被悄悄丢掉（否则面板「添加」等于没用）', async () => {
   const { normalize } = await import('../src/core/config.js')
-  const c = normalize({ persona: { current: 'dafeiyu', privates: { 444555666: '' }, groups: { 333444555: 'dafeiyu' } } })
-  assert.ok('444555666' in c.persona.privates, '空值行必须保留，用户回头能继续选')
-  assert.equal(c.persona.privates['444555666'], '', '空值就是空值')
+  const c = normalize({ persona: { current: 'dafeiyu', privates: { 10000001: '' }, groups: { 333444555: 'dafeiyu' } } })
+  assert.ok('10000001' in c.persona.privates, '空值行必须保留，用户回头能继续选')
+  assert.equal(c.persona.privates['10000001'], '', '空值就是空值')
   assert.equal(c.persona.groups['333444555'], 'dafeiyu', '已选的要保留')
   // 空值不能影响实际生效的人设
   const { personaIdFor } = await import('../src/persona/personas.js')
-  assert.equal(personaIdFor({ kind: 'private', userId: '444555666' }, c), 'dafeiyu', '空值 → 往下落到全局')
+  assert.equal(personaIdFor({ kind: 'private', userId: '10000001' }, c), 'dafeiyu', '空值 → 往下落到全局')
 })

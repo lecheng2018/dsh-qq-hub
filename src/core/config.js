@@ -37,7 +37,13 @@ const DEFAULTS_RAW = {
   files: { enabled: true, maxMB: 50, dirs: [] },
   // 危险命令确认（可选保护，默认关）：她在私聊里执行删根目录/格式化/关机/下载后直接执行等
   // 终端命令前，先发 QQ 私聊问主人，回复「确认」才执行；超时或「取消」就拦下。
-  security: { dangerConfirm: false },
+  // 用量遥测（只观察）：写在 <dataDir>/telemetry.jsonl，超 4MB 轮转
+  telemetry: { enabled: true },
+  security: {
+    dangerConfirm: false,
+    // 身份泄露闸（移植自 surfcore）：出站前扫主人的 QQ 号 / 别的群号
+    identityGuard: { enabled: true, mode: 'block' },
+  },
   snowluma: {
     dir: 'C:\\Aurabot\\snowluma', // 主人自己下载解压到这里（EULA 不允许自动部署）
     autoStart: true, // 随 DSH 启动它（只启动主人已安装并同意过协议的副本）
@@ -81,11 +87,16 @@ const DEFAULTS_RAW = {
     current: 'dafeiyu',
     privateDefault: '', // 留空 = 用 current
     groupDefault: '',
-    privates: {}, // { '444555666': 'persona-id' }
+    privates: {}, // { '10000001': 'persona-id' }
     groups: {}, // { '333444555': 'persona-id' }
   },
   // 主人私聊里问起群里的事：把最近 24 小时的群聊流水补进这一轮（默认关，开启前先把群加进白名单）
-  group: { ...DEFAULT_GROUP_POLICY, overrides: {}, ownerBrief: { enabled: false, lines: 12, groups: [] } },
+  group: {
+    ...DEFAULT_GROUP_POLICY, overrides: {},
+    ownerBrief: { enabled: false, lines: 12, groups: [] },
+    // 鱼群保护（移植自 surfcore）：同群同类 bot 太多时本轮不参与。名列表留空 = 用模块默认值
+    fishGuard: { enabled: true },
+  },
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
   titleFilter: { enabled: true, groups: [], title: '大肥鱼' },
   voice: {
@@ -212,6 +223,8 @@ const DEFAULTS_RAW = {
     nudge: true, // 她问了你一句、你一直没回时，偶尔轻轻追一句
     awakeFrom: 8,
     awakeTo: 23,
+    // 早安 / 晚安：到点必发一次（不参与随机间隔抽签），每天每种只发一次
+    greeting: { enabled: true, morning: '08:00', night: '23:00' },
   },
   mood: { enabled: true, halfLifeHours: 3, judge: false }, // judge：每轮聊完用模型判一次心情（更准，每轮多一次很短的调用）；关着用关键词
   memory: { enabled: true, recallCount: 6, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
@@ -233,6 +246,9 @@ const DEFAULTS_RAW = {
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
     enabled: false,              // 模块总开关，默认关
+    inGroups: true,              // 群聊里要不要提供解析（关掉就只在私聊解析，群里连链接都不碰）
+    inPrivate: true,             // 私聊里要不要提供解析
+    disabledGroups: [],          // 这些群单独关掉（即使 inGroups 开着）
     feedToAi: true,              // 🌟 AI 注入开关（把标题、作者、正文摘要喂给当前大模型会话让它读懂并接话）
     sendMedia: true,             // 媒体发送开关（是否向 QQ 发送解析后的视频或图文）
     forwardMode: 'threshold',    // threshold / always / never
@@ -365,6 +381,9 @@ export function normalize(raw) {
   if (!isObj(c.files)) c.files = {}
   if (!isObj(c.security)) c.security = {}
   c.security.dangerConfirm = bool(c.security.dangerConfirm, false)
+  if (!isObj(c.security.identityGuard)) c.security.identityGuard = { enabled: true, mode: 'block' }
+  c.security.identityGuard.enabled = bool(c.security.identityGuard.enabled, true)
+  c.security.identityGuard.mode = c.security.identityGuard.mode === 'warn' ? 'warn' : 'block'
   c.files.enabled = bool(c.files.enabled, true)
   c.files.maxMB = num(c.files.maxMB, 50, 1, 2048)
   c.files.dirs = (Array.isArray(c.files.dirs) ? c.files.dirs : String(c.files.dirs || '').split(/[\n,，;；]+/))
@@ -538,6 +557,10 @@ export function normalize(raw) {
   if (!isObj(c.multiParser)) c.multiParser = {}
   const mp = c.multiParser
   mp.enabled = bool(mp.enabled, false)
+  mp.inGroups = bool(mp.inGroups, true)
+  mp.inPrivate = bool(mp.inPrivate, true)
+  if (!Array.isArray(mp.disabledGroups)) mp.disabledGroups = []
+  mp.disabledGroups = mp.disabledGroups.map((g) => String(g).replace(/\D/g, '')).filter((g) => g.length >= 4).slice(0, 100)
   mp.feedToAi = bool(mp.feedToAi, true)
   mp.sendMedia = bool(mp.sendMedia, true)
   mp.forwardMode = ['threshold', 'always', 'never'].includes(mp.forwardMode) ? mp.forwardMode : 'threshold'

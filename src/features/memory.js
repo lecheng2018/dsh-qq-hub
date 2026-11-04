@@ -128,13 +128,51 @@ export function memoryLine(it, now = Date.now()) {
 /**
  * 该不该忘掉：每日整理自动提炼出来的、不太重要、已经淡了的（见 retention），忘掉。
  * 她自己记的、你加的、经历和日记不自动忘。
+ *
+ * 【经历类的四档清晰度】移植自 surfcore 的记忆卡设计（docs/guides/MEMORY_CARD.md）：
+ * 浏览经历（B站/小黑盒/画画）源源不断，原来一律 return false → 记忆库只增不减。
+ * 现在按清晰度分级，每天最多降一档（慢慢模糊，不是突然消失）：
+ *   vivid（清晰）→ clear（清楚）→ fuzzy（模糊，正文已截断）→ trace（只剩印象）→ 遗忘
+ * 主人相关的记忆（about 是主人 QQ，或 importance ≥ 0.65）永不遗忘，最差保持 clear。
  */
+/** 这条记忆是不是主人相关的。两边都要非空才比较——空串相比会恒等，把普通记忆误判成主人的。 */
+export function isOwnerMemory(m) {
+  const a = String((m && m.about) || '').trim()
+  const o = String((m && m.ownerQQ) || '').trim()
+  return Boolean(a && o && a === o)
+}
+
+export const CLARITY_STEPS = ['vivid', 'clear', 'fuzzy', 'trace']
+
+/** 一条记忆当前该是什么清晰度（纯函数，方便测试）。 */
+export function clarityOf(m, now = Date.now()) {
+  if (m.pinned) return 'vivid'
+  const r = retention(m, now)
+  const own = isOwnerMemory(m) || (Number(m.importance) || 0) >= 0.65
+  // 主人的重要记忆最差保持 clear（surfcore 的 minOwnerImportance 规则）
+  if (r >= 0.5) return 'vivid'
+  if (r >= 0.25) return 'clear'
+  if (own) return 'clear'
+  if (r >= 0.08) return 'fuzzy'
+  return 'trace'
+}
+
 export function shouldForget(m, now = Date.now()) {
   // 过时的留半年（面板里能看到、能恢复），之后清掉
   if (m.invalidAt) return now - m.invalidAt > 180 * 86400_000
-  if (m.source !== 'auto') return false
-  if ((Number(m.importance) || 0) >= 0.6) return false
-  return retention(m, now) < 0.05
+  if (m.pinned) return false
+  // 经验/洞察/你亲手加的：不自动忘
+  if (m.source !== 'auto' && m.source !== 'event') return false
+  // 主人相关或明确重要的：不遗忘
+  if ((Number(m.importance) || 0) >= 0.65) return false
+  if (isOwnerMemory(m)) return false
+
+  const step = clarityOf(m, now)
+  if (step === 'trace') {
+    // 只走到「印象」阶段还不够，得再放一段（retention 掉到极低）才真正忘
+    return retention(m, now) < 0.05
+  }
+  return false
 }
 
 /**
@@ -316,7 +354,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
     // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
-    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0 }
+    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0, clarity: 'vivid' }
     s.items.push(item)
     if (s.items.length > 3000) s.items = s.items.sort((a, b) => (b.importance - a.importance) || (b.at - a.at)).slice(0, 3000)
     save(s)
@@ -514,7 +552,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
 
   // ---------- 人物小档案：每个人一小段印象（是谁、什么关系、喜好、近况），聊天时常驻 ----------
   // 档案按「QQ + 作用域」存：私聊里对她的印象不外流到群里，群里认识的也不带到私聊。
-  // 键形如 "444555666@private:444555666" / "444555666@group:222333444" / "444555666@global"。
+  // 键形如 "10000001@private:10000001" / "10000001@group:222333444" / "10000001@global"。
   // 老数据（只按 QQ 号存的）一律当 global，仍然哪里都能用，不会突然失忆。
   function profileKeyOf(qq, scope) {
     const q = String(qq || '')
@@ -902,14 +940,28 @@ export function createMemoryStore({ dsh, getConfig, hub, log }) {
         try { if (await buildProfile(qq, scope)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
       }
       const s = load()
-      // 遗忘：不重要、很久没被想起的自动记忆清掉，记忆库不会越堆越乱
+      // ① 模糊化（surfcore 记忆卡设计）：fuzzy 档把正文截断成「只剩大意」，trace 档只留标题。
+      //    只动经历类（event）且非主人相关的；正文一截，检索和上下文都省，但还认得出是什么事。
+      const nowC = Date.now()
+      let blurred = 0
+      for (const it of s.items) {
+        if (it.invalidAt || it.pinned) continue
+        if (it.source !== 'event' && it.source !== 'auto') continue
+        const item = { ...it, ownerQQ: getConfig()?.ownerQQ || '' }
+        const step = clarityOf(item, nowC)
+        if (step !== 'fuzzy' && step !== 'trace') continue
+        const raw = String(it.text || '')
+        if (step === 'fuzzy' && raw.length > 40) { it.text = raw.slice(0, 40) + '…（记不太清了）'; it.clarity = 'fuzzy'; blurred++ }
+        else if (step === 'trace' && raw.length > 16) { it.text = raw.slice(0, 16) + '…（只剩个印象）'; it.clarity = 'trace'; blurred++ }
+      }
+      // ② 遗忘：不重要、很久没被想起的清掉，记忆库不会越堆越乱
       const before = s.items.length
-      s.items = s.items.filter((m) => !shouldForget(m))
+      s.items = s.items.filter((m) => !shouldForget({ ...m, ownerQQ: getConfig()?.ownerQQ || '' }))
       const forgot = before - s.items.length
-      s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot, profiles }
+      s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles }
       save(s)
-      log.info(`整理临时记忆：处理了 ${days} 天，新增或更新 ${added} 条长期记忆，更新了 ${insights} 份相处经验、${profiles} 份人物小档案${forgot ? `，忘掉 ${forgot} 条不重要的旧记忆` : ''}`)
-      return { ok: true, added, insights, days, forgot, profiles, message: `整理好了：新增或更新 ${added} 条记忆，更新 ${insights} 份相处经验、${profiles} 份人物小档案${forgot ? `，忘掉 ${forgot} 条旧的` : ''}` }
+      log.info(`整理临时记忆：处理了 ${days} 天，新增或更新 ${added} 条长期记忆，更新了 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条旧的变模糊了` : ''}${forgot ? `，忘掉 ${forgot} 条不重要的旧记忆` : ''}`)
+      return { ok: true, added, insights, days, forgot, blurred, profiles, message: `整理好了：新增或更新 ${added} 条记忆，更新 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条变模糊` : ''}${forgot ? `，忘掉 ${forgot} 条旧的` : ''}` }
     } catch (error) {
       log.warn('整理临时记忆失败：', error.message)
       return { ok: false, message: error.message }
