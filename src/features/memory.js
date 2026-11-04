@@ -1355,6 +1355,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       return { count: live.length, auto: live.filter((m) => m.source === 'auto').length, events: live.filter((m) => m.source === 'event').length, outdated: items.length - live.length }
     },
     /** 关闭存储层（宿主退出/热重载时调用；SQLite 要 close 才不落脏 WAL）。 */
-    dispose: () => { try { store?.close?.() } catch (error) {} store = null },
+    dispose: () => { try { flushHits() } catch (error) {} try { store?.close?.() } catch (error) {} store = null },
   }
 }

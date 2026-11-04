@@ -28,8 +28,9 @@ test('#4 主人换号迁移：scope/about 一起搬，面板有入口', () => {
   assert.match(MEM, /reassignOwner,/, '导出')
   assert.match(MOD, /\/memory\/reassign-owner/, '路由')
   assert.match(CLIENT, /主人换号迁移/, '面板入口')
-  // SQLite 快照 hash 必须含 scope/chatId/about，否则迁移后库里不更新
-  assert.match(SQL, /_\$\{String\(m\.scope \|\| ''\)\}/, 'hash 含 scope')
+  // P1-12 后不再有 hash 快跳过：save() 走 eqCols 全字段比较，scope/chatId/about 变化必然落库
+  assert.match(SQL, /eqCols\(old, it\)\) continue/, 'save 走全字段比较')
+  assert.doesNotMatch(SQL, /savedHash\.get\(it\.id\) === h/, '不允许 hash 快跳过（会漏冷字段）')
 })
 
 test('#5 召回负反馈：说「记错了」降权最近注入的记忆', () => {
