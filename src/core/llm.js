@@ -294,9 +294,18 @@ export async function askModel (dsh, o) {
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
   const hasImage = content.length > 1
   let droppedImage = false
+  let retriedEmpty = false
   for (let attempt = 0; ; attempt++) {
     try {
-      return await runStream(llm, effort ? { ...base, reasoningEffort: effort } : base)
+      const out = await runStream(llm, effort ? { ...base, reasoningEffort: effort } : base)
+      // 推理模型偶发「只思考不答题」：流正常结束、usage 有输出 token，但正文 0 字
+      //（思考把轮次吃满，正文一个字没写）。重试一次，并把「直接给结果」写进正文请求里压一压。
+      if (!out && !retriedEmpty && !imgCount) {
+        retriedEmpty = true
+        base.messages = [{ ...messages[0], content: [{ type: 'text', text: o.text + '\n\n（上一轮没有输出正文，直接写出结果本身，不要只分析。）' }] }]
+        continue
+      }
+      return out
     } catch (error) {
       // 能力探测没查到 / 模型临时不认：去掉思考强度再来一次
       if (attempt === 0 && effort && isUnsupportedEffort(error)) {
