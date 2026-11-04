@@ -83,8 +83,10 @@ export default {
     const persist = () => { try { writeJson(stateFile(), state) } catch (error) { api.log.warn('保存状态失败：', error.message) } }
     const persistSummary = () => { try { writeJson(summaryFile(), summaries) } catch (error) { api.log.warn('保存摘要失败：', error.message) } }
 
-    /** 一次会话大概占多少 token：中文 1 字≈1 token，英文 4 字符≈1 token，粗算按 1.2 字符/token。 */
-    const estimate = (chars) => Math.round(Number(chars || 0) / 1.2)
+    /** 一次会话大概占多少 token：中文 1 字≈1.4 token（DeepSeek tokenizer 实测 1.3~1.5），
+     * 旧口径 chars/1.2 会低估三成（上下文 80k 按成 60k，压缩该触发不触发，2026-11-05 复盘）。 */
+    const CHARS_TO_TOKEN = 1.4
+    const estimate = (chars) => Math.round(Number(chars || 0) * CHARS_TO_TOKEN)
 
     /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。 */
     function recentTranscript(hub, chatId, maxChars = 12000) {
@@ -130,7 +132,7 @@ export default {
           system: '你是「大肥鱼」的记忆整理助手。把下面这段聊天压缩成一份供后续对话参考的摘要：'
             + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；不要评价、不要编造、不要加标题。',
           text: transcript,
-          maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars / 1.2))),
+          maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars * 1.4))),
           ...askOpts,
         })
       } catch (error) {
@@ -171,12 +173,12 @@ export default {
       persistSummary()
       const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
       // 压缩完相当于把历史折成摘要，把估算值重置成摘要本身的规模
-      st.chars = Math.round(body.length * 1.2)
+      st.chars = Math.round(body.length * CHARS_TO_TOKEN)
       st.lastCompactAt = Date.now()
       st.compacts = (st.compacts || 0) + 1
       state[sessionKey] = st
       persist()
-      api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens * 1.2 : st.chars)} token`}`)
+      api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens / CHARS_TO_TOKEN : st.chars)} token`}`)
       latestByChat.delete(String(chatId || ''))
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return { ok: true, chars: body.length, compacts: st.compacts }

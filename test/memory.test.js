@@ -67,7 +67,8 @@ test('默认一天整理两次；老配置的单个时间自动变成两个', ()
 
 test('整理：提炼记忆、相处经验和说话方式；同一天再整理只处理新增的聊天', async () => {
   const today = day(new Date())
-  logs.set(today, [line('我超爱吃辣'), line('hhh'), line('今天好累'), line('嗯嗯', 'bot')])
+  // 提取门槛升到 6 行非 bot（2026-11-05 复盘 #2）：流水要够长才进模型
+  logs.set(today, [line('我超爱吃辣'), line('hhh'), line('今天好累'), line('嗯嗯', 'bot'), line('周末想去看电影'), line('还没想好看啥'), line('到时候再说'), line('行，那周五')])
   let r = await mem.consolidate({ includeToday: true })
   assert.equal(r.ok, true, r.message)
   assert.equal(r.added, 1)
@@ -80,7 +81,7 @@ test('整理：提炼记忆、相处经验和说话方式；同一天再整理�
   r = await mem.consolidate({ includeToday: true })
   assert.equal(asked.filter((a) => a.system.includes('整理长期记忆')).length, n, '没有新聊天就不再提炼')
 
-  logs.get(today).push(line('周末去爬山'), line('你去不去'), line('hhh 来嘛'))
+  logs.get(today).push(line('周末去爬山'), line('你去不去'), line('hhh 来嘛'), line('爬山带水吗'), line('带了两瓶'), line('那走吧'))
   await mem.consolidate({ includeToday: true })
   const styleAsk = asked.find((a) => a.system.includes('{"insights"'))
   assert.match(styleAsk.system + styleAsk.text, /不得与它冲突/, 'style 学习提示必须带人设护栏')
@@ -202,7 +203,7 @@ test('整理时比对旧记忆：新事实说明旧的过时了，旧的标过�
   const old = mem.list('喜欢吃辣').find((m) => m.text === '小明喜欢吃辣')
   assert.ok(old)
   const today = day(new Date())
-  logs.get(today).push(line('我最近戒辣了'), line('胃不好'), line('医生让我少吃'))
+  logs.get(today).push(line('我最近戒辣了'), line('胃不好'), line('医生让我少吃'), line('那火锅就别叫我了'), line('好，记下了'), line('改约爬山'))
   await mem.consolidate({ includeToday: true })
   const asked1 = asked.filter((a) => a.system.includes('整理长期记忆')).at(-1)
   assert.ok(asked1.text.includes('#' + old.id), '旧记忆带着编号交给模型比对')
