@@ -206,13 +206,17 @@ export default {
     api.rule(() => '你有一份按聊天分开的记忆。私聊里听到的事只在那个私聊里提；群里的只在那群里提。被追问别处的私事就说不方便讲。')
 
     // 面板：看 / 删
+    // 私聊条目默认打码（只给条数），previewPrivate=true（面板设置里的调试开关）才返回原文。
+    // 没有 query 旁路：以前 ?all=1 能直接绕过打码，开关成了摆设。
     api.route('/memory-privacy/list', (req) => {
       const s = load()
-      const all = String(req?.query?.all || '') === '1'
       const cfg = api.settings()
-      // 私聊分区预览：默认只给条数（文本打码），previewPrivate 打开后看原文（调试用）
       const preview = Boolean(cfg.previewPrivate)
-      return { ok: true, preview, items: all || preview ? s.items : s.items.filter((m) => String(m.scope).startsWith('private:')).map((m) => ({ ...m, text: '（私聊内容，面板不预览）' })) }
+      const items = s.items.map((m) => {
+        if (preview || !String(m.scope).startsWith('private:')) return m
+        return { ...m, text: '（私聊内容，面板不预览）' }
+      })
+      return { ok: true, preview, items }
     })
     // 单分区清空：删掉某个作用域（private:xxx / group:xxx / global）的全部条目。
     // 只动本模块 scoped.json；主记忆库的清空另有 /memory-privacy/clear-main。
@@ -239,7 +243,8 @@ export default {
       if (!memory?.list) return { ok: false, message: '主记忆库没在跑' }
       let n = 0
       for (const m of memory.list() || []) {
-        if (String(m.scope || '') === scope && !m.invalidAt) {
+        // 软删（invalidAt）的一并清掉：用户点的是「彻底清空」，面板的已失效分区还挂着它们
+        if (String(m.scope || '') === scope) {
           try { memory.remove(m.id); n += 1 } catch (error) {}
         }
       }

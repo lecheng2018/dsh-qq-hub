@@ -75,3 +75,36 @@ test('URL（含查询串）不切坏', async () => {
   const whole = texts.find((t) => t.includes(url))
   assert.ok(whole, 'URL 要完整出现在某一条里（不切坏查询串）')
 })
+
+// —— v1.3.22 二轮复审修复 ——
+
+test('memory-privacy/list 没有 all=1 旁路：私聊打码只由 previewPrivate 开关决定', () => {
+  const src = readFileSync(join(root, 'src/modules/memory-privacy/index.js'), 'utf8')
+  const seg = src.slice(src.indexOf("/memory-privacy/list"), src.indexOf("/memory-privacy/clear-scope"))
+  assert.doesNotMatch(seg, /query\?\.all/, 'list 路由不再读 all 参数（旁路已删）')
+  assert.match(seg, /previewPrivate/, '打码判定走 previewPrivate 开关')
+  // 打码逻辑：private: 且未开 preview 才替换文本
+  assert.match(seg, /startsWith\('private:'\)/, '按作用域前缀打码')
+})
+
+test('clear-main 连软删条目一起清（不加 !invalidAt 过滤）', () => {
+  const src = readFileSync(join(root, 'src/modules/memory-privacy/index.js'), 'utf8')
+  const seg = src.slice(src.indexOf("/memory-privacy/clear-main"), src.indexOf("/memory-privacy/set-override"))
+  assert.doesNotMatch(seg, /!m\.invalidAt/, 'clear-main 不再跳过软删条目')
+})
+
+test('ListInput numbers=true：敲一半的短数字不被吃（strict 只在失焦生效）', () => {
+  const src = readFileSync(join(root, 'client/client.js'), 'utf8')
+  const i = src.indexOf('function ListInput')
+  const seg = src.slice(i, i + 1400)
+  assert.match(seg, /strict/, 'parse 有 strict 模式')
+  // onChange 也传 strict（draft 只收有效值），但输入框 text 保留原文 —— 关键断言：useEffect 对比用 strict，
+  // text 不被非 strict parse 覆盖
+  assert.match(seg, /onChange: \(e\) => \{ setText\(e\.target\.value\)/, '输入时 text 保留原文')
+})
+
+test('heybox dutyInFlight 挂进程级单例（热重载不失效）', () => {
+  const src = readFileSync(join(root, 'src/heybox/site.js'), 'utf8')
+  assert.match(src, /globalThis\.__qqhubHeyboxDuty/, '锁挂 globalThis 跨热重载')
+  assert.doesNotMatch(src, /let dutyInFlight/, '不再用闭包变量')
+})
