@@ -37,8 +37,6 @@ const DEFAULTS_RAW = {
   files: { enabled: true, maxMB: 50, dirs: [] },
   // 危险命令确认（可选保护，默认关）：她在私聊里执行删根目录/格式化/关机/下载后直接执行等
   // 终端命令前，先发 QQ 私聊问主人，回复「确认」才执行；超时或「取消」就拦下。
-  // 用量遥测（只观察）：写在 <dataDir>/telemetry.jsonl，超 4MB 轮转
-  telemetry: { enabled: true },
   // 资讯池：订阅源只把内容拉进池子，不主动推送（她自己按需查）
   rss: {
     enabled: false, intervalMinutes: 30, feeds: [], maxPerFeed: 50, summaryChars: 400, poolMaxItems: 2000,
