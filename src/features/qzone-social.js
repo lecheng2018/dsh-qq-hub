@@ -3,6 +3,7 @@
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { isSilence, stripMarkdown } from '../chat/reply.js'
+import { guardOutbound } from '../chat/identity-guard.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -74,6 +75,18 @@ export function createQzoneSocial({ getConfig, onebot, hub, log, memory }) {
 
   async function sendComment(tid, content, targetUin) {
     const cfg = getConfig()
+    // 出站身份闸（S1）：空间评论好友可见，账号标识一律不发。
+    try {
+      const g = guardOutbound(String(content || ''), {
+        surface: '空间评论',
+        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
+        mode: cfg.security?.identityGuard?.mode === 'warn' ? 'warn' : 'block',
+      })
+      if (g.hits.length) {
+        log.warn(`身份泄露闸拦下 → 空间评论：${g.message}`)
+        if (!g.ok) return false
+      }
+    } catch (error) { log.debug('身份泄露闸判定出错：', error.message) }
     if (cfg.dryRun) {
       log.info(`试运行：本来要在空间评论（${targetUin || '自己'} / ${tid}）：${content}`)
       return true

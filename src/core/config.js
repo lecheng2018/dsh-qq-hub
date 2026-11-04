@@ -697,7 +697,8 @@ export function loadConfig() {
 
 export function saveConfig(cfg) {
   const c = normalize(cfg)
-  writeJson(FILE(), c)
+  // config.json 明文含 webuiPassword/httpToken/wsToken/imageGen.apiKey/bridge.token，收紧到 0600（S5）
+  writeJson(FILE(), c, { mode: 0o600 })
   return c
 }
 

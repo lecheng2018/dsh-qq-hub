@@ -9,10 +9,10 @@ import { createShotStore, shotPath, clockOf } from './shots.js'
 // 这些错误说明今天别再发了：没登录 / Cookie 过期、csrf 不对、风控、要验证码、太频繁
 const PAUSE_CODES = { '-101': 'B 站没登录或 Cookie 过期了', '-111': 'Cookie 里的 bili_jct 不对', '-352': '被 B 站风控了', '-509': '发得太频繁', '12015': 'B 站要求验证码' }
 import { isSilence } from '../chat/reply.js'
+import { guardOutbound } from '../chat/identity-guard.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const link = (bvid) => `https://www.bilibili.com/video/${bvid}`
-
 /** 从模型输出里取 JSON（对象或数组），取不到返回 fallback。 */
 export function pickJson(out, fallback) {
   const s = String(out || '')
@@ -51,6 +51,19 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   let login = { at: 0, value: { isLogin: false, uname: '' } }
 
   const owner = () => getConfig().ownerName || '主人'
+
+  // 出站身份闸（S1）：B 站评论全网可见且撤不回，正文里出现主人/别人的账号标识一律不发。
+  const guard = (text) => {
+    try {
+      const g = guardOutbound(text, {
+        surface: 'B站评论',
+        ids: [getConfig().ownerQQ, getConfig().botQQ].filter(Boolean),
+        mode: getConfig().security?.identityGuard?.mode === 'warn' ? 'warn' : 'block',
+      })
+      if (g.hits.length) log.warn(`身份泄露闸拦下 → B站：${g.message}`)
+      return g.ok
+    } catch (error) { log.debug('身份泄露闸判定出错：', error.message); return true }
+  }
   // 能不能发评论 / 回复：Cookie 里要有 bili_jct，今天也没因为风控之类暂停
   const canPost = (s) => Boolean(parseCookie(cfg().cookie).bili_jct) && s.pauseDay !== dayKey()
   const pauseIf = (s, error) => {
@@ -80,8 +93,12 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
   async function chooseKeywords() {
     const c = cfg()
     const interests = [...(c.keywords || []), ...(getConfig().group.interests || [])]
-    const about = (memory?.list?.('') || []).filter((m) => String(m.about) === String(getConfig().ownerQQ) || /喜欢|爱|想|在玩|在看|追/.test(m.text)).slice(0, 12).map((m) => m.text)
-    const recent = (memory?.recentEvents?.(72, 6) || []).filter((m) => (m.tags || []).includes('B站')).map((m) => m.text)
+    // M4：后台轮读记忆必须显式声明可见域（global + 主人私聊），不许读全库——
+    // 私聊里的兴趣画像只进「挑什么关键词」的提示词，不会出 QQ，但不给别的域留口子。
+    const about = (memory?.listFor?.(['global', `private:${getConfig().ownerQQ}`]) || memory?.list?.('') || [])
+      .filter((m) => String(m.about) === String(getConfig().ownerQQ) || /喜欢|爱|想|在玩|在看|追/.test(m.text)).slice(0, 12).map((m) => m.text)
+    // 后台轮只看 global + 主人私聊的事件流水（M4，与 listFor 同口径）
+    const recent = (memory?.recentEventsFor?.(['global', `private:${getConfig().ownerQQ}`], 72, 6) || []).filter((m) => (m.tags || []).includes('B站')).map((m) => m.text)
     try {
       const out = await think(`你想去 B 站刷点视频。你感兴趣的：${interests.join('、') || '随便看看'}。\n你记得的关于${owner()}和大家的事：\n${about.map((t) => '- ' + t).join('\n') || '（暂无）'}\n最近刷过的：\n${recent.map((t) => '- ' + t).join('\n') || '（暂无）'}\n\n挑 3 个这次想搜的关键词（可以是你自己想看的，也可以是${owner()}可能喜欢、你想分享给${owner()}的），别和最近刷过的重复。只输出 JSON 数组，例如 ["白米饭 做法","猫咪 搞笑"]。`)
       const arr = pickJson(out, []).map((k) => String(k).trim()).filter(Boolean)
@@ -220,7 +237,8 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
             if (getConfig().dryRun) log.info(`试运行：本来要在 B 站《${v.title}》下评论：${comment}`)
-            else await api.postComment(v.aid, comment.slice(0, 200))
+            else if (guard(comment.slice(0, 200))) await api.postComment(v.aid, comment.slice(0, 200))
+            else log.info('这条评论因包含账号标识没有发出去')
             commented++
             s.comments++
             memory?.addEvent?.({ text: `在B站《${v.title}》下评论：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.4 })
@@ -295,6 +313,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         if (!reply || isSilence(reply)) continue
         try {
           if (getConfig().dryRun) log.info(`试运行：本来要在 B 站回复 ${x.name}：${reply}`)
+          else if (!guard(reply)) log.info('这条回复因包含账号标识没有发出去')
           else await api.postComment(x.oid, `回复 @${x.name} :${reply}`.slice(0, 200), { root: x.root, parent: x.parent })
           s.replies++
           n++
@@ -333,6 +352,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
     const w = await watch(text)
     if (!w.ok) return w
     if (getConfig().dryRun) return { ok: true, message: `试运行：本来要在《${w.title}》下评论：${message}` }
+    if (!guard(String(message).slice(0, 200))) return { ok: false, message: '这条评论里有账号标识，不能发到 B 站（账号信息不外传）' }
     await api.postComment(w.aid, String(message).slice(0, 200))
     memory?.addEvent?.({ text: `在B站《${w.title}》下评论：${String(message).slice(0, 60)}`, tags: ['B站'], importance: 0.45 })
     const s = load(); record(s, { kind: 'comment', title: w.title, bvid: w.bvid, text: message }); save(s)

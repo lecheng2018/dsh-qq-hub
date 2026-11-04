@@ -13,6 +13,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { HeyboxClient, HeyboxError, cosSign, WEB_BASE, TOPICS } from './api.js'
 import { POST_STYLES, DEFAULT_POST_STYLE, styleOf, stylePrompt } from './styles.js'
+import { guardOutbound } from '../chat/identity-guard.js'
 
 const HOME = process.env.USERPROFILE || os.homedir()
 const CRED_DIR = path.join(HOME, '.heybox-ai')
@@ -62,6 +63,19 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   let client = null
   let clientCookie = ''
   let searchAt = 0
+
+  // 出站身份闸（S1）：小黑盒帖子/评论全网可见且撤不回，正文里出现主人/别人的账号标识一律不发。
+  const guard = (text, surface) => {
+    try {
+      const g = guardOutbound(text, {
+        surface,
+        ids: [getConfig().ownerQQ, getConfig().botQQ].filter(Boolean),
+        mode: getConfig().security?.identityGuard?.mode === 'warn' ? 'warn' : 'block',
+      })
+      if (g.hits.length) log?.warn?.(`身份泄露闸拦下 → 小黑盒：${g.message}`)
+      return g.ok
+    } catch (error) { log?.debug?.('身份泄露闸判定出错：', error.message); return true }
+  }
 
   /** Cookie 从配置或凭据文件读；配置优先（面板里填的） */
   function cookie() {
@@ -315,6 +329,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     const t = String(text || '').trim().slice(0, 100)
     if (!t) return { ok: false, message: '评论内容空了' }
     if (left('comment') <= 0) return { ok: false, message: '今天的评论额度用完了' }
+    if (!guard(t, '小黑盒评论')) return { ok: false, message: '这条评论里有账号标识，不能发（账号信息不外传）' }
     await getClient().post('/bbs/app/comment/create', { link_id: id, text: t, root_id: String(rootId), reply_id: String(replyId), is_cy: '0' })
     bump('comment')
     pushHistory({ kind: 'comment', linkId: id, text: t })
@@ -421,6 +436,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     const t = String(title || '').trim()
     if (!t) return { ok: false, message: '标题不能空' }
     if (t.length > 30) return { ok: false, message: `标题 ${t.length} 字，太长了（最多 30 字）` }
+    if (!guard(`${t}\n${text}`, '小黑盒帖子')) return { ok: false, message: '帖子里有账号标识，不能发（账号信息不外传）' }
 
     // 风格只影响提示词和字数下限，不改发帖接口
     const st = styleOf(style || cfg.postStyle)
