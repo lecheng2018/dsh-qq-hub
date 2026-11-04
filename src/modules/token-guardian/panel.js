@@ -15,7 +15,7 @@ return function TokenGuardianPanel(props) {
   if (!d) return h(Card, { title: '用量' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '用量' }, h('div', { className: 'ab-note err' }, '读不到用量（扩展模块没在跑？）'))
   const items = d.items || []
-  return h(Card, { title: '各聊天用了多少', desc: `估算口径：字符数 ÷ 1.2。超过 ${fmt(d.threshold)} 就会在你空闲时自动压一次。` },
+  return h(Card, { title: '各聊天用了多少', desc: `有真实用量就用真实值（DSH 上报的 input+cache），没有才按字符数 ÷ 1.2 估。超过 ${fmt(d.threshold)} 就会在你空闲时自动压一次。` },
     items.length ? h('div', null, items.map((it, i) => {
       const pct = Math.min(100, Math.round((it.tokens / Math.max(1, d.threshold)) * 100))
       return h('div', { key: it.chatId, style: { marginBottom: 10 } },
@@ -29,6 +29,6 @@ return function TokenGuardianPanel(props) {
           }, busy === it.chatId ? '压着呢…' : '现在压一次')),
         h('div', { style: { height: 6, borderRadius: 3, background: 'var(--ab-line, #e5e7eb)', marginTop: 4 } },
           h('div', { style: { height: 6, borderRadius: 3, width: pct + '%', background: pct >= 100 ? '#ef4444' : pct > 60 ? '#f59e0b' : '#22c55e' } })),
-        h('div', { className: 'ab-small ab-muted' }, `压过 ${it.compacts} 次，上次说话 ${ago(it.lastAt)}，上次压缩 ${ago(it.lastCompactAt)}${it.hasSummary ? '，有摘要' : ''}`))
+        h('div', { className: 'ab-small ab-muted' }, `${it.estimated ? '（字符估算）' : '（真实用量）'}压过 ${it.compacts} 次，上次说话 ${ago(it.lastAt)}，上次压缩 ${ago(it.lastCompactAt)}${it.hasSummary ? '，有摘要' : ''}`))
     })) : h(Empty, { icon: '📊', text: '还没有聊天记录，聊几句就有了' }))
 }

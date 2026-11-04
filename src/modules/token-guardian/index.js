@@ -89,7 +89,7 @@ export default {
      * 流程：把最近聊天流水压成摘要 → 存起来由 api.context() 常驻注入 →
      *       调 hub.resetChat() 归档旧会话、开新会话（历史实打实变小，不是只贴摘要）。
      * 摘要带过去，新会话开场就知道之前聊了什么 —— 「压缩」而不是「清空」。 */
-    async function compact(sessionKey, chat) {
+    async function compact(sessionKey, chat, meta = {}) {
       const cfg = api.settings()
       const hub = api.core.hub
       const chatId = chat?.chatId || ''
@@ -132,7 +132,7 @@ export default {
       st.compacts = (st.compacts || 0) + 1
       state[sessionKey] = st
       persist()
-      api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）`)
+      api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens * 1.2 : st.chars)} token`}`)
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return true
     }
@@ -145,7 +145,14 @@ export default {
       const now = Date.now()
       for (const [key, st] of Object.entries(state)) {
         if (!st || typeof st !== 'object') { delete state[key]; continue }
-        const tokens = estimate(st.chars)
+        // 优先用**真实 usage**（本次请求发进去多少 token），没有才退回字符估算。
+        // 字符估算实测差 5~9 倍（估算 89k 而真实 443k），按它判定等于永不压缩。
+        let tokens = estimate(st.chars)
+        let measured = false
+        try {
+          const real = api.core?.telemetry?.contextOf?.(key)
+          if (real && Number.isFinite(real.tokens) && real.tokens > 0) { tokens = real.tokens; measured = true }
+        } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
@@ -160,7 +167,7 @@ export default {
           try { const c = hub.chatOfSession?.(key); if (typeof c === 'string' && c) chatId = c } catch (error) {}
         }
         if (!chatId) continue
-        await compact(key, { chatId })
+        await compact(key, { chatId }, { tokens, measured })
       }
     }
 
@@ -199,7 +206,14 @@ export default {
         .map(([chatId, st]) => ({
         chatId,
         chars: Number(st.chars || 0),
-        tokens: estimate(st.chars),
+        tokens: (() => {
+          try {
+            const real = api.core?.telemetry?.contextOf?.(key)
+            if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
+          } catch (error) {}
+          return estimate(st.chars)
+        })(),
+        estimated: !(() => { try { const r = api.core?.telemetry?.contextOf?.(key); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
         compacts: Number(st.compacts || 0),
         lastAt: Number(st.lastAt || 0),
         lastCompactAt: Number(st.lastCompactAt || 0),
