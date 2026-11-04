@@ -54,14 +54,14 @@ test('身份闸：打码保留首尾', () => {
 
 // ── 鱼群保护 ──────────────────────────────────────────────────────────────
 
-const guard = normalizeFishGuard({ nameContains: ['肥鱼', '鲸', '鱼'] })
+const guard = normalizeFishGuard({ nameContains: ['肥鱼', '鲸'] })
 const mk = (sender, t, extra = {}) => ({ sender, userId: `u${sender}`, time: t, ...extra })
 
 test('鱼群：认出同类 bot 名字，不误伤真人', () => {
-  for (const n of ['无敌大肥鱼', '小鲸', '泡泡/鲸生（超级大灵珠）', '蓝色大肥鱼（测试用鱼）', '咸鱼']) {
+  for (const n of ['无敌大肥鱼', '小鲸', '泡泡/鲸生（超级大灵珠）', '蓝色大肥鱼（测试用鱼）', '大肥鱼（兮）']) {
     assert.equal(isFishName(n, guard), true, `${n} 应该算鱼`)
   }
-  for (const n of ['饭包', '沈汐', '雫']) {
+  for (const n of ['饭包', '沈汐', '雫', '小鱼', '咸鱼', '摸鱼达人']) {
     assert.equal(isFishName(n, guard), false, `${n} 不该算鱼`)
   }
   // 「全鱼公敌」是真人，名字带「鱼」会被规则误判 —— 用 exemptNames 豁免
@@ -79,7 +79,7 @@ test('鱼群：不同鱼 ≥ 阈值 → 拦', () => {
   const now = 1000000
   const msgs = [
     mk('无敌大肥鱼', now - 1000), mk('小鲸', now - 2000), mk('泡泡鲸生', now - 3000),
-    mk('蓝色肥鱼', now - 4000), mk('咸鱼', now - 5000), mk('饭包', now - 6000),
+    mk('蓝色大肥鱼', now - 4000), mk('大肥鱼（兮）', now - 5000), mk('饭包', now - 6000),
   ]
   const a = assessFishDensity(msgs, { now, guard })
   assert.equal(a.blocked, true)
@@ -118,7 +118,7 @@ test('鱼群：人话原因能说清为什么拦', () => {
   const now = 1000000
   const msgs = [
     mk('无敌大肥鱼', now - 1000), mk('小鲸', now - 2000), mk('泡泡鲸生', now - 3000),
-    mk('蓝色肥鱼', now - 4000), mk('咸鱼', now - 5000),
+    mk('蓝色大肥鱼', now - 4000), mk('大肥鱼（兮）', now - 5000),
   ]
   const a = assessFishDensity(msgs, { now, guard })
   assert.ok(fishGuardReasonText(a).includes('条不同的鱼'))
@@ -127,4 +127,23 @@ test('鱼群：人话原因能说清为什么拦', () => {
 test('鱼群：群名判定用包含（摸鱼后援会也算鱼窝）', () => {
   assert.equal(isFishGroupName('摸鱼肥鱼窝', guard), true)
   assert.equal(isFishGroupName('日常闲聊', guard), false)
+})
+
+test('鱼群：号码名单里的人一律算同类（名字看不出也能认）', () => {
+  const g = normalizeFishGuard({ fishIds: ['480213179'] })
+  const now = 2000000
+  const msgs = [
+    { sender: '小鱼', userId: '480213179', time: now - 1000 },   // 名字看不出，但号码在名单
+    { sender: '饭包', userId: '111', time: now - 2000 },
+  ]
+  const a = assessFishDensity(msgs, { now, guard: g })
+  assert.equal(a.fishCount, 1, '号码名单要生效')
+  assert.deepEqual(a.fishNames, ['小鱼'])
+})
+
+test('鱼群：面板把名字列表留空时回退到默认（不能变成谁都不算）', () => {
+  const g = normalizeFishGuard({ nameSuffixes: [] })
+  assert.equal(isFishName('大肥鱼', g), true, '留空不该把默认规则清掉')
+  assert.equal(isFishName('小鲸', g), true)
+  assert.equal(isFishName('咸鱼', g), false, '默认不认单独的「鱼」结尾')
 })

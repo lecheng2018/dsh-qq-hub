@@ -133,7 +133,8 @@ before(async () => {
     voice: { engine: 'windows', autoChance: 0 },
     stickers: { autoChance: 0 },
     // 大多数用例要的是「每次都回」，刹车放宽；558/559 专门测一段一回和刹车
-    group: { interjectChance: 0, burstMax: 50, overrides: { 557: { interjectChance: 1, minRelevance: 0, minRecentMessages: 0, cooldownSec: 0, quietHours: [0, 0] }, 559: { burstMax: 2 } } },
+    // 配额关掉：e2e 会在同一个群反复发探测消息，开着会让测试等 60 秒窗口（配额有自己的单元测试）
+    group: { interjectChance: 0, burstMax: 50, quota: { enabled: false }, overrides: { 557: { interjectChance: 1, minRelevance: 0, minRecentMessages: 0, cooldownSec: 0, quietHours: [0, 0] }, 559: { burstMax: 2 } } },
     diary: { enabled: true },
     qzoneSocial: { friendChance: 1, ownerChance: 1, intervalMin: 1440 },
     merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
