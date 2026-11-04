@@ -96,6 +96,8 @@ const DEFAULTS_RAW = {
     ownerBrief: { enabled: false, lines: 12, groups: [] },
     // 鱼群保护（移植自 surfcore）：同群同类 bot 太多时本轮不参与。名列表留空 = 用模块默认值
     fishGuard: { enabled: true },
+    // 群发送配额：QQ 群每分钟最多 10 条，超了消息会真丢（等窗口/重试）
+    quota: { enabled: true, perMinute: 10, reserve: 1 },
   },
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
   titleFilter: { enabled: true, groups: [], title: '大肥鱼' },
@@ -391,6 +393,13 @@ export function normalize(raw) {
   const g = c.group
   g.wakeWords = (Array.isArray(g.wakeWords) ? g.wakeWords : String(g.wakeWords || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.interjectChance = num(g.interjectChance, 0.15, 0, 1)
+  // 群发送配额（QQ 每分钟 10 条，超了消息会真丢）
+  if (!isObj(g.quota)) g.quota = {}
+  g.quota.enabled = bool(g.quota.enabled, true)
+  g.quota.perMinute = num(g.quota.perMinute, 10, 1, 200)
+  g.quota.reserve = num(g.quota.reserve, 1, 0, 10)
+  if (!isObj(g.fishGuard)) g.fishGuard = { enabled: true }
+  g.fishGuard.enabled = bool(g.fishGuard.enabled, true)
   g.cooldownSec = num(g.cooldownSec, 90, 0, 86400)
   g.maxPerHour = num(g.maxPerHour, 6, 0, 120)
   g.minRecentMessages = num(g.minRecentMessages, 3, 0, 100)
