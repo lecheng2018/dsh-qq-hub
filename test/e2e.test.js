@@ -751,6 +751,11 @@ test('日志里没有令牌原文', async () => {
 })
 
 test('重新开始：归档会话，下一条消息开新会话', async () => {
+  // 前面的「人格切换」用例会触发 /persona/use 的即时重置（切人设就把旧会话清掉），
+  // 所以这里先发一条消息把会话建回来，再测 /sessions/reset。
+  let n = sentTo('private', OWNER).length
+  mock.push(priv(OWNER, text('在吗')))
+  await until(() => sentTo('private', OWNER).length > n, 20000)
   const before = Object.keys((await fake.call('/state')).json().sessions).length
   assert.ok(before > 0)
   const r = (await fake.call('/sessions/reset')).json()

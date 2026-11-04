@@ -20,3 +20,21 @@ test('hub 导出 sessions() 与 resetChat（host 能拿到）', () => {
   assert.match(HUB, /sessions: \(\) => map\(\)\.chats/, 'sessions 导出')
   assert.match(HUB, /    resetChat,/, 'resetChat 导出')
 })
+
+test('/persona/use 切换人设后立刻重置用旧全局人设的会话', () => {
+  assert.match(HOST, /route\('\/persona\/use'[^]*?personaChanged|route\('\/persona\/use'[^]*?resetChat\(chatId\)/s, 'use 路由里要重置会话')
+  const seg = HOST.slice(HOST.indexOf("route('/persona/use'"), HOST.indexOf("route('/persona/polish'"))
+  assert.match(seg, /hub\.resetChat\(chatId\)/, 'use 路由内 reset')
+})
+
+test('/save 改人设配置（分流表/全局）后重置受影响会话', () => {
+  const seg = HOST.slice(HOST.indexOf("route('/save'"), HOST.indexOf("route('/save'", HOST.indexOf("route('/save'") + 10))
+  assert.match(seg, /personaChanged/, '比对 persona 前后差异')
+  assert.match(seg, /personaIdFor/, '算出各会话当前该用哪张卡')
+  assert.match(seg, /hub\.resetChat\(chatId\)/, '变了就重置')
+})
+
+test('agentFor 对没记 personaId 的老会话补基线不误重置', () => {
+  assert.match(HUB, /entry && !entry\.personaId && wantPersona/, '空 personaId 补记')
+  assert.match(HUB, /entry\.personaId = wantPersona/, '补记当前值')
+})
