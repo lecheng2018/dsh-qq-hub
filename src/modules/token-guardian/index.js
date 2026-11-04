@@ -161,9 +161,6 @@ export default {
       state[sessionKey] = st
       persist()
       api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens * 1.2 : st.chars)} token`}`)
-      // 会话已经重置：清掉 telemetry 里这个聊天的旧上下文，让下次请求重新测真实值。
-      // 不清的话，一个 406k 的旧值会一直挂着，压缩完还按它判定，就会反复压。
-      try { api.core?.telemetry?.clear?.(chatId) } catch (error) {}
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return { ok: true, chars: body.length, compacts: st.compacts }
     }
@@ -176,14 +173,9 @@ export default {
       const now = Date.now()
       for (const [key, st] of Object.entries(state)) {
         if (!st || typeof st !== 'object') { delete state[key]; continue }
-        // 优先用**真实 usage**（本次请求发进去多少 token），没有才退回字符估算。
-        // 字符估算实测差 5~9 倍（估算 89k 而真实 443k），按它判定等于永不压缩。
+        // 按字符估算（用量遥测已按主人要求移除，回到估算口径）
         let tokens = estimate(st.chars)
         let measured = false
-        try {
-          const real = api.core?.telemetry?.contextOf?.(key)
-          if (real && Number.isFinite(real.tokens) && real.tokens > 0) { tokens = real.tokens; measured = true }
-        } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
@@ -242,16 +234,8 @@ export default {
         .map(([chatId, st]) => ({
         chatId,
         chars: Number(st.chars || 0),
-        tokens: (() => {
-          try {
-            // 这里要查的是本行 chatId 的真实用量 —— 原来写了外层不存在的变量 key
-            //（ReferenceError 被 catch 吞掉，面板永远显示估算值而不是真实 usage）。
-            const real = api.core?.telemetry?.contextOf?.(chatId)
-            if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
-          } catch (error) {}
-          return estimate(st.chars)
-        })(),
-        estimated: !(() => { try { const r = api.core?.telemetry?.contextOf?.(chatId); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
+        tokens: estimate(st.chars),
+        estimated: true,
         compacts: Number(st.compacts || 0),
         lastAt: Number(st.lastAt || 0),
         lastCompactAt: Number(st.lastCompactAt || 0),

@@ -17,7 +17,7 @@ before(async () => {
 
 function setup(hubState, speakUp = {}) {
   const pushed = []
-  // greeting 关掉：这几个用例测的是「冷场主动搭话」，早安/晚安有自己的用例（telemetry-greeting.test.js）。
+  // greeting 关掉：这几个用例测的是「冷场主动搭话」，早安/晚安有自己的用例（greeting.test.js）。
   // 不关的话，测试在 08:00~09:00 之间跑会多一次问候推送，结果依赖钟点。
   const cfg = normalize({ enabled: true, ownerQQ: OWNER, speakUp: { awakeFrom: 0, awakeTo: 24, minIntervalMinutes: 5, maxIntervalMinutes: 5, greeting: { enabled: false }, ...speakUp } })
   const hub = { ...hubState, pushToSession: async (chat, content) => pushed.push({ chat, text: content[0].text }) }
