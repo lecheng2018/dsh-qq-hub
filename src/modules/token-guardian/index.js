@@ -94,7 +94,11 @@ export default {
       const hub = api.core.hub
       const chatId = chat?.chatId || ''
       const transcript = chatId ? recentTranscript(hub, chatId) : ''
-      if (!transcript) { api.log.debug(`${ID}：${chatId} 没有聊天流水，跳过压缩`); return false }
+      // 返回结构：ok + reason（让面板能说清「为什么没压成」，而不是一句笼统的「看日志」）
+      if (!transcript) {
+        api.log.debug(`${ID}：${chatId} 没有聊天流水，跳过压缩`)
+        return { ok: false, reason: 'no-transcript', message: '还没聊过，没有可压缩的流水' }
+      }
       let text = ''
       try {
         text = await api.ask({
@@ -104,11 +108,17 @@ export default {
           maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars / 1.2))),
         })
       } catch (error) {
-        api.log.warn(`${ID}：压缩请求失败（${error.message}），下次再试`)
-        return false
+        const msg = String(error?.message || error)
+        // 限流最容易被误当成「功能坏了」：明确告诉她切模型或等重置，别让她以为是代码问题
+        if (/429|rate.?limit|频率限制|quota|限额/i.test(msg)) {
+          api.log.warn(`${ID}：压缩请求被限流（${msg.slice(0, 120)}），额度恢复后再试`)
+          return { ok: false, reason: 'rate-limited', message: '模型额度用完了（429 限流），额度恢复后再试或换个模型' }
+        }
+        api.log.warn(`${ID}：压缩请求失败（${msg}），下次再试`)
+        return { ok: false, reason: 'ask-failed', message: '模型调用失败：' + msg.slice(0, 80) }
       }
       const body = String(text || '').trim().slice(0, cfg.summaryMaxChars)
-      if (!body) return false
+      if (!body) return { ok: false, reason: 'empty-summary', message: '模型没给出可用的摘要' }
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
       persistSummary()
       // 关键一步：归档旧会话、换新会话 —— 旧历史实打实退出上下文，
@@ -137,7 +147,7 @@ export default {
       // 不清的话，一个 406k 的旧值会一直挂着，压缩完还按它判定，就会反复压。
       try { api.core?.telemetry?.clear?.(chatId) } catch (error) {}
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
-      return true
+      return { ok: true, chars: body.length, compacts: st.compacts }
     }
 
     /** 空闲检查：到了阈值、过了冷却、会话闲下来了就压。 */
@@ -170,7 +180,9 @@ export default {
           try { const c = hub.chatOfSession?.(key); if (typeof c === 'string' && c) chatId = c } catch (error) {}
         }
         if (!chatId) continue
-        await compact(key, { chatId }, { tokens, measured })
+        const r = await compact(key, { chatId }, { tokens, measured })
+        // 自动压缩失败（常见：模型被限流）不要每 30 秒刷一遍 warn，交给面板/手动重试
+        if (!r.ok && r.reason !== 'no-transcript') api.log.debug(`${ID}：自动压缩没成，下次再试`);
       }
     }
 
@@ -233,8 +245,10 @@ export default {
       if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
       const chatId = String(q || body?.chatId || '')
       if (!chatId) return { ok: false, message: '要先说压缩哪个聊天' }
-      const ok = await compact(chatId, { chatId })
-      return ok ? { ok: true, message: '压缩好了' } : { ok: false, message: '这次没压成（没有聊天流水或请求失败，看日志）' }
+      const r = await compact(chatId, { chatId })
+      return r.ok
+        ? { ok: true, message: `压缩好了（第 ${r.compacts} 次，摘要 ${r.chars} 字）` }
+        : { ok: false, reason: r.reason, message: r.message || '这次没压成' }
     })
 
     api.tool(({ chat }) => {
