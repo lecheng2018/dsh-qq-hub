@@ -553,9 +553,15 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     return { ok: true, message: String(out || '').slice(0, 300), session: 'system:ext-heybox' }
   }
 
+  // 防重入：runSystemTurn 一轮最长 240s，而 tick 每 60s 被叫一次。
+  // 没有这把锁时，上一轮没跑完 tick 又起一轮，日志里连刷
+  // 「这个后台会话的上一轮还没结束」（2026-11-04 17:27~17:35 连续 5 次）。
+  let dutyInFlight = false
+
   async function tick({ memory, owner } = {}) {
     const c = getConfig().heybox || {}
     if (!c.enabled || !c.autoBrowse || !hasLogin()) return
+    if (dutyInFlight) return
     const st = readState()
     const gap = (Number(c.intervalHours) || 4) * 3600_000
     if (st.lastRun && nowMs() - st.lastRun < gap) return
@@ -564,6 +570,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       writeState(st)
       return
     }
+    dutyInFlight = true
     try {
       const r = await runDuty({ memory, owner })
       if (!r.ok) { st.lastSkipReason = r.message; writeState(st) }
@@ -572,6 +579,8 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       st.lastSkipReason = e.message
       writeState(st)
       log?.warn?.('小黑盒后台会话失败：' + e.message)
+    } finally {
+      dutyInFlight = false
     }
   }
 
