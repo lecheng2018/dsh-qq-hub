@@ -1,5 +1,51 @@
 # 更新记录
 
+## 1.3.10
+
+修「会话压缩从来不工作」。主人截图里点「现在压一次」弹红字「要先说压缩哪个聊天」，而且所有聊天都显示「压过 0 次」。查下来是三个独立的 bug 叠在一起，任何一个都足以让压缩永远不生效。
+
+### 三个 bug
+
+1. **自动压缩的 chatId 被空串覆盖（致命）**。`tickOnce()` 里写的是
+   ```js
+   const chat = hub.chatOfSession?.(key)
+   const chatId = typeof chat === 'string' ? chat : (st.chatId || key)
+   ```
+   `key` 本身已经是 chatId（`group:249729644`），但 `chatOfSession()` 要的是 **sessionId**，
+   传 chatId 进去恒返回空串 `''`；而 `typeof '' === 'string'` 成立，于是 `chatId` 被置成空，
+   `compact()` 因为「没有聊天流水」直接 `return false`。**自动压缩 100% 不可能成功。**
+   现在直接用 `st.chatId || key`，只有 key 不是 `group:` / `private:` 形态时才去反查。
+
+2. **框架层没给模块的 req 挂 query（影响了三个模块）**。
+   `api.route()` 的 handler 收到的是原始 IncomingMessage，**没有 `query` 属性**，
+   所以模块里写的 `req?.query?.xxx` 全是 undefined。中招的：
+   - `token-guardian` 的「现在压一次」（恒定回「要先说压缩哪个聊天」）
+   - `memory-privacy` 的 `id` / `all` 参数
+   - `telemetry` 的 `days` 参数
+   已在框架层统一把解析出的 query 挂到 `req.query`，内置模块和用户自写的扩展都能直接用。
+
+3. **摘要里分不清谁说的**。`recentTranscript()` 判断 `r.who === 'self'`，但 chatlog 里
+   bot 自己的 who 是 **`'bot'`**（永远不是 `'self'`），所以每行都标成「对方」，
+   摘要质量废掉一半。现在两种都认。
+
+### 顺带加固
+
+- 面板按钮从「call(p, body) 发 POST」改成 GET query（`?chatId=…`）。
+  `call` 带第二个参数会走 POST 把参数放 body，而后端读 query —— 这是 bug 2 的另一种踩法。
+  现在前后端两种都能读，任何一边改都不会再断。
+
+### 验证
+
+- 端到端跑通手动压缩：`/token-guardian/compact-now?chatId=group:249729644` → `{"ok":true,"message":"压缩好了"}`
+- 端到端跑通自动压缩：state 里 500000 chars、阈值 1，等 tickOnce 跑一次后
+  `compacts: 1`、`chars` 重置为摘要长度 17。
+- 新增 `test/token-guardian-compact-route.test.js` 五条回归（含框架层 req.query、tickOnce 的 chatId 形态）。
+
+### 关于阈值
+
+压缩**不会**在 89k 时触发是设计如此：默认阈值 300k，图里最高才 89k。
+想更早压就调低阈值（面板「会话压缩」页的「什么时候压」）。
+
 ## 1.3.9
 
 这一版全是「静默出错」类修复：消息发着发着少了、模型列表看着重复、表情老用同一张。共同点是**出了问题但不报错**，从日志里几乎看不出来。
