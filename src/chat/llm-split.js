@@ -15,10 +15,24 @@ const SPLIT_PROMPT = `把下面这条消息按自然语义断开，改成几条�
 1. 只返回 JSON 字符串数组，例如 ["第一句。","第二句？"]，不要 Markdown、不要解释。
 2. 只能在原文已有的字符之间切开，不许改写、增删、换顺序、改标点。
 3. 括号、引号、颜文字、代码不要从中间拆开。
-4. 如果本来就短、或者完整一段读着更顺（代码、公式、清单），只返回 no_split。
+4. 条数尽量 2 到 3 条，最多 {max} 条。短句不要单独拆。
+5. 指标罗列、逐行要点、带【小标题】的排版内容，整段读着才清楚，返回 no_split。
+6. 如果本来就短、或者完整一段读着更顺（代码、公式、清单），只返回 no_split。
 
 原文：
 `
+
+/** 排版型内容：小标题（【…】）、逐行罗列的指标。这类东西拆开就是一堆碎片，只能整段发。 */
+export function looksStructured(text) {
+  const t = String(text || '')
+  const heads = t.match(/【[^】]{1,14}】/g)
+  if (heads && heads.length >= 2) return true
+  const lines = t.split('\n').map((x) => x.trim()).filter(Boolean)
+  if (lines.length < 3) return false
+  const short = lines.filter((x) => x.length <= 18).length
+  const numeric = lines.filter((x) => /[%％]|\d/.test(x)).length
+  return short * 2 >= lines.length && numeric * 2 >= lines.length && t.length >= 60
+}
 
 /** 去掉全部空白，用于校验「只动断点、不动字」。 */
 export function squash(text) {
@@ -80,6 +94,7 @@ export function worthLlmSplit(text, ruleBubbles, { minChars = 80, maxChars = 600
   if (!enabled) return false
   const t = String(text || '')
   if (t.length < minChars || t.length > maxChars) return false
+  if (looksStructured(t)) return false // 排版型：整段发，拆开就碎了
   if (t.includes('```')) return false
   if (Array.isArray(ruleBubbles) && ruleBubbles.length > 1) return false
   return true
@@ -98,7 +113,7 @@ export async function llmSplit(text, { ask, maxSegments = 6, log } = {}) {
   try {
     raw = await ask({
       system: '你只做一件事：给一段话挑断句位置。只输出 JSON 字符串数组或 no_split。',
-      text: SPLIT_PROMPT + body,
+      text: SPLIT_PROMPT.replace('{max}', String(maxSegments)) + body,
       maxTokens: Math.min(1200, 200 + body.length * 2),
       temperature: 0,
     })
