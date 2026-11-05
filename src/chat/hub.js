@@ -10,7 +10,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
-import { parseReply, bubbleDelay, wantsVoice, replyRules } from './reply.js'
+import { parseReply, bubbleDelay, wantsVoice, replyRules, capBubbles } from './reply.js'
 import { llmSplit, worthLlmSplit } from './llm-split.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
@@ -786,8 +786,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (worthLlmSplit(text, r.items.filter((i) => i.kind === 'text').map((i) => i.value), { enabled: cfg.reply?.llmSplit !== false })) {
       const segs = await llmSplit(text, { ask: (o) => askModel(dsh, { cfg, ...o }), maxSegments: rules.maxBubbles, log })
       if (segs) {
+        // 模型给的断点就是最终气泡，不能再过一遍规则，否则「它说这样断」会被规则二次拆碎
         log.debug(`${chatId}：模型断句成 ${segs.length} 条`)
-        r = parseReply(segs.join('|||'), rules)
+        r = { ...r, items: capBubbles(segs.map((v) => ({ kind: 'text', value: v })), rules.maxBubbles) }
       }
     }
     if (r.silent) {

@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { parseSplitPayload, acceptSplit, worthLlmSplit, llmSplit, squash } from '../src/chat/llm-split.js'
+import { parseSplitPayload, acceptSplit, worthLlmSplit, llmSplit, squash, looksStructured } from '../src/chat/llm-split.js'
 
 const BODY = '刚拉的 11:42 那会儿的数 剩 93% 已烧 7% 结论没变 周额度基本没动 这一窗口再烧 35% 就得等 14:22 哥 刚才我查生图那几轮掉得挺快'
 const GOOD = [
@@ -70,5 +70,30 @@ test('发送链路接上了模型断句，且失败退回规则分条', () => {
   const hub = readFileSync(new URL('../src/chat/hub.js', import.meta.url), 'utf8')
   assert.match(hub, /worthLlmSplit\(text,/, '发消息前先判断值不值得问模型')
   assert.match(hub, /await llmSplit\(text, \{ ask: \(o\) => askModel\(dsh, \{ cfg, \.\.\.o \}\)/, '用当前配置的模型问')
-  assert.ok(hub.includes("parseReply(segs.join('|||'), rules)"), '模型给的断点当 ||| 交给分条器')
+  assert.match(hub, /const segs = await llmSplit\(text, \{ ask:/, '断句失败返回 null 时沿用规则结果')
+})
+
+test('排版型内容（小标题 + 逐行指标）不许拆，整段发', () => {
+  const reportA = '刚拉的 11:42 那会儿的数 【5小时窗口】09:22 开 到 14:22 收 剩 35% 已烧 65% 还剩 2.7 小时 【周窗口】09:22 开 到下周三 09:22\n剩 93% 已烧 7%\n还剩 6.9 天\n结论没变'
+  const reportB = '刚拉的 12:02 的数\n\n【5小时窗口】09:22 → 14:22\n剩 33% 已烧 67%\n还剩 2.3 小时\n\n【周窗口】09:22 开 到下周三 09:22\n剩 93% 已烧 7%'
+  const chat = '哈啊行 那我晚上再弄 你先把那个视频看了 别又忘了'
+  assert.equal(looksStructured(reportA), true)
+  assert.equal(looksStructured(reportB), true)
+  assert.equal(looksStructured(chat), false)
+  assert.equal(looksStructured('嗯\n好\n行'), false, '三行短话不是排版，是正常分行聊天')
+  assert.equal(worthLlmSplit(reportA, [reportA]), false, '排版型不问模型')
+  assert.equal(worthLlmSplit(reportB, [reportB]), false)
+})
+
+test('模型给的断点就是最终气泡，不再被规则二次拆碎', () => {
+  const hub = readFileSync(new URL('../src/chat/hub.js', import.meta.url), 'utf8')
+  assert.ok(hub.includes("capBubbles(segs.map((v) => ({ kind: 'text', value: v }))"), '断点直接成气泡')
+  assert.ok(!hub.includes("parseReply(segs.join('|||'), rules)"), '不许把断点丢回规则再拆一遍')
+})
+
+test('人设提示词不再教她写小标题和空行排版（这是串里最像报表的源头）', () => {
+  const src = readFileSync(new URL('../src/persona/personas.js', import.meta.url), 'utf8')
+  assert.ok(!src.includes('空一行留出阅读呼吸感'), '营销排版那条规则必须删掉')
+  assert.ok(!src.includes('推荐型号或小标题用【加粗括号】标注'), '同上')
+  assert.ok(src.includes('说人话，别写报表'), '要有明确的反报表规则')
 })
