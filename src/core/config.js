@@ -69,7 +69,7 @@ const DEFAULTS_RAW = {
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 },
   // 分条：她自己断的句（换行 / |||）优先，字数只当兜底。群里句子短、私聊可以长一点。
-  reply: { groupMaxChars: 40, privateMaxChars: 120, trustModelBubbles: true, keepReports: true }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒；群里等得久一点，把一段话攒齐
+  reply: { groupMaxChars: 40, privateMaxChars: 120, maxBubbles: 6, keepReports: true }, // 连发合并：对方停顿 waitSec 秒再一起回，最多等 maxSec 秒；群里等得久一点，把一段话攒齐
   imageGen: {
     enabled: false,
     provider: 'openai', // openai / custom；codex = 实验性订阅接法（需单独登录）
@@ -532,7 +532,7 @@ export function normalize(raw) {
   if (!isObj(c.reply)) c.reply = {}
   c.reply.groupMaxChars = num(c.reply.groupMaxChars, 40, 10, 500)
   c.reply.privateMaxChars = num(c.reply.privateMaxChars, 120, 20, 2000)
-  c.reply.trustModelBubbles = bool(c.reply.trustModelBubbles, true)
+  c.reply.maxBubbles = Math.round(Math.min(12, Math.max(1, Number(c.reply.maxBubbles) || 6))) // 一轮最多几条
   c.reply.keepReports = bool(c.reply.keepReports, true)
   c.titleFilter.enabled = bool(c.titleFilter.enabled, true)
   c.titleFilter.groups = qqList(c.titleFilter.groups) // 和群白名单同一套规则
