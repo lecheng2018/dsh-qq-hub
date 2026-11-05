@@ -189,6 +189,16 @@ export function whenText(at, now = Date.now()) {
 }
 
 /** 想起来的一条记忆怎么写给她：[什么时候] [关于谁] 内容。 */
+/** 一条记忆太长时按句子边界收短，实在没有句读才用省略号（绝不从半句中间断）。 */
+export function cutAtSentence(line, max = 120) {
+  const s = String(line || '')
+  if (s.length <= max) return s
+  const head = s.slice(0, max)
+  const cut = Math.max(head.lastIndexOf('。'), head.lastIndexOf('；'), head.lastIndexOf(';'), head.lastIndexOf('，'), head.lastIndexOf(','))
+  if (cut > max * 0.5) return head.slice(0, cut + 1)
+  return head + '…'
+}
+
 export function memoryLine(it, now = Date.now()) {
   return `[${whenText(it.at, now)}] ` + (it.aboutName ? `[${it.aboutName}] ` : '') + it.text
 }
@@ -961,7 +971,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       : undefined
     // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
     const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
-    const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, 4)
+    const memCfg = (cfg.memory || {})
+    const maxItems = Math.max(1, Math.min(20, Math.round(Number(memCfg.hintCount) || 8)))
+    const maxChars = Math.max(120, Math.min(2000, Math.round(Number(memCfg.hintMaxChars) || 600)))
+    const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
     // 泛问兜底（P2-1）：「他最近怎么样」和记忆没有任何字词/概念重叠，recall 严格按相关性返回空，
     // 模型会完全失忆。注入场景退而求其次给这个作用域最近的重要记忆（明确检索/清空契约不受影响）。
     if (!hits.length) {
@@ -974,8 +987,18 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       hits.push(...fallback)
     }
     if (!hits.length) return backdrop
-    let body = hits.map((h) => memoryLine(h.it)).join('；')
-    if (body.length > 300) body = body.slice(0, 300) + '…'
+    // 按条收，不按字腰斩：以前 4 条压 300 字再 slice，一条记到一半被切断，
+    // 她读到的就是半句话（2026-11-05 实测记忆平均 165 字，等于只能看见不到两条）。
+    const lines = []
+    let used = 0
+    for (const h of hits) {
+      let line = memoryLine(h.it)
+      if (line.length > 120) line = cutAtSentence(line, 120)
+      if (lines.length && used + line.length + 1 > maxChars) break
+      lines.push(line)
+      used += line.length + 1
+    }
+    const body = lines.join('\n')
     return ['（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + body + '）', backdrop].filter(Boolean).join('\n')
   }
 
@@ -1088,9 +1111,25 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const known = new Map(related.map((m) => [m.id, m]))
     const out = await askModel(dsh, {
       cfg,
-      system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。挑出以后值得记住的事实：别人的名字/称呼、喜好、讨厌的东西、身份、近况和重要经历、约定、你们之间的关系变化。不要记寒暄、日常琐事、一次性的问答；不要记大肥鱼自己的人设和喜好（她本来就知道），只记关于别人、以及你们之间的事。每条一句话，主语写清楚是谁。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。` +
+      system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
+
+记什么（三类）：
+1. 人：别人的名字/称呼/身份/关系，喜好和讨厌的东西，雷区和禁忌，近况变化，你们之间的约定。
+2. 她自己攒下的经验教训：踩过的坑、验证过的方法、定下的规矩。
+3. 从看过的内容里学到的可复用知识：结论 + 适用条件 + 出处（哪个视频、哪篇文章、谁转述的）。这类要记，但要记成能直接用的结论，不是「看过某视频」。
+
+不记：寒暄、日常琐事、一次性问答、没人再提的闲聊；不记她自己的人设和喜好（她本来就知道）；不记「今天看了什么」这种浏览流水，只记从里面学到的东西。
+
+怎么写：
+- 一条 30 到 60 字，写成一句自然的话，带一个具体细节（数字、店名、原话片段、命令、路径）。
+- 句子本身要说清是谁说的、关于谁，不许用「有人」「群友」「他们」这种模糊主语。别人转述的写清转述关系。
+- 不要字段标签（gist=、detail=、why=）、不要小标题、不要分点，就是一句人话。
+- 正例：「小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他」
+- 正例：「NAS 选盘别碰杂牌混发，企业盘优先，这是 B 站那个搭 RAID 的视频里讲的」
+- 反例：「小明.饮食：gist=不吃香菜；detail=挑十分钟；why=点外卖注意」
+- 反例：「在B站看了《选硬盘搭RAID建Docker》这个视频」` +
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
-        `只输出 JSON 数组，例如 [{"op":"add","text":"小明喜欢吃辣","about":"小明","about_qq":"12345","importance":0.6}]（about_qq 写这件事是关于谁的 QQ 号，不知道就不写），没有值得记的就输出 []。`,
+        `只输出 JSON 数组，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。`,
       text: (related.length ? `已经记得的事：\n${related.map((m) => `#${m.id} [${whenText(m.at)}] ${m.aboutName ? '[' + m.aboutName + '] ' : ''}${m.text}`).join('\n')}\n\n` : '') + transcript,
       maxTokens: 1500,
       temperature: 0.2,
@@ -1125,7 +1164,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
         }
         continue
       }
-      const r = add({ text: x.text, aboutName: x.about || '', about, importance: x.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
+      const tags = Array.isArray(x.tags) ? x.tags.map((t) => String(t).slice(0, 8)).slice(0, 2) : []
+      const r = add({ text: x.text, aboutName: x.about || '', about, tags, importance: x.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
       if (r.ok && r.id) n++
     }
     return n
