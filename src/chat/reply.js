@@ -226,6 +226,20 @@ function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
 }
 
 /** 一整轮文字 → 若干气泡（字符串数组）。pushText 用它。 */
+/** 真正的「报表」才整段发：两个以上【小标题】，或者一整片短条目的编号清单。
+ *  以前只要看到编号列表就整段发，结果她发一段带路径的技术说明，499 字挤成一条巨块，
+ *  在 QQ 里像贴文档（2026-11-05 实测）。 */
+function structuredReport(t) {
+  const heads = t.match(/【[^】]{1,14}】/g)
+  if (heads && heads.length >= 2) return true
+  const lines = t.split('\n').map((x) => x.trim()).filter(Boolean)
+  if (lines.length < 3) return false
+  const items = lines.filter((x) => /^(\d+[.、)]|[-*•·])/.test(x)).length
+  if (items * 2 < lines.length) return false
+  const avg = lines.reduce((n, x) => n + x.length, 0) / lines.length
+  return avg <= 40
+}
+
 export function segmentBubbles(text, rules = {}) {
   const t = String(text || '').trim()
   if (!t) return []
@@ -235,7 +249,7 @@ export function segmentBubbles(text, rules = {}) {
   if (t.includes('```')) return [t]
   // 清单/汇报/指标整段发（拆开对应关系就散了）。判整段，不按段落判，
   // 否则「【结论】…」和下面的编号列表会被切成两条。
-  if (rules.keepReports !== false && t.length <= 1200 && (looksLikeReport(t) || looksLikeList(t))) return [t]
+  if (rules.keepReports !== false && t.length <= 1200 && structuredReport(t)) return [t]
   // 段落（空行）是硬边界：一段一条，段内再按句子攒
   const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
   const bubbles = []
