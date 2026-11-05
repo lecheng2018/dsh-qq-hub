@@ -126,7 +126,7 @@ before(async () => {
     setupDone: true,
     botQQ: BOT,
     ownerQQ: OWNER,
-    allow: { private: [OWNER], groups: ['555', '556', '557', '558', '559'] },
+    allow: { private: [OWNER], groups: ['555', '556', '557', '558', '559', '560'] },
     // 556 专门测按头衔不理
     titleFilter: { enabled: true, groups: ['556'], title: '大肥鱼' },
     snowluma: { autoStart: false, autoAttach: false, httpUrl: mock.httpUrl, wsUrl: mock.wsUrl, httpToken: mock.token, wsToken: mock.token, dir: join(dataDir, 'no-snowluma') },
@@ -173,7 +173,8 @@ test('主人私聊「在吗」：建会话（完整权限 preset）、按 ||| �
   const turn = fake.turns.at(-1)
   assert.equal(turn.preset, 'qq-hub-private')
   assert.ok(mock.sent('set_input_status').some((c) => c.params.user_id === Number(OWNER) && c.params.event_type === 1), '等回复时显示正在输入')
-  assert.match(turn.userText, /^【私聊】xiaoming\(10000001\)：在吗/)
+  // 来源行下面多了一行时间锚（1.3.45）：先认来源，再认它，最后才是正文
+  assert.match(turn.userText, /^【私聊】xiaoming\(10000001\)：\n【现在】[^\n]+\n在吗/)
   const ws = fake.workspaces[0]
   assert.ok(ws && ws.sessionIds.length === 1, '会话放进了 Aurabot 工作区')
   // 主人私聊的会话里有完整工具
@@ -1269,4 +1270,53 @@ test('上一轮还在跑时排队的新消息，不会让下一轮的「仅主�
   const second = await until(() => fake.turns.slice(before).find((t) => /allOwner=/.test(String(t.reply))), 20000)
   assert.match(String(second.reply), /allOwner=true/, '排队轮次也要认出主人：' + second.reply)
   rmSync(modsDir, { recursive: true, force: true })
+})
+
+// ---- 按聊天换人设（2026-11-05）----
+// 事故：这个群配了专用卡，而插件当年是往提示词里**追加**一块
+// 【本聊天专用人设：X】…历史里的作废，从本段开始只按这一套说话。
+// 结果系统卡 + 追加块两套人设同时在场，模型只能自己仲裁谁说了算。
+// 现在改成在 agent 作用域里遮蔽 {{qq_hub_persona}}：这个群只渲染专用卡，一块都不多。
+
+test('按聊天换人设：这个群只渲染专用卡，不再追加「专用人设」块', async () => {
+  const saved = (await fake.call('/persona/save', { id: 'hier-test', name: '测试专用卡', body: '你在这个群里说话很冲，喜欢反问，一句一个「？」。' })).json()
+  assert.equal(saved.ok, true, '先把测试卡写上')
+  await fake.call('/save', { persona: { groups: { 560: 'hier-test' } } })
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  const n = fake.turns.length
+  mock.push(grp('560', '30003', at('人设替换测试'), '群友'))
+  const turn = await until(() => fake.turns.slice(n).find((t) => String(t.userText).includes('人设替换测试')), 12000)
+  assert.match(turn.persona, /说话很冲/, '这一轮用的是这个群的专用卡')
+  assert.doesNotMatch(turn.persona, /大肥鱼|鲸鱼|大白饭/, '全局那张卡不该一起进提示词（两套人设会打架）')
+  assert.ok(!String(turn.ctxText || '').includes('本聊天专用人设'), '也不再追加覆盖块')
+})
+
+// ---- 时间锚（2026-11-05）----
+// 现象：她两小时前叫主人去睡觉，主人两小时后再回一句，她还当是刚才。
+// 原因不在「没注入时间」：DSH 的 time-context 每 10 分钟才刷新一次，而且消息本身没有时间戳。
+// 现在每轮在消息最前面加一行中文时间，群聊每条消息再标「（2 小时前）」。
+
+test('时间锚：私聊隔了两小时，她会知道「现在几点、隔了多久」', async () => {
+  const mapFile = join(dataDir, 'sessions.json')
+  mock.push(priv(OWNER, text('时间锚预热')))
+  await until(() => String(fake.turns.at(-1)?.userText || '').includes('时间锚预热'), 12000)
+  // 把她上一次收到消息的时间拨回两小时前，模拟「两小时后再回一句」
+  const m = JSON.parse(readFileSync(mapFile, 'utf8'))
+  const key = `private:${OWNER}`
+  assert.ok(m.chats[key], '私聊会话要记在 sessions.json 里：' + Object.keys(m.chats).join(','))
+  m.chats[key].lastTurnAt = Date.now() - 2 * 3600_000
+  writeFileSync(mapFile, JSON.stringify(m))
+  const n = fake.turns.length
+  mock.push(priv(OWNER, text('时间锚两小时后')))
+  const turn = await until(() => fake.turns.slice(n).find((t) => String(t.userText).includes('时间锚两小时后')), 12000)
+  // 前面可能还有记忆/近况拼的提示，所以不锚行首，只认「【私聊】那行下面紧跟时间行」
+  assert.match(String(turn.userText), /【私聊】xiaoming\(10000001\)：\n【现在】\d{2}-\d{2} \d{2}:\d{2}（周[一二三四五六日]）｜距上一条消息 2 小时/, '来源行下面要带时间：' + String(turn.userText).slice(-120))
+})
+
+test('时间锚：群聊每轮把「现在」写在标题行下面', async () => {
+  const at = (t) => [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' ' + t } }]
+  const n = fake.turns.length
+  mock.push(grp('555', '779', at('群时间锚测试')))
+  const turn = await until(() => fake.turns.slice(n).find((t) => String(t.userText).includes('群时间锚测试')), 12000)
+  assert.match(String(turn.userText), /【群聊 [^\n]*】刚才新说的（\d+ 条）[^\n]*\n【现在】\d{2}-\d{2} \d{2}:\d{2}（周/, '时间行紧跟标题行：' + String(turn.userText).slice(0, 120))
 })

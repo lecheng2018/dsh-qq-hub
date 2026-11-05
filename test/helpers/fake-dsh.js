@@ -18,6 +18,8 @@ export function createFakeDsh({ brain }) {
   function makeAgent(sessionId, preset) {
     const tools = new Map()
     const contexts = new Map()
+    // agent 作用域的提示词变量：同名变量遮蔽全局那份（对应 DSH 的 systemPrompt.variable 作用域语义）
+    const agentVars = new Map()
     const events = []
     let turn = 0
     let chain = Promise.resolve()
@@ -38,7 +40,10 @@ export function createFakeDsh({ brain }) {
           register: (t) => { tools.set(t.name, t); return () => tools.delete(t.name) },
           restrict: ({ deny = [] }) => { for (const n of deny) agent.denied.add(n); return () => { for (const n of deny) agent.denied.delete(n) } },
         },
-        systemPrompt: { context: (c) => { contexts.set(c.name, c); return () => contexts.delete(c.name) } },
+        systemPrompt: {
+          context: (c) => { contexts.set(c.name, c); return () => contexts.delete(c.name) },
+          variable: (name, fn) => { agentVars.set(name, fn); return () => agentVars.delete(name) },
+        },
       },
       steered: [],
       // 假的 steer：记下来，并当作下一步输入（这里简化成排在当前这一轮之后再跑一轮）
@@ -53,7 +58,9 @@ export function createFakeDsh({ brain }) {
           const text = msg.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')
           const images = msg.content.filter((c) => c.type === 'image')
           const ctxText = [...contexts.values()].map((c) => c.text()).filter(Boolean).join('\n')
-          const persona = variables.get('qq_hub_persona')?.() || ''
+          // 作用域变量优先（按聊天换人设就是靠遮蔽这一层实现的）
+          const personaFn = agentVars.get('qq_hub_persona') || variables.get('qq_hub_persona')
+          const persona = personaFn?.() || ''
           const calls = []
           const callTool = async (name, args) => {
             const t = tools.get(name)
@@ -63,7 +70,7 @@ export function createFakeDsh({ brain }) {
             return result
           }
           const reply = await brain({ preset, text, images, ctxText, persona, callTool, toolNames: [...tools.keys()] })
-          turns.push({ sessionId, preset, userText: text, images: images.length, reply, toolCalls: calls, ctxText })
+          turns.push({ sessionId, preset, userText: text, images: images.length, reply, toolCalls: calls, ctxText, persona })
           emit('session/event', session, { type: 'assistant/message', data: { turn: myTurn, message: { content: [{ type: 'text', text: reply }] } } })
           emit('session/event', session, { type: 'turn/end', data: { turn: myTurn, reason: { kind: 'completed' } } })
         })

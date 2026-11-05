@@ -6,6 +6,8 @@
 //   - `<sticker:标签>` 发一张表情（可写 `<sticker:标签></sticker>`）
 //   - `<poke>` = 戳一戳对方
 //   - `<reply:编号>` 写在某句前面 = 这句以「引用回复」发出（群聊里引用提示词中带编号的那条消息）
+//   - `<report>…</report>` 包住的内容是「数据报告」：只洗 Markdown、整段发出，不按聊天分条
+//     （1.3.48。忘了写标记但这一轮调过内容型工具时，hub 会兜底整段发，见 CONTENT_TOOLS）
 //   - 整轮只输出 `[沉默]`（或空）= 这次不说话（群聊插话用）
 // 另外顺手把模型偶尔漏出来的 Markdown 洗掉——QQ 不渲染 Markdown。
 
@@ -55,8 +57,18 @@ export function isSilence(text) {
  * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
 export function parseReply(text, rules = {}) {
-  const raw = String(text || '').trim()
+  let raw = String(text || '').trim()
   if (isSilence(raw)) return { silent: true, items: [] }
+  // 报告标记（1.3.48）：<report>…</report> 里的内容是「给主人看的数据」。
+  // 摘出来当**一条**整段气泡（在 ||| 拆分之前摘，标记里的空行不能当气泡边界）；
+  // 标记外的部分照常走 ||| 分条（开场白归聊天）。模型偶尔忘了闭合：从开标记到结尾都算报告。
+  let reportBody = ''
+  const reportMatch = raw.match(/<report>([\s\S]*?)<\/report>/) || raw.match(/<report>([^]*)$/)
+  if (reportMatch) {
+    reportBody = stripMarkdown(reportMatch[1])
+    raw = (raw.slice(0, reportMatch.index) + raw.slice(reportMatch.index + reportMatch[0].length)).trim()
+    if (isSilence(raw) && isSilence(reportBody)) return { silent: true, items: [] }
+  }
   const items = []
   let replyTo = '' // 等着挂到下一条气泡上的「引用回复」编号
   const attach = (from) => {
@@ -104,8 +116,11 @@ export function parseReply(text, rules = {}) {
     if (quoted) delete it.replyTo
     quoted = true
   }
-  if (items.length === 0) return { silent: true, items: [] }
-  return { silent: false, items: capBubbles(items, rules.maxBubbles) }
+  if (items.length === 0 && !reportBody) return { silent: true, items: [] }
+  const finalItems = capBubbles(items, rules.maxBubbles)
+  // 报告气泡放最后（她一般先说一句人话，再给数据），不参与条数上限——数据报告不该被截断
+  if (reportBody) finalItems.push({ kind: 'text', value: reportBody })
+  return { silent: false, items: finalItems }
 }
 
 const MAX_BUBBLES = 6
@@ -440,6 +455,14 @@ function sentencePieces(line) {
 function pushText(items, s, rules = {}) {
   const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
   if (!t || isSilence(t)) return
+  // 报告路径（1.3.48）：<report> 包住的整段内容（含代码块/长文）只洗 Markdown、不切段。
+  // 里面的编号列表、空行排版保留 —— 「查一下/拉一下」就该整条排版返回，不是被切成碎片。
+  // 注意 stripMarkdown 会给编号列表补空行，那属于显示排版；整段发必须在切段之前决定，
+  // 所以这里跳过 segmentBubbles（段落边界对报告没意义），也不再过 capBubbles（报告不打断）。
+  if (rules.forceReport) {
+    items.push({ kind: 'text', value: t })
+    return
+  }
   // 清单/汇报（多段小标题、编号列表、代码块）：整段发。这类内容拆开就散了。
   // 代码块的围栏会被 stripMarkdown 去掉，所以要在原文上判一次。
   if (rules.keepReports !== false && String(s || '').includes('```') && t.length <= 1200) {

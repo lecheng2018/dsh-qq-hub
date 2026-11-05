@@ -26,7 +26,7 @@ export default {
     promptMaxChars: 16000,
     carrier: 'qq', // 投递载体：qq = 私聊；pet = 桌宠气泡
     petFallbackToQQ: true, // 桌宠离线时回落到 QQ
-    maxPerDay: 3, // 每日上限（0 = 不发）。未设时沿用「主动搭话」的 maxPerDay
+    maxPerDay: 3, // 每日上限。留空/0/未设都沿用「主动搭话」的 maxPerDay；填大于 0 的数才用这里自己的
   },
   settings: [
     { key: 'enabled', label: '启用目的引擎', type: 'switch', hint: '默认关。开启后她会按目的主动找主人；建议先关掉「主动搭话」总开关，避免两套同时打扰' },
@@ -38,7 +38,7 @@ export default {
       { value: 'pet', label: '桌宠' },
     ], hint: 'pet = 走桌宠气泡；桌宠模块没开时按离线处理，按下面的开关回落 QQ' },
     { key: 'petFallbackToQQ', label: '桌宠离线时回落 QQ', type: 'switch', hint: '桌宠没在跑的时候照样用 QQ 私聊找到你' },
-    { key: 'maxPerDay', label: '每日上限', type: 'number', min: 0, max: 20, hint: '0 = 今天不发。留空则沿用「主动搭话」页的次数上限' },
+    { key: 'maxPerDay', label: '每日上限', type: 'number', min: 0, max: 20, hint: '0 或留空 = 沿用「主动搭话」页的次数上限；填大于 0 的数才用这里自己的上限' },
   ],
   setup(api) {
     const purpose = createPurpose({
