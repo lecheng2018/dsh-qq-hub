@@ -58,3 +58,24 @@ test('群里一段回复超过 3 条时，多出来的并进第 3 条而不是�
     assert.ok(all.includes(piece), `内容「${piece}」被丢了：` + JSON.stringify(all))
   }
 })
+
+test('时间/比例里的冒号不是切点：09:22 不会被切成「到14」+「22 …」', () => {
+  // 2026-11-05 线上：额度汇报里「到14:22 已经烧掉55%」被她发成两条，
+  // 前一条停在「…到14」、冒号还没了，看着像被截断。
+  const raw = '查了 你猜对了一半 【M Plan 现在状态】 5小时窗口 今天09:22开的 到14:22 已经烧掉55% 剩45% 周窗口到下周三09:22 只烧了6% 剩94%'
+  const out = textsOf(raw)
+  const joined = out.join('')
+  assert.ok(joined.includes('到14:22'), '时间被切开了：' + JSON.stringify(out))
+  assert.ok(joined.includes('09:22'), '时间被切开了：' + JSON.stringify(out))
+  for (const t of out) {
+    assert.equal(/\d$/.test(t) && /[：:]/.test(raw), false, '不要以单个数字结尾（半截时间）：' + JSON.stringify(t))
+  }
+})
+
+test('冒号不再被当成切开处的收尾标点', () => {
+  const raw = '按M3.1-Flash刊例折算 输入1 输出4 缓存读0.1 每百万 总共才3块6 所以烧的不是新token 是缓存读那3065万 按量算一分钱 换成M Plan额度就变成三千多块的额度单位'
+  const out = textsOf(raw)
+  for (const t of out) {
+    assert.equal(/[，,、：:；;]$/.test(t), false, '切开处不能带标点：' + JSON.stringify(t))
+  }
+})
