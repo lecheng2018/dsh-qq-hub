@@ -124,8 +124,10 @@ test('刷一轮：看视频、按每天上限评论、分享给主人、记成�
   assert.equal(sent.length, 1)
   assert.equal(sent[0].chatId, 'private:10000001')
   assert.match(sent[0].text, /会做饭！\nhttps:\/\/www\.bilibili\.com\/video\/BV1/)
-  assert.ok(events.some((e) => e.includes('在B站看了《米饭大赛》') && e.includes('米饭好香')))
-  assert.ok(events.some((e) => e.includes('下评论：看饿了')))
+  // 记忆里不写视频标题，留她刷完之后的判断（2026-11-05 复盘）
+  assert.ok(events.some((e) => e.includes('在B站刷到了点东西，她的想法：') && e.includes('米饭好香')))
+  assert.ok(!events.some((e) => e.includes('米饭大赛')), '视频标题不该进长期记忆')
+  assert.ok(events.some((e) => e.includes('在B站一条视频下评论过：看饿了')))
   assert.deepEqual(facts, ['有个米饭大赛很好玩'])
   assert.equal(b.state().comments, 1)
   // 看过的不会再看
