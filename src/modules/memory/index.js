@@ -3,6 +3,7 @@
 // 别的模块（空间日记、B 站、翻唱）会往这里记她的经历；记忆模块关着时它们自己跳过。
 
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
+import { createMemoryBus } from '../../features/memory-bus.js'
 import { currentPersonaText } from '../../persona/personas.js'
 import { defineTool, str } from '../../tools/tools.js'
 
@@ -147,6 +148,14 @@ export default {
       return memory.consolidate({ includeToday: b.includeToday !== false })
     })
 
-    return memory
+    // 记忆总线（1.3.48）：模块返回值在主库之上叠一层总线。其他模块拿到的
+    // api.use('memory') 从此是总线——add/addEvent/recall/listFor/recentEventsFor
+    // 都收拢到统一入口；面板路由继续直接调 store 的管理接口（list/remove/insights…）。
+    const bus = createMemoryBus({ store: memory, log: api.log })
+
+    return Object.assign(Object.create(memory), bus, {
+      /** 底下那层主库：面板统计、consolidate、小档案这类管理接口还在它身上 */
+      store: memory,
+    })
   },
 }

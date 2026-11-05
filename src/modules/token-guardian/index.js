@@ -88,11 +88,15 @@ export default {
     const CHARS_TO_TOKEN = 1.4
     const estimate = (chars) => Math.round(Number(chars || 0) * CHARS_TO_TOKEN)
 
-    /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。 */
+    /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。
+     * 开头带上上一份摘要（若有）：连续压缩时，第一次压缩摘掉的那段聊天只存在于摘要里，
+     * chatlog 早就翻不到了 —— 不带它，第二次压缩就会把更早的对话彻底丢掉（2026-11-05 排查）。 */
     function recentTranscript(hub, chatId, maxChars = 12000) {
       try {
+        const prev = summaries[chatId]
+        const head = prev && prev.text ? `【更早聊天的摘要（${new Date(prev.at).toLocaleString('zh-CN').slice(0, 16)}）】\n${prev.text}\n\n【以下是之后新说的】\n` : ''
         const days = hub.chatLogDays ? hub.chatLogDays() : []
-        if (!days.length) return ''
+        if (!days.length) return head.trim() ? head : ''
         const rows = []
         for (let i = days.length - 1; i >= 0 && rows.join('').length < maxChars * 2; i--) {
           const list = hub.chatLogOf ? hub.chatLogOf(days[i]) : []
@@ -100,8 +104,13 @@ export default {
           // 分不清哪句是她说的，摘要质量直接废掉一半。
           for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${(r.who === 'bot' || r.who === 'self') ? '你' : '对方'}：${r.text}`)
         }
-        return rows.join('\n').slice(-maxChars)
-      } catch (error) { return '' }
+        // 摘要头固定占预算，原文吃剩下的额度 —— 总输入仍然有上限，不会越压越大
+        const body = rows.join('\n').slice(-Math.max(2000, maxChars - head.length))
+        return head + body
+      } catch (error) {
+        const prev = summaries[chatId]
+        return prev && prev.text ? `【更早聊天的摘要】\n${prev.text}` : ''
+      }
     }
 
     /** 真正做一次提前压缩。
@@ -109,7 +118,28 @@ export default {
      *       调 hub.resetChat() 归档旧会话、开新会话（历史实打实变小，不是只贴摘要）。
      * 摘要带过去，新会话开场就知道之前聊了什么 —— 「压缩」而不是「清空」。 */
     // sessionKey 实际就是 chatId（state/summaries 两处 key 均已统一为 chatId）
+    // 每 chatId 一把并发锁：tickOnce 每 30 秒轮询、面板「现在压一次」随时可点，
+    // 同一个聊天两个压缩同时跑就是双 resetChat + 双摘要。锁按 chatId 分开，不同聊天互不挡。
+    const compactBusy = new Set()
     async function compact(sessionKey, chat, meta = {}) {
+      const cfg = api.settings()
+      const hub = api.core.hub
+      const chatId = chat?.chatId || ''
+      if (chatId) {
+        if (compactBusy.has(chatId)) {
+          api.log.debug(`${ID}：${chatId} 已经在压缩中，这次跳过`)
+          return { ok: false, reason: 'busy', message: '这个聊天正在压缩，别急着再点' }
+        }
+        compactBusy.add(chatId)
+      }
+      try {
+        return await doCompact(sessionKey, chat, meta)
+      } finally {
+        if (chatId) compactBusy.delete(chatId)
+      }
+    }
+
+    async function doCompact(sessionKey, chat, meta = {}) {
       const cfg = api.settings()
       const hub = api.core.hub
       const chatId = chat?.chatId || ''
@@ -129,8 +159,13 @@ export default {
       } catch (error) { api.log.debug(`${ID}：拿聊天模型失败，摘要用默认模型（${error.message}）`) }
       try {
         text = await api.ask({
-          system: '你是「大肥鱼」的记忆整理助手。把下面这段聊天压缩成一份供后续对话参考的摘要：'
-            + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；不要评价、不要编造、不要加标题。',
+          // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
+          // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
+          system: '你是「大肥鱼」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：'
+            + '如果开头带【更早聊天的摘要】，那是上一份检查点：保留仍然成立的事实、丢掉已经过时的、把新内容并进去，输出**一份**合并后的摘要，不要照抄也不要分两截。'
+            + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；最后一条用户发言按原意保留，别只写成「聊了某事」；'
+            + '每句话写清是谁说的（用「你」和「对方」），分不清的就标「有人」；'
+            + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题。',
           text: transcript,
           maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars * 1.4))),
           ...askOpts,
@@ -162,12 +197,23 @@ export default {
         }
       }
       if (!resetOk) {
-        // 没清场就不换摘要：旧摘要继续用，等下次压缩成功一起换
+        // 没清场就不换摘要：旧摘要继续用，等下次压缩成功一起换。
+        // 冷却分开记：no-reset 多是暂时性失败（会话正被归档/还没建），10 分钟就该重试；
+        // 真打了一次模型的失败（no-reset 之外）和成功才吃完整冷却 —— 暂时性失败不该被罚 2 小时。
         const st0 = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
-        st0.lastCompactAt = Date.now() // 记一次尝试，冷却期内不再反复打模型
+        st0.lastCompactAt = Date.now() - (Number(cfg.cooldownMinutes) * 60_000 - 10 * 60_000)
         state[sessionKey] = st0
         persist()
-        return { ok: false, reason: 'no-reset', message: '旧会话没归档成功，摘要保持原样（防止历史里堆多份摘要）' }
+        return { ok: false, reason: 'no-reset', message: '旧会话没归档成功，摘要保持原样（10 分钟内会自动重试）' }
+      }
+      // 摘要写回 chatlog（她自己的名字记一笔，who 用 'bot'）：
+      //   1. chatlog 保留 14 天，而摘要 7 天就过期 —— 过期后她对这些对话失忆，且没有任何机制重建；
+      //      写回之后，下次压缩的输入天然带上旧摘要，连续压缩也不会再丢更早的对话（和 recentTranscript 的摘要头双保险）。
+      //   2. 只在会话真的换了（resetOk）时写，避免旧会话里堆两份。
+      if (chatId && typeof hub.logChat === 'function') {
+        try {
+          hub.logChat(chatId, 'bot', `【更早聊天的摘要（${new Date().toLocaleString('zh-CN').slice(0, 16)}）】\n${body}`)
+        } catch (error) { api.log.debug(`${ID}：摘要写回聊天流水失败（不影响压缩）：`, error.message) }
       }
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
       persistSummary()
@@ -183,6 +229,9 @@ export default {
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return { ok: true, chars: body.length, compacts: st.compacts }
     }
+
+    /** 摘要里会带【更早聊天的摘要】标记，不该被当成正常聊天再提炼成长期记忆 —— 标记开头的行给整理模块跳过用。 */
+    const isSummaryLog = (text) => /^【更早聊天的摘要/.test(String(text || ''))
 
     /** 空闲检查：到了阈值、过了冷却、会话闲下来了就压。 */
     async function tickOnce() {
@@ -201,6 +250,9 @@ export default {
         } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
+        // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
+        //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
+        try { if (hub.isBusy?.(chatId)) continue } catch (error) {}
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
         // state 的 key 就是 chatId（'activity' 里直接拿 a.chatId 当 key），直接用，
         // **不要拿 chatId 去问 hub.chatOfSession()** —— 那个函数要的是 sessionId，

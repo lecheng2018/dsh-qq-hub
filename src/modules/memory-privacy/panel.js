@@ -6,9 +6,8 @@
 //
 // 每个分区支持：
 // - 查看该分区记忆（弹窗列表）
-// - 单分区隔离开关（强制不隔离 → global 也可见）
-// - 清空本分区（本模块 scoped.json + 主记忆库，二次确认）
-// - 过滤日志（最近 200 次投喂中被拦掉的跨域记忆）
+// - 单分区隔离开关（强制不隔离 → 主人私聊也可见）
+// - 清空本分区（主记忆库按作用域清空，二次确认；1.3.48 起没有第二套库了）
 
 const { useState, useEffect } = React
 
@@ -19,6 +18,7 @@ return function MemoryPrivacyPanel(props) {
   const [viewing, setViewing] = useState(null)   // 正在查看的分区 scope
   const [viewItems, setViewItems] = useState(null)
   const [confirming, setConfirming] = useState('') // 清空二次确认
+  const [copied, setCopied] = useState('')         // 刚复制完的那条（按钮显示「已复制」）
   const load = () => call('/memory-privacy/stats').then((r) => setD(r)).catch(() => setD({ ok: false }))
   useEffect(() => { load() }, [])
 
@@ -42,10 +42,11 @@ return function MemoryPrivacyPanel(props) {
       setViewItems(r.items || [])
     } catch (error) { setViewItems([]) }
   }
-  const clearScope = async (scope, which) => {
-    setBusy('clear:' + scope + ':' + which)
+  // 1.3.48：只剩主库一条路（本模块自己的 scoped.json 已删）。
+  const clearScope = async (scope) => {
+    setBusy('clear:' + scope)
     try {
-      const r = await call(which === 'main' ? '/memory-privacy/clear-main' : '/memory-privacy/clear-scope', { scope })
+      const r = await call('/memory-privacy/clear-main', { scope })
       toast(r.message || (r.ok ? '清空了' : '没成功'), r.ok ? 'ok' : 'err')
       await load()
     } finally { setBusy('') }
@@ -89,30 +90,39 @@ return function MemoryPrivacyPanel(props) {
         ? h(Btn, { small: true, disabled: busy === 'ov:' + scope, onClick: () => setOverride(scope, opened ? '' : 'open') },
             opened ? '恢复隔离' : '不隔离')
         : null,
-      confirming === 'cs:' + scope
-        ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope, 'scoped') } }, '确认清空(分层)')
-        : h(Btn, { small: true, onClick: () => setConfirming('cs:' + scope) }, '清空分层'),
       confirming === 'cm:' + scope
-        ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope, 'main') } }, '确认清空(主库)')
-        : h(Btn, { small: true, onClick: () => setConfirming('cm:' + scope) }, '清空主库'),
+        ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope) } }, '确认清空')
+        : h(Btn, { small: true, onClick: () => setConfirming('cm:' + scope) }, '清空本分区'),
     )
   }
 
   // 查看弹窗
+  // 样式说明（2026-11-05）：深色卡片上正文用 #e8e8e8、元信息用 #b0b0b0，对比度够读；
+  // 单条 hover 高亮方便定位；右下角「复制」一键复制本条；右上角「关」hover 提亮。
+  const copyOne = async (m, id) => {
+    try {
+      await navigator.clipboard.writeText(String(m.text || ''))
+      setCopied(id)
+      toast('已复制', 'ok')
+      setTimeout(() => setCopied(''), 1500)
+    } catch (error) { toast('复制失败：' + error.message, 'err') }
+  }
   const viewer = viewing
     ? h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' },
         onClick: (e) => { if (e.target === e.currentTarget) setViewing(null) } },
         h('div', { style: { background: 'var(--ab-panel-bg, #1a1f2b)', borderRadius: 10, padding: 16, maxWidth: 520, width: '86%', maxHeight: '72vh', overflow: 'auto' } },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
             h('b', { className: 'ab-small' }, (viewing.kind === 'profiles' ? '小档案：' : '分区记忆：') + label(viewing.scope)),
-            h(Btn, { small: true, onClick: () => setViewing(null) }, '关')),
+            h(Btn, { small: true, className: 'ab-close', onClick: () => setViewing(null) }, '关')),
           viewItems === null
-            ? h('div', { className: 'ab-small ab-muted' }, '读着呢…')
+            ? h('div', { className: 'ab-small', style: { color: '#b0b0b0' } }, '读着呢…')
             : viewItems.length
-              ? viewItems.slice().reverse().map((m, i) => h('div', { key: m.id || m.qq || i, style: { borderBottom: '1px solid rgba(255,255,255,.08)', padding: '6px 0' } },
-                  h('div', { className: 'ab-small' }, m.text),
-                  h('div', { className: 'ab-small ab-muted' }, new Date(m.at).toLocaleString(), ' · ', badge(String(m.scope || 'global')).text)))
-              : h('div', { className: 'ab-small ab-muted' }, '这个分区还没有记忆')))
+              ? viewItems.slice().reverse().map((m, i) => h('div', { key: m.id || m.qq || i, className: 'ab-mem-item', style: { borderBottom: '1px solid rgba(255,255,255,.08)', padding: '6px 0' } },
+                  h('div', { className: 'ab-small', style: { color: '#e8e8e8' } }, m.text),
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 } },
+                    h('div', { className: 'ab-small ab-muted', style: { color: '#b0b0b0', flex: 1 } }, new Date(m.at).toLocaleString(), ' · ', badge(String(m.scope || 'global')).text),
+                    h(Btn, { small: true, kind: 'ghost', onClick: () => copyOne(m, m.id || m.qq || i) }, copied === (m.id || m.qq || i) ? '已复制' : '复制'))))
+              : h('div', { className: 'ab-small', style: { color: '#b0b0b0' } }, '这个分区还没有记忆')))
     : null
 
   const main = d.main || null
