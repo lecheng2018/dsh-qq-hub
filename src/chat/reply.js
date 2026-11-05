@@ -105,25 +105,149 @@ export function parseReply(text, rules = {}) {
     quoted = true
   }
   if (items.length === 0) return { silent: true, items: [] }
-  return { silent: false, items: capBubbles(items) }
+  return { silent: false, items: capBubbles(items, rules.maxBubbles) }
 }
 
-const MAX_BUBBLES = 5
+const MAX_BUBBLES = 6
 
-/** 文字气泡最多 5 条，多出来的并进最后一条（防止刷屏）。 */
-function capBubbles(items) {
+/**
+ * 文字气泡超过上限时，**均匀分组**，不是把剩下的全塞进最后一条。
+ * 老做法（tail.join('\n')）会得到「4 条极短 + 1 坨巨块」，线上实测最难看的就是这个
+ * （2026-11-05）。均匀分组至少让每条长短接近，读起来像人一条条说。
+ */
+function capBubbles(items, max = MAX_BUBBLES) {
+  const limit = Math.max(1, Math.round(Number(max) || MAX_BUBBLES))
   const texts = items.filter((i) => i.kind === 'text')
-  if (texts.length <= MAX_BUBBLES) return items
-  const keep = new Set(texts.slice(0, MAX_BUBBLES - 1))
-  const tail = texts.slice(MAX_BUBBLES - 1)
-  const merged = { kind: 'text', value: tail.map((t) => t.value).join('\n') }
+  if (texts.length <= limit) return items
+  const groups = []
+  let start = 0
+  for (let g = 0; g < limit; g += 1) {
+    const remain = texts.length - start
+    const left = limit - g
+    const size = Math.ceil(remain / left)
+    groups.push(texts.slice(start, start + size).map((t) => t.value).join('\n'))
+    start += size
+  }
+  // 按顺序把文字项换成合并后的组，媒体项（表情/语音/图片）位置不动
   const out = []
-  let placed = false
+  let gi = 0
   for (const it of items) {
-    if (it.kind !== 'text' || keep.has(it)) out.push(it)
-    else if (!placed) { out.push(merged); placed = true }
+    if (it.kind !== 'text') { out.push(it); continue }
+    if (gi < groups.length) { out.push({ ...it, kind: 'text', value: groups[gi] }); gi += 1 }
   }
   return out
+}
+
+/**
+ * 一轮回复怎么分条。调研过同类项目的做法（AstrBot / MaiMBot，见 docs/回复分条.md）：
+ *
+ *  - 换行不是消息边界。模型用单换行排版（一行一个要点），当成消息边界发出去就是
+ *    「4 条极短 + 1 坨巨块」，线上实测最难看（2026-11-05）。
+ *  - 真正的边界只有三个：`|||`（她显式写的）、空行（段落）、句末标点（。！？…；）。
+ *  - 太短的不单独成条：攒够「最短条长」才断开。
+ *  - 一整段没有任何句末标点时，退一步把单换行当**弱边界**（可用，但不强制），
+ *    这样排版型汇报也能切成几条，而不是一坨 200 多字。
+ *  - 清单、步骤、代码块、指标汇报整段发，不按行拆。
+ *
+ * 返回 [{ text, brk }]，brk 是这一片**后面**的边界类型：'punct' | 'nl' | ''
+ */
+function segmentUnits(text) {
+  const tags = []
+  // 标签/URL/时间/小数先占位：它们的冒号、斜杠、点绝不能当断句点
+  // （「到14:22」曾被杀成「…到14」「22」；链接从 ? 处断成两截点不开）
+  const guarded = String(text || '').replace(
+    /\d{1,3}:\d{1,3}(?::\d{1,3})?|\d+\.\d+|<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>|\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi,
+    (m) => { tags.push(m); return '~~Z' + (tags.length - 1) + 'Z~~' },
+  )
+  const units = []
+  let buf = ''
+  let quote = 0
+  const quoteOpen = '“「『\''
+  const quoteClose = '”」』\''
+  for (let i = 0; i < guarded.length; i += 1) {
+    const ch = guarded[i]
+    if (quoteOpen.includes(ch)) quote += 1
+    else if (quoteClose.includes(ch) && quote > 0) quote -= 1
+    if (ch === '\n') {
+      // 单换行：不写进正文，只当弱边界候选
+      if (buf.trim()) { units.push({ text: buf.trim(), brk: 'nl' }); buf = '' } else buf = ''
+      continue
+    }
+    buf += ch
+    const sentenceEnd = '。！？!?…；;'.includes(ch)
+    if (!sentenceEnd) continue
+    if (quote > 0) continue // 引号里的句号不是句子边界
+    const next = guarded[i + 1] || ''
+    if ('：:'.includes(next)) continue // 「注意：」后面还有内容
+    if (/[0-9]/.test(buf[buf.length - 2] || '') && /[0-9]/.test(next)) continue // 1.5 这类
+    units.push({ text: buf.trim(), brk: 'punct' })
+    buf = ''
+  }
+  const rest = buf.trim()
+  if (rest) units.push({ text: rest, brk: '' })
+  // 换行的性质看整段排版：
+  //  · 每一行都短（≤15 字）→ 她就是在用换行分行说话，这些换行**必须**断（'hard'）
+  //  · 否则是长文排版（指标汇报一类）→ 换行只算弱边界，能不拆就不拆（'soft'）
+  const lineLens = guarded.split('\n').map((x) => x.trim().length).filter((n) => n > 0)
+  const shortLines = lineLens.length > 1 && lineLens.every((n) => n <= 15)
+  for (const u of units) {
+    if (u.brk !== 'nl') continue
+    u.brk = shortLines ? 'hard' : 'soft'
+  }
+  return units.map((u) => ({ ...u, text: u.text.replace(/~~Z(\d+)Z~~/g, (_, i) => tags[Number(i)] || '') }))
+}
+
+/**
+ * 把句子片攒成气泡：攒够 minBubble 才考虑断开，断不断带随机（真人不是机械切）。
+ * 换行边界比句末标点更容易断（0.7 vs 0.4），因为换行本来就是排版意图。
+ */
+function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
+  const out = []
+  let cur = ''
+  let brk = ''
+  for (const u of units) {
+    if (!u.text) continue
+    if (!cur) { cur = u.text; brk = u.brk; continue }
+    if (brk === 'hard') { out.push(cur); cur = u.text; brk = u.brk; continue }
+    const joiner = brk === 'soft' ? '\n' : ''
+    const merged = cur + joiner + u.text
+    const closeProb = brk === 'soft' ? 0.45 : 0.4
+    const long = merged.length > cap
+    if (cur.length >= minBubble && (long || rand() < closeProb)) {
+      out.push(cur)
+      cur = u.text
+    } else {
+      cur = merged
+    }
+    brk = u.brk
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+/** 一整轮文字 → 若干气泡（字符串数组）。pushText 用它。 */
+export function segmentBubbles(text, rules = {}) {
+  const t = String(text || '').trim()
+  if (!t) return []
+  const cap = Math.max(10, Math.round(Number(rules.maxChars) || 30))
+  const minBubble = Math.max(6, Math.round(cap * (Number(rules.minBubbleRatio) || 0.4)))
+  const rand = typeof rules.rand === 'function' ? rules.rand : Math.random
+  if (t.includes('```')) return [t]
+  // 清单/汇报/指标整段发（拆开对应关系就散了）。判整段，不按段落判，
+  // 否则「【结论】…」和下面的编号列表会被切成两条。
+  if (rules.keepReports !== false && t.length <= 1200 && (looksLikeReport(t) || looksLikeList(t))) return [t]
+  // 段落（空行）是硬边界：一段一条，段内再按句子攒
+  const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
+  const bubbles = []
+  for (const p of paragraphs) {
+    const units = segmentUnits(p)
+    for (const b of mergeUnits(units, { cap, minBubble, rand })) {
+      // 单片本身远超上限（英文长句、无标点堆栈）：退回按逗号/空格兜底切，绝不留半句
+      if (b.length <= cap * 2) { bubbles.push(b); continue }
+      for (const piece of splitLongLine(b, cap)) bubbles.push(piece)
+    }
+  }
+  return bubbles.length ? bubbles : [t]
 }
 
 /**
@@ -302,22 +426,23 @@ function sentencePieces(line) {
 function pushText(items, s, rules = {}) {
   const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
   if (!t || isSilence(t)) return
-  const cap = Math.max(10, Math.round(Number(rules.maxChars) || 30))
-  // 她自己在哪断句（换行 / |||）就按她的断法发：字数只当兜底，不当尺子。
-  // 老行为（直接调 parseReply 不带规则）保持按字数硬拆，工具与测试不受影响。
-  const trust = rules.trustModelBubbles === true
-  const hard = Math.max(cap * 2, 60)
   // 清单/汇报（多段小标题、编号列表、代码块）：整段发。这类内容拆开就散了。
   // 代码块的围栏会被 stripMarkdown 去掉，所以要在原文上判一次。
-  const blockish = String(s || '').includes('```') || looksLikeReport(t)
-  if (rules.keepReports !== false && t.length <= 1200 && blockish) {
+  if (rules.keepReports !== false && String(s || '').includes('```') && t.length <= 1200) {
     items.push({ kind: 'text', value: t })
     return
   }
-  for (const line of splitLines(t)) {
-    if (trust && line.length <= hard) { items.push({ kind: 'text', value: line }); continue }
-    for (const piece of splitLongLine(line, cap)) if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
+  for (const piece of segmentBubbles(t, rules)) {
+    if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
   }
+}
+
+/** 像不像列表：过半的行以 1. / 2、 / - / • 开头。每一项都是一个完整信息块，拆开对应关系就散了。 */
+function looksLikeList(t) {
+  const lines = String(t || '').split(/\n+/).map((x) => x.trim()).filter(Boolean)
+  if (lines.length < 2) return false
+  const listy = lines.filter((l) => /^(\d+[.、)]|[-*•·])/.test(l)).length
+  return listy >= Math.ceil(lines.length / 2)
 }
 
 /** 像不像「清单/汇报」：小标题多、编号列表、代码块、或整段都是长行。 */
@@ -335,10 +460,16 @@ function looksLikeReport(t) {
 /** 面板上的分条规则 → parseReply 的参数。群聊与私聊可以有不同上限。 */
 export function replyRules(cfg, inGroup) {
   const r = (cfg && cfg.reply) || {}
-  const pick = (v, def, min, max) => Math.round(Math.min(max, Math.max(min, Number(v) || def)))
+  // 注意 0 是合法输入（不能因为 Number(0) 是 falsy 就退回默认值）
+  const pick = (v, def, min, max) => {
+    const n = Number(v)
+    const base = v === '' || v === null || v === undefined || !Number.isFinite(n) ? def : n
+    return Math.round(Math.min(max, Math.max(min, base)))
+  }
   return {
     maxChars: inGroup ? pick(r.groupMaxChars, 40, 10, 500) : pick(r.privateMaxChars, 120, 20, 2000),
-    trustModelBubbles: r.trustModelBubbles !== false,
+    maxBubbles: pick(r.maxBubbles, 6, 1, 12),
+    minBubbleRatio: 0.4,
     keepReports: r.keepReports !== false,
   }
 }

@@ -40,13 +40,14 @@ test('bubbleDelay 按下一条长短停顿', () => {
   assert.ok(bubbleDelay('x'.repeat(500), () => 1) <= 4500 * 1.3)
 })
 
-test('回复按行拆成多条气泡；列表、代码、长文不拆；最多 5 条', () => {
+test('回复按行拆成多条气泡；列表、代码、长文不拆；最多 6 条', () => {
   const NL = String.fromCharCode(10)
   assert.deepEqual(parseReply(['白米饭！必须是白米饭', '别的都能省 饭不能省'].join(NL)).items.map((x) => x.value), ['白米饭！必须是白米饭', '别的都能省 饭不能省'])
   assert.equal(parseReply(['1. 打开设置', '2. 点插件', '3. 保存'].join(NL)).items.length, 1)
+  // 超过 6 条时**均匀分组**（以前是把剩下的全塞进最后一条，出现「4 条极短 + 1 坨巨块」）
   const seven = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].join(NL)
-  assert.equal(parseReply(seven).items.length, 5)
-  assert.equal(parseReply(seven).items[4].value, ['e', 'f', 'g'].join(NL))
+  assert.equal(parseReply(seven).items.length, 6)
+  assert.equal(parseReply(seven).items[0].value, ['a', 'b'].join(NL))
 })
 
 const base = (o) => ({
