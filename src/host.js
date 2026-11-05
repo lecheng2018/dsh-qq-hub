@@ -747,6 +747,57 @@ export function apply(ctx) {
 
   route('/state', async () => overview())
 
+  // 工作区维护：宿主自带的删除入口在界面上，脚本化处理时没有门路，这里补两个只读/清理接口。
+  // 背景：1.3.33 曾按聊天建子工作区（每个群一个「QQ Hub」），1.3.41 已改回共用主工作区，
+  // 但那些已经建出来的子工作区要能被清掉（会话会落回「未分组」，文件夹自己删）。
+  route('/workspaces/list', async () => {
+    const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+    if (!reg) return { ok: false, message: '宿主没有 workspaceRegistry' }
+    return {
+      ok: true,
+      workspaces: reg.list().map((w) => ({ id: w.id, title: w.title || '', path: w.path || '', sessions: (w.sessionIds || []).length })),
+    }
+  })
+
+  route('/workspaces/delete', async (req) => {
+    const body = await readBody(req)
+    const ids = (Array.isArray(body?.ids) ? body.ids : [body?.id])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+    if (!ids.length) return { ok: false, message: '没说要删哪个工作区' }
+    const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
+    if (!reg) return { ok: false, message: '宿主没有 workspaceRegistry' }
+    const done = []
+    const failed = []
+    for (const id of ids) {
+      const ws = reg.list().find((w) => String(w.id) === id)
+      if (!ws) {
+        failed.push({ id, message: '没这个工作区' })
+        continue
+      }
+      try {
+        // 先把这个工作区里还挂着的 QQ 会话收掉，否则删完工作区，会话再开会找不到落脚点
+        for (const [chatId, ent] of Object.entries(hub.sessions() || {})) {
+          const sid = String(ent?.sessionId || '')
+          if (sid && (ws.sessionIds || []).includes(sid)) {
+            try {
+              await hub.resetChat(chatId)
+              log.info('删工作区前先收了会话：' + chatId)
+            } catch (error) {
+              log.warn('收会话失败：' + chatId, error.message)
+            }
+          }
+        }
+        reg.delete(id)
+        done.push({ id, title: ws.title || '', path: ws.path || '' })
+        log.info('删掉工作区：' + (ws.title || '') + '（' + (ws.path || '') + '）')
+      } catch (error) {
+        failed.push({ id, message: error.message })
+      }
+    }
+    return { ok: failed.length === 0, done, failed }
+  })
+
   route('/save', async (req) => {
     const body = await readBody(req)
     const before = cfg
