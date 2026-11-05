@@ -140,8 +140,11 @@ function splitLongLine(line, maxChars = 30) {
   // 占位符用纯文本（绝不用控制字符——会把源文件写成 binary）。
   const tags = []
   const canGuard = !s.includes('~~X')
+  // 时间/比例（09:22、到14:22、1:3）里的冒号不是句子边界：以前把「：」「:」当切点，
+  // 「今天09:22开的 到14:22」被切成「…到14」「22 已经烧掉55%」，冒号还被抹掉，
+  // 线上看着就是莫名其妙被截断（2026-11-05 实测）。和标签、URL 一样先占位保护。
   const guarded = canGuard
-    ? s.replace(/<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>|\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
+    ? s.replace(/\d{1,3}:\d{1,3}(?::\d{1,3})?|<(?:face|sticker|voice|at|reply|poke)[^>]*>|<\/[^>]+>|\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
         tags.push(m)
         return '~~X' + (tags.length - 1) + 'X~~'
       })
@@ -157,7 +160,7 @@ function splitLongLine(line, maxChars = 30) {
   for (const p of parts) {
     if (p.length <= hardMax) { refined.push(p); continue }
     let buf = ''
-    for (const seg of p.split(/(?<=[，,、：:])/)) {
+    for (const seg of p.split(/(?<=[，,、])/)) {
       if (buf && (buf + seg).length > hardMax) { refined.push(buf); buf = seg }
       else buf += seg
     }
@@ -165,7 +168,7 @@ function splitLongLine(line, maxChars = 30) {
     // 长句被切开的地方要补上句末感：以逗号结尾的改成句号（"…差别没那么大。" 是通顺的），
     // 顿号/冒号/分号结尾的直接去掉（那是并列中途，不该带标点收尾）。
     for (let i = 0; i < refined.length - 1; i += 1) {
-      refined[i] = refined[i].replace(/[，,]\s*$/, '。').replace(/[、：:；;]\s*$/, '')
+      refined[i] = refined[i].replace(/[，,]\s*$/, '。').replace(/[、；;]\s*$/, '')
     }
   }
   // ③ 聚合：只有**很短的片段**才跟前后挤成一条（避免「草」「好」一字一条刷屏）。
@@ -264,7 +267,7 @@ function sentencePieces(line) {
   const out = []
   // URL 先占位再切：句号层正则里的半角 ? 会把链接的查询串切走（"…query?" / "param=1" 分家）。
   const tags = []
-  const guarded = String(line || '').replace(/\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
+  const guarded = String(line || '').replace(/\d{1,3}:\d{1,3}(?::\d{1,3})?|\b(?:https?:\/\/|www\.)[^\s，。！？!；;、，？]+/gi, (m) => {
     tags.push(m)
     return '~~Y' + (tags.length - 1) + 'Y~~'
   })
@@ -272,7 +275,7 @@ function sentencePieces(line) {
   for (const piece of guarded.split(/(?<=[。！？!?；;])/)) {
     if (piece.length <= 240) { out.push(piece); continue }
     let buf = ''
-    for (const seg of piece.split(/(?<=[，,、：:])/)) {
+    for (const seg of piece.split(/(?<=[，,、])/)) {
       if (seg.length > 240) {
         // 逗号也救不了：按空格硬切（URL/代码串整段放行，切开会坏）
         for (const word of seg.split(/(?<=\s)/)) {
