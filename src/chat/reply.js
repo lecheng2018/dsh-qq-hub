@@ -115,7 +115,7 @@ const MAX_BUBBLES = 6
  * 老做法（tail.join('\n')）会得到「4 条极短 + 1 坨巨块」，线上实测最难看的就是这个
  * （2026-11-05）。均匀分组至少让每条长短接近，读起来像人一条条说。
  */
-function capBubbles(items, max = MAX_BUBBLES) {
+export function capBubbles(items, max = MAX_BUBBLES) {
   const limit = Math.max(1, Math.round(Number(max) || MAX_BUBBLES))
   const texts = items.filter((i) => i.kind === 'text')
   if (texts.length <= limit) return items
