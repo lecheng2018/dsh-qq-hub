@@ -62,7 +62,8 @@
 另有覆写位 `awakeFrom/awakeTo/minIntervalMinutes/maxIntervalMinutes/maxPerDay/idleMinutes`。
 **沿用主动搭话的设置**（保持作息单一真相）：`config.speakUp.awakeFrom/awakeTo`（派生引擎安静时段；全天=关闭安静）、
 `idleMinutes`（→ idleThreshold）、`minIntervalMinutes/maxIntervalMinutes`（→ gap）、`maxPerDay`（→ dailyMax）——
-ext.purpose 同名键可覆写。
+ext.purpose 同名键可覆写。`maxPerDay` 的覆写只在**填了大于 0 的数**时生效；
+0、空字符串（面板里清空）、未设都沿用 speakUp 的值。
 
 ## 6. 其它接线事实
 
