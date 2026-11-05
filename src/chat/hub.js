@@ -237,8 +237,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   async function ensureWorkspace(chat) {
     const reg = dsh.workspaceRegistry || dsh.get('workspaceRegistry')
     if (!reg) throw new Error('宿主没有 workspaceRegistry')
-    // 没带 chat（启动期预热等）用主工作区；带 chat 就用该聊天专属子工作区
-    const dir = chat?.chatId && !chat.chatId.startsWith('system:') ? chatWorkspaceDir(chat.chatId) : workspaceDirOf(getConfig())
+    // 默认所有 QQ 会话共用同一个工作区。
+    // 1.3.33 曾按 chatId 给每个聊天建子工作区，本意是让 dsh-soul 的 project scope 按聊天隔离；
+    // 但那样每个群 / 每个私聊都会在宿主里多出一个工作区，聊得越多列表越脏（2026-11-05 实测）。
+    // 跨聊天串台的源头是 dsh-soul 的 project 级 handoff，那个已经停用；
+    // 群聊和陌生人会话本来就没有文件工具，共用工作区不会互相看见文件。
+    // 需要时可以在配置里打开 workspacePerChat 恢复按聊天隔离。
+    const perChat = chat?.chatId && !chat.chatId.startsWith('system:') && getConfig().workspacePerChat === true
+    const dir = perChat ? chatWorkspaceDir(chat.chatId) : workspaceDirOf(getConfig())
     mkdirSync(dir, { recursive: true })
     const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
     let ws = reg.list().find((w) => norm(w.path) === norm(dir))
