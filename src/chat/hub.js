@@ -10,8 +10,8 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
-import { parseReply, bubbleDelay, wantsVoice, replyRules, capBubbles } from './reply.js'
-import { llmSplit, worthLlmSplit } from './llm-split.js'
+import { parseReply, bubbleDelay, wantsVoice, replyRules } from './reply.js'
+import { nowLine, agoLabel } from './clockline.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
 import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
@@ -21,7 +21,7 @@ import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
-import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper, askModel } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags, speakableText, dedupeFaces } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
@@ -29,7 +29,7 @@ import { createRecentMedia } from './recent-media.js'
 import { createTitleFilter } from './title-filter.js'
 import { createQuestionRegistry } from './questions.js'
 import { createApprovalRegistry } from './approvals.js'
-import { personaIdFor } from '../persona/personas.js'
+import { personaIdFor, readPersona } from '../persona/personas.js'
 import { backfillNoticeBlock } from './backfill.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
@@ -50,6 +50,7 @@ const sessionKey = (id) => {
 /**
  * hooks（扩展模块用，都可以不传）：
  *   message(msg) → true 表示这条消息被模块接管了，她不再处理
+ *   persona(text) → 改写人设正文（全局那份和按聊天换的专用卡都走这里）
  *   reply(text, {chatId}) → 改写她要发的话；返回 null 表示这次不发
  *   deniedTools() → 不许出现在她 QQ 会话里的全局工具名（给其他 DSH 会话用的联动工具）
  *   groupDecide(decision, info) → 改群聊「回不回、怎么回」的决定 { reply, mode, reason }
@@ -69,6 +70,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const saveMap = (m) => writeJson(mapFile(), m)
 
   const mounted = new Map() // sessionKey → { agent, offs, chatId, toolsKey }  按会话记，agent 对象换了也能清掉旧工具（#90）
+  // chatId → 上一次把消息交给她是什么时候。存进 sessions.json（lastTurnAt），重启之后
+  // 「距上一条消息 2 小时」照样算得出来；内存里再留一份，会话刚建、entry 还没落盘时也不丢。
+  const lastTurnAt = new Map()
   const toolDisposers = new Map() // `${sessionKey}|${工具名}` → disposer，防注册表里残留同名工具时挂不上（#90）
   const sessionToChat = new Map() // sessionKey → chatId
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
@@ -78,6 +82,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
   const groupRefs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
   const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
+  // chatId → 这一轮是否调过内容型工具（报告兜底用，turn/end 清掉）。见 CONTENT_TOOLS。
+  const reportTurns = new Map()
+  // 内容型工具清单（报告兜底第二层）：这些工具的产物是「给主人看的数据」，回复应该整段排版。
+  // 记忆型（recall_memory、qq_chat_history）和管理型（qq_group_admin 等）刻意不在列。
+  // 新增内容型工具时在这里加一行；她写了 <report> 标记时第一层优先生效，这里只是兜底。
+  const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
+
   const ENGAGE_MS = 3 * 60_000
   const groupNames = new Map()
   const recentMedia = createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
@@ -202,6 +213,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   /** 有聊天流水的日期（升序）。 */
+  /**
+   * 记下「这一次交给她」的时间，返回上一次的时间（没有就是 0）。
+   * 时间锚用：她知道这次隔了多久，也知道「两小时前那句叫你睡觉」是两小时前的。
+   */
+  function markTurnAt (chatId, now = Date.now()) {
+    const m = map()
+    const e = m.chats[chatId]
+    const last = Number(e?.lastTurnAt) > 0 ? Number(e.lastTurnAt) : (lastTurnAt.get(chatId) || 0)
+    lastTurnAt.set(chatId, now)
+    if (e) { e.lastTurnAt = now; saveMap(m) }
+    return last
+  }
+
   function chatLogDays() {
     try {
       return readdirSync(dataDir('chatlog')).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).map((n) => n.slice(0, 10)).sort()
@@ -484,6 +508,34 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           else log.warn(`工具 ${tool.name} 挂不上：`, error.message)
         }
       }
+    }
+    // 按聊天换人设：在这个 agent 的作用域里，用同一个变量名再注册一次，**遮蔽**全局那份。
+    // 这样整份提示词里从头到尾只有一套人设 —— 以前的做法是往提示词里追加一块
+    // 「【本聊天专用人设：X】…历史里的作废，从本段开始只按这一套说话」，结果是系统卡和
+    // 追加块两套人设同时在场，模型要自己仲裁谁说了算（2026-11-05 群里就是这么打起来的）。
+    // 现在那一块不存在了：这个群里只渲染专用卡，别的群和全局照旧。
+    try {
+      const cfg = getConfig()
+      const want = personaIdFor(chat, cfg)
+      const globalId = (cfg.persona || {}).current || ''
+      if (want && want !== globalId && readPersona(want)) {
+        // 打一行日志：重启后面板/日志里能直接看出「这个群用的是专用卡」而不是猜
+        log.info(`${chat.chatId} 按聊天用人设 ${want}（遮蔽全局 ${globalId || '默认'}）`)
+        offs.push(agent.ctx.systemPrompt.variable('qq_hub_persona', () => {
+          // 每轮重读：面板里改了这张卡，下一轮就按新的说（和全局人设同一个行为）
+          const p = readPersona(want)
+          const body = p && p.body ? p.body : ''
+          // 扩展模块能整段改写人设：全局那条走 rewrite('persona')，专用卡也走同一个 hook
+          try {
+            const next = hooks?.persona ? hooks.persona(body) : body
+            return typeof next === 'string' ? next : body
+          } catch (error) {
+            return body
+          }
+        }))
+      }
+    } catch (error) {
+      log.debug('按聊天挂人设失败：', error.message)
     }
     try {
       offs.push(agent.ctx.systemPrompt.context({
@@ -786,17 +838,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
     const rules = replyRules(cfg, chatId.startsWith('group:'))
-    let r = parseReply(text, rules)
-    // 规则只能整条发的长回复（没有句末标点的汇报、一行一个要点的排版），让她自己挑断点。
-    // 失败的每一种情况都退回规则分条，绝不影响发消息。
-    if (worthLlmSplit(text, r.items.filter((i) => i.kind === 'text').map((i) => i.value), { enabled: cfg.reply?.llmSplit !== false })) {
-      const segs = await llmSplit(text, { ask: (o) => askModel(dsh, { cfg, ...o }), maxSegments: rules.maxBubbles, log })
-      if (segs) {
-        // 模型给的断点就是最终气泡，不能再过一遍规则，否则「它说这样断」会被规则二次拆碎
-        log.debug(`${chatId}：模型断句成 ${segs.length} 条`)
-        r = { ...r, items: capBubbles(segs.map((v) => ({ kind: 'text', value: v })), rules.maxBubbles) }
-      }
-    }
+    // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
+    // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
+    if (opts.forceReport || reportTurns.get(chatId)) rules.forceReport = true
+    // 只有一个判断分条的地方：规则。她怎么断（|||）写在提示词里，规则只负责认和收尾。
+    // 1.3.43 删掉了「多问一次模型挑断点」——那是第二个权威，会跟规则打架，
+    // 而且每次都要多等一次模型往返（免费中转一卡，整条回复跟着卡住发不出去）。
+    const r = parseReply(text, rules)
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groupEngaged.delete(chatId.slice(6)) // 不想聊就退出这个话题
@@ -908,6 +956,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (src && src.kind === 'user') st.directOwner = true
       return
     }
+    if (event.type === 'tool/call') {
+      // 报告兜底（1.3.48 第二层）：这一轮调了「内容型工具」（查资料/拉列表的），
+      // 她的回复多半是数据排版，忘了写 <report> 也按报告整段发。记忆/管理型工具不算。
+      const name = String(event.data?.name || '')
+      if (CONTENT_TOOLS.test(name)) reportTurns.set(chatId, true)
+      return
+    }
     if (event.type === 'assistant/message') {
       const d = event.data || {}
       if (d.interrupted) return
@@ -941,6 +996,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (event.type === 'turn/end') {
       slowNoticeSent.delete(key)
       running.delete(chatId)
+      reportTurns.delete(chatId) // 报告兜底只管一轮：下一轮是不是报告，看下一轮调了什么
       stopTyping(key)
       const d = event.data || {}
       const completed = d.reason && d.reason.kind === 'completed'
@@ -1585,7 +1641,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 她想 @ 主人用群名片就行（expandMentions 能对上），不需要号码。
     const ownerQQ = String(getConfig().ownerQQ || '')
     const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${x.nick}(${x.uid})`)
-    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}${x.picNote ? '\n    ' + x.picNote : ''}`
+    // 每条消息标「（2 小时前）」这类相对时间：不然她眼里的历史和「刚刚」没区别
+    const nowAt = Date.now()
+    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${x.text || '（图片/表情）'}${x.quote ? ' ' + quoteInline(x.quote) : ''}${x.picNote ? '\n    ' + x.picNote : ''}`
     // 新消息带编号，她想专门回某一条时可以引用；编号 → QQ 消息 ID 记下来，发的时候换成引用
     const refs = {}
     const numbered = fresh.map((x, i) => {
@@ -1598,8 +1656,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
       : '（有人在叫你，看完这一段再回）'
+    const head = nowLine(nowAt, markTurnAt(chat.chatId), { what: '上一段消息' })
     const text = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
-      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${head}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
       '大多数时候直接说就行。只有想专门接其中某一条、而直接说别人会看不出你在回谁时（比如那条已经被后面的话刷上去了、或者你在回某个人随口一提的事），才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
@@ -1697,7 +1756,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       p.speakers = gp.speakers
       p.autoReply = gp.autoReply
     } else {
-      content = [{ type: 'text', text: p.texts.join('\n') + hint }, ...p.images]
+      // 时间锚放在「【私聊】某某(QQ号)：」这行下面（不是最顶上）：
+      // 来源那行仍然是每条消息的第一行，插件里所有认 /^【私聊/ 的地方都不受影响。
+      const head = nowLine(Date.now(), markTurnAt(chatId))
+      const joined = p.texts.join('\n').replace(/^(【私聊】[^：]*：)/, `$1\n${head}\n`)
+      content = [{ type: 'text', text: joined + hint }, ...p.images]
     }
     busy.set(chatId, Date.now())
     try {
@@ -2038,6 +2101,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     turnSendersAllOwner,
     turnHasOwner,
     resetChat,
+    /** 这个聊天她是不是正忙着一轮（在想 / 在跑工具 / 在发）：压缩、插话这类后台动作拿来避让。 */
+    isBusy: (chatId) => isBusy(chatId),
     joinTopic: (gid) => groupEngaged.set(String(gid), Date.now() + ENGAGE_MS),
     leaveTopic: (gid) => groupEngaged.delete(String(gid)),
     chatOfSession,

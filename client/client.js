@@ -37,14 +37,58 @@ window.__ModuleLoader__.load({
       if (m[digits] !== undefined && digits !== id) return { action: 'clear' }
       return { action: 'move', key: digits, value: keep }
     }
-    const API = '/qq-hub/api'
+    /**
+     * 接口前缀：跟着「页面被挂载在哪」走，而不是写死根路径。
+     *
+     * 以前写的是 `'/qq-hub/api'`，在直连端口（http://127.0.0.1:13080/）时没问题，
+     * 但只要 DSH 被挂在子路径下就会掉出去 —— 飞牛 App 就是这种：网关把整个 DSH
+     * 挂在 `/app/Harness/dsh/`，页面里还注入了 `<base href="./">`，dsh 自己的客户端
+     * 全用相对路径（`open-in-app/apps` 这种去首斜杠的写法）才走得通。写死根路径时
+     * 请求打到门户根（http://<nas>:5666/qq-hub/api/state），拿到的是飞牛自己的
+     * 404 HTML，`r.json()` 解析失败，iOS/Safari 只会抛一句
+     * “The string did not match the expected pattern.”，看起来像是插件没装上。
+     *
+     * 所以从 document.baseURI 取挂载目录拼绝对路径（和浏览器解析相对路径用的是同一份
+     * 基准）：站点根 → `/qq-hub/api`（行为完全不变）；子路径挂载 → `/app/Harness/dsh/qq-hub/api`。
+     *
+     * @param {string} href 一般是 document.baseURI
+     * @returns {string} 形如 `/qq-hub/api` 或 `/app/Harness/dsh/qq-hub/api`
+     */
+    function apiBaseFrom (href) {
+      try {
+        const u = new URL(href)
+        // about:blank / data: / 自定义 scheme 没有可用的站点根：退回根路径，和以前一样
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return '/qq-hub/api'
+        const p = u.pathname.replace(/\/index\.html?$/i, '').replace(/\/+$/, '')
+        return (p || '') + '/qq-hub/api'
+      } catch (e) {
+        // baseURI 都解析不出来（about:blank 之类）：退回老的根路径，起码和以前一样
+        return '/qq-hub/api'
+      }
+    }
+    const API = apiBaseFrom(typeof document !== 'undefined' && document.baseURI
+      ? document.baseURI
+      : (typeof location !== 'undefined' ? location.href : ''))
 
     // ---------------- 小工具 ----------------
-    const get = (p) => fetch(API + p, { cache: 'no-store' }).then((r) => r.json()).catch((e) => ({ ok: false, message: '连不上插件：' + e.message }))
+    // 服务器不回 JSON 时（登录过期的 401 文本、门户/网关的 404 HTML、反向代理错误页），
+    // 浏览器只会报 “The string did not match the expected pattern.”（WebKit）或者
+    // “Unexpected token '<'”（Chromium），一句能用的信息都没有。这里自己读文本再解析，
+    // 把状态码和正文开头写进消息里，下次挂载/鉴权出问题一眼就能看出打到了谁身上。
+    const readJson = (r) => r.text().then((text) => {
+      try {
+        const data = JSON.parse(text)
+        if (data && typeof data === 'object') return data
+      } catch (e) { /* 不是 JSON，落到下面拼错误消息 */ }
+      const snippet = String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)
+      return { ok: false, status: r.status, message: 'HTTP ' + r.status + '：' + (snippet || '空响应') }
+    })
+    const failed = (e) => ({ ok: false, message: '连不上插件：' + (e && e.message ? e.message : e) + '（接口 ' + API + '）' })
+    const get = (p) => fetch(API + p, { cache: 'no-store' }).then(readJson).catch(failed)
     const post = (p, body) =>
       fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
-        .then((r) => r.json())
-        .catch((e) => ({ ok: false, message: '连不上插件：' + e.message }))
+        .then(readJson)
+        .catch(failed)
     const clone = (o) => JSON.parse(JSON.stringify(o))
     const setPath = (obj, path, value) => {
       // 面板刚打开时 draft 可能还是 null，直接 clone 会在下一行炸，兜成空对象
@@ -196,6 +240,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-li .meta{color:var(--ab-dim);font-size:11.5px;white-space:nowrap}
 .ab-li .body{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word}
 .ab-logs{font-family:var(--dsh-font-family-code,ui-monospace,monospace);font-size:12px;max-height:520px;overflow:auto;border-radius:10px;background:var(--ab-card-2);padding:8px 0}
+/* 分层记忆弹窗（memory-privacy panel）：单条 hover 高亮 + 关闭按钮 hover 提亮（1.3.46） */
+.ab-mem-item{transition:background .12s;border-radius:6px;margin:0 -6px;padding:6px 6px !important}
+.ab-mem-item:hover{background:rgba(45,49,58,.95)}
+.ab-close{transition:opacity .12s}
+.ab-close:hover{opacity:.72}
 .ab-log{display:flex;gap:10px;padding:2px 12px;align-items:baseline}
 .ab-log:hover{background:var(--ab-hover)}
 .ab-log .t{color:var(--ab-dim);flex:none}
@@ -432,10 +481,10 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         desc ? h('p', { className: 'ab-desc' }, desc) : null,
         children)
     }
-    function Btn({ kind, small, onClick, disabled, children, title }) {
+    function Btn({ kind, small, onClick, disabled, children, title, className }) {
       const [busy, setBusy] = useState(false)
       return h('button', {
-        type: 'button', title, className: cx('ab-btn', kind, small && 'sm'), disabled: disabled || busy,
+        type: 'button', title, className: cx('ab-btn', kind, small && 'sm', className), disabled: disabled || busy,
         onClick: async () => { if (!onClick) return; setBusy(true); try { await onClick() } finally { setBusy(false) } },
       }, busy ? [h('i', { key: 's', className: 'ab-spin' }), ' 处理中'] : children)
     }
@@ -561,11 +610,25 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         text: (path, props) => h('input', { className: cx('ab-input', props && props.size), value: getPath(draft, path) ?? '', placeholder: props && props.placeholder, type: (props && props.type) || 'text', onChange: (e) => setDraft(setPath(draft, path, e.target.value)) }),
         // 数字框要有兜底：draft 里没存过值时，显示扩展模块 defaults 里的默认值，
         // 否则「每次最多带几条」这类框一片空白，看着像没配置。
+        // allowEmpty：0 或留空有「沿用默认」含义的字段（如目的引擎每日上限）允许清空——
+        // 空值原样保存为 ''，后端按「未覆写」处理；清空瞬间不能被 fallback 顶回来，否则永远清不掉。
         num: (path, props) => {
           const raw = getPath(draft, path)
           const fallback = props && props.fallback
-          const shown = (raw === undefined || raw === null || raw === '') && fallback !== undefined ? fallback : (raw ?? '')
-          return h('input', { className: 'ab-input sm', type: 'number', min: props && props.min, max: props && props.max, step: (props && props.step) || 1, value: shown, onChange: (e) => setDraft(setPath(draft, path, e.target.value === '' ? '' : Number(e.target.value))) })
+          const empty = raw === undefined || raw === null || raw === ''
+          const shown = empty && fallback !== undefined && !(props && props.allowEmpty) ? fallback : (raw ?? '')
+          const sanitize = (v) => {
+            // 非数字内容自动过滤（正整数语义，min>=0 时小数也不放行）；空串原样保留 = 允许留空
+            if (v === '') return (props && props.allowEmpty) ? '' : v
+            let s = String(v).replace(/[^\d]/g, '')
+            if (!s) return (props && props.allowEmpty) ? '' : v
+            let n = Number(s)
+            if (props && props.min !== undefined && props.min >= 0) n = Math.floor(n)
+            if (props && props.max !== undefined && n > props.max) n = props.max
+            if (props && props.min !== undefined && n < props.min) n = props.min
+            return n
+          }
+          return h('input', { className: 'ab-input sm', type: 'number', min: props && props.min, max: props && props.max, step: (props && props.step) || 1, value: shown, placeholder: (props && props.allowEmpty && empty && fallback !== undefined) ? '留空 = 沿用 ' + fallback : undefined, onChange: (e) => setDraft(setPath(draft, path, sanitize(e.target.value))) })
         },
         percent: (path) => h(Range, { min: 0, max: 100, value: pct(getPath(draft, path)), onChange: (v) => setDraft(setPath(draft, path, v / 100)), fmt: (v) => v + '%' }),
         range: (path, min, max, step, fmt) => h(Range, { min, max, step, value: getPath(draft, path), onChange: (v) => setDraft(setPath(draft, path, v)), fmt }),
@@ -1390,12 +1453,11 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Row, { label: '群里停顿多久算一段', hint: '群里大家你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着' }, f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')),
           h(Row, { label: '群里最多等多久' }, f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')),
         ),
-        h(Card, { title: '说话的样子（怎么分条）', desc: '分条只看三件事：她自己写的 |||、空行分段、句末标点。换行不代表换消息，一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。句子太短不会单独成条，攒够一截才断。' },
+        h(Card, { title: '说话的样子（怎么分条）', desc: '分条全走规则，不再多问一次模型。她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。换行不代表换消息，一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。句子太短不会单独成条，攒够一截才断。' },
           h(Row, { label: '群里一条最长', hint: '攒到这么长就断开；正常聊天她一般写得比这短' }, f.num('reply.groupMaxChars', { min: 10, max: 500 }), h('span', { className: 'ab-muted' }, ' 字')),
           h(Row, { label: '私聊一条最长', hint: '私聊可以整段说，设大一点更像正常聊天' }, f.num('reply.privateMaxChars', { min: 20, max: 2000 }), h('span', { className: 'ab-muted' }, ' 字')),
           h(Row, { label: '一轮最多几条', hint: '超过就均匀合并，不会把剩下的全塞进最后一条' }, f.num('reply.maxBubbles', { min: 1, max: 12 }), h('span', { className: 'ab-muted' }, ' 条')),
           h(Row, { label: '清单和汇报整段发', hint: '开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆' }, f.sw('reply.keepReports')),
-          h(Row, { label: '长回复让她自己挑断点', hint: '开：规则只能整条发的长回复（没有句末标点的汇报、一行一个要点的排版）会多问一次模型，让它按语义断；失败或改动了原文就按规则发。关：一律按规则断' }, f.sw('reply.llmSplit')),
         ),
         h(TitleFilter, { draft, setDraft }),
         h(OwnerBrief, { draft, setDraft }),
@@ -2905,7 +2967,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const field = (s) => {
         const p = base + s.key
         if (s.type === 'switch') return f.sw(p)
-        if (s.type === 'number') return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key] })
+        // allowEmpty：模块声明了 min:0 的数字框允许清空（0/空 = 沿用默认，比如目的引擎每日上限）。
+        // 模块自己没声明可空就不要给——普通数字框空着保存还是老行为。
+        if (s.type === 'number') return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key], allowEmpty: Number(s.min) === 0 && s.key === 'maxPerDay' })
         if (s.type === 'select') return f.select(p, (s.options || []).map((o) => (typeof o === 'string' ? { value: o, label: o } : o)))
         if (s.type === 'textarea') return h('textarea', { className: 'ab-textarea', value: getPath(draft, p) ?? '', placeholder: s.placeholder, onChange: (e) => setDraft(setPath(draft, p, e.target.value)) })
         if (s.type === 'password') return f.text(p, { type: 'password', placeholder: getPath(draft, p + 'Set') ? '已保存（不改就留空）' : s.placeholder || '' })

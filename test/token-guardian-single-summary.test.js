@@ -18,7 +18,8 @@ test('先重置会话、后落摘要（reset 成功才换摘要文本）', () =>
 
 test('reset 失败不更新摘要（防历史堆多份快照），返回 no-reset', () => {
   assert.match(SRC, /if \(!resetOk\) \{[\s\S]{0,400}no-reset/, '要有 no-reset 分支')
-  assert.match(SRC, /防止历史里堆多份摘要/, '失败原因要写清楚')
+  // 1.3.46 起失败信息顺带说明会短冷却重试；「防止历史堆多份摘要」的口径仍在
+  assert.match(SRC, /摘要保持原样/, '失败原因要写清楚')
 })
 
 test('state/summaries 两处 key 注释统一为 chatId', () => {

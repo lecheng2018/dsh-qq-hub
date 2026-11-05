@@ -56,7 +56,10 @@ export function purposeConfig(cfg = {}) {
     gapMinMs: clampInt(ext.minIntervalMinutes ?? su.minIntervalMinutes, 90, 5, 2880) * MINUTE,
     gapMaxMs: clampInt(ext.maxIntervalMinutes ?? su.maxIntervalMinutes, 240, 5, 2880) * MINUTE,
     initialDelayMinMs: clampInt(ext.initialDelayMinutes, 15, 1, 720) * MINUTE,
-    dailyMax: clampInt(ext.maxPerDay ?? su.maxPerDay, 3, 0, 20),
+    // 每日上限：只在填了大于 0 的数时才用本模块自己的值；
+    // 0、空、没设都沿用「主动搭话」的 maxPerDay（engine 里 dailyMax>0 才拦截，所以沿用的值照常生效）。
+    // 注意 ?? 只认 null/undefined，面板存下来的空字符串会绕过它——所以这里要显式判空。
+    dailyMax: (Number(ext.maxPerDay) > 0 ? clampInt(ext.maxPerDay, 3, 0, 20) : clampInt(su.maxPerDay, 3, 0, 20)),
     idleThresholdMs: clampInt(ext.idleMinutes ?? su.idleMinutes, 40, 0, 1440) * MINUTE,
     minMaterials: clampInt(ext.minMaterials, DEFAULT_PURPOSE_CONFIG.minMaterials, 0, 20),
     maxMaterials: clampInt(ext.maxMaterials, DEFAULT_PURPOSE_CONFIG.maxMaterials, 6, 80),

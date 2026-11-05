@@ -344,29 +344,11 @@ export function apply(ctx) {
     stickers,
     tts,
     buildTools: (where) => mods.buildTools(where),
-    // 会话上下文：模块的（记忆、近况……）+ 这个聊天专属的人设覆盖
+    // 会话上下文：只放模块给的（记忆、近况……）。
+    // 按聊天换人设不在这里做——那会变成「系统卡 + 追加块」两套人设；
+    // 现在由 hub 的 mount() 在 agent 作用域里遮蔽 {{qq_hub_persona}}，整份提示词只有一套人设。
     contextProviders: [
       (args) => mods.contextFor(args),
-      // 按聊天换人设：只有这个私聊/群单独指定了人设时才注入。
-      // 没配就返回空串，全局人设仍由 preset 里的 {{qq_hub_persona}} 提供，行为完全不变。
-      ({ chat }) => {
-        try {
-          const want = personaIdFor(chat, getConfig())
-          const globalId = (getConfig().persona || {}).current || ''
-          if (!want || want === globalId) return ''
-          const p = readPersona(want)
-          if (!p || !p.body) return ''
-          // 明确覆盖：告诉模型这轮用的是哪个人设，避免和全局那段打架
-          return [
-            `【本聊天专用人设：${p.name}】`,
-            '这个聊天里你用的是下面这一套，不是通用设定。历史里若出现更早的【本聊天专用人设】段落，那是换人设之前的旧人设，全部作废，不要模仿也不要仲裁；从本段开始只按下面这一套说话。',
-            '',
-            p.body,
-          ].join('\n')
-        } catch (error) {
-          return ''
-        }
-      },
     ],
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
@@ -386,6 +368,8 @@ export function apply(ctx) {
     toolsGeneration: () => (mods ? mods.generation?.() || 0 : 0),
     hooks: {
       message: (msg) => mods.claim('message', msg),
+      // 专用卡（按聊天换人设）也过一次模块改写，和全局人设走同一条路
+      persona: (text) => rewrite('persona', text),
       reply: (text, info) => mods.filter('reply', text, info),
       deniedTools: () => bridge?.deniedTools() || [],
       groupDecide: (decision, info) => mods.filter('group/decide', decision, info),

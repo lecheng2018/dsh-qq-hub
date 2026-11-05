@@ -1,25 +1,17 @@
 // 移植自 h-D-ACE/dsh-qq 的 memory-policy.js：记忆隐私分层（Memory Privacy）
 //
-// dsh-qq 的核心约束：记忆有作用域，私聊记忆在**代码注入层被物理拦截**，
-// 无论模型被怎么套话都读不到。三个作用域：
+// 记忆有作用域，私聊记忆在**代码注入层被物理拦截**，无论模型被怎么套话都读不到。三个作用域：
 //   private:<QQ>  只在这个人的私聊里可见
 //   group:<群号>  只在这个群里可见
 //   global        哪里都能用
 //
-// 注：qq-hub 的记忆本体在 features/memory.js，它自己现在也按作用域隔离了
-// （indexFor/scopeVisible），这里并列的是一层独立的作用域记忆库，两者口径保持一致。
-// 这个模块不改它，而是并列一层"作用域记忆库"：
-// - 她可以用工具把事记到某个作用域（默认：私聊记 private，群里记 group）
-// - 交给她内容时（'prompt' 事件），只把**当前聊天可见**的作用域记忆拼进去
-// - 群聊里 private:* 的记忆条目在进入模型上下文之前就被过滤掉，不是靠模型自觉
-//
-// 这样即使 BM25 记忆库被套话，敏感内容根本不在上下文里。
-
-import { readJson, writeJson } from '../../core/store.js'
-import { randomUUID } from 'node:crypto'
+// 本模块现在的职责（1.3.48 起）：**作用域口径的唯一真相** + 隔离开关 + 面板。
+// 记忆本体只在主库（features/memory.js，scopeVisible/indexFor 按同一套口径过滤）；
+// 所有读写一律走记忆总线（features/memory-bus.js），不再有本模块自己的存储——
+// 曾经并行的 scoped.json 在 P0-4 迁移进主库后彻底删除（代码、路由、面板口径一并清理）。
+// 下面三个纯函数（scopeOf/visibleScopes/isVisible）是主库、总线和面板共用的口径来源。
 
 const ID = 'memory-privacy'
-const SCOPES = ['private', 'group', 'global']
 
 /** 当前聊天能看到哪些作用域。 */
 export function visibleScopes(chat) {
@@ -83,25 +75,16 @@ export default {
     { key: 'globalFallback', label: 'global 兜底条数', type: 'number', min: 0, max: 12, step: 1, hint: '分层记忆不够时补几条 global（0=不补，默认不补）' },
   ],
   setup(api) {
-    const file = () => api.dataDir('scoped.json')
-    // { items: [{ id, text, scope, aboutName, importance, at }] }
-    const load = () => readJson(file(), { items: [] })
-    const save = (s) => { try { writeJson(file(), s) } catch (error) { api.log.warn('保存分层记忆失败：', error.message) } }
+    // 记忆总线：本模块里所有「记一条 / 翻记忆」都从这里走（1.3.48 起）。
+    // 总线底下是主库，作用域口径就是本模块导出的那三个纯函数。
+    // store 惰性解析：setup 时 memory 模块可能还没启动完，不能把 null 烧死在闭包里
+    const busStore = () => { try { return api.use('memory') || null } catch { return null } }
+    const bus = { add: (o) => createMemoryBus({ store: busStore(), log: api.log }).add(o) }
 
-    function add({ text, scope, aboutName = '', importance = 0.6, chat = null }) {
-      const t = String(text || '').trim().slice(0, 200)
-      if (!t) return { ok: false, message: '内容是空的' }
-      const finalScope = scope && (scope === 'global' || SCOPES.includes(String(scope).split(':')[0])) ? scope : scopeOf(chat)
-      const s = load()
-      // 同作用域里几乎一样的就更新，不重复存
-      const dup = s.items.find((m) => m.scope === finalScope && m.text === t)
-      if (dup) { dup.at = Date.now(); dup.importance = Math.max(Number(dup.importance) || 0, Number(importance) || 0); save(s); return { ok: true, message: '✓', id: dup.id } }
-      const item = { id: randomUUID().slice(0, 8), text: t, scope: finalScope, aboutName: String(aboutName || ''), importance: Math.max(0, Math.min(1, Number(importance) || 0.6)), at: Date.now() }
-      s.items.push(item)
-      if (s.items.length > 2000) s.items = s.items.slice(-2000)
-      save(s)
-      return { ok: true, message: '✓', id: item.id }
-    }
+    // 1.3.48：本模块自己的 scoped.json 平行库连同 add/load/save 全部删除。
+    // 它在 P0-4 就已停用（存量迁移进主库后文件改名备份），但代码一直留着——
+    // 结果每个新记忆源都要纠结「写到哪边」。现在只有一条路：走记忆总线（features/memory-bus.js），
+    // 总线底下是主库（features/memory.js），作用域口径由本模块导出的 scopeOf/visibleScopes 提供。
 
     // 单会话隔离 override：scope → 'open'（强制不隔离）/ ''（默认隔离）
     // 存在 settings.json 的 modules.memory-privacy.overrides 里。
@@ -121,41 +104,6 @@ export default {
         return String(overrides[scopeOf(chat)] || '') === 'open' && scope === `private:${ownerQQ}`
       })
     } catch (error) { api.log?.warn?.('隔离开关接主库失败：' + error.message) }
-
-    // ---- P0-4：合并平行库。主记忆库（features/memory.js）已经按同一口径做作用域隔离
-    //（scopeVisible/indexFor/recall scopes），这层独立的 scoped.json 是重复实现：
-    // 模型几乎不走它、每个新特性都要写两遍、还占一轮 prompt 注入额度。现在：
-    // 1) remember_scoped 工具停用（主库 remember/add 走同一套作用域）
-    // 2) 每轮 prompt 注入停掉（主库 recallHint 已经按查询检索 + 作用域过滤，比固定取 4 条更准）
-    // 3) 存量 scoped.json 一次性迁移进主库（scope 原样保留），迁移后文件改名备份，不再写
-    // 迁移只跑一次：migratedAt 记在 scoped.json 里
-    function migrateIntoMain(memory) {
-      try {
-        const s = load()
-        if (s.migratedAt) return
-        const items = s.items || []
-        let n = 0
-        for (const m of items) {
-          if (!m.text || !m.scope) continue
-          // 走主库 add：同一套去重/清晰度/遗忘逻辑；scope 原样保留
-          memory.add({
-            text: m.text,
-            importance: Number(m.importance) || 0.6,
-            source: 'event',
-            chatId: m.scope,
-            scope: m.scope,
-          })
-          n += 1
-        }
-        s.migratedAt = Date.now()
-        s.migratedCount = n
-        s.items = []
-        save(s)
-        api.log.info(`记忆分层：scoped.json 里 ${n} 条已迁移进主记忆库，平行库停用`)
-      } catch (error) {
-        api.log.warn('记忆分层迁移失败（下次启动再试）：', error.message)
-      }
-    }
 
     // ---- 交给她内容时，只拼当前聊天可见的作用域记忆 ----
     // P0-4：这段停用 —— 主库 recallHint 按查询检索 + 作用域过滤（fail-closed），
@@ -188,13 +136,15 @@ export default {
             ? (api.settings().autoScope ? scopeOf(chat) : 'global')
             : scope
           try {
-            memory.add({
+            // 走总线（1.3.48）：所有记忆写入口收拢到 features/memory-bus.js
+            const r = bus.add({
               text: String(text || '').trim(),
               importance: Math.max(0, Math.min(1, Number(importance) || 0.6)),
               source: 'tool',
               chatId: chat?.chatId || finalScope,
               scope: finalScope,
             })
+            if (r && r.ok === false) return r
             return { ok: true, message: `记住了（${finalScope}）` }
           } catch (error) {
             return { ok: false, message: error.message }
@@ -224,20 +174,6 @@ export default {
       }
       const items = (memory && typeof memory.list === 'function' ? memory.list() : []).filter((m) => !scope || String(m.scope || 'global') === scope).map(mask)
       return { ok: true, preview, items }
-    })
-    // 单分区清空：删掉某个作用域（private:xxx / group:xxx / global）的全部条目。
-    // 只动本模块 scoped.json；主记忆库的清空另有 /memory-privacy/clear-main。
-    api.route('/memory-privacy/clear-scope', async (req) => {
-      const q = req?.query?.scope || ''
-      let body = {}
-      if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
-      const scope = String(q || body?.scope || '')
-      if (!scope) return { ok: false, message: '要先说清哪个分区' }
-      const s = load()
-      const before = s.items.length
-      s.items = s.items.filter((m) => m.scope !== scope)
-      save(s)
-      return { ok: true, message: `已清空 ${before - s.items.length} 条（${scope}）` }
     })
     // 主记忆库按作用域清空（同样二次确认在前端做）
     api.route('/memory-privacy/clear-main', async (req) => {
@@ -273,19 +209,7 @@ export default {
     // 面板数据以「真正生效的那套」为准：主记忆库的作用域分布 + 人物小档案的作用域分布。
     // 本模块自己的 scoped.json 只是附带的一份，模型几乎不会走它，所以面板不能只报它（否则永远 0 条）。
     api.route('/memory-privacy/stats', () => {
-      const s = load()
-      const by = {}
-      for (const m of s.items) {
-        const scope = String(m.scope || 'global')
-        by[scope] = (by[scope] || 0) + 1
-      }
-      const out = {
-        ok: true,
-        total: s.items.length,
-        overrides,
-        scopes: Object.entries(by).map(([scope, n]) => ({ scope, n })).sort((a, b) => b.n - a.n),
-        globalItems: s.items.filter((m) => String(m.scope || 'global') === 'global').slice(-50).map((m) => ({ id: m.id, text: m.text, at: m.at })),
-      }
+      const out = { ok: true, total: 0, overrides, scopes: [], globalItems: [] }
       // 主记忆库的真实分布
       try {
         const memory = api.use('memory')
@@ -318,18 +242,6 @@ export default {
       }
       return out
     })
-    api.route('/memory-privacy/delete', (req) => {
-      const id = String(req?.query?.id || '')
-      const s = load()
-      s.items = s.items.filter((m) => m.id !== id)
-      save(s)
-      return { ok: true }
-    })
-
-    // 迁移：setup 末尾跑一次（memory 模块已加载，api.use 能拿到）
-    const memory = api.use('memory')
-    if (memory?.add) migrateIntoMain(memory)
-
-    return { add, scopeOf, visibleScopes, isVisible }
+    return { scopeOf, visibleScopes, isVisible }
   },
 }
