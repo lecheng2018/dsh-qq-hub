@@ -565,7 +565,8 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     try {
       const t = String(out || '').trim()
       // 逛圈是「看了什么」→ 默认落主人私聊（不传 scope），别把兴趣画像带进群
-      if (t && t.length > 10) memory?.addEvent?.({ text: `我在小黑盒逛了一圈：${t.slice(0, 120)}`, tags: ['小黑盒'], importance: 0.45 })
+      // 逛完的总结是她的收获，不是「看了什么」的流水，留着。
+      if (t && t.length > 10) memory?.addEvent?.({ text: `我在小黑盒逛了逛，看到这些：${t.slice(0, 120)}`, tags: ['小黑盒', '见闻'], importance: 0.42 })
     } catch { /* 记忆模块没在跑就算了 */ }
 
     return { ok: true, message: String(out || '').slice(0, 300), session: 'system:ext-heybox' }
