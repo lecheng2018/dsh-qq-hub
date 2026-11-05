@@ -54,7 +54,7 @@ export function isSilence(text) {
  * @param {string} text 模型这一轮的最终正文
  * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
-export function parseReply(text) {
+export function parseReply(text, rules = {}) {
   const raw = String(text || '').trim()
   if (isSilence(raw)) return { silent: true, items: [] }
   const items = []
@@ -74,7 +74,7 @@ export function parseReply(text) {
     let m
     while ((m = re.exec(part)) !== null) {
       let from = items.length
-      pushText(items, part.slice(last, m.index))
+      pushText(items, part.slice(last, m.index), rules)
       attach(from)
       from = items.length
       if (m[0].startsWith('<poke')) {
@@ -94,7 +94,7 @@ export function parseReply(text) {
       last = re.lastIndex
     }
     const from = items.length
-    pushText(items, part.slice(last))
+    pushText(items, part.slice(last), rules)
     attach(from)
   }
   // 一轮最多引用一次，多的去掉（大多数时候正常发就好）
@@ -299,12 +299,47 @@ function sentencePieces(line) {
   return restored
 }
 
-function pushText(items, s) {
+function pushText(items, s, rules = {}) {
   const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
   if (!t || isSilence(t)) return
+  const cap = Math.max(10, Math.round(Number(rules.maxChars) || 30))
+  // 她自己在哪断句（换行 / |||）就按她的断法发：字数只当兜底，不当尺子。
+  // 老行为（直接调 parseReply 不带规则）保持按字数硬拆，工具与测试不受影响。
+  const trust = rules.trustModelBubbles === true
+  const hard = Math.max(cap * 2, 60)
+  // 清单/汇报（多段小标题、编号列表、代码块）：整段发。这类内容拆开就散了。
+  // 代码块的围栏会被 stripMarkdown 去掉，所以要在原文上判一次。
+  const blockish = String(s || '').includes('```') || looksLikeReport(t)
+  if (rules.keepReports !== false && t.length <= 1200 && blockish) {
+    items.push({ kind: 'text', value: t })
+    return
+  }
   for (const line of splitLines(t)) {
-    // 长气泡硬拆（主人要求群友感：单条最长 ~30 字）：无论模型输出多长，到 QQ 上都是碎句
-    for (const piece of splitLongLine(line)) if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
+    if (trust && line.length <= hard) { items.push({ kind: 'text', value: line }); continue }
+    for (const piece of splitLongLine(line, cap)) if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
+  }
+}
+
+/** 像不像「清单/汇报」：小标题多、编号列表、代码块、或整段都是长行。 */
+function looksLikeReport(t) {
+  if (t.includes('```')) return true
+  if ((t.match(/【[^】]{1,20}】/g) || []).length >= 2) return true
+  const lines = t.split(/\n+/).map((x) => x.trim()).filter(Boolean)
+  if (lines.length < 4) return false
+  const listy = lines.filter((l) => /^(\d+[.、)]|[-*•·])/.test(l)).length
+  if (listy >= Math.ceil(lines.length / 2)) return true
+  const longLines = lines.filter((l) => l.length >= 25).length
+  return longLines >= Math.ceil(lines.length * 0.6)
+}
+
+/** 面板上的分条规则 → parseReply 的参数。群聊与私聊可以有不同上限。 */
+export function replyRules(cfg, inGroup) {
+  const r = (cfg && cfg.reply) || {}
+  const pick = (v, def, min, max) => Math.round(Math.min(max, Math.max(min, Number(v) || def)))
+  return {
+    maxChars: inGroup ? pick(r.groupMaxChars, 40, 10, 500) : pick(r.privateMaxChars, 120, 20, 2000),
+    trustModelBubbles: r.trustModelBubbles !== false,
+    keepReports: r.keepReports !== false,
   }
 }
 
