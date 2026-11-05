@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
 import { parseReply, bubbleDelay, wantsVoice, replyRules } from './reply.js'
+import { llmSplit, worthLlmSplit } from './llm-split.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
 import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
@@ -20,7 +21,7 @@ import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
-import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper, askModel } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags, speakableText, dedupeFaces } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
@@ -778,7 +779,17 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
-    const r = parseReply(text, replyRules(cfg, chatId.startsWith('group:')))
+    const rules = replyRules(cfg, chatId.startsWith('group:'))
+    let r = parseReply(text, rules)
+    // 规则只能整条发的长回复（没有句末标点的汇报、一行一个要点的排版），让她自己挑断点。
+    // 失败的每一种情况都退回规则分条，绝不影响发消息。
+    if (worthLlmSplit(text, r.items.filter((i) => i.kind === 'text').map((i) => i.value), { enabled: cfg.reply?.llmSplit !== false })) {
+      const segs = await llmSplit(text, { ask: (o) => askModel(dsh, { cfg, ...o }), maxSegments: rules.maxBubbles, log })
+      if (segs) {
+        log.debug(`${chatId}：模型断句成 ${segs.length} 条`)
+        r = parseReply(segs.join('|||'), rules)
+      }
+    }
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groupEngaged.delete(chatId.slice(6)) // 不想聊就退出这个话题
