@@ -31,7 +31,8 @@ const DEFAULTS_RAW = {
   // 用什么接 QQ：snowluma = 插件帮你管 SnowLuma（Windows）；onebot = 接你已有的 OneBot v11 机器人（NapCat、LLOneBot、Lagrange、Docker 里的 SnowLuma……），
   // 这时只按下面 snowluma.httpUrl / wsUrl / token 去连，不启动、不注入任何东西
   gateway: 'snowluma',
-  workspaceDir: '', // QQ 会话放在哪个文件夹（DSH 里的「QQ Hub」工作区）；留空 = 默认（用户目录下 Aurabot\\qq-chats）
+  workspaceDir: '',
+  workspacePerChat: false, // 每个聊天单独建工作区（会多出很多工作区，默认关；跨聊天隔离靠会话作用域，不靠目录）, // QQ 会话放在哪个文件夹（DSH 里的「QQ Hub」工作区）；留空 = 默认（用户目录下 Aurabot\\qq-chats）
   // 发文件（#52）：默认开但限制很多——她只能把 QQ 工作区（workspaceDir）和 dirs 里列的目录中的文件当文件发出去；
   // 单个文件有大小上限；只有主人私聊里能触发（可以发给白名单里的人和群）。日志里会记下发了什么。
   files: { enabled: true, maxMB: 50, dirs: [] },
