@@ -226,7 +226,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         log.warn('QQ 上分享抖音视频失败：', error.message)
       }
     }
-    if (via.length) memory?.addEvent?.({ text: `把抖音上《${v.title}》分享给了${owner()}${via.includes('douyin') ? '（抖音私信）' : ''}：${text.slice(0, 40)}`, tags: ['抖音'], importance: 0.45, scope: ownerScope(getConfig()) })
+    if (via.length) memory?.addEvent?.({ text: `把抖音上的一个视频分享给了${owner()}${via.includes('douyin') ? '（抖音私信）' : ''}：${text.slice(0, 40)}`, tags: ['抖音'], importance: 0.42, scope: ownerScope(getConfig()) })
     return { ok: via.length > 0, via }
   }
 
@@ -330,7 +330,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         const d = byI.get(i + 1) || {}
         const meta = { awemeId: v.awemeId, title: v.title, author: v.author }
         const feeling = clip(d.feeling, 80)
-        memory?.addEvent?.({ text: `在抖音看了${v.author ? ' ' + v.author + ' 的' : ''}《${v.title}》${feeling ? '：' + feeling : ''}`, tags: ['抖音'], importance: 0.4 })
+        if (feeling) memory?.addEvent?.({ text: `在抖音刷到了点东西，她的想法：${String(feeling).slice(0, 60)}`, tags: ['抖音', '想法'], importance: 0.38 })
         if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: clip(d.remember, 200), tags: ['抖音'], importance: 0.5, source: 'event' })
         record(s, { kind: 'watch', ...meta, text: feeling })
 
@@ -346,7 +346,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
           if (w.ok) {
             commented++
             if (w.atOwner) { atted++; s.atOwner++ }
-            if (!w.dryRun) memory?.addEvent?.({ text: `在抖音《${v.title}》下评论${w.atOwner ? `（@了${owner()}）` : ''}：${comment.slice(0, 60)}`, tags: ['抖音'], importance: 0.4 })
+            if (!w.dryRun) memory?.addEvent?.({ text: `在抖音一条视频下评论${w.atOwner ? `（@了${owner()}）` : ''}：${comment.slice(0, 60)}`, tags: ['抖音'], importance: 0.38 })
           }
         }
         const share = clip(d.share, 120)
@@ -432,7 +432,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       const r = await ready(s)
       if (!r.ok) return r
       const [v, comments] = await Promise.all([site.detail(id), site.comments(id).catch(() => [])])
-      memory?.addEvent?.({ text: `看了别人发来的抖音视频《${v.title}》`, tags: ['抖音'], importance: 0.4 })
+      memory?.addEvent?.({ text: '看了别人发来的一个抖音视频', tags: ['抖音'], importance: 0.3 })
       record(s, { kind: 'look', awemeId: id, title: v.title, author: v.author })
       return { ok: true, message: digestOf(v, comments), awemeId: id, title: v.title }
     } catch (error) {
@@ -458,7 +458,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       if (!w.ok) return w
       if (w.dryRun) return { ok: true, message: `试运行：本来要${NAME[kind]}《${title}》` }
       if (w.already) return { ok: true, message: `《${title}》之前就赞过了` }
-      memory?.addEvent?.({ text: kind === 'like' ? `在抖音给《${title}》点了赞` : `在抖音《${title}》下评论：${text.slice(0, 60)}`, tags: ['抖音'], importance: 0.4 })
+      memory?.addEvent?.({ text: kind === 'like' ? '在抖音给一条视频点了赞' : `在抖音一条视频下评论过：${text.slice(0, 60)}`, tags: ['抖音'], importance: 0.38 })
       return { ok: true, message: kind === 'like' ? `点赞了（《${title}》）` : `评论发出去了（《${title}》）` }
     } finally {
       save(s)

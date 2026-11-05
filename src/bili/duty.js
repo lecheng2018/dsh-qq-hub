@@ -231,8 +231,11 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         const v = x.info
         const feeling = String(d.feeling || '').trim()
         if (feeling) felt.set(v.bvid, feeling)
-        memory?.addEvent?.({ text: `在B站看了《${v.title}》（UP主 ${v.author}）${feeling ? '：' + feeling.slice(0, 60) : ''}`, tags: ['B站'], importance: 0.4 })
-        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: String(d.remember).slice(0, 200), tags: ['B站'], importance: 0.5, source: 'event' })
+        // 长期记忆里不写视频标题（那是浏览流水，还会把主人的兴趣画像写进去）。
+        // 值钱的是她刷完之后的判断，没有判断就不记。
+        if (feeling) memory?.addEvent?.({ text: `在B站刷到了点东西，她的想法：${feeling.slice(0, 60)}`, tags: ['B站', '想法'], importance: 0.38 })
+        // 她自己写下的结论才算知识，值得长期留；tag 打上「知识」，注入时能分出来。
+        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: String(d.remember).slice(0, 200), tags: ['B站', '知识'], importance: 0.55, source: 'event' })
         const comment = String(d.comment || '').trim()
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
@@ -241,7 +244,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
             else log.info('这条评论因包含账号标识没有发出去')
             commented++
             s.comments++
-            memory?.addEvent?.({ text: `在B站《${v.title}》下评论：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.4 })
+            memory?.addEvent?.({ text: `在B站一条视频下评论过：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.38 })
             record(s, { kind: 'comment', title: v.title, bvid: v.bvid, text: comment })
           } catch (error) {
             log.warn('B 站评论失败：', error.message)
@@ -343,7 +346,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
       if (!id || id.short) return { ok: false, message: '短链打不开' }
     }
     const x = await lookAt(id)
-    memory?.addEvent?.({ text: `看了别人发来的 B 站视频《${x.info.title}》`, tags: ['B站'], importance: 0.4 })
+    memory?.addEvent?.({ text: '看了别人发来的一个 B 站视频', tags: ['B站'], importance: 0.3 })
     return { ok: true, message: x.digest, bvid: x.info.bvid, aid: x.info.aid, title: x.info.title }
   }
 
@@ -354,7 +357,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
     if (getConfig().dryRun) return { ok: true, message: `试运行：本来要在《${w.title}》下评论：${message}` }
     if (!guard(String(message).slice(0, 200))) return { ok: false, message: '这条评论里有账号标识，不能发到 B 站（账号信息不外传）' }
     await api.postComment(w.aid, String(message).slice(0, 200))
-    memory?.addEvent?.({ text: `在B站《${w.title}》下评论：${String(message).slice(0, 60)}`, tags: ['B站'], importance: 0.45 })
+    memory?.addEvent?.({ text: `在B站一条视频下评论过：${String(message).slice(0, 60)}`, tags: ['B站'], importance: 0.4 })
     const s = load(); record(s, { kind: 'comment', title: w.title, bvid: w.bvid, text: message }); save(s)
     return { ok: true, message: `评论发出去了（《${w.title}》）` }
   }
