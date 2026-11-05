@@ -1390,6 +1390,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Row, { label: '群里停顿多久算一段', hint: '群里大家你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着' }, f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')),
           h(Row, { label: '群里最多等多久' }, f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')),
         ),
+        h(Card, { title: '说话的样子（怎么分条）', desc: '她写几句话通常就发几条。这里决定「谁说了算」：默认按她自己断的句发，字数只当兜底，不再一刀切。群里句子短、私聊可以说长一点，两边上限分开设。' },
+          h(Row, { label: '群里一条最长', hint: '超过这个长度才会按句子拆开；正常聊天她一般写得比这短' }, f.num('reply.groupMaxChars', { min: 10, max: 500 }), h('span', { className: 'ab-muted' }, ' 字')),
+          h(Row, { label: '私聊一条最长', hint: '私聊可以整段说，设大一点更像正常聊天' }, f.num('reply.privateMaxChars', { min: 20, max: 2000 }), h('span', { className: 'ab-muted' }, ' 字')),
+          h(Row, { label: '按她自己的断句发', hint: '开：她换行、或者用 ||| 隔开的地方就是一条消息，程序不再按字数硬拆。关：回到老办法，按字数切碎' }, f.sw('reply.trustModelBubbles')),
+          h(Row, { label: '清单和汇报整段发', hint: '开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆' }, f.sw('reply.keepReports')),
+        ),
         h(TitleFilter, { draft, setDraft }),
         h(OwnerBrief, { draft, setDraft }),
         h(Card, { title: '发文件', right: f.sw('files.enabled'), desc: '打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。她只能发 QQ 工作区和下面目录里的文件；单个文件有大小上限；发过什么会记在日志里。' },
@@ -3835,7 +3841,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }

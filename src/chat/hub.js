@@ -10,7 +10,7 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
-import { parseReply, bubbleDelay, wantsVoice } from './reply.js'
+import { parseReply, bubbleDelay, wantsVoice, replyRules } from './reply.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
 import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
@@ -777,7 +777,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         log.warn('扩展模块改写回复出错：', error.message)
       }
     }
-    const r = parseReply(text)
+    // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
+    const r = parseReply(text, replyRules(cfg, chatId.startsWith('group:')))
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groupEngaged.delete(chatId.slice(6)) // 不想聊就退出这个话题
