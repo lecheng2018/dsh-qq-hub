@@ -285,6 +285,15 @@ export function createAggregatorMiddleware(options = {}) {
       counters.disposedAborts++
       return
     }
+    // US-008 verifier 观察①（移交 US-009 修）：poke/notice 等非 message 事件也可能带
+    // sender.user_id / group_id，按 chatId 口径会被误归进聚合窗口——lead 是 poke 时后续
+    // 消息被并进 poke 事件（有吞失风险），lead 是消息时 poke 被当 follower 吞掉。
+    // 修正为类型硬闸：只有 message 大类进窗，其余保留原事件流直通终端
+    // （legacyFallback 自带 onPoke 路由，旧核心的 poke 语义不经过窗口）。
+    if (ctx.inbound?.type !== 'message') {
+      await timed(ctx, 'aggregator-direct', () => next())
+      return
+    }
     const m = (typeof getConfig === 'function' ? getConfig()?.merge : null) || {}
     const chatId = m.enabled === false ? undefined : resolveChatId(ctx.inbound, ctx)
     // 不归聊（poke/notice/无 sender）或合流关闭：直通下行，不碰窗口。
