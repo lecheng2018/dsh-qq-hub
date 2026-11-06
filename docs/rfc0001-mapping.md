@@ -67,7 +67,7 @@ host.js:229               handleEvent(ev)          ← 前置段：gapTracker.no
 | seenIds 去重、dangerGuard、ACL（checkAllowed hub.js:1324）、群决策（decideGroupReply hub.js:1415） | Ingress Middleware 2-4 | US-009 |
 | 防抖合流 `pending/enqueue/flush`（hub.js:1709-1795） | Ingress Aggregator | US-008 |
 | 人设/记忆装配（mount 529/546 + contextProviders + memoryScore） | Context Assembly | US-010 |
-| 命令路由（onCommand 链、hub.js:1365-1376 主人命令分支） | Terminal Handler | US-011 |
+| 命令路由（onCommand 链、hub.js:1365-1376 主人命令分支） | Terminal Handler | US-011 **已落地**：src/kernel/mw-command-router.js（flag-on 装在 egress 内侧；16 内置命令 router 直答经 ctx.reply，ext 模块命令/混非文本段/提问等待中/非主人 → 透传 legacy，hub.js:1366 闸门保留为第二权威；覆盖矩阵见 progress US-011 段） |
 | 推理调用 `agent.followup/steer`（hub.js:1887/1890） | 暂留 legacy（管道终端之内） | Phase 4 换 ModelInferenceExecutor（US-012 后） |
 | 分条发送 `deliver`+`sendSegments`+`hooks.send`（hub.js:833/572/604） | Egress → Dispatcher | US-005/006/007 |
 | 记忆写回 `logChat`+`sessions.flush`（hub.js:934/1893） | Dispatcher & Sink 侧写 | US-007 收口发送时评估 |
