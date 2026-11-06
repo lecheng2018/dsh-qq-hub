@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EnvironmentDetector } from '../src/runtime/environment-detector.js'
-import { ConditionalModuleLoader } from '../src/runtime/module-loader.js'
+import { ConditionalModuleLoader, validateManifest } from '../src/runtime/module-loader.js'
 
 // ---- 桩件工厂 ----
 
@@ -253,4 +253,87 @@ test('getModule 不隐式触发装载：查询未知名后 entrypoint 依旧零�
   assert.equal(loader.getModule('ghost'), undefined)
   assert.equal(loader.getModule('lazy').id, 'lazy')
   assert.equal(m.hits.length, before, 'getModule 只读已装载集合，绝不补装载')
+})
+
+// ---------- validateManifest：结构校验与归一化（US-004 硬化项） ----------
+
+test('validateManifest：缺 targetPlatforms / displayRequirements 抛出含模块名的可诊断错误', async () => {
+  const noPlatforms = { name: 'gui-pet', priority: 0, displayRequirements: ['headless'], entrypoint: async () => ({}) }
+  const noDisplay = { name: 'snowluma', priority: 0, targetPlatforms: ['linux'], entrypoint: async () => ({}) }
+  assert.throws(() => validateManifest(noPlatforms), (error) => {
+    assert.ok(error instanceof TypeError)
+    assert.match(error.message, /gui-pet/, '错误文本必须带模块名，不然排障只能猜')
+    assert.match(error.message, /targetPlatforms/)
+    return true
+  })
+  assert.throws(() => validateManifest(noDisplay), /snowluma/)
+  assert.throws(() => validateManifest(noDisplay), /缺少 displayRequirements/)
+
+  // 走装载器两条入口都得拦下，且在任何 entrypoint 执行之前
+  const loader = new ConditionalModuleLoader({ detector: headlessDockerDetector(), debugLog: () => {} })
+  await assert.rejects(() => loader.evaluateGate(noDisplay), /snowluma.*displayRequirements/)
+  let entryHits = 0
+  const batch = [
+    { name: 'ok-mod', targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: async () => { entryHits++; return {} } },
+    noPlatforms,
+  ]
+  await assert.rejects(() => loader.loadModules(batch), /gui-pet/)
+  assert.equal(entryHits, 0, '整批预检：坏 manifest 必须在好模块 entrypoint 执行之前就拦下（不留半装载）')
+})
+
+test('validateManifest：manifest 非对象 / 缺 name 明确报错，不静默跳过', () => {
+  assert.throws(() => validateManifest(undefined), /必须是对象/)
+  assert.throws(() => validateManifest(['a']), /必须是对象/)
+  assert.throws(() => validateManifest({ targetPlatforms: ['linux'], displayRequirements: ['headless'] }), /缺少 name/)
+})
+
+test('validateManifest：priority 缺省补 0、显式非数字拒绝，且绝不改动调用方对象', () => {
+  const bare = { name: 'no-priority', targetPlatforms: ['linux'], displayRequirements: ['headless'] }
+  const fixed = validateManifest(bare)
+  assert.equal(fixed.priority, 0, '缺省 priority 视为 0')
+  assert.equal(bare.priority, undefined, '归一化只作用于返回的副本')
+  assert.notEqual(fixed, bare)
+  assert.throws(() => validateManifest({ ...bare, priority: 'high' }), (error) => {
+    assert.ok(error instanceof TypeError)
+    assert.match(error.message, /no-priority.*priority 必须是数字/)
+    return true
+  })
+})
+
+test('loadModules：priority 缺省模块按 0 参与降序调度', async () => {
+  const order = []
+  const mk = (name, priority) => {
+    const m = { name, targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: async () => { order.push(name); return { name } } }
+    if (priority !== undefined) m.priority = priority
+    return m
+  }
+  const loader = new ConditionalModuleLoader({ detector: headlessDockerDetector(), debugLog: () => {} })
+  await loader.loadModules([mk('default-a'), mk('high', 9), mk('low', -3), mk('default-b')])
+  assert.deepEqual(order, ['high', 'default-a', 'default-b', 'low'], '缺省 0 排在正数之后、负数之前')
+})
+
+test('loadModules：同批同名 manifest 拒绝并报错，不静默覆盖（entrypoint 零执行）', async () => {
+  const hits = []
+  const mk = (tag) => ({
+    name: 'dup-mod', version: tag, priority: 0,
+    targetPlatforms: ['linux'], displayRequirements: ['headless'],
+    entrypoint: async () => { hits.push(tag); return { tag } },
+  })
+  const loader = new ConditionalModuleLoader({ detector: headlessDockerDetector(), debugLog: () => {} })
+  await assert.rejects(() => loader.loadModules([mk('v1'), mk('v2')]), (error) => {
+    assert.match(error.message, /模块名重复：dup-mod/)
+    return true
+  })
+  assert.deepEqual(hits, [], '重名预检发生在装载之前：两个版本都不许执行')
+  assert.equal(loader.getModule('dup-mod'), undefined)
+})
+
+test('loadModules：跨批次同名同样拒绝，已装载导出保持不变', async () => {
+  const loader = new ConditionalModuleLoader({ detector: headlessDockerDetector(), debugLog: () => {} })
+  const first = { ...spyManifest({ name: 'stable' }).manifest, entrypoint: async () => ({ build: 'first' }) }
+  await loader.loadModules([first])
+  assert.deepEqual(loader.getModule('stable'), { build: 'first' })
+  const second = { ...first, entrypoint: async () => ({ build: 'second' }) }
+  await assert.rejects(() => loader.loadModules([second]), /模块名重复：stable.*拒绝覆盖/)
+  assert.deepEqual(loader.getModule('stable'), { build: 'first' }, '报错不得顺手把已装载实现换掉')
 })
