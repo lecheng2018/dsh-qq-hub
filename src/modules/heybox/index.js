@@ -3,7 +3,7 @@
 // 接口签名 / cosm 上传等实现在 src/heybox/ 里（api.js 签名与请求，site.js 业务）。
 // 写操作各有权限（面板「权限」页），默认仅主人；发帖前有自检清单（见面板与规则）。
 
-import { createHeybox } from '../../heybox/site.js'
+import { createHeybox } from './site.js'
 import { defineTool, str } from '../../tools/tools.js'
 import { profileToolVisible, profilePermits } from '../../chat/access.js'
 
