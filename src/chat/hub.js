@@ -17,7 +17,7 @@ import { createActivityState } from './activity-state.js'
 import { nowLine, agoLabel } from './clockline.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
-import { assessFishDensity, fishGuardReasonText, normalizeFishGuard } from './fish-guard.js'
+import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from './fish-guard.js'
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
 import { fetchImage, segmentBytes, fileSegmentBytes } from '../core/net.js'
@@ -29,7 +29,6 @@ import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags, speakableText, dedupeFaces } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
 import { createRecentMedia } from './recent-media.js'
-import { createTitleFilter } from './title-filter.js'
 import { createQuestionRegistry } from './questions.js'
 import { createApprovalRegistry } from './approvals.js'
 import { personaIdFor, readPersona } from '../persona/personas.js'
@@ -78,6 +77,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const lastTurnAt = new Map()
   const toolDisposers = new Map() // `${sessionKey}|${工具名}` → disposer，防注册表里残留同名工具时挂不上（#90）
   const sessionToChat = new Map() // sessionKey → chatId
+  // pair 对聊冷却表（1.3.63）：`群号:uid` → 冷却截止时间；懒清理（写时扫掉过期项）
+  const pairCalmUntil = new Map()
+  const pairCalmSweep = (nowTs) => {
+    if (pairCalmUntil.size < 50) return
+    for (const [k, v] of pairCalmUntil) if (v < nowTs - 3 * 3600_000) pairCalmUntil.delete(k)
+  }
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
   // 群聊状态（1.3.57）：消息缓冲 / 引用编号表 / 话题加入 / 说话与插话时间 / 群名与群成员缓存。
   // 七个 groupId 键的 Map 收进 group-state.js，规则（40 条上限、1 小时窗口、3 分钟话题）各归其位。
@@ -170,7 +175,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   const slowNoticeSent = new Set() // sessionKey → 这一轮已经发过「正在做」提示（慢工具，issue #74）
   const faces = createFaces({ onebot, log }) // QQ 系统表情：<face:名字> ↔ 编号
-  const titleFilter = createTitleFilter({ getConfig, onebot, log }) // 勾选的群里，头衔是某个词的成员（别的机器人）不理
 
   async function membersOf(groupId) {
     const hit = groups.cachedMembers(groupId)
@@ -1306,7 +1310,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const msg = parseMessageEvent(event, selfId, { faceName: faces.nameOf })
     if (msg.userId === selfId) return
     // 按群头衔过滤：这条当没看见（不进群聊上下文、不触发回复，@ 她、主人命令也一样）
-    if (msg.kind === 'group' && await titleFilter.shouldIgnore(event)) return
     bump('received')
     const now = Date.now()
 
@@ -1443,13 +1446,43 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       try {
         const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
         if (fg.enabled) {
+          // pair 级对聊泉冷却（1.3.63，OpenClaw pair-budget 思路）：只算我和这一个对象的
+          // 互相针对——已确认是鱼的 2 轮就停，陌生人 4 轮；冷却期内它说什么（包括 @ 我）
+          // 都不交给模型，别人照常、主人完全豁免。风暴在成型前就掐，不等全局占比报警。
+          const ownerQQ = String(getConfig().ownerQQ || '')
+          const pairKey = `${msg.groupId}:${msg.userId}`
+          if (String(msg.userId) !== ownerQQ) {
+            const calmUntil = pairCalmUntil.get(pairKey) || 0
+            if (calmUntil > now) {
+              log.info(`群 ${msg.groupId}：与 ${msg.nickname || msg.userId} 的对聊冷却中（${Math.ceil((calmUntil - now) / 60000)} 分钟），不回`)
+              logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+              if (pending.has(msg.chatId)) await addGroupImages(msg)
+              return
+            }
+            const pairMsgs = dedupConvo(groups.buffer(msg.groupId).filter((x) => x.uid && (x.self === true || String(x.uid) === String(msg.userId))).map((x) => ({
+              sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
+            })))
+            const loop = assessPairLoop(pairMsgs, String(msg.userId), { guard: fg })
+            if (loop.blocked) {
+              pairCalmSweep(now)
+              pairCalmUntil.set(pairKey, now + fg.pairCooldownMs)
+              log.info(`群 ${msg.groupId}：和 ${msg.nickname || msg.userId} 已经互来回 ${loop.rounds} 轮${loop.isFish ? '（名单里的鱼）' : ''}，${Math.round(fg.pairCooldownMs / 60000)} 分钟内不再接它的话`)
+              logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
+              if (pending.has(msg.chatId)) await addGroupImages(msg)
+              return
+            }
+          }
           const direct = decision.mode === 'must'
           const density = assessFishDensity(groups.buffer(msg.groupId).map((x) => ({
             sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
           })), { now, guard: fg, groupId: msg.groupId })
           if (density.blocked) {
-            if (!(direct && fg.bypassDirectAddress)) {
-              log.info(`群 ${msg.groupId}：${fishGuardReasonText(density)}，本轮不参与`)
+            // 「被直接叫到就豁免」只对人类有效：叫人的这只本身是鱼（fishIds/名字判定）时
+            // 豁免失效——不然两只 bot 互相 @ 就是无限对聊泉（2026-11-06 实测：麦麦系 bot
+            // 「某bot」已在鱼名单，仍靠连续 @ 把她从冷却里一次次捞出来聊了十分钟）。
+            const callerIsFish = senderFish({ userId: msg.userId, sender: msg.nickname }, fg)
+            if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
+              log.info(`群 ${msg.groupId}：${fishGuardReasonText(density)}${direct && callerIsFish ? '，叫她的也在鱼名单里，豁免不适用' : ''}，本轮不参与`)
               logChat(msg.chatId, msg.nickname, msg.text, msg.userId)
               if (pending.has(msg.chatId)) await addGroupImages(msg)
               return
@@ -1572,7 +1605,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const group = ev.group_id ? String(ev.group_id) : ''
     const poker = String(group ? ev.user_id : ev.sender_id ?? ev.user_id)
     if (!poker || poker === self) return
-    if (group && await titleFilter.shouldIgnore({ group_id: group, user_id: poker })) return
     const chatId = group ? `group:${group}` : `private:${poker}`
     interaction.rememberPoker(chatId, poker)
     if (!interaction.claimPoke(chatId)) return // 同一个聊天 20 秒内只算一次
@@ -2072,7 +2104,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     sendImage,
     sendSegments,
     pushToSession,
-    titleFilter,
     runSystemTurn,
     turnSendersAllOwner,
     turnHasOwner,
