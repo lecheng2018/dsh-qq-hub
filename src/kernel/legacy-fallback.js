@@ -14,6 +14,7 @@
 //     rawPayload（原事件引用），缺字段置 undefined 不臆造。
 
 import crypto from 'node:crypto'
+import { runWithContext } from './ctx-store.js'
 
 /** host 装配管道时使用的驱动标识（QQ 网关半边）。 */
 export const LEGACY_DRIVER_ID = 'onebot'
@@ -79,6 +80,13 @@ export function legacyEventToEnvelope(ev) {
 
 /**
  * 把遗留巨石 hub 包成洋葱终端中间件（RFC §4 Phase 0 的 createLegacyHubFallback）。
+ *
+ * US-007 出口切换补的一条硬约束：旧入口必须在 AsyncLocalStorage 里执行
+ * （runWithContext(ctx, …)），这样旧核心深处 await/setTimeout 链里的每一次发送都能
+ * `getCurrentContext()` 拿到本轮 ctx，把消息段投进 ctx.reply 缓冲池——不改 hub 一个签名。
+ * ALS 穿透定时器是 Node 内置行为（run 期内创建的 async resource 一律继承 store），
+ * 已由 test/kernel-egress-cutover.test.js 钉住。
+ *
  * 路由与 host.js handleEvent 现行分发逐条对齐：
  *   - post_type 'message' / 'message_sent' → legacyHub.onMessage(原事件)
  *   - post_type 'notice' 且 notice_type 'notify' 且 sub_type 'poke' → legacyHub.onPoke(原事件)
@@ -92,9 +100,9 @@ export function createLegacyHubFallback(legacyHub) {
     const postType = event && typeof event === 'object' ? event.post_type : undefined
     if (legacyHub && event) {
       if (postType === 'message' || postType === 'message_sent') {
-        if (typeof legacyHub.onMessage === 'function') await legacyHub.onMessage(event)
+        if (typeof legacyHub.onMessage === 'function') await runWithContext(ctx, () => legacyHub.onMessage(event))
       } else if (postType === 'notice' && event.notice_type === 'notify' && event.sub_type === 'poke') {
-        if (typeof legacyHub.onPoke === 'function') await legacyHub.onPoke(event)
+        if (typeof legacyHub.onPoke === 'function') await runWithContext(ctx, () => legacyHub.onPoke(event))
       }
     }
     await next()

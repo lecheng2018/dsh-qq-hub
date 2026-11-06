@@ -41,6 +41,11 @@ import { compose } from './kernel/compose.js'
 import { createContext } from './kernel/context.js'
 import { createLegacyHubFallback, isPipelineEnabled, legacyEventToEnvelope, unwrapPipelineError, LEGACY_DRIVER_ID } from './kernel/legacy-fallback.js'
 import { createTracingMiddleware } from './kernel/mw-tracing.js'
+// RFC-0001 Phase 1（US-005/006/007）：出口切换——pipeline 开启时 hub 的发送全部收口 ctx.reply → Dispatcher
+import { createDispatcher } from './kernel/dispatcher.js'
+import { createEgressMiddleware } from './kernel/mw-egress.js'
+import { isEgressShadowEnabled } from './kernel/ctx-store.js'
+import { createEgressFlushMiddleware, createEgressOnebot, createEgressSendHook, createEgressSender } from './kernel/mw-egress-cutover.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -350,12 +355,28 @@ export function apply(ctx) {
     },
   }
 
+  // ---------- RFC-0001 Phase 1（US-007）：出口切换装配件（pipeline 开启态才注入） ----------
+  // 关闭态（默认）：hub 拿到的还是原 onebot 客户端与原 hooks.send，旧路径逐字不动。
+  // 开启态：两个注入点都在装配层，hub.js 零改动——
+  //   hubOnebot   收口 send_group_msg / send_private_msg / upload_*_file
+  //               （live 吞包入队、shadow 旧通道真发并记 hash）；
+  //   hubSendHook 扩展模块改写语义不变，另记投递草稿（chatId/note/priority/delayMs）给出口认领。
+  // FLAG_EGRESS_SHADOW=true → shadow 双算比对（先比对后切权），缺省 live。
+  const usePipeline = isPipelineEnabled(process.env)
+  const egressMode = usePipeline && isEgressShadowEnabled(process.env) ? 'shadow' : 'live'
+  const hubOnebot = usePipeline
+    ? createEgressOnebot({ onebot, mode: egressMode, log: logger.child('egress') })
+    : onebot
+  const hubSendHook = usePipeline
+    ? createEgressSendHook({ legacySend: (message, info) => mods.filter('send', message, info), log: logger.child('egress') })
+    : (message, info) => mods.filter('send', message, info)
+
   hub = createHub({
     localApi: local,
     dsh: ctx,
     getConfig,
     log: logger.child('chat'),
-    onebot,
+    onebot: hubOnebot,
     stickers,
     tts,
     buildTools: (where) => mods.buildTools(where),
@@ -390,25 +411,50 @@ export function apply(ctx) {
       groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
       prompt: (content, info) => mods.filter('prompt', content, info),
       items: (items, info) => mods.filter('reply/items', items, info),
-      send: (message, info) => mods.filter('send', message, info),
+      // US-007：开启态换成出口切换变体（内部照样先跑 mods.filter('send', …)，模块语义一字不动）
+      send: hubSendHook,
       model: (sel, chat) => mods.filterSync('model', sel, chat),
       poke: (ev) => mods.claim('poke', ev),
       // security-lock 模块已移除：不再提供锁状态，approvals 的锁分支自然不会触发
     },
   })
 
-  // ---------- RFC-0001 Phase 0：FLAG_USE_PIPELINE 熔断开关（US-003） ----------
+  // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
   // 开关关闭（默认）：handleEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
-  // 开关打开：onebot 实时事件流走 compose([tracing 占位 → 遗留终端])，终端把事件原样送回旧入口。
+  // 开关打开：onebot 实时事件流走 compose([tracing → 边界 flush → egress → 遗留终端])。
   // backfill 补收、deliver/pushToSession 等旁路入口不经管道（边界见 docs/rfc0001-mapping.md）。
-  const usePipeline = isPipelineEnabled(process.env)
   if (usePipeline) {
+    // US-007：Dispatcher 的物理出口。sender 用的是**没被包装的**原 onebot 客户端，
+    // 所以「旧通道直发」和「新链路下发」不会互相套娃；upload_*_file 保留 hub 的长超时
+    // 与「网关看不到本机路径 → 改走 base64」回退（大小口径同 hub 的 30MB 上限）。
+    const egressSender = createEgressSender({
+      call: (action, params, opts) => onebot.call(action, params, opts),
+      uploadFile: (file) => {
+        const maxBytes = 30 * 1024 * 1024
+        if (!existsSync(file) || !statSync(file).isFile() || statSync(file).size > maxBytes) return ''
+        return 'base64://' + readFileSync(file).toString('base64')
+      },
+      log: logger.child('egress'),
+    })
+    // shaping 参数就是 chat/reply.js bubbleDelay 的口径（clamp 后 × 0.8~1.3 抖动）；
+    // 当前投递的 payload 一律带 delayMs=0（US-007 拍板），所以这里只做兜底：
+    // 谁以后给 payload 显式留空 delayMs，就自动按打字估时整形。
+    const dispatcher = createDispatcher({
+      mode: egressMode,
+      sender: egressSender,
+      log: logger.child('dispatcher'),
+      shaping: { baseMs: 350, perCharMs: 110, minGapMs: 700, maxGapMs: 4500 },
+    })
     legacyPipeline = compose([
       // RFC Middleware 1（US-004）：最外层 tracing，回溯阶段一行 debug 打点 total/mw0/mw1/err
       createTracingMiddleware({ log: logger.child('trace') }),
+      // US-007：边界 flush——必须在 egress 外层，回溯顺序才是「清洗 → 下发」
+      createEgressFlushMiddleware({ dispatcher, log: logger.child('egress-shadow') }),
+      // US-006：防思考泄漏截尾 + stripReasoning + 4000 字语义分条
+      createEgressMiddleware({ log: logger.child('egress') }),
       createLegacyHubFallback(hub),
     ])
-    log.info('RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端')
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；出口=${egressMode}`)
   }
 
   // ---------- 面板接口的小工具 ----------
