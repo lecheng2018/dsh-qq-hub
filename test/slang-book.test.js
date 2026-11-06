@@ -67,6 +67,9 @@ test('面板接口与注入路径都接上了', () => {
   const client = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
   assert.match(client, /function SlangBook/, '面板有独立卡片')
   assert.match(client, /post\('\/slang\/save'/)
+  // 1.3.60b：群选择器（不再平铺所有群）+ 记忆库「翻一翻」默认收起
+  assert.match(client, /选群/)
+  assert.match(client, /browseOpen, setBrowseOpen\] = useState\(false\)/, '翻一翻默认收起')
   // 1.3.59：黑话本和「蒸馏群友（学人）」分成两张独立卡，都不再埋在「记忆库」卡片里
   assert.match(client, /h\(Card, \{ title: '群黑话本（学一个群在用什么词）', right: f\.sw\('memory\.slang'\)/)
   assert.match(client, /h\(Card, \{ title: '蒸馏群友（学一个人的说话样子）'/)

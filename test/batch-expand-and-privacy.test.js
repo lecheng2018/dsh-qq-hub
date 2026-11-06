@@ -92,14 +92,14 @@ test('memory-privacy/list 没有 all=1 旁路：私聊打码只由 previewPrivat
   assert.match(seg, /profiles/, '支持人物小档案查看')
 })
 
-test('client.js 记忆列表按时间收纳：有分段标题（今天/昨天/…），条目仍平铺全文', () => {
+test('client.js 记忆列表：翻一翻默认收起（1.3.61），展开后仍按时间分段平铺', () => {
   const src = readFileSync(join(root, 'client/client.js'), 'utf8')
-  assert.match(src, /secOf|'今天'/, '按时间分段')
-  const i = src.indexOf("翻一翻")
+  assert.match(src, /browseOpen, setBrowseOpen\] = useState\(false\)/, '默认收起，整页不被拉长')
+  // 展开后照旧：按时间分段小标题、条目平铺全文
+  const i = src.indexOf("(browseOpen ? '▾' : '▸')")
   const seg = src.slice(i, i + 3000)
   assert.match(seg, /ab-section-title/, '分段用小标题')
   assert.match(seg, /MemoryRow/, '条目照常平铺渲染')
-  assert.doesNotMatch(seg, /setCollapsed|collapsed/, '收纳不等于折叠')
 })
 
 test('clear-main 连软删条目一起清（不加 !invalidAt 过滤）', () => {

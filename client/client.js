@@ -2322,6 +2322,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [q, setQ] = useState('')
       const [ins, setIns] = useState(null)
       const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
+      const [browseOpen, setBrowseOpen] = useState(false) // 「翻一翻」默认收起：整页长度不再被几百条记忆拉爆
       const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null) })
       const [styles, setStyles] = useState({})
       const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
@@ -2375,9 +2376,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('input', { className: 'ab-input', style: { flex: '1 1 120px' }, placeholder: '关于谁（可选）', value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }),
             h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: '随口一提' }, { value: 0.6, label: '比较重要' }, { value: 0.9, label: '非常重要' }] }),
             h(Btn, { small: true, kind: 'primary', disabled: !adding.text.trim(), onClick: async () => { const r = await post('/memory/add', adding); toast(r.ok ? '记住了' : r.message); setAdding({ text: '', aboutName: '', importance: 0.6 }); load() } }, '记住')),
-          h('div', { className: 'ab-section-title' }, '翻一翻'),
-          h('input', { className: 'ab-input wide', placeholder: '搜索记忆，例如：白米饭、游戏、约定…', value: q, onChange: (e) => setQ(e.target.value) }),
-          mem === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : mem.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没找到相关的记忆' : '还没有记住什么。' }) :
+          h('div', { className: 'ab-flex', style: { marginTop: 10, cursor: 'pointer' }, onClick: () => setBrowseOpen(!browseOpen) },
+            h('div', { className: 'ab-section-title', style: { margin: 0 } }, (browseOpen ? '▾' : '▸') + ' 翻一翻'),
+            h('span', { className: 'ab-muted ab-small' }, mem ? mem.length + ' 条记忆' : '')),
+          browseOpen && h('input', { className: 'ab-input wide', placeholder: '搜索记忆，例如：白米饭、游戏、约定…', value: q, onChange: (e) => setQ(e.target.value) }),
+          !browseOpen ? null : mem === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : mem.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没找到相关的记忆' : '还没有记住什么。' }) :
             h('div', null,
               h('div', { className: 'ab-flex', style: { marginBottom: 6 } },
                 h('span', { className: 'ab-muted ab-small' }, mem.length + ' 条' + (mem.length >= 300 ? '（只显示最近 300 条，可搜索）' : ''))),
@@ -2559,14 +2562,22 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
     /** 群黑话本（1.3.58）：每个群一份，和相处经验分开存、分开管。
      *  一行一条「词＝意思」，可直接改、直接删；整理时自动学到的也落在这里。 */
     function SlangBook({ toast, onChanged }) {
-      const [groups, setGroups] = useState(null)
+      const [groups, setGroups] = useState(null)   // 全部群（含没学到词的）
+      const [err, setErr] = useState('')           // 接口失败的原因（空态文案要分清是谁的锅）
+      const [sel, setSel] = useState('')           // 当前选中的群号
       const [busy, setBusy] = useState('')
-      const [editing, setEditing] = useState({}) // gid → 文本
-      const load = () => get('/slang').then((r) => setGroups(r.groups || [])).catch(() => setGroups([]))
+      const [editing, setEditing] = useState({})   // gid → 编辑中的文本
+      const load = () => get('/slang').then((r) => {
+        setErr('')
+        setGroups(r.groups || [])
+        setSel((cur) => cur || (r.groups || []).find((g) => g.list.length)?.gid || (r.groups || [])[0]?.gid || '')
+      }).catch((e) => { setErr(e.message || String(e)); setGroups([]) })
       useEffect(() => { load() }, [])
+      const cur = (groups || []).find((g) => String(g.gid) === String(sel))
+      const label = (g) => (g.name ? g.name + '（' + g.gid + '）' : '群 ' + g.gid)
       const textOf = (gid, list) => editing[gid] !== undefined ? editing[gid] : list.map((x) => x.word + '＝' + x.meaning).join('\n')
       const saveOne = async (gid, list) => {
-        setBusy('save:' + gid)
+        setBusy('save')
         try {
           const r = await post('/slang/save', { gid, text: textOf(gid, list) })
           toast(r.message || '保存好了', r.ok ? 'ok' : 'err')
@@ -2576,31 +2587,35 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       }
       const delOne = async (gid, item) => {
         if (!window.confirm('删掉这条黑话？\n\n' + item.word + '＝' + item.meaning)) return
-        setBusy('del:' + gid)
+        setBusy('del')
         try {
           const r = await post('/slang/delete', { gid, id: item.id })
           toast(r.message || '删掉了', r.ok ? 'ok' : 'err')
           await load(); onChanged && onChanged()
         } finally { setBusy('') }
       }
-      if (groups === null) return h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '黑话本读着呢…')
-      if (!groups.length) return h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '还没有学到黑话。打开上面的开关、群聊热几天，整理时她会自己挑出这个群在用的词。')
-      return h('div', { style: { marginTop: 10 } },
-        groups.map((g) => h('div', { key: g.gid, style: { marginBottom: 12 } },
-          h('div', { className: 'ab-flex', style: { marginBottom: 4 } },
-            h('b', { className: 'ab-small' }, '群 ' + g.gid),
-            h('span', { className: 'ab-muted ab-small' }, g.list.length + ' 个词'),
-            h('div', { className: 'ab-spacer' }),
-            h(Btn, { small: true, kind: 'primary', disabled: busy === 'save:' + g.gid, onClick: () => saveOne(g.gid, g.list) }, busy === 'save:' + g.gid ? '…' : '保存')),
-          h('div', { className: 'ab-list', style: { marginBottom: 4 } }, g.list.map((x) => h('div', { key: x.id, className: 'ab-li', style: { padding: '3px 0' } },
-            h('div', { className: 'body ab-small' }, h('b', null, x.word), ' ＝ ', x.meaning),
-            h(Btn, { small: true, kind: 'ghost', disabled: busy === 'del:' + g.gid, onClick: () => delOne(g.gid, x) }, '删')))),
-          h('textarea', {
-            className: 'ab-textarea', style: { minHeight: 56, fontFamily: 'inherit' },
-            value: textOf(g.gid, g.list),
-            placeholder: '一行一个词，写成「词＝意思」，例如：面包片＝新出的平民配装',
-            onChange: (e) => setEditing({ ...editing, [g.gid]: e.target.value }),
-          }))))
+      if (groups === null) return h('div', { className: 'ab-muted ab-small' }, '黑话本读着呢…')
+      if (err) return h('div', { className: 'ab-note err' }, '黑话本读不到：' + err + '。多半是插件代码刚更新但还没重启——重启 dsh web 后强刷本页。')
+      if (!groups.length) return h('div', { className: 'ab-muted ab-small' }, '群白名单是空的，先在「权限」页加群。')
+      return h('div', null,
+        // 群选择器：白名单 + 已学过词的群（去重）
+        h(Row, { label: '选群' },
+          h('select', { className: 'ab-input', style: { maxWidth: 260 }, value: sel, onChange: (e) => setSel(e.target.value) },
+            groups.map((g) => h('option', { key: g.gid, value: g.gid }, label(g) + (g.list.length ? '（' + g.list.length + ' 词）' : '（还没学词）'))))),
+        !cur ? null : h('div', { style: { marginTop: 4 } },
+          cur.list.length
+            ? h('div', { className: 'ab-list', style: { marginBottom: 6 } }, cur.list.map((x) => h('div', { key: x.id, className: 'ab-li', style: { padding: '3px 0' } },
+                h('div', { className: 'body ab-small' }, h('b', null, x.word), ' ＝ ', x.meaning),
+                h(Btn, { small: true, kind: 'ghost', disabled: busy === 'del', onClick: () => delOne(cur.gid, x) }, '删'))))
+            : h('div', { className: 'ab-muted ab-small', style: { marginBottom: 6 } }, '这个群还没学到词。打开开关后聊几天，整理时她会挑；也可以直接在下面手填。'),
+          h('div', { className: 'ab-flex', style: { alignItems: 'flex-start', gap: 8 } },
+            h('textarea', {
+              className: 'ab-textarea', style: { minHeight: 56, fontFamily: 'inherit', flex: 1 },
+              value: textOf(cur.gid, cur.list),
+              placeholder: '一行一个词，写成「词＝意思」，例如：面包片＝新出的平民配装',
+              onChange: (e) => setEditing({ ...editing, [cur.gid]: e.target.value }),
+            }),
+            h(Btn, { small: true, kind: 'primary', disabled: busy === 'save', onClick: () => saveOne(cur.gid, cur.list) }, busy === 'save' ? '…' : '保存'))))
     }
 
     /** 蒸馏群友（1.3.59）：指定某个群的某个人当数据源，学他的说话方式/性格/语气。
