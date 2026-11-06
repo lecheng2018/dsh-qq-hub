@@ -159,11 +159,13 @@ test('isStickerSegment：普通照片不算表情', () => {
   assert.equal(isStickerSegment({ type: 'mface', data: {} }), true)
 })
 
-test('stickerSizeOk 尺寸兜底', () => {
+test('stickerSizeOk 尺寸兜底（PR #1 新阈值：maxSide 1920、静态 5MB、GIF 10MB）', () => {
   assert.equal(stickerSizeOk({ width: 240, height: 240, bytes: 50_000 }), true)
-  assert.equal(stickerSizeOk({ width: 1080, height: 1080, bytes: 50_000 }), false)
-  assert.equal(stickerSizeOk({ width: 300, height: 100, bytes: 50_000 }), false)
-  assert.equal(stickerSizeOk({ width: 240, height: 240, bytes: 2_000_000 }), false)
+  assert.equal(stickerSizeOk({ width: 1080, height: 1080, bytes: 50_000 }), true, '1080 边长在 1920 内')
+  assert.equal(stickerSizeOk({ width: 3000, height: 3000, bytes: 50_000 }), false, '超 maxSide 拒')
+  assert.equal(stickerSizeOk({ width: 300, height: 100, bytes: 50_000 }), false, '长宽比 3:1 超容差拒')
+  assert.equal(stickerSizeOk({ width: 240, height: 240, bytes: 6_000_000 }), false, '静态超 5MB 拒')
+  assert.equal(stickerSizeOk({ width: 240, height: 240, bytes: 8_000_000, mime: 'image/gif' }), true, 'GIF 放宽到 10MB')
 })
 
 test('imageSize 读 PNG 宽高', () => {
