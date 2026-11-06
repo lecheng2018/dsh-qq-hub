@@ -64,3 +64,20 @@ test('#31 面板改名字 / 标签：去掉 #、去重、最多 5 个，名字�
   assert.deepEqual(r.item.tags, ['开心', '卖萌', '一二三四五六七八', 'a', 'b'])
   assert.equal(store.rename('nope', 'x').ok, false)
 })
+
+test('表情包双轨制：静态图上限5MB，GIF动图允许放宽至10MB以下', async () => {
+  const { stickerSizeOk } = await import('../src/chat/inbound.js')
+  // 1. 静态图 (PNG)
+  // 4MB 静态图通过
+  assert.equal(stickerSizeOk({ width: 300, height: 300, bytes: 4 * 1024 * 1024, mime: 'image/png' }), true)
+  // 6MB 静态图被拦截
+  assert.equal(stickerSizeOk({ width: 300, height: 300, bytes: 6 * 1024 * 1024, mime: 'image/png' }), false)
+
+  // 2. 动图 (GIF)
+  // 8MB GIF 动图通过
+  assert.equal(stickerSizeOk({ width: 300, height: 300, bytes: 8 * 1024 * 1024, mime: 'image/gif' }), true)
+  // 11MB GIF 动图被拦截
+  assert.equal(stickerSizeOk({ width: 300, height: 300, bytes: 11 * 1024 * 1024, mime: 'image/gif' }), false)
+  // 宽幅带字幕的 GIF 动图（比例 2.0）通过
+  assert.equal(stickerSizeOk({ width: 600, height: 300, bytes: 2 * 1024 * 1024, mime: 'image/gif' }), true)
+})
