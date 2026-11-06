@@ -47,6 +47,10 @@ import { createEgressMiddleware } from './kernel/mw-egress.js'
 import { isEgressShadowEnabled } from './kernel/ctx-store.js'
 import { createEgressFlushMiddleware, createEgressOnebot, createEgressSendHook, createEgressSender } from './kernel/mw-egress-cutover.js'
 import { createAggregatorMiddleware, isIngressAggregatorEnabled } from './kernel/mw-aggregator.js'
+// RFC-0001 Phase 2（US-009）：入口防御链——ratelimit/ACL/dedup 在出口记账之前短路无效流量
+import { createRatelimitMiddleware } from './kernel/mw-ratelimit.js'
+import { createAclMiddleware } from './kernel/mw-acl.js'
+import { createDedupMiddleware } from './kernel/mw-dedup.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -425,7 +429,7 @@ export function apply(ctx) {
 
   // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
   // 开关关闭（默认）：handleEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
-  // 开关打开：onebot 实时事件流走 compose([tracing → 边界 flush → egress → 入口合流 → 遗留终端])。
+  // 开关打开：onebot 实时事件流走 compose([tracing → ratelimit → acl → dedup → 边界 flush → egress → 入口合流 → 遗留终端])。
   // backfill 补收、deliver/pushToSession 等旁路入口不经管道（边界见 docs/rfc0001-mapping.md）。
   if (usePipeline) {
     // US-007：Dispatcher 的物理出口。sender 用的是**没被包装的**原 onebot 客户端，
@@ -460,6 +464,16 @@ export function apply(ctx) {
     legacyPipeline = compose([
       // RFC Middleware 1（US-004）：最外层 tracing，回溯阶段一行 debug 打点 total/mw0/mw1/err
       createTracingMiddleware({ log: logger.child('trace') }),
+      // US-009：入口防御链（RFC §2.1 Tracing→RateLimiter→ACL→Dedup→终端）。
+      // 刻意放在出口 flush/egress 之前：被守卫 abort 的事件按 compose §2.2（US-008a）
+      // 其后各级两级不进——出口链、聚合窗、旧核心都不为限流/无权/重传流量做记账；
+      // 外层 tracing 的 bubble 照常收尾打点（aborted 标记，不计错误）。
+      // 旋钮取构造缺省值（30 突发 + 5/s 持续 / LRU 2048），Phase 2 验收再调，
+      // 配置化文档留 US-012；ACL 复用 chat/access.js 判定（fail-closed），
+      // ratelimit/dedup 判定异常 fail-open。
+      createRatelimitMiddleware({ log: logger.child('ratelimit') }),
+      createAclMiddleware({ getConfig: () => cfg, log: logger.child('acl') }),
+      createDedupMiddleware({ log: logger.child('dedup') }),
       // US-007：边界 flush——必须在 egress 外层，回溯顺序才是「清洗 → 下发」
       createEgressFlushMiddleware({ dispatcher, log: logger.child('egress-shadow') }),
       // US-006：防思考泄漏截尾 + stripReasoning + 4000 字语义分条
@@ -473,7 +487,7 @@ export function apply(ctx) {
       ...(useIngressAggregator ? [pipelineAggregator] : []),
       createLegacyHubFallback(hub),
     ])
-    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}`)
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}`)
   }
 
   // ---------- 面板接口的小工具 ----------
