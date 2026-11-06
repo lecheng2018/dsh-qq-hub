@@ -1,0 +1,137 @@
+// 入口限流中间件（RFC-0001 §2.1 拓扑 Tracing→RateLimiter→ACL→Dedup→终端 / §4 Phase 2，US-009）。
+//
+// 令牌桶 per-key（缺省按 hub 同款 chatId 口径 group:<gid>/private:<uid>，键函数可注入）：
+// 容量 capacity 决定突发上限，refillPerSec 决定持续速率。超限事件 ctx.abort('ratelimited')
+// 且**不调 next()**——按 compose §2.2（US-008a）语义，其后 ACL/Dedup/出口链/聚合/终端
+// 两级都不进，只有外层 tracing 的 bubble 正常回溯收尾打点；出口链根本不为无效流量记账。
+//
+// **fail-open 拍板（controller）**：键推导/时钟等判定异常属资源防御故障——错拦正常
+// 流量的代价大于漏拦一次刷屏，异常一律放行并计 errors 数留 debug；与 mw-acl 的
+// fail-closed（权限防御，判定坏了不能当通行）刻意相反，两边的注释各自写明理由。
+//
+// capacity/refillPerSec 为构造参数：缺省给保守值（30 突发 + 5/秒持续，人类节奏远用不满，
+// 脚本刷屏必撞墙），这是 Phase 2 验收旋钮，实测调参在验收阶段做；配置化（面板/持久化）
+// 留给 US-012 文档化。桶表另设 LRU 上限 maxKeys 防止 chatId 无界增长——被逐出的桶按
+// 「新桶」复活，代价仅是多一次突发额度，不会丢消息。
+
+import { traceStage } from './mw-tracing.js'
+
+/** 事件 → hub 同款 chatId 口径（与 mw-aggregator.chatIdFromInbound 一致）；不可归聊返回 undefined。 */
+function chatKeyFromInbound(inbound) {
+  if (inbound?.groupId) return `group:${inbound.groupId}`
+  const userId = String(inbound?.sender?.userId ?? '')
+  if (userId && inbound?.subType !== 'group') return `private:${userId}`
+  return undefined
+}
+
+/**
+ * 令牌桶限流中间件工厂。
+ *
+ * @param {object} [options]
+ * @param {number} [options.capacity=30] 桶容量（突发上限）；Phase 2 验收旋钮，配置化留 US-012
+ * @param {number} [options.refillPerSec=5] 每秒补充令牌数；同上
+ * @param {number} [options.maxKeys=4096] 桶表 LRU 上限（内存防线，被逐出按新桶复活）
+ * @param {() => number} [options.clock] 毫秒时钟（缺省 Date.now；测试注入假时钟）
+ * @param {(inbound: any, ctx: any) => string | undefined} [options.keyFn] 限流键推导，undefined = 放行
+ * @param {{ debug?: Function, warn?: Function }} [options.log]
+ * @param {(name: string, ms: number) => any} [options.reportStage] G4 分段自报覆盖位（段名 'ratelimit'）；
+ *   缺省走 mw-tracing 的 traceStage，未装 tracing 时自动退化为直执行
+ * @returns {((ctx: any, next: () => Promise<void>) => Promise<void>) & { stats(): object }}
+ */
+export function createRatelimitMiddleware(options = {}) {
+  const {
+    capacity = 30,
+    refillPerSec = 5,
+    maxKeys = 4096,
+    clock = () => Date.now(),
+    keyFn = chatKeyFromInbound,
+    log,
+    reportStage,
+  } = options
+  if (!Number.isFinite(capacity) || capacity <= 0) throw new TypeError('ratelimit: capacity 必须为正数')
+  if (!Number.isFinite(refillPerSec) || refillPerSec < 0) throw new TypeError('ratelimit: refillPerSec 必须为非负数')
+  if (!Number.isFinite(maxKeys) || maxKeys <= 0) throw new TypeError('ratelimit: maxKeys 必须为正数')
+
+  /** 限流键 → { tokens, at }；Map 插入序即 LRU 序（touch 靠 delete+set 重排）。 */
+  const buckets = new Map()
+  const counters = { passed: 0, limited: 0, keyless: 0, errors: 0 }
+
+  const dbg = (msg) => { try { log?.debug?.(msg) } catch { /* 日志出口不吃崩主链 */ } }
+  const stage = (name, ms) => { try { reportStage?.(name, ms) } catch {} }
+
+  /** G4 自报口径同 mw-egress/mw-aggregator：注入 reportStage 走 clock；否则 traceStage（无 tracing 退化直执行）。 */
+  async function timed(ctx, name, fn) {
+    if (reportStage) {
+      const t0 = clock()
+      try {
+        return await fn()
+      } finally {
+        stage(name, clock() - t0)
+      }
+    }
+    return traceStage(ctx, name, fn)
+  }
+
+  /** 取一枚令牌：true = 放行（已扣减），false = 超限。时钟回拨按 0 间隔处理。 */
+  function take(key) {
+    const now = clock()
+    let b = buckets.get(key)
+    if (b) {
+      const dt = Math.max(0, now - b.at) / 1000
+      b.tokens = Math.min(capacity, b.tokens + dt * refillPerSec)
+      b.at = now
+      buckets.delete(key)
+      buckets.set(key, b) // LRU touch：热桶不被逐
+    } else {
+      b = { tokens: capacity, at: now }
+      buckets.set(key, b)
+      if (buckets.size > maxKeys) {
+        const oldest = buckets.keys().next().value
+        if (oldest !== key) buckets.delete(oldest)
+      }
+    }
+    if (b.tokens >= 1) {
+      b.tokens -= 1
+      return true
+    }
+    return false
+  }
+
+  async function ratelimit(ctx, next) {
+    let allowed = true
+    let limitedKey
+    let keyless = false
+    try {
+      const key = await timed(ctx, 'ratelimit', async () => keyFn(ctx.inbound, ctx))
+      if (key === undefined || key === null || key === '') {
+        // 不可归聊的事件（无 sender 的 notice 等）：不知道该拦谁，放行不误伤整链
+        keyless = true
+      } else {
+        allowed = take(String(key))
+        if (!allowed) limitedKey = String(key)
+      }
+    } catch (error) {
+      // fail-open 拍板：判定故障不吃消息，见文件头理由
+      counters.errors += 1
+      allowed = true
+      dbg(`ratelimit: 判定异常，按 fail-open 放行（${error?.message ?? error}）`)
+    }
+    if (!allowed) {
+      counters.limited += 1
+      dbg(`ratelimit: ${limitedKey} 令牌耗尽（capacity=${capacity}，refill=${refillPerSec}/s），abort('ratelimited')`)
+      try { ctx.abort('ratelimited') } catch { /* 裸 ctx 无 abort 槽：不因此炸链 */ }
+      return
+    }
+    if (keyless) counters.keyless += 1
+    counters.passed += 1
+    await next()
+  }
+
+  ratelimit.stats = () => ({
+    ...counters,
+    keys: buckets.size,
+    capacity,
+    refillPerSec,
+  })
+  return ratelimit
+}
