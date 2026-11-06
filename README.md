@@ -480,6 +480,49 @@ npm test
 
 ---
 
+## 🧅 RFC-0001 洋葱内核（实验通道，mission 分支）
+
+`mission/onion-refactor` 分支引入洋葱中间件内核（绞杀者模式渐进重构）。**总开关关闭时一切照旧**——
+flag-off 路径与重构前逐字等价、管道组件零装配；开启后 onebot 实时事件流经管道，遗留 hub.js 降为终端中间件：
+
+```text
+onebot 事件 ─▶ handleEvent（前置段两态原位）─▶ [FLAG_USE_PIPELINE?]
+   关 ─▶ hub.onMessage / hub.onPoke 直调（旧路径，逐字等价）
+   开 ─▶ compose([
+           tracing                        一行 debug 打点（total/mw0/mw1/err）
+         , ratelimit → acl → dedup        入口防御：超限/无权/重传 abort，出口链零记账
+         , egress flush                   边界 flush：整轮结束后 Dispatcher 排空下发
+         , egress                         防思考泄漏栈守卫截尾 + 4000 字语义分条
+         , command router                 16 内置主人命令 ctx.reply 直答
+         , (aggregator)                   入口合流窗 + busy steer —— FLAG_INGRESS_AGGREGATOR，默认关
+         , (persona → memory)             人设预取 + 记忆装配接管 —— NEW_MEMORY_PIPELINE，默认关
+         , legacy hub.js                  终端：LLM 推理/会话/群策略仍住这里 ])
+                        └─ 发送面收口：onebot.call 包装（三道安全闸之后）吞包入队 ─▶ Dispatcher ─▶ OneBot
+```
+
+| env 开关 | 缺省 | 作用 |
+|:--|:--|:--|
+| `FLAG_USE_PIPELINE` | 关 | 总闸：事件流走洋葱管道（其余三个开关的前提） |
+| `FLAG_EGRESS_SHADOW` | 关（=live 切权） | 出口双算观测：旧通道照发 + 新链 hash 比对，mismatch 出 warn |
+| `FLAG_INGRESS_AGGREGATOR` | 关 | 入口合流窗装配（默认关实因：与 hub 自家 pending 双合流会丢消息，见 docs 映射表 §2） |
+| `NEW_MEMORY_PIPELINE` | 关 | 记忆装配接管：contextProviders 由 ctx.state 缓存供给（缺口 A/B 修复前不该默认开） |
+
+| env 旋钮 | 缺省 | 作用 |
+|:--|:--|:--|
+| `QQHUB_RL_CAPACITY` | 30 | 限流令牌桶容量（突发上限）；仅正数生效，非法值回默认 |
+| `QQHUB_RL_REFILL_PER_SEC` | 5 | 每秒补令牌数；非负数合法（0=突发用尽后全拒） |
+
+开关解析口径统一：仅 `'true'`/`'1'`（忽略大小写与首尾空白）为真，乱值一律按 false/默认（熔断语义）；
+全部在进程启动时读取一次，**改动需重启**。**回滚**：所有开关 unset 即回到重构前行为（flag-off→on→off
+三进程演练已实证旧通道发送序列首末全等，见 CHANGELOG「RFC-0001 洋葱内核重构」段）。
+
+**无头 NAS**：`src/runtime/` 条件装载器（EnvironmentDetector + ConditionalModuleLoader）在冷启动按
+六道门禁（平台→display→Docker→环境变量→内存→自定义）剪枝 GUI/原生模块，被剪模块零代码执行、零句柄、零内存。
+
+完整落地映射、hub.js 存活职责清单与已知缺口：见 [`docs/rfc0001-mapping.md`](docs/rfc0001-mapping.md)。
+
+---
+
 ## 📄 开源许可与致谢
 
 - 插件本体源码采用 [MIT License](LICENSE) 授权开源；
