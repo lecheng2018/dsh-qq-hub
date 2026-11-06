@@ -29,16 +29,71 @@ const DANGER_RULES = [
   { label: '强制改系统目录权限', re: /\b(?:takeown|icacls)\s+[^\n]*(?:[a-zA-Z]:\\Windows|\/etc|\/usr|\/bin)\b/i },
   { label: 'chmod 根目录', re: /\bchmod\s+-R\s+777\s+\/(?:\s|$)/i },
   { label: 'forkshell 炸弹', re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/ },
+  // pwsh 高频直接执行（1.3.49 补）：iex/iwr 一行流在原规则里要求「同条命令里下载+执行」，
+  // 变量中转（$d=iwr …; iex $d）或单独 iex 执行已编码命令漏网——这里直接盯 iex 本体。
+  { label: 'pwsh 直接执行下载内容', re: /\b(?:iex|Invoke-Expression)\b/i },
+  { label: 'pwsh 绕过执行策略', re: /(?:-ep\b|-ExecutionPolicy\s+(?:Bypass|Unrestricted))/i },
+  { label: 'pwsh 隐藏窗口执行', re: /(?:-w\s+(?:hidden|1)\b|-WindowStyle\s+Hidden)/i },
+  { label: 'bash 解码后执行', re: /(?:base64|openssl)\s+(?:-d|--decode|-D)[^\n|;]*\|\s*(?:ba|z|k|da)?sh\b/i },
+  { label: 'xxd/printf 解码执行', re: /\b(?:xxd\s+-[rp]|printf\s+(?:\\x|0x))[^\n|;]*\|\s*(?:ba|z|k|da)?sh\b/i },
 ]
 
-/** 判断一条命令是否危险；返回命中的规则（含中文标签），不危险返回 null。 */
+/** 判断一条命令是否危险；返回命中的规则（含中文标签），不危险返回 null。
+ *  1.3.49 起：明文判完再做一层「解码探测」——base64/hex/拼接变形的命令还原后再判一遍，
+ *  绕过姿势（`echo cm0gLXJmIC8= | base64 -d | sh`、`\rm -rf /`、`r''m -rf /`、`$(printf ...) | sh`）不再漏网。 */
 export function isDangerousCommand (command) {
   const text = String(command || '')
   if (!text.trim()) return null
   for (const rule of DANGER_RULES) {
     if (rule.re.test(text)) return { label: rule.label }
   }
+  // 解码探测：把命令里可还原的片段解出来再判一轮。命中同一条规则，标签标注「变形」。
+  for (const variant of decodeVariants(text)) {
+    for (const rule of DANGER_RULES) {
+      if (rule.re.test(variant)) return { label: rule.label, label2: `${rule.label}（编码/变形绕过）`, obfuscated: true }
+    }
+  }
   return null
+}
+
+/**
+ * 从命令里挖出可能的「隐藏载荷」并还原：base64 / hex / $'\x..' 拼接 / 反斜杠插空。
+ * 只做探测用——解出来的文本不执行，只喂给同一套规则再判一遍。宁多勿漏（这里只影响是否要确认）。
+ */
+export function decodeVariants (command) {
+  const text = String(command || '')
+  const out = new Set()
+
+  // 1) base64：命令里出现的 base64 样式长串（含 -d/--decode 上下文更可疑，但无上下文也探）
+  for (const m of text.matchAll(/[A-Za-z0-9+/=]{16,}/g)) {
+    try {
+      const decoded = Buffer.from(m[0].replace(/=+$/, ''), 'base64').toString('utf8')
+      // 还原结果要有可打印主体才算（乱码说明不是 base64 文本）
+      const printable = decoded.replace(/[^\x20-\x7e\u4e00-\u9fff]/g, '')
+      if (decoded.length >= 4 && printable.length >= decoded.length * 0.7) out.add(decoded)
+    } catch {}
+  }
+  // 2) hex：\x##、0x## 连续串、以及 $'\x2frm\x20-rf' 这类 ANSI-C 拼接
+  const hexRuns = []
+  for (const m of text.matchAll(/(?:\\x[0-9a-fA-F]{2}){3,}/g)) {
+    hexRuns.push(m[0].replace(/\\x/g, ''))
+  }
+  for (const m of text.matchAll(/\b[0-9a-fA-F]{16,}\b/g)) {
+    if (m[0].length % 2 === 0) hexRuns.push(m[0])
+  }
+  for (const hex of hexRuns) {
+    try {
+      const decoded = Buffer.from(hex, 'hex').toString('utf8')
+      const printable = decoded.replace(/[^\x20-\x7e\u4e00-\u9fff]/g, '')
+      if (decoded.length >= 4 && printable.length >= decoded.length * 0.7) out.add(decoded)
+    } catch {}
+  }
+  // 3) 反斜杠插空 / shell 引号拆词（\rm、r''m、r"m" -rf）：剥掉反斜杠和空引号对还原
+  const stripped = text.replace(/\\([a-zA-Z./-])/g, '$1').replace(/''|""|''''|""""/g, '')
+  if (stripped !== text) out.add(stripped)
+  // 4) printf/echo 拼接执行：把管道右侧是否接 sh/iex 的判定交给规则本身——
+  //    这里只补一个「管道右边还原后的整段」不需要，规则已覆盖 | sh / iex。
+  return [...out]
 }
 
 const clip = (text, n = 300) => (text.length > n ? text.slice(0, n) + '…' : text)

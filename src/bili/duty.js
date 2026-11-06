@@ -220,6 +220,7 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
       const commentLeft = c.comment && canPost(s) ? Math.max(0, c.maxCommentsPerDay - s.comments) : 0
       const out = await think(`你在 B 站刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${x.digest}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", "share":"想私聊分享给${owner()}的话（觉得${owner()}会喜欢才写，不然空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
+        `remember 是写给你**将来自己**的：主人问起「你最近看啥了」、或群里聊到相关话题时，你会靠它想起这次经历。所以要写「这次刷视频，真正让我停下来注意的东西」——一个具体的细节、一句戳到我的原话、一个我之前不知道的事实、或它和我已知事情的连接（「这不就是 xx 说的那个」）。别写成视频内容简介（那是摘要不是记忆），也别只有情绪（「太戳我了」戳的是什么？）。没有就空字符串，别硬凑。` +
         `这次最多评论 ${commentLeft} 个。只输出 JSON 数组。`)
       const decisions = pickJson(out, [])
       let commented = 0
@@ -231,11 +232,13 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
         const v = x.info
         const feeling = String(d.feeling || '').trim()
         if (feeling) felt.set(v.bvid, feeling)
-        // 长期记忆里不写视频标题（那是浏览流水，还会把主人的兴趣画像写进去）。
-        // 值钱的是她刷完之后的判断，没有判断就不记。
-        if (feeling) memory?.addEvent?.({ text: `在B站刷到了点东西，她的想法：${feeling.slice(0, 60)}`, tags: ['B站', '想法'], importance: 0.38 })
+        // 出处带标题（1.3.55）：1.3.40 去流水化矫枉过正——「在B站刷到了点东西」连看了什么都不剩，
+        // 两周后她自己和主人都对不上「这条想法说的是哪个视频」。折中：标题只作出处（截 30 字），
+        // 不写 UP主/播放量/分区那些真流水；正文仍是她的判断。
+        const srcTitle = String(v.title || '').slice(0, 30)
+        if (feeling) memory?.addEvent?.({ text: `看了《${srcTitle}》，她的想法：${feeling.slice(0, 60)}`, tags: ['B站', '想法'], importance: 0.3, ephemeral: true })
         // 她自己写下的结论才算知识，值得长期留；tag 打上「知识」，注入时能分出来。
-        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: String(d.remember).slice(0, 200), tags: ['B站', '知识'], importance: 0.55, source: 'event' })
+        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: `（来自《${srcTitle}》）${String(d.remember).slice(0, 180)}`, tags: ['B站', '知识'], importance: 0.55, source: 'event' })
         const comment = String(d.comment || '').trim()
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {

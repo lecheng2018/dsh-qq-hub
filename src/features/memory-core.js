@@ -235,6 +235,9 @@ export function shouldForget(m, now = Date.now()) {
 
   const step = clarityOf(m, now)
   if (step === 'trace') {
+    // ephemeral（浏览情绪残留）：走到「只剩印象」就直接忘，不必等 retention 掉到极低——
+    // 这类条目生来就是要淡出的，留着只会稀释检索。
+    if (Number(m.ephemeral)) return true
     // 只走到「印象」阶段还不够，得再放一段（retention 掉到极低）才真正忘
     return retention(m, now) < 0.05
   }
@@ -249,7 +252,10 @@ export function retention(m, now = Date.now()) {
   const last = Math.max(m.at || 0, m.lastHit || 0)
   const days = Math.max(0, (now - last) / 86400_000)
   const strength = 1 + Math.min(10, Number(m.hitDays) || 0)
-  const tau = 20 * strength * (0.5 + (Number(m.importance) || 0.5))
+  // ephemeral（B站「想法」这类浏览情绪残留）：τ 减半——两天热度，一周就该淡了。
+  // 不衰减的话刷屏速率（72 条/天）会把长期记忆库整个淹掉（2026-11-06 复盘）。
+  const eph = Number(m.ephemeral) ? 0.5 : 1
+  const tau = 20 * strength * (0.5 + (Number(m.importance) || 0.5)) * eph
   return Math.exp(-days / tau)
 }
 

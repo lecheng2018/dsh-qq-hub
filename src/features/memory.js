@@ -15,6 +15,8 @@ import { dataDir, readJson, writeJson } from '../core/store.js'
 import { askModel } from '../core/llm.js'
 import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
+import { discoverSlangCandidates } from './slang-discover.js'
+import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint } from './distill.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
@@ -156,6 +158,18 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const scope = scopeKeyOf(chatOrScope)
     if (!scope) return buildIndex([]) // fail-closed：没说清楚给谁看，就什么都不给
     const chatLike = chatOrScope && typeof chatOrScope === 'object' ? chatOrScope : null
+    // 缓存有效性只看 rev（SQLite save 是 diff 写：rev 没变 ⇒ items 没变）。
+    // 先查缓存再 load()：稳态（每轮 recall/recallHint）直接命中，省掉整库深拷贝——
+    // 2000 条库上这一步把稳态检索成本从 ~3ms 压到 0.1ms（2026-11-06 实测）。
+    const revNow = store ? store.load().rev : null
+    if (revNow === null || revNow === undefined) {
+      const s0 = load()
+      const hit0 = cache.get(scope)
+      if (hit0 && hit0.stamp === (s0.rev || 0) && hit0.count === s0.items.length) return hit0.idx
+    } else {
+      const hit0 = cache.get(scope)
+      if (hit0 && hit0.stamp === revNow) return hit0.idx
+    }
     const s = load()
     // 可看见的条目：本作用域的 + global（global 处处可见）
     const visible = s.items.filter((m) => {
@@ -212,7 +226,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     return false
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '' }) {
+  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '', ephemeral = false }) {
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
@@ -230,7 +244,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       }
       return false
     }
-    const dup = scopeItems.find((m) => maybe(m) && similarity(m.text, t) >= 0.6
+    // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增
+    const biliLike = t.includes('B站') || tags.includes('B站') || scopeItems.some((m) => (m.tags || '').includes('B站'))
+    const dupAt = biliLike ? 0.5 : 0.6
+    const dup = scopeItems.find((m) => maybe(m) && similarity(m.text, t) >= dupAt
       && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || '')))
     if (dup) {
       dup.text = t.length >= dup.text.length ? t : dup.text
@@ -244,9 +261,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
-    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0, clarity: 'vivid' }
+    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0, clarity: 'vivid', ephemeral: ephemeral ? 1 : '' }
     s.items.push(item)
     evictIfNeeded(s, finalScope)
+    s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
     save(s)
     return { ok: true, message: '✓', id: item.id }
   }
@@ -295,12 +313,12 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
    *
    *  所以：默认 private:<主人QQ>；要公开进所有聊天，必须显式传 scope: 'global'
    *  （只有「在别人空间公开评论」这种对方本来就看得见的事才配）。 */
-  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '' }) {
+  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '', ephemeral = false }) {
     // 优先级：显式 scope > 当前 chat > chatId 推断 > 主人私聊（兜底不再是 global）
     const sc = String(scope || '').trim() || (chat ? scopeOfChat(chat) : scopeFromChatId(chatId))
     const ownerScope = String(getConfig()?.ownerQQ || '')
     const finalScope = sc === 'global' ? 'global' : sc || (ownerScope ? `private:${ownerScope}` : 'global')
-    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: finalScope })
+    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: finalScope, ephemeral })
   }
 
   /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。
@@ -504,6 +522,89 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   function insightsOf(key) {
     return (load().insights || {})[key] || []
   }
+  /** 群黑话本（1.3.58 独立存储）：以前和相处经验挤在 insights[key] 的 8 条槽位里，
+   *  reflect() 每轮整体覆盖那个数组，模型不知道【黑话】条目存在 → 学到就丢。
+   *  现在单独存 s.slang[gid]，各自容量、各自注入、各自面板。 */
+  const SLANG_CAP = 12
+  function slangOf(gid) {
+    return (load().slang || {})[String(gid)] || []
+  }
+  /** 合并写入：同词更新解释，最多 SLANG_CAP 条（新的在前）。 */
+  function putSlang(gid, items) {
+    const id = String(gid)
+    const s = load()
+    s.slang = s.slang || {}
+    const old = s.slang[id] || []
+    const next = []
+    for (const it of items) {
+      const w = String(it.word || '').trim()
+      const m = String(it.meaning || '').trim()
+      if (!w || !m) continue
+      next.push({ id: randomUUID().slice(0, 8), word: w, meaning: m, at: Date.now() })
+    }
+    // 同词去重：新解释覆盖旧的
+    const byWord = new Map(next.map((x) => [x.word, x]))
+    for (const o of old) if (!byWord.has(o.word)) byWord.set(o.word, o)
+    s.slang[id] = [...byWord.values()].sort((a, b) => b.at - a.at).slice(0, SLANG_CAP)
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return s.slang[id]
+  }
+
+  // ---------------- 蒸馏群友（1.3.59）----------------
+  // 指定某个群的某个人当数据源，学他的说话方式/性格/语气（不冒充他本人）。
+  // 目标列表和学到的画像都存在记忆库里，跟着 memories.db 一起持久化。
+  const distillKey = (gid, uid) => `group:${String(gid)}#${String(uid)}`
+  /** 目标列表：[{ gid, uid, name }] */
+  function distillTargets () {
+    return (load().distillTargets || []).map((t) => ({ gid: String(t.gid), uid: String(t.uid), name: String(t.name || '') }))
+  }
+  function addDistillTarget ({ gid, uid, name }) {
+    const g = String(gid || '').replace(/\D/g, '')
+    const u = String(uid || '').replace(/\D/g, '')
+    if (!g || !u) return { ok: false, message: '群号和 QQ 号都要填' }
+    const s = load()
+    s.distillTargets = s.distillTargets || []
+    if (s.distillTargets.some((t) => String(t.gid) === g && String(t.uid) === u)) {
+      return { ok: false, message: '这个群里的这个人已经在学了' }
+    }
+    s.distillTargets.push({ gid: g, uid: u, name: String(name || '').slice(0, 20) })
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return { ok: true, message: '加上了，下次整理记忆时开始学他的说话样子' }
+  }
+  function removeDistillTarget (gid, uid) {
+    const g = String(gid || ''), u = String(uid || '')
+    const s = load()
+    const before = (s.distillTargets || []).length
+    s.distillTargets = (s.distillTargets || []).filter((t) => !(String(t.gid) === g && String(t.uid) === u))
+    if (s.distillTargets.length === before) return { ok: false, message: '没找到这个目标' }
+    s.distill = s.distill || {}
+    delete s.distill[distillKey(g, u)]
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return { ok: true, message: '不学了，学到的东西也一起清掉了' }
+  }
+  /** 某个目标的画像 { style, persona, tone, samples, updatedAt } */
+  function distillOf (gid, uid) {
+    return (load().distill || {})[distillKey(gid, uid)] || null
+  }
+  function putDistill (gid, uid, profile, samples) {
+    const s = load()
+    s.distill = s.distill || {}
+    const key = distillKey(gid, uid)
+    const old = s.distill[key] || null
+    const merged = mergeProfile(old || {}, profile)
+    s.distill[key] = { ...merged, samples: Math.max(Number(old && old.samples) || 0, Number(samples) || 0), updatedAt: Date.now() }
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return s.distill[key]
+  }
+  /** 面板用：目标 + 各自画像，合成一份。 */
+  function distillList () {
+    return distillTargets().map((t) => ({ ...t, profile: distillOf(t.gid, t.uid) }))
+  }
+
   function setInsights(key, list, name) {
     const s = load()
     s.insights = s.insights || {}
@@ -611,6 +712,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
     const ins = insightsOf(personKey(chat))
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
+    if (chat.kind === 'group') {
+      // 蒸馏群友（1.3.59）：这个群指定了要学的人，就带上他的说话样子（含「不冒充」边界）
+      const gid = String(chat.groupId)
+      for (const t of distillTargets()) {
+        if (t.gid !== gid) continue
+        const hint = renderDistillHint(t.name || t.uid, distillOf(t.gid, t.uid) || {})
+        if (hint) parts.push(hint)
+      }
+      const slang = slangOf(chat.groupId).slice(0, 8)
+      if (slang.length) parts.push('（这个群的黑话，听懂了就用、别硬套：' + slang.map((x) => x.word + '＝' + x.meaning).join('；') + '）')
+    }
     const sty = styleOf(personKey(chat))
     const self = styleOf('self')
     if (sty.length || self.length) {
@@ -952,7 +1064,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
         save(s)
         days++
       }
-      if (days) await learnSelfStyle()
+      if (days) {
+        await learnSelfStyle()
+        // 蒸馏群友（1.3.53）：每个群一天一次黑话提炼——纯统计找候选（零成本），
+        // 模型只负责判断「是不是黑话、什么意思」，写进 insights['group:<gid>'] 同一套存储。
+        try { await learnGroupSlang(day) } catch (error) { log.debug('群黑话提炼失败：', error.message) }
+        // 蒸馏群友（1.3.59）：指定的人的说话样子
+        try { await learnDistill(day) } catch (error) { log.debug('蒸馏群友失败：', error.message) }
+      }
       // 这次记忆有变化的人，重写人物小档案（每次最多 8 个人）
       const live = load()
       const touched = [...new Set(live.items
@@ -998,6 +1117,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       const before = s.items.length
       s.items = s.items.filter((m) => !shouldForget({ ...m, ownerQQ: getConfig()?.ownerQQ || '' }))
       const forgot = before - s.items.length
+      if (forgot || blurred) s.rev = (s.rev || 0) + 1 // 条目被遗忘/变模糊，索引缓存要失效
       s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles }
       save(s)
       log.info(`整理临时记忆：处理了 ${days} 天，新增或更新 ${added} 条长期记忆，更新了 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条旧的变模糊了` : ''}${forgot ? `，忘掉 ${forgot} 条不重要的旧记忆` : ''}`)
@@ -1008,6 +1128,126 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     } finally {
       busy = false
     }
+  }
+
+  /**
+   * 蒸馏群友（1.3.59）：指定某人当数据源，学他的说话方式/性格/语气。
+   * 每天整理时对每个目标跑一次（每群每人一次调用）；他当天说得太少就不学（学出来也是瞎猜）。
+   * 学的是「怎么说话」，不是「冒充谁」——注入文本里带硬边界。
+   */
+  async function learnDistill (day) {
+    const cfg = getConfig()
+    if (cfg.memory?.distill === false) return
+    const targets = distillTargets()
+    if (!targets.length) return
+    // 证据按「最近 3 天」累加：molroo 建议 20~30 条样本才可靠，而多数群一天攒不到 20 句
+    const days = (hub.chatLogDays ? hub.chatLogDays() : []).slice(-3)
+    const done = (load().distillLearned || {})
+    const doneToday = new Set(done[day] || [])
+    for (const t of targets) {
+      const tag = `${t.gid}#${t.uid}`
+      if (doneToday.has(tag)) continue // 这天这个人学过了（重启不重复花钱）
+      const groupLines = []
+      for (const d of days) for (const l of (hub.chatLogOf ? (hub.chatLogOf(d) || []) : [])) {
+        if (String(l.chatId) === `group:${t.gid}`) groupLines.push(l)
+      }
+      if (!groupLines.length) continue
+      const mine = collectMemberLines(groupLines, t.uid)
+      if (!enoughEvidence(mine)) {
+        log.debug(`蒸馏群友：${t.name || t.uid} 最近 3 天只说了 ${mine.length} 句，证据不够（要 20 句），跳过`)
+        continue
+      }
+      // 上下文：他说这几句时群里前后在聊什么（帮助模型判断语气）
+      const context = groupLines.filter((l) => l.who !== 'bot').slice(-40).map((l) => `${l.who}：${String(l.text).slice(0, 80)}`)
+      // 对照：群里别人的话（不含他、不含她自己）——靠「他和别人不一样在哪」定位特征
+      const others = groupLines
+        .filter((l) => l.who !== 'bot' && String(l.uid || '') !== String(t.uid))
+        .slice(-60)
+        .map((l) => `${l.who}：${String(l.text).slice(0, 100)}`)
+      const old = distillOf(t.gid, t.uid)
+      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, memberLines: mine, context, others, old })
+      let out = ''
+      try {
+        out = await askModel(dsh, { cfg, system, text, maxTokens: 800, temperature: 0.3 })
+      } catch (error) {
+        log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
+        continue
+      }
+      const profile = parseDistillProfile(out)
+      if (!profile || (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length)) {
+        log.debug(`蒸馏群友：${t.name || t.uid} 没提炼出东西，跳过`)
+        continue
+      }
+      putDistill(t.gid, t.uid, profile, mine.length)
+      doneToday.add(tag)
+      log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(profile.samples || []).length} 条原话）`)
+    }
+    if (doneToday.size) {
+      const s = load()
+      s.distillLearned = s.distillLearned || {}
+      s.distillLearned[day] = [...doneToday]
+      save(s)
+    }
+  }
+
+  /**
+   * 蒸馏群友（1.3.53）：从一天的群聊里提炼黑话/梗/圈内称呼，写进 insights（key = group:<gid>）。
+   *
+   * 三段式：
+   *   ① discoverSlangCandidates（纯本地）→ 词频候选，零模型调用；
+   *   ② 候选 + 原句采样 → 一次模型调用判断「是不是黑话/梗、什么意思、怎么用」；
+   *   ③ 写进 insights（和相处经验同一套存储/注入/面板路径），每群最多 8 条，旧的合并、冷掉的淘汰。
+   *
+   * 成本：每群每天一次模型调用，几百 token。没有候选（全是日常词）就零调用。
+   */
+  async function learnGroupSlang(day) {
+    const cfg = getConfig()
+    if (cfg.memory?.slang !== true) return // 默认关：面板开关打开才学习
+    const all = hub.chatLogOf(day) || []
+    if (all.length < 10) return
+    const byGroup = new Map()
+    for (const l of all) {
+      if (!String(l.chatId || '').startsWith('group:')) continue
+      if (!byGroup.has(l.chatId)) byGroup.set(l.chatId, [])
+      byGroup.get(l.chatId).push(l)
+    }
+    for (const [chatId, lines] of byGroup) {
+      const key = chatId // insights key 和 personKey 的 group 形态一致，contextFor 自动带上
+      const cands = discoverSlangCandidates(lines)
+      if (!cands.length) continue
+      const linesSeen = (load().slangLearned || {})
+      if ((linesSeen[day] || []).includes(chatId)) continue // 这天这个群提炼过了（重启不重复花钱）
+      const groupName = (hub.groupNames?.get?.(chatId.slice(6)) || chatId.slice(6))
+      const prompt = lines
+        .filter((l) => l.who !== 'bot')
+        .map((l) => `${l.who}：${l.text}`)
+        .slice(-120)
+        .join('\n')
+      const out = await askModel(dsh, {
+        cfg,
+        system: '你在帮一个 QQ 群里的 AI 群友整理「这个群的黑话本」。下面是群聊记录和词频统计里挑出来的高频词候选。\n'
+          + '判断哪些候选**真的是这个群/这个圈子在用的黑话、梗、圈内称呼或缩写**（常用词、普通词汇一律不要）。\n'
+          + '对每个入选的词给一句话解释（这个词在这群里的意思、怎么用），一条不超过 40 字。\n'
+          + '没有值得记的就输出 []。只输出 JSON 数组：[{"word":"词","meaning":"意思和用法"}]，最多 6 条。',
+        text: `群名：${groupName}\n\n词频候选：\n${cands.map((c) => `-「${c.word}」出现 ${c.count} 次，例如：${(c.samples || []).join(' / ')}`).join('\n')}\n\n聊天记录：\n${prompt}`,
+        maxTokens: 500,
+      })
+      let items = []
+      try {
+        const arr = JSON.parse((String(out).match(/\[[\s\S]*\]/) || [String(out)])[0])
+        if (Array.isArray(arr)) items = arr.filter((x) => x && x.word && x.meaning).slice(0, 6)
+      } catch {}
+      if (!items.length) continue
+      // 写进独立的黑话本（1.3.58）：不再和相处经验抢 insights 的 8 条槽位
+      putSlang(key.slice(6), items)
+      log.info(`群黑话（${groupName}）：学到 ${items.length} 个词（${items.map((x) => x.word).join('、')}）`)
+    }
+    // 记录「哪天哪个群提炼过」：重启/重放聊天日志时不重复花模型调用
+    const s = load()
+    s.slangLearned = s.slangLearned || {}
+    s.slangLearned[day] = [...byGroup.keys()]
+    s.rev = (s.rev || 0) + 1
+    save(s)
   }
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
@@ -1034,11 +1274,18 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   /** 每分钟调一次：一天几个整理时间点（默认 04:00 / 16:00），到点且这个点今天还没跑过就整理。 */
   async function tick() {
     const cfg = getConfig().memory
-    if (!cfg.enabled || !cfg.dailyConsolidate) {
-      const cutoff = dayKey(new Date(Date.now() - 14 * 86400_000))
-      for (const day of hub.chatLogDays?.() || []) if (day < cutoff) hub.deleteChatLog(day)
-      return
+    // 聊天流水滚动保留（1.3.49 #5）：每聊天每日一个 JSONL，之前只在「整理关着」的分支里
+    // 顺手清 14 天前的，开着整理反而永远不清——几个月下来磁盘上堆几百个文件，
+    // recentTranscript（token-guardian 压缩输入）也要多翻好几天。现在两条路径都清。
+    // 保留天数取两者较大值：整理流水最多用 2 天，token-guardian 翻得更深，默认 30 天足够。
+    {
+      const keepDays = Math.max(14, Number(getConfig().chatlog?.keepDays) || 30)
+      const cutoff = dayKey(new Date(Date.now() - keepDays * 86400_000))
+      const stale = (hub.chatLogDays?.() || []).filter((day) => day < cutoff)
+      for (const day of stale) hub.deleteChatLog(day)
+      if (stale.length) log.info(`聊天流水：清理了 ${stale.length} 天前的旧文件（保留 ${keepDays} 天）`)
     }
+    if (!cfg.enabled || !cfg.dailyConsolidate) return
     const s = load()
     const today = dayKey()
     const now = new Date()
@@ -1132,6 +1379,31 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       return Object.entries(s.insights || {}).map(([key, list]) => ({ key, name: (s.insightNames || {})[key] || '', list }))
     },
     setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
+    /** 群黑话本（面板用）：[{ gid, list: [{id, word, meaning, at}] }] */
+    slang: () => Object.entries(load().slang || {})
+      .map(([gid, list]) => ({ gid, list: list || [] }))
+      .filter((x) => x.list.length)
+      .sort((a, b) => b.list.length - a.list.length),
+    slangOf,
+    putSlang,
+    /** 蒸馏群友（1.3.59）：目标管理 + 画像读取（面板用） */
+    distillList,
+    distillTargets,
+    distillOf,
+    putDistill,
+    addDistillTarget,
+    removeDistillTarget,
+    removeSlang: (gid, id) => {
+      const s = load()
+      s.slang = s.slang || {}
+      const list = s.slang[String(gid)] || []
+      const next = list.filter((x) => String(x.id) !== String(id))
+      if (next.length === list.length) return false
+      s.slang[String(gid)] = next
+      s.rev = (s.rev || 0) + 1
+      save(s)
+      return true
+    },
     /** 删一条相处经验：insights[key] 是 {id,text,at} 数组，按 id 摘掉一条。 */
     removeInsight: (key, id) => {
       const s = load()
