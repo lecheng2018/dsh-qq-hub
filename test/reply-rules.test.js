@@ -100,3 +100,14 @@ test('真报表（两个以上小标题）仍然整段发', () => {
   const t = ['刚拉的数', '', '【5小时窗口】09:22 到 14:22', '剩 33% 已烧 67%', '', '【周窗口】09:22 到下周三', '剩 93% 已烧 7%'].join(NL)
   assert.equal(parseReply(t, replyRules({}, false)).items.length, 1)
 })
+
+test('两三行各一句完整的话（16~30 字）是聊天分行，不是排版（2026-11-06 事故）', () => {
+  // 事故：两行各 17/12 字，旧行长阈值 15 把它判成长文排版，soft 边界再按 0.45 概率合，
+  // 一半概率粘成一条带 \n 的消息发出。新口径：行数 ≤3 且每行 ≤30 字 = hard。
+  const raw = '今晚刚见证教程没捂热号先凉，你说呢\n不如先吃饭，别赶着送人头'
+  const out = texts(raw, replyRules({}, true))
+  assert.deepEqual(out, ['今晚刚见证教程没捂热号先凉，你说呢', '不如先吃饭，别赶着送人头'])
+  // 同族：三行都在 16~30 字区间
+  const raw3 = '今天那个副本打得我头疼\n野队队友一个比一个离谱\n下周还是自己单刷吧'
+  assert.deepEqual(texts(raw3, replyRules({}, true)), raw3.split('\n'))
+})

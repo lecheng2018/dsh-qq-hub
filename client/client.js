@@ -618,12 +618,16 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           const empty = raw === undefined || raw === null || raw === ''
           const shown = empty && fallback !== undefined && !(props && props.allowEmpty) ? fallback : (raw ?? '')
           const sanitize = (v) => {
-            // 非数字内容自动过滤（正整数语义，min>=0 时小数也不放行）；空串原样保留 = 允许留空
+            // 非数字内容自动过滤（正整数语义）；小数取整数部分——
+            // 注意不能先无条件滤掉非数字：'3.7' 会变 '37'（2026-11-06 复核发现），先按小数点切。
             if (v === '') return (props && props.allowEmpty) ? '' : v
-            let s = String(v).replace(/[^\d]/g, '')
-            if (!s) return (props && props.allowEmpty) ? '' : v
-            let n = Number(s)
-            if (props && props.min !== undefined && props.min >= 0) n = Math.floor(n)
+            let s = String(v).trim()
+            const dot = s.indexOf('.')
+            let head = (dot >= 0 ? s.slice(0, dot) : s).replace(/[^\d]/g, '')
+            let frac = dot >= 0 ? s.slice(dot + 1).replace(/[^\d]/g, '') : ''
+            if (!head && !frac) return (props && props.allowEmpty) ? '' : v
+            let n = Number(head || '0')
+            if (props && props.min !== undefined && props.min >= 0) n = Math.floor(n) // 正整数语义：3.7 → 3
             if (props && props.max !== undefined && n > props.max) n = props.max
             if (props && props.min !== undefined && n < props.min) n = props.min
             return n
@@ -2344,6 +2348,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
             ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
+        h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。整理记忆时顺带做：拿他当天在这个群里的原话，让模型提炼「模仿他说话要知道什么」，写进下面的画像。她在那个群聊天时会带上这段画像，顺着他的语感说 —— 但**不会冒充他、也不替他表态**。他当天说得太少（少于 8 句）就不学。' },
+          h(DistillPanel, { toast, onChanged: () => { load() } })),
+        h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang'), desc: '和上面不同：这个学的是**词**，不是人。从每个群的聊天里找这个群在用的黑话、梗、圈内称呼——词频统计挑候选（不花钱），模型判断哪些真是黑话、什么意思（每群每天一次调用）。她和这个群聊天时会看到黑话本，听懂了就用，不会硬套。' },
+          (st.config.memory || {}).slang !== true ? h('div', { className: 'ab-muted ab-small' }, '开关关着：现在只统计、不判断也不写库。打开后下次整理记忆时开始学。') : null,
+          h(SlangBook, { toast, onChanged: () => { load() } })),
         h(Card, { title: '说话方式', desc: '聊久了潜移默化学到的：每个人的说话习惯（她会自然地贴近一点），和她自己慢慢养成的说法。不会变成另一个人，只是越来越像「你们的」大肥鱼。' },
           h(StyleEditor, { k: 'self', label: '她自己养成的说法', list: styles.self || [], toast, onSaved: loadIns }),
           Object.keys(styles).filter((k) => k !== 'self').length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没学到别人的说话习惯。整理记忆时会跟着相处经验一起总结（显示在上面每个人的相处经验下面）。') : null),
@@ -2545,6 +2554,110 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Btn, { small: true, kind: 'ghost', onClick: () => { if (window.confirm('删掉这条相处经验？\n\n' + x.text.slice(0, 60))) delOne(i) } }, '删')))) : null,
         h('textarea', { className: 'ab-textarea', style: { minHeight: 70, fontFamily: 'inherit' }, value: text, onChange: (e) => setText(e.target.value), placeholder: '一行一条经验' }),
         h(StyleEditor, { k: p.key, label: '说话方式', list: style || [], toast, onSaved }))
+    }
+
+    /** 群黑话本（1.3.58）：每个群一份，和相处经验分开存、分开管。
+     *  一行一条「词＝意思」，可直接改、直接删；整理时自动学到的也落在这里。 */
+    function SlangBook({ toast, onChanged }) {
+      const [groups, setGroups] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [editing, setEditing] = useState({}) // gid → 文本
+      const load = () => get('/slang').then((r) => setGroups(r.groups || [])).catch(() => setGroups([]))
+      useEffect(() => { load() }, [])
+      const textOf = (gid, list) => editing[gid] !== undefined ? editing[gid] : list.map((x) => x.word + '＝' + x.meaning).join('\n')
+      const saveOne = async (gid, list) => {
+        setBusy('save:' + gid)
+        try {
+          const r = await post('/slang/save', { gid, text: textOf(gid, list) })
+          toast(r.message || '保存好了', r.ok ? 'ok' : 'err')
+          setEditing({ ...editing, [gid]: undefined })
+          await load(); onChanged && onChanged()
+        } finally { setBusy('') }
+      }
+      const delOne = async (gid, item) => {
+        if (!window.confirm('删掉这条黑话？\n\n' + item.word + '＝' + item.meaning)) return
+        setBusy('del:' + gid)
+        try {
+          const r = await post('/slang/delete', { gid, id: item.id })
+          toast(r.message || '删掉了', r.ok ? 'ok' : 'err')
+          await load(); onChanged && onChanged()
+        } finally { setBusy('') }
+      }
+      if (groups === null) return h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '黑话本读着呢…')
+      if (!groups.length) return h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '还没有学到黑话。打开上面的开关、群聊热几天，整理时她会自己挑出这个群在用的词。')
+      return h('div', { style: { marginTop: 10 } },
+        groups.map((g) => h('div', { key: g.gid, style: { marginBottom: 12 } },
+          h('div', { className: 'ab-flex', style: { marginBottom: 4 } },
+            h('b', { className: 'ab-small' }, '群 ' + g.gid),
+            h('span', { className: 'ab-muted ab-small' }, g.list.length + ' 个词'),
+            h('div', { className: 'ab-spacer' }),
+            h(Btn, { small: true, kind: 'primary', disabled: busy === 'save:' + g.gid, onClick: () => saveOne(g.gid, g.list) }, busy === 'save:' + g.gid ? '…' : '保存')),
+          h('div', { className: 'ab-list', style: { marginBottom: 4 } }, g.list.map((x) => h('div', { key: x.id, className: 'ab-li', style: { padding: '3px 0' } },
+            h('div', { className: 'body ab-small' }, h('b', null, x.word), ' ＝ ', x.meaning),
+            h(Btn, { small: true, kind: 'ghost', disabled: busy === 'del:' + g.gid, onClick: () => delOne(g.gid, x) }, '删')))),
+          h('textarea', {
+            className: 'ab-textarea', style: { minHeight: 56, fontFamily: 'inherit' },
+            value: textOf(g.gid, g.list),
+            placeholder: '一行一个词，写成「词＝意思」，例如：面包片＝新出的平民配装',
+            onChange: (e) => setEditing({ ...editing, [g.gid]: e.target.value }),
+          }))))
+    }
+
+    /** 蒸馏群友（1.3.59）：指定某个群的某个人当数据源，学他的说话方式/性格/语气。
+     *  和「群黑话本」不同——那个学词，这个学人。 */
+    function DistillPanel({ toast, onChanged }) {
+      const [list, setList] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [form, setForm] = useState({ gid: '', uid: '', name: '' })
+      const load = () => get('/distill/list').then((r) => setList(r.list || [])).catch(() => setList([]))
+      useEffect(() => { load() }, [])
+      const add = async () => {
+        setBusy('add')
+        try {
+          const r = await post('/distill/add', form)
+          toast(r.message || '加上了', r.ok ? 'ok' : 'err')
+          if (r.ok) { setForm({ gid: '', uid: '', name: '' }); await load(); onChanged && onChanged() }
+        } finally { setBusy('') }
+      }
+      const remove = async (t) => {
+        if (!window.confirm('不再学「' + (t.name || t.uid) + '」了？学到的画像也会一起清掉。')) return
+        setBusy('rm:' + t.gid + t.uid)
+        try {
+          const r = await post('/distill/remove', { gid: t.gid, uid: t.uid })
+          toast(r.message || '去掉了', r.ok ? 'ok' : 'err')
+          await load(); onChanged && onChanged()
+        } finally { setBusy('') }
+      }
+      const line = (label, arr) => (arr && arr.length)
+        ? h('div', { style: { marginBottom: 3 } }, h('span', { className: 'ab-muted ab-small' }, label + '：'), h('span', { className: 'ab-small' }, arr.join('；')))
+        : null
+      return h('div', null,
+        h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 6, flexWrap: 'wrap' } },
+          h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '群号', value: form.gid, onChange: (e) => setForm({ ...form, gid: e.target.value.replace(/\D/g, '') }) }),
+          h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '他的 QQ 号', value: form.uid, onChange: (e) => setForm({ ...form, uid: e.target.value.replace(/\D/g, '') }) }),
+          h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '怎么称呼（可选）', value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }) }),
+          h(Btn, { small: true, kind: 'primary', disabled: busy === 'add' || !form.gid || !form.uid, onClick: add }, busy === 'add' ? '…' : '开始学')),
+        list === null ? h('div', { className: 'ab-muted ab-small' }, '读着呢…')
+          : list.length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没有指定要学的人。填群号和 QQ 号，下次整理记忆时开始学他说话的样子（他当天说得太少就不学）。')
+            : list.map((t) => h('div', { key: t.gid + t.uid, className: 'ab-li', style: { padding: '8px 0' } },
+                h('div', { className: 'ab-flex', style: { marginBottom: 4 } },
+                  h('b', { className: 'ab-small' }, t.name || t.uid),
+                  h('span', { className: 'ab-muted ab-small' }, ' 群 ' + t.gid + ' · QQ ' + t.uid),
+                  h('div', { className: 'ab-spacer' }),
+                  h(Btn, { small: true, kind: 'ghost', disabled: busy === 'rm:' + t.gid + t.uid, onClick: () => remove(t) }, '不学了')),
+                t.profile
+                  ? h('div', null,
+                      (t.profile.samples || []).length
+                        ? h('div', { style: { marginBottom: 3 } },
+                            h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
+                            h('span', { className: 'ab-small' }, t.profile.samples.map((x) => '「' + x + '」').join(' ')))
+                        : null,
+                      line('说话方式', t.profile.style),
+                      line('性格', t.profile.persona),
+                      line('语气', t.profile.tone),
+                      line('他不会', t.profile.avoid),
+                      h('div', { className: 'ab-muted ab-small' }, '依据 ' + (t.profile.samples || 0) + ' 句原话 · ' + (t.profile.updatedAt ? new Date(t.profile.updatedAt).toLocaleString() : '')))
+                  : h('div', { className: 'ab-muted ab-small' }, '还没学到。等他这个群聊够一天，整理记忆时会自动学。'))))
     }
 
     function MemoryRow({ m, onChanged, toast }) {

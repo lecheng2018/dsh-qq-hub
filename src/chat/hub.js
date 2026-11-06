@@ -11,6 +11,9 @@ import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { parseMessageEvent } from './inbound.js'
 import { parseReply, bubbleDelay, wantsVoice, replyRules } from './reply.js'
+import { createInteractionState } from './interaction-state.js'
+import { createGroupState } from './group-state.js'
+import { createActivityState } from './activity-state.js'
 import { nowLine, agoLabel } from './clockline.js'
 import { checkIdentityLeak } from './identity-guard.js'
 import { createGroupQuota } from './group-quota.js'
@@ -76,12 +79,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const toolDisposers = new Map() // `${sessionKey}|${工具名}` → disposer，防注册表里残留同名工具时挂不上（#90）
   const sessionToChat = new Map() // sessionKey → chatId
   const turnState = new Map() // sessionKey → { lastTurn, text, images, senders:Set, system?: {resolve, reject} }
-  const groupBuf = new Map() // groupId → [{t, uid, nick, text, at, replyId, quote}]
+  // 群聊状态（1.3.57）：消息缓冲 / 引用编号表 / 话题加入 / 说话与插话时间 / 群名与群成员缓存。
+  // 七个 groupId 键的 Map 收进 group-state.js，规则（40 条上限、1 小时窗口、3 分钟话题）各归其位。
+  const groups = createGroupState()
+  // 兼容：外部模块（features/memory.js）按 hub.groupNames.get?.() 取群名
+  const groupNames = groups.names
   const quoteCache = new Map() // replyId → { ok, who, uid, text, images, stickers, records, isBot }  引用消息解析缓存
-  const groupInterjects = new Map() // groupId → [t]  她主动开口（插话、接话）的时间
-  const groupSaid = new Map() // groupId → [t]  她每次在群里说话的时间（刹车用）
-  const groupRefs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
-  const groupEngaged = new Map() // groupId → 加入话题到什么时候（毫秒）
   // chatId → 这一轮是否调过内容型工具（报告兜底用，turn/end 清掉）。见 CONTENT_TOOLS。
   const reportTurns = new Map()
   // 内容型工具清单（报告兜底第二层）：这些工具的产物是「给主人看的数据」，回复应该整段排版。
@@ -89,12 +92,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // 新增内容型工具时在这里加一行；她写了 <report> 标记时第一层优先生效，这里只是兜底。
   const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
 
-  const ENGAGE_MS = 3 * 60_000
-  const groupNames = new Map()
   const recentMedia = createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
   // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
   const stickerStash = new Map() // chatId → { at, segs: [seg] }
+  // 互动状态（1.3.57）：小黄脸去重池 / 谁戳过她 / 谁最后说话 / 戳一戳节流 / 别处代发的补话队列。
+  // 从 hub 的 23 个 Map 里剥出来的第一批——都是纯内存、纯 chatId 键，规则收进 interaction-state.js。
+  const interaction = createInteractionState()
   const STICKER_TTL = 30 * 60_000 // 和「最近图片」一个尺度
   const stashFile = () => dataDir('sticker-stash.json')
   let stashLoaded = false
@@ -167,25 +171,22 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const slowNoticeSent = new Set() // sessionKey → 这一轮已经发过「正在做」提示（慢工具，issue #74）
   const faces = createFaces({ onebot, log }) // QQ 系统表情：<face:名字> ↔ 编号
   const titleFilter = createTitleFilter({ getConfig, onebot, log }) // 勾选的群里，头衔是某个词的成员（别的机器人）不理
-  const groupMembers = new Map() // groupId → { at, list }  群成员（真 @ 时按名字找人，缓存 10 分钟）
-  const saidElsewhere = new Map() // chatId → [{ at, text }]  别处安排她在这里发的话，下次这个聊天交给她时补进去
 
   async function membersOf(groupId) {
-    const hit = groupMembers.get(groupId)
-    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.list
+    const hit = groups.cachedMembers(groupId)
+    if (hit) return hit
     try {
       const r = await onebot.call('get_group_member_list', { group_id: Number(groupId) }, { timeoutMs: 15000 })
       const list = Array.isArray(r) ? r : r?.data || []
-      groupMembers.set(groupId, { at: Date.now(), list })
+      groups.setMembers(groupId, list)
       return list
     } catch (error) {
       log.debug('拉群成员失败，@ 按文字发：', error.message)
-      return hit?.list || []
+      return groups.staleMembers(groupId)
     }
   }
   const sentIds = new Set()
   // 每个聊天上一条回复用过的系统表情：同一条/相邻条别重复用（实测她老配 OK/得意）
-  const lastFaces = new Map()
   // 群发送配额：QQ 群每分钟最多 10 条，超了网关直接拒、消息真丢（2026-11-04 实测 3 条丢 2 条）
   const groupQuota = createGroupQuota({ getConfig, log })
   void groupQuota
@@ -654,12 +655,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let body = text
     if (getConfig().stickers.faces) {
       // 表情别固化：同一条内重复、或与上一条撞名的，这次不夹（提示词劝不住就靠这层兜底）
-      const d = dedupeFaces(body, lastFaces.get(chatId) || new Set())
+      const d = dedupeFaces(body, interaction.facesUsed(chatId))
       if (d.text !== body) {
         body = d.text
         if (!body) return null
       }
-      lastFaces.set(chatId, new Set(d.used))
+      interaction.rememberFaces(chatId, d.used)
     }
     let segs = getConfig().stickers.faces ? textToSegments(body, faces.idOf) : [{ type: 'text', data: { text: stripFaceTags(body) } }]
     text = body
@@ -694,7 +695,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   async function pokeBack(chatId) {
     const cfg = getConfig()
     const group = chatId.startsWith('group:') ? chatId.slice(6) : ''
-    const target = group ? lastPoker.get(chatId) || lastSpeaker.get(chatId) : chatId.slice(8)
+    const target = interaction.pokeBackTarget(chatId)
     if (!target) return
     if (!cfg.enabled || cfg.dryRun) return log.info(`试运行（没真戳）→ ${chatId}：戳了戳 ${target}`)
     try {
@@ -847,7 +848,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const r = parseReply(text, rules)
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
-      if (chatId.startsWith('group:')) groupEngaged.delete(chatId.slice(6)) // 不想聊就退出这个话题
+      if (chatId.startsWith('group:')) groups.leaveTopic(chatId.slice(6)) // 不想聊就退出这个话题
       return
     }
     let items = r.items
@@ -900,7 +901,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     // 一段只有一个人明确 @ / 引用她时，第一条回复引用并 @ 那个人；多人同时叫她不猜。
     // 模型明确选了引用编号时尊重它，不再自动引用另一条。
-    const refs = inGroup ? groupRefs.get(chatId.slice(6)) || {} : {}
+    const refs = inGroup ? groups.refs(chatId.slice(6)) : {}
     const explicit = items.some((item) => item.replyTo)
     const firstSendable = items.findIndex((item) => item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value))))
     const missedAt = [] // 写了 @ 却没对上群里人的名字
@@ -922,15 +923,13 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (opts.simulate) return items
     if (inGroup) {
       const gid = chatId.slice(6)
-      const said = (groupSaid.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
-      said.push(Date.now())
-      groupSaid.set(gid, said)
-      groupEngaged.set(gid, Date.now() + ENGAGE_MS) // 在群里说了话 = 加入了话题
+      groups.noteSpeak(gid)
+      groups.noteSpokeInGroup(gid) // 在群里说了话 = 加入了话题
     }
     const said = items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
     logChat(chatId, 'bot', said)
     // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
-    if (!opts.own) saidElsewhere.set(chatId, [...(saidElsewhere.get(chatId) || []), { at: Date.now(), text: said.slice(0, 300) }].slice(-5))
+    if (!opts.own) interaction.queueAside(chatId, said)
     lastChatAt = Date.now()
     if (chatId === `private:${cfg.ownerQQ}`) lastBotToOwner = { at: Date.now(), text: items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => i.value).join('\n') }
     onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
@@ -1314,11 +1313,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 群里的每条消息都记进缓冲（给上下文和「群里在不在聊」用）
     let groupEntry = null
     if (msg.kind === 'group') {
-      const buf = groupBuf.get(msg.groupId) || []
-      groupEntry = { t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned, mid: msg.messageId, direct: false, replyId: msg.replyId }
-      buf.push(groupEntry)
-      while (buf.length > 40) buf.shift()
-      groupBuf.set(msg.groupId, buf)
+      groupEntry = groups.appendMessage(msg.groupId, {
+        t: now, uid: msg.userId, nick: msg.nickname, text: msg.text, at: msg.mentioned, mid: msg.messageId, direct: false, replyId: msg.replyId,
+      })
     }
 
     const allowed = checkAllowed(cfg, msg)
@@ -1406,7 +1403,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       // 心情好更爱插话，心情差少插话
       const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * mood().chatty) }
       // 群里最近在聊的（窗口内最后几条）和她有多相关
-      const recentTexts = (groupBuf.get(msg.groupId) || []).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
+      const recentTexts = groups.buffer(msg.groupId).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0
       // 带上当前群：话题相关度只在这个群可见的记忆里算，主人私聊记的东西不该让她在这个群「感兴趣」
       const memChat = { chatId: msg.chatId, kind: 'group', groupId: msg.groupId }
@@ -1415,16 +1412,16 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const decision = decideGroupReply({
         policy: pol,
         relevance: topicRelevance(recentTexts, pol.interests, memScore),
-        engagedUntil: groupEngaged.get(msg.groupId) || 0,
+        engagedUntil: groups.engagedUntil(msg.groupId),
         mentioned: msg.mentioned,
         repliedToBot: quotedBot,
         fromOwner: isOwner(cfg, msg.userId),
         text: msg.text,
         now,
         hour: new Date().getHours(),
-        recentTimes: (groupBuf.get(msg.groupId) || []).map((x) => x.t),
-        interjectTimes: groupInterjects.get(msg.groupId) || [],
-        botReplyTimes: groupSaid.get(msg.groupId) || [],
+        recentTimes: groups.buffer(msg.groupId).map((x) => x.t),
+        interjectTimes: groups.interjectTimes(msg.groupId),
+        botReplyTimes: groups.speakTimes(msg.groupId),
       })
       if (hooks?.groupDecide) {
         try {
@@ -1447,7 +1444,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
         if (fg.enabled) {
           const direct = decision.mode === 'must'
-          const density = assessFishDensity((groupBuf.get(msg.groupId) || []).map((x) => ({
+          const density = assessFishDensity(groups.buffer(msg.groupId).map((x) => ({
             sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
           })), { now, guard: fg, groupId: msg.groupId })
           if (density.blocked) {
@@ -1471,15 +1468,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (msg.forwards?.length) {
       text = await expandForwards(msg, text)
       if (msg.kind === 'group') {
-        const last = (groupBuf.get(msg.groupId) || []).findLast?.((x) => x.uid === msg.userId)
+        const last = groups.lastFrom(msg.groupId, msg.userId)
         if (last) last.text = text
       }
     }
     const voiceText = cfg.voice.asr && msg.records.length ? await transcribe(msg) : msg.records.length ? '[发来一条语音]' : ''
     if (voiceText) text = (text ? text + ' ' : '') + voiceText
     if (voiceText && msg.kind === 'group') {
-      // 群消息的文字在 groupBuf 里，语音转出来的字补进去，拼提示词时才看得到
-      const last = (groupBuf.get(msg.groupId) || []).findLast?.((x) => x.uid === msg.userId)
+      // 群消息的文字在群聊缓冲里，语音转出来的字补进去，拼提示词时才看得到
+      const last = groups.lastFrom(msg.groupId, msg.userId)
       if (last) last.text = text
     }
     // 引用消息：私聊现在就把被引用的内容取出来拼进正文；群聊留给 groupPrompt 懒加载（没交给她就白取）
@@ -1565,9 +1562,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   // ---------- 戳一戳 ----------
-  const lastPoker = new Map() // chatId → 最近戳她的人（她戳回去用）
-  const lastSpeaker = new Map() // chatId → 群里最近一段最后说话的人
-  const pokeAt = new Map() // chatId → 上次处理戳一戳的时间
   /** 有人戳了她：当成一条对她说的话交给她（群里也一定回），同一个聊天 20 秒内只算一次。 */
   async function onPoke(ev) {
     const self = String(ev.self_id || selfId || getConfig().botQQ)
@@ -1580,9 +1574,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (!poker || poker === self) return
     if (group && await titleFilter.shouldIgnore({ group_id: group, user_id: poker })) return
     const chatId = group ? `group:${group}` : `private:${poker}`
-    lastPoker.set(chatId, poker)
-    if (Date.now() - (pokeAt.get(chatId) || 0) < 20_000) return
-    pokeAt.set(chatId, Date.now())
+    interaction.rememberPoker(chatId, poker)
+    if (!interaction.claimPoke(chatId)) return // 同一个聊天 20 秒内只算一次
     let nickname = poker
     try {
       const info = group ? await onebot.call('get_group_member_info', { group_id: Number(group), user_id: Number(poker) }, { timeoutMs: 5000 }) : await onebot.call('get_stranger_info', { user_id: Number(poker) }, { timeoutMs: 5000 })
@@ -1610,11 +1603,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         const nick = msg.nickname || msg.userId
         const note = await imageTextFor(imgs, nick, getConfig(), msg.text)
         // 挂到群里那条消息上，groupPrompt 拼这一段时会原样带出来
-        const buf = groupBuf.get(msg.groupId) || []
+        const buf = groups.buffer(msg.groupId)
         const hit = buf.findLast?.((x) => String(x.uid) === String(msg.userId) && !x.fed)
         if (hit) hit.picNote = note
         else buf.push({ t: Date.now(), uid: msg.userId, nick, text: '', picNote: note })
-        groupBuf.set(msg.groupId, buf)
+
         log.debug(`群 ${msg.chatId}：${imgs.length} 张图看不了，已转成文字备注`)
         return
       }
@@ -1626,7 +1619,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   /** 群聊这一段的提示词：之前的几句当背景，上次交给她之后群里新说的话全部列出来，让她看完整段再回。 */
   async function groupPrompt(chat, mode, imageRoom = 0) {
     const name = await groupName(chat.groupId)
-    const buf = groupBuf.get(chat.groupId) || []
+    const buf = groups.buffer(chat.groupId)
     // 时间戳可能同一毫秒：直接取上一轮之后的消息，避免紧接着到达的消息丢失。
     const fresh = buf.filter((x) => !x.fed).slice(-20)
     const older = buf.filter((x) => x.fed).slice(-8)
@@ -1650,7 +1643,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid }
       return `[${i + 1}] ${line(x)}`
     })
-    groupRefs.set(chat.groupId, refs)
+    groups.setRefs(chat.groupId, refs)
     const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
     const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
@@ -1682,11 +1675,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // ---------- 连发合并：人常常一口气发好几句，等对方说完再一起交给她，别一句一回 ----------
   // 群聊再加一层：她正在回上一段时，新消息先攒着，等她说完再一起交给她（不会一条消息一轮、挨个回）
   const pending = new Map() // chatId → { chat, texts, images, senders, wantVoice, timer, firstAt, mode, count }
-  const busy = new Map() // chatId → 这一轮开始的时间（她正在想 / 正在发）
-  const BUSY_MAX_MS = 4 * 60_000 // 卡住保护：超过这么久就当她已经回完了
+  // 活动状态（1.3.57）：busy（这一轮是否在跑 + 4 分钟卡住保护）与 typing（QQ「正在输入」计时器）。
+  // 卡住保护从此只有一处实现，新写的调用点不会忘记判超时。
+  const activity = createActivityState({ onTypingPing: () => {} })
+  const isBusy = (chatId) => activity.isBusy(chatId)
   const RANK = { engaged: 1, interject: 2, must: 3 }
   const running = new Set() // chatId → 这一轮还在跑（模型 / 工具还没结束，turn/end 之前）；私聊此时新消息直接 steer 进去
-  const isBusy = (chatId) => busy.has(chatId) && Date.now() - busy.get(chatId) < BUSY_MAX_MS
 
   function enqueue(chat, content, senderId, wantVoice, mode = 'must', extra = {}) {
     const m = getConfig().merge
@@ -1745,12 +1739,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (p.chat.kind === 'group') {
       const gid = p.chat.groupId
       if (p.mode === 'interject') {
-        const arr = (groupInterjects.get(gid) || []).filter((t) => Date.now() - t < 3600_000)
-        arr.push(Date.now())
-        groupInterjects.set(gid, arr)
+        groups.noteInterject(gid)
       }
       const gp = await groupPrompt(p.chat, p.mode, Math.max(0, 4 - p.images.length))
-      if (gp.speakers.length) lastSpeaker.set(chatId, [...p.senders].pop() || gp.speakers.at(-1))
+      if (gp.speakers.length) interaction.rememberSpeaker(chatId, [...p.senders].pop() || gp.speakers.at(-1))
       content = [{ type: 'text', text: gp.text + hint }, ...p.images, ...(gp.images || [])]
       p.query = gp.query
       p.speakers = gp.speakers
@@ -1762,7 +1754,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const joined = p.texts.join('\n').replace(/^(【私聊】[^：]*：)/, `$1\n${head}\n`)
       content = [{ type: 'text', text: joined + hint }, ...p.images]
     }
-    busy.set(chatId, Date.now())
+    activity.markBusy(chatId)
     try {
       const [first, ...rest] = [...p.senders]
       // 私聊：检索记忆时去掉「【私聊】某某(QQ)：」这个头
@@ -1777,7 +1769,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   /** 她这一轮说完了（或者没说）：放开，把这期间攒下的消息交给她。 */
   function release(chatId) {
-    busy.delete(chatId)
+    activity.release(chatId)
     running.delete(chatId)
     const p = pending.get(chatId)
     if (p && p.waiting) {
@@ -1804,26 +1796,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return content
   }
 
-  // 私聊里等她回复时，在 QQ 上显示「对方正在输入…」（模型慢的时候让人知道她在想）
-  const typing = new Map() // sessionKey → timer
-  function startTyping(key, chat) {
-    const cfg = getConfig()
-    if (chat.kind !== 'private' || !cfg.enabled || cfg.dryRun || typing.has(key)) return
-    const ping = () => onebot.call('set_input_status', { user_id: Number(chat.userId), event_type: 1 }, { timeoutMs: 5000 }).catch(() => {})
-    ping()
-    const started = Date.now()
-    const t = setInterval(() => {
-      if (Date.now() - started > 6 * 60_000) return stopTyping(key)
-      ping()
-    }, 15_000)
-    t.unref?.()
-    typing.set(key, t)
-  }
-  function stopTyping(key) {
-    const t = typing.get(key)
-    if (t) clearInterval(t)
-    typing.delete(key)
-  }
+  // 私聊里等她回复时，在 QQ 上显示「对方正在输入…」（模型慢的时候让人知道她在想）。
+  // 计时器与上限住在 activity-state.js，这里只把「怎么 ping」注入进去（模块不碰 onebot）。
+  const pingTyping = (userId) => onebot.call('set_input_status', { user_id: Number(userId), event_type: 1 }, { timeoutMs: 5000 }).catch(() => {})
+  function startTyping(key, chat) { activity.startTyping(key, chat, getConfig(), pingTyping) }
+  function stopTyping(key) { activity.stopTyping(key) }
 
   async function pushToSession(chat, content, senderId, opts = {}) {
     const { agent, sessionId } = await agentFor(chat)
@@ -1844,9 +1821,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         log.warn('扩展模块改提示词出错：', error.message)
       }
     }
-    const earlier = saidElsewhere.get(chat.chatId)
-    if (earlier?.length) {
-      saidElsewhere.delete(chat.chatId)
+    const earlier = interaction.takeAside(chat.chatId)
+    if (earlier.length) {
       const lines = earlier.map((x) => `${new Date(x.at).toTimeString().slice(0, 5)} 你：${x.text}`)
       content = [{ type: 'text', text: `【你之前在这个聊天里主动说过（是在别处安排下发的，这里的人都看到了）】\n${lines.join('\n')}\n` }, ...content]
     }
@@ -2102,9 +2078,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     turnHasOwner,
     resetChat,
     /** 这个聊天她是不是正忙着一轮（在想 / 在跑工具 / 在发）：压缩、插话这类后台动作拿来避让。 */
-    isBusy: (chatId) => isBusy(chatId),
-    joinTopic: (gid) => groupEngaged.set(String(gid), Date.now() + ENGAGE_MS),
-    leaveTopic: (gid) => groupEngaged.delete(String(gid)),
+    isBusy: (chatId) => activity.isBusy(chatId),
+    joinTopic: (gid) => groups.joinTopic(gid),
+    leaveTopic: (gid) => groups.leaveTopic(gid),
     chatOfSession,
     knownChats,
     canSeeImages: async (chat) => {

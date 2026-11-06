@@ -41,11 +41,11 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 - **全功能通用定时调度器 (`src/modules/scheduler/`)**：移植完整调度引擎，支持 `once`、`in 30m`、`daily`、`workdays`、`weekly`、`interval` 与 `Cron`；提供主人私聊 `/remind` 管理指令，并向模型暴露 `schedule_reminder` 原生工具。
 - **多平台内容解析器 (`src/modules/multi-parser/`)**：移植自 astrbot_plugin_multi_parser，自动识别 10+ 平台链接（B站/微博/小红书/知乎/微信/贴吧/番茄/GitHub等），提取无水印视频与高清图集；支持合并转发防刷屏、大视频转群文件；集成独立 AI 上下文注入开关 (`feedToAi`)，并在控制面板「平台」页新增专属设置选项卡。
 
-### 2. DSH 增强五件套模块内置化
-- **`security-lock`**：纯 `node:crypto` 实现 RFC 6238 TOTP 手机动态口令，提供 `/unlock` 提权与 30 分钟生命周期。
-- **`token-guardian`**：估算会话上下文 Token，达阈值且空闲时自动调用 DSH compaction 压缩历史。
+### 2. DSH 增强模块内置化
+- **`token-guardian`**：按聊天的真实用量（DSH 上报的 input+cache，缺省按字符估算）统计会话开销，达阈值且空闲时做**应用层外置压缩**——把近期聊天流水连同上一份摘要请模型压成新摘要，`hub.resetChat()` 归档旧会话，摘要经 `api.context` 常驻注入，同时写回聊天流水供下次压缩续接。不碰宿主 compaction 引擎。
 - **`complete-guard`**：识别停留在连接词或未闭合括号上的截断回复，提供截断告警。
 - **`memory-privacy`**：私聊（`private`）、群聊（`group`）与全局（`global`）三层作用域隔离，群聊物理阻断私聊记忆。
+- **`security-lock`（已移除）**：RFC 6238 TOTP 动态口令权限锁已按主人要求下线，`/unlock` 指令不再存在；工具审批走 `complete-guard` 之外的通用审批链（`/approvals` + 「通过/拒绝 #编号」）。
 
 ### 3. 全量安全审计与稳定性加固（16 项缺陷修复）
 - **高危修复**：修复 `heybox` 模块 `hasLogin()` 未定义导致定时器抛错崩溃；修复 `douyin` 浏览器跳转与 `net.js` 302 重定向导致的内网 SSRF 风险；为 `studio.js` 的 `ffmpeg` 调用增加 15s 超时强杀防死锁；将记忆库 `recall` 统计覆写解耦为内存防抖回写，防止冲掉事实记忆。
@@ -121,7 +121,6 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 | | `/remind monthly 1,15,-1 20:00 交房租` | 每月固定几号提醒（-1 表示当月最后一天） |
 | | `/remind list` / `/remind del 1` | 查看当前所有定时任务 / 删除指定编号任务 |
 | | `/remind on 1` / `/remind off 1` | 启用 / 暂停指定编号的定时任务 |
-| **安全审批** | `/unlock [6位动态码]` | 验证 TOTP 手机口令，解锁 30 分钟高权限状态 |
 | | `/approvals` | 查看当前挂起等待批复的工具操作清单 |
 | | `通过 #1` / `同意` | 批准编号为 #1 的工具操作执行（单个待审项可免编号） |
 | | `拒绝 #1` / `不行` | 拦截指定操作执行 |
@@ -453,8 +452,7 @@ src/
 │   └── group-policy.js   # 群聊插话策略纯函数
 ├── modules/              # 24 个内置业务模块
 │   ├── scheduler/        # 全功能定时任务调度引擎
-│   ├── security-lock/    # RFC 6238 TOTP 手机动态口令权限锁
-│   ├── token-guardian/   # 会话 Token 估算与自动 Compaction 守门员
+│   ├── token-guardian/   # 会话 Token 统计与应用层外置压缩守门员
 │   ├── complete-guard/   # 截断回复识别与告警
 │   ├── memory-privacy/   # 记忆三层作用域物理隔离
 │   └── ... (stickers, voice, mood, memory, pet, bili, song, heybox 等)

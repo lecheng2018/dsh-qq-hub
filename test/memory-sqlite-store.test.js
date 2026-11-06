@@ -112,7 +112,7 @@ test('迁移失败时回滚空库、抛错退回 JSON（P2-4：不能嘴上说�
   process.env.AURABOT_DATA_DIR = dir
 })
 
-test('add 性能：3000 条库上单次 add 应显著低于旧实现（<8ms，旧实现 13ms）', async () => {
+test('add 性能：3000 条库上单次 add 应显著低于旧实现（<8ms，旧实现 13ms）', { skip: process.env.CI !== '1' ? 'NAS 磁盘 fsync 抖动大，本机不稳定（2026-11-06 对照实验：旧代码同样 5~26ms 波动），只在 CI 固定环境跑' : false }, async () => {
   const d3 = mkdtempSync(join(tmpdir(), 'memsql-perf-'))
   process.env.AURABOT_DATA_DIR = d3
   const { createMemoryStore } = await import('../src/features/memory.js')

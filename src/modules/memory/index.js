@@ -96,6 +96,39 @@ export default {
       return memory.reassignOwner(b.from, b.to)
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
+    // 群黑话本（1.3.58）：独立于相处经验的存储与面板
+    api.route('/slang', async () => ({ ok: true, groups: memory.slang ? memory.slang() : [] }))
+    // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
+    api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
+    api.route('/distill/add', async (req) => {
+      const b = await http.body(req)
+      return memory.addDistillTarget ? memory.addDistillTarget({ gid: b.gid, uid: b.uid, name: b.name }) : { ok: false, message: '记忆库没在跑' }
+    })
+    api.route('/distill/remove', async (req) => {
+      const b = await http.body(req)
+      return memory.removeDistillTarget ? memory.removeDistillTarget(b.gid, b.uid) : { ok: false, message: '记忆库没在跑' }
+    })
+    api.route('/slang/save', async (req) => {
+      const b = await http.body(req)
+      const gid = String(b.gid || '').trim()
+      if (!gid) return { ok: false, message: '要先说清哪个群' }
+      const list = Array.isArray(b.list) ? b.list : String(b.text || '').split('\n')
+      // 面板按「词=意思」一行一条编辑
+      const items = list.map((x) => {
+        if (x && typeof x === 'object') return { word: x.word, meaning: x.meaning }
+        const t = String(x || '').trim()
+        const m = t.match(/^(.+?)[=＝:：](.+)$/)
+        return m ? { word: m[1].trim(), meaning: m[2].trim() } : null
+      }).filter(Boolean)
+      const saved = memory.putSlang(gid, items)
+      return { ok: true, message: '黑话本已保存（' + saved.length + ' 条）', list: saved }
+    })
+    api.route('/slang/delete', async (req) => {
+      const b = await http.body(req)
+      const gid = String(b.gid || '').trim()
+      const ok = memory.removeSlang ? memory.removeSlang(gid, b.id) : false
+      return { ok, message: ok ? '删掉了' : '没找到这条' }
+    })
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
     api.route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
