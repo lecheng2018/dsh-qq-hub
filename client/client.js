@@ -1383,46 +1383,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
               h('td', null, g.canManage ? h('span', { className: 'ab-badge' }, '可以') : h('span', { className: 'ab-muted ab-small' }, '不行')))))))
     }
 
-    /** 按群头衔不理：勾选的群里，专属头衔是某个词的成员（别的机器人）她不理。头衔可以从群里现有的里面点一个。 */
-    function TitleFilter({ draft, setDraft }) {
-      const tf = draft.titleFilter || { enabled: true, groups: [], title: '大肥鱼' }
-      const [info, setInfo] = useState(null) // { groups, titles, failed, message } 拉过才有 titles
-      const [busy, setBusy] = useState(false)
-      const set = (p) => setDraft(setPath(draft, 'titleFilter', { ...tf, ...p }))
-      const pull = async () => {
-        setBusy(true)
-        const r = await get('/groups/titles')
-        setBusy(false)
-        if (r.ok) setInfo(r)
-        else setInfo({ groups: [], titles: [], message: r.message || '没拉到' })
-      }
-      useEffect(() => { pull() }, [])
-      const groups = (draft.allow.groups || []).map(String)
-      const nameOf = (gid) => { const g = ((info && info.groups) || []).find((x) => x.groupId === gid); return g && g.name && g.name !== gid ? g.name : '' }
-      const on = (gid) => tf.groups.includes(gid)
-      const hit = info && info.titles ? info.titles.find((t) => t.title === tf.title.trim()) : null
-      return h(Card, { title: '按头衔不理（防机器人互聊）', right: h(Switch, { on: tf.enabled, onChange: (v) => set({ enabled: v }) }),
-        desc: '同一个群里有别的机器人时，给它们挂上同一个专属头衔（比如「大肥鱼」），她在勾选的群里就不理它们：说话、@ 她、戳她都不回，免得机器人之间互相接话停不下来。只认专属头衔，昵称和群名片不算；私聊不受影响。' },
-        h(Row, { label: '要不理的头衔', hint: '一字不差才算。下面列出白名单群里现有的头衔，点一个就填进来。' },
-          h('div', { style: { width: '100%' } },
-            h('div', { className: 'ab-flex' },
-              h('input', { className: 'ab-input', value: tf.title, maxLength: 30, placeholder: '大肥鱼', onChange: (e) => set({ title: e.target.value }) }),
-              h(Btn, { small: true, onClick: pull, disabled: busy }, busy ? '拉取中…' : '从群里拉取头衔')),
-            info && info.titles ? h('div', { className: 'ab-psec-add', style: { marginTop: 10 } },
-              info.titles.length
-                ? info.titles.slice(0, 30).map((t) => h('button', { key: t.title, type: 'button', className: cx('ab-chip', t.title === tf.title.trim() && 'on'), title: t.members.map((m) => m.name).join('、'), onClick: () => set({ title: t.title }) }, t.title, h('span', { className: 'n' }, t.count + ' 人')))
-                : h('span', { className: 'ab-muted ab-small' }, groups.length ? '这些群里还没有人挂专属头衔。' : '群白名单是空的，先在「权限」页加群。')) : null,
-            hit ? h('div', { className: 'ab-tf-who' }, '挂着「' + hit.title + '」的：' + hit.members.map((m) => m.name + '（' + m.id + '）').join('、') + (hit.count > hit.members.length ? ' 等 ' + hit.count + ' 人' : '')) : null,
-            info && info.message ? h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, info.message) : null)),
-        h(Row, { label: '在哪些群生效', hint: '没勾的群照常回。只列白名单里的群。' },
-          groups.length
-            ? h('div', { className: 'ab-flex' }, groups.map((gid) => h('button', { key: gid, type: 'button', className: cx('ab-chip', on(gid) && 'on'), onClick: () => set({ groups: on(gid) ? tf.groups.filter((x) => x !== gid) : [...tf.groups, gid] }) },
-              (on(gid) ? '✓ ' : '') + (nameOf(gid) || '群'), h('span', { className: 'n' }, gid))))
-            : h('span', { className: 'ab-muted ab-small' }, '群白名单是空的。')),
-        h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '查不到某人的头衔时（网关抽风），那条先不回，过几秒再查；成员改了头衔一分钟内生效。'))
-    }
-
-    /** 主人私聊里问起群里的事：把最近群聊流水补进当轮上下文（默认关）。 */
     function OwnerBrief({ draft, setDraft }) {
       const f = useField(draft, setDraft)
       const ob = draft.group.ownerBrief || { enabled: false, lines: 12, groups: [] }
@@ -1463,7 +1423,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
           h(Row, { label: '一轮最多几条', hint: '超过就均匀合并，不会把剩下的全塞进最后一条' }, f.num('reply.maxBubbles', { min: 1, max: 12 }), h('span', { className: 'ab-muted' }, ' 条')),
           h(Row, { label: '清单和汇报整段发', hint: '开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆' }, f.sw('reply.keepReports')),
         ),
-        h(TitleFilter, { draft, setDraft }),
         h(OwnerBrief, { draft, setDraft }),
         h(Card, { title: '发文件', right: f.sw('files.enabled'), desc: '打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。她只能发 QQ 工作区和下面目录里的文件；单个文件有大小上限；发过什么会记在日志里。' },
           h(Row, { label: '单个文件最大' }, f.num('files.maxMB', { min: 1, max: 2048 }), h('span', { className: 'ab-muted' }, ' MB')),
@@ -1490,7 +1449,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, 'group.quietHours', [draft.group.quietHours[0], Number(e.target.value)])) }),
             h('span', { className: 'ab-muted' }, '点')),
         ),
-        h(Card, { title: '同类 bot 太多时不参与', desc: '同一个群里同类 bot 在刷屏时就让她闭嘴，别跟着一起刷。默认只认名字里有「肥鱼」「鲸」「fish」的；名字看不出来的 bot（比如「小鱼」）要在这里手动加号码。' },
+        h(Card, { title: '同类 bot 太多时不参与', desc: '防 bot 对聊刷屏，按「配对」掐（业界 bot-loop 做法）：她和一个对象互相针对地接话——已确认是鱼的 **2 个来回**就停、看不出来身份的 4 个来回才停，停的是这一对 30 分钟（它的 @ 也不接，别人和主人不受影响）；另有全局密度兜底（连续/占比）。名字看不出来的 bot（比如麦麦系的「某bot」）把号码加进下面的鱼名单，第二回合就掐。' },
           h(Row, { label: '启用', hint: '关掉就完全不判定，她照常按插话概率说话。' }, f.sw('group.fishGuard.enabled')),
           h(Row, { label: '按号码认同类 bot', hint: '逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）。' },
             // 输入过程保留原文（能敲逗号和空格），失焦才解析写回 —— 原来逐键 split+filter，
@@ -2349,7 +2308,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
             ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
-        h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。加完可以点「从历史学」立刻从他**过去说过的话**里提炼（DSH 会话记录里存着群友原话，比聊天流水留得久），不用干等他再聊；以后每次整理记忆也会拿他最近的原话更新画像。她在那个群聊天时会带上这段画像，顺着他的语感说 —— 但**不会冒充他、也不替他表态**。他当天说得太少（少于 8 句）就不学。' },
+        h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。加完可以点「从历史学」立刻从他**过去说过的话**里提炼（DSH 会话记录里存着群友原话，比聊天流水留得久），不用干等他再聊；以后每次整理记忆也会拿他最近的原话更新画像。**学成后自动生成一张该群专属的「语感人设卡」**＝她原来的人设底卡 + 借来的说话方式段（人设页可见；你的底卡一个字不动，那群你手动指定过别人设卡的话蒸馏不抢槽位）。借的是说话方式，不冒充人；他近期原话不足 15 句就不学。' },
           h(DistillPanel, { toast, onChanged: () => { load() } })),
         h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang'), desc: '和上面不同：这个学的是**词**，不是人。从每个群的聊天里找这个群在用的黑话、梗、圈内称呼——词频统计挑候选（不花钱），模型判断哪些真是黑话、什么意思（每群每天一次调用）。她和这个群聊天时会看到黑话本，听懂了就用，不会硬套。' },
           (st.config.memory || {}).slang !== true ? h('div', { className: 'ab-muted ab-small' }, '开关关着：现在只统计、不判断也不写库。打开后下次整理记忆时开始学。') : null,
@@ -2669,7 +2628,11 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '群号', value: form.gid, onChange: (e) => setForm({ ...form, gid: e.target.value.replace(/\D/g, '') }) }),
           h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '他的 QQ 号', value: form.uid, onChange: (e) => setForm({ ...form, uid: e.target.value.replace(/\D/g, '') }) }),
           h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '怎么称呼（可选）', value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }) }),
-          h(Btn, { small: true, kind: 'primary', disabled: busy === 'add' || !form.gid || !form.uid, onClick: add }, busy === 'add' ? '…' : '开始学')),
+          h(Btn, { small: true, kind: 'primary', disabled: busy === 'add' || !form.gid || !form.uid, onClick: add }, busy === 'add' ? '…' : '开始学'),
+          h(Btn, { small: true, kind: 'ghost', disabled: busy === 'card', onClick: async () => {
+            setBusy('card')
+            try { const r = await post('/distill/card/refresh', { gid: form.gid || (list || [])[0]?.gid }); toast(r.ok ? `已写成群人设卡（${r.cardId}），人设页可查；底卡没动` : (r.message || '没写成'), r.ok ? 'ok' : 'err') } finally { setBusy('') }
+          } }, busy === 'card' ? '…' : '写进群人设卡')),
         h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h(Btn, { small: true, kind: 'ghost', disabled: busy === 'scan', onClick: scanHist }, busy === 'scan' ? '翻着呢…' : '翻一翻聊天历史'),
           hist ? h('span', { className: 'ab-muted ab-small' },
@@ -4061,7 +4024,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply', 'titleFilter'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
