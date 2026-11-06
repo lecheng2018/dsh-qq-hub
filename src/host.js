@@ -53,8 +53,11 @@ import { createAclMiddleware } from './kernel/mw-acl.js'
 import { createDedupMiddleware } from './kernel/mw-dedup.js'
 // RFC-0001 Phase 3（US-010）：上下文装配中间件——人设预取 + 记忆检索；
 // 记忆接管点在装配层的 contextProviders provider 包装（NEW_MEMORY_PIPELINE=true 才包）
-import { createPersonaInjector } from './kernel/mw-persona.js'
+import { createPersonaInjector, chatFromInbound } from './kernel/mw-persona.js'
 import { createMemoryRetriever, createContextProviderTakeover, isNewMemoryPipelineEnabled } from './kernel/mw-memory.js'
+// RFC-0001 Phase 3（US-011）：命令路由终端中间件——命中主人命令即 ctx.reply 应答并短路，未适配/抛错透传 legacy
+import { createCommandRouterMiddleware } from './kernel/mw-command-router.js'
+import { isOwner } from './chat/access.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -511,6 +514,50 @@ export function apply(ctx) {
       })(),
       log: logger.child('memory-mw'),
     })
+    // US-011：命令路由（无独立灰度位——拍板数组直接进管道；flag-off 整段不装配，零改动红线保住）。
+    // 判定口径逐条对齐 hub.onMessage 的 legacy 命令闸门（hub.js:1350-1376）：
+    //   - approvals.handleReply 与 slash 命令在正则上互斥（其 token 表不含斜杠），无需守卫；
+    //   - hub.questions.has 命中 → 透传（legacy 顺序：交互提问先于命令闸门消费该文本）；
+    //   - ext 模块命令 → 透传（ext.run 吃 hub 全套 msg 形状——images/forwards/replyId/raw——
+    //     信封视图补齐不可信，矩阵诚实留给 legacy；questions.test 亦钉住该文本形态）；
+    //   - 非主人 / 非斜杠开头 → 透传（isOwner 复用 chat/access.js，同 hub.js:1366 一份权威）；
+    //   - 混有非 text 段（图/表情/录音/转发）→ 透传（legacy recentMedia.remember 先于命令闸门
+    //     记媒体，接管会跳过记录——少拦一条命令换语义完整）。
+    // handler 复用 host.js:423 legacy onCommand 同款 runCommand 与同一 deps 闭包（模块实例
+    // 每事件现取，热重载跟上）；回复经 hub.sendSegments 在 ALS 里落出口切换包装器
+    // → ctx.reply.enqueue，总开关 force 豁免 / 试运行 / 身份闸三道安全闸一字不动。
+    const runOwnerCommand = async (cmd, msg) => {
+      const reply = await runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods.commands() })
+      if (!reply) return // 空回复：mw 以零入队增量透传下游，复刻 legacy「命令没答话就继续当聊天」
+      log.info(`主人命令 ${String(msg.text).trim().slice(0, 30)} → ${String(reply).split('\n')[0]}`)
+      await hub.sendSegments(msg.chatId, [{ type: 'text', data: { text: String(reply) } }], String(reply).slice(0, 60), { force: true })
+    }
+    const pipelineCommandRouter = createCommandRouterMiddleware({
+      parse: (ctx) => {
+        const inbound = ctx?.inbound
+        if (!inbound || inbound.type !== 'message') return null
+        const text = String(inbound.rawText || '')
+        if (!/^\s*[/／]/.test(text)) return null
+        const chat = chatFromInbound(inbound)
+        if (!chat) return null
+        const c = getConfig()
+        if (!isOwner(c, chat.userId || '')) return null
+        if (Array.isArray(inbound.segments) && inbound.segments.some((seg) => seg.type !== 'text')) return null
+        if (hub.questions?.has?.(chat.chatId)) return null
+        const cmd = parseCommand(text, mods.commands())
+        if (!cmd || cmd.ext) return null
+        return { cmd, msg: { ...chat, nickname: c.ownerName || '主人', text } }
+      },
+      // 覆盖矩阵「router 直答」列：runCommand 的 deps 注入面全部 host 可达（含 hub 公开方法
+      // stats/resetChat/joinTopic/leaveTopic），16 个内置命令逐一登记；未登记的自动透传。
+      handlers: {
+        help: runOwnerCommand, silent: runOwnerCommand, active: runOwnerCommand, quiet: runOwnerCommand,
+        chatty: runOwnerCommand, normal: runOwnerCommand, model: runOwnerCommand, sing: runOwnerCommand,
+        status: runOwnerCommand, mood: runOwnerCommand, diary: runOwnerCommand, remember: runOwnerCommand,
+        reset: runOwnerCommand, new: runOwnerCommand, on: runOwnerCommand, off: runOwnerCommand,
+      },
+      log: logger.child('router'),
+    })
     legacyPipeline = compose([
       // RFC Middleware 1（US-004）：最外层 tracing，回溯阶段一行 debug 打点 total/mw0/mw1/err
       createTracingMiddleware({ log: logger.child('trace') }),
@@ -528,6 +575,11 @@ export function apply(ctx) {
       createEgressFlushMiddleware({ dispatcher, log: logger.child('egress-shadow') }),
       // US-006：防思考泄漏截尾 + stripReasoning + 4000 字语义分条
       createEgressMiddleware({ log: logger.child('egress') }),
+      // US-011：命令路由——必须在边界 flush/egress **内侧**（更深层）：命中入队的回复
+      // 交给外层 bubble 清洗+drain 下发，与 legacy 流量同一出口路径；又必须在
+      // aggregator/persona/memory/legacy **外侧**：命令不进聚合窗、不触发记忆检索，即时应答。
+      // 未命中/未适配/抛错 → next() 透传（legacy 命令闸门复检兜底，双权威顺序不变）。
+      pipelineCommandRouter,
       // US-008：入口合流防抖——必须紧贴遗留终端（在它之前 = 更外层），
       // 这样 followers 被 abort 时旧核心还没被派发，两级都不进，天然不会双发。
       // merge.* 参数与 hub 内部 pending 共用同一份配置，语义对齐 hub.enqueue。
@@ -539,7 +591,7 @@ export function apply(ctx) {
       ...(memoryAssemblyOn ? [personaAssembly, memoryAssembly] : []),
       createLegacyHubFallback(hub),
     ])
-    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}；上下文装配=${memoryAssemblyOn ? '开（persona/memory 接管，NEW_MEMORY_PIPELINE）' : '关（legacy provider 链）'}`)
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}；上下文装配=${memoryAssemblyOn ? '开（persona/memory 接管，NEW_MEMORY_PIPELINE）' : '关（legacy provider 链）'}；命令路由=开（内置命令接管，ext/边界形态透传 legacy）}`)
   }
 
   // ---------- 面板接口的小工具 ----------
