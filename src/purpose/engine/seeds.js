@@ -1,7 +1,7 @@
 // 决策层：minePurposeSeeds（从素材挖「可以主动说起的事」）+ selectPurpose（候选去重、打分、选出本轮目的）。
 import { DAY, HOUR, MINUTE, clampInt, clip, hashId, isPlainObject } from './shared.js'
 import { DEFAULT_PURPOSE_CONFIG } from './shared.js';
-import { ACTION_LABELS, DEFAULT_DRIVES, EMOTION_LABELS, NEED_LABELS, PURPOSE_NEEDS, appraiseMaterial, needAffinity, normalizeDrives, topNeedOf } from './drives.js'
+import { ACTION_LABELS, DEFAULT_DRIVES, DESIRE_RE, EMOTION_LABELS, NEED_LABELS, PLAN_RE, PROMISE_RE, PURPOSE_NEEDS, QUESTION_RE, appraiseMaterial, needAffinity, normalizeDrives, topNeedOf } from './drives.js'
 import { clockText, localDateKey } from './clock.js';
 import { isDuplicateText, textSimilarity } from './similarity.js';
 import { goalToCandidate } from './goals.js'

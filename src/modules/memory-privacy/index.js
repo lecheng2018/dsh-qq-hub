@@ -13,6 +13,8 @@
 
 const ID = 'memory-privacy'
 
+import { createMemoryBus } from '../../features/memory-bus.js'
+
 /** 当前聊天能看到哪些作用域。 */
 export function visibleScopes(chat) {
   if (!chat || chat.kind === 'system') return []
