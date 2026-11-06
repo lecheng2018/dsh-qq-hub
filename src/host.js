@@ -48,7 +48,7 @@ import { isEgressShadowEnabled } from './kernel/ctx-store.js'
 import { createEgressFlushMiddleware, createEgressOnebot, createEgressSendHook, createEgressSender } from './kernel/mw-egress-cutover.js'
 import { createAggregatorMiddleware, isIngressAggregatorEnabled } from './kernel/mw-aggregator.js'
 // RFC-0001 Phase 2（US-009）：入口防御链——ratelimit/ACL/dedup 在出口记账之前短路无效流量
-import { createRatelimitMiddleware } from './kernel/mw-ratelimit.js'
+import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from './kernel/mw-ratelimit.js'
 import { createAclMiddleware } from './kernel/mw-acl.js'
 import { createDedupMiddleware } from './kernel/mw-dedup.js'
 // RFC-0001 Phase 3（US-010）：上下文装配中间件——人设预取 + 记忆检索；
@@ -565,10 +565,11 @@ export function apply(ctx) {
       // 刻意放在出口 flush/egress 之前：被守卫 abort 的事件按 compose §2.2（US-008a）
       // 其后各级两级不进——出口链、聚合窗、旧核心都不为限流/无权/重传流量做记账；
       // 外层 tracing 的 bubble 照常收尾打点（aborted 标记，不计错误）。
-      // 旋钮取构造缺省值（30 突发 + 5/s 持续 / LRU 2048），Phase 2 验收再调，
-      // 配置化文档留 US-012；ACL 复用 chat/access.js 判定（fail-closed），
+      // 旋钮（US-012 配置化尾巴）：QQHUB_RL_CAPACITY / QQHUB_RL_REFILL_PER_SEC 装配期一次性
+      // 读 env，非法值回构造缺省（30 突发 + 5/s 持续 / LRU 2048）——口径同四个管道开关，
+      // 改 env 需重启；ACL 复用 chat/access.js 判定（fail-closed），
       // ratelimit/dedup 判定异常 fail-open。
-      createRatelimitMiddleware({ log: logger.child('ratelimit') }),
+      createRatelimitMiddleware({ ...ratelimitOptionsFromEnv(process.env), log: logger.child('ratelimit') }),
       createAclMiddleware({ getConfig: () => cfg, log: logger.child('acl') }),
       createDedupMiddleware({ log: logger.child('dedup') }),
       // US-007：边界 flush——必须在 egress 外层，回溯顺序才是「清洗 → 下发」
