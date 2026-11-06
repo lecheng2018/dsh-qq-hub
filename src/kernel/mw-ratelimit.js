@@ -10,8 +10,9 @@
 // fail-closed（权限防御，判定坏了不能当通行）刻意相反，两边的注释各自写明理由。
 //
 // capacity/refillPerSec 为构造参数：缺省给保守值（30 突发 + 5/秒持续，人类节奏远用不满，
-// 脚本刷屏必撞墙），这是 Phase 2 验收旋钮，实测调参在验收阶段做；配置化（面板/持久化）
-// 留给 US-012 文档化。桶表另设 LRU 上限 maxKeys 防止 chatId 无界增长——被逐出的桶按
+// 脚本刷屏必撞墙），这是 Phase 2 验收旋钮，实测调参在验收阶段做；配置化（US-012）走环境
+// 变量 QQHUB_RL_CAPACITY / QQHUB_RL_REFILL_PER_SEC（见 ratelimitOptionsFromEnv，非法值回
+// 构造缺省——口径与四个管道开关一致：不确定就用默认）。桶表另设 LRU 上限 maxKeys 防止 chatId 无界增长——被逐出的桶按
 // 「新桶」复活，代价仅是多一次突发额度，不会丢消息。
 
 import { traceStage } from './mw-tracing.js'
@@ -134,4 +135,34 @@ export function createRatelimitMiddleware(options = {}) {
     refillPerSec,
   })
   return ratelimit
+}
+
+/**
+ * 限流旋钮的环境变量解析（US-012 配置化尾巴，host.js 装配处消费）。
+ *
+ * - `QQHUB_RL_CAPACITY`      桶容量（突发上限），正数才有效；
+ * - `QQHUB_RL_REFILL_PER_SEC` 每秒补令牌数，非负数才有效（0 = 突发用尽后全拒，极端闸）。
+ *
+ * 非法值（乱码/负数/空串/未设置）**返回不含该键的对象** → 工厂解构落到构造缺省 30/5。
+ * 熔断语义与四个管道开关同款：不确定就用默认，绝不因环境变量写错而炸装配。
+ * 改 env 需重启进程（装配期一次性读取，与开关口径一致）。
+ *
+ * @param {Record<string, string | undefined>} [env] 缺省 process.env（测试注入桩 env）
+ * @returns {{ capacity?: number, refillPerSec?: number }} 可直接 spread 进 createRatelimitMiddleware
+ */
+export function ratelimitOptionsFromEnv(env = process.env) {
+  const out = {}
+  // 空串/纯空白先拦：Number('') === 0 会被当成合法数值（capacity 恰好因此误过 0 判、
+  // refill 更会落进「极端闸 0」），与「未设置=用默认」的语义相反，必须先短路。
+  const rawC = env?.QQHUB_RL_CAPACITY
+  if (typeof rawC === 'string' && rawC.trim() !== '') {
+    const capacity = Number(rawC)
+    if (Number.isFinite(capacity) && capacity > 0) out.capacity = capacity
+  }
+  const rawR = env?.QQHUB_RL_REFILL_PER_SEC
+  if (typeof rawR === 'string' && rawR.trim() !== '') {
+    const refill = Number(rawR)
+    if (Number.isFinite(refill) && refill >= 0) out.refillPerSec = refill
+  }
+  return out
 }
