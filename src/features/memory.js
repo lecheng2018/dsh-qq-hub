@@ -17,6 +17,8 @@ import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint } from './distill.js'
+import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
+import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
@@ -603,6 +605,69 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   /** 面板用：目标 + 各自画像，合成一份。 */
   function distillList () {
     return distillTargets().map((t) => ({ ...t, profile: distillOf(t.gid, t.uid) }))
+  }
+
+  // ---------------- 从会话历史蒸馏（1.3.63）----------------
+  // chatlog 每天整理完就删，所以「新加的学习目标」只能干等。DSH 的会话记录留得久、
+  // 而且存着群友原话「名字(QQ号)：内容」，翻它就能立刻学。
+
+  /** 扫一遍会话历史，给出「谁说了多少句」和覆盖的时间范围（面板用）。 */
+  function distillHistory ({ group = '' } = {}) {
+    const cfg = getConfig()
+    const dir = sessionsDirFor(workspaceDirOf(cfg), { dshHome: process.env.DSH_HOME || '' })
+    const scan = scanTranscripts(dir, { group })
+    return {
+      dir,
+      sessions: scan.sessions,
+      total: scan.lines.length,
+      from: scan.spans.from,
+      to: scan.spans.to,
+      speakers: speakerCounts(scan.lines, 20),
+      lines: scan.lines,
+    }
+  }
+
+  /**
+   * 从历史里给某个目标学一次（立即出画像，不用等）。
+   * @returns {{ok:boolean, message:string, learned?:object}}
+   */
+  async function learnDistillFromHistory ({ gid, uid, name = '', minMessages } = {}) {
+    const cfg = getConfig()
+    if (cfg.memory?.distill === false) return { ok: false, message: '蒸馏群友开关关着' }
+    const g = String(gid || '').replace(/\D/g, '')
+    const u = String(uid || '').replace(/\D/g, '')
+    if (!g || !u) return { ok: false, message: '群号和 QQ 号都要填' }
+    // 群名 → 只学这个群里的他；拿不到群名就按 QQ 号在全部群里找他
+    let groupName = ''
+    try { groupName = await hub.groupName(g) } catch {}
+    if (groupName === g) groupName = ''
+    const hist = distillHistory({ group: groupName })
+    if (!hist.total) return { ok: false, message: '没找到会话历史' + (hist.dir ? '' : '（会话目录不存在）') }
+    const mine = linesOf(hist.lines, u)
+    if (!enoughEvidence(mine, minMessages ? { minMessages } : undefined)) {
+      return { ok: false, message: `历史里他只说了 ${mine.length} 句，不够 20 句，学出来也是瞎猜` }
+    }
+    const others = hist.lines.filter((l) => String(l.uid) !== u).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
+    const old = distillOf(g, u)
+    const { system, text } = buildDistillPrompt({
+      name: name || mine[0]?.name || u,
+      memberLines: mine.map((l) => ({ t: l.at, text: l.text })),
+      others,
+      old,
+    })
+    let out = ''
+    try {
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 800, temperature: 0.3 })
+    } catch (error) {
+      return { ok: false, message: '提炼失败：' + error.message }
+    }
+    const profile = parseDistillProfile(out)
+    if (!profile || (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length)) {
+      return { ok: false, message: '没提炼出东西，可能是他的发言太碎' }
+    }
+    const saved = putDistill(g, u, profile, mine.length)
+    log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
+    return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
   }
 
   function setInsights(key, list, name) {
@@ -1391,6 +1456,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     distillTargets,
     distillOf,
     putDistill,
+    distillHistory,
+    learnDistillFromHistory,
     addDistillTarget,
     removeDistillTarget,
     removeSlang: (gid, id) => {
