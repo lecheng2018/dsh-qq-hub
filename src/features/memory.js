@@ -591,13 +591,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
   function distillOf (gid, uid) {
     return (load().distill || {})[distillKey(gid, uid)] || null
   }
-  function putDistill (gid, uid, profile, samples) {
+  function putDistill (gid, uid, profile, evidenceCount) {
     const s = load()
     s.distill = s.distill || {}
     const key = distillKey(gid, uid)
     const old = s.distill[key] || null
     const merged = mergeProfile(old || {}, profile)
-    s.distill[key] = { ...merged, samples: Math.max(Number(old && old.samples) || 0, Number(samples) || 0), updatedAt: Date.now() }
+    // 兼容旧调用/旧存量把证据条数塞在 samples 里的形态（数字），认作条数而不是原话
+    const incomingCount = Math.max(Number(evidenceCount) || 0, (profile && typeof profile.samples === 'number') ? profile.samples : 0)
+    // 证据条数单独放 evidenceCount —— 以前叫 samples，把画像里的逐字原话数组（few-shot
+    // 主信号）覆盖成了数字，注入时渲染出「- 「44」」这种鬼东西（1.3.64 修）
+    s.distill[key] = { ...merged, evidenceCount: Math.max(Number(old && (old.evidenceCount != null ? old.evidenceCount : (typeof old.samples === 'number' ? old.samples : 0))) || 0, incomingCount), updatedAt: Date.now() }
     s.rev = (s.rev || 0) + 1
     save(s)
     return s.distill[key]
@@ -643,27 +647,36 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     if (groupName === g) groupName = ''
     const hist = distillHistory({ group: groupName })
     if (!hist.total) return { ok: false, message: '没找到会话历史' + (hist.dir ? '' : '（会话目录不存在）') }
-    const mine = linesOf(hist.lines, u)
-    if (!enoughEvidence(mine, minMessages ? { minMessages } : undefined)) {
-      return { ok: false, message: `历史里他只说了 ${mine.length} 句，不够 20 句，学出来也是瞎猜` }
+    // 历史学习先清洗（去重 + 滤纯转发），清洗后质量高，门槛相应降到 15 句
+    const mine = collectMemberLines(hist.lines.map((l) => ({ ...l, t: l.at })), u)
+    const t0name = name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u
+    const minMsg = Number(minMessages) || 15
+    if (!enoughEvidence(mine, { minMessages: minMsg })) {
+      return { ok: false, message: `历史里他的原话只有 ${mine.length} 句（去重滤转发后），不够 ${minMsg} 句，学出来也是瞎猜——等多聊几天再来` }
     }
-    const others = hist.lines.filter((l) => String(l.uid) !== u).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
+    const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)
     const { system, text } = buildDistillPrompt({
       name: name || mine[0]?.name || u,
-      memberLines: mine.map((l) => ({ t: l.at, text: l.text })),
+      memberLines: mine,
       others,
       old,
     })
     let out = ''
     try {
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 800, temperature: 0.3 })
+      // 1600 token：800 会截断五段 JSON（截了 parse 就失败，之前没日志根本看不出）
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 1600, temperature: 0.3 })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
     const profile = parseDistillProfile(out)
-    if (!profile || (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length)) {
-      return { ok: false, message: '没提炼出东西，可能是他的发言太碎' }
+    if (!profile) {
+      log.warn(`蒸馏群友（历史）：${t0name} 回包解析失败，原始前 200 字：`, String(out).slice(0, 200))
+      return { ok: false, message: '模型回包没解析成 JSON（原因已记日志，可再点一次重试）' }
+    }
+    if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
+      log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
+      return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }
     }
     const saved = putDistill(g, u, profile, mine.length)
     log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
@@ -1233,14 +1246,18 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       const { system, text } = buildDistillPrompt({ name: t.name || t.uid, memberLines: mine, context, others, old })
       let out = ''
       try {
-        out = await askModel(dsh, { cfg, system, text, maxTokens: 800, temperature: 0.3 })
+        out = await askModel(dsh, { cfg, system, text, maxTokens: 1600, temperature: 0.3 })
       } catch (error) {
         log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
         continue
       }
       const profile = parseDistillProfile(out)
-      if (!profile || (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length)) {
-        log.debug(`蒸馏群友：${t.name || t.uid} 没提炼出东西，跳过`)
+      if (!profile) {
+        log.warn(`蒸馏群友：${t.name || t.uid} 回包解析失败，前 200 字：`, String(out).slice(0, 200))
+        continue
+      }
+      if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
+        log.info(`蒸馏群友：${t.name || t.uid} 模型判空画像，前 120 字：`, String(out).slice(0, 120))
         continue
       }
       putDistill(t.gid, t.uid, profile, mine.length)
