@@ -13,9 +13,21 @@
 
 export const SILENCE = '[沉默]'
 
+/** 去掉模型思考标签（<think>、<thought>、<reasoning> 等及其孤立闭合标签）。 */
+export function stripReasoning(text) {
+  let s = String(text || '')
+  // 1. 成对闭合的思考块：整段连同标签全部移除
+  s = s.replace(/<(think|thought|reasoning|reflection|antThinking)(\s+[^>]*)?>[\s\S]*?<\/\1>/gi, '')
+  // 2. 只有开头没闭合的整段思考（例如模型思考到一半被截断）
+  s = s.replace(/^<(think|thought|reasoning|reflection|antThinking)(\s+[^>]*)?>[\s\S]*$/gi, '')
+  // 3. 孤立的闭合或开启标签（如模型被代理或网关吞噬前缀后漏出的 </thought>、</think>）
+  s = s.replace(/<\/?(think|thought|reasoning|reflection|antThinking)(\s+[^>]*)?>/gi, '')
+  return s
+}
+
 /** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
 export function stripMarkdown(text) {
-  let s = String(text || '')
+  let s = stripReasoning(text)
   s = s.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, '$1')
   s = s.replace(/`([^`\n]+)`/g, '$1')
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '$1')
@@ -57,7 +69,7 @@ export function isSilence(text) {
  * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
 export function parseReply(text, rules = {}) {
-  let raw = String(text || '').trim()
+  let raw = stripReasoning(text).trim()
   if (isSilence(raw)) return { silent: true, items: [] }
   // 报告标记（1.3.48）：<report>…</report> 里的内容是「给主人看的数据」。
   // 摘出来当**一条**整段气泡（在 ||| 拆分之前摘，标记里的空行不能当气泡边界）；
