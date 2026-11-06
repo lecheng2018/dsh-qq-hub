@@ -34,6 +34,8 @@ const MIN_MS = 60_000            // 一分钟（碎碎念间隔/静默窗口都�
 export default {
   id: 'pet',
   name: '桌宠',
+  platforms: ['win32'],
+  headless: false,
   version: '1.0.0',
   api: 1,
   description: '桌面悬浮窗桌宠（移植自 dsh-pet，代码 MIT）：主动发言走气泡（可选语音），与 QQ 私聊载体互斥回落',
