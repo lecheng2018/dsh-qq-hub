@@ -111,7 +111,7 @@ export default {
           if (!seg) return { ok: false, message: '这张表情已经拿不到了（超过 30 分钟，或者这一轮里没有这张）' }
           let buf
           try {
-            buf = await segmentBytes(seg, onebot, { maxBytes: 5 * 1024 * 1024 })
+            buf = await segmentBytes(seg, onebot, { maxBytes: 10 * 1024 * 1024 })
           } catch (error) {
             return { ok: false, message: '这张表情下载失败了：' + error.message }
           }
@@ -151,7 +151,7 @@ export default {
             // 优先主人自己发的，其次这个聊天里最近的
             const pick = media.filter((x) => x.userId === String(api.config().ownerQQ)).at(-1) || media.at(-1)
             if (!pick) return { ok: false, message: '最近半小时这个聊天里没有人发表情或图片，先把那张发过来' }
-            buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 5 * 1024 * 1024 })
+            buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 10 * 1024 * 1024 })
           }
           const r = await store.addFromBuffer(buf, { name: String(name || '').slice(0, 12), tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
           if (!r.ok) return { ok: false, message: r.reason || '没存成' }
@@ -174,7 +174,7 @@ export default {
         properties: { source: str('本地路径或 http(s) 地址'), name: str('备注（≤12 字）'), tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈' } },
         required: ['source'],
         execute: async ({ source, name, tags }) => {
-          const buf = await fetchImage(String(source), { maxBytes: 5 * 1024 * 1024, allowLocal: true })
+          const buf = await fetchImage(String(source), { maxBytes: 10 * 1024 * 1024, allowLocal: true })
           const r = await store.addFromBuffer(buf, { name: name || '', tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
           return r.ok ? { ok: true, message: r.existed ? '库里已经有这张了' : `收好了「${r.item.name || '未命名'}」` } : { ok: false, message: r.reason }
         },
