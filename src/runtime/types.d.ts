@@ -43,8 +43,11 @@ export interface EnvironmentConstraints {
 export interface ModuleManifest {
   readonly name: string
   readonly version: string
-  /** 数值越大越先装载（loadModules 按 priority 降序调度） */
-  readonly priority: number
+  /**
+   * 数值越大越先装载（loadModules 按 priority 降序调度）。
+   * 声明可缺省：validateManifest 归一化时补默认值 0，但显式给非数字仍会被拒绝
+   */
+  readonly priority?: number
   readonly targetPlatforms: ReadonlyArray<PlatformType>
   readonly displayRequirements: ReadonlyArray<DisplayServerType>
   readonly hardware?: HardwareConstraints

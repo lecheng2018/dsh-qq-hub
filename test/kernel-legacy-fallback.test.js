@@ -217,8 +217,10 @@ test('P99 打点：compose 空转基准 + 占位→遗留终端全链（阈值 1
     `[US-003 打点] runs=${runs}｜空管道 P99=${empty.p99.toFixed(3)}ms｜占位+终端全链 P99=${full.p99.toFixed(3)}ms｜增量 P99=${overhead.p99.toFixed(3)}ms（max=${overhead.max.toFixed(3)}ms）`
   )
 
-  // RFC Phase 0 验收线：P99 ≤ 1.5ms。沙箱抖动放宽到 8ms 兜底，实测值以打点日志为准。
-  assert.ok(full.p99 <= 8, `全链 P99=${full.p99.toFixed(3)}ms 超过宽阈值 8ms，环境异常`)
+  // RFC §4 Phase 0 验收线原文：「端到端 P99 延迟增量 ≤ 1.5ms」。US-004 按 verifier 记账
+  // 把此前的 8ms 宽断言收紧到验收线本身：增量（overhead）是硬指标，全链绝对值同线兜底。
+  assert.ok(overhead.p99 <= 1.5, `增量 P99=${overhead.p99.toFixed(3)}ms 超过 RFC 验收线 1.5ms`)
+  assert.ok(full.p99 <= 1.5, `全链 P99=${full.p99.toFixed(3)}ms 超过 RFC 验收线 1.5ms`)
 })
 
 // ---------- host 装配形态复刻 ----------
