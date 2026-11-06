@@ -2349,7 +2349,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
             ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
-        h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。整理记忆时顺带做：拿他当天在这个群里的原话，让模型提炼「模仿他说话要知道什么」，写进下面的画像。她在那个群聊天时会带上这段画像，顺着他的语感说 —— 但**不会冒充他、也不替他表态**。他当天说得太少（少于 8 句）就不学。' },
+        h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。加完可以点「从历史学」立刻从他**过去说过的话**里提炼（DSH 会话记录里存着群友原话，比聊天流水留得久），不用干等他再聊；以后每次整理记忆也会拿他最近的原话更新画像。她在那个群聊天时会带上这段画像，顺着他的语感说 —— 但**不会冒充他、也不替他表态**。他当天说得太少（少于 8 句）就不学。' },
           h(DistillPanel, { toast, onChanged: () => { load() } })),
         h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang'), desc: '和上面不同：这个学的是**词**，不是人。从每个群的聊天里找这个群在用的黑话、梗、圈内称呼——词频统计挑候选（不花钱），模型判断哪些真是黑话、什么意思（每群每天一次调用）。她和这个群聊天时会看到黑话本，听懂了就用，不会硬套。' },
           (st.config.memory || {}).slang !== true ? h('div', { className: 'ab-muted ab-small' }, '开关关着：现在只统计、不判断也不写库。打开后下次整理记忆时开始学。') : null,
@@ -2624,6 +2624,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [list, setList] = useState(null)
       const [busy, setBusy] = useState('')
       const [form, setForm] = useState({ gid: '', uid: '', name: '' })
+      const [hist, setHist] = useState(null)   // 会话历史扫描结果
+      const [histErr, setHistErr] = useState('')
       const load = () => get('/distill/list').then((r) => setList(r.list || [])).catch(() => setList([]))
       useEffect(() => { load() }, [])
       const add = async () => {
@@ -2632,6 +2634,22 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           const r = await post('/distill/add', form)
           toast(r.message || '加上了', r.ok ? 'ok' : 'err')
           if (r.ok) { setForm({ gid: '', uid: '', name: '' }); await load(); onChanged && onChanged() }
+        } finally { setBusy('') }
+      }
+      const scanHist = async () => {
+        setBusy('scan')
+        try {
+          const r = await get('/distill/history' + (form.gid ? '?group=' : ''))
+          setHistErr(r.ok === false ? (r.message || '读不到') : '')
+          setHist(r.ok === false ? null : r)
+        } catch (e) { setHistErr(e.message || String(e)); setHist(null) } finally { setBusy('') }
+      }
+      const learnHist = async (t) => {
+        setBusy('hist:' + t.gid + t.uid)
+        try {
+          const r = await post('/distill/from-history', { gid: t.gid, uid: t.uid, name: t.name })
+          toast(r.message || '学完了', r.ok ? 'ok' : 'err')
+          if (r.ok) { await load(); onChanged && onChanged() }
         } finally { setBusy('') }
       }
       const remove = async (t) => {
@@ -2652,6 +2670,13 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '他的 QQ 号', value: form.uid, onChange: (e) => setForm({ ...form, uid: e.target.value.replace(/\D/g, '') }) }),
           h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '怎么称呼（可选）', value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }) }),
           h(Btn, { small: true, kind: 'primary', disabled: busy === 'add' || !form.gid || !form.uid, onClick: add }, busy === 'add' ? '…' : '开始学')),
+        h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h(Btn, { small: true, kind: 'ghost', disabled: busy === 'scan', onClick: scanHist }, busy === 'scan' ? '翻着呢…' : '翻一翻聊天历史'),
+          hist ? h('span', { className: 'ab-muted ab-small' },
+            '历史里 ' + hist.total + ' 条发言、' + hist.sessions + ' 个会话' +
+            (hist.from ? '（' + new Date(hist.from).toLocaleDateString() + ' → ' + new Date(hist.to).toLocaleDateString() + '）' : '') +
+            (hist.speakers && hist.speakers.length ? '；说得最多的：' + hist.speakers.slice(0, 3).map((x) => (x.name || x.uid) + ' ' + x.count + ' 句').join('、') : '')) : null,
+          histErr ? h('span', { className: 'ab-small', style: { color: '#e08a8a' } }, histErr) : null),
         list === null ? h('div', { className: 'ab-muted ab-small' }, '读着呢…')
           : list.length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没有指定要学的人。填群号和 QQ 号，下次整理记忆时开始学他说话的样子（他当天说得太少就不学）。')
             : list.map((t) => h('div', { key: t.gid + t.uid, className: 'ab-li', style: { padding: '8px 0' } },
@@ -2659,6 +2684,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
                   h('b', { className: 'ab-small' }, t.name || t.uid),
                   h('span', { className: 'ab-muted ab-small' }, ' 群 ' + t.gid + ' · QQ ' + t.uid),
                   h('div', { className: 'ab-spacer' }),
+                  h(Btn, { small: true, kind: 'ghost', disabled: busy === 'hist:' + t.gid + t.uid, onClick: () => learnHist(t) },
+                    busy === 'hist:' + t.gid + t.uid ? '学呢…' : '从历史学'),
                   h(Btn, { small: true, kind: 'ghost', disabled: busy === 'rm:' + t.gid + t.uid, onClick: () => remove(t) }, '不学了')),
                 t.profile
                   ? h('div', null,

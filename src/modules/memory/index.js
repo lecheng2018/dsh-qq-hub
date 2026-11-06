@@ -119,6 +119,21 @@ export default {
     })
     // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
     api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
+    // 从会话历史蒸馏（1.3.63）：chatlog 每天删，DSH 会话记录留得久，翻它能立刻学
+    api.route('/distill/history', async (req) => {
+      if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
+      const q = http.query(req) || {}
+      const h = memory.distillHistory({ group: q.group || '' })
+      return {
+        ok: true, dir: h.dir, sessions: h.sessions, total: h.total,
+        from: h.from, to: h.to, speakers: h.speakers,
+      }
+    })
+    api.route('/distill/from-history', async (req) => {
+      if (!memory.learnDistillFromHistory) return { ok: false, message: '记忆库没在跑' }
+      const b = await http.body(req)
+      return memory.learnDistillFromHistory({ gid: b.gid, uid: b.uid, name: b.name })
+    })
     api.route('/distill/add', async (req) => {
       const b = await http.body(req)
       return memory.addDistillTarget ? memory.addDistillTarget({ gid: b.gid, uid: b.uid, name: b.name }) : { ok: false, message: '记忆库没在跑' }
