@@ -51,6 +51,10 @@ import { createAggregatorMiddleware, isIngressAggregatorEnabled } from './kernel
 import { createRatelimitMiddleware } from './kernel/mw-ratelimit.js'
 import { createAclMiddleware } from './kernel/mw-acl.js'
 import { createDedupMiddleware } from './kernel/mw-dedup.js'
+// RFC-0001 Phase 3（US-010）：上下文装配中间件——人设预取 + 记忆检索；
+// 记忆接管点在装配层的 contextProviders provider 包装（NEW_MEMORY_PIPELINE=true 才包）
+import { createPersonaInjector } from './kernel/mw-persona.js'
+import { createMemoryRetriever, createContextProviderTakeover, isNewMemoryPipelineEnabled } from './kernel/mw-memory.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -379,6 +383,21 @@ export function apply(ctx) {
     ? createEgressSendHook({ legacySend: (message, info) => mods.filter('send', message, info), log: logger.child('egress') })
     : (message, info) => mods.filter('send', message, info)
 
+  // ---------- RFC-0001 Phase 3（US-010）：记忆装配接管（NEW_MEMORY_PIPELINE 灰度位） ----------
+  // 缺省关：contextProviders 仍是原函数本体的数组，与 US-009 逐字节等价（红线）。
+  // 开（且仅当管道也开）：注入面**外面**包一层 takeover——ALS 有本轮 ctx、
+  // mw-memory 已在 ctx.state 备好装配结果 → 直接供给 state 缓存，原 provider 零调用；
+  // 任一条件不满足（flag off / 无 ctx / 中间件没跑到）→ 原 mods.contextFor（legacy 回退）。
+  // hub.js 一行未动；接管面覆盖清单与已知边界（其余 api.context 模块 / 群 speakersOf 档案）
+  // 见 src/kernel/mw-memory.js 头注。
+  const baseContextProvider = (args) => mods.contextFor(args)
+  const memoryAssemblyOn = usePipeline && isNewMemoryPipelineEnabled(process.env)
+  const hubContextProviders = [
+    memoryAssemblyOn
+      ? createContextProviderTakeover({ provider: baseContextProvider, isNewPipeline: () => true, log: logger.child('memory-mw') })
+      : baseContextProvider,
+  ]
+
   hub = createHub({
     localApi: local,
     dsh: ctx,
@@ -391,9 +410,7 @@ export function apply(ctx) {
     // 会话上下文：只放模块给的（记忆、近况……）。
     // 按聊天换人设不在这里做——那会变成「系统卡 + 追加块」两套人设；
     // 现在由 hub 的 mount() 在 agent 作用域里遮蔽 {{qq_hub_persona}}，整份提示词只有一套人设。
-    contextProviders: [
-      (args) => mods.contextFor(args),
-    ],
+    contextProviders: hubContextProviders,
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
     // 传 chat：话题相关度只在当前聊天可见的记忆里算，别处的记忆不该让她在群里「感兴趣」
@@ -461,6 +478,39 @@ export function apply(ctx) {
       log: logger.child('dispatcher'),
       shaping: { baseMs: 350, perCharMs: 110, minGapMs: 700, maxGapMs: 4500 },
     })
+    // US-010：上下文装配两件（NEW_MEMORY_PIPELINE=true 才进管道；关时数组与 US-009 等价）。
+    // - persona：hub 内部直读 personas.js（红线不动），本件为**预取 + 打点**，state 快照供
+    //   观测与 Phase 4 消费；人设源每事件实时读 cfg + 人格卡文件（面板改卡下一事件即生效）。
+    // - memory：检索 features/memory.js 现行 contextFor/listFor（每事件实时读=热重载），
+    //   结果写 ctx.state；上面 hubContextProviders 的 takeover 层据此供给。
+    // 拍板顺序：persona/memory 在 aggregator **之后**（lead 放行后为合并回合装配一次，
+    // 同窗 followers 在聚合层就 abort，根本到不了检索），legacy 终端之前。
+    const personaAssembly = createPersonaInjector({
+      getPersona: (chat) => {
+        const c = getConfig()
+        const want = personaIdFor(chat, c)
+        const globalId = (c.persona || {}).current || ''
+        const p = want ? readPersona(want) : null
+        return {
+          id: want || globalId,
+          name: p && p.name ? p.name : '',
+          body: p && p.body ? p.body : currentPersonaText(want || globalId),
+          perChat: Boolean(want && want !== globalId),
+        }
+      },
+      log: logger.child('persona-mw'),
+    })
+    const memoryAssembly = createMemoryRetriever({
+      // 注入面每事件现取：模块热重载（generation 变了换了实例）自动跟上
+      memory: (() => {
+        const m = () => use('memory')
+        return {
+          contextFor: (chat, sessionId) => m()?.contextFor?.(chat, sessionId) ?? '',
+          listFor: (scopes, opts) => m()?.listFor?.(scopes, opts) ?? [],
+        }
+      })(),
+      log: logger.child('memory-mw'),
+    })
     legacyPipeline = compose([
       // RFC Middleware 1（US-004）：最外层 tracing，回溯阶段一行 debug 打点 total/mw0/mw1/err
       createTracingMiddleware({ log: logger.child('trace') }),
@@ -485,9 +535,11 @@ export function apply(ctx) {
       // 那一条报文（实测丢消息），所以本层另吃 FLAG_INGRESS_AGGREGATOR，默认不装；
       // Ingress 收编（US-009/Phase 3）后再并进 FLAG_USE_PIPELINE。
       ...(useIngressAggregator ? [pipelineAggregator] : []),
+      // US-010：装配层在聚合之后、终端之前——lead 放行后为合并回合装配一次人设+记忆
+      ...(memoryAssemblyOn ? [personaAssembly, memoryAssembly] : []),
       createLegacyHubFallback(hub),
     ])
-    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}`)
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}；上下文装配=${memoryAssemblyOn ? '开（persona/memory 接管，NEW_MEMORY_PIPELINE）' : '关（legacy provider 链）'}`)
   }
 
   // ---------- 面板接口的小工具 ----------
