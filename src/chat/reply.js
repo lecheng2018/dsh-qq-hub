@@ -166,7 +166,7 @@ export function capBubbles(items, max = MAX_BUBBLES) {
  *
  * 返回 [{ text, brk }]，brk 是这一片**后面**的边界类型：'punct' | 'nl' | ''
  */
-function segmentUnits(text) {
+export function segmentUnits(text) {
   const tags = []
   // 标签/URL/时间/小数先占位：它们的冒号、斜杠、点绝不能当断句点
   // （「到14:22」曾被杀成「…到14」「22」；链接从 ? 处断成两截点不开）
@@ -201,13 +201,17 @@ function segmentUnits(text) {
   const rest = buf.trim()
   if (rest) units.push({ text: rest, brk: '' })
   // 换行的性质看整段排版：
-  //  · 每一行都短（≤15 字）→ 她就是在用换行分行说话，这些换行**必须**断（'hard'）
-  //  · 否则是长文排版（指标汇报一类）→ 换行只算弱边界，能不拆就不拆（'soft'）
-  const lineLens = guarded.split('\n').map((x) => x.trim().length).filter((n) => n > 0)
-  const shortLines = lineLens.length > 1 && lineLens.every((n) => n <= 15)
+  //  · **短行**（≤15 字）随便多少行都是她在分行说话（「a/b/c/d」七个超短行也是）→ hard。
+  //  · **中行**（16~30 字）只在行数 ≤3 时算聊天分行 → hard。原阈值只有 15，两句话各 17 字
+  //    （「今晚刚见证教程没捂热号先凉，你说呢」正好 17）被误判成排版，soft 边界再按 0.45 概率
+  //    合——一半概率把两句不同话题粘成一条带 \n 的消息（2026-11-06 线上实锤）。
+  //  · **长行**（>30 字/行）或中行超过 3 行 → 长文排版（指标汇报一类）→ soft，能不拆就不拆。
+  const lines0 = guarded.split('\n').map((x) => x.trim()).filter(Boolean)
+  const allShort = lines0.length > 1 && lines0.every((x) => x.length <= 15)
+  const fewMedium = lines0.length > 1 && lines0.length <= 3 && lines0.every((x) => x.length <= 30)
   for (const u of units) {
     if (u.brk !== 'nl') continue
-    u.brk = shortLines ? 'hard' : 'soft'
+    u.brk = (allShort || fewMedium) ? 'hard' : 'soft'
   }
   return units.map((u) => ({ ...u, text: u.text.replace(/~~Z(\d+)Z~~/g, (_, i) => tags[Number(i)] || '') }))
 }
@@ -216,7 +220,7 @@ function segmentUnits(text) {
  * 把句子片攒成气泡：攒够 minBubble 才考虑断开，断不断带随机（真人不是机械切）。
  * 换行边界比句末标点更容易断（0.7 vs 0.4），因为换行本来就是排版意图。
  */
-function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
+export function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
   const out = []
   let cur = ''
   let brk = ''

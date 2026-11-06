@@ -522,7 +522,12 @@ export function normalize(raw) {
   delete c.memory.consolidateAt
   c.memory.consolidateTimes = [...new Set((Array.isArray(c.memory.consolidateTimes) ? c.memory.consolidateTimes : String(c.memory.consolidateTimes || '').split(/[\s,，]+/)).map((t) => hhmm(t, '')).filter(Boolean).map((t) => t.padStart(5, '0')))].sort().slice(0, 4)
   if (!c.memory.consolidateTimes.length) c.memory.consolidateTimes = ['04:00', '16:00']
+  c.memory.slang = bool(c.memory.slang, false) // 群黑话本：每日提炼群里的黑话/梗（默认关，面板开）
+  c.memory.distill = bool(c.memory.distill, true) // 蒸馏群友：学指定某个人的说话样子（有目标才跑，默认开）
   c.memory.recallCount = num(c.memory.recallCount, 6, 0, 20)
+  // 聊天流水滚动保留（1.3.49 #5）：每天一个 JSONL，超期自动清理；14 天下限（整理和压缩都还要翻它）
+  if (!isObj(c.chatlog)) c.chatlog = {}
+  c.chatlog.keepDays = Math.round(num(c.chatlog.keepDays, 30, 14, 365))
   c.memory.hintCount = Math.round(num(c.memory.hintCount, 8, 1, 20)) // 每轮最多带几条记忆进提示词
   c.memory.hintMaxChars = Math.round(num(c.memory.hintMaxChars, 600, 120, 2000)) // 这些记忆合起来最多多少字
   g.interests = (Array.isArray(g.interests) ? g.interests : String(g.interests || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
