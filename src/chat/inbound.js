@@ -125,14 +125,20 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
 }
 
 /** 偷表情的尺寸兜底（拿到字节、宽高之后再判）。 */
-export function stickerSizeOk({ width, height, bytes }, limits = {}) {
-  const maxSide = limits.maxSide ?? 520
-  const maxBytes = limits.maxBytes ?? 1.5 * 1024 * 1024
+/** 偷表情的尺寸与体积判定（支持动图/静图双轨制）。 */
+export function stickerSizeOk({ width, height, bytes, mime }, limits = {}) {
+  const maxSide = limits.maxSide ?? 1920
+  const isGif = Boolean(limits.isGif || mime === 'image/gif')
+  // 静态表情默认上限 5MB，GIF 动图允许放宽至 10MB
+  const defaultBytes = isGif ? (10 * 1024 * 1024) : (5 * 1024 * 1024)
+  const maxBytes = limits.maxBytes ?? defaultBytes
   if (!(bytes > 0) || bytes > maxBytes) return false
   if (!(width > 0) || !(height > 0)) return true // 读不出尺寸就只看体积
   if (width > maxSide || height > maxSide) return false
   const r = width / height
-  return r >= 0.75 && r <= 1.33
+  // GIF 经常带字幕或宽条比例，放宽至 0.4 ~ 2.5；静态表情放宽至 0.6 ~ 1.6
+  if (isGif) return r >= 0.4 && r <= 2.5
+  return r >= 0.6 && r <= 1.6
 }
 
 /** 从图片字节里读宽高（PNG / GIF / JPEG / WEBP），读不出返回 0。 */
