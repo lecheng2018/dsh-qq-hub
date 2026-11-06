@@ -27,6 +27,20 @@ const ENTRY = ['index.mjs', 'index.js']
 const DOC = 'API.md'
 const TYPES = 'qq-hub.d.ts'
 
+/** 检查模块是否与当前操作系统平台及运行环境兼容。 */
+export function isPlatformSupported(def, currentPlatform = process.platform, env = process.env) {
+  if (!def || typeof def !== 'object') return { ok: true }
+  if (Array.isArray(def.platforms) && def.platforms.length > 0) {
+    if (!def.platforms.includes(currentPlatform)) {
+      return { ok: false, reason: `仅支持 ${def.platforms.join(' / ')} 平台，当前为 ${currentPlatform}` }
+    }
+  }
+  if (def.headless === false && currentPlatform !== 'win32' && !env.DISPLAY && !env.WAYLAND_DISPLAY) {
+    return { ok: false, reason: '需要桌面图形（GUI）环境，当前无头服务器环境不支持' }
+  }
+  return { ok: true }
+}
+
 export const userDir = () => dataDir('modules')
 
 /** 内部源码全部按「相对 src 的路径」开放出来：lib('features/memory.js') → 那个文件导出的全部东西。 */
@@ -409,9 +423,16 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   /** 这个 id 现在该跑哪个版本：'user' | 'builtin' | null（关着）。 */
   function wanted(id, users) {
     if (!isEnabled(id)) return null
-    const hasUser = isUserOn() && users.some((u) => u.id === id)
-    if (hasUser && !(builtinDefs.has(id) && modCfg(id).useBuiltin)) return 'user'
-    return builtinDefs.has(id) ? 'builtin' : null
+    const b = builtinDefs.get(id)
+    const u = users.find((x) => x.id === id)
+    const def = isUserOn() && u && !(b && modCfg(id).useBuiltin) ? (u.def || b) : b
+    if (def) {
+      const sup = isPlatformSupported(def)
+      if (!sup.ok) return null
+    }
+    const hasUser = isUserOn() && Boolean(u)
+    if (hasUser && !(b && modCfg(id).useBuiltin)) return 'user'
+    return b ? 'builtin' : null
   }
 
   /** 插件加载时：内置模块同步启动（被替换 / 关掉的跳过），自己写的随后异步加载。 */
@@ -581,9 +602,14 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const def = rec?.def || b || {}
       const m = modCfg(id)
       const err = errors.get(id)
+      const sup = def ? isPlatformSupported(def) : { ok: true }
       return {
         id,
         name: def.name || id,
+        supported: sup.ok,
+        unsupportedReason: sup.ok ? '' : sup.reason,
+        platforms: def.platforms || null,
+        headless: def.headless !== false,
         description: def.description || '',
         version: def.version || '',
         builtin: Boolean(b),
