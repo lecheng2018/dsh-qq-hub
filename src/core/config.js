@@ -107,7 +107,6 @@ const DEFAULTS_RAW = {
     quota: { enabled: true, perMinute: 10, reserve: 1 },
   },
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
-  titleFilter: { enabled: true, groups: [], title: '大肥鱼' },
   voice: {
     enabled: true,
     // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http = 指定引擎（失败都会退回 Windows 语音）
@@ -512,6 +511,9 @@ export function normalize(raw) {
   // 1.0.x 的 douyin-im / 私信相关设置都不用了
   for (const k of ['atOwnerOnLikeChance', 'minimize', 'socialInterruptBrowse', 'replyPollMinutes']) delete d[k]
 
+  // 1.3.63：按头衔过滤整条下线（很多 bot 根本不挂头衔/普通号查不到头衔，形同虚设）；
+  // 防 bot 对聊改由鱼名单 + 乒乓规则负责。清掉旧配置里的死键。
+  delete c.titleFilter
   delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
@@ -544,9 +546,6 @@ export function normalize(raw) {
   c.reply.keepReports = bool(c.reply.keepReports, true)
   // 1.3.43 删掉了「多问一次模型挑断点」：老配置里的残留在这里丢掉，别又跟着存回去。
   delete c.reply.llmSplit
-  c.titleFilter.enabled = bool(c.titleFilter.enabled, true)
-  c.titleFilter.groups = qqList(c.titleFilter.groups) // 和群白名单同一套规则
-  c.titleFilter.title = String(c.titleFilter.title ?? '').replace(/[​-‍﻿]/g, '').trim().slice(0, 30) || '大肥鱼'
   g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
   if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'

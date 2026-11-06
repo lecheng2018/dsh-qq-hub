@@ -16,11 +16,31 @@
 //
 // 本文件只做判定；冷却计时、落盘、真正拦下发送由 hub.js 负责。
 
+// 群聊流水去重复注入：同一 (uid,text) 第三次出现起视为会话轮次重发，只留前两次。
+export function dedupConvo (lines, keepTimes = 2) {
+  const seen = new Map()
+  const out = []
+  for (const l of lines || []) {
+    const key = `${String((l && l.uid) || '')}|${String((l && l.text) || '').slice(0, 80)}`
+    const n = (seen.get(key) || 0) + 1
+    seen.set(key, n)
+    if (n <= keepTimes) out.push(l)
+  }
+  return out
+}
+
 export const DEFAULT_FISH_GUARD = Object.freeze({
   enabled: true,
   windowMs: 10 * 60 * 1000,
   cooldownMs: 10 * 60 * 1000,
   maxFish: 5,
+  // ⑥ 乒乓：我↔同一只鱼交替接话达到这么多条（4 轮）→ 停。交替模式数不到②③的「连续」，
+  // 等④占比抓到要几十条消息，两只 bot 早就聊疯了——这条按行为直接掐（2026-11-06 实测事故）。
+  maxPingPong: 8,
+  // pair 对聊泉预算（1.3.63）：已确认身份的鱼 2 轮（4 条互回）就停，陌生人 4 轮
+  pairFishRounds: 2,
+  pairUnknownRounds: 4,
+  pairCooldownMs: 30 * 60_000,
   maxConsecutiveFish: 5,
   singleFishMaxConsecutive: 5,
   maxFishMessages: 8,
@@ -70,6 +90,10 @@ export function normalizeFishGuard(raw = {}) {
     cooldownMs: clampInt(src.cooldownMs, Math.max(windowMs, DEFAULT_FISH_GUARD.cooldownMs), 60_000, 24 * 3600_000),
     maxFish: clampInt(src.maxFish, DEFAULT_FISH_GUARD.maxFish, 2, 20),
     maxConsecutiveFish: clampInt(src.maxConsecutiveFish, DEFAULT_FISH_GUARD.maxConsecutiveFish, 2, 30),
+    maxPingPong: clampInt(src.maxPingPong, DEFAULT_FISH_GUARD.maxPingPong, 4, 60),
+    pairFishRounds: clampInt(src.pairFishRounds, DEFAULT_FISH_GUARD.pairFishRounds, 1, 10),
+    pairUnknownRounds: clampInt(src.pairUnknownRounds, DEFAULT_FISH_GUARD.pairUnknownRounds, 2, 20),
+    pairCooldownMs: clampInt(src.pairCooldownMs, DEFAULT_FISH_GUARD.pairCooldownMs, 60_000, 6 * 3600_000),
     singleFishMaxConsecutive: clampInt(src.singleFishMaxConsecutive, DEFAULT_FISH_GUARD.singleFishMaxConsecutive, 2, 50),
     maxFishMessages: clampInt(src.maxFishMessages, DEFAULT_FISH_GUARD.maxFishMessages, 2, 100),
     maxFishRatio: clampNum(src.maxFishRatio, DEFAULT_FISH_GUARD.maxFishRatio, 0, 1),
@@ -132,7 +156,7 @@ export function isFishGroupName(name, guard = DEFAULT_FISH_GUARD) {
   })
 }
 
-function senderFish(msg, cfg) {
+export function senderFish(msg, cfg) {
   if (!msg || msg.isSelf || msg.isOwner) return false
   const uid = msg.userId != null ? String(msg.userId) : ''
   if (uid && cfg.exemptIds.includes(uid)) return false
@@ -149,7 +173,7 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
   const cfg = normalizeFishGuard(guard)
   const empty = {
     enabled: cfg.enabled, blocked: false, reason: '', fishCount: 0, fishMessages: 0,
-    totalMessages: 0, fishRatio: 0, consecutiveFish: 0, consecutiveFishSenders: 0,
+    totalMessages: 0, fishRatio: 0, consecutiveFish: 0, consecutiveFishSenders: 0, pingPong: 0,
     groupIsFishNest: false, effectiveMaxFish: cfg.maxFish, windowMs: cfg.windowMs, fishNames: [],
   }
   if (!cfg.enabled) return empty
@@ -166,6 +190,26 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
   const fishList = recentOthers.filter((m) => senderFish(m, cfg))
   const fishIdSet = new Set(fishList.map((m) => (m.userId != null ? `id:${m.userId}` : `name:${normalizeName(m.sender)}`)))
   const fishNames = [...new Set(fishList.map((m) => String(m.sender ?? '').trim()).filter(Boolean))].slice(0, 10)
+
+  // ⑥ 乒乓检测：从时间最新往回，「我 / 同一只鱼」严格交替的连续条数
+  let pingPong = 0
+  {
+    let prev = ''
+    let fishUid = ''
+    for (let i = recentAll.length - 1; i >= 0; i -= 1) {
+      const m = recentAll[i]
+      const kind = m.isSelf ? 'self' : (senderFish(m, cfg) ? 'fish' : 'human')
+      if (kind === 'human') break
+      if (kind === 'fish') {
+        const uid = String(m.userId ?? '')
+        if (!fishUid) fishUid = uid
+        else if (uid !== fishUid) break // 掺进第二只鱼就不算对聊泉，交给别的规则
+      }
+      if (prev && prev === kind) break  // 同侧连发（自言自语/连发）不是乒乓
+      pingPong += 1
+      prev = kind
+    }
+  }
 
   let consecutiveFish = 0
   const consecutiveSenders = new Set()
@@ -186,17 +230,55 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
   if (fishCount >= effectiveMaxFish) reason = 'fish-count'
   else if (consecutiveFish >= cfg.maxConsecutiveFish && consecutiveSenders.size >= 2) reason = 'fish-streak'
   else if (consecutiveFish >= cfg.singleFishMaxConsecutive) reason = 'fish-streak-single'
+  else if (pingPong >= cfg.maxPingPong) reason = 'ping-pong'
   else if (totalMessages >= cfg.minSample && fishMessages >= cfg.maxFishMessages
     && fishRatio >= cfg.maxFishRatio && fishCount >= cfg.minFishSendersForRatio) reason = 'fish-ratio'
 
   return {
-    enabled: true, blocked: Boolean(reason), reason, fishCount, fishMessages, totalMessages,
+    enabled: true, blocked: Boolean(reason), reason, fishCount, fishMessages, totalMessages, pingPong,
     fishRatio, consecutiveFish, consecutiveFishSenders: consecutiveSenders.size,
     groupIsFishNest, effectiveMaxFish, windowMs: cfg.windowMs, fishNames,
   }
 }
 
 /** 给日志/面板看的人话原因。 */
+
+/**
+ * 配对级循环判定（1.3.63，OpenClaw pair-budget + terraphim cycle 思路）。
+ *
+ * 全局密度（占比/连续条数）是「风暴已经成型才报警」；pair 视角是「你和这一个
+ * 对象已经互来回几轮了」。回话轮数交替计数：我→X→我→X 算 2 轮。
+ * - 对方已被认定为鱼（名单/名字）→ **2 轮（4 条）就停**：身份已确认，没必要攒证据
+ * - 未知身份 → 保守 4 轮，避免误伤人机正常问答（真人连问三轮也常见）
+ * 只统计「互相针对」的消息：X 的话直接接在我后面、我的话直接接在 X 后面即算交替，
+ * 真人插话会重置（讨论是公开的不算对聊）。
+ * @param {Array} recentAll 窗口内消息（含 isSelf/uid/sender/time）
+ * @param {string} uid 对话对象
+ * @param {{guard:object}} opts
+ * @returns {{pairs:number, isFish:boolean, blocked:boolean, untilRound:number}}
+ */
+export function assessPairLoop (recentAll, uid, { guard = DEFAULT_FISH_GUARD } = {}) {
+  const cfg = normalizeFishGuard(guard)
+  const want = String(uid ?? '')
+  const isFish = cfg.fishIds.includes(want)
+  // 从尾部向前数交替 run（self↔want 两个角色）
+  let pairs = 0
+  let prev = ''
+  for (let i = recentAll.length - 1; i >= 0; i -= 1) {
+    const m = recentAll[i]
+    if (!m) continue
+    const who = m.isSelf ? 'self' : (String(m.userId ?? '') === want ? 'peer' : 'other')
+    if (who === 'other') break
+    if (prev === who) continue // 同一方连发不算新轮
+    if (prev !== '') pairs += 1
+    prev = who
+  }
+  // pairs 计的是「交接次数」；一轮问答=2 次交接
+  const rounds = Math.ceil(pairs / 2)
+  const limit = isFish ? cfg.pairFishRounds : cfg.pairUnknownRounds
+  return { pairs, rounds, isFish, blocked: rounds >= limit, untilRound: limit }
+}
+
 export function fishGuardReasonText(a) {
   if (!a || !a.blocked) return ''
   const win = Math.round(a.windowMs / 60000)
@@ -204,6 +286,7 @@ export function fishGuardReasonText(a) {
     return `最近 ${win} 分钟有 ${a.fishCount} 条不同的鱼在说话（阈值 ${a.effectiveMaxFish}${a.groupIsFishNest ? '，本群像鱼窝' : ''}）`
   }
   if (a.reason === 'fish-streak') return `最近连续 ${a.consecutiveFish} 条消息都来自鱼（${a.consecutiveFishSenders} 条鱼）`
+  if (a.reason === 'ping-pong') return `最近和同一只鱼已经交替对聊 ${a.pingPong} 条，停一停（这是行为判定，不管叫什么名字）`
   if (a.reason === 'fish-streak-single') return `同一只鱼最近连续发了 ${a.consecutiveFish} 条消息`
   return `最近 ${a.fishMessages}/${a.totalMessages} 条消息来自鱼（占比 ${Math.round(a.fishRatio * 100)}%）`
 }
