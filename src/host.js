@@ -40,6 +40,7 @@ import { BUILTINS } from './modules/index.js'
 import { compose } from './kernel/compose.js'
 import { createContext } from './kernel/context.js'
 import { createLegacyHubFallback, isPipelineEnabled, legacyEventToEnvelope, unwrapPipelineError, LEGACY_DRIVER_ID } from './kernel/legacy-fallback.js'
+import { createTracingMiddleware } from './kernel/mw-tracing.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -403,8 +404,8 @@ export function apply(ctx) {
   const usePipeline = isPipelineEnabled(process.env)
   if (usePipeline) {
     legacyPipeline = compose([
-      // US-004 会把这条占位换成真正的 tracing 中间件（RFC Middleware 1 / G4）
-      async (ctx, next) => { await next() },
+      // RFC Middleware 1（US-004）：最外层 tracing，回溯阶段一行 debug 打点 total/mw0/mw1/err
+      createTracingMiddleware({ log: logger.child('trace') }),
       createLegacyHubFallback(hub),
     ])
     log.info('RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端')
