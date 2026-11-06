@@ -46,6 +46,7 @@ import { createDispatcher } from './kernel/dispatcher.js'
 import { createEgressMiddleware } from './kernel/mw-egress.js'
 import { isEgressShadowEnabled } from './kernel/ctx-store.js'
 import { createEgressFlushMiddleware, createEgressOnebot, createEgressSendHook, createEgressSender } from './kernel/mw-egress-cutover.js'
+import { createAggregatorMiddleware, isIngressAggregatorEnabled } from './kernel/mw-aggregator.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -265,6 +266,9 @@ export function apply(ctx) {
   }
   /** RFC-0001 熔断开关开启态的洋葱管道；关闭态（默认）恒为 null，装配见 createHub 之后。 */
   let legacyPipeline = null
+  // US-008：入口合流中间件实例（dispose 由 ctx.effect 收尾统一回收定时器/挂起 ctx）
+  let pipelineAggregator = null
+  let useIngressAggregator = false
   /** 开启态：旧事件构造 RFC 信封 → kernel createContext → 整链 await 走管道（终端仍是旧 hub 入口）。 */
   function dispatchLegacyPipeline(ev) {
     return legacyPipeline(createContext(legacyEventToEnvelope(ev), LEGACY_DRIVER_ID))
@@ -421,7 +425,7 @@ export function apply(ctx) {
 
   // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
   // 开关关闭（默认）：handleEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
-  // 开关打开：onebot 实时事件流走 compose([tracing → 边界 flush → egress → 遗留终端])。
+  // 开关打开：onebot 实时事件流走 compose([tracing → 边界 flush → egress → 入口合流 → 遗留终端])。
   // backfill 补收、deliver/pushToSession 等旁路入口不经管道（边界见 docs/rfc0001-mapping.md）。
   if (usePipeline) {
     // US-007：Dispatcher 的物理出口。sender 用的是**没被包装的**原 onebot 客户端，
@@ -439,6 +443,14 @@ export function apply(ctx) {
     // shaping 参数就是 chat/reply.js bubbleDelay 的口径（clamp 后 × 0.8~1.3 抖动）；
     // 当前投递的 payload 一律带 delayMs=0（US-007 拍板），所以这里只做兜底：
     // 谁以后给 payload 显式留空 delayMs，就自动按打字估时整形。
+    // US-008 灰度位：入口合流是否装进管道（默认 false = 旧 pending 路径）
+    useIngressAggregator = usePipeline && isIngressAggregatorEnabled(process.env)
+    if (useIngressAggregator) {
+      pipelineAggregator = createAggregatorMiddleware({
+        getConfig: () => cfg,
+        log: logger.child('aggregator'),
+      })
+    }
     const dispatcher = createDispatcher({
       mode: egressMode,
       sender: egressSender,
@@ -452,9 +464,16 @@ export function apply(ctx) {
       createEgressFlushMiddleware({ dispatcher, log: logger.child('egress-shadow') }),
       // US-006：防思考泄漏截尾 + stripReasoning + 4000 字语义分条
       createEgressMiddleware({ log: logger.child('egress') }),
+      // US-008：入口合流防抖——必须紧贴遗留终端（在它之前 = 更外层），
+      // 这样 followers 被 abort 时旧核心还没被派发，两级都不进，天然不会双发。
+      // merge.* 参数与 hub 内部 pending 共用同一份配置，语义对齐 hub.enqueue。
+      // 灰度：legacy 核心仍自持逐事件 Ingress，吞掉 followers 会让它只看得到 lead
+      // 那一条报文（实测丢消息），所以本层另吃 FLAG_INGRESS_AGGREGATOR，默认不装；
+      // Ingress 收编（US-009/Phase 3）后再并进 FLAG_USE_PIPELINE。
+      ...(useIngressAggregator ? [pipelineAggregator] : []),
       createLegacyHubFallback(hub),
     ])
-    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；出口=${egressMode}`)
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；出口=${egressMode}；入口合流=${useIngressAggregator ? '开' : '关（FLAG_INGRESS_AGGREGATOR）'}`)
   }
 
   // ---------- 面板接口的小工具 ----------
@@ -711,6 +730,8 @@ export function apply(ctx) {
   ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'qq-hub: 看门狗')
   setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   ctx.effect(() => () => {
+    // US-008：管道里的合流中间件先卸（清窗口定时器 + 中止挂起 ctx），flag-off 时为 null
+    try { pipelineAggregator?.dispose?.() } catch (error) { log.warn('入口合流卸载出错：', error.message) }
     hub.disposeRecentMedia()
     mods.dispose()
     onebot.stop()
