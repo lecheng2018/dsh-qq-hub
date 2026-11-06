@@ -95,6 +95,11 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         return { name: '', tags: [] }
       }
       let imageFailed = ''
+      // 超大 GIF (>4MB) 跳过耗时的视觉大模型 base64 传输，避免模型上下文/超时报错
+      if (buf.length > 4 * 1024 * 1024 && mime === 'image/gif') {
+        log.debug?.('超大 GIF 动图（' + Math.round(buf.length / 1024) + 'KB）跳过视觉模型起名，采用默认提示词')
+        return { name: hint ? String(hint).replace(/[\[\]]/g, '').trim().slice(0, 12) : '动图表情', tags: ['动画表情'] }
+      }
       const text = await askModel(dsh, {
         cfg: getConfig(),
         onImageError: (error) => {
@@ -133,20 +138,27 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     const d = seg.data || {}
     let buf
     try {
-      // 下载上限跟判定阈值用同一套（默认 3MB）：1.5MB 的旧上限会先把大图掐掉，轮不到尺寸判定
-      buf = await segmentBytes(seg, onebot, { maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })
+      // 下载预留上限：支持 GIF 时放宽到 10MB，普通静态图放宽到 5MB
+      const maxGif = Number(cfg.maxGifBytes) || 10 * 1024 * 1024
+      const maxStatic = Number(cfg.maxBytes) || 5 * 1024 * 1024
+      buf = await segmentBytes(seg, onebot, { maxBytes: Math.max(maxGif, maxStatic) })
     } catch (error) {
       return { ok: false, reason: '下载失败：' + error.message }
     }
+    const mime = mimeOf(buf)
+    const isGif = mime === 'image/gif'
+    // 默认静态表情放宽到 5MB，只有判定是 GIF 动图时才允许 10MB 以下
+    const allowedBytes = isGif
+      ? (Number(cfg.maxGifBytes) || 10 * 1024 * 1024)
+      : (Number(cfg.maxBytes) || 5 * 1024 * 1024)
+
     const { width, height } = imageSize(buf)
-    // 尺寸阈值可由 config.stickers.maxSide / maxBytes 覆盖；默认从 520 放宽到 1200 ——
-    // 520 是老 QQ 小图时代的标准。实测今天 52 张被拒里：方形比例 36 张，最大边长 1920px、最大 553KB。
-    // 所以放到 1920（QQ 表情实际最大尺寸），仍靠 0.75~1.33 的宽高比挡掉横幅/长图。
-    if (!stickerSizeOk({ width, height, bytes: buf.length }, { maxSide: cfg.maxSide ?? 1920, maxBytes: cfg.maxBytes ?? 3 * 1024 * 1024 })) return { ok: false, reason: `尺寸不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB）` }
+    if (!stickerSizeOk({ width, height, bytes: buf.length, mime }, { maxSide: cfg.maxSide ?? 1920, maxBytes: allowedBytes, isGif })) {
+      return { ok: false, reason: `尺寸或体积不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB，类型 ${mime}，允许上限 ${Math.round(allowedBytes / 1024 / 1024)}MB）` }
+    }
     const md5 = createHash('md5').update(buf).digest('hex')
     const lib = loadLibrary()
     if (lib.items.some((i) => i.md5 === md5)) return { ok: false, reason: '已经有了' }
-    const mime = mimeOf(buf)
     mkdirSync(dir(), { recursive: true })
     const file = `collected-${md5}.${ext(mime)}`
     writeFileSync(join(dir(), file), buf)
