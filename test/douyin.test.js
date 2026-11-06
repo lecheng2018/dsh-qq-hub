@@ -178,9 +178,12 @@ test('刷一轮：一个个点开看，按视频 id 点赞 / 评论（不会点�
   assert.deepEqual(sent, [['private:10000001', '主人你看这个\nhttps://www.douyin.com/video/7000000000000000004']])
   assert.match(prompts[0], /内容摘要|分类：动物/)
   assert.match(prompts[0], /最多点赞 30 个、评论 1 个、分享 5 个/)
-  assert.ok(events.some((e) => /在抖音刷到了点东西，她的想法：好可爱/.test(e)))
-  assert.ok(!events.some((e) => e.includes('视频7000000000000000001')), '视频标题不该进长期记忆')
-  assert.ok(events.includes('记住:有只猫叫大橘'))
+  assert.ok(events.some((e) => /看了《[^》]*》，她的想法：好可爱/.test(e)), '想法带出处标题：' + JSON.stringify(events.filter(e => e.includes('想法'))))
+  assert.ok(events.some((e) => e.startsWith('记住:（来自《') && e.includes('有只猫叫大橘')), '知识条目带出处：' + JSON.stringify(events.filter(e => e.startsWith('记住:'))))
+  // 出处化后的口径（1.3.55）：标题只许作为「看了《…》，她的想法：…」/「（来自《…》）…」的出处出现，
+  // 不许有单独记流水、或标题裸奔在正文里却没有挂在她的话后面的条目
+  const bare = events.filter((e) => e.includes('视频7000000000000000001') && !/看了《[^》]*》，她的想法/.test(e) && !/（来自《[^》]*》）/.test(e))
+  assert.deepEqual(bare, [], '不许有无出处的标题流水')
   const st = dy.state()
   assert.equal(st.watched, 3)
   assert.equal(st.like, 2)

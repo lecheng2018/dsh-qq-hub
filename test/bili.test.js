@@ -124,11 +124,11 @@ test('刷一轮：看视频、按每天上限评论、分享给主人、记成�
   assert.equal(sent.length, 1)
   assert.equal(sent[0].chatId, 'private:10000001')
   assert.match(sent[0].text, /会做饭！\nhttps:\/\/www\.bilibili\.com\/video\/BV1/)
-  // 记忆里不写视频标题，留她刷完之后的判断（2026-11-05 复盘）
-  assert.ok(events.some((e) => e.includes('在B站刷到了点东西，她的想法：') && e.includes('米饭好香')))
-  assert.ok(!events.some((e) => e.includes('米饭大赛')), '视频标题不该进长期记忆')
+  // 想法条目带出处标题（截 30 字）+ 她的判断；remember 不再单独出现「米饭大赛」字样（知识正文里是「来自《…》」）
+  assert.ok(events.some((e) => e.includes('看了《米饭大赛》，她的想法：') && e.includes('米饭好香')), '想法带出处：' + JSON.stringify(events.filter(e => e.includes('想法'))))
+  assert.ok(!events.some((e) => e.includes('米饭大赛') && e.includes('她的想法') && !e.includes('看了《')), '标题只作出处')
   assert.ok(events.some((e) => e.includes('在B站一条视频下评论过：看饿了')))
-  assert.deepEqual(facts, ['有个米饭大赛很好玩'])
+  assert.deepEqual(facts, ['（来自《米饭大赛》）有个米饭大赛很好玩'], '知识条目带出处前缀')
   assert.equal(b.state().comments, 1)
   // 看过的不会再看
   const r2 = await b.run({ force: true })
