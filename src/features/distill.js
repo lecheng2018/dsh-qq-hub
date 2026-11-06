@@ -25,14 +25,24 @@ const FIELD_CAP = {
   avoid: 3, // 负向：他从不做的事（防止被通用聊天腔带跑）
 }
 
-/** 从这个群当天的流水里挑出目标那个人说的话（按时间正序）。 */
+// 纯转发的卡片/图片/链接不是「他本人在说话」，喂给模型只会稀释证据
+const JUNK_RE = /^\[(分享卡片|图片|动画表情|表情包|视频|文件)[^\]]*\]\s*$|^https?:\/\/\S+\s*$/
+
+/** 从这个群的流水里挑出目标那个人说的话：滤掉纯转发、去重（同一条转发了 14 遍只算一句）、按时间正序。 */
 export function collectMemberLines (lines, uid) {
   const want = String(uid || '').trim()
   if (!want) return []
-  return (lines || [])
-    .filter((l) => l && l.text && String(l.uid || '') === want && !String(l.text).startsWith('【系统'))
-    .map((l) => ({ t: Number(l.t) || 0, text: String(l.text) }))
-    .sort((a, b) => a.t - b.t)
+  const seen = new Set()
+  const out = []
+  for (const l of (lines || []).slice().sort((a, b) => (Number(a.t) || 0) - (Number(b.t) || 0))) {
+    if (!l || !l.text || String(l.uid || '') !== want) continue
+    const text = String(l.text).trim()
+    if (!text || text.startsWith('【系统') || JUNK_RE.test(text)) continue
+    if (seen.has(text)) continue // 复读转发只留第一次
+    seen.add(text)
+    out.push({ t: Number(l.t) || 0, text })
+  }
+  return out
 }
 
 /** 话太少就不值得花一次模型调用（学出来也是瞎猜）。门槛 20 句对齐 molroo 的 20~30 条建议。 */
@@ -115,11 +125,14 @@ export function normalizeProfile (obj) {
     }
     return out
   }
+  // 旧数据兼容：samples 曾被 putDistill 覆盖成「证据句数」（如 44），
+  // 合并时会变成 ['44'] 混进原话——纯数字的条目一律丢掉
+  const samples = pick(obj && obj.samples, FIELD_CAP.samples).filter((x) => !/^\d+$/.test(x))
   return {
     style: pick(obj && obj.style, FIELD_CAP.style),
     persona: pick(obj && obj.persona, FIELD_CAP.persona),
     tone: pick(obj && obj.tone, FIELD_CAP.tone),
-    samples: pick(obj && obj.samples, FIELD_CAP.samples),
+    samples,
     avoid: pick(obj && obj.avoid, FIELD_CAP.avoid),
   }
 }

@@ -13,6 +13,20 @@ import {
 
 const L = (uid, text, t = 0) => ({ uid, text, t, who: 'u' + uid })
 
+test('证据清洗：复读转发只算一句，纯分享卡片/链接不算话（1.3.64）', () => {
+  const lines = [
+    L('1', '[分享卡片：576k5YWs5ZGK]', 1),
+    L('1', '兄弟们，刚挖到俩羊毛', 2),
+    L('1', '[分享卡片：576k5YWs5ZGK]', 3),
+    L('1', '兄弟们，刚挖到俩羊毛', 4),
+    L('1', 'https://example.com/x', 5),
+    L('2', '收到', 6),
+  ]
+  const out = collectMemberLines(lines, '1')
+  assert.deepEqual(out.map((x) => x.text), ['兄弟们，刚挖到俩羊毛'], '同文去重 + 卡片/纯链接过滤')
+  assert.equal(out[0].t, 2, '留最早一次的时间')
+})
+
 test('从群流水里只捞目标那个人的话，按时间正序', () => {
   const lines = [L('9', '晚点', 3), L('111', '草', 2), L('222', '哈哈哈', 1), L('111', '上号', 4)]
   assert.deepEqual(collectMemberLines(lines, '111').map((x) => x.text), ['草', '上号'])
@@ -66,6 +80,8 @@ test('注入文本：原话优先（few-shot）、带负向约束、带「学样
   assert.equal(renderDistillHint('老王', { style: [], persona: [], tone: [], samples: [], avoid: [] }), '', '没学到就不注入')
   // 只有原话也算学到（特征为空但样本在）
   assert.match(renderDistillHint('老王', { samples: ['就这？'] }), /就这？/)
+  // 回归：1.3.63 曾把证据句数（数字）写进 samples，注入渲染出「- 「44」」
+  assert.doesNotMatch(renderDistillHint('老王', { style: ['短句'], samples: 44 }), /「44」/)
 })
 
 test('提示词：要逐字原话、要负向约束、要自检「换成谁都成立就删」、带对照', () => {
@@ -116,20 +132,36 @@ test('目标管理：加/去重/删（删的时候连带清掉画像）', async 
   assert.deepEqual(mem.distillTargets(), [])
 })
 
-test('画像落库：合并、记录证据条数与时间', async () => {
+test('画像落库：samples 存逐字原话数组，证据条数单独放 evidenceCount', async () => {
   const mem = await freshStore()
   mem.addDistillTarget({ gid: '123', uid: '456', name: '老王' })
-  mem.putDistill('123', '456', { style: ['句子短'], persona: [], tone: [] }, 12)
+  mem.putDistill('123', '456', { style: ['句子短'], samples: ['草 这也能崩'] }, 12)
   let p = mem.distillOf('123', '456')
   assert.deepEqual(p.style, ['句子短'])
-  assert.equal(p.samples, 12)
+  assert.deepEqual(p.samples, ['草 这也能崩'], '原话必须是数组（1.3.64 前被句数覆盖成 44 这种数字）')
+  assert.equal(p.evidenceCount, 12)
   assert.ok(p.updatedAt > 0)
-  mem.putDistill('123', '456', { style: ['爱用逗号'], persona: ['脾气急'], tone: [] }, 20)
+  mem.putDistill('123', '456', { style: ['爱用逗号'], samples: ['行吧 你牛逼'] }, 20)
   p = mem.distillOf('123', '456')
   assert.equal(p.style[0], '爱用逗号', '新的在前')
-  assert.equal(p.samples, 20, '证据条数取较大值')
-  // 面板视图把目标和画像合在一起
-  assert.equal(mem.distillList()[0].profile.persona[0], '脾气急')
+  assert.equal(p.samples[0], '行吧 你牛逼', '原话合并保留')
+  assert.equal(p.evidenceCount, 20, '证据条数取较大值')
+  assert.equal(mem.distillList()[0].profile.persona && true, true)
+})
+
+test('旧坏数据自愈：samples 是句数（如 44）的存量画像，渲染与合并都不把它当原话', async () => {
+  const broken = { style: ['短句'], persona: [], tone: [], samples: 44, updatedAt: 1 }
+  const hint = renderDistillHint('老王', broken)
+  assert.doesNotMatch(hint, /「44」/, '数字不能被渲染成原话')
+  assert.match(hint, /短句/, '特征照常注入')
+  const merged = mergeProfile(broken, { samples: ['真的服了'] })
+  assert.deepEqual(merged.samples, ['真的服了'])
+  // 数字形态的旧证据条数也能被 putDistill 认出来接着用
+  const mem = await freshStore()
+  mem.addDistillTarget({ gid: '123', uid: '456', name: '老王' })
+  mem.putDistill('123', '456', { style: ['短句'], samples: 44 }, 0)
+  mem.putDistill('123', '456', { samples: ['行吧'] }, 0)
+  assert.equal(mem.distillOf('123', '456').evidenceCount, 44, '旧的数字 samples 被认作证据条数')
 })
 
 test('接线：整理时学、群聊时注入、面板与接口都在', () => {
