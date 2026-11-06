@@ -119,7 +119,7 @@ test('ListInput numbers=true：敲一半的短数字不被吃（strict 只在失
 })
 
 test('heybox dutyInFlight 挂进程级单例（热重载不失效）', () => {
-  const src = readFileSync(join(root, 'src/heybox/site.js'), 'utf8')
+  const src = readFileSync(join(root, 'src/modules/heybox/site.js'), 'utf8')
   assert.match(src, /globalThis\.__qqhubHeyboxDuty/, '锁挂 globalThis 跨热重载')
   assert.doesNotMatch(src, /let dutyInFlight/, '不再用闭包变量')
 })

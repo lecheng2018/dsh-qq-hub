@@ -27,6 +27,7 @@ function readJsonSafe(file) {
 export function detectInstall(dir) {
   const d = String(dir || '').trim()
   if (!d) return { installed: false, reason: '还没填 SnowLuma 目录' }
+  if (process.platform !== 'win32') return { installed: false, reason: '当前为非 Windows 环境，建议使用 Docker 部署 SnowLuma 并通过 OneBot 网关连接' }
   if (/[^\x00-\x7f]/.test(d)) return { installed: false, reason: '目录里有中文，请换成纯英文路径（例如 C:\\Aurabot\\snowluma）' }
   const entry = join(d, 'index.mjs')
   if (!existsSync(entry)) return { installed: false, reason: `在 ${d} 里没找到 index.mjs，请确认解压位置` }
@@ -231,6 +232,7 @@ export function createSnowLumaManager({ getConfig, log, savePassword }) {
   }
 
   async function start() {
+    if (process.platform !== 'win32') return { ok: false, message: '非 Windows 环境不支持本地拉起 SnowLuma 进程，请使用 Docker 或 OneBot 模式' }
     const inst = detectInstall(cfg().dir)
     if (!inst.installed) return { ok: false, message: inst.reason }
     if (await running()) return { ok: true, message: 'SnowLuma 已经在运行' }

@@ -7,8 +7,8 @@ import { readFileSync } from 'node:fs'
 
 const SRC = (p) => readFileSync(new URL(p, import.meta.url), 'utf8')
 const IG = SRC('../src/chat/identity-guard.js')
-const DUTY = SRC('../src/bili/duty.js')
-const HEY = SRC('../src/heybox/site.js')
+const DUTY = SRC('../src/modules/bili/duty.js')
+const HEY = SRC('../src/modules/heybox/site.js')
 const QZ = SRC('../src/features/qzone.js')
 const QZS = SRC('../src/features/qzone-social.js')
 
@@ -21,13 +21,13 @@ test('B 站三个出站点都过 guard', () => {
   assert.match(DUTY, /guard\(comment\.slice\(0, 200\)\)/, '自动评论')
   assert.match(DUTY, /!guard\(reply\)/, '自动回复')
   assert.match(DUTY, /guard\(String\(message\)\.slice\(0, 200\)\)/, '主人点名评论')
-  assert.match(DUTY, /import \{ guardOutbound \} from '\.\.\/chat\/identity-guard\.js'/)
+  assert.match(DUTY, /import \{ guardOutbound \} from '\.\.\/\.\.\/chat\/identity-guard\.js'/)
 })
 
 test('小黑盒 post/comment 都过 guard', () => {
   assert.match(HEY, /guard\(t, '小黑盒评论'\)/)
   assert.match(HEY, /guard\(`\$\{t\}\\n\$\{text\}`, '小黑盒帖子'\)/)
-  assert.match(HEY, /import \{ guardOutbound \} from '\.\.\/chat\/identity-guard\.js'/)
+  assert.match(HEY, /import \{ guardOutbound \} from '\.\.\/\.\.\/chat\/identity-guard\.js'/)
 })
 
 test('空间说说/评论都过 guard', () => {

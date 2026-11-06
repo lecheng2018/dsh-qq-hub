@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const bili = readFileSync(new URL('../src/bili/duty.js', import.meta.url), 'utf8')
+const bili = readFileSync(new URL('../src/modules/bili/duty.js', import.meta.url), 'utf8')
 const dy = readFileSync(new URL('../src/douyin/duty.js', import.meta.url), 'utf8')
 
 test('remember 提示词有明确的「将来自己」受众与反面示例', () => {
