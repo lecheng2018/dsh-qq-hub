@@ -16,7 +16,7 @@ import { askModel } from '../core/llm.js'
 import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
-import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint } from './distill.js'
+import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
@@ -25,7 +25,7 @@ export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradict
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
+export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDistillLearned }) {
   /** 从人设文本里抽「禁止」类硬规则行，给 style 学习当护栏（人设没写或没传 personaText 就返回空）。 */
   const personaGuard = () => {
     try {
@@ -657,15 +657,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)
     const { system, text } = buildDistillPrompt({
-      name: name || mine[0]?.name || u,
+      name: name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u,
+      uid: u,
       memberLines: mine,
+      context: dedupConvo(hist.lines).slice(-80),
       others,
       old,
     })
     let out = ''
     try {
       // 1600 token：800 会截断五段 JSON（截了 parse 就失败，之前没日志根本看不出）
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 1600, temperature: 0.3 })
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -680,6 +682,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
     }
     const saved = putDistill(g, u, profile, mine.length)
     log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
+    try { onDistillLearned && await onDistillLearned(g) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
   }
 
@@ -1236,17 +1239,17 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
         continue
       }
       // 上下文：他说这几句时群里前后在聊什么（帮助模型判断语气）
-      const context = groupLines.filter((l) => l.who !== 'bot').slice(-40).map((l) => `${l.who}：${String(l.text).slice(0, 80)}`)
+      const context = dedupConvo(groupLines.filter((l) => l.who !== 'bot')).slice(-80)
       // 对照：群里别人的话（不含他、不含她自己）——靠「他和别人不一样在哪」定位特征
       const others = groupLines
         .filter((l) => l.who !== 'bot' && String(l.uid || '') !== String(t.uid))
         .slice(-60)
         .map((l) => `${l.who}：${String(l.text).slice(0, 100)}`)
       const old = distillOf(t.gid, t.uid)
-      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, memberLines: mine, context, others, old })
+      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, uid: t.uid, memberLines: mine, context, others, old })
       let out = ''
       try {
-        out = await askModel(dsh, { cfg, system, text, maxTokens: 1600, temperature: 0.3 })
+        out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
       } catch (error) {
         log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
         continue
@@ -1263,6 +1266,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText }) {
       putDistill(t.gid, t.uid, profile, mine.length)
       doneToday.add(tag)
       log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(profile.samples || []).length} 条原话）`)
+      try { onDistillLearned && await onDistillLearned(String(t.gid)) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     }
     if (doneToday.size) {
       const s = load()
