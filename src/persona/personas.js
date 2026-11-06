@@ -36,7 +36,7 @@ export function parsePersona(id, raw) {
   return { ...meta, body: text.trim() }
 }
 
-const safeId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)
+const safeId = (id) => String(id || '').replace(/[^\p{L}\p{N}_-]/gu, '').slice(0, 40)
 
 export function listPersonas() {
   seedPersonas()
@@ -61,7 +61,7 @@ export function readPersona(id) {
 
 export function savePersona(id, { name, tags, body }) {
   const sid = safeId(id)
-  if (!sid) throw new Error('人格 id 只能用英文字母、数字、- 和 _')
+  if (!sid) throw new Error('人格 id 只能包含字母、数字、中文、- 和 _')
   if (!String(body || '').trim()) throw new Error('人格内容不能是空的')
   mkdirSync(dir(), { recursive: true })
   const head = `---\nname: ${String(name || sid).replace(/\n/g, ' ')}\ntags: [${(tags || []).join(', ')}]\n---\n\n`
