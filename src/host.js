@@ -36,6 +36,10 @@ import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from './chat/backfill.js'
 import { BUILTINS } from './modules/index.js'
+// RFC-0001 Phase 0（US-003）：遗留核心终端化 + FLAG_USE_PIPELINE 熔断开关
+import { compose } from './kernel/compose.js'
+import { createContext } from './kernel/context.js'
+import { createLegacyHubFallback, isPipelineEnabled, legacyEventToEnvelope, unwrapPipelineError, LEGACY_DRIVER_ID } from './kernel/legacy-fallback.js'
 
 export const name = 'qq-hub'
 // 注意：不要把 userQuestions 写进 inject。
@@ -117,7 +121,7 @@ export function apply(ctx) {
   // 直接丢弃的话，刚连上那几百毫秒里主人发的消息就没了（登录核对要等一次 get_login_info 往返）。
   let verifying = false
   let pendingEvents = []
-  let hub = null
+  let hub = null // 遗留核心：US-003 起作为管道终端（开关关闭时仍直调）
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
 
   // 断线消息补收（Backfill）追踪器
@@ -243,11 +247,21 @@ export function apply(ctx) {
             : ''
           if (dangerGuard.handleReply(`private:${ev.user_id}`, ev.user_id, text)) return
         }
-        hub.onMessage(ev).catch((error) => log.error('处理消息出错：', error.message))
+        const sink = (error) => log.error('处理消息出错：', (usePipeline ? unwrapPipelineError(error) : error).message)
+        if (usePipeline) dispatchLegacyPipeline(ev).catch(sink)
+        else hub.onMessage(ev).catch(sink)
       }
     } else if (ev.post_type === 'notice' && ev.notice_type === 'notify' && ev.sub_type === 'poke') {
-      hub.onPoke(ev).catch((error) => log.error('处理戳一戳出错：', error.message))
+      const sink = (error) => log.error('处理戳一戳出错：', (usePipeline ? unwrapPipelineError(error) : error).message)
+      if (usePipeline) dispatchLegacyPipeline(ev).catch(sink)
+      else hub.onPoke(ev).catch(sink)
     }
+  }
+  /** RFC-0001 熔断开关开启态的洋葱管道；关闭态（默认）恒为 null，装配见 createHub 之后。 */
+  let legacyPipeline = null
+  /** 开启态：旧事件构造 RFC 信封 → kernel createContext → 整链 await 走管道（终端仍是旧 hub 入口）。 */
+  function dispatchLegacyPipeline(ev) {
+    return legacyPipeline(createContext(legacyEventToEnvelope(ev), LEGACY_DRIVER_ID))
   }
   const onebot = createOneBotClient({
     endpoint,
@@ -381,6 +395,20 @@ export function apply(ctx) {
       // security-lock 模块已移除：不再提供锁状态，approvals 的锁分支自然不会触发
     },
   })
+
+  // ---------- RFC-0001 Phase 0：FLAG_USE_PIPELINE 熔断开关（US-003） ----------
+  // 开关关闭（默认）：handleEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
+  // 开关打开：onebot 实时事件流走 compose([tracing 占位 → 遗留终端])，终端把事件原样送回旧入口。
+  // backfill 补收、deliver/pushToSession 等旁路入口不经管道（边界见 docs/rfc0001-mapping.md）。
+  const usePipeline = isPipelineEnabled(process.env)
+  if (usePipeline) {
+    legacyPipeline = compose([
+      // US-004 会把这条占位换成真正的 tracing 中间件（RFC Middleware 1 / G4）
+      async (ctx, next) => { await next() },
+      createLegacyHubFallback(hub),
+    ])
+    log.info('RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端')
+  }
 
   // ---------- 面板接口的小工具 ----------
   const send = (res, code, body, type = 'application/json; charset=utf-8') => {
