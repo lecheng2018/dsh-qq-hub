@@ -1,5 +1,30 @@
 # 更新记录
 
+## RFC-0001 洋葱内核重构（mission 分支，未发版）
+
+> **这不是发版条目**：全部工作发生在分支 `mission/onion-refactor`（12 个故事，提交链
+> 7170305→77e15bb→d758a5d→5e27ada→935671e→b6f52b3→edee277→5d03c91→47a94ab→d643b94→0c03f88→47083db→US-012），
+> **未 bump 任何版本号、未合并 main**。回滚一行话：**四个 env 开关全部不设（或设乱值）= 原行为**——
+> flag-off 路径零改动红线贯穿全链，e2e 基线 70/0 与重构前逐字一致。
+
+- **US-001** 洋葱内核 `compose` + `createContext` 纯库（7170305）：double-next 熔断、PipelineError 因果链、meta/reply/state/signal 契约，零接线。
+- **US-002** 运行时能力探测 + 声明式条件装载器（77e15bb）：EnvironmentDetector 全注入桩、六道门禁按 RFC 次序短路、剪枝模块 entrypoint 零执行（无头 NAS 剪掉 GUI 件）。
+- **US-003** 遗留核心终端化 + `FLAG_USE_PIPELINE` 熔断开关（d758a5d）：hub.js 包成终端中间件、原事件引用送达；P99 延迟增量实测 0.02ms（验收线 1.5ms 的 1/70）。
+- **US-004** Tracing & Metrics 中间件（5e27ada）：管道最外层单行 debug 打点（total/mw0/mw1/err/aborted），生产零刷屏。
+- **US-005** 出站 Dispatcher + 优先级队列（935671e）：HIGH/NORMAL/LOW 稳定排序、bubbleDelay 同款整形语义、shadow/live 双模内容 hash 比对、abort 计 dropped。
+- **US-006** 出口后处理链（b6f52b3）：未闭合 `<think>` 栈守卫截尾 + stripReasoning + 4000 字语义分条；对抗语料外发捕获率 13/13。
+- **US-007** 出口切换（edee277）：ALS 携带 ctx，收口点在 `onebot.call` 包装（模拟闸/总开关/试运行**三道安全闸之后**）；`FLAG_EGRESS_SHADOW` 双算观测。**行为变化**：开启态整轮结束才批量外发（边界 flush），多条回复几乎同时落地（delayMs=0）。
+- **US-008a** compose abort unwind 语义（5d03c91）：abort 后已派发中间件 bubble 正常回溯——「中断并合并 + 丢弃未 flush 回复」的内核前提。
+- **US-008b** 入口合流中间件 + busy steer（47a94ab）：per-chat 窗口聚合/合并参数对齐 hub.pending；`FLAG_INGRESS_AGGREGATOR` 灰度默认关（与 hub 自家合流并存实测丢消息，终局收编后再并进主开关）。
+- **US-009** 入口防御链（d643b94）：令牌桶限流 / ACL（复用 access.js 一份权威，fail-closed）/ 聊天域复合键去重；被拒事件出口链零记账；poke/notice 归窗修复。
+- **US-010** 人设与记忆装配中间件（0c03f88）：mw-persona 预取快照 + mw-memory 检索写 ctx.state，contextProviders 接管层按 state 供给；`NEW_MEMORY_PIPELINE` 默认关（缺口 A：其余 api.context 模块贡献；B：群 speakersOf 档案拿不到 sessionId——映射文档 §8 留档）。
+- **US-011** 命令路由终端中间件（47083db）：16 内置主人命令 router 直答经 ctx.reply；ext 模块命令/混非文本段/提问等待中/非主人 → 透传 legacy（覆盖矩阵与 handler 抛错回滚语义留档）。
+- **US-012** 绞杀者收口（本提交）：开关全清单与统一解析口径（`true/1` 才算真、乱值回默认，四开关同规）；限流旋钮配置化 `QQHUB_RL_CAPACITY` / `QQHUB_RL_REFILL_PER_SEC`（缺省 30/5，非法值回默认，改 env 需重启）；README 拓扑简图 + 开关表；映射文档终版落地状态表 + hub.js 存活职责清单（**Phase 4 终局——hub.js 归零、legacy 物理删除——不在本期**，PRD 边界）；三态冒烟与回滚演练实证。
+
+**回滚说明**：unset 四个开关重启即回到重构前行为（演练已实证 flag-off→on→off 三进程下旧通道发送调用序列首末全等、开启态外发文本语义一致）。灰度顺序建议：`FLAG_USE_PIPELINE`（live）→ 需要观测时 `FLAG_EGRESS_SHADOW` → `FLAG_INGRESS_AGGREGATOR`/`NEW_MEMORY_PIPELINE` 待终局条件成熟再开。
+
+---
+
 ## 1.3.63
 
 ### 新增：从聊天历史蒸馏（不用干等）

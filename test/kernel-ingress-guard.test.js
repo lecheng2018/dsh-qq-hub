@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { compose } from '../src/kernel/compose.js'
 import { createContext } from '../src/kernel/context.js'
 import { legacyEventToEnvelope } from '../src/kernel/legacy-fallback.js'
-import { createRatelimitMiddleware } from '../src/kernel/mw-ratelimit.js'
+import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../src/kernel/mw-ratelimit.js'
 import { createAclMiddleware, defaultAclDecision } from '../src/kernel/mw-acl.js'
 import { createDedupMiddleware } from '../src/kernel/mw-dedup.js'
 import { createTracingMiddleware, getTrace } from '../src/kernel/mw-tracing.js'
@@ -223,6 +223,52 @@ test('限流：reportStage 注入约定——每个到达本层的事件恰好�
   await pipeline(messageCtx({ userId: '111' }))
   await pipeline(messageCtx({ userId: '111' })) // 被限流也要打点
   assert.deepEqual(stages.map((s) => s[0]), ['ratelimit', 'ratelimit'])
+})
+
+// ---------- 限流 env 配置化（US-012 尾巴：QQHUB_RL_CAPACITY / QQHUB_RL_REFILL_PER_SEC） ----------
+test('限流 env 覆盖：合法值经装配 spread 生效（容量 3 + 0.5s 补 1 枚，与旋钮语义一致）', async () => {
+  const opts = ratelimitOptionsFromEnv({ QQHUB_RL_CAPACITY: '3', QQHUB_RL_REFILL_PER_SEC: '2' })
+  assert.deepEqual(opts, { capacity: 3, refillPerSec: 2 })
+  const fc = fakeClock(0)
+  const rl = createRatelimitMiddleware({ ...opts, clock: fc.now })
+  assert.equal(rl.stats().capacity, 3)
+  assert.equal(rl.stats().refillPerSec, 2)
+  const t = terminal()
+  const pipeline = compose([rl, t])
+  for (let i = 0; i < 3; i++) await pipeline(messageCtx({ userId: '777' }))
+  const blocked = messageCtx({ userId: '777' })
+  await pipeline(blocked)
+  assert.equal(blocked.signal.aborted, true, 'env 容量 3 生效：第 4 条拒')
+  fc.advance(500)
+  const after = messageCtx({ userId: '777' })
+  await pipeline(after)
+  assert.equal(after.signal.aborted, false, 'env 速率 2/s 生效：0.5s 补 1 枚')
+})
+
+test('限流 env 非法值回缺省 30/5（熔断口径同管道开关：乱值/负数/0 容量/空串一律默认，改 env 需重启）', async () => {
+  assert.deepEqual(ratelimitOptionsFromEnv({}), {}, '未设置 → 空对象（落构造缺省）')
+  for (const bad of ['abc', '-2', '0', '', ' ', 'NaN', '3.5x']) {
+    assert.deepEqual(ratelimitOptionsFromEnv({ QQHUB_RL_CAPACITY: bad }), {}, `capacity 乱值「${bad}」不生效`)
+  }
+  for (const bad of ['abc', '-1', '', '5x']) {
+    assert.deepEqual(ratelimitOptionsFromEnv({ QQHUB_RL_REFILL_PER_SEC: bad }), {}, `refill 乱值「${bad}」不生效`)
+  }
+  // refill=0 是合法极端闸（突发用尽后全拒），不算非法值
+  assert.deepEqual(ratelimitOptionsFromEnv({ QQHUB_RL_REFILL_PER_SEC: '0' }), { refillPerSec: 0 })
+  // 口径说明：解析只认字符串 env 值（process.env 契约），非字符串形态按未设置回默认
+  assert.deepEqual(ratelimitOptionsFromEnv({ QQHUB_RL_CAPACITY: 45 }), {}, '非字符串值不生效')
+  // 行为验证：非法 env 装配出来的桶 = 缺省 30——30 条全过、第 31 条拒
+  const fc = fakeClock(0)
+  const rl = createRatelimitMiddleware({ ...ratelimitOptionsFromEnv({ QQHUB_RL_CAPACITY: 'oops', QQHUB_RL_REFILL_PER_SEC: '-7' }), clock: fc.now })
+  assert.equal(rl.stats().capacity, 30)
+  assert.equal(rl.stats().refillPerSec, 5)
+  const t = terminal()
+  const pipeline = compose([rl, t])
+  for (let i = 0; i < 30; i++) await pipeline(messageCtx({ userId: '777' }))
+  assert.equal(t.hits.length, 30)
+  const over = messageCtx({ userId: '777' })
+  await pipeline(over)
+  assert.equal(over.signal.aborted, true)
 })
 
 // ================= 3. ACL =================
