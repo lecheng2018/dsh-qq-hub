@@ -97,7 +97,26 @@ export default {
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
     // 群黑话本（1.3.58）：独立于相处经验的存储与面板
-    api.route('/slang', async () => ({ ok: true, groups: memory.slang ? memory.slang() : [] }))
+    api.route('/slang', async () => {
+      const groups = memory.slang ? memory.slang() : []
+      // 带上群名（群名缓存没有的退回群号），前端选择器直接显示可读名字
+      const named = await Promise.all(groups.map(async (g) => {
+        let name = ''
+        try { name = await hub.groupName(g.gid) } catch {}
+        return { ...g, name: name && name !== g.gid ? name : '' }
+      }))
+      // 白名单里的群也要列出（还没学到词的群可以手填）
+      const allow = (api.config().allow && api.config().allow.groups) || []
+      const known = new Set(named.map((g) => String(g.gid)))
+      for (const gid of allow.map(String)) {
+        if (!known.has(gid)) {
+          let name = ''
+          try { name = await hub.groupName(gid) } catch {}
+          named.push({ gid, name: name && name !== gid ? name : '', list: [] })
+        }
+      }
+      return { ok: true, groups: named }
+    })
     // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
     api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
     api.route('/distill/add', async (req) => {
