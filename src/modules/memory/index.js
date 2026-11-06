@@ -5,6 +5,7 @@
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
 import { createMemoryBus } from '../../features/memory-bus.js'
 import { currentPersonaText } from '../../persona/personas.js'
+import { refreshDistillCard, styleEntries, distillCardId } from '../../persona/distill-card.js'
 import { defineTool, str } from '../../tools/tools.js'
 
 export default {
@@ -16,7 +17,13 @@ export default {
   files: ['features/memory.js'],
   setup(api) {
     const { hub, http } = api.core
-    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log, personaText: () => currentPersonaText(api.config().persona.current) })
+    const refreshCard = (gid) => {
+      const entries = styleEntries((memory.distillList() || []).filter((t) => String(t.gid) === String(gid)))
+      const r = refreshDistillCard({ gid, entries, cfg: api.config(), log: api.log })
+      if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
+      return r
+    }
+    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log, personaText: () => currentPersonaText(api.config().persona.current), onDistillLearned: async (gid) => { refreshCard(gid) } })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
     // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照
@@ -119,6 +126,12 @@ export default {
     })
     // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
     api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
+    // 蒸馏→语感人设卡（1.3.65）：学成后自动刷新；也可面板手动点
+    api.route('/distill/card/refresh', async (req) => {
+      const b = await http.body(req)
+      if (!b.gid) return { ok: false, message: '没给群号' }
+      return refreshCard(b.gid)
+    })
     // 从会话历史蒸馏（1.3.63）：chatlog 每天删，DSH 会话记录留得久，翻它能立刻学
     api.route('/distill/history', async (req) => {
       if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
