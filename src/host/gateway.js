@@ -58,6 +58,11 @@ export function createGateway({
           })
           for (const it of items) {
             seenIds.add(`group:${gid}`, it.event.message_id)
+            // M1-B：过旧（> maxAgeMinutes）消息不主动唤醒——backfill.js 头注安全承诺 #3。
+            // 它们只留在 QQ 自己的历史里；legacy 没有独立的「只落上下文」通道，
+            // 投喂 6 小时前的旧消息只会制造迟到副作用（M1-B 验收线），故整个跳过。
+            // 新核心 M2-A 起由 NormalizedInbound.source + 时间戳承接「落上下文」语义。
+            if (it.tooOld) { log.debug(`[backfill] 群 ${gid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
@@ -75,12 +80,16 @@ export function createGateway({
             seen: seenIds,
             config: cfg.backfill
           })
+          // M1-B：命令/审批/动态码在补收中绝不执行；记入 seen，重复拉取时不再重发提醒
+          for (const c of skippedCommands) seenIds.add(`private:${uid}`, c.event.message_id)
           if (skippedCommands.length && String(uid) === String(cfg.ownerQQ)) {
             const cmds = skippedCommands.map((c) => `「${c.text}」`).join('、')
             await getHub().sendText(`private:${uid}`, `⚠️ 断线期间（约 ${describeDuration(gapMs)}）收到的管理命令 ${cmds} 未执行；如需执行请重新发送。`)
           }
           for (const it of items) {
             seenIds.add(`private:${uid}`, it.event.message_id)
+            // M1-B：同上，过旧消息不唤醒
+            if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
