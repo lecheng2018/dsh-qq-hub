@@ -282,6 +282,29 @@ test('④b shadow：内容没被清洗改动时 hash 全等（match=1 mismatch=0
   assert.equal(r.real.length, 1)
 })
 
+// 补评 F8：现行装配下主气泡走包装器直发分支（F1），shadow 账本常年全空——
+// 「match=0 mismatch=0」是「没样本」不是「比对通过」，e2e SHADOW 态全绿不能当治理生效的证据。
+test('④d shadow 零样本：账本全空时明写「无队列支路样本」，不出 match=0 假干净（补评 F1/F8）', async () => {
+  const w = world({ mode: 'shadow', core: async () => { /* 本轮零发送：气泡直发形态下治理面的真实样子 */ } })
+  const r = await w.dispatch(messageEvent('hi'))
+  const lines = r.logs.filter((l) => l[1].includes('[egress-shadow]'))
+  assert.equal(lines.length, 1, '零样本也留一行可观测记录，不静默')
+  assert.equal(lines[0][0], 'info', '升 info 级：空账本不能被 debug 埋掉')
+  assert.match(lines[0][1], /无队列支路样本（气泡直发不在治理面）/)
+  assert.ok(!lines[0][1].includes('match='), '零样本不再输出 match=0 mismatch=0 的假干净计数')
+  assert.equal(r.real.length, 0, '零样本轮一个包都不发')
+  assert.equal(r.logs.filter((l) => l[0] === 'warn').length, 0, '无样本也不触发比对告警')
+})
+
+test('④e shadow 有样本：计数日志维持 debug 原样（零样本诚实化不影响有样本口径）', async () => {
+  const w = world({ mode: 'shadow', core: async (ev, { sendSegments }) => { await sendSegments('private:10001', textSeg('干净的一句话'), 'note') } })
+  const r = await w.dispatch(messageEvent('hi'))
+  const lines = r.logs.filter((l) => l[1].includes('[egress-shadow]'))
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0][0], 'debug', '有样本走原口径')
+  assert.match(lines[0][1], /match=1 mismatch=0 oldFailed=0/)
+})
+
 test('④c live：不产比对日志，旧通道零调用（切权后的稳态）', async () => {
   const w = world({ core: async (ev, { sendSegments }) => { await sendSegments('private:10001', textSeg('ok'), 'note') } })
   const r = await w.dispatch(messageEvent('hi'))
