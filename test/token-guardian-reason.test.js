@@ -20,7 +20,7 @@ test('compact 返回结构而不是 boolean（要能带 reason）', () => {
 })
 
 test('429 / 限流要被识别出来，给出可操作建议', () => {
-  assert.match(SRC, /429\|rate\.?limit\|频率限制\|quota\|限额/, '要能认限流的各种说法')
+  assert.match(SRC, /429\|rate\.\?limit\|频率限制\|quota\|限额/, '要能认限流的各种说法')
   assert.match(SRC, /额度用完/, '要明确说是额度问题，不是功能坏了')
 })
 
