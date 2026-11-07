@@ -6,13 +6,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
+// host.js 分层拆分后：会话事件监听在 host/effects.js（断言逐字保留）
+const HOST = readFileSync(join(ROOT, 'src/host/effects.js'), 'utf8')
+const HOST_MAIN = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
 const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
 
 test('host 把 assistant/message 的 usage 转发为 session/usage 事件', () => {
   assert.match(HOST, /event\.type === 'assistant\/message'/, '盯 assistant/message')
   assert.match(HOST, /mods\.emit\('session\/usage'/, '转发给模块')
-  assert.ok(!/createTelemetry/.test(HOST), '遥测核心不再回来')
+  assert.ok(!/createTelemetry/.test(HOST) && !/createTelemetry/.test(HOST_MAIN), '遥测核心不再回来')
 })
 
 test('token-guardian 监听 session/usage 并用真实值判定', () => {

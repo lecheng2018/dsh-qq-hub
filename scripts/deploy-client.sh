@@ -9,6 +9,18 @@ DST_ROOT="/vol2/@appshare/Harness/.dsh/profiles/web/node_modules/dsh-qq-hub"
 FILES=(
   "client/client.js"
   "src/host.js"
+  "src/host/http.js"
+  "src/host/models.js"
+  "src/host/gateway.js"
+  "src/host/pipeline.js"
+  "src/host/effects.js"
+  "src/host/panel/overview.js"
+  "src/host/panel/routes-config.js"
+  "src/host/panel/routes-gateway.js"
+  "src/host/panel/routes-persona.js"
+  "src/host/panel/routes-purpose-pet.js"
+  "src/host/panel/routes-modules.js"
+  "src/host/panel/routes-misc.js"
   "src/core/config.js"
   "src/core/fnos-fsync-patch.js"
   "src/core/llm.js"
@@ -48,7 +60,7 @@ echo "校验："
 grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
 grep -n 'onClick: () => setDraft((prev) =>' "$DST_ROOT/client/client.js" || true
 grep -n 'next.persona.groups' "$DST_ROOT/src/core/config.js" || true
-grep -n 'dedupeModelList'    "$DST_ROOT/src/host.js"      || true
+grep -n 'dedupeModelList'    "$DST_ROOT/src/host/models.js" || true
 grep -n 'fnos-fsync-patch'    "$DST_ROOT/src/host.js"      || true
 grep -n '绝不把裸 base64'     "$DST_ROOT/src/core/llm.js"  || true
 grep -n '按看不了图处理'      "$DST_ROOT/src/chat/hub.js"  || true

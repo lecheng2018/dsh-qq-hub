@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
+// host.js 分层拆分后：工作区路由在 panel/routes-config.js（断言逐字保留）
+const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
 
 function blockOf(src, marker, size = 2200) {
