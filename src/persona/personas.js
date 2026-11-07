@@ -42,7 +42,7 @@ export function listPersonas() {
   seedPersonas()
   const out = []
   for (const n of readdirSync(dir())) {
-    if (!n.endsWith('.md')) continue
+    if (!n.endsWith('.md') || n.startsWith('_')) continue // _ 前缀是内部文件（如蒸馏卡模板），不算人设
     const id = n.slice(0, -3)
     try {
       const p = parsePersona(id, readFileSync(join(dir(), n), 'utf8'))
@@ -54,6 +54,7 @@ export function listPersonas() {
 
 export function readPersona(id) {
   seedPersonas()
+  if (String(id || '').startsWith('_')) return null // 内部文件不是人设
   const f = join(dir(), `${safeId(id)}.md`)
   if (!existsSync(f)) return null
   return { ...parsePersona(safeId(id), readFileSync(f, 'utf8')), raw: readFileSync(f, 'utf8') }
