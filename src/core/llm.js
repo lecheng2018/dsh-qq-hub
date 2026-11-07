@@ -143,12 +143,7 @@ export async function pickReasoningEffort (dsh, provider, model, want) {
 
 const isUnsupportedEffort = (error) => {
   const msg = String((error && (error.message || error.code)) || '')
-  // 各家措辞不同，都要认：
-  //   OpenAI 系：UNSUPPORTED_REASONING_EFFORT / does not support reasoning effort
-  //   MiniMax 系（2026-11-07 实测）：invalid params, model "X" requires adaptive thinking;
-  //     thinking.type="disabled" (including reasoning.effort=none) is not allowed (2013)
-  //     —— 这个模型**要求**开思考，传 none/disabled 直接 400。
-  return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort|reasoning effort|requires adaptive thinking|thinking\.type\s*[=:]\s*["']?disabled|reasoning\.effort/i.test(msg)
+  return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort|reasoning effort/i.test(msg)
 }
 
 /**

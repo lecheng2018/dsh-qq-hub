@@ -18,7 +18,6 @@ import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
-import { extractStats, statsToPrompt } from './style-stats.js'
 import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
@@ -616,55 +615,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   // chatlog 每天整理完就删，所以「新加的学习目标」只能干等。DSH 的会话记录留得久、
   // 而且存着群友原话「名字(QQ号)：内容」，翻它就能立刻学。
 
-  /**
-   * 扫一遍聊天流水（chatlog），给出「谁说了多少句」和覆盖的时间范围（面板用）。
-   *
-   * 数据源选择（1.3.63 修正）：**chatlog 优先**——它是系统记下的**全部**群消息（包括她
-   * 当时没回的那些），实测同一个人 chatlog 里 146 条、DSH 会话记录里只有 17 条（会话记录
-   * 只含进过模型上下文窗口的部分）。会话记录只作补充（chatlog 已被清理时的兜底）。
-   */
-  function distillHistory ({ gid = '', group = '', days = 14 } = {}) {
+  /** 扫一遍会话历史，给出「谁说了多少句」和覆盖的时间范围（面板用）。 */
+  function distillHistory ({ group = '' } = {}) {
     const cfg = getConfig()
-    // chatlog 里的 chatId 用**群号**（group:111222333）；会话记录里用的是**群名**（标题）。
-    // 之前只传群名 → chatlog 一条都匹配不上 → 静默退回会话记录（少 8 倍证据）。
-    const chatId = gid ? `group:${gid}` : ''
-    const lines = []
-    const daysList = (hub.chatLogDays ? hub.chatLogDays() : []).slice(-days)
-    for (const day of daysList) {
-      for (const l of (hub.chatLogOf ? (hub.chatLogOf(day) || []) : [])) {
-        if (chatId && String(l.chatId) !== chatId) continue
-        const uid = String(l.uid || '')
-        if (!uid) continue
-        lines.push({
-          uid,
-          name: l.who === 'bot' || l.who === 'self' ? '她自己' : String(l.who || uid),
-          text: String(l.text || ''),
-          t: Number(l.t) || 0,
-          at: Number(l.t) || 0,
-          chatId: String(l.chatId),
-          self: l.who === 'bot' || l.who === 'self',
-        })
-      }
-    }
-    let sessions = 0
-    let dir = ''
-    // chatlog 没覆盖到（刚装插件、清过盘、或该群不在白名单）→ 退回会话记录
-    if (!lines.length) {
-      dir = sessionsDirFor(workspaceDirOf(cfg), { dshHome: process.env.DSH_HOME || '' })
-      const scan = scanTranscripts(dir, { group })
-      sessions = scan.sessions
-      return {
-        dir, sessions, source: 'sessions',
-        total: scan.lines.length, from: scan.spans.from, to: scan.spans.to,
-        speakers: speakerCounts(scan.lines, 20), lines: scan.lines,
-      }
-    }
+    const dir = sessionsDirFor(workspaceDirOf(cfg), { dshHome: process.env.DSH_HOME || '' })
+    const scan = scanTranscripts(dir, { group })
     return {
-      dir, sessions: daysList.length, source: 'chatlog',
-      total: lines.length,
-      from: lines.reduce((n, x) => Math.min(n || Infinity, x.t), 0),
-      to: lines.reduce((n, x) => Math.max(n, x.t), 0),
-      speakers: speakerCounts(lines, 20), lines,
+      dir,
+      sessions: scan.sessions,
+      total: scan.lines.length,
+      from: scan.spans.from,
+      to: scan.spans.to,
+      speakers: speakerCounts(scan.lines, 20),
+      lines: scan.lines,
     }
   }
 
@@ -682,7 +645,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     let groupName = ''
     try { groupName = await hub.groupName(g) } catch {}
     if (groupName === g) groupName = ''
-    const hist = distillHistory({ gid: g, group: groupName })
+    const hist = distillHistory({ group: groupName })
     if (!hist.total) return { ok: false, message: '没找到会话历史' + (hist.dir ? '' : '（会话目录不存在）') }
     // 历史学习先清洗（去重 + 滤纯转发），清洗后质量高，门槛相应降到 15 句
     const mine = collectMemberLines(hist.lines.map((l) => ({ ...l, t: l.at })), u)
@@ -691,22 +654,20 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     if (!enoughEvidence(mine, { minMessages: minMsg })) {
       return { ok: false, message: `历史里他的原话只有 ${mine.length} 句（去重滤转发后），不够 ${minMsg} 句，学出来也是瞎猜——等多聊几天再来` }
     }
-    const others = hist.lines.filter((l) => String(l.uid) !== u && !l.self && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
+    const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)
-    const stats = extractStats(mine)
     const { system, text } = buildDistillPrompt({
       name: name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u,
       uid: u,
-      memberLines: stats.burstMerged, // 突发合并后的消息块（防学成断裂单句）
+      memberLines: mine,
       context: dedupConvo(hist.lines).slice(-80),
       others,
       old,
-      stats,
     })
     let out = ''
     try {
       // 1600 token：800 会截断五段 JSON（截了 parse 就失败，之前没日志根本看不出）
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3 })
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -1175,11 +1136,12 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         }
         const s = load()
         s.processed = s.processed || {}
-        // 1.3.63：整理完**不再**立刻删当天的流水。以前一整理就删，等于「聊天记录只活一天」——
-        // 蒸馏群友要拿某个人在群里的全部原话（chatlog 是完整记录，146 条；DSH 会话记录只
-        // 有进过模型上下文的 17 条），流水活不过一天就什么都学不到。
-        // 现在按 chatlog.keepDays（默认 30 天）滚动保留，processed 记账照旧（不会重复提炼）。
-        s.processed[day] = all.length
+        if (day < today) {
+          hub.deleteChatLog(day) // 整理完清空（今天的留着，写日记还要用）
+          delete s.processed[day]
+        } else {
+          s.processed[day] = all.length
+        }
         save(s)
         days++
       }
@@ -1284,11 +1246,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         .slice(-60)
         .map((l) => `${l.who}：${String(l.text).slice(0, 100)}`)
       const old = distillOf(t.gid, t.uid)
-      const stats = extractStats(mine)
-      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, uid: t.uid, memberLines: stats.burstMerged, context, others, old, stats })
+      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, uid: t.uid, memberLines: mine, context, others, old })
       let out = ''
       try {
-        out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3 })
+        out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
       } catch (error) {
         log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
         continue
