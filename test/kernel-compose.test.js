@@ -265,3 +265,136 @@ test('契约钉死：abort 不强制作废在飞 next()——管道完成=已启
   assert.equal(done, true)
   assert.deepEqual(order, ['inner:entry', 'after-abort', 'outer:bubble'], '内层真实 settle 后外层 bubble 收尾（§2.2 unwind 实况）')
 })
+
+
+// ===== 2026-11-07 gemini38《onion-real-issues》缺陷1 拒绝项回归锁（US-003）=====
+//
+// 指控：M0→M1→M2、M2 在飞挂起时外部 abort（boundary=2），M1 二次调 next() 会命中
+// 检查点2（`context.signal?.aborted && abortBoundary !== null`）被**就地 resolve**，
+// 于是不等在飞 M2 真实结束就提前 bubble（对方定级 P0「时序倒置」）。
+// 对方补丁：检查点2 追加 `&& currentIndex > abortBoundary`，让边界内的重派「继续派发」。
+//
+// 裁决：**不成立**（workspace `reports/2026-11-07-gemini38-real-issues-复核裁决.md` §缺陷1）。
+// 实测二次 next() 被每层 nextCalled 资格位（compose.js:137-144，P5 review A1#3 修复）熔断成
+// **reject**，且管道完成仍必须等 M2 真实 settle；补丁在 A1/A2/A3 三时序下与现实现**逐位一致**
+// ——`currentIndex <= abortBoundary` 的 dispatch 必先被检查点1全局游标（:93）或资格位（:139）
+// 拦掉，新增子句永远轮不到改结论 ⇒ unreachable-equivalent（空改动）。
+//
+// ⚠️ 勿采纳该补丁：它不治病（病本来就没有），只是把检查点2从「abort 后一律不进入任何
+// 中间件」的无条件承诺改成依赖 abortBoundary 与调用序的条件分支——§2.2 的硬承诺
+// （compose.js:9-14 JSDoc「管道返回 = 已启动中间件真实结束」）随之失去可推理的单一形态。
+//
+// 下面三条锁钉的是「熔断链拆掉时立刻变红」，不是「区分补丁与现实现」（两者本不可区分）。
+
+test('gemini38 缺陷1 拒绝项锁①（A3/A4b）：闭包泄漏重派 nextStep 一律 reject，在飞 M2 真实 settle 前管道不得完成', async () => {
+  const controller = new AbortController()
+  const ctx = { signal: controller.signal }
+  const ev = []
+  let m2Run = 0
+  let hangRelease
+  const hang = new Promise((r) => { hangRelease = r })
+  // 把第 1 层的 nextStep 泄漏到「管道外」持有者（模拟被偷走的闭包 / 存进 globalThis 的回调）
+  const leaked = { next: null }
+  let pipelineDone = false
+
+  const M0 = async (c, next) => { ev.push('M0:enter'); await next(); ev.push('M0:bubble') }
+  const M1 = async (c, next) => {
+    leaked.next = next                       // ← 闭包泄漏点
+    ev.push('M1:enter')
+    const first = next()                     // dispatch(2)：在飞 M2 挂起
+    await new Promise((r) => setImmediate(r))
+    controller.abort('external-stop')        // inFlight={0,1,2} ⇒ abortBoundary=2
+    ev.push('ABORT')
+    // A3 时序：abort 后同层二次 next()（对方断言这里「静默 resolve → 越飞层提前 bubble」）
+    ev.push('inflight-2nd-next:' + await next().then(
+      () => 'RESOLVED(指控成真!)',
+      (e) => `REJECTED(${e.name}:idx=${e.index})`,
+    ))
+    await first                              // 仍要等在飞 M2 真实结束
+    ev.push('M1:bubble')
+  }
+  const M2 = async () => {
+    m2Run += 1
+    ev.push(`M2:enter#${m2Run}`)
+    await hang                               // 挂起：LLM/IO 在飞
+    ev.push(`M2:settled#${m2Run}`)
+  }
+
+  const p = compose([M0, M1, M2])(ctx).then(
+    () => { pipelineDone = true; ev.push('PIPELINE:resolved') },
+    (e) => { pipelineDone = true; ev.push(`PIPELINE:rejected(${e.name})`) },
+  )
+
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(pipelineDone, false, 'M2 仍挂起时管道不得完成（§2.2 硬承诺）')
+  assert.equal(m2Run, 1, '在飞层不得被重派第二次')
+
+  // A4b 时序：从管道外拿泄漏闭包再调一次（对方补丁宣称能「放行 dispatch(2) 重进在飞 M2」的最强攻势）
+  const outside = await leaked.next().then(
+    () => 'RESOLVED(重派放行!)',
+    (e) => `REJECTED(${e.name}:idx=${e.index})`,
+  )
+  assert.equal(outside, 'REJECTED(PipelineError:idx=1)', '泄漏闭包重派必须 reject，违规者 index 归调用方')
+  assert.equal(m2Run, 1, '管道外重调同样不得让在飞 M2 第二次执行')
+  assert.equal(pipelineDone, false, '重派被拒后管道依旧只在真实 settle 时完成')
+
+  hangRelease()
+  await p
+  assert.equal(pipelineDone, true)
+  assert.equal(m2Run, 1, 'm2Run 恒 1：全程无双重执行')
+  assert.deepEqual(ev, [
+    'M0:enter', 'M1:enter', 'M2:enter#1', 'ABORT',
+    'inflight-2nd-next:REJECTED(PipelineError:idx=1)',
+    'M2:settled#1', 'M1:bubble', 'M0:bubble', 'PIPELINE:resolved',
+  ], `事件序：在飞 M2 settle 必须先于 bubble 回溯与管道完成（实际 ${ev.join(' | ')}）`)
+})
+
+test('gemini38 缺陷1 拒绝项锁②（A4b 变体）：管道真实完成后，泄漏的 nextStep 仍不可复活重派', async () => {
+  const controller = new AbortController()
+  const ctx = { signal: controller.signal }
+  const ev = []
+  let m2Run = 0
+  const leaked = { next: null }
+  const M0 = async (c, next) => { await next() }
+  const M1 = async (c, next) => { leaked.next = next; await next(); ev.push('M1:bubble') }
+  const M2 = async () => { m2Run += 1; ev.push(`M2:run#${m2Run}`); await new Promise((r) => setImmediate(r)) }
+
+  await compose([M0, M1, M2])(ctx)
+  ev.push('PIPELINE:done')
+  controller.abort('post-completion')        // 管道已结束才 abort
+
+  const after = await leaked.next().then(
+    () => 'RESOLVED(结算后重派放行!)',
+    (e) => `REJECTED(${e.name}:idx=${e.index})`,
+  )
+  assert.equal(after, 'REJECTED(PipelineError:idx=1)', '资格位终身有效：不存在「结束后再放一次」的复活路径')
+  assert.equal(m2Run, 1, '终端副作用不放大')
+  assert.deepEqual(ev, ['M2:run#1', 'M1:bubble', 'PIPELINE:done'])
+})
+
+test('gemini38 缺陷1 拒绝项锁③（A5）：预 abort 场景二次确认——连第 0 层都不进、不注册监听、同句柄重复执行仍全短路', async () => {
+  let added = 0
+  let removed = 0
+  const preAbortedSignal = {
+    aborted: true,
+    addEventListener: () => { added += 1 },
+    removeEventListener: () => { removed += 1 },
+  }
+  const ctx = { signal: preAbortedSignal }
+  const ev = []
+  const M0 = async (c, next) => { ev.push('M0:enter'); await next(); ev.push('M0:bubble') }
+  const M1 = async (c, next) => { ev.push('M1:enter'); await next() }
+  const pipeline = compose([M0, M1])
+
+  // 第一次：预 abort（abortBoundary=-1）→ dispatch(0) 即命中检查点2就地 resolve
+  await pipeline(ctx, async () => { ev.push('tail') })
+  assert.deepEqual(ev, [], '预 abort：任何中间件与 tail 都不进')
+  assert.deepEqual([added, removed], [0, 0], '预 abort 不注册监听（review A1#2 卫生约束）')
+
+  // 二次确认：同一 executePipeline 句柄在同一已 abort 信号上重复执行，语义不变
+  //（对方补丁在此场景 currentIndex(0) > abortBoundary(-1) 同样成立 ⇒ 两版逐位一致，
+  //  本锁防的是未来把「预 abort 全短路」改成「先派发第 0 层再短路」的重构）
+  await pipeline(ctx, async () => { ev.push('tail#2') })
+  assert.deepEqual(ev, [], '重复执行仍全短路，无半进入状态')
+  assert.deepEqual([added, removed], [0, 0], '二次执行同样不注册监听')
+})
