@@ -201,3 +201,82 @@ test('ctx-store：runWithContext(null) 在 A 上下文内显式退出（review A
   markContextFlushed(null)
   assert.equal(isContextFlushed(null), false)
 })
+
+// ===== 2026-11-07 gemini38 缺陷2 回归锁：父信号监听器泄漏（计数桩两面 + 边界） =====
+// 口径说明：本组用 **addEventListener/removeEventListener 计数法**判定泄漏，不用
+// WeakRef/gc 读数——verifier 复跑证实 WeakRef 读数不可靠（forwardParentAbort 未引用
+// ctx/envelope，V8 作用域分析不把大对象钉住；实测 WeakRef 存活 1/100），而计数法
+// 对桩与真实 AbortSignal 双向一致且不吃 --expose-gc，能稳定进 `node --test` 子集。
+
+/** 计数桩：模拟真实 EventTarget 语义——只有「确实摘掉了」才计 remove。 */
+function countingParentSignal() {
+  const listeners = new Set()
+  return {
+    add: 0,
+    remove: 0,
+    aborted: false,
+    reason: undefined,
+    get residual() { return listeners.size },
+    addEventListener(type, fn) {
+      if (type !== 'abort') return
+      this.add++
+      listeners.add(fn)
+    },
+    removeEventListener(type, fn) {
+      if (type !== 'abort') return
+      if (listeners.delete(fn)) this.remove++
+    },
+    fire(reason) {
+      this.aborted = true
+      this.reason = reason
+      for (const fn of [...listeners]) fn()
+    },
+  }
+}
+
+test('缺陷2①（修复面）：100×createContext({signal}) + dispose → add==remove==100、residual=0，重复 dispose 幂等', () => {
+  const parent = countingParentSignal()
+  for (let i = 0; i < 100; i++) {
+    const ctx = createContext({ messageId: 'm' + i }, 'd', undefined, { signal: parent })
+    assert.equal(typeof ctx.dispose, 'function', 'createContext 必须暴露 dispose()')
+    ctx.dispose()
+    ctx.dispose() // 幂等：第二次不得重复计数、不得抛
+    assert.equal(ctx.signal.aborted, false, 'dispose 只摘父监听，绝不 abort 本地 signal')
+  }
+  assert.equal(parent.add, 100, '每轮注册一个转发闭包')
+  assert.equal(parent.remove, 100, '每轮摘净一次（重复 dispose 不重复计）')
+  assert.equal(parent.residual, 0, '长命父信号上零残留')
+})
+
+test('缺陷2②（泄漏事实钉）：不 dispose → add=100/remove=0/residual=100 —— 文档化断言，勿改成宽松断言', () => {
+  // 此钉**故意**断言残留非零：它记录 gemini38 缺陷2 的泄漏事实（正常完成不 abort 时
+  // 转发闭包全数残留在父信号上）。修复面 = 生命周期终点调用 ctx.dispose()（见①）。
+  // 若未来有人把 dispose 摘错监听、或把泄漏洗成「看似无害」的弱断言，本钉会红。
+  const parent = countingParentSignal()
+  for (let i = 0; i < 100; i++) createContext({ messageId: 'm' + i }, 'd', undefined, { signal: parent })
+  assert.equal(parent.add, 100)
+  assert.equal(parent.remove, 0, '不 dispose（也不 abort）就一次都摘不掉——这就是缺陷本体')
+  assert.equal(parent.residual, 100, '残留 100 个闭包是事实，不是可接受状态')
+})
+
+test('缺陷2③（语义边界）：dispose 后父 abort 不再转发；abort 既有摘除语义不变；无父信号时 dispose 空操作', () => {
+  const a1 = countingParentSignal()
+  const disposed = createContext({ messageId: 'a' }, 'd', undefined, { signal: a1 })
+  disposed.dispose()
+  a1.fire('late-parent')
+  assert.equal(disposed.signal.aborted, false, '已收尾的 ctx 生命周期已过，父信号再 abort 不该复活它')
+  assert.equal(a1.residual, 0)
+
+  const a2 = countingParentSignal()
+  const aborted = createContext({ messageId: 'b' }, 'd', undefined, { signal: a2 })
+  aborted.abort('local')
+  assert.equal(aborted.signal.aborted, true, 'abort 仍照常取消本地（既有语义）')
+  assert.equal(a2.remove, 1, 'abort 路径摘净（review A2 P1 原行为）')
+  aborted.dispose()
+  assert.equal(a2.remove, 1, 'abort 后再 dispose 不重复摘')
+
+  const noParent = createContext({ messageId: 'c' }, 'd')
+  noParent.dispose()
+  noParent.dispose()
+  assert.equal(noParent.signal.aborted, false, '未传父信号时 dispose 是空操作')
+})
