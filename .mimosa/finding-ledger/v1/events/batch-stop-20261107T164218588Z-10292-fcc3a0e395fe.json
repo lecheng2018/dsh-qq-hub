@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261107T164218588Z-10292-fcc3a0e395fe",
+  "runId": "20261107T164218588Z-10292-fcc3a0e395fe",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "src/host/panel/routes-purpose.js",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "src/host/panel/routes-purpose.js",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "2be1be63abaa02adb73a50d72117ce5afcb26a50",
+  "diffHash": "d95b5708450a2da788aa60406cba7e4f86d6e508409a353bc8f7b3b9f0c93829",
+  "rulesVersion": "unavailable",
+  "sessionHash": "06e8fde651f4fc575745569b11bdedb031f2a3ec5e46fbef07eada1671552f0d",
+  "reportRef": ".mimosa/reports/task-review-sess_2c268665-781f-4875-a31c-bb72899b71e6-20261107T164218588Z-10292-fcc3a0e395fe.json",
+  "events": [],
+  "observedFindingIds": [
+    "mimosa-dea929aa02dcee018fd4de8e",
+    "mimosa-e3914d46e954793a95d93bf1",
+    "mimosa-5c696ae1e68955778eb5e209",
+    "mimosa-43d6c4a04e9be21e83b13013",
+    "mimosa-83167e70b5f56494491c918c",
+    "mimosa-763b53d7f563afc9c5a82908",
+    "mimosa-cb3c484b01baadc8f6170f23",
+    "mimosa-5cabc4f3d48a8d0731223d3e",
+    "mimosa-e0c6163da458bd31affc5624"
+  ],
+  "verifiedFiles": [
+    {
+      "file": "test/e2e.test.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "test/memory-scope.test.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "test/panel-purpose-settings.test.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "test/panel-purpose-single.test.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "test/panel-purpose.test.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/host.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/purpose/module.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/modules/index.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/modules/purpose/index.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/host/effects.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/host/panel/overview.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/host/panel/routes-purpose.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/chat/hub.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "client/client.js",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-11-07T16:42:18.944Z"
+}

@@ -24,8 +24,6 @@ export default {
     initialDelayMinutes: 15, // 启动后的第一枪延迟
     maxCandidates: 6,
     promptMaxChars: 16000,
-    carrier: 'qq', // 投递载体：qq = 私聊；pet = 桌宠气泡
-    petFallbackToQQ: true, // 桌宠离线时回落到 QQ
     maxPerDay: 3, // 每日上限。留空/0/未设都沿用「主动搭话」的 maxPerDay；填大于 0 的数才用这里自己的
   },
   settings: [
@@ -33,24 +31,16 @@ export default {
     { key: 'minMaterials', label: '最少素材数', type: 'number', min: 0, max: 20, hint: '低于这个数且没有惦记的事/人格卡时，这轮不硬找话' },
     { key: 'initialDelayMinutes', label: '启动延迟（分钟）', type: 'number', min: 1, max: 720, hint: '插件启动后第一次主动搭话前先等多久' },
     { key: 'maxCandidates', label: '候选方向数', type: 'number', min: 3, max: 10 },
-    { key: 'carrier', label: '投递载体', type: 'select', options: [
-      { value: 'qq', label: 'QQ 私聊' },
-      { value: 'pet', label: '桌宠' },
-    ], hint: 'pet = 走桌宠气泡；桌宠模块没开时按离线处理，按下面的开关回落 QQ' },
-    { key: 'petFallbackToQQ', label: '桌宠离线时回落 QQ', type: 'switch', hint: '桌宠没在跑的时候照样用 QQ 私聊找到你' },
     { key: 'maxPerDay', label: '每日上限', type: 'number', min: 0, max: 20, hint: '0 或留空 = 沿用「主动搭话」页的次数上限；填大于 0 的数才用这里自己的上限' },
   ],
   setup(api) {
     const purpose = createPurpose({
       getConfig: api.config,
-      setConfig: api.setConfig,
       hub: api.core.hub,
       log: api.log,
       isMuted: (chatId) => { try { return api.core.mutes.muted(chatId) } catch { return false } },
       mood: () => api.use('mood'),
       memory: () => api.use('memory'),
-      // 载体分发用（面板里 carrier=pet 时推桌宠气泡；桌宠没开是 null，按离线回落处理）
-      pet: () => api.use('pet'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },
     })
     api.every(60_000, () => purpose.tick(), '目的引擎')

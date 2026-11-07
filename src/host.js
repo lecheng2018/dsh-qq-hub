@@ -9,7 +9,7 @@
 //   src/host/gateway.js         QQ 网关连接层（OneBot 客户端 + 登录核对 + 事件分发 + 补收）
 //   src/host/models.js          DSH 模型目录（listModels + 缓存）
 //   src/host/pipeline.js        RFC-0001 洋葱管道装配（FLAG_USE_PIPELINE 开启态）
-//   src/host/effects.js         DSH 旁路 seam（审批流/交互提问/桌宠端口/会话监听/看门狗）
+//   src/host/effects.js         DSH 旁路 seam（审批流/交互提问/会话监听/看门狗）
 //   src/host/panel/overview.js  面板聚合视图（overview/脱敏/连接诊断）
 //   src/host/panel/routes-*.js  72 条面板路由按域拆分
 // 业务能力本身都是模块（src/modules/）：表情、语音、记忆、空间、B 站、翻唱、生图……
@@ -53,7 +53,7 @@ import { assemblePipeline } from './host/pipeline.js'
 import { createHostEffects } from './host/effects.js'
 import { createPanelOverview } from './host/panel/overview.js'
 import { registerConfigRoutes } from './host/panel/routes-config.js'
-import { registerPurposePetRoutes } from './host/panel/routes-purpose-pet.js'
+import { registerPurposeRoutes } from './host/panel/routes-purpose.js'
 import { registerGatewayRoutes } from './host/panel/routes-gateway.js'
 import { registerPersonaRoutes } from './host/panel/routes-persona.js'
 import { registerModulesRoutes } from './host/panel/routes-modules.js'
@@ -323,14 +323,12 @@ export function apply(ctx) {
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'qq-hub: 危险命令确认')
 
-  // ---------- 宿主旁路 seam（审批流/交互提问/桌宠端口/会话监听/看门狗，见 host/effects.js） ----------
+  // ---------- 宿主旁路 seam（审批流/交互提问/会话监听/看门狗，见 host/effects.js） ----------
   const effects = createHostEffects({ ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
-  effects.installPetPortListener()
 
   const booted = mods.boot()
-  booted.then(() => effects.injectPetPort()).catch(() => {})
   booted.then(() => bridge.refresh())
 
   effects.installSessionWatcher()
@@ -360,11 +358,11 @@ export function apply(ctx) {
     snowluma, onebot, gatewayState, hub, getMods: () => mods,
     overview: overviewApi.overview, log, safe: effects.safe, watchdog: effects.watchdog,
   })
-  registerPurposePetRoutes({
+  registerPurposeRoutes({
     route, readBody,
     getConfig, setConfig,
     use, log,
-    purposeOverview: overviewApi.purposeOverview, petStatus: overviewApi.petStatus, redactTokens: overviewApi.redactTokens,
+    purposeOverview: overviewApi.purposeOverview, redactTokens: overviewApi.redactTokens,
   })
   registerGatewayRoutes({
     route, readBody, query,
