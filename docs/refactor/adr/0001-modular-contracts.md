@@ -1,6 +1,7 @@
 # ADR-0001：模块化核心公共契约
 
-- 状态：Proposed（实现与测试已提供，冻结仍需功能矩阵和各工作流会签）
+- 状态：Accepted（契约 v1）
+- 接受决定：当前协调人 `yaozy2020` 将本 ADR 作为执行基线接受；这不是各工作流成员的多人签字或会签记录，不据此虚构任何个人签署。
 - 契约版本：1
 - 执行分支：`refactor/modular-core`
 - 范围：纯数据契约、运行时边界校验和模块定义兼容，不接生产主链
@@ -25,7 +26,7 @@
 
 ## 2. 兼容性
 
-旧模块只需保留现有 `id/version/setup`，`api` 缺省仍为 1。新能力字段均可选，归一化返回副本，不修改调用方对象。
+旧模块必须保留现有 `id/setup`；`version` 可省略，提供时必须为非空字符串；`api` 缺省仍为 1。新能力字段均可选，归一化返回副本，不修改调用方对象。
 
 现有同名模块替换机制继续保留。`provides` 表达抽象能力，供后续 Module SDK 做依赖检查和替代实现选择；本 ADR 不引入第二套装载器。
 
@@ -51,12 +52,15 @@ NormalizedInbound 不要求核心携带或理解 OneBot 原始对象。legacy ra
 
 ## 5. 验证
 
-- `test/modular-contracts.test.js`：ChatKey、Inbound、Turn、Delivery、ContextFragment 的成功和失败边界。
-- `test/modular-module-contract.test.js`：旧定义兼容、能力声明、非法输入和当前全部内置模块兼容。
+- `test/modular-contracts.test.js`：ChatKey、Inbound、Turn、Delivery、ContextFragment 的成功和失败边界；`sender.nickname/card/role` 可选，存在时按各自字段规则校验。
+- `test/modular-module-contract.test.js`：旧定义兼容（含缺省 `version`）、能力声明、非法输入和当前全部内置模块兼容。
+- M0 最终门禁记录：主测试 1289 tests / 1285 pass / 0 fail / 4 skipped，第二次相同内容 dot reporter 运行正常退出（0）；扩展 46/46；`npm pack --dry-run` 成功，214 个文件。详细边界见 `docs/refactor/baseline.md`。
+
+本 ADR 已由当前协调人 `yaozy2020` 接受为执行基线；该记录不声称多人签字。`version` 可选、`sender` 可选字段校验及断言类型改善等兼容修复已纳入契约 v1。后续字段变化必须另立 ADR，不因本次接受而免审。
 
 ## 6. 后续工作
 
-- M0-3 完成完整功能矩阵后，各工作流会签并将状态改为 Accepted。
+- M1 是 G0 放行后的下一阶段；本 ADR 本身不表示 M1 或之后阶段已实施。
 - M2 各核心模块只能依赖本契约，不私自增加公共字段。
 - M2-F 在现有 `src/core/modules.js` 上消费模块能力声明，并补依赖解析、冲突处理、生命周期和替代实现测试。
 - M3/M4 通过适配器接入真实 DSH/OneBot，不在契约层导入宿主实现。
