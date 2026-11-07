@@ -57,7 +57,8 @@ export function createOutbox({ send, ledger, authorize, dryRun } = {}) {
     })
 
     // dryRun：记台账（cancelled + dryRun 标记）不实发——面板/测试可对账
-    if (dryRun?.()) {
+    //（全局注入 dryRun() 或按请求 dryRun: true 都算——工具类调用按次试运行用）
+    if (dryRun?.() === true || req?.dryRun === true) {
       book.mark(deliveryId, 'cancelled', { reason: 'dryRun' })
       rec.state = 'cancelled'
       return { state: 'cancelled', deliveryId, reason: 'dryRun' }
