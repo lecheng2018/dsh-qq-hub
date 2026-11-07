@@ -260,12 +260,15 @@ export function apply(ctx) {
   })
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
-  const http = createHttpKit({ ctx, prefix: PREFIX })
-  const { send, readBody, readRaw, query, answer, route } = http
+  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, log: logger.child('panel') })
+  const { send, readBody, readRaw, query, answer, route, guard } = http
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
+      // M1-A：模块前缀路由与精确路由同一道防护（Host 白名单 + 改写请求同源校验）
+      const g = guard.check(req)
+      if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''
       let qs = {}
       try {
