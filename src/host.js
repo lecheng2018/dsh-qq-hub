@@ -281,8 +281,19 @@ export function apply(ctx) {
   let pipelineAggregator = null
   let useIngressAggregator = false
   /** 开启态：旧事件构造 RFC 信封 → kernel createContext → 整链 await 走管道（终端仍是旧 hub 入口）。 */
-  function dispatchLegacyPipeline(ev) {
-    return legacyPipeline(createContext(legacyEventToEnvelope(ev), LEGACY_DRIVER_ID))
+  async function dispatchLegacyPipeline(ev) {
+    const ctx = createContext(legacyEventToEnvelope(ev), LEGACY_DRIVER_ID)
+    // gemini38 缺陷2（父信号泄漏预炸点）接线：createContext 支持第 4 参 {signal}
+    // （review A2 P1），转发闭包只有 abort/dispose 两条摘除出口；本调用点是全仓唯一
+    // 生产实调用，若将来透传长命父信号（HTTP 断开/会话超时）而这里不收尾，监听闭包
+    // 会逐事件线性累积。故在管道**真实 settle 之后**统一 dispose——必须 await 再
+    // finally（同步 finally 会在派发前就摘掉监听，父取消在飞窗口直接失效）。
+    // 现产未传父信号 → dispose 是空操作，默认/flag-off 路径行为逐字不变。
+    try {
+      return await legacyPipeline(ctx)
+    } finally {
+      ctx.dispose?.()
+    }
   }
   const onebot = createOneBotClient({
     endpoint,
