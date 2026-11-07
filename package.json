@@ -1,0 +1,66 @@
+{
+  "name": "dsh-qq-hub",
+  "version": "1.3.64",
+  "description": "把 QQ 接入 DeepSeek Harness：经 SnowLuma / OneBot v11 接私聊与群聊，支持按会话隔离的记忆、多平台链接解析与网页管理面板。",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:extensions": "npm run --prefix extensions/tieba-reader test",
+    "test:all": "npm test && npm run test:extensions",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "dsh-hub",
+    "dsh-agent",
+    "qq-hub",
+    "qq-agent",
+    "qq",
+    "onebot"
+  ],
+  "files": [
+    "extensions",
+    "src",
+    "client",
+    "personas",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/USER-MANUAL.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lecheng2018/dsh-qq-hub.git"
+  },
+  "homepage": "https://github.com/lecheng2018/dsh-qq-hub",
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
