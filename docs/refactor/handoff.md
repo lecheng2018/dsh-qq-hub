@@ -1,9 +1,12 @@
 # 模块化重构地基交接
 
-> **2026-11-08 更新：M0 已收口、G0/G1 已放行证据齐备，M1（安全止损与行为锁定）完成。**  
-> 本次执行：单人体（Controller/Integration/QA/各域 owner 一人兼任）。起点：`refactor/modular-core` @ 8115132（pristine 内容以本地 5117131 复刻）。推送方案：**新建干净分支**（见文末），不动远端 `refactor/modular-core`。
+> **2026-11-08 二次更新（分支 refactor/m2-m6）：M2~M4 代码交付完成，M5/M6 工件就绪。**  
+> 分支结构：`backup/m0-m1-complete` = M1 完成点备份（不再推进）；`refactor/m2-m6` = 全量工作分支。  
+> M2：六组纯模块（ChatKey/NormalizedInbound、SessionRegistry、TurnController、Outbox+Ledger、ContextAssembly、Module SDK）58 用例；  
+> M3：四适配器 + 511 例确定性回放（零差异）；M4：FLAG_MODULAR_CORE 新核心全链（默认关，10 用例，flag-off 逐字不变）；  
+> M5：m5-runbook.md（执行项 blocked-on-fnOS/owner，如实标记）；M6：m6-exit-plan.md（切换/清理程序就绪，blocked-on-G5+owner go）。
 
-## 1. 本次负责范围
+## 1. 本次负责范围（M0/M1 阶段原文保留，见 git 历史）
 
 工作分支：`refactor/modular-core`。未修改 main，未接生产主链。
 
