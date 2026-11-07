@@ -5,15 +5,25 @@ const RECONNECT_MIN = 2000
 const RECONNECT_MAX = 30000
 // 网关短暂不可用（SnowLuma 刚被重启、端口还没释放）时，发消息别直接丢：等一会儿再试
 const RETRY_DELAYS = [1000, 3000, 5000]
+// M1-C：发送类动作（副作用）在「请求可能已送达」的失败上不允许自动重试——
+// 只有能确证「连接都没建起来、请求没出门」的网络错误（refused/DNS/不可达）才可安全重试；
+// 超时、连接中途断开、响应丢失一律标 unknown（副作用可能已发生），由调用方按状态处理，
+// 严禁「请求失败即可安全重发」的旧假设（ADR-0001：unknown 不能自动重试）。
+const SEND_ACTIONS = new Set(['send_group_msg', 'send_private_msg', 'send_poke', 'upload_group_file', 'upload_private_file'])
+const PRE_SEND_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'])
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 export class OneBotError extends Error {
-  constructor(action, data, { transport = false } = {}) {
+  constructor(action, data, { transport = false, preSend = false } = {}) {
     super(`${action} 失败：${data?.message || data?.wording || data?.retcode || '未知错误'}`)
     this.action = action
     this.data = data
-    // transport = 根本没连上网关（可以重试）；业务错误（retcode 不为 0、超时但也可能已经发出去）不重试
+    // transport = 根本没连上网关（查询类可重试）；业务错误（retcode 不为 0、超时但也可能已经发出去）不重试
+    // preSend = 网络错误发生在请求出门之前（连接被拒/DNS/不可达），发送类动作也可安全重试
+    // unknown = 副作用可能已发生（超时/中途断开），发送类动作禁止重试，调用方按 unknown 状态处理
     this.transport = transport
+    this.preSend = preSend
+    this.unknown = false
   }
 }
 
@@ -63,7 +73,9 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
         if (ws && ws.readyState === 1) {
           try { return await callWs(action, params, timeoutMs) } catch (wsError) { throw wsError }
         }
-        throw new OneBotError(action, { message: describeNetError(error, ep) }, { transport: true })
+        const code = String(error?.cause?.code || error?.code || '')
+        // 网络层失败：标 transport + 是否「请求未出门」（refused/DNS/不可达 = 连接没建立）
+        throw new OneBotError(action, { message: describeNetError(error, ep) }, { transport: true, preSend: PRE_SEND_CODES.has(code) })
       } finally {
         clearTimeout(t)
       }
@@ -89,6 +101,17 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
         return await callOnce(action, params, timeoutMs)
       } catch (error) {
         lastError = error
+        if (error instanceof OneBotError) {
+          const businessReject = !error.transport && error.data?.retcode !== undefined && error.data.retcode !== 0
+          if (SEND_ACTIONS.has(action) && !businessReject) {
+            // M1-C：发送类动作只允许在「确证请求没出门」时重试；
+            // 超时 / 中途断开 / 响应丢失 = unknown，立即上抛，绝不自动重发
+            if (!(error.transport && error.preSend)) {
+              error.unknown = true
+              throw error
+            }
+          }
+        }
         // 业务错误（比如没权限、参数不对）重试也没用
         if (!(error instanceof OneBotError) || !error.transport) throw error
         if (i === retries) break
