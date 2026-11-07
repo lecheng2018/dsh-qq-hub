@@ -384,6 +384,8 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
    所有 JSON 状态写入均遵循写入临时文件再原子改名的规程，并在 Windows 文件系统下针对 `renameSync` 补充 4 次 `EPERM/EBUSY` 微等待重试，保障杀软扫描时的读写稳固。
 7. **凭据保护**：
    `config.json` 落盘 0600 权限；日志出口统一脱敏（token/cookie 打码）；面板接口回包不泄露网关密钥。
+8. **面板入站防护（M1-A）**：
+   `/qq-hub/api/*` 全部路由（含扩展模块接口）经过插件内建的两道防线——**Host 白名单**（回环名与 IP 字面量默认放行；DNS rebinding 的攻击域名直接 403）与**改写请求同源校验**（跨站 Origin / `Sec-Fetch-Site: cross-site` 的 POST/PUT/DELETE 一律 403，curl/脚本等非浏览器客户端不受影响）。用域名（如 fnOS 的 DDNS 名）访问面板时，在 `config.json` 的 `security.panel.allowedHosts` 登记（每请求现读、热生效）。插件层不做来源 IP 限制、不信任 `X-Forwarded-*`（防伪造）；若 DSH 前置反向代理，来源限制由宿主层负责（该部署形态未在本插件验证）。
 
 ---
 
