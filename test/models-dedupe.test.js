@@ -4,8 +4,9 @@
 //   2. 同一 provider 下 hy3 / hy3-x 显示名都叫 Hy3，是真的不同模型，要能分开。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const { dedupeModelList } = await import(`file:///${REPO}/src/core/models.js`)
 
 // 线上 /models 的真实形状（节选）

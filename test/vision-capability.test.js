@@ -4,8 +4,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const { modelVision, canSeeImages, clearVisionCache } = await import(`file:///${REPO}/src/core/llm.js`)
 
 const stub = (resolveModelInfo) => ({ llm: { resolveModelInfo }, get: () => null })
