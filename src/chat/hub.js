@@ -569,7 +569,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return kind === 'group' ? { kind: 'group', id } : kind === 'private' ? { kind: 'private', id } : null
   }
 
-  async function sendSegments(chatId, message, note, { force = false } = {}) {
+  async function sendSegments(chatId, message, note, { force = false, onResult } = {}) {
     const cfg = getConfig()
     const tgt = targetOf(chatId)
     if (!tgt) return null
@@ -633,6 +633,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (!gr.ok) {
         bump('errors')
         log.warn(`发到 ${chatId} 失败：`, gr.error?.message || '未知')
+        // M1-C：向调用方如实报告投递状态——unknown = 副作用可能已发生（超时/中途断连），
+        // 调用方（sendVoice 等）不得对该状态自动重试或改发另一形式
+        onResult?.({ ok: false, unknown: gr.error?.unknown === true, error: gr.error })
         return null
       }
       const r = gr.result
@@ -641,10 +644,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
       }
       bump('sent')
+      onResult?.({ ok: true, result: r })
       return r
     } catch (error) {
       bump('errors')
       log.warn(`发到 ${chatId} 失败：`, error.message)
+      onResult?.({ ok: false, unknown: error?.unknown === true, error })
       return null
     }
   }
@@ -684,11 +689,22 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       // QQ 客户端不支持「引用 / @ + 语音」同一条消息：这样发电脑 QQ 是空白气泡、手机 QQ 提示
       // 「该消息类型暂不支持查看」，语音也听不到（issue #103）。语音条一律单独成条，引用和 @ 只能放弃。
       if (replyId || userId) log.debug(`语音条不能带引用/@（QQ 限制），单独发：${chatId}`)
-      const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`)
+      let outcome = null
+      const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`, { onResult: (o) => { outcome = o } })
       if (r || getConfig().dryRun || !getConfig().enabled) bump('voice')
-      if (!r && getConfig().enabled && !getConfig().dryRun) throw new Error('网关没接受语音')
+      if (!r && getConfig().enabled && !getConfig().dryRun) {
+        const err = new Error('网关没接受语音')
+        err.unknown = outcome?.unknown === true
+        throw err
+      }
       return true
     } catch (error) {
+      // M1-C：unknown（超时/中途断连，语音可能已经发出去了）不改发文字——
+      // 那等于「盲发第二遍」；只有确定没发出去的失败才走文字兜底（voice 模块文档行为）
+      if (error?.unknown) {
+        log.warn(`语音发送状态未知（可能已发出），不改发文字：${chatId}`)
+        return false
+      }
       log.warn('语音没发出去，改发文字：', error.message)
       await sendText(chatId, text, replyId, undefined, userId)
       return false
@@ -781,8 +797,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       log.info(`${chatId}：发文件「${label}」（${srcLabel}）`)
       return r
     } catch (error) {
-      // 网关看不到本机路径（远程 / 容器）时，小文件改用 base64 再试
-      const canRetryBase64 = !external && size <= Math.min(FILE_BASE64_MAX, maxBytes)
+      // 网关看不到本机路径（远程 / 容器）时，小文件改用 base64 再试。
+      // M1-C：只允许在「确定没发出去」的失败上走这个约定内 fallback
+      // （网关明确拒绝 / 连接没建立起来）；unknown（超时、中途断连）可能已经
+      // 发出去了，再补一发 base64 就是重复文件。
+      const canRetryBase64 = !external && size <= Math.min(FILE_BASE64_MAX, maxBytes) && error?.unknown !== true
       if (!canRetryBase64) {
         bump('errors')
         throw new Error(`发文件失败：${error.message}`)
