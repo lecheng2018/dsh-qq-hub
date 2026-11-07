@@ -47,6 +47,14 @@ export function legacyEventToEnvelope(ev) {
   // message_sent 是 v11 的「自己发出」事件，归并进 message 大类（细分看 rawPayload.post_type）
   const type = event.post_type === 'message_sent' ? 'message' : event.post_type
   const sender = event.sender
+  // F4（2026-11-07 补评）：部分网关的私聊 message 事件不带 sender 对象，或 sender 里没有
+  // user_id，身份只在事件顶层。hub 的解析口径本就是顶层优先（src/chat/inbound.js:35
+  // `event.user_id ?? event.sender?.user_id`），host 的危险命令拦截也直接读 ev.user_id。
+  // 信封缺这层兜底时，pipeline-on 会被 acl 以「缺少发送者身份」fail-closed 整条丢弃，
+  // 而 legacy 同一份报文能正常回复——这是管道独有的行为差，故在此补齐。
+  // 兜底只对 message 大类生效：notice/poke 等事件旧核心本就不按 sender 认人，
+  // 凭空合成 sender 会改变终端与 acl 对通知类事件的既有形态判定。
+  const senderUserIdFallback = type === 'message' && event.user_id != null ? String(event.user_id) : undefined
   const segments = Array.isArray(event.message)
     ? Object.freeze(event.message.map((seg) => {
         const s = seg && typeof seg === 'object' ? seg : {}
@@ -63,12 +71,15 @@ export function legacyEventToEnvelope(ev) {
     selfId: event.self_id != null ? String(event.self_id) : undefined, // 私聊 notice 等可能不带
     sender: sender && typeof sender === 'object'
       ? Object.freeze({
-          userId: sender.user_id != null ? String(sender.user_id) : undefined,
+          userId: sender.user_id != null ? String(sender.user_id) : senderUserIdFallback, // F4：sender 缺 user_id → 顶层兜底
           nickname: sender.nickname ?? undefined,
           card: sender.card ?? undefined,
           role: sender.role ?? undefined,
         })
-      : undefined, // poke 等通知类事件没有 sender 结构
+      : senderUserIdFallback === undefined
+        ? undefined // poke 等通知类事件没有 sender 结构（不凭空合成，维持原形态判定）
+        // 无 sender 结构的 message 事件：只补身份字段，其余仍 undefined（同形，不造昵称/角色）
+        : Object.freeze({ userId: senderUserIdFallback, nickname: undefined, card: undefined, role: undefined }),
     messageId: event.message_id != null ? String(event.message_id) : undefined,
     segments,
     rawText,

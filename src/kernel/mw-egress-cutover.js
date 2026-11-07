@@ -352,6 +352,13 @@ export function createEgressFlushMiddleware(options = {}) {
       if (detail.length < 5) detail.push(`#${i + 1} old=${a ?? '-'} new=${b ?? '-'}`)
     }
     const traceId = String(ctx?.meta?.traceId ?? '-').slice(0, 8)
+    // F8（2026-11-07 补评）：零样本时「match=0 mismatch=0」不叫干净，叫没数据——现行装配下
+    // 主气泡走包装器直发分支（F1），shadow 账本常年为空，e2e SHADOW 态全绿不能读成治理生效。
+    // 明写「无队列支路样本」并升 info，别让空账本伪装成比对通过。有样本时维持原 debug 逐条计数。
+    if (match === 0 && mismatch === 0 && oldFailed === 0) {
+      safeLog(log, 'info', [`[egress-shadow] 无队列支路样本（气泡直发不在治理面）——非「比对通过」，勿据此判治理生效（补评 F1/F8）total=${summary?.total ?? 0} trace=${traceId}`])
+      return
+    }
     safeLog(log, 'debug', [`[egress-shadow] match=${match} mismatch=${mismatch} oldFailed=${oldFailed} old=${oldSends.length} new=${mine.length} total=${summary?.total ?? 0} trace=${traceId}`, detail.join(' ')])
     // 比对不一致是预期内的（清洗/分条本来就会改内容）：只计数告警，不阻断、不改发包
     if (mismatch > 0) safeLog(log, 'warn', [`[egress-shadow] 新旧通道内容有 ${mismatch} 条不一致（切权前先看清）trace=${traceId}`])
