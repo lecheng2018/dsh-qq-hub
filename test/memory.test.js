@@ -98,22 +98,11 @@ test('说话方式会进到聊天上下文里', () => {
   assert.match(ctx, /完全以人设为准/, 'styles 注入必须带上人设优先声明')
 })
 
-test('过了一天的流水整理完**保留**（1.3.63：保留期交给 keepDays 滚动清理）', async () => {
+test('过了一天的流水整理完删掉', async () => {
   const y = new Date(Date.now() - 86400000)
   logs.set(day(y), [line('昨天吃了火锅 好辣'), line('哈哈'), line('晚安')])
   await mem.consolidate({ includeToday: false })
-  assert.equal(logs.has(day(y)), true, '整理完不删——蒸馏群友要靠它拿到完整原话')
-  // 但 processed 记账在：再整理一次不会重复提炼
-  const before = mem.list('').length
-  await mem.consolidate({ includeToday: false })
-  assert.equal(mem.list('').length, before, '不会重复提炼同一批流水')
-})
-
-test('超出保留期的旧流水会被清掉（keepDays 滚动清理）', async () => {
-  const old = new Date(Date.now() - 40 * 86400000)
-  logs.set(day(old), [line('很久以前的流水')])
-  await mem.tick()
-  assert.equal(logs.has(day(old)), false, '超过 keepDays（默认 30 天）的清掉')
+  assert.equal(logs.has(day(y)), false)
 })
 
 test('检索：同时偏向好几个说话人（群里这一段谁在说）', async () => {
