@@ -347,3 +347,14 @@ fallback」一节审查超时缺失（US-003 补评），与 B 节 ACL 代号 C1
 C（单调钟不回退基线）、D（owner 收回权威判定）全部按仓内语境适配落地；与本表口径差异仅在 R3（补丁 C
 未含总量防线，review 亦自评「已知设计取舍」）。e2e 唯一联动改动：PIPELINE 态 issue #74 用例读取时机
 改为等待落线再断言（A4#4 pacing 的预期后果，断言语义未松，见 US-001 留档）。
+
+### 11.5 补评新增 roadmap（2026-11-07 US-003 补评 §五；本批只入账，不动代码语义）
+
+补评报告：`reports/2026-11-07-dsh-qq-hub-C1C-补评.md`（计数 P0=0 / P1=4 / P2=5）。其中轻量防线与观测
+诚实化已随 US-003b 落地（F4/F5/F1-a/F8，见 CHANGELOG P5「补评即修」）；下列三项涉 hub/装配语义，挂账留档：
+
+| 编号 | 内容 | 爆点引用（补评 §五） |
+|:--|:--|:--|
+| **F1-b** | 气泡入队列的**根治**方案：round-aware flush（边界 flush 延后到本轮 `turn/end` 的 deliver 全部落地），或气泡 checkpoint 入队。「终端 await 整轮」要改 hub 语义（红线不动则留待 Phase 4 事件化收编）；把 egress 认领点下沉进 onebot client 内层违背 kernel 纯库原则——两条都需 controller 拍板 | §五-6（仅针对气泡投递路径；F1-a 已把实况写进装配日志与文档） |
+| **F2** | **真实 id 回传契约**：deferred 成功形态改 `{ queued: true, deliveryId }` 并迁移消费点（hub.js:639 sentIds → 1151 repliedToBot 快路径、1089/1113-1114 quoteCache 失败缓存、1494 群 direct、profile/bili/voice 的「无回执=失败」判定），Dispatcher 不再丢弃网关真实 message_id | §五-5（与 Phase 4 同批；气泡入链前不做，F2 立即升主流量 P0） |
+| **F3** | **队列支路重试策略**：drain 被网关拒（含 299/120 限流）现为零重试静默丢且调用方已拿假成功；需在 sender 层对齐 legacy `groupQuota` 65s 跨窗重试（2026-11-04 真实事故背书），并同批补 drain 前安全闸复核（F6 同一面） | §五-5（同批第三件事） |
