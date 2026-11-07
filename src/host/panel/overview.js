@@ -1,6 +1,6 @@
 // QQ Hub · 面板聚合视图（host.js 分层拆出）
 //
-// /state 的 overview 大聚合 + 目的引擎/桌宠摘要 + 面板令牌脱敏 + 连不上网关的人话诊断。
+// /state 的 overview 大聚合 + 目的引擎摘要 + 面板令牌脱敏 + 连不上网关的人话诊断。
 // avatarInfo/AVATAR 也在这里（overview 和头像路由两处共用，保持依赖单向：路由层消费本层）。
 
 import { statSync } from 'node:fs'
@@ -59,7 +59,6 @@ export function createPanelOverview({
       qzoneSocial: use('qzone-social')?.state?.() ?? null,
       speakUp: use('speakup')?.state?.() ?? { count: 0 },
       purpose: purposeOverview(),
-      pet: petStatus(),
       memory: { lastConsolidate: memory?.lastConsolidate?.() ?? 0 },
       avatar: avatarInfo(),
       voice: { edgeInstalled: use('voice')?.edgeInstalled?.() ?? false },
@@ -72,8 +71,8 @@ export function createPanelOverview({
     }
   }
 
-  // ---------- 面板：目的机制 / 桌宠 聚合 ----------
-  // 面板令牌脱敏：任何 32 位以上的十六进制串（pet host-token、bridge token 等）只留尾 4 位。
+  // ---------- 面板：目的机制 聚合 ----------
+  // 面板令牌脱敏：任何 32 位以上的十六进制串（模块 host-token、bridge token 等）只留尾 4 位。
   const HEX_RE = /[0-9a-f]{32,}/gi
   function redactTokens(value) {
     const walk = (v) => typeof v === 'string' ? v.replace(HEX_RE, (m) => '（已脱敏…' + m.slice(-4) + '）')
@@ -98,8 +97,6 @@ export function createPanelOverview({
       enabled: ext.enabled === true,
       status: pu?.status?.() ?? null,
       count: pu?.state?.().count ?? 0,
-      carrier: ext.carrier === 'pet' ? 'pet' : 'qq',
-      petFallbackToQQ: ext.petFallbackToQQ !== false,
       quietStart: quiet.quietStart,
       quietEnd: quiet.quietEnd,
       dailyMax: Number.isFinite(sp.maxPerDay) ? sp.maxPerDay : null,
@@ -107,7 +104,6 @@ export function createPanelOverview({
       awakeTo,
     }
   }
-  const petStatus = () => redactTokens(use('pet')?.status?.() ?? null)
 
   /** 连不上 QQ 网关时，按顺序找卡在哪一步，给一句人话。 */
   async function connectionProblem() {
@@ -138,5 +134,5 @@ export function createPanelOverview({
     try { return { custom: true, at: statSync(AVATAR()).mtimeMs } } catch (error) { return { custom: false, at: 0 } }
   }
 
-  return { overview, purposeOverview, petStatus, redactTokens, connectionProblem, consented, resetConsent, avatarInfo, avatarPath: AVATAR }
+  return { overview, purposeOverview, redactTokens, connectionProblem, consented, resetConsent, avatarInfo, avatarPath: AVATAR }
 }
