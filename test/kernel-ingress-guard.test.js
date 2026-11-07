@@ -611,3 +611,80 @@ test('acl（review C1 加严三面）：缺配置拒绝、群事件缺 groupId �
   assert.equal(defaultAclDecision(msgCtx({ type: 'message', groupId: '5' }), ACL_CFG).allow, false, '缺 sender.userId → 拒')
   assert.equal(defaultAclDecision(msgCtx({ type: 'notice', sender: { userId: '1' } }), ACL_CFG).allow, true, '非 message 仍放行（处理器复检）')
 })
+
+// ===== 2026-11-07 gemini38《onion-real-issues》缺陷4 拒绝项回归锁（US-003）=====
+//
+// 指控：`await timed(...)`（mw-dedup.js:92）让出微任务 → 同 messageId 两事件并发进入时
+// 都在 `inProgress.has(key)` 读到 false ⇒ 「并发重入穿透」双重放行（P1）。
+// 对方补丁：去掉 await，keyFn 改纯同步取值。
+//
+// 裁决：**不成立**（workspace `reports/2026-11-07-gemini38-real-issues-复核裁决.md` §缺陷4）。
+// `has→add` 之间没有 await，是同步段（mw-dedup.js:97-107）；让出点在**临界区之外**，
+// 「await 前让出」≠「临界区内让出」。并发进入时 continuation 按注册序恢复，先到者
+// has→add 先完成，后到者必命中 duplicate——实测恰一条通过（同步 keyFn/异步 keyFn/
+// 缺省 dedupKeyFromInbound 三型全过）。既有 review D2 钉（本文件上方）是**串行进入式**
+// 且用缺省同步 keyFn，挡不住「未来有人在 has→add 之间真插 await」，故下面补并发式锁。
+//
+// ⚠️ 勿采纳「去 await」补丁：它在契约内（同步 keyFn）零收益，在契约外（keyFn 返回 Promise，
+// JSDoc `=> string | undefined` 本不允许，但注入面无法强制）把 `String(Promise)` 当键——
+// 万物同键 `[object Promise]`，**不同 messageId 的消息互相误拦**。裁决探针实测（缺陷4 节
+// P2 读数）：补丁 + 异步 keyFn + 两条不同消息(111/222) → `abortB='duplicate'`；
+// 现实现同场景 `passed=2` 全部正确放行。锁②即该对照的常驻版——`stats().size` 恒为 1 就是撞键指纹。
+
+test('gemini38 缺陷4 拒绝项锁①：Promise 型 keyFn 微任务并发进入同 messageId——恰 passed:1/duplicates:1', async () => {
+  const dedup = createDedupMiddleware({ keyFn: async (inbound) => `k:${inbound.messageId}` })
+  const hits = []
+  const slow = async (ctx, next) => { hits.push(ctx.inbound.messageId); await next() }
+  const pipeline = compose([dedup, slow])
+
+  const a = messageCtx({ messageId: 'G4-DUP' })
+  const b = messageCtx({ messageId: 'G4-DUP' })
+  await Promise.all([pipeline(a), pipeline(b)])   // 同一同步段并发进入（区别于 D2 钉的串行进入）
+
+  const st = dedup.stats()
+  assert.deepEqual([st.passed, st.duplicates], [1, 1], `异步 keyFn 下并发同键仍只放一条（实际 ${JSON.stringify(st)}）`)
+  assert.equal(a.signal.aborted, false, '先注册 continuation 的一方准入')
+  assert.equal(b.signal.reason, 'duplicate', '后到一方命中在飞键')
+  assert.deepEqual(hits, ['G4-DUP'], '终端只执行一次，无双重放行')
+  assert.equal(st.inProgress, 0, '处理中键已释放（D1 语义不受本场景影响）')
+})
+
+test('gemini38 缺陷4 拒绝项锁②：异步 keyFn 下不同 messageId 并发必须都放行（去 await 补丁在此被打红）', async () => {
+  const dedup = createDedupMiddleware({ keyFn: async (inbound) => `k:${inbound.messageId}` })
+  const hits = []
+  const slow = async (ctx, next) => { hits.push(ctx.inbound.messageId); await next() }
+  const pipeline = compose([dedup, slow])
+
+  const x = messageCtx({ messageId: 'G4-A' })
+  const y = messageCtx({ messageId: 'G4-B' })
+  await Promise.all([pipeline(x), pipeline(y)])
+
+  const st = dedup.stats()
+  assert.deepEqual([st.passed, st.duplicates], [2, 0], `不同消息互不撞键（实际 ${JSON.stringify(st)}）`)
+  assert.equal(x.signal.aborted, false, 'G4-A 未被误拦')
+  assert.equal(y.signal.aborted, false, 'G4-B 未被误拦')
+  assert.deepEqual(hits, ['G4-A', 'G4-B'], '两条各自下行')
+  assert.equal(st.size, 2, '两条各占一个成功缓存键（补丁版此处恒为 1：[object Promise] 万物同键）')
+})
+
+
+// 锁③（裁决文档缺陷4 节「建议加锁」的 S1/S3fix 主钉）：缺省同步 keyFn
+// （dedupKeyFromInbound，即现产接线）并发同键恰一条通过。锁①是 Promise 型变体；
+// D2 钉是串行进入式——只有本条挡得住「未来有人在 has→add 之间真插 await」的重构。
+test('gemini38 缺陷4 拒绝项锁③：缺省同步 keyFn 同一同步段并发进入同 messageId——恰 passed:1/duplicates:1', async () => {
+  const dedup = createDedupMiddleware()   // 缺省 keyFn = dedupKeyFromInbound（同步，现产口径）
+  const hits = []
+  const slow = async (ctx, next) => { hits.push(ctx.inbound.messageId); await next() }
+  const pipeline = compose([dedup, slow])
+
+  const a = messageCtx({ messageId: 'G4-SYNC' })
+  const b = messageCtx({ messageId: 'G4-SYNC' })
+  await Promise.all([pipeline(a), pipeline(b)])   // 同一同步段并发进入（区别于 D2 钉的串行进入）
+
+  const st = dedup.stats()
+  assert.deepEqual([st.passed, st.duplicates], [1, 1], `同步 keyFn 下并发同键仍只放一条（实际 ${JSON.stringify(st)}）`)
+  assert.equal(a.signal.aborted, false, '先到一方（continuation 注册序在前）准入')
+  assert.equal(b.signal.reason, 'duplicate', '后到一方命中在飞键')
+  assert.deepEqual(hits, ['G4-SYNC'], '终端只执行一次，无「二者 has 均 false」的双重放行')
+  assert.equal(st.inProgress, 0, '处理中键已释放（D1 语义不受本场景影响）')
+})

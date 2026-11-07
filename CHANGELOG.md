@@ -42,6 +42,7 @@
   包装器直发分支，不经队列/清洗/pacing/shadow 比对，队列支路（router 直答与 hub 闸门透传）才是治理面；
   F8=shadow 比对零样本时改打 info「无队列支路样本（气泡直发不在治理面）」，不再用
   「match=0 mismatch=0」把空账本冒充比对通过。**无版本号 bump**，hub.js/package.json 红线零改动。
+- **P6 gemini38 复核**（`e6eaaee` + 本提交；裁决全文见 workspace `reports/2026-11-07-gemini38-real-issues-复核裁决.md`，四行处置表见映射文档 §11.6）：外部报告 4 条指控逐条实跑探针裁决——**缺陷2（父信号 `forwardParentAbort` 监听器泄漏）成立**，`context.js` 新增 `dispose()` + `host.js` `dispatchLegacyPipeline` await 后 finally 接线（现产未传父信号，属预炸点先堵）；**缺陷3（缺省 `delayMs=0` 杀死 typing 估时）部分成立**——机制链实测全真，但这是 US-007/A4#4 三选一拍板的接线契约，拒其「兜底改 undefined」补丁（会打红 `kernel-egress-cutover.test.js:166/:458` 两条钉），改为在 `mw-egress-cutover.js` 兜底行上方加契约注释防再误报；**缺陷1（compose「越飞层提前 bubble」）与缺陷4（dedup 并发原子准入）不成立**——二次/闭包泄漏重派 `next` 实测一律 reject PipelineError（`m2Run` 恒 1、在飞层真实 settle 前管道不完成），`has→add` 是让出点在临界区外的同步段；对方两处补丁一个是不可达空改动（`currentIndex > abortBoundary`）、一个会把异步 keyFn 的键写成 `[object Promise]` 而错拦不同消息，全部拒绝，并落 6 条拒绝项回归锁（compose 锁①②③ + dedup 锁①②③，逐条经变异测试自证非空锁）。**无版本号 bump**，hub.js/package.json 红线零改动。
 
 **回滚说明**：unset 四个开关重启即回到重构前行为（演练已实证 flag-off→on→off 三进程下旧通道发送调用序列首末全等、开启态外发文本语义一致）。灰度顺序建议：`FLAG_USE_PIPELINE`（live）→ 需要观测时 `FLAG_EGRESS_SHADOW` → `FLAG_INGRESS_AGGREGATOR`/`NEW_MEMORY_PIPELINE` 待终局条件成熟再开。
 
