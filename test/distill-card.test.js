@@ -1,8 +1,8 @@
-// 蒸馏→语感人设卡（1.3.63）：学成群友后自动生成「底卡 + 借用段」的群专属人设卡，
-// 把语感搬进系统提示词的最高优先级层；主人手动指定过人设的群绝不抢槽位。
+// 蒸馏→语感人设卡 v2 测试：渲染统一走 renderProfile(mode='card')；借用段带 distill:v2 标记，
+// 刷新只替换标记块（主人手改保留）；接管判定与底卡保护沿袭 v1。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -12,19 +12,24 @@ process.env.AURABOT_DATA_DIR = dir
 mkdirSync(join(dir, 'personas'), { recursive: true })
 writeFileSync(join(dir, 'personas', 'dafeiyu.md'), '---\nname: 大肥鱼\ntags: []\n---\n\n你是大肥鱼。\n\n【怎么说话：像人在打字】\n短句对仗。')
 const dc = await import('../src/persona/distill-card.js')
-const { distillCardId, renderStyleBlock, buildDerivedBody, takeoverDecision, styleEntries, refreshDistillCard } = dc
+const { distillCardId, renderStyleBlock, buildDerivedBody, takeoverDecision, styleEntries, refreshDistillCard, DISTILL_MARK_BEGIN, DISTILL_MARK_END, stripDistillBlock } = dc
 
 const PROFILE = {
-  exchanges: ['问：「号全封了吗」\n答：「空了好几天，我没看呢」'],
-  syntax: ['长句靠逗号串，不分点'], catchphrases: ['斩（随口催办时）', '我瞅瞅（答应看一眼）'],
-  rhetoric: ['被封号就自嘲'], never: ['从不说感谢、请问'], persona: ['热心答疑，谁问都回'],
+  exchanges: [{ text: '问：「号全封了吗」\n答：「空了好几天，我没看呢」', score: 1 }],
+  syntax: [{ text: '长句靠逗号串，不分点', score: 0.8 }],
+  catchphrases: [{ text: '斩（随口催办时）', score: 0.9 }, { text: '我瞅瞅（答应看一眼）', score: 0.8 }],
+  rhetoric: [{ text: '被封号就自嘲', score: 0.7 }],
+  never: [{ text: '从不说感谢、请问', score: 0.9 }],
+  persona: [{ text: '热心答疑，谁问都回', score: 0.8 }],
   // 旧字段也塞一点，验证兼容
-  samples: ['毕竟是别人的卡，对你肯定没影响啊'], style: [], tone: [], avoid: [],
+  samples: [{ text: '毕竟是别人的卡，对你肯定没影响啊', score: 0.6 }], style: [], tone: [], avoid: [],
 }
 const ENTRIES = styleEntries([{ gid: '249729644', uid: '1040489623', name: '炙心', profile: PROFILE }])
 
-test('借用段（新模板）：对话对在最前、口头禅带语境、never/锚齐备、边界收尾', () => {
+test('借用段（v2 统一渲染）：对话对在最前、口头禅带语境、never/锚齐备、标记包围、边界收尾', () => {
   const block = renderStyleBlock(ENTRIES)
+  assert.ok(block.includes(DISTILL_MARK_BEGIN), '标记开头')
+  assert.ok(block.includes(DISTILL_MARK_END), '标记结尾')
   assert.match(block, /【语感·借自「炙心」】/)
   assert.match(block, /我在这个群接话就照着他的应对方式来（学应对方式，聊天内容绝不照搬）：\n- 问：「号全封了吗」/, '对话对是首要块')
   assert.match(block, /口头禅：斩（随口催办时）；我瞅瞅（答应看一眼）/, '口头禅带使用语境')
@@ -32,18 +37,25 @@ test('借用段（新模板）：对话对在最前、口头禅带语境、never
   assert.match(block, /修辞招式：被封号就自嘲/)
   assert.match(block, /我不用他绝不会用的东西：从不说感谢、请问/, 'never 词表')
   assert.match(block, /我借他神韵的地方：热心答疑，谁问都回/, '性格锚')
-  assert.match(block, /旧原话|校准节奏|毕竟是别人的卡/, '旧 samples 兼容渲染')
+  assert.match(block, /毕竟是别人的卡，对你肯定没影响啊/, '旧 samples 兼容渲染')
   assert.match(block, /只借说话方式，不借身份：我不是炙心，不自称他、不替他表态、不提他个人隐私/, '边界随段走')
   assert.equal(renderStyleBlock([]), '')
   assert.equal(renderStyleBlock([{ name: '甲', profile: {} }]), '', '空画像不出段')
 })
 
-test('派生卡 = 底卡正文 + 借用段；底卡本体一个字不动', () => {
+test('派生卡 = 基座正文 + 标记借用段；底卡本体一个字不动', () => {
   const body = buildDerivedBody('你是大肥鱼。\n\n【怎么说话：像人在打字】\n短句对仗。', ENTRIES)
-  assert.ok(body.startsWith('你是大肥鱼。'), '底卡原文在前且原样')
+  assert.ok(body.startsWith('你是大肥鱼。'), '基座原文在前且原样')
   assert.match(body, /【从群友身上借来的说话方式】/)
   const base = readFileSync(join(dir, 'personas', 'dafeiyu.md'), 'utf8')
   assert.doesNotMatch(base, /借来的说话方式/, '底卡文件没被改写')
+})
+
+test('stripDistillBlock：取标记前的基座；没有标记返回 null', () => {
+  const body = buildDerivedBody('基座正文', ENTRIES)
+  assert.equal(stripDistillBlock(body), '基座正文')
+  assert.equal(stripDistillBlock('没有标记的卡'), null)
+  assert.equal(stripDistillBlock(''), null)
 })
 
 test('接管判定：没指定过才接管；手动指定过（哪怕和默认撞值）绝不抢', () => {
@@ -59,7 +71,7 @@ test('接管判定：没指定过才接管；手动指定过（哪怕和默认�
   assert.equal(takeoverDecision(already, '249729644', cardId).takeover, true, '槽位已经是派生卡 → 允许更新自己')
 })
 
-test('refresh 端到端：生成卡文件（front-matter 带自动生成标签与借用对象名）', () => {
+test('refresh 端到端：生成卡文件（front-matter 带自动生成标签与借用对象名、标记段在卡里）', () => {
   const cfg = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: {} } }
   const r = refreshDistillCard({ gid: '249729644', entries: ENTRIES, cfg, log: { info: () => {} } })
   assert.equal(r.ok, true)
@@ -69,10 +81,28 @@ test('refresh 端到端：生成卡文件（front-matter 带自动生成标签�
   assert.match(raw, /tags: \[自动生成\]/)
   assert.match(raw, /短句对仗/)
   assert.match(raw, /我瞅瞅（答应看一眼）/)
+  assert.ok(raw.includes(DISTILL_MARK_BEGIN), '标记写进卡文件')
   // 无画像时明确拒绝
   const r2 = refreshDistillCard({ gid: '999', entries: [], cfg, log: { info: () => {} } })
   assert.equal(r2.ok, false)
   assert.match(r2.message, /还没有学成的画像/)
+})
+
+test('增量刷新：主人手改派生卡后，刷新保留手改、只更新标记段', () => {
+  const cardFile = join(dir, 'personas', 'persona-语感-249729644.md')
+  const raw = readFileSync(cardFile, 'utf8')
+  const handEdited = raw.replace('你是大肥鱼。', '你是大肥鱼，但这个群里请更收敛一点（主人手改）。')
+  writeFileSync(cardFile, handEdited, 'utf8')
+  // 画像变了（口头禅少一条）
+  const updated = styleEntries([{ gid: '249729644', uid: '1040489623', name: '炙心', profile: { ...PROFILE, catchphrases: [{ text: '斩（随口催办时）', score: 0.9 }] } }])
+  const cfg = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: { '249729644': distillCardId('249729644') } } }
+  const r = refreshDistillCard({ gid: '249729644', entries: updated, cfg, log: { info: () => {} } })
+  assert.equal(r.ok, true)
+  const raw2 = readFileSync(cardFile, 'utf8')
+  assert.match(raw2, /主人手改/, '手改内容没被冲掉')
+  assert.doesNotMatch(raw2, /我瞅瞅/, '更新后的画像生效（删掉的口头禅不再出现）')
+  assert.match(raw2, /斩（随口催办时）/)
+  assert.equal((raw2.match(new RegExp(DISTILL_MARK_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1, '标记只有一对')
 })
 
 test('接线：学习成功自动刷卡 + 路由 + setConfig 只在接管时发生', () => {

@@ -2620,8 +2620,10 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           await load(); onChanged && onChanged()
         } finally { setBusy('') }
       }
+      // v2：条目可能是字符串（旧存量）或 {text, score, evidence}；高置信（≥0.8）标★
+      const texts = (arr) => (arr || []).map((x) => (x && typeof x === 'object') ? (x.score >= 0.8 ? '★' + x.text : x.text) : x)
       const line = (label, arr) => (arr && arr.length)
-        ? h('div', { style: { marginBottom: 3 } }, h('span', { className: 'ab-muted ab-small' }, label + '：'), h('span', { className: 'ab-small' }, arr.join('；')))
+        ? h('div', { style: { marginBottom: 3 } }, h('span', { className: 'ab-muted ab-small' }, label + '：'), h('span', { className: 'ab-small' }, texts(arr).join('；')))
         : null
       return h('div', null,
         h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 6, flexWrap: 'wrap' } },
@@ -2655,7 +2657,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
                       (t.profile.samples || []).length
                         ? h('div', { style: { marginBottom: 3 } },
                             h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
-                            h('span', { className: 'ab-small' }, t.profile.samples.map((x) => '「' + x + '」').join(' ')))
+                            h('span', { className: 'ab-small' }, t.profile.samples.map((x) => '「' + ((x && typeof x === 'object') ? x.text : x) + '」').join(' ')))
                         : null,
                       line('说话方式', t.profile.style),
                       line('性格', t.profile.persona),

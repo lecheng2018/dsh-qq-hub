@@ -16,7 +16,7 @@ import { askModel } from '../core/llm.js'
 import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
-import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
+import { collectMemberLines, enoughEvidence, buildExtractPrompt, buildVerifyPrompt, buildReflectPrompt, parseExtracted, applyVerdicts, parseReflections, mergeProfile, renderProfile, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
@@ -591,6 +591,57 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   function distillOf (gid, uid) {
     return (load().distill || {})[distillKey(gid, uid)] || null
   }
+
+  /**
+   * v2 三段流水线执行器（Extract 提取 → Verify 校验 → [可选] Reflect 反思 → 评分制合并）。
+   * 两个学习入口（历史学习 / 日常整理）共用，保证行为一致。
+   * @returns {{ok:boolean, reason?:string, profile?:object}} profile 是 Verify 通过后的 v2 条目集
+   */
+  async function runDistillPipeline ({ name, uid, memberLines, context = [], others = [], old = null, baseBody = '', reflect = false, tag = '蒸馏群友' }) {
+    const cfg = getConfig()
+    // ① Extract：只找证据，每条必须带原话引用
+    const p1 = buildExtractPrompt({ name, uid, memberLines, context, others })
+    let raw1 = ''
+    try {
+      raw1 = await askModel(dsh, { cfg, system: p1.system, text: p1.text, maxTokens: 4000, temperature: 0.2, reasoningEffort: 'none' })
+    } catch (error) {
+      return { ok: false, reason: '提炼失败：' + error.message }
+    }
+    const ex = parseExtracted(raw1)
+    if (!ex.ok) {
+      log.info(`${tag}：${name} ${ex.reason}，原始前 120 字：`, String(raw1).slice(0, 120))
+      return { ok: false, reason: ex.reason }
+    }
+    // ② Verify：独立裁判逐条打分，漏判从严淘汰
+    const p2 = buildVerifyPrompt({ name, memberLines, extracted: ex.fields, old, baseBody })
+    let raw2 = ''
+    try {
+      raw2 = await askModel(dsh, { cfg, system: p2.system, text: p2.text, maxTokens: 2000, temperature: 0, reasoningEffort: 'none' })
+    } catch (error) {
+      return { ok: false, reason: '校验失败：' + error.message }
+    }
+    const vd = applyVerdicts(ex.fields, raw2)
+    if (!vd.ok) {
+      log.info(`${tag}：${name} 校验后全部淘汰（裁判从严），原始前 120 字：`, String(raw2).slice(0, 120))
+      return { ok: false, reason: vd.reason }
+    }
+    // ③ Reflect（低频）：高阶概括并进 persona
+    if (reflect) {
+      try {
+        const p3 = buildReflectPrompt({ name, profile: vd.fields })
+        const raw3 = await askModel(dsh, { cfg, system: p3.system, text: p3.text, maxTokens: 800, temperature: 0.3, reasoningEffort: 'none' })
+        const refl = parseReflections(raw3)
+        if (refl.length) {
+          vd.fields.persona = [...refl, ...(vd.fields.persona || [])].slice(0, 4)
+          log.info(`${tag}：${name} 反思产出 ${refl.length} 条高阶锚点`)
+        }
+      } catch (error) {
+        log.debug(`${tag}：${name} 反思跳过：`, error.message) // 反思是增益步骤，失败不阻断
+      }
+    }
+    return { ok: true, profile: vd.fields }
+  }
+
   function putDistill (gid, uid, profile, evidenceCount) {
     const s = load()
     s.distill = s.distill || {}
@@ -656,31 +707,19 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     }
     const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)
-    const { system, text } = buildDistillPrompt({
+    // v2 三段流水线：Extract（找证据）→ Verify（独立裁判）→ 评分制合并；历史学习证据足，触发反思
+    const r = await runDistillPipeline({
       name: name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u,
       uid: u,
       memberLines: mine,
       context: dedupConvo(hist.lines).slice(-80),
       others,
       old,
+      reflect: true,
+      tag: '蒸馏群友（历史）',
     })
-    let out = ''
-    try {
-      // 1600 token：800 会截断五段 JSON（截了 parse 就失败，之前没日志根本看不出）
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
-    } catch (error) {
-      return { ok: false, message: '提炼失败：' + error.message }
-    }
-    const profile = parseDistillProfile(out)
-    if (!profile) {
-      log.warn(`蒸馏群友（历史）：${t0name} 回包解析失败，原始前 200 字：`, String(out).slice(0, 200))
-      return { ok: false, message: '模型回包没解析成 JSON（原因已记日志，可再点一次重试）' }
-    }
-    if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
-      log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
-      return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }
-    }
-    const saved = putDistill(g, u, profile, mine.length)
+    if (!r.ok) return { ok: false, message: r.reason }
+    const saved = putDistill(g, u, r.profile, mine.length)
     log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
     try { onDistillLearned && await onDistillLearned(g) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
@@ -1216,6 +1255,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
    * 每天整理时对每个目标跑一次（每群每人一次调用）；他当天说得太少就不学（学出来也是瞎猜）。
    * 学的是「怎么说话」，不是「冒充谁」——注入文本里带硬边界。
    */
+  const learnCounter = {} // v2：每目标学习次数计数，驱动 Reflect 低频触发
   async function learnDistill (day) {
     const cfg = getConfig()
     if (cfg.memory?.distill === false) return
@@ -1246,26 +1286,21 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         .slice(-60)
         .map((l) => `${l.who}：${String(l.text).slice(0, 100)}`)
       const old = distillOf(t.gid, t.uid)
-      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, uid: t.uid, memberLines: mine, context, others, old })
-      let out = ''
-      try {
-        out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
-      } catch (error) {
-        log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
+      // v2 三段流水线：Extract → Verify → 评分制合并；反思按计数器每 5 次学习触发一次
+      learnCounter[tag] = (learnCounter[tag] || 0) + 1
+      const r = await runDistillPipeline({
+        name: t.name || t.uid, uid: t.uid, memberLines: mine, context, others, old,
+        reflect: learnCounter[tag] % 5 === 0,
+        tag: '蒸馏群友',
+      })
+      if (!r.ok) {
+        log.info(`蒸馏群友：${t.name || t.uid} ${r.reason}`)
         continue
       }
-      const profile = parseDistillProfile(out)
-      if (!profile) {
-        log.warn(`蒸馏群友：${t.name || t.uid} 回包解析失败，前 200 字：`, String(out).slice(0, 200))
-        continue
-      }
-      if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
-        log.info(`蒸馏群友：${t.name || t.uid} 模型判空画像，前 120 字：`, String(out).slice(0, 120))
-        continue
-      }
-      putDistill(t.gid, t.uid, profile, mine.length)
+      putDistill(t.gid, t.uid, r.profile, mine.length)
       doneToday.add(tag)
-      log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(profile.samples || []).length} 条原话）`)
+      const learned = r.profile
+      log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(learned.exchanges || []).length} 组对话对）`)
       try { onDistillLearned && await onDistillLearned(String(t.gid)) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     }
     if (doneToday.size) {
