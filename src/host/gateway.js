@@ -15,6 +15,7 @@ import { dataDir } from '../core/store.js'
 export function createGateway({
   getConfig, snowluma, endpoint, logger, log,
   getHub, getMods, getDangerGuard,
+  getModularCore, // M4：旗开时补收也走新核心（同一入站契约）
   dispatch, // (ev, kind) => Promise；kind 'message'|'poke'，由组合根决定走管道还是遗留 hub
 }) {
   let onebotState = 'stopped'
@@ -63,7 +64,9 @@ export function createGateway({
             // 投喂 6 小时前的旧消息只会制造迟到副作用（M1-B 验收线），故整个跳过。
             // 新核心 M2-A 起由 NormalizedInbound.source + 时间戳承接「落上下文」语义。
             if (it.tooOld) { log.debug(`[backfill] 群 ${gid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
-            await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+            const mc = getModularCore?.()
+            if (mc) await mc.dispatchBackfill(it.event)
+            else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
           log.debug(`[backfill] 拉取群 ${gid} 历史失败:`, e.message)
@@ -90,7 +93,9 @@ export function createGateway({
             seenIds.add(`private:${uid}`, it.event.message_id)
             // M1-B：同上，过旧消息不唤醒
             if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
-            await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+            const mc = getModularCore?.()
+            if (mc) await mc.dispatchBackfill(it.event)
+            else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
           log.debug(`[backfill] 拉取私聊 ${uid} 历史失败:`, e.message)
