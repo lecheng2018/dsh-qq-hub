@@ -133,7 +133,9 @@ class OutputReplyQueueImpl {
  * @param {string} [parentTraceId] 上游透传的链路 id；缺省时新起一条 trace
  * @param {{ signal?: AbortSignal }} [options] 上游取消信号透传（review A2 P1：
  *   HTTP 断开/任务超时必须能取消本轮 Context）；父信号已 abort 则新 ctx 出生即 abort，
- *   父信号后续 abort 会转发进来；本地 abort 时卸载转发监听（不留闭包在长命信号上）。
+ *   父信号后续 abort 会转发进来；本地 abort 或 ctx.dispose() 时卸载转发监听
+ *   （不留闭包在长命信号上——review A2 P1 + gemini38 缺陷2：正常完成路径也必须
+ *   有 dispose 这条收尾出口，否则不 abort 就摘不掉）。
  * @returns {import('./types.js').Context}
  */
 export function createContext(envelope, driverId, parentTraceId, options = {}) {
@@ -158,11 +160,28 @@ export function createContext(envelope, driverId, parentTraceId, options = {}) {
       return abortController.signal
     },
     abort(reason) {
-      if (parentSignal) {
-        try { parentSignal.removeEventListener('abort', forwardParentAbort) } catch { /* 非标准信号容忍 */ }
-      }
+      detachParentAbort()
       abortController.abort(reason)
     },
+    /**
+     * 生命周期终点必须调用（装配层在管道 flush 的 finally 里收尾）：摘除注册在父
+     * 信号上的 forwardParentAbort 转发闭包。**gemini38 缺陷2 实测**：×100 正常完成
+     * （不 abort）的请求会在长命父信号上残留 100 个监听闭包（add=100/remove=0），
+     * 摘除原本只挂在 abort() 路径上 → 不取消就永不回收（HTTP 断开/任务超时会话
+     * 信号这类长命父信号会线性累积）。
+     * 语义边界：只摘父监听，**不** abort 本地 signal、不动 reply/state/flush 状态，
+     * 对 dispatcher、cutover、aggregator 既有语义零影响；无父信号时是空操作；
+     * 重复调用无害（幂等，removeEventListener 本身对未注册闭包是 no-op）。
+     */
+    dispose() {
+      detachParentAbort()
+    },
+  }
+
+  /** 卸载父信号上的转发闭包（abort/dispose 共用）；非标准信号容忍。 */
+  function detachParentAbort() {
+    if (!parentSignal) return
+    try { parentSignal.removeEventListener('abort', forwardParentAbort) } catch { /* 非标准信号容忍 */ }
   }
 
   function forwardParentAbort() {
