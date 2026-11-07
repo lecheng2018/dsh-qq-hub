@@ -13,7 +13,10 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:extensions": "npm run --prefix extensions/tieba-reader test",
+    "test:all": "npm test && npm run test:extensions",
+    "pack:check": "npm pack --dry-run"
   },
   "dsh": {
     "bundle": {
