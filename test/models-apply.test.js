@@ -9,7 +9,9 @@ import { join } from 'node:path'
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
-const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
+// host.js 分层拆分后：/save 的模型联动在 panel/routes-config.js，/models/apply 路由在 panel/routes-misc.js
+const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
+const MODELS = readFileSync(join(ROOT, 'src/host/panel/routes-misc.js'), 'utf8')
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 
 test('hub 暴露 syncAllModels，能遍历所有已有会话切模型', () => {
@@ -29,11 +31,11 @@ test('保存模型配置后自动同步（不用主人手动点）', () => {
 })
 
 test('面板有「立刻应用到所有会话」按钮和路由', () => {
-  assert.match(HOST, /route\('\/models\/apply'/, '要有路由')
+  assert.match(MODELS, /route\('\/models\/apply'/, '要有路由')
   assert.match(CLIENT, /立刻应用到所有会话/, '要有按钮')
   assert.match(CLIENT, /models\/apply/, '按钮要调路由')
 })
 
 test('失败时消息不能还说「都和配置一致」', () => {
-  assert.match(HOST, /r\.failed \? |if \(r\.failed\) parts\.push/, '要如实报失败数')
+  assert.match(MODELS, /r\.failed \? |if \(r\.failed\) parts\.push/, '要如实报失败数')
 })
