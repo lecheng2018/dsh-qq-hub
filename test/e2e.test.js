@@ -926,7 +926,7 @@ test('换头像：主人发来的图也能用，不能被「她的画作」抢�
   assert.deepEqual(sent, png, '换上去的是主人发的那张图，不是她自己的画')
 })
 
-test('每日整理：往日的流水整理后保留（超期才清），今天的保留；空间日记进了记忆库', async () => {
+test('每日整理：往日的临时流水整理后清空，今天的保留；空间日记进了记忆库', async () => {
   const { existsSync } = await import('node:fs')
   const dir = join(dataDir, 'chatlog')
   mkdirSync(dir, { recursive: true })
@@ -934,7 +934,7 @@ test('每日整理：往日的流水整理后保留（超期才清），今天�
   writeFileSync(old, ['你好', '我喜欢吃辣', '周末一起打游戏吧', '好呀'].map((t, i) => JSON.stringify({ t: i, chatId: 'private:' + OWNER, who: i % 2 ? 'bot' : 'xiaoming', text: t })).join('\n') + '\n')
   const r = (await fake.call('/memory/extract', {})).json()
   assert.equal(r.ok, true, r.message)
-  assert.equal(existsSync(old), true, '往日的流水整理完保留（1.3.63：蒸馏群友要靠完整流水；超期才由 keepDays 清）')
+  assert.equal(existsSync(old), false, '往日的流水被清空')
   const today = new Date()
   const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
   assert.equal(existsSync(join(dir, key + '.jsonl')), true, '今天的流水保留')
