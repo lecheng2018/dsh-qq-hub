@@ -63,7 +63,7 @@ export interface ContextFragment {
 
 export declare function createChatKey(kind: ChatKind, id: string | number): ChatKey
 export declare function parseChatKey(value: string): Readonly<{ kind: ChatKind; id: string }>
-export declare function assertNormalizedInbound<T>(value: T): T
-export declare function assertTurn<T>(value: T): T
-export declare function assertDelivery<T>(value: T): T
-export declare function assertContextFragment<T>(value: T): T
+export declare function assertNormalizedInbound(value: unknown): NormalizedInbound
+export declare function assertTurn(value: unknown): Turn
+export declare function assertDelivery(value: unknown): Delivery
+export declare function assertContextFragment(value: unknown): ContextFragment

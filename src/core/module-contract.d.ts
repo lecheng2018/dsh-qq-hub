@@ -1,7 +1,7 @@
-export interface ModuleContract {
+export interface ModuleContract<TApi = any> {
   readonly id: string
   readonly name?: string
-  readonly version: string
+  readonly version?: string
   readonly api?: number
   readonly provides?: ReadonlyArray<string>
   readonly requires?: ReadonlyArray<string>
@@ -10,11 +10,11 @@ export interface ModuleContract {
   readonly requiresGUI?: boolean
   readonly configVersion?: number
   readonly storageVersion?: number
-  readonly setup: (api: unknown) => unknown
+  readonly setup: (api: TApi) => unknown
   readonly [key: string]: unknown
 }
 
-export interface NormalizedModuleContract extends ModuleContract {
+export interface NormalizedModuleContract<TApi = any> extends ModuleContract<TApi> {
   readonly api: number
   readonly configVersion: number
   readonly storageVersion: number
@@ -23,4 +23,4 @@ export interface NormalizedModuleContract extends ModuleContract {
   readonly conflicts: string[]
 }
 
-export declare function validateModuleContract(definition: ModuleContract): NormalizedModuleContract
+export declare function validateModuleContract<TApi = any>(definition: ModuleContract<TApi>): NormalizedModuleContract<TApi>

@@ -24,7 +24,7 @@ export function validateModuleContract(definition) {
   if (typeof definition.id !== 'string' || !ID_RE.test(definition.id)) {
     throw new TypeError(`模块 id「${definition.id ?? ''}」不符合现有模块 ID 规则`)
   }
-  if (typeof definition.version !== 'string' || definition.version.length === 0) {
+  if (definition.version !== undefined && (typeof definition.version !== 'string' || definition.version.length === 0)) {
     throw new TypeError(`模块 ${definition.id} 的 version 必须是非空字符串`)
   }
   if (typeof definition.setup !== 'function') throw new TypeError(`模块 ${definition.id} 缺少 setup(api)`)
