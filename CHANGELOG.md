@@ -20,6 +20,19 @@
 - **US-010** 人设与记忆装配中间件（0c03f88）：mw-persona 预取快照 + mw-memory 检索写 ctx.state，contextProviders 接管层按 state 供给；`NEW_MEMORY_PIPELINE` 默认关（缺口 A：其余 api.context 模块贡献；B：群 speakersOf 档案拿不到 sessionId——映射文档 §8 留档）。
 - **US-011** 命令路由终端中间件（47083db）：16 内置主人命令 router 直答经 ctx.reply；ext 模块命令/混非文本段/提问等待中/非主人 → 透传 legacy（覆盖矩阵与 handler 抛错回滚语义留档）。
 - **US-012** 绞杀者收口（本提交）：开关全清单与统一解析口径（`true/1` 才算真、乱值回默认，四开关同规）；限流旋钮配置化 `QQHUB_RL_CAPACITY` / `QQHUB_RL_REFILL_PER_SEC`（缺省 30/5，非法值回默认，改 env 需重启）；README 拓扑简图 + 开关表；映射文档终版落地状态表 + hub.js 存活职责清单（**Phase 4 终局——hub.js 归零、legacy 物理删除——不在本期**，PRD 边界）；三态冒烟与回滚演练实证。
+- **P5 review 修复批**（`a15f53e`，外部双模型 review 逐项回应，处置清单见映射文档 §11）：**P0×3**——
+  ① 聚合执行暂停：mw-aggregator 退化为逐事件透传（follower 物理丢失、lead 取消连带销毁随吞并语义下线而消失，
+  合流仍由 hub 内部 pending 提供）；② 去重拆「处理中键/成功缓存」两层（首次失败后重传可重新准入，在飞键不进
+  LRU 逐出）；③ Dispatcher 原子领批（快照+clear 在任何 await 之前，drain 期间新入队条目归下一批，不再被结尾
+  clear() 连锅吞掉）。**P1/P2 全量硬化**：compose 监听器卸载+预 abort 不注册+每层 next 资格位+PipelineError.index
+  纠偏；context queue 冻结快照/enqueue 深冻结/父取消信号透传/restoreFront+rollbackTo 正规 API；ctx-store
+  runWithContext(null) 显式退出+WeakSet 收口标记；dispatcher 跨 drain pacing（单调钟）/同优先级 FIFO/
+  canonicalJSON 对齐 JSON 出站语义/jitter 二次 clamp；cutover 模式构造校验/异常轮清队收口/上传回退白名单/
+  shadow 账本带状态；loader isDocker 三态（未知≠安全）+QQHUB_RUNTIME_ENV+requiresGUI 政策位+预检补全；
+  ratelimit 单调钟+回拨基线不回退+capacity≥1；ACL owner 直通收回 checkAllowed 权威（入口层自此可独立作权限边界）。
+  **行为变化**：`FLAG_INGRESS_AGGREGATOR=true` 现在的含义是「挂载暂停透传版」——装载即 warn「聚合执行暂停」，
+  不吞并不合流（此前为开旗即开窗合流；灰度默认关的口径不变）。**无版本号 bump**：仍为分支未发版条目，
+  hub.js/package.json 红线零改动。
 
 **回滚说明**：unset 四个开关重启即回到重构前行为（演练已实证 flag-off→on→off 三进程下旧通道发送调用序列首末全等、开启态外发文本语义一致）。灰度顺序建议：`FLAG_USE_PIPELINE`（live）→ 需要观测时 `FLAG_EGRESS_SHADOW` → `FLAG_INGRESS_AGGREGATOR`/`NEW_MEMORY_PIPELINE` 待终局条件成熟再开。
 
