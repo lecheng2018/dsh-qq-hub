@@ -1,11 +1,11 @@
 # DSH-QQ-Hub · 住在 QQ 里的智能伙伴与 DSH Agent 交互终端
 
 [![GitHub Release](https://img.shields.io/github/v/release/lecheng2018/dsh-qq-hub?color=blue&logo=github)](https://github.com/lecheng2018/dsh-qq-hub/releases)
-[![Tests](https://img.shields.io/badge/tests-746%20passed-success?logo=node.js)](https://github.com/lecheng2018/dsh-qq-hub/actions)
+[![Tests](https://img.shields.io/badge/tests-1425%20passed-success?logo=node.js)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DSH-Plugin-0969da)](https://github.com/deepseek-ai)
 
-**DSH-QQ-Hub** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。
+**DSH-QQ-Hub** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。当前版本 **v1.3.64**（RFC-0001 洋葱内核重构已并入主干，见下文🧅）。
 
 它兼具 **顶尖的拟人化社交聊天伙伴** 与 **强大的生产力 Agent 远程交互终端** 双重能力：
 - **拟人伙伴**：有性格、有心情、懂记忆。看图、听发语音、发表情包、RVC 翻唱变声、写空间日记、刷 B 站/抖音/小黑盒，以及常驻屏幕边缘的互动桌面宠物。
@@ -18,43 +18,23 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 > [!NOTE]
 > ### 🧬 项目血缘与独立演进说明
 > 
-> 本项目最初脱胎于优秀的上游开源项目 **[aureth-labs/dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)**（社区俗称“大肥鱼”），继承了其灵动可爱的拟人化社交设计、微内核扩展机制与多模态交互底子。
+> 本项目最初脱胎于优秀的上游开源项目 **[aureth-labs/dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)**（社区俗称"大肥鱼"），继承了其灵动可爱的拟人化社交设计、微内核扩展机制与多模态交互底子。
 > 
 > **为什么要独立发展？**  
-> 上游原版的核心定位是“纯轻量陪伴型社交聊天机器人”（注重日常闲聊、空间动态、桌面宠物等）；  
-> 而我们在实际高频使用中，将其深度重构并演进为一个**兼具生产力派活的工业级 DSH QQ Agent 综合终端**——加入了**多选交互提问状态机 (`ask_user_question`)、高危工具审批流 (`approval/request`)、离线断线消息补收 (`backfill`)、全功能通用定时调度器 (`scheduler` / `/remind`)、TOTP 手机动态口令权限锁、10 大平台内容无水印解析 (`multi-parser`)**，并全面完成了全量代码审计与 16 项高/中危缺陷加固。  
+> 上游原版的核心定位是"纯轻量陪伴型社交聊天机器人"（注重日常闲聊、空间动态、桌面宠物等）；  
+> 而我们在实际高频使用中，将其深度重构并演进为一个**兼具生产力派活的工业级 DSH QQ Agent 综合终端**——加入了**多选交互提问状态机 (`ask_user_question`)、高危工具审批流 (`approval/request`)、离线断线消息补收 (`backfill`)、全功能通用定时调度器 (`scheduler` / `/remind`)、TOTP 手机动态口令权限锁、10 大平台内容无水印解析 (`multi-parser`)**，并全面完成了全量代码审计与高/中危缺陷加固。  
 > 
-> 功能边界与底层架构已实质性超越了原版闲聊机器人的设计初衷，上游不再适合承载如此重度的生产力与自动化代码。为了更自主地进行技术演进、保障独立的 CI/CD 自动化发版，并让社区更清晰地辨识其“QQ 生产力中枢”的定位，本项目正式独立为 **DSH-QQ-Hub**。  
+> 功能边界与底层架构已实质性超越了原版闲聊机器人的设计初衷，上游不再适合承载如此重度的生产力与自动化代码。为了更自主地进行技术演进、保障独立的 CI/CD 自动化发版，并让社区更清晰地辨识其"QQ 生产力中枢"的定位，本项目正式独立为 **DSH-QQ-Hub**。  
 > 
 > 我们由衷感谢原作者团队在 DSH 插件机制与陪伴玩法上的开拓性探索！
 
 ---
 
-## 📌 本次修改清单（v1.2.0 重构、加固与文档完善）
+## 📦 版本与发版流程
 
-本版本对项目进行了全面的生产力升级、架构解耦、安全审计与文档重构：
-
-### 1. 核心 Agent 交互与生产力闭环
-- **交互式多选提问系统 (`src/chat/questions.js`)**：接入 DSH `userQuestions` 抽象。模型触发澄清提问时，格式化为带 `A./B./C.` 编号的 QQ 卡片，支持字母、连写（`A,C` / `ac`）、编号、模糊匹配与自定义自由作答，带 5 分钟超时兜底与回执反馈。
-- **通用工具审批流 (`src/chat/approvals.js`)**：接入 DSH `approval/request` 瀑布流。执行敏感工具前向主人私聊推送编号审批卡（`#1`、`#2`...），展示真实脱敏命令与原因，支持回复「通过 #1」「拒绝 2」「放行」即时批复，带 60 秒超时自动拦截。
-- **断线消息自动补收 (`src/chat/backfill.js`)**：检测到连接断档（>2 分钟）并在恢复后，自动拉取错过的群聊与私聊历史；严格执行安全命令隔离，严禁执行迟到命令与审批，注入带时间戳的上下文提示词。
-- **全功能通用定时调度器 (`src/modules/scheduler/`)**：移植完整调度引擎，支持 `once`、`in 30m`、`daily`、`workdays`、`weekly`、`interval` 与 `Cron`；提供主人私聊 `/remind` 管理指令，并向模型暴露 `schedule_reminder` 原生工具。
-- **多平台内容解析器 (`src/modules/multi-parser/`)**：移植自 astrbot_plugin_multi_parser，自动识别 10+ 平台链接（B站/微博/小红书/知乎/微信/贴吧/番茄/GitHub等），提取无水印视频与高清图集；支持合并转发防刷屏、大视频转群文件；集成独立 AI 上下文注入开关 (`feedToAi`)，并在控制面板「平台」页新增专属设置选项卡。
-
-### 2. DSH 增强模块内置化
-- **`token-guardian`**：按聊天的真实用量（DSH 上报的 input+cache，缺省按字符估算）统计会话开销，达阈值且空闲时做**应用层外置压缩**——把近期聊天流水连同上一份摘要请模型压成新摘要，`hub.resetChat()` 归档旧会话，摘要经 `api.context` 常驻注入，同时写回聊天流水供下次压缩续接。不碰宿主 compaction 引擎。
-- **`complete-guard`**：识别停留在连接词或未闭合括号上的截断回复，提供截断告警。
-- **`memory-privacy`**：私聊（`private`）、群聊（`group`）与全局（`global`）三层作用域隔离，群聊物理阻断私聊记忆。
-- **`security-lock`（已移除）**：RFC 6238 TOTP 动态口令权限锁已按主人要求下线，`/unlock` 指令不再存在；工具审批走 `complete-guard` 之外的通用审批链（`/approvals` + 「通过/拒绝 #编号」）。
-
-### 3. 全量安全审计与稳定性加固（16 项缺陷修复）
-- **高危修复**：修复 `heybox` 模块 `hasLogin()` 未定义导致定时器抛错崩溃；修复 `douyin` 浏览器跳转与 `net.js` 302 重定向导致的内网 SSRF 风险；为 `studio.js` 的 `ffmpeg` 调用增加 15s 超时强杀防死锁；将记忆库 `recall` 统计覆写解耦为内存防抖回写，防止冲掉事实记忆。
-- **中危修复**：Windows 环境下文件原子写入引入 `renameWithRetry` 消除 `EPERM` 偶发崩溃；修复 OAuth 报错分支端口未释放泄漏；翻唱异常分支补齐临时切片目录清理；OneBot 客户端引入 90s 心跳保活看门狗。
-- **规范治理**：全模块数据存储统一收敛至 `api.dataDir`，彻底消除各模块在全局数据目录的 `state.json` 冲突。
-
-### 4. 拟人排版优化与 CI/CD 自动化发版
-- **回复引擎排版增强 (`src/chat/reply.js` & `personas.js`)**：`stripMarkdown` 在数字列表项前自动补空行撑开呼吸感，分割线转换为 QQ 细分界线；系统规则增加长内容与推荐排版指引，彻底解决“密集字砖”阅读压迫感。
-- **自动工作流 (`.github/workflows/release.yml`)**：push `main` 分支时自动触发 746 个测试用例门禁，0 失败后自动提取 `CHANGELOG.md` 生成 Release 并打包发布 `.tgz` 离线插件包。
+- 当前版本：**v1.3.64**（RFC-0001 洋葱内核重构并入主干）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
+- **自动化发版**：push `main` 触发 `.github/workflows/release.yml` —— 全量测试门禁（1425 用例 0 失败）→ 自动提取 `CHANGELOG.md` 生成 Release 正文 → 打包 `.tgz` 离线插件包挂到 Release 附件。
+- 安装源三选一：`dsh plugin add github:lecheng2018/dsh-qq-hub`（跟随最新 tag）、GitHub Releases 下载 `.tgz` 离线安装、或本地 `npm pack` 后安装。
 
 ---
 
@@ -79,7 +59,7 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 ```
 
-> **离线安装**：可直接从 [Releases](https://github.com/lecheng2018/dsh-qq-hub/releases) 下载 `dsh-qq-hub-1.2.0.tgz`，执行 `dsh plugin add ./dsh-qq-hub-1.2.0.tgz`。
+> **离线安装**：从 [Releases](https://github.com/lecheng2018/dsh-qq-hub/releases) 下载 `dsh-qq-hub-<版本号>.tgz`，执行 `dsh plugin add ./dsh-qq-hub-<版本号>.tgz`。
 
 ### 3. 网关连接与配置
 安装后重启 DSH，在左侧栏「自动化任务」下点击 **QQ Hub** 打开配置面板：
@@ -94,6 +74,7 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 - **刷抖音**：需要 Chrome / Chromium / Edge 浏览器，且抖音限制无头模式（headless）。无桌面服务器需使用 Xvfb 虚拟显示（如 `xvfb-run` 启动 DSH，或在容器内配置 `DISPLAY` 环境变量）；浏览器路径可在面板指定或通过 `CHROME_PATH` 环境变量指定。
 - **声音翻唱（RVC）**：目前仅支持 Windows 本地运行。
 - **容器网络**：容器内的 DSH 连接宿主机或其他容器的 OneBot 服务时，地址必须使用容器可访问的主机名或 IP（不可使用 `127.0.0.1`）。
+- **无头部署的依赖剪枝**：`src/runtime/` 条件装载器在冷启动按平台能力门禁（详见🧅一节），GUI/桌面宠物等重依赖在无头环境零执行、零句柄，不会因缺 `libX11` 崩启动。
 
 ### 5. 升级插件
 再次执行安装命令（自动拉取 GitHub 最新版本），随后重启 DSH 即可。所有配置、人格卡、记忆库和状态文件均受持久化保护，升级永不丢失：
@@ -107,29 +88,40 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 
 ---
 
-## ⌨️ QQ 指令速查（主人私聊专属）
+## ⌨️ QQ 指令速查（主人专属）
 
-主人在 QQ 私聊中向机器人发送指令即可完成管理，总开关关闭时命令通道依然受保活保护：
+主人在 QQ 发送指令即可完成管理；总开关关闭时命令通道依然保活（否则叫不回她）。内置 16 条命令 + 模块扩展命令：
 
-| 类别 | 指令示例 | 功能说明 |
-|---|---|---|
-| **定时任务** | `/remind in 30m 喝水` | 相对延时：30 分钟后提醒（支持 m 分钟 / h 小时 / d 天） |
-| | `/remind once 2026-11-05 09:30 检查周报` | 一次性：指定日期与时刻提醒 |
-| | `/remind daily 08:30 早上打卡` | 每日固定时间重复提醒（多个时间用逗号分隔） |
-| | `/remind workdays 18:00 下班打卡` | 工作日定时提醒（周一至周五，自动避开法定假日） |
-| | `/remind weekly 1,3,5 20:00 健身` | 每周固定几天提醒（1=周一 … 7=周日） |
-| | `/remind monthly 1,15,-1 20:00 交房租` | 每月固定几号提醒（-1 表示当月最后一天） |
-| | `/remind list` / `/remind del 1` | 查看当前所有定时任务 / 删除指定编号任务 |
-| | `/remind on 1` / `/remind off 1` | 启用 / 暂停指定编号的定时任务 |
-| | `/approvals` | 查看当前挂起等待批复的工具操作清单 |
-| | `通过 #1` / `同意` | 批准编号为 #1 的工具操作执行（单个待审项可免编号） |
-| | `拒绝 #1` / `不行` | 拦截指定操作执行 |
-| **会话控制** | `/silent [分钟]` | 开启静默模式，禁止主动与群聊发言（可指定分钟数） |
-| | `/active` | 解除静默，恢复正常发言 |
-| | `/model` | 查看当前会话使用的大模型或切换模型 |
-| | `/remember 事实内容` | 手动向机器人长期记忆库录入一条事实 |
-| | `/sing 歌名` | 点歌翻唱，后台处理完成后自动回传语音条 |
-| | `/status` | 输出系统健康面板、运行时长、会话及配额监控 |
+### 会话与发言控制
+| 指令 | 功能说明 |
+|---|---|
+| `/help` | 列出全部可用命令（含模块注册的新命令） |
+| `/status` | 系统健康面板：总开关/试运行、心情、今日收发、当前群插话档位 |
+| `/on` / `/off` | 上线 / 下线（插件总开关；下线后仍可收命令） |
+| `/silent [分钟]` | 静默：停止主动与群聊发言，可指定分钟数自动恢复 |
+| `/active` | 解除静默恢复正常发言 |
+| `/quiet` / `/chatty` / `/normal` | 群插话档位三档：没人叫绝不插话 / 话多模式 / 恢复默认（群聊专用） |
+| `/reset` | 当前会话重新开始（**记忆不动**，只清对话上下文） |
+| `/new` | 清当前聊天的**记忆**（条目+小档案+相处经验+说话方式；对话不动，别处与 global 记忆不受影响） |
+
+### 模型与内容
+| 指令 | 功能说明 |
+|---|---|
+| `/model` | 列出可用模型与当前选择；`/model 序号` 或 `/model 名字` 切换；`/model 默认` 跟随 DSH |
+| `/remember 事实内容` | 手动录入一条长期记忆（**作用域跟随当前聊天**：群里记的只在那群可见） |
+| `/mood` | 查看她当前心情 |
+| `/diary` | 立即写一篇 QQ 空间日记（按当日聊天流水提炼） |
+| `/sing 歌名 [歌手] [+12]` | 点歌 RVC 翻唱，尾部数字为变调半音；后台完成后自动回传语音条 |
+
+### 生产力闭环（模块命令）
+| 指令 | 功能说明 |
+|---|---|
+| `/remind in 30m 喝水` | 相对延时提醒（支持 m/h/d） |
+| `/remind once 2026-11-05 09:30 检查周报` | 一次性指定时刻 |
+| `/remind daily 08:30 打卡` / `workdays 18:00 下班` / `weekly 1,3,5 20:00 健身` / `monthly 1,15,-1 交房租` | 周期任务（`-1`=当月最后一天，workdays 自动避开法定假日） |
+| `/remind list` / `del 1` / `on 1` / `off 1` | 查看 / 删除 / 启停指定编号任务 |
+| `/approvals` | 查看挂起中的高危工具审批清单 |
+| `通过 #1` / `拒绝 #1`（单个待办仍需带编号） | 批复指定操作，60 秒超时自动拦截 |
 
 ---
 
@@ -237,6 +229,8 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 }
 ```
 
+> 洋葱内核的灰度开关与限流旋钮是**环境变量**（进程启动读取一次，改动需重启），不在 `config.json` 内，见🧅一节。
+
 ---
 
 ## 🧠 提示词工程规范（Prompt Engineering）
@@ -326,7 +320,7 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 - **发帖风格（三选一）**：
   - `diary`（大肥鱼日记）：第一人称随手记，语气与空间日记一致（120~300 字，无小标题）；
   - `news`（热搜报道）：新闻通讯体，开门见山、罗列客观数据，钩子→主体信息→自身判断→抛出问题（200~800 字）；
-  - `mix`（肥鱼热搜，默认）：用随性日记口吻报道热点，“我跟你说个事”（150~500 字）。
+  - `mix`（肥鱼热搜，默认）：用随性日记口吻报道热点，"我跟你说个事"（150~500 字）。
 - **避坑经验（内核已内置修复）**：
   - 帖子类型 28（动态）仅支持纯文本，输入 HTML 标签会原样暴露，发帖强制锁定类型 11；
   - 分区 ID 必须为真实存在的分区：`7214` 盒友杂谈 / `18745` 数码硬件 / `806933` AI（网传 58144 为废弃无效分区）。
@@ -363,10 +357,11 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 
 - **联动工作流**：桌宠工作状态与 DSH 会话实时同步（思考、执行、完成动画）；碎碎念只在桌面弹出气泡，**绝不向 QQ 乱发干扰消息**。
 - **资源托管与协议**：客户端架构移植自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT）；50MB+ 大肥鱼形象素材遵循 CC BY-NC-SA 4.0 协议，初次启动从指定素材仓库自动下载落位，不随插件代码分发。
+- **无头环境**：桌面宠物在 headless/Docker/飞牛 NAS 环境被条件装载器自动剪枝，不产生任何子进程与 native 加载。
 
 ### 6. QQ 空间日记与好友动态
 
-- **空间日记**：后台专属会话每日定时（默认 2 次）根据当日实际聊天流水提炼情绪，调用 `send_qzone_msg` 发布空间说说，支持自动配图（优先选用当日生成的画作或收藏表情包）。
+- **空间日记**：后台专属会话每日定时（默认 2 次）根据当日实际聊天流水提炼情绪，调用 `send_qzone_msg` 发布空间说说，支持自动配图（优先选用当日生成的画作或收藏表情包）。也可用 `/diary` 命令立即触发一篇。
 - **好友互动**：定期检索自己说说下的新回评，一串会话聚合回评一次；逛好友动态按概率点赞与评论。
 
 ### 7. 智能表情包系统
@@ -385,12 +380,18 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 
 1. **预设物理隔离（Preset Isolation）**：
    群聊与非管理员私聊强制分配至 `aurabot-social` 预设，在 DSH 宿主层物理移除 `tool-bash`、`tool-pwsh`、`tool-fs` 等系统工具，即使遭遇复杂越狱 Prompt 也无法调用任何本地命令。
-2. **两阶段 SSRF 深度防御**：
-   外部网络请求（图片、头像、素材）强制经过 `assertPublicUrl` 校验，拦截局域网及回环 IP；采用 `redirect: 'manual'` 手动循环接管重定向，对每一跳重定向目标递归检验，彻底封死 302 弹回内网的漏洞。
-3. **子进程生命周期与强杀**：
+2. **身份泄露闸（guardOutbound）**：
+   所有出站内容（QQ 回复、B 站评论、小黑盒发帖、空间说说与回评）统一经过身份检测，拦截泄露主人 QQ 号、管理员身份等敏感信息；公开面默认更严格（allowIds 为空）。
+3. **两阶段 SSRF 深度防御**：
+   外部网络请求（图片、头像、素材）强制经过 `assertPublicUrl` 校验，拦截局域网及回环 IP；采用 `redirect: 'manual'` 手动循环接管重定向，对每一跳重定向目标递归检验，封死 302 弹回内网的漏洞。
+4. **记忆作用域 fail-closed**：
+   私聊（`private`）/群聊（`group`）/全局（`global`）三层作用域隔离；检索拿不到可信作用域时返回空而非全库兜底，群聊物理阻断私聊记忆。
+5. **子进程生命周期与强杀**：
    子进程调用（ffmpeg、Python）均配置绝对超时熔断（15s ~ 30s）；Windows 环境下超时采用 `taskkill /pid <PID> /T /F` 强制清除整棵派生进程树，杜绝孤儿进程占用显存与 CPU。
-4. **文件原子写与并发重试**：
+6. **文件原子写与并发重试**：
    所有 JSON 状态写入均遵循写入临时文件再原子改名的规程，并在 Windows 文件系统下针对 `renameSync` 补充 4 次 `EPERM/EBUSY` 微等待重试，保障杀软扫描时的读写稳固。
+7. **凭据保护**：
+   `config.json` 落盘 0600 权限；日志出口统一脱敏（token/cookie 打码）；面板接口回包不泄露网关密钥。
 
 ---
 
@@ -436,7 +437,27 @@ export default {
 ### 项目源码结构
 ```text
 src/
-├── host.js               # 插件核心入口（Cordis 服务绑定 / 看门狗 / 路由）
+├── host.js               # 插件核心入口（Cordis 服务绑定 / 看门狗 / 面板路由 / 洋葱管道装配）
+├── kernel/               # 🧅 洋葱内核（RFC-0001，v1.3.64 并入主干，默认全开关关闭）
+│   ├── compose.js        # 管道组合器（double-next 熔断、abort unwind 边界、PipelineError 因果链）
+│   ├── context.js        # Context 工厂（meta/inbound/reply 队列/state/signal/abort + 父信号透传）
+│   ├── ctx-store.js      # AsyncLocalStorage 隐式传递与出口收口标记
+│   ├── dispatcher.js     # 出站 Dispatcher（优先级队列、限流整形、shadow/live 双模、abort 丢弃）
+│   ├── legacy-fallback.js# 遗留 hub 终端化 + FLAG_USE_PIPELINE 熔断开关
+│   ├── mw-tracing.js     # 每层耗时/错误打点（G4 可观测）
+│   ├── mw-ratelimit.js   # 入口令牌桶（单调时钟，per-chat）
+│   ├── mw-acl.js         # 入口权限（复用 chat/access.js 权威判定，fail-closed）
+│   ├── mw-dedup.js       # messageId 幂等（处理中键/成功缓存两层，失败可重试）
+│   ├── mw-command-router.js # 16 内置主人命令直答（未命中透传 legacy）
+│   ├── mw-egress.js      # 防思考泄漏栈守卫 + stripReasoning + 4000 字语义分条
+│   ├── mw-egress-cutover.js # 出口切换（onebot.call 收口包装 + 边界 flush + 投递账本）
+│   ├── mw-aggregator.js  # 入口合流（当前为暂停透传版，恢复前置条件见文件头注释）
+│   ├── mw-persona.js / mw-memory.js # 人设预取 + 记忆装配接管（NEW_MEMORY_PIPELINE）
+│   └── types.d.ts        # 内核契约类型（JSDoc，无 TS 编译链）
+├── runtime/              # 跨平台能力探测与条件装载器（无头 NAS 剪枝 GUI/原生模块）
+│   ├── environment-detector.js  # 平台/display/isDocker 三态/fnOS/内存（全注入可桩）
+│   ├── module-loader.js  # 六道门禁 + requiresGUI 政策位 + manifest 预检
+│   └── types.d.ts
 ├── core/
 │   ├── modules.js        # 微内核模块引擎（热重载、快照与错误隔离）
 │   ├── config.js         # 配置归一化与脱敏管理
@@ -444,7 +465,7 @@ src/
 │   ├── store.js          # 原子读写与 Windows EPERM 重试
 │   └── llm.js            # 模型能力探测与思考强度收敛
 ├── chat/
-│   ├── hub.js            # 消息中枢（会话调度、连发合并、分发）
+│   ├── hub.js            # 消息中枢 + 洋葱终端（会话调度、连发合并、LLM 推理、分发）
 │   ├── reply.js          # 回复解析引擎（Markdown 洗涤、断句切气泡、延迟仿真）
 │   ├── questions.js      # 交互式提问状态机与 A/B/C 卡片系统
 │   ├── approvals.js      # 通用工具审批流与审批卡系统
@@ -465,61 +486,78 @@ src/
 - **Windows**：`%USERPROFILE%\.dsh\plugins-data\aurabot\`
 - **Linux / Docker**：`~/.dsh/plugins-data/aurabot/`
 
-目录包含：`config.json`（配置文件）、`modules-data/`（各模块独立数据目录）、`memories.json`（记忆库）、`stickers/`（表情库）、`tasks.json`（定时任务清单）、`logs/`（脱敏运行日志）。
+目录包含：`config.json`（配置文件，0600）、`modules-data/`（各模块独立数据目录）、`memories.json`（记忆库）、`stickers/`（表情库）、`tasks.json`（定时任务清单）、`logs/`（脱敏运行日志）。
 
 ---
 
 ## 🧪 自动化测试
 
-项目全套单元测试基于 Node.js 原生测试套件构建，涵盖全部纯函数逻辑、状态机、多模块隔离与网络容灾场景：
+项目全套单元测试基于 Node.js 原生测试套件构建（145 个测试文件 / 1425 个用例），涵盖全部纯函数逻辑、状态机、洋葱内核契约、多模块隔离与网络容灾场景：
 
 ```bash
-# 执行全部 746 个测试用例
+# 执行全部测试用例（CI 发版门禁同款命令）
 npm test
+
+# 只跑洋葱内核与运行时套件
+node --test test/kernel-*.test.js test/runtime-loader.test.js
 ```
 
 ---
 
-## 🧅 RFC-0001 洋葱内核（实验通道，mission 分支）
+## 🧅 洋葱内核（RFC-0001）——v1.3.64 已并入主干，全部开关默认关
 
-`mission/onion-refactor` 分支引入洋葱中间件内核（绞杀者模式渐进重构）。**总开关关闭时一切照旧**——
-flag-off 路径与重构前逐字等价、管道组件零装配；开启后 onebot 实时事件流经管道，遗留 hub.js 降为终端中间件：
+按 [RFC-0001 落地映射](docs/rfc0001-mapping.md) 以**绞杀者模式**（Strangler Fig）完成的洋葱中间件内核重构，经 12 个故事 + 两轮外部代码审查修复批（P5/P6）于 v1.3.64 并入主干。**四个灰度开关全部默认关闭**：flag-off 路径与重构前逐字节等价（e2e 三态 70/0 实测 + 回滚演练 run1≡run3 实证），不影响现有部署。
+
+### 管道拓扑（FLAG_USE_PIPELINE=true 时的真实装配序）
 
 ```text
 onebot 事件 ─▶ handleEvent（前置段两态原位）─▶ [FLAG_USE_PIPELINE?]
    关 ─▶ hub.onMessage / hub.onPoke 直调（旧路径，逐字等价）
    开 ─▶ compose([
-           tracing                        一行 debug 打点（total/mw0/mw1/err）
-         , ratelimit → acl → dedup        入口防御：超限/无权/重传 abort，出口链零记账
-         , egress flush                   边界 flush：整轮结束后 Dispatcher 排空下发
-         , egress                         防思考泄漏栈守卫截尾 + 4000 字语义分条
-         , command router                 16 内置主人命令 ctx.reply 直答
-         , (aggregator)                   入口合流窗 + busy steer —— FLAG_INGRESS_AGGREGATOR，默认关
+           tracing                        一行 debug 打点（total/每层耗时/err/aborted）
+         , ratelimit → acl → dedup        入口防御：超限/无权/重传 abort，其后各级两级不进
+         , egress flush                   边界 flush：标记收口 → Dispatcher 排空下发
+         , egress                         防思考泄漏栈守卫截尾 + stripReasoning + 4000 字语义分条
+         , command router                 16 内置主人命令 ctx.reply 直答（未命中透传）
+         , (aggregator)                   入口合流 —— FLAG_INGRESS_AGGREGATOR，默认关；
+         │                                挂载态=暂停透传（吞并语义因终端契约缺口下线，见下）
          , (persona → memory)             人设预取 + 记忆装配接管 —— NEW_MEMORY_PIPELINE，默认关
-         , legacy hub.js                  终端：LLM 推理/会话/群策略仍住这里 ])
-                        └─ 发送面收口：onebot.call 包装（三道安全闸之后）吞包入队 ─▶ Dispatcher ─▶ OneBot
+         , legacy hub.js                  终端：LLM 推理 / 会话 steer / 群策略仍住这里 ])
+                        └─ 发送面收口：onebot.call 包装（模拟/总开关/试运行三道安全闸之后）
+                           ─▶ ctx.reply 入队 ─▶ egress 清洗 ─▶ Dispatcher（优先级+整形）─▶ OneBot
 ```
+
+### env 开关与旋钮（进程启动读取一次，改动需重启；解析口径统一：仅 `true`/`1` 为真，乱值按 false）
 
 | env 开关 | 缺省 | 作用 |
 |:--|:--|:--|
 | `FLAG_USE_PIPELINE` | 关 | 总闸：事件流走洋葱管道（其余三个开关的前提） |
 | `FLAG_EGRESS_SHADOW` | 关（=live 切权） | 出口双算观测：旧通道照发 + 新链 hash 比对，mismatch 出 warn |
-| `FLAG_INGRESS_AGGREGATOR` | 关 | 入口合流窗装配（默认关实因：与 hub 自家 pending 双合流会丢消息，见 docs 映射表 §2） |
-| `NEW_MEMORY_PIPELINE` | 关 | 记忆装配接管：contextProviders 由 ctx.state 缓存供给（缺口 A/B 修复前不该默认开） |
+| `FLAG_INGRESS_AGGREGATOR` | 关 | 入口合流挂载。**注意**：当前挂载态为「暂停透传」——逐事件下行不吞并，合流仍由 hub 内部 pending 提供；恢复吞并语义的五项前置条件见 `src/kernel/mw-aggregator.js` 文件头 |
+| `NEW_MEMORY_PIPELINE` | 关 | 记忆装配接管：contextProviders 由 ctx.state 缓存供给（缺口 A/B 修复前不应默认开） |
 
 | env 旋钮 | 缺省 | 作用 |
 |:--|:--|:--|
-| `QQHUB_RL_CAPACITY` | 30 | 限流令牌桶容量（突发上限）；仅正数生效，非法值回默认 |
+| `QQHUB_RL_CAPACITY` | 30 | 入口令牌桶容量（突发上限）；须 ≥1，非法值回默认 |
 | `QQHUB_RL_REFILL_PER_SEC` | 5 | 每秒补令牌数；非负数合法（0=突发用尽后全拒） |
+| `QQHUB_RUNTIME_ENV` | 未设 | 容器声明：`container`/`host`，优先于 fs 探测（供条件装载器门禁） |
 
-开关解析口径统一：仅 `'true'`/`'1'`（忽略大小写与首尾空白）为真，乱值一律按 false/默认（熔断语义）；
-全部在进程启动时读取一次，**改动需重启**。**回滚**：所有开关 unset 即回到重构前行为（flag-off→on→off
-三进程演练已实证旧通道发送序列首末全等，见 CHANGELOG「RFC-0001 洋葱内核重构」段）。
+### 治理面边界（如实声明，避免误读）
 
-**无头 NAS**：`src/runtime/` 条件装载器（EnvironmentDetector + ConditionalModuleLoader）在冷启动按
-六道门禁（平台→display→Docker→环境变量→内存→自定义）剪枝 GUI/原生模块，被剪模块零代码执行、零句柄、零内存。
+- **主聊天气泡走直发分支**：hub 的回复由 DSH `turn/end` 会话事件异步投递，落在终端 `await onMessage` 返回之后——此时本轮 ctx 已过出口边界，气泡按契约回落旧通道直发（真 message_id、三道闸、群配额、bubbleDelay 全保留，行为与旧路径逐字节等价）。当前队列治理面实际覆盖：**router 命令直答 + hub 命令闸门透传回复**。因此 `FLAG_EGRESS_SHADOW` 下比对日志出现「无队列支路样本」属正常。
+- **abort 的生效粒度**：未 flush 的回复必被 Dispatcher 丢弃（dropped 计数），但进行中的 LLM 请求不打断（legacy 终端未接取消通道；管道完成=已启动中间件真实结束）。
+- **Phase 4 终局**（hub.js 归零、物理删除遗留）不在 v1.3.64：存活职责清单与逐项归宿见 [`docs/rfc0001-mapping.md`](docs/rfc0001-mapping.md) §7/§11。
 
-完整落地映射、hub.js 存活职责清单与已知缺口：见 [`docs/rfc0001-mapping.md`](docs/rfc0001-mapping.md)。
+### 无头 NAS / Docker 条件装载
+
+`src/runtime/` 声明式装载器在冷启动按 manifest 六道门禁（平台→display→Docker 三态→环境变量→内存→自定义探针）剪枝，另设 `requiresGUI` 政策位：fnOS / 容器 / 容器状态未知环境一律拒绝 GUI 依赖模块——被剪模块**零代码执行、零句柄、零内存分配**。
+
+### 回滚与灰度建议
+
+- **回滚一行话**：unset 全部 `FLAG_*` 环境变量并重启 = 重构前行为（三进程开关演练已实证发送序列首末全等）。
+- **灰度顺序建议**：`FLAG_USE_PIPELINE + FLAG_EGRESS_SHADOW`（零行为变化，攒比对数据）→ 关 SHADOW 切 live（注意整轮齐发的节奏变化）→ `NEW_MEMORY_PIPELINE`（盯人设/记忆一致性）→ `FLAG_INGRESS_AGGREGATOR`（现为安全空位）。
+
+完整落地映射、审查裁决与已知缺口：[`docs/rfc0001-mapping.md`](docs/rfc0001-mapping.md)（§11 外部 review 逐条回应、§11.6 二次复核裁决）。
 
 ---
 
