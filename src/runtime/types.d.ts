@@ -52,5 +52,11 @@ export interface ModuleManifest {
   readonly displayRequirements: ReadonlyArray<DisplayServerType>
   readonly hardware?: HardwareConstraints
   readonly environment?: EnvironmentConstraints
+  /**
+   * GUI 政策位（review C3#2）：true = 强依赖可连接的图形会话。除 displayRequirements
+   * 匹配外，还要求**确认非容器且非 fnOS**（isDocker()===false 且 !isFnOS()）才放行；
+   * 容器/未知/fnOS 一律剪枝，customDetector 不得反向放行该政策。
+   */
+  readonly requiresGUI?: boolean
   readonly entrypoint: () => Promise<any>
 }

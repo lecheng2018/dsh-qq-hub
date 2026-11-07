@@ -486,3 +486,69 @@ test('poke 事件同样收口：onPoke 链里的发送在边界 flush 才外发'
   assert.equal(r.real.length, 1)
   assert.deepEqual(outboundText(r.real), ['干嘛戳我'])
 })
+
+
+// ===== 2026-11-07 review C2 修复回归 =====
+
+test('C2#3 内层抛错：markFlushed + 队列清空计日志 + 原样上抛，不留死队列', async () => {
+  const sent = []
+  const dispatcher = createDispatcher({ sender: async (p) => sent.push(p), mode: 'live' })
+  const flush = createEgressFlushMiddleware({ dispatcher, log: { warn: (m) => sent.push('WARN:' + m) } })
+  const ctx = createContext({ messageId: 'm' }, 'd')
+  const boom = async (c) => {
+    c.reply.enqueue(buildReplyPayload({ targetType: 'group', targetId: '1', segments: textSeg('半途受理') }))
+    throw new Error('legacy 崩了')
+  }
+  await assert.rejects(compose([flush, boom])(ctx), (e) => {
+    let cur = e
+    while (cur) { if (String(cur.message || '').includes('legacy 崩了')) return true; cur = cur.originalCause ?? cur.cause }
+    return false
+  }, '原样上抛（包装链里可寻 legacy 崩了）')
+  assert.equal(ctx.reply.queue.length, 0, '异常轮队列必须清空')
+  assert.equal(sent.length, 1, '异常轮一条都没真发，只剩告警')
+  assert.match(String(sent[0]), /WARN:.*未下发条目/, '有告警留痕')
+  // 边界已立：晚到发送不再入死队列
+  const { isContextFlushed } = await import('../src/kernel/ctx-store.js')
+  assert.equal(isContextFlushed(ctx), true)
+})
+
+test('C2#1 模式校验：createEgressOnebot 非法 mode 构造即抛，杜绝 wrapper/dispatcher 错配双发', () => {
+  assert.throws(() => createEgressOnebot({ onebot: { call: async () => ({}) }, mode: 'shadoww' }), /live.*shadow|必须是/)
+  assert.throws(() => createDispatcher({ sender: async () => {}, mode: 'half' }), /必须是/)
+})
+
+test('C2#5 上传回退白名单：仅确认的路径读取失败才转 base64 重传；超时/鉴权直接上抛', async () => {
+  const { isConfirmedPathReadError } = await import('../src/kernel/mw-egress-cutover.js')
+  assert.equal(isConfirmedPathReadError(new Error('open /data/x.mp4: no such file or directory')), true)
+  assert.equal(isConfirmedPathReadError(Object.assign(new Error('boom'), { cause: { code: 'ENOENT' } })), true)
+  assert.equal(isConfirmedPathReadError(new Error('The operation was aborted due to timeout')), false)
+  assert.equal(isConfirmedPathReadError(new Error('HTTP 401 unauthorized')), false)
+  assert.equal(isConfirmedPathReadError(new Error('ECONNRESET')), false)
+  let calls = 0
+  const sender = createEgressSender({
+    call: async () => { calls += 1; throw new Error('timeout waiting for gateway') },
+    uploadFile: async () => 'base64://AAA',
+  })
+  await assert.rejects(sender(buildReplyPayload({ targetType: 'group', targetId: '9', segments: [{ type: 'file', data: { file: '/d/x.mp4', name: 'x.mp4' } }] })))
+  assert.equal(calls, 1, '超时错误绝不二次上传')
+})
+
+test('C2#7 shadow 账本带状态：失败请求不计入比对样本', async () => {
+  const dispatcher = createDispatcher({ mode: 'shadow' })
+  const flush = createEgressFlushMiddleware({ dispatcher, log: { debug: () => {}, warn: () => {} } })
+  const innerCalls = []
+  const onebot = createEgressOnebot({ onebot: { call: async (a, p) => { innerCalls.push(a); if (innerCalls.length === 2) throw new Error('网关 500'); return { message_id: 1 } } }, mode: 'shadow' })
+  const ctx = createContext({ messageId: 'm' }, 'd')
+  const round = async (c) => {
+    await onebot.call('send_group_msg', { group_id: 1, message: textSeg('一') })
+    try { await onebot.call('send_group_msg', { group_id: 1, message: textSeg('二') }) } catch { /* 旧通道失败 */ }
+  }
+  const { runWithContext } = await import('../src/kernel/ctx-store.js')
+  await compose([flush, () => runWithContext(ctx, round)])(ctx)
+  const { getCurrentContext } = await import('../src/kernel/ctx-store.js')
+  void getCurrentContext
+  // 队列未被 shadow 消费：两条仍在
+  assert.equal(ctx.reply.queue.length, 2)
+  const summary = await dispatcher.drain(ctx)
+  assert.equal(summary.shadow, 2)
+})

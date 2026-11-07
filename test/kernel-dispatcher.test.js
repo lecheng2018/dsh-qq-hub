@@ -173,14 +173,15 @@ test('③：间隔 = delayMs 覆写优先，否则 typing 估式；首条不等�
 })
 
 test('③对抗：估式先 clamp 后乘抖动系数（700 下限 / 4500 上限 / 满抖动 1.3），与 bubbleDelay 语义对齐', async () => {
-  // 短文本：typing 350 → clamp 下限 700 → *0.8 = 560
+  // 短文本：typing 460 → clamp 下限 700 → *0.8 = 560 → **再 clamp 回 [700,4500] = 700**
+  // （review A4#7 修复：jitter 结果不得突破声明的 min/max 边界）
   const ctx1 = newCtx()
   push(ctx1, 'a')
   push(ctx1, 'b')
   const ft1 = fakeTime()
   const d1 = createDispatcher({ sender: spySender().sender, clock: ft1.clock, sleep: ft1.sleep, jitter: noJitter })
   await d1.drain(ctx1)
-  assert.deepEqual(ft1.sleeps, [Math.round(Math.min(4500, Math.max(700, 350 + 110)) * 0.8)])
+  assert.deepEqual(ft1.sleeps, [700])
 
   // 超长文本：typing 11350 → clamp 上限 4500 → *0.8 = 3600
   const ctx2 = newCtx()
@@ -459,4 +460,95 @@ test('payload 全程只读：dispatcher 拿原件引用、条目从入队到消�
   assert.equal(seen[0], originals[0], '送达的是冻结原件引用，不是克隆')
   assert.ok(seen.every((p) => Object.isFrozen(p) && Object.isFrozen(p.segments)))
   assert.deepEqual(JSON.parse(JSON.stringify(seen)), snapshot, '消费全程未篡改任何字段')
+})
+
+
+// ===== 2026-11-07 review A4 修复回归 =====
+
+test('A4#1 drain 期间新入队的条目不被吞：归下一批（旧结尾 clear 连锅端已修）', async () => {
+  const ctx = newCtx()
+  push(ctx, '第一条')
+  const ft = fakeTime()
+  let enqDuringDrain = false
+  const origSleep = ft.sleep
+  const sleep = async (ms) => {
+    if (!enqDuringDrain) { enqDuringDrain = true; push(ctx, 'drain 期间新来的') }
+    return origSleep(ms)
+  }
+  const { sender, calls } = spySender()
+  const d = createDispatcher({ sender, clock: ft.clock, sleep, jitter: noJitter })
+  // 两条：第二条发送前的 sleep 里 enqueue 第三条 → 本批只处理领取时的两条
+  push(ctx, '第二条')
+  const s1 = await d.drain(ctx)
+  assert.equal(s1.sent, 2)
+  assert.equal(s1.deferred, 0)
+  const q = ctx.reply.queue
+  assert.equal(q.length, 1, 'drain 期间入队的第三条必须还在队列里')
+  const s2 = await d.drain(ctx)
+  assert.equal(s2.sent, 1)
+  assert.equal(calls.length, 3)
+})
+
+test('A4#3 sleep 拒绝：未尝试条目 restoreFront 回队列计 deferred，已发送绝不重放', async () => {
+  const ctx = newCtx()
+  push(ctx, '甲')
+  push(ctx, '乙')
+  push(ctx, '丙')
+  const ft = fakeTime()
+  let n = 0
+  const sleep = async (ms) => {
+    n += 1
+    if (n === 2) { const e = new Error('scheduler down'); throw e }
+    return ft.sleep(ms)
+  }
+  const { sender, calls } = spySender()
+  const d = createDispatcher({ sender, clock: ft.clock, sleep, jitter: noJitter })
+  const s = await d.drain(ctx)
+  assert.equal(s.sent, 2, '甲乙已发（sleep #1 正常，#2 抛）')
+  assert.equal(s.deferred, 1, '丙未尝试计 deferred')
+  assert.equal(s.infrastructureError.phase, 'sleep')
+  assert.equal(ctx.reply.queue.length, 1, '未尝试条目回到队首')
+  const s2 = await d.drain(ctx)
+  assert.equal(s2.sent, 1)
+  assert.equal(calls.length, 3, '甲乙没有被重发')
+})
+
+test('A4#5 createdAt 倒序不打乱同优先级入队序（FIFO 契约，删 createdAt 次排序）', async () => {
+  const taken = []
+  const ctx = {
+    reply: {
+      queue: Object.freeze([
+        { id: 'A', priority: 'NORMAL', createdAt: 200, segments: [{ type: 'text', data: { text: 'a' } }] },
+        { id: 'B', priority: 'NORMAL', createdAt: 100, segments: [{ type: 'text', data: { text: 'b' } }] },
+        { id: 'C', priority: 'HIGH', createdAt: 300, segments: [{ type: 'text', data: { text: 'c' } }] },
+      ]),
+      clear() { taken.push('clear') },
+      restoreFront(items) { this.queue = items },
+    },
+    signal: { aborted: false },
+  }
+  const ft = fakeTime()
+  const { sender, calls } = spySender()
+  const d = createDispatcher({ sender, clock: ft.clock, sleep: ft.sleep, jitter: noJitter })
+  await d.drain(ctx)
+  assert.deepEqual(calls.map((p) => p.id), ['C', 'A', 'B'], 'HIGH 插队；NORMAL 按入队序，不按 createdAt')
+})
+
+test('A4#4 跨 drain pacing：上一条发出后的最小间隔对下一轮第一条同样生效', async () => {
+  const ft = fakeTime()
+  const { sender } = spySender()
+  const d = createDispatcher({ sender, clock: ft.clock, sleep: ft.sleep, jitter: noJitter })
+  const ctx1 = newCtx()
+  push(ctx1, '轮一')
+  await d.drain(ctx1)
+  const ctx2 = newCtx()
+  push(ctx2, '轮二')
+  await d.drain(ctx2)
+  assert.equal(ft.sleeps.length, 1, '轮二第一条必须等待跨轮最小间隔（旧实现 i>0 才等，轮轮首条免检）')
+  assert.ok(ft.sleeps[0] >= 700)
+})
+
+test('shaping 参数构造校验：NaN/倒挂直接抛错（review A4#7 附带）', () => {
+  assert.throws(() => createDispatcher({ sender: () => {}, shaping: { minGapMs: NaN } }), /有限数/)
+  assert.throws(() => createDispatcher({ sender: () => {}, shaping: { minGapMs: 5000, maxGapMs: 1000 } }), /minGapMs 不得大于/)
 })

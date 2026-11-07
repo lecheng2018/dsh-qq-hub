@@ -302,16 +302,19 @@ test('ACL：白名单外私聊/黑名单群 abort(acl)；owner 直通；poke/not
   assert.equal(owner.signal.aborted, false, 'owner 直通（不在私聊白名单也过——复用 isOwner 判定）')
   assert.equal(t.hits.length, 3)
 
+  // review C1 修复后：入口不再给 owner 群聊扩权——群白名单对 owner 一视同仁
+  // （与旧核心 hub.js:1324 checkAllowed 完全同规则；私聊 owner 由 checkAllowed 自身放行）
   const ownerGroup = messageCtx({ userId: '1001', groupId: '66' })
   await pipeline(ownerGroup)
-  assert.equal(ownerGroup.signal.aborted, false, 'owner 群聊直通粗筛；核心仍按 checkAllowed 复检（诚实边界）')
+  assert.equal(ownerGroup.signal.aborted, true, 'owner 在非白名单群同样被拒（入口=权威判定）')
+  assert.equal(ownerGroup.signal.reason, 'acl')
 
   const poke = groupPokeCtx({ userId: '3003', groupId: '66' })
   await pipeline(poke)
   assert.equal(poke.signal.aborted, false, 'poke 在旧核心无白名单闸门，入口层不拦（避免行为变更）')
 
-  assert.equal(acl.stats().rejected, 2)
-  assert.equal(acl.stats().passed, 5)
+  assert.equal(acl.stats().rejected, 3)
+  assert.equal(acl.stats().passed, 4)
 })
 
 test('ACL：判定桩 reject/缺字段 → abort(acl)；桩抛错 → fail-closed 拒绝（拍板：权限防御异常不放行）', async () => {
@@ -373,49 +376,39 @@ test('装配次序回归：tracing→ratelimit→acl→dedup→aggregator→终�
   assert.deepEqual(layers, ['T>', 'R>', 'A>', '<A', '<R', '<T'], 'acl 之后的层两级不进，之前的 bubble 正常收尾')
 })
 
-test('abort unwind 联动：守卫层 abort 后聚合窗无残留挂起 ctx、定时器计数零泄漏、tracing 收尾 aborted', async () => {
+test('abort unwind 联动（聚合暂停版）：守卫层 abort 后各级两级不进、tracing 收尾 aborted、零定时器', async () => {
   const fc = fakeClock(1000)
   const sl = fakeSleep()
   const logs = []
   const tracing = createTracingMiddleware({ log: { debug: (l) => logs.push(l) }, now: fc.now })
   const dedup = createDedupMiddleware()
-  const agg = createAggregatorMiddleware({
-    getConfig: () => ({ merge: { enabled: true, waitSec: 1, maxSec: 5, groupWaitSec: 1, groupMaxSec: 5 } }),
-    clock: fc.now, sleep: sl.fn,
-  })
+  const agg = createAggregatorMiddleware({ clock: fc.now, log: { warn: () => {} } })
   const t = terminal()
   const pipeline = compose([tracing, createAclMiddleware({ getConfig: () => ACL_CFG }), dedup, agg, t])
 
-  // lead 开窗挂起（flush 前聚合器 await 窗口，promise 不 resolve）
+  // 暂停版逐事件透传：lead 立即下行，不再挂窗
   const lead = messageCtx({ userId: '2002', messageId: 'lead-1', text: '在吗' })
-  const leadP = pipeline(lead)
-  await tick()
-  assert.equal(agg.stats().windows, 1)
-  assert.equal(t.hits.length, 0, '窗口未到期，终端还没吃事件')
+  await pipeline(lead)
+  assert.equal(t.hits.length, 1)
+  assert.equal(t.hits[0].inbound.rawText, '在吗')
+  assert.equal(agg.stats().windows, 0)
 
-  // 重传同 messageId：必须在 dedup 就被拦——绝不作为 follower 进窗（否则 reason 会是 superseded-merged）
+  // 重传同 messageId：dedup 拦下，聚合/终端不参与
   const dup = messageCtx({ userId: '2002', messageId: 'lead-1', text: '在吗？' })
   await pipeline(dup)
   assert.equal(dup.signal.reason, 'duplicate')
-  assert.equal(agg.stats().windows, 1, '窗数不变：重传没进窗')
+  assert.equal(t.hits.length, 1)
 
-  // ACL 拒绝：同样不进窗
+  // ACL 拒绝同样短路
   const banned = messageCtx({ userId: '3003' })
   await pipeline(banned)
   assert.equal(banned.signal.reason, 'acl')
-  assert.equal(agg.stats().windows, 1)
 
-  // 到期 flush：lead 单条成窗（合并文本不含重传与拒绝者），窗口清空零残留
-  sl.settleAll()
-  await leadP
-  assert.equal(t.hits.length, 1)
-  assert.equal(t.hits[0].inbound.rawText, '在吗', '窗口里只有 lead 自己——守卫拦下的事件零参与')
-  assert.equal(agg.stats().windows, 0)
-  assert.equal(agg.stats().inFlight, 0)
-  assert.equal(agg.stats().pendingTimers, 0, '定时器零泄漏')
-  assert.equal(agg.stats().mergedRounds, 1)
+  // 零定时器泄漏（暂停版根本不起 timer）
+  assert.equal(agg.stats().pendingTimers, 0)
+  assert.equal(sl.calls.length, 0, '暂停版不创建任何 sleep 定时器')
 
-  // tracing 收尾：abort 记 aborted 不计错误；守卫的 stage 都在
+  // tracing 收尾：abort 记 aborted 不计错误；守卫 stage 都在
   const dupTrace = getTrace(dup)
   assert.equal(dupTrace.aborted, true)
   assert.equal(dupTrace.errors, 0)
@@ -423,48 +416,34 @@ test('abort unwind 联动：守卫层 abort 后聚合窗无残留挂起 ctx、�
   const bannedTrace = getTrace(banned)
   assert.deepEqual(bannedTrace.stages.map((s) => s.name), ['acl'], 'acl 拒绝时 dedup 未执行，也就没有它的段')
   assert.ok(logs.some((l) => l.includes('aborted=1') && l.includes('err=0')))
-  // 被拦事件的 reply 从未入过东西
   assert.ok(dup.reply.isEmpty() && banned.reply.isEmpty())
 })
 
-// ================= 5. poke/notice 归窗修复（US-008 verifier 观察①） =================
-test('poke/notice 不进窗：带 sender 的群 poke 直通报终端，后续消息自己开窗、没被 poke 吞并', async () => {
+// ================= 5. poke/notice（聚合暂停版：全事件逐条透传） =================
+test('poke/notice 与消息一律逐事件透传：无吞并、无开窗、顺序=到达序', async () => {
   const fc = fakeClock(1000)
-  const sl = fakeSleep()
-  const agg = createAggregatorMiddleware({
-    getConfig: () => ({ merge: { enabled: true, waitSec: 1, maxSec: 5, groupWaitSec: 1, groupMaxSec: 5 } }),
-    clock: fc.now, sleep: sl.fn,
-  })
+  const agg = createAggregatorMiddleware({ clock: fc.now, log: { warn: () => {} } })
   const t = terminal()
   const pipeline = compose([agg, t])
 
-  // 观察①复现形态：群 poke 带 sender.user_id + group_id——旧口径会被 chatId 归进窗口
   const poke = groupPokeCtx({ userId: '777', groupId: '55' })
   await pipeline(poke)
-  assert.equal(t.hits.length, 1, 'poke 直通报终端')
+  assert.equal(t.hits.length, 1, 'poke 直达终端')
   assert.equal(t.hits[0].inbound.type, 'notice')
-  assert.equal(agg.stats().windows, 0, 'poke 不开窗')
-  assert.equal(agg.stats().mergedRounds, 0)
 
-  // 随后同群消息：正常自任 lead 开自己的窗，没有被并进 poke、也没被 poke 当 follower 吞掉
   const msg = messageCtx({ userId: '777', groupId: '55', text: '在吗' })
-  const msgP = pipeline(msg)
-  await tick()
-  assert.equal(agg.stats().windows, 1)
+  await pipeline(msg)
+  assert.equal(t.hits.length, 2, '消息紧随其后，不经窗口等待')
+  assert.equal(t.hits[1].inbound.rawText, '在吗')
 
-  // 在飞窗口未到期时再来 poke：直通，不打扰 lead（不 steer、不进窗）
   const poke2 = privatePokeCtx({ userId: '888' })
   await pipeline(poke2)
-  assert.equal(t.hits.length, 2, '私聊 poke 同样直通')
-  assert.equal(agg.stats().steered, 0, 'poke 不触发 busy steer')
-
-  sl.settleAll()
-  await msgP
   assert.equal(t.hits.length, 3)
-  assert.equal(t.hits[2].inbound.rawText, '在吗', 'lead 只合并了自己')
-  const meta = t.hits[2].state.get(AGGREGATION_KEY)
-  assert.equal(meta.count, 1, '窗内条数只有消息自己——poke 从未入窗')
+
   assert.equal(agg.stats().windows, 0)
+  assert.equal(agg.stats().mergedRounds, 0)
+  assert.equal(agg.stats().steered, 0)
+  assert.equal(agg.stats().aggregationSuspended, true)
 })
 
 test('aggregator：merge 关闭与 disposed 路径不受类型闸影响（回归既有语义）', async () => {
@@ -484,4 +463,93 @@ test('aggregator：merge 关闭与 disposed 路径不受类型闸影响（回归
   await compose([agg, terminal()])(disposedPoke)
   assert.equal(disposedPoke.signal.aborted, true, 'disposed 检查先于类型闸：poke 也按既有语义被中止')
   assert.equal(disposedPoke.signal.reason, 'aggregator-disposed')
+})
+
+
+// ===== 2026-11-07 review 修复回归（D1/D2/R1/R2/C1 加严）=====
+
+test('dedup（review D1）：首次处理失败后重传可重新准入；成功后重传仍被拦', async () => {
+  let boom = true
+  const t = terminal()
+  const dedup = createDedupMiddleware()
+  const failing = async (ctx, next) => { if (boom) { boom = false; throw new Error('下游炸了') }; t.hits.push(ctx) }
+  const pipeline = compose([dedup, failing])
+  const a = messageCtx({ messageId: 'F1' })
+  await assert.rejects(pipeline(a))
+  const retry = messageCtx({ messageId: 'F1' })
+  await pipeline(retry)
+  assert.equal(retry.signal.aborted, false, '失败不留幂等锁：重传放行')
+  assert.equal(dedup.stats().inProgress, 0, '处理中占位已释放')
+  const dup = messageCtx({ messageId: 'F1' })
+  await pipeline(dup)
+  assert.equal(dup.signal.reason, 'duplicate', '成功处理一次后重传被拦')
+})
+
+test('dedup（review D2）：在飞键并发只放一个，且处理中键不被 LRU 逐出', async () => {
+  const dedup = createDedupMiddleware({ capacity: 1 })
+  let releaseFirst
+  const gate = new Promise((r) => { releaseFirst = r })
+  const hits = []
+  const slow = async (ctx, next) => { hits.push(ctx.inbound.messageId); if (hits.length === 1) await gate; await next() }
+  const pipeline = compose([dedup, slow])
+  const a = messageCtx({ messageId: 'P' })
+  const pA = pipeline(a)
+  await new Promise((r) => setImmediate(r))
+  // 灌入别的键把 LRU 打满（capacity 1），P 只在 inProgress 不在 seen——不得因此放行并发
+  const b = messageCtx({ messageId: 'Q' })
+  const pB = pipeline(b)
+  await new Promise((r) => setImmediate(r))
+  const a2 = messageCtx({ messageId: 'P' })
+  const pA2 = pipeline(a2)
+  await Promise.all([pA2])
+  assert.equal(a2.signal.reason, 'duplicate', '在飞键并发拦截，与 LRU 容量无关')
+  releaseFirst()
+  await Promise.all([pA, pB])
+})
+
+test('ratelimit（review R1）：时钟回拨不后退基线，恢复不多发令牌', async () => {
+  const times = [10000, 9000, 10000]
+  let i = 0
+  const rl = createRatelimitMiddleware({
+    capacity: 1, refillPerSec: 1,
+    clock: () => (i < times.length ? times[i++] : 10000),
+  })
+  const t = terminal()
+  const pipeline = compose([rl, t])
+  const mk = () => messageCtx({ userId: '99' })
+  await pipeline(mk()) // 10000：吃掉 1 枚
+  const back = mk()
+  await pipeline(back) // 9000 回拨：基线不回退，无补充 → 拒
+  assert.equal(back.signal.reason, 'ratelimited')
+  const fwd = mk()
+  await pipeline(fwd) // 10000 恢复：dt 从 effectiveNow=10000 起算=0 → 仍拒（旧实现此处会重复计息放行）
+  assert.equal(fwd.signal.reason, 'ratelimited')
+})
+
+test('ratelimit（review R2）：NaN 时钟 fail-open 放行且桶不被毒化；capacity<1 构造拒绝', async () => {
+  let nanOnce = false
+  const rl = createRatelimitMiddleware({
+    capacity: 2, refillPerSec: 1,
+    clock: () => { if (!nanOnce) { nanOnce = true; return NaN } return 5000 },
+  })
+  const t = terminal()
+  const pipeline = compose([rl, t])
+  const bad = mk2()
+  await pipeline(bad)
+  assert.equal(bad.signal.aborted, false, 'NaN 时钟走 fail-open')
+  assert.equal(rl.stats().errors, 1)
+  const good = mk2()
+  await pipeline(good)
+  assert.equal(good.signal.aborted, false, '恢复正常时钟后桶仍可用（未被 NaN 毒化）')
+  function mk2() { return messageCtx({ userId: '77' }) }
+  assert.throws(() => createRatelimitMiddleware({ capacity: 0.5 }), /至少为 1/)
+})
+
+test('acl（review C1 加严三面）：缺配置拒绝、群事件缺 groupId 拒绝、缺 sender.userId 拒绝', async () => {
+  const { defaultAclDecision } = await import('../src/kernel/mw-acl.js')
+  const msgCtx = (inbound) => ({ inbound })
+  assert.equal(defaultAclDecision(msgCtx({ type: 'message', sender: { userId: '1' }, groupId: '5' }), null).allow, false, 'cfg 缺失 → 拒')
+  assert.equal(defaultAclDecision(msgCtx({ type: 'message', sender: { userId: '1' }, subType: 'group' }), ACL_CFG).allow, false, '群事件缺 groupId → 拒')
+  assert.equal(defaultAclDecision(msgCtx({ type: 'message', groupId: '5' }), ACL_CFG).allow, false, '缺 sender.userId → 拒')
+  assert.equal(defaultAclDecision(msgCtx({ type: 'notice', sender: { userId: '1' } }), ACL_CFG).allow, true, '非 message 仍放行（处理器复检）')
 })

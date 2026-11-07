@@ -60,10 +60,11 @@ test('对抗：同一层重复调用 next() 触发 double-next 熔断', async ()
   }
   const err = await compose([bad, inner])(fakeCtx()).then(() => null, (e) => e)
   assert.ok(err instanceof PipelineError, `期望 PipelineError，实际 ${err}`)
-  // 下游错误会沿调用链逐层包装：index 1 拦下重入，index 0 记录传播点
+  // 下游错误会沿调用链逐层包装；review A1#4 修复后 originalCause.index 指向
+  // **违规调用者（第 0 层）**而非被请求的下游——「谁重复调 next 就报谁」
   assert.equal(err.index, 0)
   assert.ok(err.originalCause instanceof PipelineError)
-  assert.equal(err.originalCause.index, 1)
+  assert.equal(err.originalCause.index, 0)
   assert.match(err.originalCause.message, /called next\(\) multiple times/)
   assert.match(err.stack, /Caused by:/)
   assert.equal(innerCalls.length, 1, '内层只应被执行一次')
@@ -192,4 +193,75 @@ test('空管道：直接 resolve；给了 tail 则恰好执行一次', async () 
 test('PipelineError 冻结数组场景：compose(Object.freeze([...])) 可正常组装', async () => {
   const frozen = Object.freeze([async (ctx, next) => { await next() }])
   await compose(frozen)(fakeCtx())
+})
+
+
+// ===== 2026-11-07 review 修复回归（A1#2/#3 + 契约钉死）=====
+
+test('对抗：abort 短路后同层第二次 next() 仍被熔断（review A1#3：旧游标方案会放行）', async () => {
+  const controller = new AbortController()
+  const ctx = { signal: controller.signal }
+  let innerCount = 0
+  const bad = async (c, next) => {
+    controller.abort()
+    await next()
+    await next() // 第二次调用必须 reject——abort 短路同样消耗资格
+  }
+  const inner = async () => { innerCount += 1 }
+  const err = await compose([bad, inner])(ctx).then(() => null, (e) => e)
+  assert.ok(err instanceof PipelineError, `期望 PipelineError，实际 ${err}`)
+  assert.equal(innerCount, 0)
+  let root = err
+  while (root.originalCause instanceof PipelineError) root = root.originalCause
+  assert.match(root.message, /called next\(\) multiple times/)
+  assert.equal(root.index, 0)
+})
+
+test('监听器卫生：正常完成/异常完成后卸载 abort 监听；预 abort 不注册（review A1#2）', async () => {
+  let added = 0
+  let removed = 0
+  const mkSignal = (aborted = false) => ({
+    aborted,
+    addEventListener: (ev, fn, opts) => { added += 1 },
+    removeEventListener: (ev, fn) => { removed += 1 },
+  })
+  await compose([async (_, next) => next()])(fakeCtxWith(mkSignal()))
+  assert.deepEqual([added, removed], [1, 1], '正常完成：注册一次卸载一次')
+  added = removed = 0
+  const err = await compose([async () => { throw new Error('boom') }])(fakeCtxWith(mkSignal())).then(() => null, (e) => e)
+  assert.ok(err instanceof PipelineError)
+  assert.deepEqual([added, removed], [1, 1], '异常完成同样卸载')
+  added = removed = 0
+  let reached = false
+  await compose([async () => { reached = true }])(fakeCtxWith(mkSignal(true)))
+  assert.equal(reached, false, '预 abort：第 0 层都不进')
+  assert.deepEqual([added, removed], [0, 0], '预 abort：不注册监听')
+})
+
+function fakeCtxWith(signal) {
+  return { signal }
+}
+
+test('契约钉死：abort 不强制作废在飞 next()——管道完成=已启动中间件真实结束（review A1#1 拍板）', async () => {
+  const controller = new AbortController()
+  const order = []
+  const outer = async (c, next) => {
+    await next()
+    order.push('outer:bubble')
+  }
+  let hangRelease
+  const inner = () => new Promise((r) => { hangRelease = r; order.push('inner:entry') })
+  const p = compose([outer, inner])({ signal: controller.signal })
+  await Promise.resolve()
+  controller.abort()
+  await Promise.resolve()
+  order.push('after-abort')
+  let done = false
+  p.then(() => { done = true })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(done, false, 'abort 后管道不得提前完成（在飞内层仍挂起）')
+  hangRelease()
+  await p
+  assert.equal(done, true)
+  assert.deepEqual(order, ['inner:entry', 'after-abort', 'outer:bubble'], '内层真实 settle 后外层 bubble 收尾（§2.2 unwind 实况）')
 })
