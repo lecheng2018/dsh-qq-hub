@@ -138,7 +138,7 @@
 4. **路由鉴权审计**：本次读到若干模块路由直接触发 OneBot、外站或持久化（例如 `/qzone/delete`、RSS pull/digest/clear、scheduler del、module tool/simulate、avatar sync）。需要在实际 host HTTP 装配点证明它们的 actor 授权、CSRF 防护与部署暴露边界；仅有面板按钮隐藏不是服务端授权证明。
 5. **记忆数据迁移证明**：`fix-memory-scope.mjs` 与其测试解决的是无 scope `memories.json` 归档；不证明历史 `scoped.json` 已完整并入主库。核对历史用户备份/迁移日志/条数校验，明确备份何时可删除、失败如何恢复。
 6. **行为测试而非测试文件存在**：M0 最终自动化门禁结果见本文件开头和 `baseline.md`；它不等同于表中每个行为都有专项断言。后续仍应为各类副作用建立 fake OneBot/HTTP/CDP 端到端矩阵，覆盖 dry-run、总开关关闭、权限撤回、模块热卸载、失败重试、目标变化、重复触发与实际副作用计数。Heybox/complete-guard/mood 的专属行为覆盖当前未能确认或偏弱。
-7. **目标环境验收**：真实 OneBot、SnowLuma 版本、外站 Cookie/验证码、CDP、语音/图像服务、Linux/Windows 工具路径、路由公网暴露均未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
+7. **目标环境验收**：真实 OneBot、SnowLuma 版本、外站 Cookie/验证码、CDP、语音/图像服务、Linux/Windows 工具路径、路由公网暴露均未在本次验证；不能据源码或历史测试数字宣称线上可用。
 
 ## 本次核验记录
 
