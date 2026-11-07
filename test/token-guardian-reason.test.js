@@ -1,6 +1,6 @@
 // 回归：压缩失败要说清「为什么」。
 //
-// 2026-11-04 主人点「现在压一次」看到「这次没压成（没有聊天流水或请求失败，看日志）」，
+// 2026-11-04 主人点「现在压一次」看到「这次没压成（没有聊天流水或请求失败，看日志）」,
 // 但日志里真正的原因是模型 429 限流。笼统的提示让他以为是功能坏了。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -20,7 +20,7 @@ test('compact 返回结构而不是 boolean（要能带 reason）', () => {
 })
 
 test('429 / 限流要被识别出来，给出可操作建议', () => {
-  assert.match(SRC, /429|rate\.?limit|频率限制|quota|限额/, '要能认限流的各种说法')
+  assert.match(SRC, /429\|rate\.?limit\|频率限制\|quota\|限额/, '要能认限流的各种说法')
   assert.match(SRC, /额度用完/, '要明确说是额度问题，不是功能坏了')
 })
 
