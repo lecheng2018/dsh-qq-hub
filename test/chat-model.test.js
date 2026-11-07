@@ -90,7 +90,10 @@ const OWNER = '10000001'
 const BOT = '20000002'
 const FRIEND = '30000003'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function until(fn, ms = 10000) {
+async function until(fn, ms = 30000) {
+  // 30s 等待窗口：全量并行（142 文件同跑）时本文件是起真 host + mock 网关的重用例，
+  // 10s 窗口在高负载机器上会「等不到条件成立」（M0-2 分类：负载敏感的等待预算，
+  // 不是断言放宽——条件最终必须成立这一要求不变）。
   const t = Date.now()
   while (Date.now() - t < ms) {
     const v = await fn()
