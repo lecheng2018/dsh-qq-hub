@@ -102,7 +102,7 @@ export function createCommandRouterMiddleware(options = {}) {
     } catch { /* state 槽位缺失：观测位让位于主链 */ }
   }
 
-  /** 本轮入队增量探测：queue getter 返回内部数组引用（context.js 契约），只读长度。 */
+  /** 本轮入队增量探测：queue getter 现返回冻结快照（review A2 契约），只读长度。 */
   function queueLength(ctx) {
     const q = ctx?.reply?.queue
     return Array.isArray(q) ? q.length : null
@@ -157,7 +157,10 @@ export function createCommandRouterMiddleware(options = {}) {
       counters.handlerErrors += 1
       try {
         const now = queueLength(ctx)
-        if (before !== null && now !== null && now > before) ctx.reply.queue.length = before
+        if (before !== null && now !== null && now > before) {
+          if (typeof ctx.reply.rollbackTo === 'function') ctx.reply.rollbackTo(before)
+          else ctx.reply.queue.length = before // 旧 duck reply 兼容位（自定义注入面）
+        }
       } catch { /* 非标准 reply（无 queue 槽）：无增量可回滚，维持现状透传 */ }
       warn(`router: 命令 /${cmd.name} 执行出错，回滚半途回复并透传 legacy 兜底（${error?.message ?? error}）`)
       record(ctx, 'handler-error', cmd, { reason: String(error?.message ?? error) })
