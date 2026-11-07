@@ -21,7 +21,7 @@ import {
 } from './engine.js'
 
 const MINUTE = 60_000
-// 她的自称：用于聊天流水标注与「名字：」前缀清洗（与 QQ Hub 的桌宠形象同名）。
+// 她的自称：用于聊天流水标注与「名字：」前缀清洗。
 const ROLE = '大肥鱼'
 // mood 模块靠 userText 的「【系统提醒」前缀把主动回合判成 origin='speak-up'（mood/index.js 的判定），
 // deliver 路径本身没有 userText，这里补一个同款前缀，保住心情判定链路。
@@ -81,7 +81,7 @@ export function cleanReply(raw) {
   return s
 }
 
-export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, memory, personaText, pet: petOf }) {
+export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, personaText }) {
   const moodOf = () => { try { return mood?.() || null } catch { return null } }
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
@@ -213,50 +213,6 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     }) + `\n6) 这一轮不能用任何工具：直接输出你要发的那句话即可（会自动转发给${cfg.ownerName || '主人'}）。不想说就整段只输出 ${SILENCE}。`
   }
 
-  // ---------- 载体分发（互斥铁律：一轮只发一处，永不双发） ----------
-  // 配置真相：cfg.ext.purpose.carrier / petFallbackToQQ（host.js /panel/purpose/config 聚合写入）。
-  // carrier=pet 只有在装了并开启「桌宠」模块后才会真正走气泡；桌宠模块是独立的 PR/模块，
-  // 没装时 petOf() 为 null，一律按离线回落处理（默认回 QQ，行为与从前一致）。
-  function carrierSettings() {
-    const ext = (getConfig().ext && getConfig().ext.purpose) || {}
-    return { carrier: ext.carrier === 'pet' ? 'pet' : 'qq', petFallbackToQQ: ext.petFallbackToQQ !== false }
-  }
-  function syncPetCarrierMirror(su) {
-    if (su.carrier !== 'pet' || typeof setConfig !== 'function') return
-    try {
-      const cfg = getConfig()
-      const cur = (cfg.ext && cfg.ext.pet) || {}
-      if (cur.carrier === su.carrier && (cur.petFallbackToQQ !== false) === su.petFallbackToQQ) return
-      setConfig({ ...cfg, ext: { ...(cfg.ext || {}), pet: { ...cur, carrier: su.carrier, petFallbackToQQ: su.petFallbackToQQ } } })
-    } catch {}
-  }
-  /**
-   * carrier=pet 时的投递决策。返回 'pet'（已推气泡）| 'qq'（调用方走原 hub.deliver）| 'silent'（本轮不发）。
-   * 在线才调 pet.dispatch（避免它内部回落路径绕过 own/userText 心情链路）；离线由 purpose 自己决定回落或静默；
-   * dispatch 返回非 ok（如专注模式 focus：不发也不回落）按契约映射，绝不在一个回合里两头都发。
-   */
-  async function deliverByCarrier(text, purposeLabel) {
-    const su = carrierSettings()
-    if (su.carrier !== 'pet') return 'qq' // carrier=qq（默认）：行为与从前完全一致
-    const pet = typeof petOf === 'function' ? petOf() : null
-    let online = false
-    try { online = Boolean(pet?.online?.()?.online) } catch {}
-    if (online && typeof pet.dispatch === 'function') {
-      syncPetCarrierMirror(su)
-      let r = null
-      try {
-        r = await pet.dispatch({ text, purpose: String(purposeLabel || '').slice(0, 40) })
-      } catch (error) {
-        log.warn?.('目的：桌宠气泡投递出错：', error?.message)
-      }
-      if (r && r.ok) return r.via === 'qq' ? 'qq' : 'pet' // dispatch 内部竞态回落（极小概率）也只发了一处
-      if (r && r.reason === 'focus') return 'silent' // 专注模式开着：不发也不回落
-      return su.petFallbackToQQ ? 'qq' : 'silent'
-    }
-    // pet 离线 / 模块没在跑：按回落开关决定 purpose 自己走 QQ（带 own/userText，保住心情与流水链路）或静默
-    return su.petFallbackToQQ ? 'qq' : 'silent'
-  }
-
   // ---------- 生成 + 投递 + 回执（hub.deliver 内部吞错，成功判定看返回值） ----------
   async function runOnce({ reason = '定时', config, state, force = false } = {}) {
     const cfg = getConfig()
@@ -310,19 +266,12 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     if (!text) {
       outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 不硬发
     } else {
-      const where = await deliverByCarrier(text, picked.purpose.text)
-      if (where === 'pet') {
-        outcome = 'sent' // 气泡已推桌宠：本轮不发 QQ，正常结算次数与心情
-      } else if (where === 'silent') {
-        outcome = 'silent' // carrier=pet 且关闭回落（或专注模式）：静默，不硬补
-      } else {
-        try {
-          const r = await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
-          outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
-        } catch (error) {
-          outcome = 'delivery-failed'
-          log.warn?.('目的：投递失败：', error?.message)
-        }
+      try {
+        const r = await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
+        outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
+      } catch (error) {
+        outcome = 'delivery-failed'
+        log.warn?.('目的：投递失败：', error?.message)
       }
     }
     applyPurposeOutcome(state, { now: Date.now(), config, outcome, text, memo, planned: picked.purpose })
@@ -425,7 +374,6 @@ export function createPurpose({ getConfig, setConfig, hub, log, isMuted, mood, m
     const sum = summarizePurposeState(loadState(config), { config })
     sum.minMaterials = config.minMaterials
     sum.maxCandidates = config.maxCandidates
-    sum.carrier = carrierSettings().carrier
     return sum
   }
 
