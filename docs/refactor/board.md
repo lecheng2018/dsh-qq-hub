@@ -34,19 +34,19 @@
 | 任务 | 状态 | 负责人 | 依赖 | 允许文件 | 验收 | 回滚 |
 |---|---|---|---|---|---|---|
 | M0-1 锁定执行基线 | ✅（地基提交 8115132 已记录 baseline.md） | Controller+Release | — | docs/refactor/baseline.md | 基线/差异/版本/回滚点齐 | 删未发布记录分支 |
-| M0-2 测试与打包基线 | 🔵 test:all 与 pack:check 已有；本机全量分类进行中 | QA | M0-1 | package scripts、.github/workflows、测试基建 | 同 commit 两次一致；tgz 清单 | 还原 workflow |
-| M0-2a 基线失败分类修复（.pathname 环境类） | 🔵 | QA | M0-2 | test/*.test.js 的路径解析行（不删不改断言） | Windows/POSIX 一致 | git revert |
-| M0-2b 其余基线失败分类登记 | 🔵 | QA + 域 owner | M0-2 | 测试或对应域文件 | 失败→修复或书面接受 | 各自 PR revert |
+| M0-2 测试与打包基线 | ✅ 全量两次一致（1287 用例 0 fail / 182s）；扩展 46/46；pack 214 文件 | QA | M0-1 | package scripts、.github/workflows、测试基建 | 同 commit 两次一致；tgz 清单 | 还原 workflow |
+| M0-2a 基线失败分类修复（.pathname 环境类等） | ✅ 62e1315 | QA | M0-2 | test/*.test.js 路径解析（不删不改断言） | Windows/POSIX 一致 | git revert |
+| M0-2b 其余基线失败分类登记 | ✅ 62e1315 / ae49305（含卡住根因：media.js 定时器泄漏，生产缺陷已修） | QA + 域 owner | M0-2 | 测试或对应域文件 | 失败→修复或书面接受 | 各自 PR revert |
 | M0-3 功能矩阵 | ✅ feature-matrix.md 初版 | QA + 各 owner | M0-1 | docs/refactor/feature-matrix.md | 无无人认领条目 | 删文档 |
-| M0-4 契约 ADR 冻结 | ⬜ ADR-0001 Proposed → 本阶段转 Accepted | Controller | M0-3 初版 | docs/refactor/adr/0001 | 全会签 + Accepted | ADR 回退 Proposed（附说明） |
+| M0-4 契约 ADR 冻结 | ✅ ADR-0001 Accepted（会签记录见 ADR §7） | Controller | M0-3 初版 | docs/refactor/adr/0001 | 全会签 + Accepted | ADR 回退 Proposed（附说明） |
 | M0-5 看板与日历 | ✅ 本文档 | Controller | M0-1 | docs/refactor/board.md | 每任务五问可答 | 删文档 |
-| G0 放行 | ⬜ 待 M0-2a/2b 收口 | Controller | 全部 M0 | — | G0 检查单 | — |
-| M1-A 面板安全边界 | ⬜ | Security/Integration | M0-2 | test 任务专属 + 必要时 host/panel/**（串行队列） | 未授权请求零副作用 | 恢复前一版本 |
-| M1-B backfill 行为锁定 | ⬜（已侦察：tooOld 无消费者） | Inbound + Integration | M0-3/4 | test/modular-backfill-legacy.test.js；接线修复走串行队列 | 迟到副作用为零 | PR revert |
-| M1-C unknown 发送锁定 | ⬜（已侦察：sendVoice/sendFile 回退面） | Outbox + Integration | M0-4 | test/modular-delivery-legacy.test.js；onebot/client.js 可改（Inbound 域）；hub 修复走串行 | 无 echo/messageId 幂等冒充 | PR revert |
-| M1-D 文档对齐 | ⬜ | Release+Security | 无 | README、docs | 宣称=实现 | 文档还原 |
-| M1-E 开关姿态 | ⬜（侦察完成：5 开关 fail-closed 默认关） | Controller+Integration | — | docs/refactor/flags.md + 必要测试 | flag-off=基线 | — |
-| G1 放行 | ⬜ | Controller | M1-A~E | — | G1 检查单 | — |
+| G0 放行 | ✅（证据见 baseline.md M0-2 节） | Controller | 全部 M0 | — | G0 检查单 | — |
+| M1-A 面板安全边界 | ✅ 7f2519a（guard + 接线 + 7/7 测试；防护位于插件层，反代形态登记未覆盖） | Security/Integration | M0-2 | test/modular-panel-guard + host/panel/guard + 接线（串行队列第 1 项） | 未授权请求零副作用 | PR revert |
+| M1-B backfill 行为锁定 | ✅ 61a8d44（11/11 测试；tooOld 无消费者已修复进接线，串行队列第 2 项） | Inbound + Integration | M0-3/4 | test/modular-backfill-legacy + gateway.js | 迟到副作用为零 | PR revert |
+| M1-C unknown 发送锁定 | ✅ d528631（11/11 测试；client 分类 + sendFile/sendVoice 回退条件，串行队列第 3 项） | Outbox + Integration | M0-4 | test/modular-delivery-legacy + client.js/hub.js | 无 echo/messageId 幂等冒充 | PR revert |
+| M1-D 文档对齐 | ✅（TOTP 已移除无宣称；审批/提问/dryRun/模块隔离宣称属实；README 补 M1-A 防护第 8 条） | Release+Security | 无 | README、docs | 宣称=实现 | 文档还原 |
+| M1-E 开关姿态 | ✅ 5896d27（flags.md + 6/6 测试；缺省全关，本阶段 0 灰度扩大） | Controller+Integration | — | docs/refactor/flags.md + 必要测试 | flag-off=基线 | — |
+| G1 放行 | 🔵 待最终提交全量两轮一致复核 | Controller | M1-A~E | — | G1 检查单 | — |
 | M2-A~F 纯模块 | ⬜ 未开始 | 各 Core 工作流 | G1 | 各自目录 | G2 检查单 | PR revert |
 | M3~M6 | ⬜ 未开始 | 按各任务书 | G2+ | — | — | — |
 

@@ -18,7 +18,9 @@ async function localTts() {
   return { srv, close: async () => { srv.close(); await fake.call('/save', { voice: { engine: 'windows' } }) } }
 }
 
-async function until(fn, ms = 8000) {
+async function until(fn, ms = 30000) {
+  // 30s 等待窗口：全量并行时高负载机器上 8s 不够（M0-2 分类：负载敏感等待预算，
+  // 非断言放宽——条件最终必须成立不变）。
   const t = Date.now()
   while (Date.now() - t < ms) {
     const v = await fn()
