@@ -148,6 +148,36 @@ test('dedup：跨聊天同 messageId 不算重传（聊天域复合键，对齐 
   assert.equal(dedup.stats().duplicates, 0)
 })
 
+// 补评 F5：legacy 的记账是真值口径（src/host.js:253 `&& ev.message_id`）——数字 0（部分网关
+// echo/回填）不记不拦；信封 String 化后它是 '0'，当有效键就会把同域第二条 0 号消息误判重传。
+test('dedup：0 号消息（message_id=0 / \'0\'）按 keyless 放行——二连发不判重传（补评 F5）', async () => {
+  const dedup = createDedupMiddleware()
+  const t = terminal()
+  const pipeline = compose([dedup, t])
+  const first = messageCtx({ userId: '2002', messageId: 0, text: '第一条 0 号' })
+  assert.equal(first.inbound.messageId, '0', '信封把数字 0 统一 String 化成 "0"')
+  const second = messageCtx({ userId: '2002', messageId: 0, text: '第二条 0 号' })
+  await pipeline(first)
+  await pipeline(second)
+  assert.equal(first.signal.aborted, false)
+  assert.equal(second.signal.aborted, false, '0 号 id 不判重传，同域第二条照样处理')
+  assert.equal(t.hits.length, 2, '终端两次都执行')
+  assert.equal(dedup.stats().duplicates, 0, '幂等层不自己制造错拦')
+  assert.equal(dedup.stats().keyless, 2)
+
+  // 空串同样 keyless（既有豁免不变）；有效 id 的重传防线一字不松
+  const empty = messageCtx({ userId: '2002', messageId: '' })
+  await pipeline(empty)
+  assert.equal(empty.signal.aborted, false, "messageId='' 维持 keyless 放行")
+  const real1 = messageCtx({ userId: '2002', messageId: 'R' })
+  const real2 = messageCtx({ userId: '2002', messageId: 'R' })
+  await pipeline(real1)
+  await pipeline(real2)
+  assert.equal(real2.signal.aborted, true, '非 0 的有效 id 照旧判重传')
+  assert.equal(real2.signal.reason, 'duplicate')
+  assert.equal(dedup.stats().duplicates, 1)
+})
+
 // ================= 2. 限流（ratelimit） =================
 test('限流边界：容量 N 恰好 N 过 N+1 拒；补充走假时钟；容量封顶不超发', async () => {
   const fc = fakeClock(0)
@@ -315,6 +345,34 @@ test('ACL：白名单外私聊/黑名单群 abort(acl)；owner 直通；poke/not
 
   assert.equal(acl.stats().rejected, 3)
   assert.equal(acl.stats().passed, 4)
+})
+
+// 补评 F4 全链：私聊事件身份只在顶层（无 sender 对象）时，pipeline-on 不再整条丢弃。
+// 修复点在信封构造（legacy-fallback），本用例钉的是「acl + dedup + 终端」的实际后果。
+test('ACL：身份只在事件顶层的私聊不再被 fail-closed 误杀（补评 F4 全链）', async () => {
+  const acl = createAclMiddleware({ getConfig: () => ACL_CFG })
+  const t = terminal()
+  const pipeline = compose([acl, createDedupMiddleware(), t])
+  const mk = (over) => createContext(legacyEventToEnvelope({
+    post_type: 'message', message_type: 'private', sub_type: 'friend', user_id: '2002', time: 1,
+    message: [{ type: 'text', data: { text: '在吗' } }], message_id: 'no-sender-1', ...over,
+  }), 'onebot')
+
+  const ctx = mk()
+  await pipeline(ctx)
+  assert.equal(ctx.inbound.sender?.userId, '2002', '信封兜底出发送者身份')
+  assert.equal(ctx.signal.aborted, false, '不再以「缺少发送者身份」丢弃')
+  assert.equal(t.hits.length, 1, 'legacy 能处理的消息，pipeline-on 也处理')
+  assert.equal(acl.stats().passed, 1)
+  assert.equal(acl.stats().rejected, 0)
+
+  // 反面对照：顶层也没身份 → 依旧 fail-closed（兜底没把权限闸门打开）
+  const anon = mk({ user_id: undefined, message_id: 'anon-1' })
+  await pipeline(anon)
+  assert.equal(anon.inbound.sender, undefined, '无身份可兜时不凭空合成 sender')
+  assert.equal(anon.signal.aborted, true, '身份真缺仍是拒绝')
+  assert.equal(anon.signal.reason, 'acl')
+  assert.equal(t.hits.length, 1, '匿名事件不进终端')
 })
 
 test('ACL：判定桩 reject/缺字段 → abort(acl)；桩抛错 → fail-closed 拒绝（拍板：权限防御异常不放行）', async () => {

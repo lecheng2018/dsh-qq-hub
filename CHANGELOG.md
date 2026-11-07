@@ -33,6 +33,15 @@
   **行为变化**：`FLAG_INGRESS_AGGREGATOR=true` 现在的含义是「挂载暂停透传版」——装载即 warn「聚合执行暂停」，
   不吞并不合流（此前为开旗即开窗合流；灰度默认关的口径不变）。**无版本号 bump**：仍为分支未发版条目，
   hub.js/package.json 红线零改动。
+- **P5 补评即修**（US-003b，据补评报告 `2026-11-07-dsh-qq-hub-C1C`；处置入账见映射文档 §11.5）：
+  **补评即修：F4/F5 + 观测诚实化（F1-a/F8），F1-b/F2/F3 入 roadmap**。
+  F4=`legacyEventToEnvelope` 私聊 sender 兜底事件顶层 `user_id`（缺 sender 或 sender 缺 user_id 的
+  私聊事件不再被 acl「缺少发送者身份」fail-closed 整条丢弃；notice/poke 通知类形态不变）；
+  F5=dedup 把假值但存在的 id（`0`/`'0'`）视同 keyless 放行（对齐 host `seenIds` 真值口径，0 号消息
+  二连发不判重传）；F1-a=装配日志「出口=live」补注治理面实况——主聊天气泡由 turn/end 异步投递、命中
+  包装器直发分支，不经队列/清洗/pacing/shadow 比对，队列支路（router 直答与 hub 闸门透传）才是治理面；
+  F8=shadow 比对零样本时改打 info「无队列支路样本（气泡直发不在治理面）」，不再用
+  「match=0 mismatch=0」把空账本冒充比对通过。**无版本号 bump**，hub.js/package.json 红线零改动。
 
 **回滚说明**：unset 四个开关重启即回到重构前行为（演练已实证 flag-off→on→off 三进程下旧通道发送调用序列首末全等、开启态外发文本语义一致）。灰度顺序建议：`FLAG_USE_PIPELINE`（live）→ 需要观测时 `FLAG_EGRESS_SHADOW` → `FLAG_INGRESS_AGGREGATOR`/`NEW_MEMORY_PIPELINE` 待终局条件成熟再开。
 

@@ -24,7 +24,11 @@ import { traceStage } from './mw-tracing.js'
 /** 事件 → 去重键：无 messageId 返回 undefined（放行）；有则按聊天域复合。 */
 function dedupKeyFromInbound(inbound) {
   const mid = inbound?.messageId
-  if (mid === undefined || mid === null || mid === '') return undefined
+  // F5（2026-11-07 补评）：假值但存在的 id 一律按 keyless 放行——legacy 的记账是真值口径
+  // （src/host.js:253 `if (ev.post_type === 'message' && ev.message_id)`），数字 0（部分网关
+  // 的 echo/回填形态）不记不拦；信封把 message_id 统一 String 化后它变成 '0'，若当有效键，
+  // 同域第二条 0 号消息会被误判重传丢弃。幂等层不该自己制造「错拦一条正常消息」。
+  if (mid === undefined || mid === null || mid === '' || mid === 0 || mid === '0') return undefined
   const groupId = inbound?.groupId
   const hasGroup = groupId !== undefined && groupId !== null && groupId !== ''
   if (hasGroup) return JSON.stringify(['message', 'group', String(groupId), String(mid)])
