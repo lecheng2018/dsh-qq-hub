@@ -15,6 +15,9 @@ import { dataDir } from './store.js'
 import { registerSecretField } from './config.js'
 import { defineTool } from '../tools/tools.js'
 import { workspaceDirOf } from '../chat/hub.js'
+// M2-F：能力声明规划层与健康注册表（在现有装载流程上消费，不另起第二套模块系统）
+import { planModules, createModuleHealth } from './module-sdk.js'
+import { EnvironmentDetector } from '../runtime/environment-detector.js'
 
 /** 扩展接口版本：只加不改。哪天不得不改已有的东西才升到 2，并在更新说明里写清楚怎么迁移。 */
 export const API_VERSION = 1
@@ -163,6 +166,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   const builtinDefs = new Map(builtins.map((d) => [d.id, d]))
   const live = new Map() // id → 运行中的模块（见 start）
   const errors = new Map() // id → { message, at }  启动失败 / 加载失败
+  const health = createModuleHealth() // M2-F：模块健康登记（enabled/disabled/degraded/failed）
   const routes = new Map() // 完整路径 → { id, handler }
   const listeners = new Map() // 事件名 → [{ id, fn }]
   // 模块每次（重）启动都递增一次「代际」：hub 用它判断会话里挂的工具是不是旧模块实例的闭包。
@@ -317,11 +321,13 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const api = makeApi(id, source, rec)
       const r = def.setup(api)
       rec.exports = (r && typeof r.then === 'function' ? await r : r) ?? {}
+      health.set(id, 'enabled')
       log.info(`模块「${def.name || id}」${source === 'user' ? '（自己写的）' : ''}已启动`)
       emit('module/start', id)
     } catch (error) {
       stop(id, { quiet: true })
       errors.set(id, { message: String(error && error.message ? error.message : error).slice(0, 800), at: Date.now(), source })
+      health.set(id, 'failed', String(error.message || error).slice(0, 200))
       log.warn(`模块「${def.name || id}」启动失败：`, error.message)
     }
     return live.get(id)
@@ -338,9 +344,11 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const r = def.setup(makeApi(id, 'builtin', rec))
       if (r && typeof r.then === 'function') throw new Error('内置模块的 setup 要同步返回')
       rec.exports = r ?? {}
+      health.set(id, 'enabled')
     } catch (error) {
       stop(id, { quiet: true })
       errors.set(id, { message: String(error.message || error).slice(0, 800), at: Date.now(), source: 'builtin' })
+      health.set(id, 'failed', String(error.message || error).slice(0, 200))
       log.error(`内置模块「${def.name || id}」启动失败：`, error.message)
     }
   }
@@ -349,6 +357,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     const rec = live.get(id)
     if (!rec) return false
     live.delete(id)
+    health.set(id, 'disabled')
     generation++ // 模块被停掉/替换：工具清单或实例变了，下一轮重挂
     for (const off of rec.offs.reverse()) { try { off() } catch (error) {} }
     try { rec.exports?.dispose?.() } catch (error) {}
@@ -417,7 +426,19 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   /** 插件加载时：内置模块同步启动（被替换 / 关掉的跳过），自己写的随后异步加载。 */
   function boot() {
     const users = isUserOn() ? scanUser() : []
-    for (const def of builtins) if (wanted(def.id, users) === 'builtin') startSync(def)
+    // M2-F：装载前先过一遍能力声明计划（requires/conflicts/provides/requiresGUI/apiVersion）。
+    // enabledOf 仍以 wanted() 为唯一开关权威；当前内置模块都没有能力声明，计划零改变（行为红线）。
+    const detector = new EnvironmentDetector()
+    const plan = planModules({
+      defs: builtins,
+      enabledOf: (id) => wanted(id, users) !== null,
+      runtime: { gui: !detector.isFnOS(), apiVersion: API_VERSION },
+    })
+    for (const skip of plan.skipped) {
+      if (skip.reason !== '配置开关关闭') log.info(`模块「${skip.id}」未装载：${skip.reason}`)
+      health.set(skip.id, skip.reason?.startsWith('定义不合法') || skip.reason?.includes('失败') ? 'failed' : 'disabled', skip.reason)
+    }
+    for (const def of plan.load) if (wanted(def.id, users) === 'builtin') startSync(def)
     return (async () => {
       await loadLib()
       const g = { lib, src: pathToFileURL(SRC).href, version, apiVersion: API_VERSION, modules: publicHandle }
@@ -709,6 +730,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     boot, sync, reload, stop, dispose, status, create, fork, promptFor, panelSource,
     use: exportsOf, has: (id) => live.has(id), running: (id) => live.get(id)?.source || null, generation: () => generation,
     emit, claim, filter, filterSync, buildTools,
+    /** M2-F：模块健康快照（enabled/disabled/degraded/failed + 原因）。 */
+    health: () => health.snapshot(),
+    healthCounts: () => health.counts(),
     // 插件核心自己听事件（不属于任何模块，不会被撤掉）
     listen: (event, fn) => { const item = { id: '@core', fn }; listeners.set(event, [...(listeners.get(event) || []), item]); return () => listeners.set(event, (listeners.get(event) || []).filter((x) => x !== item)) }, contextFor, rules, commands, dshTools, builtinOff, handle,
     hasRoute: (path) => routes.has(path),
