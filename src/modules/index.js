@@ -11,7 +11,6 @@ import diary from './diary/index.js'
 import qzoneSocial from './qzone-social/index.js'
 import speakup from './speakup/index.js'
 import purpose from './purpose/index.js'
-import pet from './pet/index.js'
 import bili from './bili/index.js'
 import song from './song/index.js'
 import profile from './profile/index.js'
@@ -25,7 +24,7 @@ import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
 import rss from './rss/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, pet, bili, song, profile, contacts, douyin, heybox,
+export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, song, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
   tokenGuardian, completeGuard, memoryPrivacy, scheduler,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器

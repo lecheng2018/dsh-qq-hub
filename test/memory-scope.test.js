@@ -276,7 +276,7 @@ test('relatedTo 不会因聊天里出现某人 QQ 就捞出别的作用域的记
   assert.ok(own.some((m) => String(m.text).includes('粥粥')), '主人私聊自己提炼时应该看得到')
 })
 
-// ---------- P0-1：后台任务（heybox / pet / purpose）不许拿到别的私聊的记忆 ----------
+// ---------- P0-1：后台任务（heybox / purpose）不许拿到别的私聊的记忆 ----------
 // 后台任务没有 chat 概念，以前走 list('')/recall 无 chat = 全库索引，会把别的私聊的记忆拼进 prompt。
 // 现在 recall 增加 scopes 参数：后台调用必须显式声明可见域，没声明一律不给（fail-closed）。
 test('P0-1：recall 无 chat 无 scopes 时什么都不给（fail-closed）', () => {

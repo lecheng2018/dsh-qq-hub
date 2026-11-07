@@ -1,7 +1,7 @@
 // QQ Hub · 宿主旁路 seam 安装器（host.js 分层拆出）
 //
-// 与消息管道正交的五个旁路：通用工具审批流（approval/request）、交互式提问
-// （userQuestions）、桌宠端口注入（破端口自举死锁）、会话事件监听、看门狗。
+// 与消息管道正交的四个旁路：通用工具审批流（approval/request）、交互式提问
+// （userQuestions）、会话事件监听、看门狗。
 // 全部通过 install*/create* 在组合根按原顺序接线。
 
 export function createHostEffects({
@@ -96,27 +96,6 @@ export function createHostEffects({
     }
   }
 
-  // ---------- 桌宠端口注入（破「端口自举死锁」） ----------
-  // pet 模块写 host.json 的 baseUrl 需要真实 Web 端口，而它自己监听不到（端口未知时只能写 null，
-  // 客户端连不上 → 学不到 Host 头 → 死锁）。DSH 的 webServer 服务知道端口（ctx.webServer.port，
-  // 取不到再退 DSH_WEB_URL）。注入时机：pet 每次启动/重载（module/start）+ boot 完成兜底各试一次；
-  // Host 头学习仍保留，作端口漂移纠正。
-  function webPortOf() {
-    let port = Number(ctx?.webServer?.port)
-    if (!Number.isInteger(port) || port <= 0 || port >= 65536) {
-      try { port = Number(new URL(String(process.env.DSH_WEB_URL || '')).port) } catch { port = 0 }
-    }
-    return Number.isInteger(port) && port > 0 && port < 65536 ? port : 0
-  }
-  function injectPetPort() {
-    const port = webPortOf()
-    if (!port) return false
-    try { return Boolean(use('pet')?.setWebPort?.(port)) } catch { return false }
-  }
-  function installPetPortListener() {
-    mods.listen('module/start', (id) => { if (id === 'pet') injectPetPort() })
-  }
-
   // ---------- 盯会话：一轮结束就发回 QQ ----------
   function installSessionWatcher() {
     ctx.effect(() => {
@@ -126,8 +105,6 @@ export function createHostEffects({
         } catch (error) {
           log.warn('会话事件处理出错：', error.message)
         }
-        // 桌宠的「干活状态」动画 / 结束提醒：把同一条事件顺手转给 pet 模块（模块没开就是 null，纯旁路）
-        try { use('pet')?.onSessionEvent?.(session, event) } catch (error) { log.debug?.('桌宠状态联动出错：', error.message) }
         // 真实用量信号：assistant/message 带 usage，转给模块（token-guardian 判定压缩用）。
         // 纯内存转发，不落盘、不开关、面板无痕 —— 用量遥测面板功能已按需求移除。
         try {
@@ -180,8 +157,6 @@ export function createHostEffects({
     safe, watchdog,
     installApprovalFlow,
     setupUserQuestions,
-    installPetPortListener,
-    injectPetPort,
     installSessionWatcher,
     installWatchdog,
   }

@@ -1,14 +1,14 @@
 # DSH-QQ-Hub · 住在 QQ 里的智能伙伴与 DSH Agent 交互终端
 
 [![GitHub Release](https://img.shields.io/github/v/release/lecheng2018/dsh-qq-hub?color=blue&logo=github)](https://github.com/lecheng2018/dsh-qq-hub/releases)
-[![Tests](https://img.shields.io/badge/tests-1425%20passed-success?logo=node.js)](https://github.com/lecheng2018/dsh-qq-hub/actions)
+[![Tests](https://img.shields.io/badge/tests-passing-success?logo=node.js)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DSH-Plugin-0969da)](https://github.com/deepseek-ai)
 
 **DSH-QQ-Hub** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。当前版本 **v1.3.64**（RFC-0001 洋葱内核重构已并入主干，见下文🧅）。
 
 它兼具 **顶尖的拟人化社交聊天伙伴** 与 **强大的生产力 Agent 远程交互终端** 双重能力：
-- **拟人伙伴**：有性格、有心情、懂记忆。看图、听发语音、发表情包、RVC 翻唱变声、写空间日记、刷 B 站/抖音/小黑盒，以及常驻屏幕边缘的互动桌面宠物。
+- **拟人伙伴**：有性格、有心情、懂记忆。看图、听发语音、发表情包、RVC 翻唱变声、写空间日记、刷 B 站/抖音/小黑盒。
 - **Agent 终端**：在手机 QQ 端直接操控 DSH。支持**交互式提问（`ask_user_question`）**、**高危工具审批流（`approval/request`）**、**断线消息自动补收（`backfill`）**、**全功能定时任务调度（`/remind`）**、**RFC 6238 TOTP 手机动态口令锁**与**私聊/群聊记忆物理隔离**。
 
 ```
@@ -33,7 +33,7 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 ## 📦 版本与发版流程
 
 - 当前版本：**v1.3.64**（RFC-0001 洋葱内核重构并入主干）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
-- **自动化发版**：push `main` 触发 `.github/workflows/release.yml` —— 全量测试门禁（1425 用例 0 失败）→ 自动提取 `CHANGELOG.md` 生成 Release 正文 → 打包 `.tgz` 离线插件包挂到 Release 附件。
+- **自动化发版**：push `main` 触发 `.github/workflows/release.yml` —— 全量测试门禁（0 失败）→ 自动提取 `CHANGELOG.md` 生成 Release 正文 → 打包 `.tgz` 离线插件包挂到 Release 附件。
 - 安装源三选一：`dsh plugin add github:lecheng2018/dsh-qq-hub`（跟随最新 tag）、GitHub Releases 下载 `.tgz` 离线安装、或本地 `npm pack` 后安装。
 
 ---
@@ -74,7 +74,7 @@ dsh plugin --profile <你的profile名称> add github:lecheng2018/dsh-qq-hub
 - **刷抖音**：需要 Chrome / Chromium / Edge 浏览器，且抖音限制无头模式（headless）。无桌面服务器需使用 Xvfb 虚拟显示（如 `xvfb-run` 启动 DSH，或在容器内配置 `DISPLAY` 环境变量）；浏览器路径可在面板指定或通过 `CHROME_PATH` 环境变量指定。
 - **声音翻唱（RVC）**：目前仅支持 Windows 本地运行。
 - **容器网络**：容器内的 DSH 连接宿主机或其他容器的 OneBot 服务时，地址必须使用容器可访问的主机名或 IP（不可使用 `127.0.0.1`）。
-- **无头部署的依赖剪枝**：`src/runtime/` 条件装载器在冷启动按平台能力门禁（详见🧅一节），GUI/桌面宠物等重依赖在无头环境零执行、零句柄，不会因缺 `libX11` 崩启动。
+- **无头部署的依赖剪枝**：`src/runtime/` 条件装载器在冷启动按平台能力门禁（详见🧅一节），GUI 等重依赖在无头环境零执行、零句柄，不会因缺 `libX11` 崩启动。
 
 ### 5. 升级插件
 再次执行安装命令（自动拉取 GitHub 最新版本），随后重启 DSH 即可。所有配置、人格卡、记忆库和状态文件均受持久化保护，升级永不丢失：
@@ -351,26 +351,18 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 - **变声联动**：翻唱音色可无缝用于日常聊天的语音条变声（先由 edge-tts 合成，再由 RVC 转换音色，实现说话和唱歌同一声音）。
 - **一键安装**：面板提供全自动依赖安装器，不依赖宿主机系统 Python/git/uv，支持自定义安装盘符，下载走系统代理并支持断点续传。
 
-### 5. 桌面宠物（Electron 置顶悬浮窗）
-
-把大肥鱼以透明桌宠形式带到桌面，具备 9 种固定物理动作（追鼠标、溜达、打盹、拖拽甩抛、收起图标等）。
-
-- **联动工作流**：桌宠工作状态与 DSH 会话实时同步（思考、执行、完成动画）；碎碎念只在桌面弹出气泡，**绝不向 QQ 乱发干扰消息**。
-- **资源托管与协议**：客户端架构移植自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT）；50MB+ 大肥鱼形象素材遵循 CC BY-NC-SA 4.0 协议，初次启动从指定素材仓库自动下载落位，不随插件代码分发。
-- **无头环境**：桌面宠物在 headless/Docker/飞牛 NAS 环境被条件装载器自动剪枝，不产生任何子进程与 native 加载。
-
-### 6. QQ 空间日记与好友动态
+### 5. QQ 空间日记与好友动态
 
 - **空间日记**：后台专属会话每日定时（默认 2 次）根据当日实际聊天流水提炼情绪，调用 `send_qzone_msg` 发布空间说说，支持自动配图（优先选用当日生成的画作或收藏表情包）。也可用 `/diary` 命令立即触发一篇。
 - **好友互动**：定期检索自己说说下的新回评，一串会话聚合回评一次；逛好友动态按概率点赞与评论。
 
-### 7. 智能表情包系统
+### 6. 智能表情包系统
 
 - **多层过滤防污染**：仅接收标准表情（`sub_type=1`、mface 或带 `emoji_id`），严格校验宽高比、物理尺寸与体积，执行 MD5 去重与每小时数量限制。
 - **视觉起名**：通过视觉多模态模型为收藏表情自动提取描述、命名并打标，写回 QQ 收藏备注。
 - **三种收集模式**：`auto`（见表情就收）、`ask`（先暂存，模型喜欢才收）、`owner`（仅在主人语境下提示与收录）。
 
-### 8. 扩展模块：贴吧只读助手（tieba-reader）
+### 7. 扩展模块：贴吧只读助手（tieba-reader）
 
 位于 `extensions/tieba-reader/`，支持用户自构建为独立模块安装。支持在 QQ 内搜索贴吧、浏览推荐热榜、阅读帖子正文与楼层评论，定时分享精华帖子给主人。纯只读设计，不提供发帖、回帖与点赞接口，内容作为非受信数据处理，严格防御指令注入。
 
@@ -471,12 +463,12 @@ src/
 │   ├── approvals.js      # 通用工具审批流与审批卡系统
 │   ├── backfill.js       # 断线消息补收与命令隔离
 │   └── group-policy.js   # 群聊插话策略纯函数
-├── modules/              # 24 个内置业务模块
+├── modules/              # 内置业务模块
 │   ├── scheduler/        # 全功能定时任务调度引擎
 │   ├── token-guardian/   # 会话 Token 统计与应用层外置压缩守门员
 │   ├── complete-guard/   # 截断回复识别与告警
 │   ├── memory-privacy/   # 记忆三层作用域物理隔离
-│   └── ... (stickers, voice, mood, memory, pet, bili, song, heybox 等)
+│   └── ... (stickers, voice, mood, memory, bili, song, heybox 等)
 ├── onebot/client.js      # OneBot v11 通信客户端（带 90s 心跳保活看门狗）
 └── security/danger.js    # DSH tools/pre-execute 高危终端命令拦截器
 ```
@@ -492,7 +484,7 @@ src/
 
 ## 🧪 自动化测试
 
-项目全套单元测试基于 Node.js 原生测试套件构建（145 个测试文件 / 1425 个用例），涵盖全部纯函数逻辑、状态机、洋葱内核契约、多模块隔离与网络容灾场景：
+项目全套单元测试基于 Node.js 原生测试套件构建，涵盖全部纯函数逻辑、状态机、洋葱内核契约、多模块隔离与网络容灾场景：
 
 ```bash
 # 执行全部测试用例（CI 发版门禁同款命令）
@@ -565,7 +557,6 @@ onebot 事件 ─▶ handleEvent（前置段两态原位）─▶ [FLAG_USE_PIPE
 
 - 插件本体源码采用 [MIT License](LICENSE) 授权开源；
 - 本项目最初基于 [aureth-labs/dsh-aurabot-qq](https://github.com/aureth-labs/dsh-aurabot-qq)（MIT）发展并重构独立，致谢原作者团队的优秀基石；
-- 桌面宠物客户端设计移植自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT）；
 - 多平台内容解析引擎设计参考了 [astrbot_plugin_multi_parser](https://github.com/Qfxaile/astrbot_plugin_multi_parser)（MIT）；
 - 「大肥鱼」形象与动画素材遵循 [CC BY-NC-SA 4.0](THIRD-PARTY-NOTICES.md) 许可，严禁商用；
 - 感谢 [DeepSeek Harness](https://github.com/deepseek-ai) 官方及开源社区贡献者的支持与启发！
