@@ -54,3 +54,34 @@
 - `npm run pack:check` 成功，tgz 内容 222 个文件，新增契约实现与类型声明均进入包。
 
 这些测试范围有重叠，数量不能相加为唯一用例总数。全量主测试的既有失败仍使 G0 保持未放行。
+
+## M0-2 全量基线分类与修复（2026-11-08，单人体 QA 执行）
+
+### 逐文件分类结果（Windows 10 / Node v22.20.0 / commit 8115132 内容，142 文件）
+
+- **PASS 136 / FAIL 4 / TIMEOUT 2**。整跑 `node --test test/**/*.test.js` 另复现「最后一条用例后长期无进展」（与前基线记录一致）。
+- 分类（按 M0-2 要求，环境问题与业务失败分开）：
+
+| 类别 | 文件 | 根因 | 处置 |
+|---|---|---|---|
+| 环境类（URL.pathname 当路径） | batch-expand-and-privacy(7 fail)、fnos-fsync-patch(1 fail)；另 21 个文件用 ASCII 专用 replace hack，中文路径下失效 | `new URL('..', import.meta.url).pathname` 在 Windows 产生 `/C:/...`，join 后成 `C:\C:\...` | 23 文件统一改 `fileURLToPath`（跨平台/Unicode 一致，不删测试不改断言） |
+| 测试自述纪律违背 | runtime-loader(2 fail) | isDocker 两用例没注入 `platform:'linux'`，依赖宿主是 Linux | 补注入（对齐文件头「全部注入」纪律） |
+| 生产缺陷（测试卡住） | douyin-media、media-cleanup（用例全过但进程 121s 不退，实测 121s exit 0） | `src/douyin/media.js` downloadVideo 在 fetch reject 路径漏 clearTimeout，120s abort 定时器钉住事件循环——也是前基线「长期无进展」的根因 | try/finally 清理（语义不变）；生产每次下载失败不再延迟进程退出 |
+| 环境敏感断言 | kernel-legacy-fallback(1 fail) | P99 全链绝对值 ≤1.5ms 的兜底线与 RFC「增量 ≤1.5ms」验收线自相矛盾（裸 compose 基线在慢机 >1.5ms） | 兜底改「基线+1.5ms」，增量硬断言一字不动；加噪声守卫（空管道 P99>1ms 显式 skip 并记录实测值） |
+| POSIX 专有语义 | fnos-fsync-patch 第 122 行用例 | chmod 0o000→EACCES 是 POSIX 语义，Windows 不复现 | 按平台门控 skip（与同文件 ATT_LIB 门控设计一致） |
+| 负载敏感等待预算 | chat-model(并行时偶发) | 全量并行高负载下 10s 轮询窗口不够 | 等待窗口 10s→30s（「条件最终成立」断言不变） |
+
+### 修复后全量结果（同一 commit 两次一致，M0-2 验收）
+
+- 轮 2：`node --test test/**/*.test.js` → **1287 tests / 1283 pass / 0 fail / 4 skip（均为有据可查的环境门控）/ 182s，干净退出**。
+- 轮 3：同命令 → 1288 tests（含新增 M1-B 锁定测试 1 文件，其 tooOld 用例当时红=缺陷复现）/ 其余全绿。
+- 扩展测试：46/46 通过（`npm ci --prefix extensions/tieba-reader` 后）。
+- `npm run pack:check`：成功，tgz 214 个文件（222→214 的差异来自 main 在基线后移除桌宠服务的 4b9bba59，非打包回归）。
+
+### G0 复核记录
+
+- 基线可重复：✅（两次全量一致；修复使 Windows/POSIX/CI 结果可一致）
+- M0-3 功能矩阵：✅（`docs/refactor/feature-matrix.md`，23 模块全部有归属；桌宠为 main 移除的既有事实，非本重构行为）
+- M0-4 契约冻结：✅（ADR-0001 转 Accepted，会签记录见 ADR §7）
+- M0-5 看板与队列：✅（`docs/refactor/board.md`）
+- 未改变生产行为：✅（除 media.js 定时器泄漏修复——纯资源清理，无行为变化；面板防护为 M1-A 范围）
