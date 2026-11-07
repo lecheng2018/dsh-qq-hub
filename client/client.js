@@ -2663,7 +2663,12 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
                       line('性格', t.profile.persona),
                       line('语气', t.profile.tone),
                       line('他不会', t.profile.avoid),
-                      h('div', { className: 'ab-muted ab-small' }, '依据 ' + (t.profile.evidenceCount != null ? t.profile.evidenceCount : (typeof t.profile.samples === 'number' ? t.profile.samples : (t.profile.samples || []).length)) + ' 句原话 · ' + (t.profile.updatedAt ? new Date(t.profile.updatedAt).toLocaleString() : '')))
+                      h('div', { className: 'ab-muted ab-small' },
+                        '依据 ' + (t.profile.evidenceCount != null ? t.profile.evidenceCount : (typeof t.profile.samples === 'number' ? t.profile.samples : (t.profile.samples || []).length)) + ' 句原话 · ' + (t.profile.updatedAt ? new Date(t.profile.updatedAt).toLocaleString() : ''),
+                        t.profile.blindTest && t.profile.blindTest.score != null
+                          ? h('span', { style: { marginLeft: 8, color: t.profile.blindTest.score <= 0.6 ? '#7bbf7b' : '#e0b04a' } },
+                              '模仿分 ' + (t.profile.blindTest.score * 100).toFixed(0) + '（裁判猜对 ' + t.profile.blindTest.hits + '/' + t.profile.blindTest.total + '，≤60 学得像）')
+                          : null))
                   : h('div', { className: 'ab-muted ab-small' }, '还没学到。等他这个群聊够一天，整理记忆时会自动学。'))))
     }
 

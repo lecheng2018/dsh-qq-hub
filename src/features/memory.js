@@ -17,6 +17,7 @@ import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
 import { collectMemberLines, enoughEvidence, buildExtractPrompt, buildVerifyPrompt, buildReflectPrompt, parseExtracted, applyVerdicts, parseReflections, mergeProfile, renderProfile, dedupConvo } from './distill.js'
+import { buildBlindTestPrompts, scoreBlindTest } from './distill-blindtest.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
@@ -642,6 +643,59 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     return { ok: true, profile: vd.fields }
   }
 
+  /**
+   * 蒸馏效果盲测（学完自动跑）：真话 vs 画像仿写 → 独立裁判猜人 → 猜对率即「不像分」。
+   * ≈0.5 学得像（裁判分不出）；越高越不像。失败不阻断学习流程，只记日志。
+   * @returns {{score:number|null, hits:number, total:number}|null} null=跑不了（证据不足/调用失败）
+   */
+  async function runBlindTest ({ name, uid, memberLines, profile }) {
+    const cfg = getConfig()
+    // 抽真话：优先选不在画像 evidence/样本里的（防裁判背答案），4 条
+    const used = new Set()
+    for (const f of ['exchanges', 'syntax', 'catchphrases', 'rhetoric', 'never', 'persona', 'samples']) {
+      for (const e of (profile && profile[f]) || []) for (const ev of (e.evidence || [])) used.add(String(ev))
+    }
+    const pool = (memberLines || []).filter((x) => x.text.length >= 6 && !used.has(String(x.text)))
+    const picks = pool.slice(-40).filter((_, i) => i % Math.max(1, Math.floor(Math.min(pool.slice(-40).length, 40) / 4)) === 0).slice(0, 4)
+    const realLines = (picks.length >= 2 ? picks : pool.slice(-2)).map((x) => x.text)
+    if (realLines.length < 2) return null
+    const samples = ((profile && profile.samples) || []).map((e) => e.text || e)
+    const { mimic, judge } = buildBlindTestPrompts({ name, realLines, profile, samples })
+    let mimicOut = ''
+    try {
+      mimicOut = await askModel(dsh, { cfg, system: mimic.system, text: mimic.text, maxTokens: 1000, temperature: 0.7, reasoningEffort: 'none' })
+    } catch (error) {
+      log.debug(`蒸馏盲测：仿写失败：`, error.message)
+      return null
+    }
+    const mimicObj = parseDistillProfile(mimicOut)
+    const fakeLines = (mimicObj && Array.isArray(mimicObj.lines)) ? mimicObj.lines.map((x) => String(x)) : []
+    if (fakeLines.length < realLines.length) return null
+    // 混排：真话 + 仿句交错
+    const mixed = []
+    for (let i = 0; i < realLines.length; i++) {
+      mixed.push(realLines[i])
+      if (fakeLines[i]) mixed.push(fakeLines[i])
+    }
+    const j = buildBlindTestPrompts({ name, realLines: mixed, profile, samples }).judge
+    let judgeOut = ''
+    try {
+      judgeOut = await askModel(dsh, { cfg, system: j.system, text: j.text, maxTokens: 500, temperature: 0, reasoningEffort: 'none' })
+    } catch (error) {
+      log.debug(`蒸馏盲测：裁判失败：`, error.message)
+      return null
+    }
+    // 裁判看到的是混排列表，取对应位置的猜测（真话在混排中的下标）
+    const realIdx = realLines.map((x) => mixed.indexOf(x))
+    const jObj = parseDistillProfile(judgeOut)
+    const guesses = (jObj && Array.isArray(jObj.guesses)) ? jObj.guesses : []
+    const realGuesses = realIdx.map((i) => guesses[i])
+    const r = scoreBlindTest(realLines, realGuesses)
+    if (r.score == null) return null
+    log.info(`蒸馏盲测：${name} 模仿分 ${r.score.toFixed(2)}（裁判猜对 ${r.hits}/${r.total}，≈0.5 学得像）`)
+    return r
+  }
+
   function putDistill (gid, uid, profile, evidenceCount) {
     const s = load()
     s.distill = s.distill || {}
@@ -653,6 +707,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     // 证据条数单独放 evidenceCount —— 以前叫 samples，把画像里的逐字原话数组（few-shot
     // 主信号）覆盖成了数字，注入时渲染出「- 「44」」这种鬼东西（1.3.64 修）
     s.distill[key] = { ...merged, evidenceCount: Math.max(Number(old && (old.evidenceCount != null ? old.evidenceCount : (typeof old.samples === 'number' ? old.samples : 0))) || 0, incomingCount), updatedAt: Date.now() }
+    // 盲测分随画像保留（上一轮的评测结果），新一轮盲测跑完会被覆盖
+    if (old && old.blindTest) s.distill[key].blindTest = old.blindTest
     s.rev = (s.rev || 0) + 1
     save(s)
     return s.distill[key]
@@ -721,6 +777,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     if (!r.ok) return { ok: false, message: r.reason }
     const saved = putDistill(g, u, r.profile, mine.length)
     log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
+    // 效果验证环：盲测评分写进画像，面板可见（失败不阻断）
+    try {
+      const bt = await runBlindTest({ name: name || u, uid: u, memberLines: mine, profile: saved })
+      if (bt) {
+        const s = load()
+        s.distill[distillKey(g, u)] = { ...saved, blindTest: { score: bt.score, hits: bt.hits, total: bt.total, at: Date.now() } }
+        s.rev = (s.rev || 0) + 1
+        save(s)
+      }
+    } catch (error) { log.debug('蒸馏盲测跳过：', error.message) }
     try { onDistillLearned && await onDistillLearned(g) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
   }
@@ -1301,6 +1367,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       doneToday.add(tag)
       const learned = r.profile
       log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(learned.exchanges || []).length} 组对话对）`)
+      // 效果验证环：盲测评分写进画像（失败不阻断整理流程）
+      try {
+        const bt = await runBlindTest({ name: t.name || t.uid, uid: t.uid, memberLines: mine, profile: learned })
+        if (bt) {
+          const s2 = load()
+          s2.distill[distillKey(t.gid, t.uid)] = { ...(s2.distill[distillKey(t.gid, t.uid)] || learned), blindTest: { score: bt.score, hits: bt.hits, total: bt.total, at: Date.now() } }
+          s2.rev = (s2.rev || 0) + 1
+          save(s2)
+        }
+      } catch (error) { log.debug('蒸馏盲测跳过：', error.message) }
       try { onDistillLearned && await onDistillLearned(String(t.gid)) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
     }
     if (doneToday.size) {
