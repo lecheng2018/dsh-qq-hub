@@ -1,0 +1,32 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - refactor/modular-core
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Extension Test Dependencies
+        run: npm ci --prefix extensions/tieba-reader
+
+      - name: Run All Tests
+        run: npm run test:all
+
+      - name: Check Package Contents
+        run: npm run pack:check
