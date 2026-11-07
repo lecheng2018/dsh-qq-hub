@@ -134,55 +134,16 @@ SOFTWARE.
 
 ---
 
-## 4. dsh-pet —— 桌面宠物架构与物理引擎（MIT）
-
-- **项目主页**：<https://github.com/PC2005-cloud/dsh-pet>
-- **原作者**：PC2005-cloud
-- **原始许可证**：MIT License（Copyright (c) 2026 PC2005-cloud）
-
-### 移植范围
-桌宠模块（模块 id `pet`，含 `src/modules/pet/` 与 Electron 桌面客户端）：
-- 客户端形态（Electron 透明置顶窗、HTTP 长轮询、气泡与右键菜单）；
-- 拖拽甩抛物理引擎逻辑（`physics.js`）；
-- pet pack 目录约定、工作状态六档及动画命名约定。
-
-### 原始 MIT 许可证文本
-```text
-MIT License
-
-Copyright (c) 2026 PC2005-cloud
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
----
-
-## 5. 「大肥鱼」形象与动画素材（CC BY-NC-SA 4.0）
+## 4. 「大肥鱼」形象与动画素材（CC BY-NC-SA 4.0）
 
 - **来源**：dsh-pet 的 pet pack（作者：PC2005-cloud）
 - **许可证**：[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名 · 非商业 · 相同方式共享）
 - **原作者声明**：“大肥鱼是遵守 CC BY-NC-SA 4.0 协议的形象，不可以以任何形式商业化。”
-- **分发边界**：本项目源码仓库**不包含任何侵权动画媒体素材**（50MB+ 的 `.webm` 动画未进 git）。素材存放在独立的社区素材仓库，启动时按需自动下载至本地数据目录。任何重新分发素材的行为均须严格遵守原作者的非商业与署名要求。
+- **分发边界**：本项目源码仓库只分发静态默认头像（`assets/dafeiyu.jpg`）；桌宠模块及其动画素材管道已移除。任何重新分发素材的行为均须严格遵守原作者的非商业与署名要求。
 
 ---
 
-## 6. Mieksido/surfcore —— 目的引擎（MIT）
+## 5. Mieksido/surfcore —— 目的引擎（MIT）
 
 - **项目主页**：<https://github.com/Mieksido/surfcore>
 - **原始许可证**：MIT License（Copyright (c) 2026 Derpyu520 and qq-bridge / QSH contributors）
@@ -190,6 +151,6 @@ SOFTWARE.
 
 ---
 
-## 7. 其他思路借鉴与致谢
+## 6. 其他思路借鉴与致谢
 
 在 DSH 插件机制与生态踩坑上，还参考了 [Yuuyuko-uu](https://github.com/Yuuyuko-uu) 等开源贡献者的实践分享，特此致谢！

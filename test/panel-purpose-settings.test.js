@@ -1,5 +1,5 @@
 // 目的引擎的面板设置：
-// 1) 引擎真正读取的字段，面板上必须有入口（曾经删掉手写卡后丢了投递载体等四项）
+// 1) 引擎真正读取的字段，面板上必须有入口（曾经删掉手写卡后丢了 maxPerDay 等调参项）
 // 2) settings 的 type 必须是面板 field() 认识的类型
 //    —— 面板只认 switch/number/select/textarea/password/text，写 boolean 会退化成文本框
 import { test } from 'node:test'
@@ -28,8 +28,8 @@ test('引擎读取的字段，面板都要有入口', () => {
   for (const need of ['enabled', 'minMaterials', 'initialDelayMinutes', 'maxCandidates']) {
     assert.ok(keys.includes(need), `核心设置 ${need} 不见了`)
   }
-  // 这四项是删掉手写卡后必须补回来的
-  for (const need of ['carrier', 'petFallbackToQQ', 'maxPerDay']) {
+  // maxPerDay 是删掉手写卡后必须补回来的
+  for (const need of ['maxPerDay']) {
     assert.ok(keys.includes(need), `投递相关设置 ${need} 缺入口，引擎在读但改不了`)
   }
 })
@@ -44,16 +44,12 @@ test('面板的 field() 确实不处理 boolean（守住上面那条判断的依
   assert.ok(!/s\.type === 'boolean'/.test(CLIENT), '面板开始支持 boolean 了，这条测试的前提需要更新')
 })
 
-test('模块 defaults 覆盖了 carrier / petFallbackToQQ / maxPerDay，面板才有初值', () => {
+test('模块 defaults 覆盖了 maxPerDay，面板才有初值', () => {
   const d = PURPOSE.slice(PURPOSE.indexOf('defaults: {'), PURPOSE.indexOf('settings: ['))
-  assert.match(d, /carrier:\s*'qq'/)
-  assert.match(d, /petFallbackToQQ:\s*true/)
   assert.match(d, /maxPerDay:\s*\d+/)
 })
 
-test('引擎侧真的在读这三个字段（不是摆设）', () => {
+test('引擎侧真的在读 maxPerDay（不是摆设）', () => {
   const mod = readFileSync(join(process.cwd(), 'src', 'purpose', 'module.js'), 'utf8')
-  assert.match(mod, /ext\.carrier/, 'carrier 没被读取')
-  assert.match(mod, /petFallbackToQQ/, 'petFallbackToQQ 没被读取')
   assert.match(mod, /ext\.maxPerDay/, 'maxPerDay 没被读取')
 })

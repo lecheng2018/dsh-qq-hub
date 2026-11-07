@@ -72,6 +72,5 @@ ext.purpose 同名键可覆写。`maxPerDay` 的覆写只在**填了大于 0 的
 - 投递：`hub.deliver('private:'+ownerQQ)`；deliver 内部吞错，`sent` = deliver 返回 `{missedAt}` 对象，`undefined`（钩子拦截）记 silent，抛错记 `delivery-failed`。
 - 闸门：`evaluatePurposeTick`（enabled/quiet/dailyMax/nextFireAt/ownerIdleMs）；`nextFireAt` 落盘 tick 重算，重启时在途 `pending` 改判 `interrupted` 不补发。
 - 归属/回执/pending 语义与 surfcore 一致（群友目标重复≥3 或被点名才升 self；主人回复正/负/中性 → confirmed/rejected/微调；备忘【状态】待续/完成驱动 pending）。
-- 投递载体：`ext.purpose.carrier`（默认 `qq`）。`carrier=pet` 时经桌宠模块（pet）推桌面气泡，
-  桌宠离线按 `petFallbackToQQ` 回落 QQ 或静默；互斥铁律一轮只发一处，详见 docs/PET_MODULE_API.md §4。
+- 投递一律走 QQ 私聊（`hub.deliver('private:'+ownerQQ)`），没有其他载体；旧配置里残留的 `ext.purpose.carrier` 键会被忽略、无害。
 - 旧 `createSpeakUp` 仍在 `src/features/companion.js`，是「主动搭话」的现行实现（mood 模块 files 与旧测试依赖，勿删）。
