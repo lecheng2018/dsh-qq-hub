@@ -6,6 +6,8 @@ RFC-0001 §1.2 的结构诊断图与 §4 示例代码用的是**示意名**（on
 `mission/onion-refactor` @ US-012 提交（hub.js 全链 12 个 story **一行未动**，§1 行号对重构前后均有效；
 host.js 行号为装配现状，会随后续 Phase 漂移，以符号名检索为准）。
 
+**完整版 RFC**：`9e070faedb554b7e8e5d5033ff61aaad_dsh-qq-hub-architecture-refactor-rfc__1_.md`（889 行 / 40624 字节，2026-11-07 收到）。重构执行以先前的截断版（814 行）为基准，两版 §0–5 主体一致；差异为 §1.3 非目标补全 3 条、新增附录 A 配置字典与附录 B 60+ 函数权威映射矩阵。重构链与完整版核对**无冲突**，对齐注记见 §10。
+
 > **本期边界（PRD 明确，先说结论）**：RFC §4 Phase 4 的**终局**——hub.js 归零、ModelInferenceExecutor
 > 替换 legacy 终端、物理删除遗留代码、`v2.0.0-rc.x` 灰度——**不在本期**。本期交付的是绞杀者路线图的
 > 「可发布收口」：文档、开关全清单、限流配置化、三态冒烟与回滚演练实证。hub.js 仍存活的职责清单见 §7。
@@ -190,3 +192,45 @@ flag-on 时 legacy hub 是管道**终端**，以下职责全部仍在 hub.js 闭
 US-012 演练（见 progress 留档）：同一 stub 事件序列在三个独立子进程按 flag-off → flag-on → flag-off
 顺序跑（env 切换模拟重启），第一/三次旧通道发送调用序列**逐条全等**；第二次经 Dispatcher，外发文本
 序列与语义与第一次一致。开关切换无需回滚代码或数据。
+
+## 10. 完整版附录对齐（2026-11-07）
+
+完整版 RFC（见文档头部引用行）相对截断版的新增内容——§1.3 非目标补全 3 条、附录 A 配置字典、附录 B
+60+ 函数权威映射矩阵——与重构链（`mission/onion-refactor` @ US-012）逐项核对，**无冲突**。本节只记录
+核对结论，不改变 §0–9 的任何决策与状态。
+
+**10.1 §1.3 非目标（完整版补全 3 条）——全部天然满足**
+
+| 非目标（RFC §1.3） | 满足方式（重构链现状） |
+|:--|:--|
+| 不更换底座 QQ 协议端（仅接口标准化，不重造网络协议） | 协议端不动：`onebot/client.js` 原样，只经 Transport.sender 注入标准化接口。 |
+| 不动 Cordis 插件框架的根级上下文拓扑 | Cordis 根级拓扑未触碰，接线只在 host 装配与 kernel 组件内收口。 |
+| 不强制重写 24 个业务功能模块的具体业务算法（向下兼容层平滑桥接） | 业务模块算法零重写：`createLegacyHubFallback` + provider 包装即向下兼容层本体。 |
+
+**10.2 附录 A 配置字典——逐路径现状（五行全列）**
+
+| 配置路径 | RFC 归属（附录 A） | 现状核对 |
+|:--|:--|:--|
+| `merge.*`（enabled / waitSec / maxSec） | 入口层 `Ingress.Debounce.*`（秒→毫秒） | **已迁**：mw-aggregator 实时读 `getConfig().merge`，秒→毫秒换算在位。 |
+| `gateway` | 传输层 `Transport.Gateway` | **方向一致**：以 `Transport.sender` 注入实现。 |
+| `reply.groupMaxChars`(40) / `reply.maxBubbles`(6) | 出口层 `Pipeline.ReplyFormatter.*` | **legacy 保留**：仍由 legacy 内 `reply.js` 分条消费——气泡级切分属 hub（replyRules），mw-egress 管协议级 4000 字分条；归属留待 Phase 4 装配一行接线。 |
+| `security.identityGuard` | 出口层 `Pipeline.IdentityGuardMiddleware` | **已在防线、未成独立中间件**：guardOutbound 五出口在 `hooks.send` **之前**，pipeline 模式覆盖不旁路（US-007 verifier 实证）。 |
+| `group.quota` | 传输层 `Transport.RateLimiter` | **双重限速语义**：hub 侧保留（Phase 1 保守拍板）+ Dispatcher shaping，叠加入口 mw-ratelimit（env 30/5）。 |
+
+**10.3 附录 B 权威映射矩阵——性质声明与可对应行**
+
+- **性质**：附录 B 的行级目标路径（`src/kernel/` 下 `ingress/`、`middlewares/`、`transport/`、`services/`
+  的 `.ts` 文件）是 **Phase 4 终局 roadmap**；本期刻意止步 Phase 4 首步（US-012），不按矩阵铺文件。
+- 已落地件可对应的行：
+
+| 附录 B 旧函数 | 终局目标（附录 B） | 本期已落地件 |
+|:--|:--|:--|
+| `enqueue(...)` / `flush(chatId)` | `ingress/debounce.ts` | mw-aggregator（FLAG_INGRESS_AGGREGATOR 灰度，§2） |
+| `deliver(...)`（拆条前置清洗与格式化） | `middlewares/reply-formatter.ts` | mw-egress（US-006） |
+| `sendSegments(...)` | `transport/dispatcher.ts` | Dispatcher（US-005/007，flag-on live 态独占物理外发） |
+| `admit(...)` / `release(...)`（会话锁） | `ingress/session-lock.ts` | busy-steer（mw-aggregator 内；G2 中断/取消边界已文档化，见 §8-E、§7-#1） |
+| `checkIdentityLeak(...)` | `middlewares/identity-guard.ts` | guardOutbound 既有防线（五出口 `hooks.send` 之前，见 §10.2 行 4） |
+
+- **其余行**（Ingress 归一化与 preprocessors、Pipeline 装配类、Transport senders、Storage & State
+  services 各表）＝ **Phase 4 终局任务清单**，后续按行核对推进；作业面起点见 §7 存活职责清单。
+- **本仓政策**：仓库为 ESM JS——终局落地时该矩阵的 `.ts` 文件名一律转 `.js`。
