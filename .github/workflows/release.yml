@@ -51,6 +51,17 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate Tag Version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${PACKAGE_VERSION}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version tag ${EXPECTED_TAG}"
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} matches package.json version ${PACKAGE_VERSION}"
+
       - name: Install Extension Test Dependencies
         run: npm ci --prefix extensions/tieba-reader
 
