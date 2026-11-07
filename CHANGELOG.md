@@ -1,5 +1,53 @@
 # 更新记录
 
+## RFC-0001 洋葱内核重构（mission 分支，未发版）
+
+> **这不是发版条目**：全部工作发生在分支 `mission/onion-refactor`（12 个故事，提交链
+> 7170305→77e15bb→d758a5d→5e27ada→935671e→b6f52b3→edee277→5d03c91→47a94ab→d643b94→0c03f88→47083db→US-012），
+> **未 bump 任何版本号、未合并 main**。回滚一行话：**四个 env 开关全部不设（或设乱值）= 原行为**——
+> flag-off 路径零改动红线贯穿全链，e2e 基线 70/0 与重构前逐字一致。
+
+- **US-001** 洋葱内核 `compose` + `createContext` 纯库（7170305）：double-next 熔断、PipelineError 因果链、meta/reply/state/signal 契约，零接线。
+- **US-002** 运行时能力探测 + 声明式条件装载器（77e15bb）：EnvironmentDetector 全注入桩、六道门禁按 RFC 次序短路、剪枝模块 entrypoint 零执行（无头 NAS 剪掉 GUI 件）。
+- **US-003** 遗留核心终端化 + `FLAG_USE_PIPELINE` 熔断开关（d758a5d）：hub.js 包成终端中间件、原事件引用送达；P99 延迟增量实测 0.02ms（验收线 1.5ms 的 1/70）。
+- **US-004** Tracing & Metrics 中间件（5e27ada）：管道最外层单行 debug 打点（total/mw0/mw1/err/aborted），生产零刷屏。
+- **US-005** 出站 Dispatcher + 优先级队列（935671e）：HIGH/NORMAL/LOW 稳定排序、bubbleDelay 同款整形语义、shadow/live 双模内容 hash 比对、abort 计 dropped。
+- **US-006** 出口后处理链（b6f52b3）：未闭合 `<think>` 栈守卫截尾 + stripReasoning + 4000 字语义分条；对抗语料外发捕获率 13/13。
+- **US-007** 出口切换（edee277）：ALS 携带 ctx，收口点在 `onebot.call` 包装（模拟闸/总开关/试运行**三道安全闸之后**）；`FLAG_EGRESS_SHADOW` 双算观测。**行为变化**：开启态整轮结束才批量外发（边界 flush），多条回复几乎同时落地（delayMs=0）。
+- **US-008a** compose abort unwind 语义（5d03c91）：abort 后已派发中间件 bubble 正常回溯——「中断并合并 + 丢弃未 flush 回复」的内核前提。
+- **US-008b** 入口合流中间件 + busy steer（47a94ab）：per-chat 窗口聚合/合并参数对齐 hub.pending；`FLAG_INGRESS_AGGREGATOR` 灰度默认关（与 hub 自家合流并存实测丢消息，终局收编后再并进主开关）。
+- **US-009** 入口防御链（d643b94）：令牌桶限流 / ACL（复用 access.js 一份权威，fail-closed）/ 聊天域复合键去重；被拒事件出口链零记账；poke/notice 归窗修复。
+- **US-010** 人设与记忆装配中间件（0c03f88）：mw-persona 预取快照 + mw-memory 检索写 ctx.state，contextProviders 接管层按 state 供给；`NEW_MEMORY_PIPELINE` 默认关（缺口 A：其余 api.context 模块贡献；B：群 speakersOf 档案拿不到 sessionId——映射文档 §8 留档）。
+- **US-011** 命令路由终端中间件（47083db）：16 内置主人命令 router 直答经 ctx.reply；ext 模块命令/混非文本段/提问等待中/非主人 → 透传 legacy（覆盖矩阵与 handler 抛错回滚语义留档）。
+- **US-012** 绞杀者收口（本提交）：开关全清单与统一解析口径（`true/1` 才算真、乱值回默认，四开关同规）；限流旋钮配置化 `QQHUB_RL_CAPACITY` / `QQHUB_RL_REFILL_PER_SEC`（缺省 30/5，非法值回默认，改 env 需重启）；README 拓扑简图 + 开关表；映射文档终版落地状态表 + hub.js 存活职责清单（**Phase 4 终局——hub.js 归零、legacy 物理删除——不在本期**，PRD 边界）；三态冒烟与回滚演练实证。
+- **P5 review 修复批**（`a15f53e`，外部双模型 review 逐项回应，处置清单见映射文档 §11）：**P0×3**——
+  ① 聚合执行暂停：mw-aggregator 退化为逐事件透传（follower 物理丢失、lead 取消连带销毁随吞并语义下线而消失，
+  合流仍由 hub 内部 pending 提供）；② 去重拆「处理中键/成功缓存」两层（首次失败后重传可重新准入，在飞键不进
+  LRU 逐出）；③ Dispatcher 原子领批（快照+clear 在任何 await 之前，drain 期间新入队条目归下一批，不再被结尾
+  clear() 连锅吞掉）。**P1/P2 全量硬化**：compose 监听器卸载+预 abort 不注册+每层 next 资格位+PipelineError.index
+  纠偏；context queue 冻结快照/enqueue 深冻结/父取消信号透传/restoreFront+rollbackTo 正规 API；ctx-store
+  runWithContext(null) 显式退出+WeakSet 收口标记；dispatcher 跨 drain pacing（单调钟）/同优先级 FIFO/
+  canonicalJSON 对齐 JSON 出站语义/jitter 二次 clamp；cutover 模式构造校验/异常轮清队收口/上传回退白名单/
+  shadow 账本带状态；loader isDocker 三态（未知≠安全）+QQHUB_RUNTIME_ENV+requiresGUI 政策位+预检补全；
+  ratelimit 单调钟+回拨基线不回退+capacity≥1；ACL owner 直通收回 checkAllowed 权威（入口层自此可独立作权限边界）。
+  **行为变化**：`FLAG_INGRESS_AGGREGATOR=true` 现在的含义是「挂载暂停透传版」——装载即 warn「聚合执行暂停」，
+  不吞并不合流（此前为开旗即开窗合流；灰度默认关的口径不变）。**无版本号 bump**：仍为分支未发版条目，
+  hub.js/package.json 红线零改动。
+- **P5 补评即修**（US-003b，据补评报告 `2026-11-07-dsh-qq-hub-C1C`；处置入账见映射文档 §11.5）：
+  **补评即修：F4/F5 + 观测诚实化（F1-a/F8），F1-b/F2/F3 入 roadmap**。
+  F4=`legacyEventToEnvelope` 私聊 sender 兜底事件顶层 `user_id`（缺 sender 或 sender 缺 user_id 的
+  私聊事件不再被 acl「缺少发送者身份」fail-closed 整条丢弃；notice/poke 通知类形态不变）；
+  F5=dedup 把假值但存在的 id（`0`/`'0'`）视同 keyless 放行（对齐 host `seenIds` 真值口径，0 号消息
+  二连发不判重传）；F1-a=装配日志「出口=live」补注治理面实况——主聊天气泡由 turn/end 异步投递、命中
+  包装器直发分支，不经队列/清洗/pacing/shadow 比对，队列支路（router 直答与 hub 闸门透传）才是治理面；
+  F8=shadow 比对零样本时改打 info「无队列支路样本（气泡直发不在治理面）」，不再用
+  「match=0 mismatch=0」把空账本冒充比对通过。**无版本号 bump**，hub.js/package.json 红线零改动。
+- **P6 gemini38 复核**（`e6eaaee` + 本提交；裁决全文见 workspace `reports/2026-11-07-gemini38-real-issues-复核裁决.md`，四行处置表见映射文档 §11.6）：外部报告 4 条指控逐条实跑探针裁决——**缺陷2（父信号 `forwardParentAbort` 监听器泄漏）成立**，`context.js` 新增 `dispose()` + `host.js` `dispatchLegacyPipeline` await 后 finally 接线（现产未传父信号，属预炸点先堵）；**缺陷3（缺省 `delayMs=0` 杀死 typing 估时）部分成立**——机制链实测全真，但这是 US-007/A4#4 三选一拍板的接线契约，拒其「兜底改 undefined」补丁（会打红 `kernel-egress-cutover.test.js:166/:458` 两条钉），改为在 `mw-egress-cutover.js` 兜底行上方加契约注释防再误报；**缺陷1（compose「越飞层提前 bubble」）与缺陷4（dedup 并发原子准入）不成立**——二次/闭包泄漏重派 `next` 实测一律 reject PipelineError（`m2Run` 恒 1、在飞层真实 settle 前管道不完成），`has→add` 是让出点在临界区外的同步段；对方两处补丁一个是不可达空改动（`currentIndex > abortBoundary`）、一个会把异步 keyFn 的键写成 `[object Promise]` 而错拦不同消息，全部拒绝，并落 6 条拒绝项回归锁（compose 锁①②③ + dedup 锁①②③，逐条经变异测试自证非空锁）。**无版本号 bump**，hub.js/package.json 红线零改动。
+
+**回滚说明**：unset 四个开关重启即回到重构前行为（演练已实证 flag-off→on→off 三进程下旧通道发送调用序列首末全等、开启态外发文本语义一致）。灰度顺序建议：`FLAG_USE_PIPELINE`（live）→ 需要观测时 `FLAG_EGRESS_SHADOW` → `FLAG_INGRESS_AGGREGATOR`/`NEW_MEMORY_PIPELINE` 待终局条件成熟再开。
+
+---
+
 ## 1.3.63
 
 ### 新增：从聊天历史蒸馏（不用干等）

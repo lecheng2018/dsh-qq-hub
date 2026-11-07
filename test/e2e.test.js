@@ -1204,8 +1204,15 @@ test('慢工具卡住超过 1.5 秒先发一条「正在做」提示，不让主
   }
   const t = await until(async () => { const x = await turn(); return x.reply === '慢工具好了' ? x : null }, 25000)
   assert.equal(t.reply, '慢工具好了')
-  const sent = mock.calls.slice(before).filter((c) => c.action === 'send_private_msg').map((c) => c.params.message)
-  const texts = sent.map((m) => (m || []).filter((s) => s.type === 'text').map((s) => s.data.text).join(''))
+  // PIPELINE 态出口走 dispatcher 批次 drain，A4#4 跨 drain pacing（minGap 700ms×抖动）让
+  // 「提示→回复」落线有真实间隔——fake.turns 记账在组完回复时，落线可能晚一拍。
+  // 先等最终回复真正落到 mock 再读序（legacy 态即时命中，零额外等待）。
+  const readTexts = () => {
+    const sent = mock.calls.slice(before).filter((c) => c.action === 'send_private_msg').map((c) => c.params.message)
+    return sent.map((m) => (m || []).filter((s) => s.type === 'text').map((s) => s.data.text).join(''))
+  }
+  await until(async () => readTexts().some((x) => /慢工具好了/.test(x)), 8000)
+  const texts = readTexts()
   const noticeAt = texts.findIndex((x) => /还在忙/.test(x))
   const doneAt = texts.findIndex((x) => /慢工具好了/.test(x))
   assert.ok(noticeAt >= 0, '慢工具卡住时要先发提示：' + JSON.stringify(texts))
