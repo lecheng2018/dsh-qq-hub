@@ -36,18 +36,53 @@ export class EnvironmentDetector {
   }
 
   /**
-   * 是否运行在 Docker 容器：/.dockerenv 哨兵文件与 /proc/1/cgroup 内容双查，结果缓存。
-   * @returns {boolean}
+   * 是否运行在容器：/.dockerenv 哨兵文件与 /proc/1/cgroup 内容双查，结果缓存。
+   * 2026-11-07 review C3#1 修复——返回**三态**：true=确认容器 / false=确认非容器 /
+   * null=未知。旧实现把「探测失败」缓存成 false（fail-open），allowDocker:false 的
+   * 模块在读取被隔离/权限限制的容器里会被放行——现在未知≠安全，门禁侧必须拿
+   * `=== false` 才放行禁容器模块。
+   * 部署侧显式声明（最高优先，消除 cgroup v2 `0::/` 这类假阴性）：
+   *   QQHUB_RUNTIME_ENV=container|host。
+   * @returns {true | false | null}
    */
   isDocker() {
     if (this._cachedIsDocker !== undefined) return this._cachedIsDocker
-    try {
-      // || 短路：哨兵文件命中时不再读 cgroup；cgroup 查询覆盖老式 cgroup v1 容器形态
-      this._cachedIsDocker = this.existsSync(this.dockerEnvPath) ||
-        this.readFileSync(this.cgroupPath, 'utf8').includes(this.cgroupMarker)
-    } catch {
-      // macOS/Windows 没有 /proc/1/cgroup，读取抛错按「不在容器」处理，绝不让探测炸穿冷启动
+    const declared = String(this.env.QQHUB_RUNTIME_ENV ?? '').trim().toLowerCase()
+    if (declared === 'container') { this._cachedIsDocker = true; return true }
+    if (declared === 'host') { this._cachedIsDocker = false; return false }
+    // 非 Linux 系宿主（win32/darwin）：本进程不可能在 Linux 容器内，直接确证 false
+    if (this.platform !== 'linux' && this.platform !== 'freebsd') {
       this._cachedIsDocker = false
+      return false
+    }
+    let positiveEvidence = false
+    let anyReliableSignal = false
+    try {
+      // || 短路：哨兵文件命中时不再读 cgroup；哨兵存在是**正向证据**
+      if (this.existsSync(this.dockerEnvPath)) {
+        this._cachedIsDocker = true
+        return true
+      }
+    } catch {
+      // 哨兵读取失败：继续找独立证据，不直接下结论
+    }
+    try {
+      const cgroup = this.readFileSync(this.cgroupPath, 'utf8')
+      anyReliableSignal = true
+      // cgroup v1 带 docker/containerd/kubepods 段；v2 常只剩 `0::/`——内容无标记时
+      // 只能证明「读到了 cgroup」，不能证明不在容器，交由下面的 unknown 判定
+      positiveEvidence = /docker|containerd|kubepods|libpod/i.test(cgroup)
+    } catch {
+      // 无 cgroup 可读（macOS/Windows 正常缺，Linux 挂载异常也缺）：不构成否定证据
+    }
+    if (positiveEvidence) {
+      this._cachedIsDocker = true
+    } else if (anyReliableSignal) {
+      // 读到了 cgroup 且无任何容器标记：按非容器处理（macOS/Windows 走不到这里）
+      this._cachedIsDocker = false
+    } else {
+      // 两条证据链都没拿到可靠事实：未知
+      this._cachedIsDocker = null
     }
     return this._cachedIsDocker
   }

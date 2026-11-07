@@ -64,12 +64,31 @@ test('isDocker 短路：哨兵文件命中则不再读 cgroup', () => {
   assert.equal(reads, 0, '|| 短路：哨兵命中时 cgroup 读取次数必须为 0')
 })
 
-test('isDocker 抗炸：macOS/Windows 无 /proc/1/cgroup 读取抛错时按非容器处理', () => {
-  const det = new EnvironmentDetector({
+test('isDocker 抗炸（review C3#1 三态）：非 Linux 平台确证 false；Linux 证据链全断返回 null（未知≠安全）', () => {
+  const mac = new EnvironmentDetector({
+    platform: 'darwin',
     existsSync: () => false,
     readFileSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
   })
-  assert.equal(det.isDocker(), false)
+  assert.equal(mac.isDocker(), false, 'macOS 宿主确证非容器')
+  const unknown = new EnvironmentDetector({
+    platform: 'linux',
+    existsSync: () => false,
+    readFileSync: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) },
+  })
+  assert.equal(unknown.isDocker(), null, 'Linux 读不到任何证据 → 未知')
+  const v2clean = new EnvironmentDetector({
+    platform: 'linux',
+    existsSync: () => false,
+    readFileSync: () => '0::/\n',
+  })
+  assert.equal(v2clean.isDocker(), false, 'cgroup v2 读到且无容器标记 → 确证非容器')
+  const v2docker = new EnvironmentDetector({
+    platform: 'linux',
+    existsSync: () => false,
+    readFileSync: () => '0::/system.slice/docker-abc.scope\n',
+  })
+  assert.equal(v2docker.isDocker(), true, 'cgroup v2 带 docker 段 → 确证容器')
 })
 
 test('isFnOS 指纹：/etc/fnos-release 或 FNOS_VERSION 环境变量任一命中', () => {
@@ -336,4 +355,76 @@ test('loadModules：跨批次同名同样拒绝，已装载导出保持不变', 
   const second = { ...first, entrypoint: async () => ({ build: 'second' }) }
   await assert.rejects(() => loader.loadModules([second]), /模块名重复：stable.*拒绝覆盖/)
   assert.deepEqual(loader.getModule('stable'), { build: 'first' }, '报错不得顺手把已装载实现换掉')
+})
+
+
+// ===== 2026-11-07 review C3 修复回归 =====
+
+test('门禁3（C3#1）：allowDocker:false 的模块遇「未知」也剪枝；未声明的模块不触发探测', async () => {
+  let probed = 0
+  const det = new EnvironmentDetector({
+    platform: 'linux', env: {},
+    existsSync: () => false,
+    readFileSync: () => { probed += 1; throw new Error('blocked') },
+  })
+  const loader = new ConditionalModuleLoader({ detector: det, debugLog: () => {} })
+  let ran = false
+  const gated = { name: 'gated', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], environment: { allowDocker: false }, entrypoint: async () => { ran = true } }
+  const open_ = { name: 'open', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: async () => ({ ok: 1 }) }
+  probed = 0
+  await loader.loadModules([gated])
+  assert.equal(ran, false, '未知容器状态必须拒（旧实现 fail-open 会放行）')
+  probed = 0
+  await loader.loadModules([open_])
+  assert.equal(probed, 0, '未声明 allowDocker 的模块不做容器探测')
+  assert.ok(loader.getModule('open'))
+})
+
+test('部署声明覆盖（C3#1）：QQHUB_RUNTIME_ENV=container/host 直接定论，优先于 fs 探测', () => {
+  const c = new EnvironmentDetector({ platform: 'linux', env: { QQHUB_RUNTIME_ENV: 'container' }, existsSync: () => false, readFileSync: () => '0::/' })
+  assert.equal(c.isDocker(), true)
+  const h = new EnvironmentDetector({ platform: 'linux', env: { QQHUB_RUNTIME_ENV: 'HOST ' }, existsSync: () => true, readFileSync: () => { throw new Error('never') } })
+  assert.equal(h.isDocker(), false)
+})
+
+test('requiresGUI 政策位（C3#2）：fnOS/容器/未知一律剪枝，customDetector 不得反向放行', async () => {
+  const mk = (det, name) => {
+    const loader = new ConditionalModuleLoader({ detector: det, debugLog: () => {} })
+    let ran = false
+    const m = { name, version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['x11'], requiresGUI: true, environment: { customDetector: () => true }, entrypoint: async () => { ran = true } }
+    return { loader, m, ran: () => ran }
+  }
+  const fnos = new EnvironmentDetector({ platform: 'linux', env: { DISPLAY: ':0', FNOS_VERSION: '1' }, existsSync: (p) => p === '/etc/fnos-release', readFileSync: () => '0::/' })
+  const a = mk(fnos, 'gui1'); await a.loader.loadModules([a.m]); assert.equal(a.ran(), false, 'fnOS 禁 GUI（即使 DISPLAY 存在且探针放行）')
+  const docker = new EnvironmentDetector({ platform: 'linux', env: { DISPLAY: ':0' }, existsSync: (p) => p === '/.dockerenv', readFileSync: () => '' })
+  const b = mk(docker, 'gui2'); await b.loader.loadModules([b.m]); assert.equal(b.ran(), false, '容器禁 GUI')
+  const host = new EnvironmentDetector({ platform: 'linux', env: { DISPLAY: ':0', QQHUB_RUNTIME_ENV: 'host' }, existsSync: () => false, readFileSync: () => '0::/' })
+  const c = mk(host, 'gui3'); await c.loader.loadModules([c.m]); assert.equal(c.ran(), true, '确证宿主+有显示变量：政策放行')
+})
+
+test('manifest 预检补全（C3#4）：坏配置在任何 entrypoint 执行前整批拦下', async () => {
+  const det = new EnvironmentDetector({ platform: 'linux', env: {}, existsSync: () => false, readFileSync: () => '0::/' })
+  const loader = new ConditionalModuleLoader({ detector: det, debugLog: () => {} })
+  let ranA = false
+  const good = { name: 'A', version: '1', priority: 10, targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: async () => { ranA = true } }
+  const badEnv = { name: 'B', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], environment: { requiredEnvVars: 'FOO' }, entrypoint: async () => {} }
+  await assert.rejects(loader.loadModules([good, badEnv]), /requiredEnvVars/)
+  assert.equal(ranA, false, '预检在任何入口执行前拦整批——不留半装载')
+  const badEntry = { name: 'C', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: 'not-a-fn' }
+  await assert.rejects(loader.loadModules([badEntry]), /entrypoint 必须是函数/)
+  const badMem = { name: 'D', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], hardware: { minFreeMemoryBytes: '1GB' }, entrypoint: async () => {} }
+  await assert.rejects(loader.loadModules([badMem]), /minFreeMemoryBytes/)
+})
+
+test('customDetector 抛错只剪该模块、不炸整批（C3#4）；内存探测失败按拒（C3#3）', async () => {
+  const det = new EnvironmentDetector({ platform: 'linux', env: { NODE_ENV: 'production' }, existsSync: () => false, readFileSync: () => '0::/', freemem: () => NaN })
+  const loader = new ConditionalModuleLoader({ detector: det, debugLog: () => {} })
+  let boomRan = false, okRan = false
+  const boom = { name: 'boom', version: '1', priority: 5, targetPlatforms: ['linux'], displayRequirements: ['headless'], environment: { customDetector: () => { throw new Error('探针坏了') } }, entrypoint: async () => { boomRan = true } }
+  const mem = { name: 'mem', version: '1', priority: 4, targetPlatforms: ['linux'], displayRequirements: ['headless'], hardware: { minFreeMemoryBytes: 1024 }, entrypoint: async () => {} }
+  const ok = { name: 'ok', version: '1', priority: 1, targetPlatforms: ['linux'], displayRequirements: ['headless'], entrypoint: async () => { okRan = true } }
+  await loader.loadModules([boom, mem, ok])
+  assert.equal(boomRan, false, '坏探针剪自己')
+  assert.equal(loader.getModule('mem'), undefined, 'freemem NaN 时内存门禁按拒')
+  assert.equal(okRan, true, '其他模块照常装载（生产环境零剪枝日志轰炸另测）')
 })
