@@ -5,8 +5,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // host.js 分层拆分后：人格路由在 panel/routes-persona.js，/save 在 panel/routes-config.js
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-persona.js'), 'utf8')
 const SAVE = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')

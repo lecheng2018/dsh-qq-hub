@@ -8,8 +8,9 @@ import { readFileSync } from 'node:fs'
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = new URL('..', import.meta.url).pathname
+const root = fileURLToPath(new URL('..', import.meta.url))
 
 test('client.js 记忆列表不折叠：没有批量展开/折叠按钮，条目直接平铺全文', () => {
   const src = readFileSync(join(root, 'client/client.js'), 'utf8')

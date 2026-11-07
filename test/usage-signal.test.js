@@ -4,8 +4,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // host.js 分层拆分后：会话事件监听在 host/effects.js（断言逐字保留）
 const HOST = readFileSync(join(ROOT, 'src/host/effects.js'), 'utf8')
 const HOST_MAIN = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
