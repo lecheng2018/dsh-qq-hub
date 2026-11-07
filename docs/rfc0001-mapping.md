@@ -358,3 +358,27 @@ C（单调钟不回退基线）、D（owner 收回权威判定）全部按仓内
 | **F1-b** | 气泡入队列的**根治**方案：round-aware flush（边界 flush 延后到本轮 `turn/end` 的 deliver 全部落地），或气泡 checkpoint 入队。「终端 await 整轮」要改 hub 语义（红线不动则留待 Phase 4 事件化收编）；把 egress 认领点下沉进 onebot client 内层违背 kernel 纯库原则——两条都需 controller 拍板 | §五-6（仅针对气泡投递路径；F1-a 已把实况写进装配日志与文档） |
 | **F2** | **真实 id 回传契约**：deferred 成功形态改 `{ queued: true, deliveryId }` 并迁移消费点（hub.js:639 sentIds → 1151 repliedToBot 快路径、1089/1113-1114 quoteCache 失败缓存、1494 群 direct、profile/bili/voice 的「无回执=失败」判定），Dispatcher 不再丢弃网关真实 message_id | §五-5（与 Phase 4 同批；气泡入链前不做，F2 立即升主流量 P0） |
 | **F3** | **队列支路重试策略**：drain 被网关拒（含 299/120 限流）现为零重试静默丢且调用方已拿假成功；需在 sender 层对齐 legacy `groupQuota` 65s 跨窗重试（2026-11-04 真实事故背书），并同批补 drain 前安全闸复核（F6 同一面） | §五-5（同批第三件事） |
+
+
+### 11.6 gemini38 real-issues 裁决（2026-11-07 外部复核，四指控逐条实跑）
+
+被复核文档 `dsh-qq-hub-onion-real-issues-gemini38.md`（4 条指控，对方定级 P0×1 / P1×3）。裁决全文、探针命令与
+输出摘录见 workspace `reports/2026-11-07-gemini38-real-issues-复核裁决.md`（含 US-002 并入的三处 verifier 勘误）。
+成立者修复、不成立者上回归锁，**对方两处补丁一律不采纳**——采纳后果实测见末段与两处测试文件头注释。
+
+| 指控（对方定级） | 裁决 | 处置 | 证据指针（裁决章节 + 测试名/代码位） |
+|:--|:--|:--|:--|
+| 缺陷1 compose abort 后「短路越飞层」提前 bubble（P0） | **不成立** | 上锁（拒补丁：`currentIndex > abortBoundary` 是 unreachable-equivalent 空改动） | 裁决 §缺陷1（探针1 A1/A2/A3 三时序 + 补丁副本逐位一致）；本批新锁 `test/kernel-compose.test.js:289/352/375`『gemini38 缺陷1 拒绝项锁①（A3/A4b）』『锁②（A4b 变体）』『锁③（A5）』；既有同向锁 `:201`『对抗：abort 短路后同层第二次 next() 仍被熔断』、`:245`『契约钉死：abort 不强制作废在飞 next()』 |
+| 缺陷2 context 父信号 `forwardParentAbort` 泄漏（P1） | **成立**（现接线潜在；`host.js:285` 未传第 4 参故今日不发生） | **已修**（`e6eaaee`：`context.js` 加 `dispose()` + `host.js` `dispatchLegacyPipeline` await 后 finally 接线） | 裁决 §缺陷2（计数法 T1 add=100/remove=0/residual=100、T2 abort 路径摘净 100/100、T4 20000 轮 +3.1MB；WeakRef/gc 读数已勘误作废）；`test/kernel-context.test.js:237/251/262`『缺陷2①（修复面）』『缺陷2②（泄漏事实钉）』『缺陷2③（语义边界）』 |
+| 缺陷3 `buildReplyPayload` 缺省 `delayMs=0` 杀死 typing 估时（P1） | **部分成立**（机制链实测全真；定性错——属已拍板接线契约） | **拒补丁 + 注释**（`e6eaaee`：`mw-egress-cutover.js:99` 加契约注释，兜底行随之下移至 `:100`；改 undefined 会打红两条钉） | 裁决 §缺陷3（探针4 A 缺省→0 / B 真 drain `sleeps=[]` / C 对照 `[2216,2216]` / D1 显式 777 保住 / E 补丁预演）；拍板留档本表 `:49`、`:164`、`:165`、A4#4 `:267` + `CHANGELOG.md` US-007「多条回复几乎同时落地」；测试钉 `test/kernel-egress-cutover.test.js:166`（`sleeps.length===0`）与 `:458`（入参不带 delayMs → 0） |
+| 缺陷4 dedup `await timed` 打破并发原子准入（P1） | **不成立**（`has→add` 是同步段，让出点在临界区之外；「await 前让出」≠「临界区内让出」） | 上锁（拒补丁：去 await 后 `String(Promise)`=`[object Promise]` 万物同键，异步 keyFn 下**不同消息互相误拦**） | 裁决 §缺陷4（探针2 S1/S2/S3fix/S4 恒恰一条通过；探针5 P2 补丁反效果 `abortB='duplicate'` vs P3 现实现 `passed=2`）；本批新锁 `test/kernel-ingress-guard.test.js:634/652/674`『gemini38 缺陷4 拒绝项锁①（Promise 型 keyFn 变体）』『锁②』『锁③（缺省同步 keyFn 主钉，裁决文档 S1/S3fix 建议项）』；既有 `:546`『dedup（review D2）』为串行进入式，挡不住「has→add 之间真插 await」，故补并发进入式 |
+
+**两处补丁若被照抄的后果（测试注释里各有一份「勿采纳」警告）**：compose 补丁=不可达空改动（不打红任何锁，
+也不加害，纯属多余）；dedup 补丁=契约内零收益、契约外把幂等层变成错拦不同消息的杀手。
+
+**拒绝项锁的自证（变异测试，2026-11-07 实跑）**：拆掉每层 `nextCalled` 资格位 → 缺陷1 锁①②红；删掉检查点2
+（含 duck 兜底两道）→ 锁③红；在 `has→add` **之间**插宏任务让出 → 缺陷4 锁①红；在 `has` **之前** await（让出点
+仍在临界区外）→ 全绿（锁拦的是「临界区内让出」，不是「任何 await」）；套用对方 dedup 补丁 → 锁②红（成功缓存
+`size` 恒 1）；套用对方 compose 补丁 → 全量逐位绿，与「unreachable-equivalent」互证。
+
+> 本表由 mission-20261107-172833 双模型探针复核产生。
