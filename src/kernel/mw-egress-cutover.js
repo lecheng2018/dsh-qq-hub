@@ -96,6 +96,7 @@ export function buildReplyPayload({ targetType, targetId, segments, priority, de
     targetId: String(targetId ?? ''),
     segments: Array.isArray(segments) ? segments : [],
     priority: priority === 'HIGH' || priority === 'LOW' ? priority : 'NORMAL',
+    // 缺省/非法 delayMs 兜 0 = US-007/A4#4 三选一拍板的**接线契约**（cutover 路径 hub.js:925 轮内已自 pacing，此处再叠 typing 估时就是双限速）：勿改成 undefined——会直接打红 test/kernel-egress-cutover.test.js:166/:458 两条钉；裁决与留档见 docs/rfc0001-mapping.md:49/:164/:267（A4#4）+ reports/2026-11-07-gemini38-real-issues-复核裁决.md 缺陷3。
     delayMs: Number.isFinite(delayMs) ? delayMs : 0,
   }
   // 与 mw-egress 同纪律：undefined 键不带上，enqueue 会把它 spread 进冻结对象，字段对照会多出噪声
