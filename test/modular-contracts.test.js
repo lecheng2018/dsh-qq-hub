@@ -94,6 +94,19 @@ test('NormalizedInbound 拒绝错误版本、缺发送者、非法时间和非�
   assert.throws(() => assertNormalizedInbound(inbound({ chatKey: '10001' })), /chatKey/)
 })
 
+test('NormalizedInbound 校验 sender 可选 nickname、card 和 role', () => {
+  for (const role of ['owner', 'admin', 'member']) {
+    const sender = { userId: '10001', nickname: 'owner', card: 'admin', role }
+    assert.equal(assertNormalizedInbound(inbound({ sender })).sender, sender)
+  }
+  for (const [field, value] of [['nickname', 1], ['card', false], ['role', 'moderator']]) {
+    assert.throws(
+      () => assertNormalizedInbound(inbound({ sender: { userId: '10001', [field]: value } })),
+      new RegExp(`sender\\.${field}`),
+    )
+  }
+})
+
 test('Turn 校验成员事件、状态和 ChatKey', () => {
   const value = turn()
   assert.equal(assertTurn(value), value)
