@@ -148,6 +148,9 @@ export function createFakeDsh({ brain }) {
   }
 
   async function call(path, body, headers = {}) {
+    // M1-A 起面板路由有 Host 白名单/CSRF 防护：真实 HTTP 请求必带 Host，
+    // fake 调用默认补一个回环 Host 模拟合法本机面板（显式传入的 headers 仍可覆盖/伪造以测防护）。
+    headers = { host: '127.0.0.1', ...headers }
     const full = '/qq-hub/api' + path.split('?')[0]
     // 先精确匹配，再找最长的前缀路由（和 DSH 的网页服务一样）
     const r = routes.get(full) || [...routes.values()].filter((x) => x.kind === 'prefix' && (full === x.path || full.startsWith(x.path + '/'))).sort((a, b) => b.path.length - a.path.length)[0]
