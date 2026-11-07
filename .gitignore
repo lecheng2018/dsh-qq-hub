@@ -8,3 +8,6 @@ E:/
 *.tmp-test
 *.bak-*
 .pkg-tmp/
+
+# Mimosa 安全钩子的本地扫描状态(会话级工具产物,不入库)
+.mimosa/
