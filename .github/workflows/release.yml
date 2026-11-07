@@ -1,0 +1,151 @@
+# DSH 插件自动发布工作流
+#
+# 触发策略（避免文档/杂项改动污染 Release 列表）：
+#   1. push tag (v*)          —— 正式发版：更新 package.json version 后打 tag 推送
+#   2. workflow_dispatch      —— 手动发版：Actions 页面点 Run workflow
+#   3. push main 且代码有变更  —— 自动判断：只看 src/、client/、cordis.patch.yml、test/、
+#                                package.json、scripts/ 等实际影响插件产物的文件；
+#                                纯 README / 文档 / .md / 许可证改动不触发发布
+#
+# Tag 命名规则：
+#   - package.json version 与远端已有 tag 一致且指向当前提交 → 跳过发布（幂等保护）
+#   - version 相同但指向不同提交 → 追加 -build.N 后缀（兜底，正常走 tag 触发不会碰到）
+name: Release DSH Plugin
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'src/**'
+      - 'client/**'
+      - 'personas/**'
+      - 'extensions/**'
+      - 'cordis.patch.yml'
+      - 'package.json'
+      - 'test/**'
+      - 'scripts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # tag 触发必定发版；push main 触发时再检测「这个提交是否已有同版本 tag」做幂等
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Extension Test Dependencies
+        run: npm ci --prefix extensions/tieba-reader
+
+      - name: Run Test Suite
+        run: npm run test:all
+
+      - name: Check Package Contents
+        run: npm run pack:check
+
+      - name: Determine Version and Tag
+        id: meta
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          SKIP=false
+
+          git fetch --tags --force || true
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            # tag 推送 = 明确的发版意图，无条件发布
+            echo "由 tag ${GITHUB_REF_NAME} 触发，直接发布"
+          else
+            # main push：幂等保护，避免重复发版污染 Release 列表
+            if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+              TAG_COMMIT=$(git rev-list -n 1 "${TAG}" 2>/dev/null || echo "")
+              if [ "${TAG_COMMIT}" = "${GITHUB_SHA}" ]; then
+                echo "当前提交 ${GITHUB_SHA} 已存在 tag ${TAG}，跳过重复发布"
+                SKIP=true
+              else
+                echo "package.json version 仍是 ${VERSION} 且 tag ${TAG} 已指向其他提交；如需重新发版请更新 version 或打 tag"
+                SKIP=true
+              fi
+            fi
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "skip=${SKIP}" >> "$GITHUB_OUTPUT"
+          echo "Target tag: ${TAG} (Package version: ${VERSION}, skip=${SKIP})"
+
+      - name: Extract Release Notes
+        id: changelog
+        if: steps.meta.outputs.skip != 'true'
+        run: |
+          node -e '
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+          const sections = changelog.split(/\r?\n##\s+/).slice(1);
+          const target = sections.find(s => {
+            const title = s.split(/\r?\n/)[0].trim();
+            return title === pkg.version || title === "v" + pkg.version;
+          }) || sections.find(s => s.split(/\r?\n/)[0].trim() === "未发布") || sections[0];
+
+          let notes = "详见版本提交明细。";
+          if (target) {
+            notes = target.split(/\r?\n/).slice(1).join("\n").trim();
+          }
+          fs.writeFileSync("RELEASE_NOTES.md", notes, "utf8");
+          '
+          echo "=== RELEASE_NOTES.md Preview ==="
+          head -n 25 RELEASE_NOTES.md
+
+      - name: Pack DSH Plugin (.tgz)
+        id: pack
+        if: steps.meta.outputs.skip != 'true'
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          TGZ=$(ls dist/*.tgz | head -n 1)
+          # 版本名 + 免版本名双资产：市场 tarball 可用 latest/download/ 免腐烂链接
+          cp "${TGZ}" dist/dsh-qq-hub.tgz
+          echo "tgz_path=${TGZ}" >> "$GITHUB_OUTPUT"
+          echo "Packaged plugin: ${TGZ}"
+          ls -lh dist/
+
+      - name: Upload Artifact
+        if: steps.meta.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-plugin-tarball
+          path: |
+            dist/*.tgz
+            !dist/dsh-qq-hub.tgz
+
+      - name: Publish GitHub Release
+        if: steps.meta.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Release ${{ steps.meta.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            ${{ steps.pack.outputs.tgz_path }}
+            dist/dsh-qq-hub.tgz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
