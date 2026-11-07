@@ -7,6 +7,7 @@
 
 | 开关 | 默认 | 适用路径 | 读取时机 | 重启要求 | 非法/空值行为 |
 |---|---|---|---|---|---|
+| `FLAG_MODULAR_CORE` | **关** | host.js dispatchEvent：实时事件走新核心（Registry→Turn→Assembly→Outbox）vs legacy/管道 | 装配期一次（`isModularCoreEnabled`） | 改后需重启 | 关（fail-closed 回 legacy） |
 | `FLAG_USE_PIPELINE` | **关** | host.js `dispatchEvent`：onebot 实时事件流走洋葱管道 vs 直调 legacy hub | 装配期一次（`isPipelineEnabled(process.env)`） | 改后需重启 | 关（fail-closed 回 legacy） |
 | `FLAG_EGRESS_SHADOW` | **关**（live） | 管道出口切换的 shadow 双算比对；**仅在管道开启时有意义**（host.js 装配位 gating） | 装配期一次（`isEgressShadowEnabled`） | 重启 | live |
 | `FLAG_INGRESS_AGGREGATOR` | **关** | 管道内的入口合流中间件（暂停版，透传）；**仅在管道开启时装配** | 装配期一次（`isIngressAggregatorEnabled`） | 重启 | 关（不装配） |
