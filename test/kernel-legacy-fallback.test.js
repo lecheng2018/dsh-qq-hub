@@ -12,6 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compose, PipelineError } from '../src/kernel/compose.js'
 import { createContext } from '../src/kernel/context.js'
+import { defaultAclDecision } from '../src/kernel/mw-acl.js'
 import {
   createLegacyHubFallback,
   isPipelineEnabled,
@@ -108,6 +109,44 @@ test('legacyEventToEnvelope：群聊多段消息、poke 通知与无 time 事件
   const noTime = legacyEventToEnvelope({ post_type: 'message', message: [] })
   assert.ok(noTime.timestamp >= Date.now() - 5000, '缺 time 用接收时刻兜底')
   assert.match(noTime.id, /.*/, '缺 message_id 用随机 id 兜底')
+})
+
+// 补评 F4：部分网关的私聊 message 事件身份只在事件顶层（不带 sender / sender 缺 user_id）。
+// 信封若不兜底，acl 会以「缺少发送者身份」fail-closed 整条丢弃，而 legacy 同一份报文正常回。
+test('legacyEventToEnvelope：私聊身份只在事件顶层时兜底进 sender.userId，acl 不再误杀整条（补评 F4）', () => {
+  const cfg = { ownerQQ: '1001', allow: { private: ['10001'], groups: [] } }
+
+  // 形态 A：完全没有 sender 对象
+  const noSender = legacyEventToEnvelope({
+    time: T0, self_id: 123456, post_type: 'message', message_type: 'private', sub_type: 'friend',
+    message_id: 990, user_id: 10001, message: [{ type: 'text', data: { text: '在吗' } }],
+  })
+  assert.equal(noSender.sender.userId, '10001', '顶层 user_id 回落进信封 sender.userId')
+  assert.equal(noSender.sender.nickname, undefined, '只补身份，不凭空造昵称')
+  assert.equal(noSender.sender.card, undefined)
+  assert.equal(noSender.sender.role, undefined)
+  const d = defaultAclDecision(createContext(noSender, 'onebot'), cfg)
+  assert.equal(d.allow, true, '兜底后 acl 判定放行（此前整条丢弃 = pipeline-on 独有行为差）')
+  assert.ok(!d.reason.includes('缺少发送者身份'), `不该再以身份缺失为由拒：${d.reason}`)
+
+  // 形态 B：sender 对象在，但里面没有 user_id
+  const partial = legacyEventToEnvelope({ ...privateMsgEvent(), sender: { nickname: '小鱼' } })
+  assert.equal(partial.sender.userId, '10001', 'sender 缺 user_id 同样回落顶层')
+  assert.equal(partial.sender.nickname, '小鱼', 'sender 自带字段一字不改')
+
+  // message_sent（自己发出）归并进 message 大类，兜底同样适用
+  const sent = legacyEventToEnvelope({ time: T0, post_type: 'message_sent', message_type: 'private', message_id: 991, user_id: 10001, message: [] })
+  assert.equal(sent.sender?.userId, '10001', 'message_sent 也按 message 大类兜底')
+
+  // 反面：顶层也没 user_id 的真·匿名事件——不凭空合成，防线维持 fail-closed
+  const anon = legacyEventToEnvelope({ time: T0, post_type: 'message', message_type: 'private', message_id: 992, message: [] })
+  assert.equal(anon.sender, undefined, '顶层无身份时不造 sender')
+  const da = defaultAclDecision(createContext(anon, 'onebot'), cfg)
+  assert.equal(da.allow, false, '身份真缺仍拒绝（兜底不是把闸门打开）')
+  assert.match(da.reason, /缺少发送者身份/)
+
+  // 通知类形态不变：poke 带顶层 user_id 也不合成 sender（终端/判定按 rawPayload 走）
+  assert.equal(legacyEventToEnvelope(pokeEvent()).sender, undefined, 'poke 仍无 sender 结构')
 })
 
 // ---------- 终端中间件路由 ----------

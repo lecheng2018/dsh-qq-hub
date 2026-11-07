@@ -592,7 +592,7 @@ export function apply(ctx) {
       ...(memoryAssemblyOn ? [personaAssembly, memoryAssembly] : []),
       createLegacyHubFallback(hub),
     ])
-    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}；入口合流=${useIngressAggregator ? '挂载（暂停透传，见 review A1/A2）' : '关（FLAG_INGRESS_AGGREGATOR）'}；上下文装配=${memoryAssemblyOn ? '开（persona/memory 接管，NEW_MEMORY_PIPELINE）' : '关（legacy provider 链）'}；命令路由=开（内置命令接管，ext/边界形态透传 legacy）}`)
+    log.info(`RFC-0001 管道开关（FLAG_USE_PIPELINE）：开 — 事件走洋葱管道，遗留 hub 作终端；入口防御链=开（ratelimit/acl/dedup）；出口=${egressMode}（治理面实况=队列支路：router 命令直答与 hub 闸门透传回复；主聊天气泡由 turn/end 异步投递、落在终端 await 之后，命中包装器直发分支，不经队列/清洗/pacing/shadow 比对——见补评 F1）；入口合流=${useIngressAggregator ? '挂载（暂停透传，见 review A1/A2）' : '关（FLAG_INGRESS_AGGREGATOR）'}；上下文装配=${memoryAssemblyOn ? '开（persona/memory 接管，NEW_MEMORY_PIPELINE）' : '关（legacy provider 链）'}；命令路由=开（内置命令接管，ext/边界形态透传 legacy）}`)
   }
 
   // ---------- 面板接口的小工具 ----------
