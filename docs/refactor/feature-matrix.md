@@ -62,7 +62,7 @@
 | `complete-guard` 不完整回复守卫 | 检测/记录不完整回复，不修改回复内容。 | 记录日志/状态，不应以此模块名推断它会自动重试或发送。 | 未定位到单独 complete-guard 专项；需补检测边界和“不改回复、不重复发送”的断言。 | Core/Chat、QA/Integration |
 | `memory-privacy` 记忆分层 | 定义 `private:<QQ>`、`group:<群>`、`global` 作用域；向主 memory 注册 override；提供作用域查询、删除、隔离设置面板。代码无独立 `scoped.json` 存储。 | 默认启用；未知/无 scope fail-closed；私聊内容面板默认打码；`autoScope=false` 会把新记忆写到 global，应视为高风险显式选择。 | `test/memory-privacy-scope.test.js`、`test/memory-scope.test.js`、`test/batch-expand-and-privacy.test.js`。注意：这些不能证明真实用户旧 `scoped.json` 都已迁入主库。 | Security/Privacy、Memory/Data |
 | `scheduler` 定时任务 | 支持 once/delay/daily/workdays/weekly/Cron 等引擎能力，持久化 `tasks.json`；`/remind` 命令和模型工具创建任务，到期通过 QQ 发送提醒卡片。 | 模块默认 enabled；命令只给主人；AI 工具可在非 system 聊天登记，目标为当前会话。到期 `api.sendText` 依赖 Hub 出站门控；模块自身 `enabled` 关闭时不 tick。面板删任务 route 权限依赖宿主。 | `test/scheduler.test.js` 覆盖时间解析/引擎 fake 文件触发，不是 Hub/真实 QQ 全链路。 | Automation、Core/Chat |
-| `multi-parser` 多平台解析 | 监听聊天 URL 并抓取 B 站/微博/小红书/知乎/微信/贴吧/番茄/GitHub/抖音/小黑盒等内容；可注入上下文；可将图片、视频、链接、转发卡片或文件发 QQ；写临时媒体文件并清理。 | 总功能默认关闭，平台/聊天分流可关；私聊/群默认允许时，必须先开启。送达层多处直接 OneBot，不保证受 `hub.capture()`、总开关/dry-run、identity guard 保护；视频/文件有限额及模式限制。 | `test/multi-parser.test.js`、`test/multi-parser-scope.test.js`、`test/douyin-media.test.js`、`test/media-cleanup.test.js`；多为 fake 依赖。直接 OneBot 的安全边界需补集成测试。 | External Platform、Media/Voice、Security/Privacy |
+| `multi-parser` 多平台解析 | 监听聊天 URL 并抓取 B 站/微博/小红书/知乎/微信/贴吧/番茄/GitHub/抖音/小黑盒等内容；可注入上下文；可将图片、视频、链接、转发卡片或文件发 QQ；写临时媒体文件并清理。 | 总功能默认关闭，platform/chat 分流可关；私聊/群默认允许时，必须先开启。送达层多处直接 OneBot，不保证受 `hub.capture()`、总开关/dry-run、identity guard 保护；视频/文件有限额及模式限制。 | `test/multi-parser.test.js`、`test/multi-parser-scope.test.js`、`test/douyin-media.test.js`、`test/media-cleanup.test.js`；多为 fake 依赖。直接 OneBot 的安全边界需补集成测试。 | External Platform、Media/Voice、Security/Privacy |
 | `rss` RSS/Atom 资讯池 | 拉取订阅源、解析并存入 JSONL 池；工具按需查询并记录 readKeys；定时精选会调用模型、选文并发送到配置目标。还可从面板手动拉取/立即精选/检查 URL/清池。 | 资讯池默认关；定时 pull 受 `rss.enabled` 控制；普通定时 digest 同样要求 `rss.enabled` 与 digest 未关闭，并经 `hub.sendText`。**代码与注释存在差异**：`/rss/digest-now` 以 `manual:true` 调用，`digest()` 未检查 `rss.enabled`，且 manual 会绕过 digest.enabled 检查，因此可能在 rss 总开关关闭时仍尝试精选发送；最终仍受 Hub 总开关/dry-run。手动 pull 也绕过 `rss.enabled`。 | `test/rss.test.js` 覆盖解析、池、SSRF URL 检查、精选解析；`test/rss-panel.test.js` 覆盖面板；没有本次执行或真实订阅/QQ 投递验收。补 manual 关闭开关断言并修正文档/实现取舍。 | Automation、External Platform |
 
 ## 核心聊天、命令与访问控制
@@ -114,7 +114,7 @@
 | 普通 QQ 对话与命令回复 | `hub.deliver()` → `sendText/sendSegments`；命令路由含显式 force 回复。 | 普通路径受全局开关、dry-run、identity guard；force 可绕过三者中的总开关、dry-run 和该处 identity guard。群发受 quota。 | 对所有 force 使用点建立允许清单和测试；验证关总开关时普通回复、命令、错误通知分别行为。Core/Chat、Security/Privacy。 |
 | 语音、图片、表情、poke、文件 | Hub `sendVoice/sendVoiceFile/sendImage/sendSticker/sendFile/pokeBack`。 | 语音/图片/表情多数走 `sendSegments`；文件另有 files.enabled、路径/大小限制；poke 单独 gate。 | 按出口做 enabled×dryRun×force 矩阵，不能只测文字。Core/Chat、Media/Voice。 |
 | 主动搭话/目的引擎 | `speakup.tick/fire`、`purpose.tick/fire` → owner private `hub.deliver`。 | 检查功能开关、静音、间隔/限额、主人目标；最后仍由 Hub 决定能否实际投递。 | 真实时钟调度和重启/重复发送 idempotency。Automation。 |
-| 定时提醒 | scheduler 到期 `api.sendText(target, card)`；命令主人专用，AI tool 以当前会话为目标。 | `scheduler.enabled`；实际消息经过 Hub 出站门控。支持群目标，需验证群会话创建提醒的产品预期。 | 重启后不重发、发送失败是否重试/标已完成、群目标权限。Automation。 |
+| 定时提醒 | scheduler 到期 `api.sendText(target, card)`；命令主人专用，AI tool 以当前会话为目标。 | `scheduler.enabled`；实际消息经过 Hub 出站门控。支持群目标，需验证群会话创建提醒的产品预期。 | 重启后不重发、发送失败是否重试/标已完成、群目标权限。Automation、QA。 |
 | QQ 好友申请提示 | contacts 收 OneBot request 后写 `friend-requests.json`，并向主人发 `api.sendText` 通知。 | 去重；通知受 `profilePerms.qqFriendRequest !== off`；申请通过/拒绝要求 profile 权限及 dry-run。 | 确认日志/落盘包含申请内容的隐私保留策略。QQ Social、Security/Privacy。 |
 | QQ 群管理 | `group-admin` 直接 OneBot `set_group_ban/kick/special_title/_send_group_notice`。 | 本轮主人、群白名单、角色能力、对象校验、dry-run；不是 Hub send，无法自动套用普通出站 gate。 | `enabled=false`、模块禁用、旧工具/并发改权时的执行时校验；各动作 fake OneBot 测试。QQ Social、Security/Privacy。 |
 | 空间说说/日记/删除 | `qzone.post` → `send_qzone_msg`；`qzone.remove` → `delete_qzone_msg`；定时 tick / 手动 route。 | 发布检查总开关、dryRun、受限 audience、身份闸；删除函数自身无对等 gate；历史同步读取空间列表并修改本地状态。 | `/qzone/delete` HTTP 授权与删除确认；所有入口统一总开关/dry-run；实际 audience 验证。QQ Social、Panel/Host。 |
@@ -135,13 +135,13 @@
 1. **先统一副作用策略**：为外部写 API、直接 OneBot、普通 Hub 发送定义统一的 disabled/dry-run/force/capability 契约。`hub.capture()` 不能当作对直接 `onebot.call()` 的沙箱。至少让群管、空间删除、多平台解析送达、Heybox 外站写都进入可测试的统一门。
 2. **Heybox 后台写权限**：后台 system chat 当前可以获取 owner 档工具；配置开启自动浏览时，默认 owner 写权限使模型可能调用外站写 API；外站 API 本体没有 dryRun。需明确“自动浏览可否写”、单独默认关闭写权限或要求显式确认，并补 fake API 测试后再纳入已验证基线。
 3. **RSS 手动路由对齐**：`/rss/digest-now` 传 `manual:true`，而 `digest()` 没有检查 `rss.enabled`；manual 还绕过 `digest.enabled` 检查。源码注释说“不跳过总开关”与实际模块开关逻辑不一致。确认产品预期，修实现/注释，并覆盖开启/关闭组合。
-4. **路由鉴权审计**：本次读到若干模块路由直接触发 OneBot、外站或持久化（例如 `/qzone/delete`、RSS pull/digest/clear、scheduler del、module tool/simulate、avatar sync）。需要在实际 host HTTP 装配点证明它们的 actor 授权、CSRF 防护与部署暴露边界；仅有面板按钮隐藏不是服务端授权证明。
+4. **路由鉴权审计**：本次读到若干模块路由直接触发 OneBot、外站或持久化（例如 `/qzone/delete`、RSS pull/digest/clear、scheduler del、module tool/simulate、avatar sync）。需要在实际 host HTTP 装配点证明它们的 actor 授权、CSRF 防护和部署暴露边界；仅有面板按钮隐藏不是服务端授权证明。
 5. **记忆数据迁移证明**：`fix-memory-scope.mjs` 与其测试解决的是无 scope `memories.json` 归档；不证明历史 `scoped.json` 已完整并入主库。核对历史用户备份/迁移日志/条数校验，明确备份何时可删除、失败如何恢复。
 6. **行为测试而非测试文件存在**：M0 最终自动化门禁结果见本文件开头和 `baseline.md`；它不等同于表中每个行为都有专项断言。后续仍应为各类副作用建立 fake OneBot/HTTP/CDP 端到端矩阵，覆盖 dry-run、总开关关闭、权限撤回、模块热卸载、失败重试、目标变化、重复触发与实际副作用计数。Heybox/complete-guard/mood 的专属行为覆盖当前未能确认或偏弱。
-7. **目标环境验收**：真实 OneBot、SnowLuma 版本、外站 Cookie/验证码、CDP、语音/图像服务、Linux/Windows 工具路径、路由公网暴露均未在本次验证；不能据源码或历史测试数字宣称线上可用。
+7. **目标环境验收**：真实 OneBot、SnowLuma 版本、外站 Cookie/验证码、CDP、语音/图像服务、Linux/Windows 工具路径、路由公网暴露均未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
 
 ## 本次核验记录
 
 - 本矩阵的功能项来自源码静态盘点；M0 最终门禁另行执行并记录为：主测试 1289 tests / 1285 pass / 0 fail / 4 skipped，第二次相同内容 dot reporter 正常退出（退出码 0）；扩展 46/46；`npm pack --dry-run` 成功、214 个文件。
-- 上述汇总测试结果不表示矩阵中每项行为均由专项测试覆盖，也不表示真实网络链路已验证。未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
+- 上述汇总测试结果不表示矩阵中每项行为均由专项断言覆盖，也不表示真实网络链路已验证。未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
 - `pet` 不在当前 `BUILTINS` 中；M3-E 因当前基线无 pet 标为不适用。若未来重新引入，另立 ADR；`_template` 是模板，不是运行中的内置模块，故不列为当前功能。
