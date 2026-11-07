@@ -3,11 +3,15 @@
 // 调度引擎提供三条硬保障：
 //   1. 中间件数组在组装时拷贝并冻结，运行期无法篡改拓扑。
 //   2. next() 只许调用一次：同一层重复调用即熔断（lastDispatchedIndex 游标防重入）。
-//   3. abort 的收尾语义（§2.2）：以「abort 时刻在飞的 next() 派发边界」为界——
-//      边界及更浅层的在飞 dispatch 就地 resolve（等价于其下游从未返回），让**已派发
-//      中间件的 bubble（next 之后代码）正常回溯收尾**；比边界更深层（abort 前从未
-//      派发）的中间件两级都不进（entry 与 bubble 都不执行）。预 abort（进管道前
-//      已中断）时派发边界为 -1：一切短路，连第 0 层都不进。
+//   3. abort 的收尾语义（§2.2，2026-11-07 review A1#1 后按实现实况改写）：
+//      - **新的 dispatch 调用**按边界短路：abort 时刻之后，任何「首次派发更深一层」
+//        的调用就地 resolve（该层两级都不进）；预 abort 边界 -1，连第 0 层都不进。
+//      - **已在飞的 dispatch Promise 不强制作废**：它等其内层真实 settle 后，调用方
+//        层的 bubble 正常回溯收尾。因此「管道返回」=「所有已启动中间件真实结束」
+//        （JS 无法强制恢复挂死的 async 函数体；review 亦确认快速完成与真实完成
+//        不可兼得，本管道选择真实完成——内层必须自带超时，legacy 终端由 LLM 层
+//        超时兜底）。abort 后内层迟到 reject 时错误照常上抛（bubble 被跳过，
+//        错误语义优先），kernel-compose 回归测试钉死这两种时序。
 //      US-001 的「abort 后零 bubble」旧承诺以本条为准更新：egress/dispatcher 等
 //      全部活在 bubble 里的中间件必须能收尾，否则 G2「中断并合并 + 丢弃未 flush
 //      回复」无法成立。
@@ -58,6 +62,7 @@ export function compose(middlewares) {
     let abortBoundary = null
 
     const signal = context.signal
+    let removeAbortListener = () => {}
     if (signal && typeof signal.addEventListener === 'function' && typeof signal.removeEventListener === 'function') {
       const onAbort = () => {
         if (abortBoundary !== null) return // 只认首次 abort（signal 一次性，双保险）
@@ -65,11 +70,18 @@ export function compose(middlewares) {
         for (const i of inFlight) if (i > deepest) deepest = i
         abortBoundary = deepest
       }
-      // AbortSignal 规范保证：abort() 同步派发事件，先于任何微任务 continuation，
-      // 因此 onAbort 读到的 inFlight 正是「abort 那一刻」的调用栈。
-      signal.addEventListener('abort', onAbort, { once: true })
-      // 进函数时已 abort（预 abort）：边界按现值定，不等事件
-      if (signal.aborted) onAbort()
+      if (signal.aborted) {
+        // 预 abort：直接定边界，**不注册监听**（review A1#2：once 监听手动调用不会消耗，
+        // 会在可复用信号上永久堆积闭包）
+        onAbort()
+      } else {
+        // AbortSignal 规范保证：abort() 同步派发事件，先于任何微任务 continuation，
+        // 因此 onAbort 读到的 inFlight 正是「abort 那一刻」的调用栈。
+        signal.addEventListener('abort', onAbort, { once: true })
+        removeAbortListener = () => {
+          try { signal.removeEventListener('abort', onAbort) } catch { /* 容忍非标准信号 */ }
+        }
+      }
     }
 
     /**
@@ -119,8 +131,22 @@ export function compose(middlewares) {
       }
 
       try {
-        // 构造连续调用链
-        const nextStep = () => dispatch(currentIndex + 1)
+        // 每层派发独立的 next 资格位：abort 短路同样消耗（旧游标方案在 abort 后
+        // 会放行同层第二次 next()，review A1#3），错误 index 指向违规调用者（A1#4）。
+        // 全局游标保留为第二重防御。
+        let nextCalled = false
+        const nextStep = () => {
+          if (nextCalled) {
+            return Promise.reject(
+              new PipelineError(
+                `Illegal next() invocation: middleware at index ${currentIndex} called next() multiple times.`,
+                currentIndex
+              )
+            )
+          }
+          nextCalled = true
+          return dispatch(currentIndex + 1)
+        }
 
         return Promise.resolve(targetFn(context, nextStep)).then(
           (value) => {
@@ -149,6 +175,6 @@ export function compose(middlewares) {
       }
     }
 
-    return dispatch(0)
+    return dispatch(0).finally(removeAbortListener)
   }
 }

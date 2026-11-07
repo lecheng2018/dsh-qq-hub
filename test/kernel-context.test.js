@@ -114,3 +114,90 @@ test('abort：signal.aborted 与 reason 语义（显式原因 / 默认 AbortErro
   assert.equal(ctx2.signal.aborted, true)
   assert.equal(ctx2.signal.reason?.name, 'AbortError')
 })
+
+
+// ===== 2026-11-07 review A2 修复回归 =====
+
+import { createContext as ctxWithParent } from '../src/kernel/context.js'
+
+test('queue getter 返回冻结快照：push/splice/length=0 一律失效（review A2 P1）', () => {
+  const ctx = createContext({ messageId: 'm' }, 'd')
+  ctx.reply.enqueue({ targetType: 'group', targetId: '1', segments: [{ type: 'text', data: { text: 'x' } }] })
+  const q = ctx.reply.queue
+  assert.ok(Object.isFrozen(q))
+  assert.throws(() => q.push({ evil: 1 }), TypeError)
+  assert.throws(() => { q.length = 0 }, TypeError)
+  assert.equal(ctx.reply.queue.length, 1, '快照被改不影响内部队列')
+})
+
+test('enqueue 深冻结：入队后改原段对象/原 data，队列内容不动（review A2 P1）', () => {
+  const ctx = createContext({ messageId: 'm' }, 'd')
+  const data = { text: '原文' }
+  const seg = { type: 'text', data }
+  ctx.reply.enqueue({ targetType: 'private', targetId: '9', segments: [seg] })
+  data.text = '篡改'
+  seg.type = 'image'
+  seg.extra = '偷加'
+  const item = ctx.reply.queue[0]
+  assert.equal(item.segments[0].type, 'text')
+  assert.equal(item.segments[0].data.text, '原文')
+  assert.equal(item.segments[0].extra, undefined)
+  assert.ok(Object.isFrozen(item.segments[0]))
+  assert.ok(Object.isFrozen(item.segments[0].data))
+})
+
+test('restoreFront/rollbackTo：正规 API 取代外部偷改（dispatcher deferred / router 回滚位）', () => {
+  const ctx = createContext({ messageId: 'm' }, 'd')
+  const mk = (t) => ({ targetType: 'group', targetId: '1', segments: [{ type: 'text', data: { text: t } }] })
+  ctx.reply.enqueue(mk('a'))
+  ctx.reply.enqueue(mk('b'))
+  const batch = [...ctx.reply.queue]
+  ctx.reply.clear()
+  ctx.reply.restoreFront([batch[1]])
+  assert.equal(ctx.reply.queue[0].segments[0].data.text, 'b')
+  ctx.reply.enqueue(mk('c'))
+  ctx.reply.rollbackTo(1)
+  assert.equal(ctx.reply.queue.length, 1)
+  ctx.reply.rollbackTo(99)
+  assert.equal(ctx.reply.queue.length, 1, '越界静默忽略')
+})
+
+test('父信号透传（review A2 P1）：createContext 第 4 参接上游 AbortSignal，断开即取消本轮', async () => {
+  const parent = new AbortController()
+  const ctx = ctxWithParent({ messageId: 'm' }, 'd', undefined, { signal: parent.signal })
+  assert.equal(ctx.signal.aborted, false)
+  parent.abort('http-closed')
+  assert.equal(ctx.signal.aborted, true)
+  assert.equal(ctx.signal.reason, 'http-closed')
+  // 预 abort：出生即取消
+  const p2 = new AbortController()
+  p2.abort('early')
+  const ctx2 = ctxWithParent({ messageId: 'm' }, 'd', undefined, { signal: p2.signal })
+  assert.equal(ctx2.signal.aborted, true)
+  // 本地 abort 后父信号再 abort 不改变本地 reason
+  const p3 = new AbortController()
+  const ctx3 = ctxWithParent({ messageId: 'm' }, 'd', undefined, { signal: p3.signal })
+  ctx3.abort('local-first')
+  p3.abort('late-parent')
+  assert.equal(ctx3.signal.reason, 'local-first')
+})
+
+test('ctx-store：runWithContext(null) 在 A 上下文内显式退出（review A3#1）；WeakSet 收口标记裸 ctx 也有效（A3#2）', async () => {
+  const { runWithContext, getCurrentContext, markContextFlushed, isContextFlushed } = await import('../src/kernel/ctx-store.js')
+  const ctxA = createContext({ messageId: 'a' }, 'd')
+  await runWithContext(ctxA, async () => {
+    assert.equal(getCurrentContext(), ctxA)
+    await runWithContext(null, async () => {
+      assert.equal(getCurrentContext(), null, 'null = 退出上下文，不得继承 A')
+      const inner = await new Promise((r) => setImmediate(() => r(getCurrentContext())))
+      assert.equal(inner, null, '退出后新建的异步资源保持无上下文')
+    })
+    assert.equal(getCurrentContext(), ctxA, '退出后恢复 A')
+  })
+  const bare = { reply: { enqueue() {} } }
+  assert.equal(isContextFlushed(bare), false)
+  markContextFlushed(bare)
+  assert.equal(isContextFlushed(bare), true, '无 state 槽的裸 ctx 也能被标记（WeakSet）')
+  markContextFlushed(null)
+  assert.equal(isContextFlushed(null), false)
+})

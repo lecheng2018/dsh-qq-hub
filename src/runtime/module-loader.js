@@ -33,6 +33,31 @@ export function validateManifest(manifest) {
   if (manifest.priority !== undefined && !Number.isFinite(manifest.priority)) {
     throw new TypeError(`[Loader] 模块 ${label} 的 manifest.priority 必须是数字，收到 ${JSON.stringify(manifest.priority)}`)
   }
+  // review C3#4：以下字段全部在**预检**拦下（旧实现要等 evaluateGate 对字符串调
+  // .every/.some 或调用非函数 entrypoint/customDetector 才炸，且已留下前序模块副作用）
+  for (const field of ['requiredEnvVars', 'deniedEnvVars']) {
+    const value = manifest.environment?.[field]
+    if (value !== undefined &&
+        (!Array.isArray(value) || value.some((k) => typeof k !== 'string' || k.length === 0))) {
+      throw new TypeError(`[Loader] 模块 ${label} 的 environment.${field} 必须是非空字符串数组`)
+    }
+  }
+  if (manifest.environment?.customDetector !== undefined && typeof manifest.environment.customDetector !== 'function') {
+    throw new TypeError(`[Loader] 模块 ${label} 的 environment.customDetector 必须是函数`)
+  }
+  if (manifest.environment?.allowDocker !== undefined && typeof manifest.environment.allowDocker !== 'boolean') {
+    throw new TypeError(`[Loader] 模块 ${label} 的 environment.allowDocker 必须是布尔值`)
+  }
+  if (manifest.requiresGUI !== undefined && typeof manifest.requiresGUI !== 'boolean') {
+    throw new TypeError(`[Loader] 模块 ${label} 的 requiresGUI 必须是布尔值`)
+  }
+  const min = manifest.hardware?.minFreeMemoryBytes
+  if (min !== undefined && (typeof min !== 'number' || !Number.isFinite(min) || min < 0)) {
+    throw new TypeError(`[Loader] 模块 ${label} 的 hardware.minFreeMemoryBytes 必须是非负有限数字`)
+  }
+  if (manifest.entrypoint !== undefined && typeof manifest.entrypoint !== 'function') {
+    throw new TypeError(`[Loader] 模块 ${label} 的 entrypoint 必须是函数（RFC §5.1 懒装载入口）`)
+  }
   // priority 缺省视为 0：RFC §5.1 声明必填，但漏写一项不该让整批装载炸掉
   return { ...manifest, priority: manifest.priority ?? 0 }
 }
@@ -83,10 +108,21 @@ export class ConditionalModuleLoader {
     if (!m.displayRequirements.includes(this.detector.getDisplayServer())) {
       return false
     }
+    // 2b. GUI 政策位（review C3#2）：DISPLAY/WAYLAND 变量存在只算「提示」，不证明
+    //     显示端点可连（失效变量、他人会话、容器透传都会假阳性）。政策从紧：
+    //     声明 requiresGUI 的模块在 fnOS、容器、以及容器状态未知时一律剪枝，
+    //     不接受 customDetector 反向放行——这是部署政策，不是模块意见。
+    if (m.requiresGUI === true) {
+      if (this.detector.isFnOS()) return false
+      if (this.detector.isDocker() !== false) return false
+    }
 
-    // 3. Docker 环境门禁：仅显式声明 allowDocker:false 才拦容器（缺省允许，照 RFC 语义）
-    if (this.detector.isDocker() && m.environment?.allowDocker === false) {
-      return false
+    // 3. Docker 环境门禁：仅显式声明 allowDocker:false 才探测并拦截（缺省允许，照 RFC 语义；
+    //    未声明的模块不再白耗一次 fs 探测——review C3#1 附带项）。
+    //    三态契约：必须拿到**确认的非容器**（=== false）才放行；true/null 一律拒——
+    //    「未发现容器标记」不等于「已证明不在容器」。
+    if (m.environment?.allowDocker === false) {
+      if (this.detector.isDocker() !== false) return false
     }
 
     // 4. 环境变量依赖校验：required 必须全存在，denied 任一命中即拒（与 required 对称）
@@ -99,9 +135,17 @@ export class ConditionalModuleLoader {
       return false
     }
 
-    // 5. 内存门禁过滤（truthy 判断照 RFC：minFreeMemoryBytes 为 0/未设视为不设限）
+    // 5. 内存门禁过滤（truthy 判断照 RFC：minFreeMemoryBytes 为 0/未设视为不设限）。
+    //    review C3#3：探测抛错或返回非有限值按**拒绝**处理——配置了内存要求却拿不到
+    //    事实时，放行等于门禁失效（NaN < 阈值恒为 false 的静默绕过已封死）。
     if (m.hardware?.minFreeMemoryBytes) {
-      if (this.detector.getFreeMemory() < m.hardware.minFreeMemoryBytes) {
+      let free
+      try {
+        free = this.detector.getFreeMemory()
+      } catch {
+        return false
+      }
+      if (!Number.isFinite(free) || free < m.hardware.minFreeMemoryBytes) {
         return false
       }
     }
@@ -109,7 +153,16 @@ export class ConditionalModuleLoader {
     // 6. 开发者自定义探针（唯一可异步门禁；运行时把 detector 作为首参传入便于复用探测事实，
     //    探针声明成无参也兼容）。前序门禁已拒时绝不会走到这里——测试可钉住该调用次序契约
     if (m.environment?.customDetector) {
-      const result = await m.environment.customDetector(this.detector)
+      let result
+      try {
+        result = await m.environment.customDetector(this.detector)
+      } catch (error) {
+        // 探针故障只剪枝本模块并留审计（旧实现整批 reject，一个坏探针拖死全部冷启动）
+        if (this.detector.env.NODE_ENV !== 'production') {
+          this.debugLog(`[Loader] customDetector failed for ${m.name}: ${error?.message ?? error}`)
+        }
+        return false
+      }
       if (!result) return false
     }
 
