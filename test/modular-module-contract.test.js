@@ -24,6 +24,12 @@ test('旧版模块定义无需新字段即可通过兼容校验', () => {
   assert.equal(legacy.provides, undefined)
 })
 
+test('缺省 version 的旧版模块定义仍可通过兼容校验', () => {
+  const { version, ...legacy } = definition()
+  assert.equal(version, '1.0.0')
+  assert.equal(validateModuleContract(legacy).id, 'example-module')
+})
+
 test('模块可声明抽象能力、依赖、冲突和默认启停', () => {
   const normalized = validateModuleContract(definition({
     api: 1,

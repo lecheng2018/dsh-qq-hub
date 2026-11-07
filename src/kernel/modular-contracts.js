@@ -4,6 +4,7 @@ const CHAT_KEY_RE = /^(private|group):([1-9][0-9]*)$/
 const TURN_STATES = new Set(['pending', 'merging', 'running', 'succeeded', 'failed', 'cancelled'])
 const DELIVERY_STATES = new Set(['queued', 'sending', 'sent', 'failed', 'unknown', 'cancelled'])
 const CONTEXT_ERROR_POLICIES = new Set(['isolate', 'fail-closed'])
+const SENDER_ROLES = new Set(['owner', 'admin', 'member'])
 
 function assertRecord(value, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -72,6 +73,11 @@ export function assertNormalizedInbound(value) {
   parseChatKey(value.chatKey)
   assertRecord(value.sender, 'sender')
   assertString(value.sender.userId, 'sender.userId')
+  assertOptionalString(value.sender.nickname, 'sender.nickname')
+  assertOptionalString(value.sender.card, 'sender.card')
+  if (value.sender.role !== undefined && !SENDER_ROLES.has(value.sender.role)) {
+    throw new TypeError('sender.role 必须是 owner、admin 或 member')
+  }
   assertTime(value.timestamp, 'timestamp')
   if (value.source !== 'realtime' && value.source !== 'backfill') {
     throw new TypeError('source 必须是 realtime 或 backfill')
