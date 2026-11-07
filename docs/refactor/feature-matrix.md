@@ -135,7 +135,7 @@
 1. **先统一副作用策略**：为外部写 API、直接 OneBot、普通 Hub 发送定义统一的 disabled/dry-run/force/capability 契约。`hub.capture()` 不能当作对直接 `onebot.call()` 的沙箱。至少让群管、空间删除、多平台解析送达、Heybox 外站写都进入可测试的统一门。
 2. **Heybox 后台写权限**：后台 system chat 当前可以获取 owner 档工具；配置开启自动浏览时，默认 owner 写权限使模型可能调用外站写 API；外站 API 本体没有 dryRun。需明确“自动浏览可否写”、单独默认关闭写权限或要求显式确认，并补 fake API 测试后再纳入已验证基线。
 3. **RSS 手动路由对齐**：`/rss/digest-now` 传 `manual:true`，而 `digest()` 没有检查 `rss.enabled`；manual 还绕过 `digest.enabled` 检查。源码注释说“不跳过总开关”与实际模块开关逻辑不一致。确认产品预期，修实现/注释，并覆盖开启/关闭组合。
-4. **路由鉴权审计**：本次读到若干模块路由直接触发 OneBot、外站或持久化（例如 `/qzone/delete`、RSS pull/digest/clear、scheduler del、module tool/simulate、avatar sync）。需要在实际 host HTTP 装配点证明它们的 actor 授权、CSRF 防护和部署暴露边界；仅有面板按钮隐藏不是服务端授权证明。
+4. **路由鉴权审计**：本次读到若干模块路由直接触发 OneBot、外站或持久化（例如 `/qzone/delete`、RSS pull/digest/clear、scheduler del、module tool/simulate、avatar sync）。需要在实际 host HTTP 装配点证明它们的 actor 授权、CSRF 防护与部署暴露边界；仅有面板按钮隐藏不是服务端授权证明。
 5. **记忆数据迁移证明**：`fix-memory-scope.mjs` 与其测试解决的是无 scope `memories.json` 归档；不证明历史 `scoped.json` 已完整并入主库。核对历史用户备份/迁移日志/条数校验，明确备份何时可删除、失败如何恢复。
 6. **行为测试而非测试文件存在**：M0 最终自动化门禁结果见本文件开头和 `baseline.md`；它不等同于表中每个行为都有专项断言。后续仍应为各类副作用建立 fake OneBot/HTTP/CDP 端到端矩阵，覆盖 dry-run、总开关关闭、权限撤回、模块热卸载、失败重试、目标变化、重复触发与实际副作用计数。Heybox/complete-guard/mood 的专属行为覆盖当前未能确认或偏弱。
 7. **目标环境验收**：真实 OneBot、SnowLuma 版本、外站 Cookie/验证码、CDP、语音/图像服务、Linux/Windows 工具路径、路由公网暴露均未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
@@ -143,5 +143,5 @@
 ## 本次核验记录
 
 - 本矩阵的功能项来自源码静态盘点；M0 最终门禁另行执行并记录为：主测试 1289 tests / 1285 pass / 0 fail / 4 skipped，第二次相同内容 dot reporter 正常退出（退出码 0）；扩展 46/46；`npm pack --dry-run` 成功、214 个文件。
-- 上述汇总测试结果不表示矩阵中每项行为均由专项断言覆盖，也不表示真实网络链路已验证。未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
+- 上述汇总测试结果不表示矩阵中每项行为均由专项测试覆盖，也不表示真实网络链路已验证。未在本次 M0 中执行 OneBot 连接、外站请求、QQ 发送、目标宿主/生产环境操作；这些保留为后续验证边界。
 - `pet` 不在当前 `BUILTINS` 中；M3-E 因当前基线无 pet 标为不适用。若未来重新引入，另立 ADR；`_template` 是模板，不是运行中的内置模块，故不列为当前功能。
