@@ -668,7 +668,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'logs', label: '日志' },
     ]
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
-    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup', 'purpose'], pet: ['pet'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multi-parser'] }
+    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup', 'purpose'], pet: ['pet'], mood: ['mood', 'memory', 'chatlog'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multi-parser'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
 
     // 两层导航：上面一排是分组，下面一排是这组里的页面；每组记住上次看的那页，Alt+K 查找功能
@@ -2328,6 +2328,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('input', { className: 'ab-input sm', type: 'time', value: times[1] || '16:00', onChange: (e) => setTime(1, e.target.value) }),
             h(Btn, { small: true, onClick: async () => { toast('正在整理，可能要一两分钟…'); const r = await post('/memory/extract', {}); toast(r.message); load(); loadIns() } }, '现在整理一次')),
           h(Row, { label: '每轮最多想起几条' }, f.range('memory.recallCount', 0, 12, 1, (v) => v + ' 条')),
+          h(Row, { label: '聊天流水保留', hint: '她记下的**全部**群消息留多久天（14~365）。蒸馏群友、查旧账都靠它——以前整理完就删，只活一天，学不到人。占空间约每天 0.5MB' },
+            f.range('chatlog.keepDays', 14, 365, 1, (v) => v + ' 天')),
           h(OwnerMigrate, { toast, onChanged: () => load() }),
           h('div', { className: 'ab-section-title' }, '手动加一条'),
           h('div', { className: 'ab-flex' },
@@ -2598,7 +2600,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const scanHist = async () => {
         setBusy('scan')
         try {
-          const r = await get('/distill/history' + (form.gid ? '?group=' : ''))
+          const r = await get('/distill/history?gid=' + encodeURIComponent(form.gid || ''))
           setHistErr(r.ok === false ? (r.message || '读不到') : '')
           setHist(r.ok === false ? null : r)
         } catch (e) { setHistErr(e.message || String(e)); setHist(null) } finally { setBusy('') }
@@ -2636,7 +2638,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h(Btn, { small: true, kind: 'ghost', disabled: busy === 'scan', onClick: scanHist }, busy === 'scan' ? '翻着呢…' : '翻一翻聊天历史'),
           hist ? h('span', { className: 'ab-muted ab-small' },
-            '历史里 ' + hist.total + ' 条发言、' + hist.sessions + ' 个会话' +
+            (hist.source === 'chatlog' ? '流水里 ' : '会话记录里 ') + hist.total + ' 条发言' + (hist.source === 'chatlog' ? '（' + hist.sessions + ' 天）' : '（' + hist.sessions + ' 个会话）') +
             (hist.from ? '（' + new Date(hist.from).toLocaleDateString() + ' → ' + new Date(hist.to).toLocaleDateString() + '）' : '') +
             (hist.speakers && hist.speakers.length ? '；说得最多的：' + hist.speakers.slice(0, 3).map((x) => (x.name || x.uid) + ' ' + x.count + ' 句').join('、') : '')) : null,
           histErr ? h('span', { className: 'ab-small', style: { color: '#e08a8a' } }, histErr) : null),
@@ -4024,7 +4026,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, pet: PetPanel, mood: Mood, song: Song, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
       }[curTab.id] || Overview
       // 哪些标签有没保存的改动
-      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
+      const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], pet: [], mood: ['mood', 'memory', 'chatlog'], song: ['song'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
       const tabDirty = (id) => {
         if (!dirty) return false
         if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
