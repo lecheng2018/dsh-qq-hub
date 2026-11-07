@@ -234,3 +234,116 @@ US-012 演练（见 progress 留档）：同一 stub 事件序列在三个独立
 - **其余行**（Ingress 归一化与 preprocessors、Pipeline 装配类、Transport senders、Storage & State
   services 各表）＝ **Phase 4 终局任务清单**，后续按行核对推进；作业面起点见 §7 存活职责清单。
 - **本仓政策**：仓库为 ESM JS——终局落地时该矩阵的 `.ts` 文件名一律转 `.js`。
+
+
+## 11. review 修复回应清单（2026-11-07，修复批 `a15f53e`）
+
+外部双模型审查报告 `dsh-qq-hub-onion-refactor-review.md`（审查对象为分支 `ae78ee05` 快照；修复批基线
+`f34b1cb→a15f53e`，22 文件）。下表逐条对着 **a15f53e 真实 diff** 记录处置，不照 review 文本脑补；测试列
+全部取自 `test/kernel-*.test.js` / `test/runtime-loader.test.js` 实际存在的用例标题，对不上号的留空。
+编号沿用 review 自身体系：A2 小节在原文未编号，本表按小节次序记 A2-1…A2-6；B 节条目（原文编号 1–16）
+与汇总表代号对照为 1–7→B-A1…B-A6+B#7、8–10→D1–D3、11–13→R1–R3、15→B-C1；报告顶层「C1. 出口与 legacy
+fallback」一节审查超时缺失（US-003 补评），与 B 节 ACL 代号 C1 无关。
+
+### 11.1 逐条处置总表（数据行 48 ≥ review 缺陷汇总表 14 条，B 节 16 项全覆盖）
+
+| 编号 | 级别 | 处置 | 落点（文件） | 测试用例（实际标题） |
+|:--|:--|:--|:--|:--|
+| A1#1 onAbort 不释放在飞 next | P1 | **拒+取舍**（见 11.2-1） | compose.js 头注释 §2.2 按实况改写 | 契约钉死：abort 不强制作废在飞 next()——管道完成=已启动中间件真实结束（review A1#1 拍板） |
+| A1#2 正常完成不卸载 abort 监听 | P1 | 已修（预 abort 不注册；完成/失败 finally 卸载） | compose.js | 监听器卫生：正常完成/异常完成后卸载 abort 监听；预 abort 不注册（review A1#2） |
+| A1#3 abort 短路不推进游标，同层二次 next 放行 | P2 | 已修（每层独立 nextCalled 资格位，abort 短路同样消耗；全局游标降为第二重防御） | compose.js | 对抗：abort 短路后同层第二次 next() 仍被熔断（review A1#3：旧游标方案会放行） |
+| A1#4 double-next 的 PipelineError.index 指向下游 | P2 | 已修（异常以调用者 currentIndex 构造，index=违规调用者） | compose.js | 对抗：同一层重复调用 next() 触发 double-next 熔断（A1#4 修复后断言 originalCause.index 指向调用者） |
+| A2-1 inbound/rawPayload 深度不可变 | P1 | **拒+取舍**（同一性契约，见 11.2-2） | context.js 头注释留档 | inbound：原样引用驱动层信封，不做二次拷贝 |
+| A2-2 reply.queue 暴露内部数组 | P1 | 已修（getter 返回冻结快照；配套 restoreFront/rollbackTo 正规 API 接管 deferred 归还与 router 回滚） | context.js；mw-command-router.js | queue getter 返回冻结快照：push/splice/length=0 一律失效（review A2 P1）；restoreFront/rollbackTo：正规 API 取代外部偷改（dispatcher deferred / router 回滚位） |
+| A2-3 segments 只冻数组不冻元素 | P1 | 已修（enqueue 深拷贝+逐层冻结，非纯数据保留引用冻容器） | context.js | enqueue 深冻结：入队后改原段对象/原 data，队列内容不动（review A2 P1） |
+| A2-4 外部取消信号未透传 | P1 | 已修（createContext 第 4 参 options.signal：父已 abort 出生即 abort、后续 abort 转发、本地 abort 卸载转发监听） | context.js | 父信号透传（review A2 P1）：createContext 第 4 参接上游 AbortSignal，断开即取消本轮 |
+| A2-5 state 无命名空间隔离 | P2 | 已修=文档化约定（拍板：不引入第二容器；symbol/string 键天然隔离为契约，业务 string 键自带前缀，见 §5 内核契约速记） | context.js（实现未动） | state：symbol 与 string 同名键互不干扰 |
+| A2-6 meta 冻结策略对未来扩展不安全 | P2 | 本批未动（review 自评「当前字段安全」，属未来扩展提示；给 meta 加引用型新字段时须同批深冻并补用例） | — | — |
+| A3#1 runWithContext(null) 继承外层 ctx | P1 | 已修（改 ctxStore.exit(fn) 显式退出，后台无上下文任务不再投进别人的死队列） | ctx-store.js | ctx-store：runWithContext(null) 在 A 上下文内显式退出（review A3#1）；WeakSet 收口标记裸 ctx 也有效（A3#2） |
+| A3#2 markContextFlushed 静默丢标记 | P2 | 已修（ctx.state 键改模块私有 WeakSet，裸 ctx/state 故障不再吞标记） | ctx-store.js | 同上（后半句） |
+| A4#1 drain 结尾 clear() 吞 drain 期间新入队 | P1 | 已修（takeBatch：首个 await 之前同步「快照+clear」原子领取；新条目留队列归下一批；并发 drain 领不相交批次） | dispatcher.js | A4#1 drain 期间新入队的条目不被吞：归下一批（旧结尾 clear 连锅端已修）；快照纪律：drain 期间外部 enqueue 的新条目绝不进本轮（queue getter 是内部引用，先 slice） |
+| A4#2 浅快照隔离不了 payload 篡改 | P1 | 已修（由 A2-2/A2-3 根治：深冻结+快照化；本模块全程只读纪律留档） | dispatcher.js（联动 context.js） | payload 全程只读：dispatcher 拿原件引用、条目从入队到消费逐字段不变 |
+| A4#3 sleep 拒绝炸整批、已成功条目重发 | P1 | 已修（捕获后未尝试条目 restoreFront 回队头，计 deferred + infrastructureError；已发送绝不重放） | dispatcher.js | A4#3 sleep 拒绝：未尝试条目 restoreFront 回队列计 deferred，已发送绝不重放 |
+| A4#4 限流状态只在单次循环 | P1 | 已修（实例级 lastSentAt + 单调钟跨 drain pacing；delayMs 显式覆写契约三选一拍板留档——cutover 路径 hub 自 pacing，覆写 0 是接线契约非绕限流） | dispatcher.js | A4#4 跨 drain pacing：上一条发出后的最小间隔对下一轮第一条同样生效 |
+| A4#5 createdAt 次排序重排同优先级 | P2 | 已修（删 createdAt 次排序，稳定排序保入队序即 FIFO） | dispatcher.js | A4#5 createdAt 倒序不打乱同优先级入队序（FIFO 契约，删 createdAt 次排序） |
+| A4#6 canonicalJSON 与 JSON 出站语义不一致 | P2 | 已修（先按 JSON.stringify 语义归一——函数省略、Date 走 toJSON、BigInt/循环抛错归调用方计失败——再稳定键排序） | dispatcher.js | ⑤：hashReplyPayload 只吃 target+segments——元数据、键序、段序无关性 |
+| A4#7 gapFor jitter 突破声明边界 | P2 | 已修（jitter 后二次 clamp 回 [min,max]；构造参数 assertFinite/序校验；jitter 非法值取中位 0.5 不炸批） | dispatcher.js | shaping 参数构造校验：NaN/倒挂直接抛错（review A4#7 附带）；③对抗：估式先 clamp 后乘抖动系数（700 下限 / 4500 上限 / 满抖动 1.3），与 bubbleDelay 语义对齐 |
+| B-A1（B#1） 合并信封与终端消费不是同一份数据 | **P0** | 已修（止损：聚合执行暂停，mw-aggregator 退化为逐事件透传，吞并语义下线） | mw-aggregator.js | 透传契约：每个事件都到达 next()，顺序=入队序，零吞并零 abort；不写聚合 state：AGGREGATION_KEY 永不落（旧吞并语义彻底下线） |
+| B-A2（B#2） lead 取消连带销毁有效 follower | **P0** | 已修（同上：无窗可吞、无 follower 可陪葬；合流语义仍由 hub 内部 pending 提供） | mw-aggregator.js | 已 abort 的入站事件不下行（compose §2.2 边界语义保留） |
+| B-A3（B#3） flush 与在飞登记空档，同 chat 可并发 | P1 | 已修（随暂停消除：透传版不开窗、不登记，空档不存在；恢复实现必须满足 11.3 前置③） | mw-aggregator.js | stats：aggregationSuspended=true，窗口/合流计数恒零 |
+| B-A4（B#4） 已到期旧 timer 撤回不了 | P1 | 已修（随暂停消除：透传版零定时器；恢复前置④） | mw-aggregator.js | abort unwind 联动（聚合暂停版）：守卫层 abort 后各级两级不进、tracing 收尾 aborted、零定时器 |
+| B-A5（B#5） timer/flush 异常留永久等待者 | P1 | 已修（随暂停消除：透传版无等待者、无 deferred 三路唤醒；恢复前置④） | mw-aggregator.js | 同上 |
+| B-A6（B#6） dispose 不取消在飞任务 | P1 | 已修（暂停版 dispose：拒绝后续回合下行 + abort 全部 active 在飞 ctx，active 以 finally 诚实回收） | mw-aggregator.js | dispose：在飞 ctx 全部 abort(aggregator-disposed)；后续事件拒绝下行 |
+| B#7 busy steer 输入继承（A 被抑制后 B 不带 A 输入） | 边界 | **roadmap**（透传版无 steer；「新输入替代旧输入」的回合输入继承语义须随聚合恢复一并设计，前置见 11.3） | — | — |
+| B#14 判定异常不调 next | 已成立 | 确认非缺陷（维持现状，回归已钉） | —（mw-acl.js 未动此语义） | ACL：判定桩 reject/缺字段 → abort(acl)；桩抛错 → fail-closed 拒绝（拍板：权限防御异常不放行） |
+| B-D1（B#8） 失败后缓存永久拦重传 | **P0** | 已修（inProgress 处理中键与 seen 成功缓存两层分离；成功且未 abort 才落缓存，失败/abort 重传可重新准入） | mw-dedup.js | dedup（review D1）：首次处理失败后重传可重新准入；成功后重传仍被拦 |
+| B-D2（B#9） LRU 逐出在飞键→同消息并发 | P1 | 已修（在飞键独立 Set 不参与 LRU 逐出；has+add 之间无 await 构成原子准入点） | mw-dedup.js | dedup（review D2）：在飞键并发只放一个，且处理中键不被 LRU 逐出 |
+| B-D3（B#10） 复合键缺边界编码/实例命名空间/缺字段策略 | P2 | 已修（键改 JSON 数组编码消歧义；群事件缺 groupId/私聊缺 userId → keyless 放行，不把不同事件强汇「-」域；capacity 收紧正整数）。跨实例命名空间→roadmap（11.4） | mw-dedup.js | dedup：跨聊天同 messageId 不算重传（聊天域复合键，对齐 seenIds 口径） |
+| B-R1（B#11） 时钟回拨基线后退重复补令牌 | P1 | 已修（缺省单调钟 performance.now；注入时钟回拨时 effectiveNow=max(now, b.at) 基线不回退） | mw-ratelimit.js | ratelimit（review R1）：时钟回拨不后退基线，恢复不多发令牌 |
+| B-R2（B#12） NaN 毒化桶；capacity<1 永不放行 | P1 | 已修（clock 非有限在改动桶状态**之前**抛错→外层 fail-open 计 errors 不毒化；capacity≥1、maxKeys 正整数构造校验） | mw-ratelimit.js | ratelimit（review R2）：NaN 时钟 fail-open 放行且桶不被毒化；capacity<1 构造拒绝 |
+| B-R3（B#13） LRU 逐出重置额度，无总量防线 | P2 | 文档化+**roadmap**（逐出=新桶复活保留为资源防御取舍，注释留档；实例级总桶总量防线见 11.4） | mw-ratelimit.js（行为未动） | — |
+| B-C1（B#15） owner 入口直通绕过群白名单 | P1 | 已修（补丁 D：isOwner 直通分支删除，owner 策略全权收回 access.js checkAllowed；入口层自此可独立作为权限边界） | mw-acl.js | acl（review C1 加严三面）：缺配置拒绝、群事件缺 groupId 拒绝、缺 sender.userId 拒绝 |
+| B#16 需补齐的信任边界（非 message 放行/kind 臆断/cfg 缺失） | 补充项 | 已修（非 message 放行理由改注「对应处理器执行权限检查」；subType=group 缺 groupId 直接拒；cfg/信封/userId 缺失一律 fail-closed 拒绝） | mw-acl.js | 同 B-C1 行；ACL：defaultAclDecision 独立可用——非 message 放行、无 sender 私聊判白名单外 |
+| B-O1 inFlight/pendingTimers 指标不真实 | P2 | 已修（暂停版诚实观测：stats.inFlight=active.size 为实际在飞数，windows/pendingTimers 恒 0，aggregationSuspended 旗标显式暴露暂停态） | mw-aggregator.js | stats：aggregationSuspended=true，窗口/合流计数恒零 |
+| C1 出口与 legacy fallback | — | **审查超时缺失**，未出结论；US-003 补评，本批未对其预设处置 | — | — |
+| C2#1 wrapper/dispatcher 模式错配双发 | P1 | 已修（createEgressOnebot 非法 mode 构造即抛 TypeError，杜绝静默回 live；host 装配两处同源 egressMode） | mw-egress-cutover.js | C2#1 模式校验：createEgressOnebot 非法 mode 构造即抛，杜绝 wrapper/dispatcher 错配双发 |
+| C2#2 整轮边界批量外发 + deferredOk 伪 message_id 被下游消费 | P1 | **roadmap**（Phase 4 待办，见 11.2-3/11.4；本批刻意不动 flush 边界，不留「已解决」假象） | — | — |
+| C2#3 内层抛错：已受理条目留死队列、ctx 不收口 | P1 | 已修（catch：markContextFlushed + 清空队列计数告警 + 原样上抛；刻意不放进 finally——清洗中途失败的内容不发脏话） | mw-egress-cutover.js | C2#3 内层抛错：markFlushed + 队列清空计日志 + 原样上抛，不留死队列 |
+| C2#4 「ctx 已收口」后晚到任务直发绕过出口策略 | P1 | **拒+理由**（现设计=回落旧通道直发是刻意保投递——ctx-store.js 头注释契约「宁可多发一条，也绝不把消息静默吞在死队列里」；该回落同时是 §8-D 留档缺口，收敛属 Phase 4） | ctx-store.js 头注释；mw-egress-cutover.js（行为保留） | ⑦ flush 之后晚到的发送回落旧通道直发，绝不落进已排空的队列（防静默丢消息） |
+| C2#5 上传任意异常都 base64 重传→回包丢失时双份上传 | P1 | 已修（isConfirmedPathReadError 白名单：仅结构化「路径读不到」信号回退重传；超时/连接重置/鉴权明确排除、直接上抛计 failed） | mw-egress-cutover.js | C2#5 上传回退白名单：仅确认的路径读取失败才转 base64 重传；超时/鉴权直接上抛 |
+| C2#6 delayMs 与旧路径逐条等价未被证明 | P2 | 部分修+契约文档化（shadow 不真睡不消费队列——比对不需要 pacing；live 侧 delayMs 显式覆写语义与「cutover 路径 hub 已自 pacing」写进 gapFor JSDoc，等价性由 e2e 三态冒烟背书而非单测逐证） | dispatcher.js | ③：间隔 = delayMs 覆写优先，否则 typing 估式；首条不等待、gap=0 不产生 sleep；⑤：shadow 不调 sender、hash 稳定可查、成功排空不动队列；live 不走 hash 记录路径 |
+| C2#7 shadow 旧通道 hash 发送前记录，失败也显示匹配 | P2 | 已修（账本带 status，failed/pending 不入比对样本，oldFailed 单独计数告警） | mw-egress-cutover.js | C2#7 shadow 账本带状态：失败请求不计入比对样本 |
+| C3#1 isDocker 探测失败缓存成「不在容器」 | P1 | 已修（三态 true/false/null：未知≠安全，allowDocker:false 门禁必须 ===false 才放行；QQHUB_RUNTIME_ENV=container/host 部署声明最高优先；cgroup v2 假阴形态不再当否定证据；未声明容器约束的模块不再白耗 fs 探测） | environment-detector.js；module-loader.js | isDocker 抗炸（review C3#1 三态）：非 Linux 平台确证 false；Linux 证据链全断返回 null（未知≠安全）；门禁3（C3#1）：allowDocker:false 的模块遇「未知」也剪枝；未声明的模块不触发探测；部署声明覆盖（C3#1）：QQHUB_RUNTIME_ENV=container/host 直接定论，优先于 fs 探测 |
+| C3#2 显示变量假阳性；isFnOS 未参与门禁 | P1 | 已修（manifest 新增 requiresGUI 政策位：声明件在 fnOS、容器、容器状态未知时一律剪枝，customDetector 不得反向放行——部署政策不是模块意见） | module-loader.js；types.d.ts | requiresGUI 政策位（C3#2）：fnOS/容器/未知一律剪枝，customDetector 不得反向放行 |
+| C3#3 内存门禁不校验阈值/探测结果，NaN 静默放行 | P2 | 已修（探测抛错或非有限值按**拒绝**：配了要求拿不到事实=门禁失效，NaN<阈值恒 false 的静默绕过封死） | module-loader.js | customDetector 抛错只剪该模块、不炸整批（C3#4）；内存探测失败按拒（C3#3） |
+| C3#4 「整批预检不留半装载」承诺不成立 | P2 | 已修（validateManifest 预检补全 requiredEnvVars/deniedEnvVars/customDetector/allowDocker/requiresGUI/minFreeMemoryBytes/entrypoint 字段校验，坏配置在任何 entrypoint 执行前整批拦下；customDetector 探针抛错只剪该模块不再拖死冷启动） | module-loader.js | manifest 预检补全（C3#4）：坏配置在任何 entrypoint 执行前整批拦下；customDetector 抛错只剪该模块、不炸整批（C3#4）；内存探测失败按拒（C3#3） |
+
+### 11.2 三项设计取舍（如实记录，不粉饰成「已修」）
+
+1. **A1#1：abort 不强释在飞 next()——完成契约选「真实完成」。** review 提供的补丁（race 释放等待）与
+   「管道返回=所有已启动中间件结束」的内核前提冲突，review 自己承认：「『所有中间件收尾完成』和
+   『无条件快速完成』不能同时保证」。本管道选择前者：abort 只短路**新的** dispatch 调用，已在飞的
+   dispatch Promise 等内层真实 settle 后 bubble 正常回溯；「内层永不 settle」由内层自带超时兜底
+   （legacy 终端由 LLM 层超时），abort 后内层迟到 reject 时错误照常上抛（错误语义优先）。头注释 §2.2
+   已按此实况改写，compose 回归测试「契约钉死：abort 不强制作废在飞 next()——管道完成=已启动中间件
+   真实结束（review A1#1 拍板）」把两种时序钉死。**代价如实**：下游挂死且无超时的场景，abort 不能
+   让管道返回——这是选择不是遗漏。
+2. **A2-1：rawPayload 不深拷贝、不深冻结——legacy 同一性契约。** legacy 终端与 backfill 记账依赖
+   `ctx.inbound.rawPayload === 原事件对象` 的引用同一性（§5 信封字段约定：不拷贝不冻结，旧入口有就地
+   读取习惯）；深拷贝破坏同一性、深冻结可能踩旧核心就地写习惯。取舍换向：信封壳、segments、reply 条目
+   全量深冻（A2-3），消费侧（dispatcher）全程只读纪律留档（A4#2），把「篡改防线」从入站信封挪到出站
+   缓冲。该契约由 context 回归「inbound：原样引用驱动层信封，不做二次拷贝」持续钉住。
+3. **C2#2：checkpoint flush + 假 message_id 的下游消费改造 = Phase 4 待办，本批刻意不动。** review 明说
+   「这需要调整旧入口或发送接口，不能靠修改 deferredOk() 的字符串解决」——checkpoint flush（业务边界显式
+   flushPending、不收口）与真实投递回执契约（`{ queued: true, deliveryId }` 替代伪成功回包、要真实
+   message_id 的调用等真实发送）都在 legacy 终端替换（llm-invoker 化）的作业面上，本期红线（hub.js 零
+   改动）内不可达。已列 roadmap；当前 live 态的「整轮结束批量外发」行为仍是 §7/CHANGELOG 留档的行为变化。
+
+### 11.3 聚合重新启用前置条件（review B 节五条原样收录，当前 0/5 达成）
+
+写在 mw-aggregator.js 头注释，缺一不得恢复吞并实现；恢复前须先做 shadow 合流（只记批次不吞输入），
+批次完整性/顺序/取消语义与终端消费比对一致后才灰度：
+
+1. 终端直接消费聚合批次（Phase 4 llm-invoker 化后由管道组装回合输入），或提供经协议验证的多消息适配器
+   （rawPayload 重建含 senders/引用/附件）；
+2. 每个成员事件独立的有效性与完成状态（lead 取消不得销毁 follower）；
+3. flush 同步阶段建立同 chat 执行占位（消除窗口删除与在飞登记间的空档）；
+4. timer generation 检查；任意异常路径所有等待者都能收敛；
+5. dispose 覆盖排队+执行中的全部任务。
+
+达成度 **0/5**：暂停版的 dispose-abort-in-flight 只是透传实现自建的防线，不构成任何一条「聚合实现」的达成
+证明——恢复吞并时五条都得由新实现自己满足。
+
+### 11.4 roadmap 行（本批明确不做的，按此四处留档）
+
+| 项 | 来源 | 归属 |
+|:--|:--|:--|
+| checkpoint flush + 投递回执契约（真 message_id） | C2#2 | Phase 4 终端替换（见 11.2-3） |
+| busy steer 回合输入继承（替代=输入继承，不是只抑制回复） | B#7 | 随聚合恢复一并设计（前置 11.3） |
+| 限流实例级总桶（逐出重置额度的总量防线） | B-R3 | 灰度前评估；多实例部署另需跨实例配额 |
+| dedup 跨实例持久化幂等键（进程内 seen/inProgress 不保证跨实例幂等） | B-D3 + review 八节灰度注 | Phase 4 存储作业面 |
+
+**遗留观察**：B 节七张「可直接落地补丁」A/B/C/D 中，A（聚合暂停+卸载取消）、B（处理中/成功缓存分离）、
+C（单调钟不回退基线）、D（owner 收回权威判定）全部按仓内语境适配落地；与本表口径差异仅在 R3（补丁 C
+未含总量防线，review 亦自评「已知设计取舍」）。e2e 唯一联动改动：PIPELINE 态 issue #74 用例读取时机
+改为等待落线再断言（A4#4 pacing 的预期后果，断言语义未松，见 US-001 留档）。
