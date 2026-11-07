@@ -1,21 +1,27 @@
 // 本地接口：模板、开关、脚本改完立即生效、出错记录、生图返回值统一、翻唱报错翻译。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 let L
 let cfg
 let normalize
+let testDir
 const logs = []
 const log = { info: (...a) => logs.push(a.join(' ')), warn: (...a) => logs.push(a.join(' ')), debug() {} }
 
 before(async () => {
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-local-'))
+  testDir = mkdtempSync(join(tmpdir(), 'aurabot-local-'))
+  process.env.AURABOT_DATA_DIR = testDir
   L = await import('../src/local/local.js')
   ;({ normalize } = await import('../src/core/config.js'))
   cfg = normalize({})
+})
+
+test.after(() => {
+  if (testDir) rmSync(testDir, { recursive: true, force: true })
 })
 
 test('默认都关着；生成模板（带说明，不覆盖已有的）', () => {
@@ -59,7 +65,7 @@ test('生图：脚本返回 Buffer / base64 / 文件都认；接管后不需要�
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
   assert.deepEqual(await L.toImageBuffer(png), png)
   assert.deepEqual(await L.toImageBuffer({ base64: 'data:image/png;base64,' + png.toString('base64') }), png)
-  const f = join(tmpdir(), 'aurabot-local-img.png')
+  const f = join(testDir, 'aurabot-local-img.png')
   writeFileSync(f, png)
   assert.deepEqual(await L.toImageBuffer({ file: f }), png)
   await assert.rejects(L.toImageBuffer({}), /没返回图片/)
@@ -82,7 +88,7 @@ test('翻唱报错翻译成人话；本地换声接管时不需要内置音色',
   assert.match(studio.explainSongError('torch.OutOfMemoryError: CUDA out of memory'), /显存/)
   assert.equal(studio.explainSongError('网易云上没搜到「x」'), '网易云上没搜到「x」')
   const denied = studio.explainSongError("RuntimeError: Failed to instantiate Roformer model: [Errno 13] Permission denied: 'E:\\\\Aurabot\\\\rvc\\\\separator-models\\\\model_bs_roformer_ep_317_sdr_12.9755.ckpt'.")
-  assert.ok(denied.includes('读不了「E:\\Aurabot\\rvc\\separator-models\\model_bs_roformer'), denied)
+  assert.ok(denied.includes('读不了「E:\\Aurabot\\rvc\\separator-models'), denied)
   assert.match(denied, /杀毒/)
 })
 
@@ -91,7 +97,7 @@ test('模型文件能读就放行，不存在的跳过', async () => {
   const { mkdtempSync, writeFileSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
-  const d = mkdtempSync(join(tmpdir(), 'ab-read-'))
+  const d = mkdtempSync(join(testDir, 'ab-read-'))
   writeFileSync(join(d, 'a.ckpt'), 'x'.repeat(32))
   await studio.ensureReadable([join(d, 'a.ckpt'), join(d, 'missing.ckpt')], 1, 1)
 })

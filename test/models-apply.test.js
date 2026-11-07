@@ -6,8 +6,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
 // host.js 分层拆分后：/save 的模型联动在 panel/routes-config.js，/models/apply 路由在 panel/routes-misc.js
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
