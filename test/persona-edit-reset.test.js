@@ -7,7 +7,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
-const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
+// host.js 分层拆分后：人格路由在 panel/routes-persona.js，/save 在 panel/routes-config.js
+const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-persona.js'), 'utf8')
+const SAVE = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
 
 test('/persona/save 后重置所有正在用该人设的会话', () => {
@@ -28,7 +30,7 @@ test('/persona/use 切换人设后立刻重置用旧全局人设的会话', () =
 })
 
 test('/save 改人设配置（分流表/全局）后重置受影响会话', () => {
-  const seg = HOST.slice(HOST.indexOf("route('/save'"), HOST.indexOf("route('/save'", HOST.indexOf("route('/save'") + 10))
+  const seg = SAVE.slice(SAVE.indexOf("route('/save'"), SAVE.indexOf("route('/save'", SAVE.indexOf("route('/save'") + 10))
   assert.match(seg, /personaChanged/, '比对 persona 前后差异')
   assert.match(seg, /personaIdFor/, '算出各会话当前该用哪张卡')
   assert.match(seg, /hub\.resetChat\(chatId\)/, '变了就重置')

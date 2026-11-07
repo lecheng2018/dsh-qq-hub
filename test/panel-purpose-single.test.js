@@ -27,7 +27,8 @@ test('purpose 模块自己声明了 tab=speakup 与四个设置项（面板从�
 })
 
 test('后端 /panel/purpose/* 代理仍然保留（桌宠卡片在用它的 status）', () => {
-  const host = readFileSync(join(process.cwd(), 'src', 'host.js'), 'utf8')
+  // host.js 分层拆分后：/panel/purpose/* 路由在 panel/routes-purpose-pet.js
+  const host = readFileSync(join(process.cwd(), 'src', 'host', 'panel', 'routes-purpose-pet.js'), 'utf8')
   for (const r of ['/panel/purpose/status', '/panel/purpose/preview', '/panel/purpose/run', '/panel/purpose/config']) {
     assert.ok(host.includes(r), `路由 ${r} 不能删，前端还有地方在用`)
   }
