@@ -188,6 +188,11 @@ function deferredOk(action, params, seq) {
 export function createEgressOnebot(options = {}) {
   const inner = options.onebot
   if (!inner || typeof inner.call !== 'function') throw new TypeError('createEgressOnebot 需要注入 onebot 客户端')
+  // review C2#1：wrapper 与 Dispatcher 的模式必须同源——非法值显式抛错，不再静默回 live。
+  // host 装配只从同一个 egressMode 变量取值传给两处（见 host.js），本校验兜住装配错误。
+  if (options.mode !== undefined && options.mode !== 'live' && options.mode !== 'shadow') {
+    throw new TypeError(`createEgressOnebot mode 必须是 'live' 或 'shadow'，收到：${String(options.mode)}`)
+  }
   const mode = options.mode === 'shadow' ? 'shadow' : 'live'
   const log = options.log
   let seq = 0
@@ -200,8 +205,17 @@ export function createEgressOnebot(options = {}) {
     const payload = payloadFromCall(action, params, draft)
     ctx.reply.enqueue(payload)
     if (mode === 'shadow') {
-      ledger(ctx).oldSends.push({ hash: hashReplyPayload(payload), note: draft?.note }) // 旧通道实发内容
-      return inner.call(action, params, opts) // 双算：旧通道真发
+      // 账本先记 pending，发送结果回填状态（review C2#7：失败请求不得显示匹配）
+      const rec = { hash: hashReplyPayload(payload), note: draft?.note, status: 'pending' }
+      ledger(ctx).oldSends.push(rec)
+      try {
+        const r = await inner.call(action, params, opts) // 双算：旧通道真发
+        rec.status = 'succeeded'
+        return r
+      } catch (error) {
+        rec.status = 'failed'
+        throw error
+      }
     }
     safeLog(log, 'debug', ['egress: 收口待发 →', payload.targetType, payload.targetId, `segments=${payload.segments.length}`, draft?.note ? `note=${draft.note}` : ''])
     return deferredOk(action, params, ++seq)
@@ -230,6 +244,21 @@ export function replyPayloadToCall(payload) {
 export const FILE_TIMEOUT_MS = 120_000
 
 /**
+ * 「网关确认读不到本地文件」白名单判定（review C2#5）。只认结构化信号：
+ *  - message/cause 文本含 no such file / ENOENT / file not found / 文件不存在 / 找不到路径；
+ *  - 或网关回包 retcode 属已知的路径不可读码（当前无稳定码表，留空集，命中靠文本）。
+ * 超时（AbortError、timeout）、连接重置（ECONNRESET）、鉴权（401/403/token）明确排除。
+ */
+const PATH_READ_PATTERNS = /no such file|enoent|file not found|文件不存在|找不到|路径不存在/i
+const PATH_READ_RETCODES = new Set([])
+export function isConfirmedPathReadError(error) {
+  const text = `${error?.message ?? ''} ${error?.cause?.message ?? ''} ${error?.cause?.code ?? ''}`
+  if (/abort|timeout|econnreset|econnrefused|401|403|token/i.test(text)) return false
+  if (PATH_READ_RETCODES.has(error?.retcode)) return true
+  return PATH_READ_PATTERNS.test(text)
+}
+
+/**
  * 创建交给 Dispatcher 的物理出口 sender。
  * @param {object} [options]
  * @param {(action: string, params: object, opts?: object) => Promise<any>} options.call 真网关调用（live 模式必填）
@@ -247,10 +276,13 @@ export function createEgressSender(options = {}) {
     try {
       return await call(action, params, opts)
     } catch (error) {
+      // review C2#5：旧实现「任何异常都转 base64 重传」——首次已成功但回包超时时会双份上传，
+      // 鉴权/限流错误也会触发无意义二次上传。现仅对**可确认的远端路径读取失败**回退，
+      // 超时（AbortError/timeout）、连接重置、鉴权类一律上抛，由 Dispatcher 计 failed。
       const external = /^(https?:\/\/|base64:\/\/)/i.test(String(params?.file ?? ''))
-      if (!uploadFile || !UPLOAD_ACTIONS.has(action) || external) throw error
+      if (!uploadFile || !UPLOAD_ACTIONS.has(action) || external || !isConfirmedPathReadError(error)) throw error
       const b64 = await uploadFile(String(params.file))
-      safeLog(log, 'debug', ['egress: 网关看不到本机路径，改走 base64 重发：', String(params.file)])
+      safeLog(log, 'debug', ['egress: 网关确认读不到本机路径，改走 base64 重发：', String(params.file)])
       return call(action, { ...params, file: b64 }, opts)
     }
   }
@@ -275,7 +307,20 @@ export function createEgressFlushMiddleware(options = {}) {
   const shadow = dispatcher.mode === 'shadow'
 
   return async function egressFlushMiddleware(ctx, next) {
-    await next() // 内层依次是 mw-egress（清洗+分条+沉默丢弃）与 legacy 终端（旧入口）
+    try {
+      await next() // 内层依次是 mw-egress（清洗+分条+沉默丢弃）与 legacy 终端（旧入口）
+    } catch (error) {
+      // review C2#3：内层抛错时已 enqueue 的「假成功」消息绝不能留在死队列里——
+      // 立边界 + 清空队列（计数告警，这些条目视为被本轮异常带走），再原样上抛。
+      // 不把 drain 塞进 finally：清洗中途失败的内容不该外发（宁丢半轮不发脏话）。
+      markContextFlushed(ctx)
+      const stranded = Array.isArray(ctx?.reply?.queue) ? ctx.reply.queue.length : 0
+      if (stranded > 0) {
+        try { ctx.reply.clear() } catch { /* 队列容器坏也不掩主错 */ }
+        safeLog(log, 'warn', [`egress: 内层抛错，丢弃未下发条目 ${stranded} 条（异常轮不 flush）：${error?.message ?? error}`])
+      }
+      throw error
+    }
     // 先立边界：之后同一条异步链上晚到的发送一律回落旧通道，绝不落进即将排空的队列
     markContextFlushed(ctx)
     const ids = shadow ? new Set((Array.isArray(ctx?.reply?.queue) ? [...ctx.reply.queue] : []).map((p) => p?.id)) : null
@@ -285,7 +330,10 @@ export function createEgressFlushMiddleware(options = {}) {
   }
 
   function compareShadow(ctx, ids, summary) {
-    const oldSends = ledger(ctx).oldSends
+    const allOld = ledger(ctx).oldSends
+    // review C2#7：失败/未完成的旧通道记录不参与 match 判定，单独计数告警
+    const oldSends = allOld.filter((r) => r.status === 'succeeded')
+    const oldFailed = allOld.length - oldSends.length
     const mine = typeof dispatcher.shadowRecords === 'function'
       ? dispatcher.shadowRecords().filter((r) => ids?.has(r.id))
       : []
@@ -304,7 +352,7 @@ export function createEgressFlushMiddleware(options = {}) {
       if (detail.length < 5) detail.push(`#${i + 1} old=${a ?? '-'} new=${b ?? '-'}`)
     }
     const traceId = String(ctx?.meta?.traceId ?? '-').slice(0, 8)
-    safeLog(log, 'debug', [`[egress-shadow] match=${match} mismatch=${mismatch} old=${oldSends.length} new=${mine.length} total=${summary?.total ?? 0} trace=${traceId}`, detail.join(' ')])
+    safeLog(log, 'debug', [`[egress-shadow] match=${match} mismatch=${mismatch} oldFailed=${oldFailed} old=${oldSends.length} new=${mine.length} total=${summary?.total ?? 0} trace=${traceId}`, detail.join(' ')])
     // 比对不一致是预期内的（清洗/分条本来就会改内容）：只计数告警，不阻断、不改发包
     if (mismatch > 0) safeLog(log, 'warn', [`[egress-shadow] 新旧通道内容有 ${mismatch} 条不一致（切权前先看清）trace=${traceId}`])
   }

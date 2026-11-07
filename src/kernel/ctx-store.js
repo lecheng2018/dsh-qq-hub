@@ -15,20 +15,30 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 /** 全进程唯一的一个 store：每轮事件各自 run，互不串味。 */
 export const ctxStore = new AsyncLocalStorage()
 
-/** ctx.state 上的「出口边界已收口」标记键（symbol 键与业务 string 键天然隔离）。 */
-const FLUSHED_KEY = Symbol.for('dsh-qq-hub.kernel.egress-flushed')
+/*
+ * 「出口边界已收口」标记：模块私有 WeakSet（review A3#2：旧版存 ctx.state，
+ * 裸 ctx / state.set 抛错会静默丢标记，晚到发送再入死队列）。WeakSet 记录 ctx
+ * 对象本身不阻碍回收；前提是每轮事件独立 ctx——管道契约如此（createContext 每事件一次）。
+ */
+const flushedContexts = new WeakSet()
+
+function isContextObject(ctx) {
+  return ctx !== null && (typeof ctx === 'object' || typeof ctx === 'function')
+}
 
 /**
  * 用 ctx 包裹一次执行并原样返回其结果。同步返回值的 Promise 与 run 期内新建的
- * async resource（定时器、then 链）都带上这份 store；ctx 为空时退化成直接执行，
- * 绝不因为「没上下文」把链路炸掉。
+ * async resource（定时器、then 链）都带上这份 store。
+ * ctx 为空 = **显式退出上下文**（review A3#1：旧版直接 fn() 在 A 的 run 内调用会
+ * 继承 A 的 ctx，使「无上下文执行」的后台任务把消息投进 A 的死队列）——改用
+ * ctxStore.exit(fn)：同步返回或抛错后恢复外层 store，回调内新建的异步资源保持无上下文。
  * @param {any} ctx 洋葱 Context
  * @param {() => any} fn 被包裹的执行体（旧入口）
  * @returns {any} fn 的返回值
  */
 export function runWithContext(ctx, fn) {
   if (typeof fn !== 'function') return undefined
-  if (!ctx) return fn()
+  if (ctx == null) return ctxStore.exit(fn)
   return ctxStore.run(ctx, fn)
 }
 
@@ -48,11 +58,8 @@ export function getCurrentContext() {
  * @param {any} ctx
  */
 export function markContextFlushed(ctx) {
-  try {
-    if (typeof ctx?.state?.set === 'function') ctx.state.set(FLUSHED_KEY, true)
-  } catch (error) {
-    // state 容器不可用（裸 ctx）就放弃标记：后续晚到的发送会再次入队，行为与标记失败前一致
-  }
+  // 幂等；非对象入参静默忽略（调用方拿 null 守卫在前）
+  if (isContextObject(ctx)) flushedContexts.add(ctx)
 }
 
 /**
@@ -61,11 +68,7 @@ export function markContextFlushed(ctx) {
  * @returns {boolean}
  */
 export function isContextFlushed(ctx) {
-  try {
-    return typeof ctx?.state?.get === 'function' ? ctx.state.get(FLUSHED_KEY) === true : false
-  } catch (error) {
-    return false
-  }
+  return isContextObject(ctx) && flushedContexts.has(ctx)
 }
 
 /**

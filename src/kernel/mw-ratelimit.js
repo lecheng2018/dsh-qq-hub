@@ -32,7 +32,7 @@ function chatKeyFromInbound(inbound) {
  * @param {number} [options.capacity=30] 桶容量（突发上限）；Phase 2 验收旋钮，配置化留 US-012
  * @param {number} [options.refillPerSec=5] 每秒补充令牌数；同上
  * @param {number} [options.maxKeys=4096] 桶表 LRU 上限（内存防线，被逐出按新桶复活）
- * @param {() => number} [options.clock] 毫秒时钟（缺省 Date.now；测试注入假时钟）
+ * @param {() => number} [options.clock] 毫秒时钟（缺省 performance.now 单调；测试注入假时钟）
  * @param {(inbound: any, ctx: any) => string | undefined} [options.keyFn] 限流键推导，undefined = 放行
  * @param {{ debug?: Function, warn?: Function }} [options.log]
  * @param {(name: string, ms: number) => any} [options.reportStage] G4 分段自报覆盖位（段名 'ratelimit'）；
@@ -44,14 +44,17 @@ export function createRatelimitMiddleware(options = {}) {
     capacity = 30,
     refillPerSec = 5,
     maxKeys = 4096,
-    clock = () => Date.now(),
+    // 默认单调时钟（review R1：Date.now 会被系统回拨/恢复重复补令牌；performance.now
+    // 单调不减。注入假时钟仍允许，但 take() 内对回拨做基线不回退保护）
+    clock = () => performance.now(),
     keyFn = chatKeyFromInbound,
     log,
     reportStage,
   } = options
-  if (!Number.isFinite(capacity) || capacity <= 0) throw new TypeError('ratelimit: capacity 必须为正数')
+  // review R2：capacity < 1 时每次消费 1 枚永远放行不了——必须 ≥ 1；maxKeys 取整防呆
+  if (!Number.isFinite(capacity) || capacity < 1) throw new TypeError('ratelimit: capacity 必须为有限数且至少为 1')
   if (!Number.isFinite(refillPerSec) || refillPerSec < 0) throw new TypeError('ratelimit: refillPerSec 必须为非负数')
-  if (!Number.isFinite(maxKeys) || maxKeys <= 0) throw new TypeError('ratelimit: maxKeys 必须为正数')
+  if (!Number.isInteger(maxKeys) || maxKeys <= 0) throw new TypeError('ratelimit: maxKeys 必须为正整数')
 
   /** 限流键 → { tokens, at }；Map 插入序即 LRU 序（touch 靠 delete+set 重排）。 */
   const buckets = new Map()
@@ -73,14 +76,21 @@ export function createRatelimitMiddleware(options = {}) {
     return traceStage(ctx, name, fn)
   }
 
-  /** 取一枚令牌：true = 放行（已扣减），false = 超限。时钟回拨按 0 间隔处理。 */
+  /**
+   * 取一枚令牌：true = 放行（已扣减），false = 超限。
+   * review R1/R2 修复：
+   *  - 时钟必须有限，NaN 在**改动桶状态之前**抛出（外层 catch 走 fail-open，桶不被毒化、errors 计数）；
+   *  - 注入时钟回拨时基线不回退（effectiveNow = max(now, b.at)），同一段墙上时间不被重复计息。
+   */
   function take(key) {
     const now = clock()
+    if (!Number.isFinite(now)) throw new TypeError('ratelimit: clock 必须返回有限毫秒数')
     let b = buckets.get(key)
     if (b) {
-      const dt = Math.max(0, now - b.at) / 1000
+      const effectiveNow = Math.max(now, b.at)
+      const dt = (effectiveNow - b.at) / 1000
       b.tokens = Math.min(capacity, b.tokens + dt * refillPerSec)
-      b.at = now
+      b.at = effectiveNow
       buckets.delete(key)
       buckets.set(key, b) // LRU touch：热桶不被逐
     } else {
@@ -157,7 +167,7 @@ export function ratelimitOptionsFromEnv(env = process.env) {
   const rawC = env?.QQHUB_RL_CAPACITY
   if (typeof rawC === 'string' && rawC.trim() !== '') {
     const capacity = Number(rawC)
-    if (Number.isFinite(capacity) && capacity > 0) out.capacity = capacity
+    if (Number.isFinite(capacity) && capacity >= 1) out.capacity = capacity
   }
   const rawR = env?.QQHUB_RL_REFILL_PER_SEC
   if (typeof rawR === 'string' && rawR.trim() !== '') {

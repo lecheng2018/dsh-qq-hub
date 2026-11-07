@@ -8,6 +8,12 @@
 // 无 messageId 的事件（poke/notify 等通知类）放行并计 keyless：幂等对它们没有语义，
 // 不据此拦截。判定异常 fail-open（拍板同 ratelimit：资源防御，错拦代价大于漏拦）。
 //
+// 2026-11-07 review P0 D1/P1 D2 修复：旧实现「先写缓存后下行」且无失败回滚——
+// 下游抛错后重传被永久拦死（数据丢失级）。现拆为两层：**处理中键**（inProgress，
+// next() 期间占用，不进 LRU、不逐出，异常/abort 即释放）与**成功缓存**（seen，
+// next() 正常完成且未 abort 才写入）。语义从「一个缓存周期内最多准入一次」修正为
+// 「成功处理一次」；失败后重传可重新准入。
+//
 // 缺省键 = (聊天域|messageId) 复合，而非裸 messageId：同域同 id 才是重传；跨聊天撞 id
 // 按碰撞不放行处理。对齐 host.js seenIds.add(chatKey, message_id) 的既有记账口径，同时
 // 避免随机 message_id 环境（e2e 取样 1e6 空间）跨聊天撞号错杀正常消息。键函数可注入，
@@ -20,9 +26,13 @@ function dedupKeyFromInbound(inbound) {
   const mid = inbound?.messageId
   if (mid === undefined || mid === null || mid === '') return undefined
   const groupId = inbound?.groupId
-  const userId = String(inbound?.sender?.userId ?? '')
-  const scope = groupId ? `g:${groupId}` : userId ? `p:${userId}` : '-'
-  return `${scope}|${mid}`
+  const hasGroup = groupId !== undefined && groupId !== null && groupId !== ''
+  if (hasGroup) return JSON.stringify(['message', 'group', String(groupId), String(mid)])
+  // 群事件缺 groupId：域不可信，宁 keyless 放行也不把不同事件强汇进 '-' 域（review D3）
+  if (inbound?.subType === 'group') return undefined
+  const userId = inbound?.sender?.userId
+  if (userId === undefined || userId === null || userId === '') return undefined
+  return JSON.stringify(['message', 'private', String(userId), String(mid)])
 }
 
 /**
@@ -39,10 +49,13 @@ function dedupKeyFromInbound(inbound) {
  */
 export function createDedupMiddleware(options = {}) {
   const { capacity = 2048, keyFn = dedupKeyFromInbound, log, reportStage, clock = () => Date.now() } = options
-  if (!Number.isFinite(capacity) || capacity <= 0) throw new TypeError('dedup: capacity 必须为正数')
+  if (!Number.isInteger(capacity) || capacity <= 0) throw new TypeError('dedup: capacity 必须为正整数')
 
-  /** 已见键集合：Map 插入序 = LRU 逐出序，命中 delete+set 重排即 touch。 */
+  /** 成功缓存：Map 插入序 = LRU 逐出序，命中 delete+set 重排即 touch。 */
   const seen = new Map()
+  /** 处理中键：next() 期间占用。不参与 LRU 逐出（D2：在飞键被逐出=同消息并发执行）；
+   *  规模由上游并发与请求生命周期约束，不为省内存牺牲幂等。 */
+  const inProgress = new Set()
   const counters = { passed: 0, duplicates: 0, keyless: 0, errors: 0 }
 
   const dbg = (msg) => { try { log?.debug?.(msg) } catch { /* 日志出口不吃崩主链 */ } }
@@ -60,45 +73,59 @@ export function createDedupMiddleware(options = {}) {
     return traceStage(ctx, name, fn)
   }
 
-  /** 记一笔并回答「是否已见过」；LRU touch 与逐出都在这里。 */
-  function seenBefore(key) {
-    if (seen.has(key)) {
-      seen.delete(key)
-      seen.set(key, true)
-      return true
-    }
+  /** 成功处理一次后落缓存（幂等 touch + 逐出）。 */
+  function rememberSuccess(key) {
+    seen.delete(key)
     seen.set(key, true)
-    if (seen.size > capacity) {
-      const oldest = seen.keys().next().value
-      seen.delete(oldest)
-    }
-    return false
+    while (seen.size > capacity) seen.delete(seen.keys().next().value)
   }
 
   async function dedup(ctx, next) {
+    let key
     let duplicate = false
     let keyless = false
     try {
-      const key = await timed(ctx, 'dedup', async () => keyFn(ctx.inbound, ctx))
-      if (key === undefined || key === null || key === '') keyless = true
-      else duplicate = seenBefore(String(key))
+      const value = await timed(ctx, 'dedup', async () => keyFn(ctx.inbound, ctx))
+      if (value === undefined || value === null || value === '') {
+        keyless = true
+      } else {
+        key = String(value)
+        // has+add 之间无 await：本进程内的原子准入点（D2：在飞键并发只放一个）
+        if (inProgress.has(key) || seen.has(key)) {
+          duplicate = true
+          // 命中成功缓存同样 touch LRU（对齐旧 seenBefore 语义：热重传不被逐出后「复活成新消息」）
+          if (!inProgress.has(key) && seen.has(key)) {
+            seen.delete(key)
+            seen.set(key, true)
+          }
+        } else {
+          inProgress.add(key)
+        }
+      }
     } catch (error) {
-      // fail-open 拍板（同 ratelimit）：键推导故障不吃正常消息
+      // fail-open 拍板（同 ratelimit）：键推导异常不吃正常消息
       counters.errors += 1
       keyless = true
       dbg(`dedup: 键推导异常，按 fail-open 放行（${error?.message ?? error}）`)
     }
     if (duplicate) {
       counters.duplicates += 1
-      dbg("dedup: messageId 命中缓存，判定重传，abort('duplicate')")
+      dbg("dedup: messageId 命中处理中/成功缓存，判定重传，abort('duplicate')")
       try { ctx.abort('duplicate') } catch { /* 裸 ctx 无 abort 槽：不因此炸链 */ }
       return
     }
     if (keyless) counters.keyless += 1
     counters.passed += 1
-    await next()
+    try {
+      await next()
+      // 成功且未被 abort 才写幂等缓存；abort 的重传留待下次重新准入（D1）
+      if (key !== undefined && !ctx?.signal?.aborted) rememberSuccess(key)
+    } finally {
+      // next() 抛错同样释放处理中占位——失败必须可重试
+      if (key !== undefined) inProgress.delete(key)
+    }
   }
 
-  dedup.stats = () => ({ ...counters, size: seen.size, capacity })
+  dedup.stats = () => ({ ...counters, size: seen.size, inProgress: inProgress.size, capacity })
   return dedup
 }
