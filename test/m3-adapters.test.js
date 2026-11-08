@@ -208,8 +208,10 @@ test('M3-D：contextFor 映射为 provider——scope/sessionId 传递、异常�
     mods: {
       contextFor: async (args) => {
         calls.push(args)
-        if (args.chatId === 'group:777') return '群聊记忆'
-        if (args.chatId === 'private:9999') throw new Error('模块炸了')
+        // 真机审计 1.1 第二层：legacy provider 契约吃 { chat, sessionId }（provider 解构 chat.kind）。
+        // 此前适配器传 { chatId } → chat=undefined → provider 抛错被吞 → 全员空串。
+        if (args.chat && args.chat.kind === 'group' && args.chat.groupId === '777') return '群聊记忆'
+        if (args.chatId === 'private:9999' || (args.chat && args.chat.kind === 'private' && args.chat.userId === '9999')) throw new Error('模块炸了')
         return ''
       },
     },
@@ -223,7 +225,7 @@ test('M3-D：contextFor 映射为 provider——scope/sessionId 传递、异常�
   assert.equal(g.fragments[0].content, '群聊记忆')
   assert.equal(g.fragments[0].scope, 'global', 'legacy adapter 声明 global（内部分发）')
   assert.equal(g.fragments[0].sessionId, 'sess-1', '真实 sessionId 透传')
-  assert.deepEqual(calls[0], { chatId: 'group:777', sessionId: 'sess-1' }, 'legacy 签名 { chatId, sessionId }')
+  assert.deepEqual(calls[0], { chat: { kind: 'group', chatId: 'group:777', groupId: '777', userId: '' }, sessionId: 'sess-1' }, 'legacy 签名 { chat, sessionId }（chat 从 ChatKey 如实派生）')
   // 模块炸：isolate——记录错误不阻断
   const b = await assembly.assemble({ chatKey: 'private:9999', sessionId: 's' })
   assert.equal(b.fragments.length, 0)
