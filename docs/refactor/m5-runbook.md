@@ -31,3 +31,23 @@
 
 - 面板 Host/CSRF 防护在「DSH 前置反向代理」部署形态未验证（插件层判定只看 Host/Origin，反代改写 Host 需在 allowedHosts 登记）。
 - 新核心 execute 依赖 `session/event` 的 `assistant/message` 事件取回复文本；真实 DSH 若事件形状不同，适配缺口会**如实失败**（M4-0 fail-closed 用例），不会伪造成功。
+
+## 实测记录（2026-11-08 两轮开旗内测，owner 执行；VERIFY-REPORT 归档）
+
+**包**：`1.3.65-test.20261108`（sha256 d72cc47c…）与 `.2`（b0d874e0…）；宿主 DSH 0.2.2-rc.1 / fnOS / profile web / 数据目录 `plugins-data/aurabot/`（历史别名）。
+
+- 9 条断言两轮后：#0/1/2/3/4/5/6/8 ✅；#7 真 aborted 语义 ✅（kill -TERM：turn/end reason=aborted/disposed、零半截投递、重启后槽不卡死）；#9 OneBot unknown ❌ 未完成（SnowLuma 在另一主机，本机无法重启网关；仅有「发送瞬间断 WS」近似验证）。
+- 第一轮发现 8 缺陷全部修复并进源码 + 回归用例（followup 消息形状、图片附件登记、ctx.get 三连、工作区注入、出站后处理链、失败留痕、模型跟随面板、cancelReason）。
+- 第二轮（`.2` 包）复验通过后再发现并修复 2 缺陷：**9 会话不命名（面板未命名）**——createSession 后按 legacy titleFor 语义 rename + 启动对存量映射回填；**10 图片入站只降级未入模**——admitContent 补「下载（15s/10MB 上限）→ mimeOf → base64 → admitPromptContent」，任一步失败回降级文案，绝不把裸 image 块写进历史（毒化会话防线，真机曾连续废 3 轮）。修复后真机两张图直接进模，她不再需要 `curl 网关→下载→read_image` 三步绕路。
+
+### 环境坑（实测踩到，务必遵守）
+
+- `loadLayeredEnv` 只填**尚未设置**的变量：从已带 `FLAG_MODULAR_CORE` 的 shell 手工拉起 dsh 会继承旧值、`.env` 静默失效。面板重启/Watchdog 起的进程才读 `.env`。
+- fnOS supervisor 不会自动拉起**自己挂掉**的 dsh 子进程（只在它发起的 stop/start 时重启）——kill 后需人工或兜底脚本拉起，且兜底脚本注意上一条的 env 继承。
+- 热重载（set_plugin off/on）可 3 秒换代码不重启宿主；但**跨热重载复用旧会话会踩脏状态**（旧实例 agent 被新实例 resolve），测试期清 `modular-sessions.json` 即恢复。生产不受影响（每次全新进程）。
+
+### 遗留挂账（勿当已解决）
+
+- #9 断言需在有 SnowLuma 可控重启的环境补测。
+- `<voice>/<sticker>/<image>/<reply:n>` 富媒体出站标记仍未接（R4）；模型无视觉能力时的图片退让探测未做（当前面板配的是 vision 模型）。
+- 模块上下文投喂在部分宿主拿不到 `contexts` 服务（如实 warn 跳过，人格不受影响）。
