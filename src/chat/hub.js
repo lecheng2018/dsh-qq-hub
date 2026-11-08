@@ -64,7 +64,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -613,6 +613,39 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       cap.push({ chatId, note, message })
       return { message_id: 'sim-' + cap.length }
     }
+    // PR-1（ADR-0002）：开旗态物理发送转进统一 Outbox（台账/dryRun/闸在 egress 内收口），
+    // 返回网关 raw 保持 legacy 返回形状；flag-off（egressRef.current=null）下面原路径一字未动。
+    const eg = egressRef?.current
+    if (eg) {
+      const eAction = tgt.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
+      const eParams = tgt.kind === 'group' ? { group_id: Number(tgt.id), message } : { user_id: Number(tgt.id), message }
+      try {
+        const eGr = tgt.kind === 'group'
+          ? await groupQuota.send(tgt.id, () => eg.deliver({ action: eAction, params: eParams, chatKey: chatId, receipt: 'required', note, sourceModuleId: 'hub', force }))
+          : { ok: true, result: await eg.deliver({ action: eAction, params: eParams, chatKey: chatId, receipt: 'required', note, sourceModuleId: 'hub', force }) }
+        if (!eGr.ok) {
+          bump('errors')
+          log.warn(`发到 ${chatId} 失败：`, eGr.error?.message || '未知')
+          onResult?.({ ok: false, unknown: eGr.error?.unknown === true, error: eGr.error })
+          return null
+        }
+        // deliver 返回 null = 闸拦（试运行/总开关/泄露闸/授权拒绝）：legacy「没发」语义
+        if (eGr.result === null) { onResult?.({ ok: true, result: null, skipped: true }); return null }
+        const r = eGr.result
+        if (r && r.message_id !== undefined) {
+          sentIds.add(String(r.message_id))
+          if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
+        }
+        bump('sent')
+        onResult?.({ ok: true, result: r })
+        return r
+      } catch (error) {
+        bump('errors')
+        log.warn(`发到 ${chatId} 失败：`, error.message)
+        onResult?.({ ok: false, unknown: error?.unknown === true, error })
+        return null
+      }
+    }
     if (force) {}
     else if (!cfg.enabled) {
       log.info(`总开关关着，没发 → ${chatId}：${note}`)
@@ -717,9 +750,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const group = chatId.startsWith('group:') ? chatId.slice(6) : ''
     const target = interaction.pokeBackTarget(chatId)
     if (!target) return
-    if (!cfg.enabled || cfg.dryRun) return log.info(`试运行（没真戳）→ ${chatId}：戳了戳 ${target}`)
+    const egP = egressRef?.current
+    if (!egP && (!cfg.enabled || cfg.dryRun)) return log.info(`试运行（没真戳）→ ${chatId}：戳了戳 ${target}`)
     try {
-      await onebot.call('send_poke', { user_id: Number(target), ...(group ? { group_id: Number(group) } : {}) }, { timeoutMs: 10000 })
+      const pokeParams = { user_id: Number(target), ...(group ? { group_id: Number(group) } : {}) }
+      const pokeRes = egP
+        ? await egP.deliver({ action: 'send_poke', params: pokeParams, opts: { timeoutMs: 10000 }, chatKey: chatId, receipt: 'optional', note: `戳了戳 ${target}`, sourceModuleId: 'hub' })
+        : await onebot.call('send_poke', pokeParams, { timeoutMs: 10000 })
+      if (pokeRes === null) return // 闸拦（试运行/开关），台账已记 cancelled
       log.info(`${chatId}：她戳了戳 ${target}`)
     } catch (error) {
       log.debug('戳一戳失败：', error.message)
@@ -784,15 +822,20 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       cap.push({ chatId, note: `[文件] ${label}`, message: [{ type: 'file', data: { file: src, name: label } }] })
       return { message_id: 'sim-' + cap.length }
     }
-    if (!cfg.enabled) { log.info(`总开关关着，没发 → ${chatId}：[文件] ${label}`); return null }
-    if (cfg.dryRun) { log.info(`试运行（没真发）→ ${chatId}：[文件] ${label}`); return null }
+    if (!egressRef?.current && !cfg.enabled) { log.info(`总开关关着，没发 → ${chatId}：[文件] ${label}`); return null }
+    if (!egressRef?.current && cfg.dryRun) { log.info(`试运行（没真发）→ ${chatId}：[文件] ${label}`); return null }
     const action = tgt.kind === 'group' ? 'upload_group_file' : 'upload_private_file'
     const params = tgt.kind === 'group'
       ? { group_id: Number(tgt.id), file: src, name: label }
       : { user_id: Number(tgt.id), file: src, name: label }
+    // PR-1：开旗态文件上传转进统一 Outbox（receipt optional：upload 回执是 file_id 不是 message_id）
+    const callFile = egressRef?.current
+      ? (p) => egressRef.current.deliver({ action, params: p, opts: { timeoutMs: FILE_TIMEOUT_MS }, chatKey, receipt: 'optional', note: `[文件] ${label}`, sourceModuleId: 'hub' })
+      : (p) => onebot.call(action, p, { timeoutMs: FILE_TIMEOUT_MS })
     const srcLabel = external ? (src.startsWith('base64://') ? 'base64' : '外部地址') : size < 1024 ? size + ' B' : Math.round(size / 1024) + ' KB'
     try {
-      const r = await onebot.call(action, params, { timeoutMs: FILE_TIMEOUT_MS })
+      const r = await callFile(params)
+      if (r === null) return null // 闸拦（试运行/开关/泄露闸），台账已记 cancelled
       bump('sent')
       log.info(`${chatId}：发文件「${label}」（${srcLabel}）`)
       return r
@@ -808,7 +851,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
       try {
         const b64 = 'base64://' + readFileSync(src).toString('base64')
-        const r = await onebot.call(action, { ...params, file: b64 }, { timeoutMs: FILE_TIMEOUT_MS })
+        const r = await callFile({ ...params, file: b64 })
+        if (r === null) return null
         bump('sent')
         log.info(`${chatId}：发文件「${label}」（网关看不到本机路径，改走 base64）`)
         return r
@@ -2104,6 +2148,19 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   return {
     // 仅关闭本中枢持有的短期媒体缓存，迟到的事件不能重新写入。
     disposeRecentMedia: () => recentMedia.dispose(),
+    // PR-1（ADR-0002）：给非 hub 主链的发送方（multi-parser 转发、qzone 说说、面板自测等）
+    // 用的统一投递面——开旗态经 egress 进 Outbox（台账/dryRun/闸全生效），关旗态透传 onebot.call。
+    deliverRaw: (args = {}) => {
+      const eg = egressRef?.current
+      const chatKey = args.chatKey || (args.params?.group_id ? `group:${args.params.group_id}` : args.params?.user_id ? `private:${args.params.user_id}` : '')
+      if (!eg) return onebot.call(args.action, args.params, args.opts)
+      // 收不进台账的发信动作（推断不出会话域，如空间说说）：如实透传并警告——不算收口完成，但绝不静默
+      if (!chatKey) {
+        log.warn(`egress：${args.action} 推断不出会话域，透传未入台账（PR-1 待收口面）`)
+        return onebot.call(args.action, args.params, args.opts)
+      }
+      return eg.deliver({ ...args, chatKey, receipt: args.receipt || 'required', sourceModuleId: args.sourceModuleId || 'module' })
+    },
     // 新核心旁路指令桥（真机审计 1.9）：主人「通过 #1 / 拒绝」批复工具审批、当前聊天在等
     // 交互提问回答时优先消费。命中返回 true 并记流水（同 legacy onMessage 两处分支语义）。
     interceptInteraction: ({ text, userId, chatId, who } = {}) => {

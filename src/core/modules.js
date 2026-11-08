@@ -276,7 +276,11 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       sendVoiceFile: (chatId, file, note) => core.hub.sendVoiceFile(String(chatId), file, note || `[${id}] 语音`),
       ask: (opts) => core.ask(typeof opts === 'string' ? { text: opts } : opts),
       think: (prompt, opts = {}) => core.hub.runSystemTurn(`ext-${id}`, opts.title || def.name || id, String(prompt), opts),
-      onebot: (action, params, opts) => core.onebot.call(action, params, opts),
+      // PR-1（ADR-0002）：发信类动作（send_*/upload_*）转走 hub.deliverRaw——开旗态进统一 Outbox
+      // （台账/dryRun/泄露闸对模块直调生效）；管理/查询类保持原直连语义不变。
+      onebot: (action, params, opts) => (/^(send|upload)_/.test(String(action)) && typeof core.hub.deliverRaw === 'function')
+        ? core.hub.deliverRaw({ action, params, opts, sourceModuleId: id })
+        : core.onebot.call(action, params, opts),
       dshTool: (tool) => { rec.dshTools.push(tool); core.bridge?.refresh(); return () => { remove(rec.dshTools, tool); core.bridge?.refresh() } },
     }
     return api

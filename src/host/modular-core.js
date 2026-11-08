@@ -309,7 +309,9 @@ export function createModularCore({
       const cfg = getConfig()
       const ig = cfg.security?.identityGuard || {}
       if (ig.enabled === false) return { ok: true }
-      const text = textOfSegments(delivery.segments)
+      const p = delivery.params || {}
+      const extra = [typeof p.message === 'string' ? p.message : '', p.name, p.content].filter(Boolean).join(' ')
+      const text = textOfSegments(delivery.segments) || extra
       const chatKey = String(delivery.chatKey || '')
       const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
       return checkIdentityLeak(text, {

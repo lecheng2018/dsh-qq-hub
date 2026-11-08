@@ -40,6 +40,8 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
   const chains = new Map()
   /** 还没出队的 deliveryId（dispose 清理对象） */
   const pending = new Set()
+  /** PR-1 直通模式登记：deliveryId -> {action, params, opts, receipt}（内存态；崩溃恢复不重发故无需持久） */
+  const passMap = new Map()
   let disposed = false
 
   /**
@@ -48,21 +50,32 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
    * @param {string} req.chatKey
    * @param {string} [req.turnId]
    * @param {string} [req.sourceModuleId] 来源模块（审计用）
-   * @param {Array<{type:string,data:object}>} req.segments
+   * @param {Array<{type:string,data:object}>} [req.segments] 消息模式段列表（与 action 直通二选一）
+   * @param {string} [req.action] PR-1 直通模式：任意 OneBot 发信动作（send_poke/upload_group_file/…）
+   * @param {object} [req.params] 直通模式的完整 RPC 参数（wire 形状由调用方保证=legacy 等价）
+   * @param {object} [req.opts] 直通模式透传 RPC 选项（timeoutMs/retries 等，legacy 语义保留）
+   * @param {'required'|'optional'} [req.receipt] 回执要求：msg 类 required（无 message_id=unknown 红线）；
+   *   upload/poke/qzone 等无 message_id 回执的动作=optional（不抛即 sent，file_id 等存 raw）
+   * @param {string} [req.note] 台账备注（legacy note 语义，审计可读）
    * @param {string} [req.deliveryId] 幂等键（缺省生成）
    * @param {boolean} [req.dryRun] 按次试运行（调用方显式语义，立即记台账不实发）
    * @param {boolean} [req.force] 同 legacy force：豁免全局 enabled/dryRun/身份闸（授权仍执行）
-   * @returns {Promise<{state:'sent'|'failed'|'unknown'|'cancelled', deliveryId:string, gatewayMessageId?:string, reason?:string}>}
+   * @returns {Promise<{state:'sent'|'failed'|'unknown'|'cancelled', deliveryId:string, gatewayMessageId?:string, raw?:object, reason?:string}>}
    */
   async function request(req) {
     if (disposed) throw new Error('outbox 已卸载')
     const chatKey = String(req?.chatKey ?? '')
     parseChatKey(chatKey)
-    const segments = req?.segments
-    if (!Array.isArray(segments) || segments.length === 0) {
+    const passThrough = Boolean(req?.action)
+    const segments = passThrough ? (req?.segments ?? []) : req?.segments
+    if (!passThrough && (!Array.isArray(segments) || segments.length === 0)) {
       throw new TypeError('segments 必须是非空数组')
     }
+    if (passThrough && (!req.params || typeof req.params !== 'object')) {
+      throw new TypeError('直通模式必须提供 params')
+    }
     const deliveryId = String(req?.deliveryId || newDeliveryId())
+    if (passThrough) passMap.set(deliveryId, { action: req.action, params: req.params, opts: req.opts, receipt: req.receipt || 'required' })
     // 同步登记台账：FIFO 顺序 = enqueue 顺序（台账落盘失败 fail-closed 直接抛出，不发送）
     const rec = book.enqueue({
       deliveryId,
@@ -70,6 +83,8 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       turnId: req?.turnId,
       sourceModuleId: req?.sourceModuleId,
       segments,
+      note: req.note,
+      action: passThrough ? req.action : undefined,
     })
 
     // 按次试运行：调用方显式语义，不排队（无 await 在 enqueue 与链注册之间插入任何东西）
@@ -115,12 +130,16 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       }
     }
 
+    // 授权/闸的 delivery 视图带上直通上下文（guard 文本回退要读 params；authorize 仍按 chatKey 判定）
+    const view = () => ({ ...current, action: passInfo?.action, params: passInfo?.params, note: current.note })
+    const passInfo = passMap.get(deliveryId)
+
     // 授权复核：出队后、标记 sending 前执行（撤权在排队期间发生也能拦住）。
     // authorize 内部有 await：唤醒后必须再复核一次台账（排队期间可能已被 cancel）。
     if (authorize) {
       let ok = false
       try {
-        ok = await authorize({ ...current, segments: current.segments })
+        ok = await authorize(view())
       } catch {
         ok = false
       }
@@ -137,7 +156,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     // 身份泄露闸（唯一出站点；同 legacy：force 豁免；闸自身异常放行不误伤，legacy 同语义）。
     if (guard && !force) {
       try {
-        const g = guard(current)
+        const g = guard(view())
         if (g && g.ok === false) {
           book.mark(deliveryId, 'cancelled', { reason: `身份泄露闸：${g.message || ''}` })
           return { state: 'cancelled', deliveryId, reason: '身份泄露闸' }
@@ -151,20 +170,32 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     } catch (error) {
       return { state: 'failed', deliveryId, reason: `台账 sending 落盘失败，fail-closed 未实发：${error?.message || error}` }
     }
-    const parsed = parseChatKey(chatKey)
-    const action = parsed.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
-    const params = parsed.kind === 'group'
-      ? { group_id: Number(parsed.id), message: current.segments }
-      : { user_id: Number(parsed.id), message: current.segments }
+    const pass = passMap.get(deliveryId)
+    let action, params, opts, receipt
+    if (pass) {
+      action = pass.action; params = pass.params; opts = pass.opts; receipt = pass.receipt
+    } else {
+      const parsed = parseChatKey(chatKey)
+      action = parsed.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
+      params = parsed.kind === 'group'
+        ? { group_id: Number(parsed.id), message: current.segments }
+        : { user_id: Number(parsed.id), message: current.segments }
+      receipt = 'required'
+    }
     try {
-      const result = await send(action, params)
-      // 红线：没有真实 messageId 的「成功」不是 sent——诚实降级为 unknown（副作用未知）
-      if (result?.messageId == null || result.messageId === '') {
+      const result = await send(action, params, opts)
+      // 红线：required 回执下，没有真实 messageId 的「成功」不是 sent——诚实降级为 unknown
+      if (receipt !== 'optional' && (result?.messageId == null || result.messageId === '')) {
         book.mark(deliveryId, 'unknown', { reason: '发送调用无异常但网关未回 messageId，不冒充 sent' })
         return { state: 'unknown', deliveryId, reason: '网关未回 messageId' }
       }
-      book.mark(deliveryId, 'sent', { gatewayMessageId: result.messageId })
-      return { state: 'sent', deliveryId, gatewayMessageId: String(result.messageId) }
+      book.mark(deliveryId, 'sent', result?.messageId != null && result.messageId !== '' ? { gatewayMessageId: result.messageId } : {})
+      return {
+        state: 'sent',
+        deliveryId,
+        ...(result?.messageId != null && result.messageId !== '' ? { gatewayMessageId: String(result.messageId) } : {}),
+        ...(result?.raw !== undefined ? { raw: result.raw } : {}),
+      }
     } catch (error) {
       if (error?.unknown === true) {
         // 副作用可能已发生：绝不重试、绝不降级 failed（重发=重复消息）
@@ -198,6 +229,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       } catch { /* 单条清理失败不阻断卸载 */ }
     }
     pending.clear()
+    passMap.clear()
     chains.clear()
   }
 

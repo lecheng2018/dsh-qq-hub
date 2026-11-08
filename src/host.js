@@ -52,6 +52,7 @@ import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { assemblePipeline } from './host/pipeline.js'
 import { createModularCore } from './host/modular-core.js'
+import { createHubEgress } from './host/hub-egress.js'
 import { createModuleSendBridge } from './host/module-send-bridge.js'
 import { createHostEffects } from './host/effects.js'
 import { createPanelOverview } from './host/panel/overview.js'
@@ -213,10 +214,15 @@ export function apply(ctx) {
       : baseContextProvider,
   ]
 
+  // PR-1（ADR-0002）Outbox 收口：hub 物理发送的 egress 插槽。flag-off 恒 null（原路径逐字不变）；
+  // modular-core 装配后填入指向其 outbox 的适配层 → 全仓主动发送共用一个出口/一份台账。
+  const egressRef = { current: null }
+
   hub = createHub({
     localApi: local,
     dsh: ctx,
     getConfig,
+    egressRef,
     log: logger.child('chat'),
     onebot: hubOnebot,
     stickers,
@@ -308,6 +314,11 @@ export function apply(ctx) {
       })
     : null
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
+  // PR-1：开旗态把 hub/模块发送的出口接到新核心 outbox（同一 Outbox、同一台账、dryRun/闸全覆盖）
+  if (useModularCore && modularCoreApi) {
+    egressRef.current = createHubEgress({ outbox: modularCoreApi.outbox, log: logger.child('egress') })
+    log.info('PR-1 Outbox 收口：hub 物理发送已接入统一出口（消息/文件/戳一戳；台账+试运行+泄露闸对全部出口生效）')
+  }
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
   const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, log: logger.child('panel') })

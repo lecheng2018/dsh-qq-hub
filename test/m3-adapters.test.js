@@ -195,9 +195,13 @@ test('M3-C：paramsFor 形状（群/私聊）与非法 ChatKey', async () => {
   assert.deepEqual(paramsFor('group:777', []), { group_id: 777, message: [] })
   assert.deepEqual(paramsFor('private:55', []), { user_id: 55, message: [] })
   assert.throws(() => paramsFor('10001', []), TypeError)
-  // 非消息动作直接拒绝（物理出口只发消息）
-  const adapter = createOnebotOutboxAdapter({ onebot: { call: async () => ({}) } })
-  await assert.rejects(() => adapter.send('set_group_ban', {}), /只发消息/)
+  // PR-1（ADR-0002）后适配器通用化：任何动作可直通（回执/入账策略在 outbox，管理动作拒绝在 egress 层）
+  const adapter = createOnebotOutboxAdapter({ onebot: { call: async (a, p, o) => ({ ok: 1, a }) } })
+  const r = await adapter.send('set_group_ban', { group_id: 1 })
+  assert.deepEqual(r.raw, { ok: 1, a: 'set_group_ban' }, '返回 raw；无 message_id 时不带 messageId 字段')
+  const guard = await import('../src/host/hub-egress.js')
+  const eg = guard.createHubEgress({ outbox: { request: async () => ({ state: 'sent' }) }, log: { debug() {} } })
+  await assert.rejects(() => eg.deliver({ action: 'set_group_ban', params: {}, chatKey: 'group:1' }), /拒绝非发信动作/, 'egress 拒管理动作（fail-closed）')
 })
 
 // ---------- M3-D legacy context adapter ----------
