@@ -42,6 +42,9 @@ function spyManifest(over = {}) {
 test('isDocker 双查与缓存：哨兵未命中则查 cgroup，二次调用零新 fs 读取', () => {
   const counts = { exists: 0, read: 0 }
   const det = new EnvironmentDetector({
+    // 文件头纪律：桩件必须注入 platform——否则在 Windows/macOS 宿主跑测试时
+    // isDocker 走「非 Linux 平台确证 false」短路，下面的断言永远到不了 cgroup。
+    platform: 'linux',
     existsSync: (p) => { counts.exists++; return p === '/.dockerenv' ? false : false },
     readFileSync: (p) => { counts.read++; return p === '/proc/1/cgroup' ? '12:cpu:/docker/abc' : '' },
   })
@@ -57,6 +60,7 @@ test('isDocker 双查与缓存：哨兵未命中则查 cgroup，二次调用零�
 test('isDocker 短路：哨兵文件命中则不再读 cgroup', () => {
   let reads = 0
   const det = new EnvironmentDetector({
+    platform: 'linux',
     existsSync: (p) => p === '/.dockerenv',
     readFileSync: () => { reads++; return '' },
   })

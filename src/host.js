@@ -25,6 +25,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { loadConfig, saveConfig } from './core/config.js'
+import { dataDir } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
@@ -39,7 +40,7 @@ import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { BUILTINS } from './modules/index.js'
 // RFC-0001 Phase 0（US-003）：遗留核心终端化 + FLAG_USE_PIPELINE 熔断开关
-import { isPipelineEnabled, unwrapPipelineError } from './kernel/legacy-fallback.js'
+import { isPipelineEnabled, isModularCoreEnabled, unwrapPipelineError } from './kernel/legacy-fallback.js'
 import { isEgressShadowEnabled } from './kernel/ctx-store.js'
 // RFC-0001 Phase 1（US-007）：出口切换——pipeline 开启时 hub 的发送全部收口 ctx.reply → Dispatcher
 import { createEgressOnebot, createEgressSendHook } from './kernel/mw-egress-cutover.js'
@@ -50,6 +51,7 @@ import { createHttpKit } from './host/http.js'
 import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { assemblePipeline } from './host/pipeline.js'
+import { createModularCore } from './host/modular-core.js'
 import { createHostEffects } from './host/effects.js'
 import { createPanelOverview } from './host/panel/overview.js'
 import { registerConfigRoutes } from './host/panel/routes-config.js'
@@ -134,9 +136,16 @@ export function apply(ctx) {
     }
   }
 
-  /** RFC-0001 熔断开关路由：开启态走洋葱管道，关闭态（默认）直调遗留 hub。 */
+  /** RFC-0001 熔断开关路由 + M4 模块化新核心总开关：
+   *  FLAG_MODULAR_CORE 开（默认关）→ 实时事件走新核心（Registry→Turn→Assembly→Outbox）；
+   *  否则 FLAG_USE_PIPELINE 开 → 洋葱管道；都关 → 直调遗留 hub（默认路径逐字不变）。 */
   function dispatchEvent (ev, kind) {
     const sink = (error) => log.error(kind === 'poke' ? '处理戳一戳出错：' : '处理消息出错：', (usePipeline ? unwrapPipelineError(error) : error).message)
+    if (useModularCore && modularCoreApi) {
+      const p = kind === 'poke' ? modularCoreApi.dispatchLegacyEvent(ev) : modularCoreApi.dispatchLegacyEvent(ev)
+      p.catch(sink)
+      return
+    }
     if (usePipeline) pipelineApi.dispatchLegacyPipeline(ev).catch(sink)
     else if (kind === 'poke') hub.onPoke(ev).catch(sink)
     else hub.onMessage(ev).catch(sink)
@@ -144,6 +153,7 @@ export function apply(ctx) {
   const gateway = createGateway({
     getConfig, snowluma, endpoint, logger, log,
     getHub: () => hub, getMods: () => mods, getDangerGuard: () => dangerGuard,
+    getModularCore: () => modularCoreApi,
     dispatch: dispatchEvent,
   })
   const { onebot } = gateway
@@ -259,13 +269,42 @@ export function apply(ctx) {
     listModels: models.listModels,
   })
 
+  // ---------- M4：模块化新核心组装根（FLAG_MODULAR_CORE，默认关；关闭态零装配） ----------
+  const useModularCore = isModularCoreEnabled(process.env)
+  const modularCoreApi = useModularCore
+    ? createModularCore({
+        dsh: ctx,
+        onebot,
+        mods: {
+          // 惰性代理：mods 在下方才创建；每事件现取（模块热重载即时生效，与 legacy 同语义）
+          contextFor: (args) => (mods ? mods.contextFor(args) : ''),
+          commands: () => (mods ? mods.commands() : []),
+          use: (id) => (mods ? mods.use(id) : null),
+        },
+        getConfig,
+        setConfig,
+        logger,
+        log,
+        personaText: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
+        runCommand: async (cmd, msg) => runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] }),
+        // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
+        ledgerFile: dataDir('deliveries.json'),
+        sessionStoreFile: dataDir('modular-sessions.json'),
+      })
+    : null
+  if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
+
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
-  const http = createHttpKit({ ctx, prefix: PREFIX })
-  const { send, readBody, readRaw, query, answer, route } = http
+  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, log: logger.child('panel') })
+  const { send, readBody, readRaw, query, answer, route, guard } = http
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
+      // M1-A / P1 §4.9：模块前缀路由与精确路由同一道防护（Host 白名单 + 带 Origin 不分方法同源校验
+      // + 副作用路径 GET 405；模块路径不在副作用表内，靠 Origin 收紧这层挡跨站触发）
+      const g = guard.check(req)
+      if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''
       let qs = {}
       try {
