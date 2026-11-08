@@ -106,9 +106,9 @@ export function createModularCore({
       const cfg = getConfig()
       return checkAllowed(cfg, aclMsgFromInbound({ chatKey: delivery.chatKey })).allowed
     },
-    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）
-    enabled: () => getConfig().enabled !== false,
-    dryRun: () => getConfig().dryRun === true,
+    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）。truthy 语义与 legacy 一致。
+    enabled: () => Boolean(getConfig().enabled),
+    dryRun: () => Boolean(getConfig().dryRun),
     // 身份泄露闸：唯一出站点扫受保护 QQ/群号（同 legacy sendSegments 语义）
     guard: (delivery) => {
       const cfg = getConfig()
@@ -155,10 +155,11 @@ export function createModularCore({
       //    - assistant/message：跳过 interrupted 的部分内容，记下本 turn 文本（可能多条取最后）；
       //    - turn/end：completed 且有文本才 resolve；非 completed 如实失败（不发、释放调度槽）；
       //    - followup rejection：捕获，回合落定异常，finally 清理监听器（防句柄泄漏）。
+      let off = null
+      const cleanupListener = () => { try { off?.() } catch {} off = null }
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
         let lastText = ''
-        let off = null
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
           if (ev?.type === 'assistant/message') {
@@ -172,12 +173,14 @@ export function createModularCore({
             const d = ev?.data || {}
             const completed = d.reason && d.reason.kind === 'completed'
             const text = lastTurn === d.turn ? lastText : ''
-            try { off?.() } catch {}
+            cleanupListener()
             if (!completed) { reject(new Error(`回合未正常结束：${d.reason?.kind || '?'}`)); return }
             resolve(String(text ?? ''))
           }
         })
         if (typeof off !== 'function') {
+          // 无事件流的 DSH：followup 链落定后取不到回复文本（如实报错，不猜）
+          cleanupListener()
           reject(new Error('DSH 没有 session/event 流，无法取回复文本'))
         }
       })
@@ -188,8 +191,17 @@ export function createModularCore({
       } catch (error) {
         followupError = error
       }
-      if (followupError) throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
-      const reply = await replyPromise
+      if (followupError) {
+        cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
+        throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
+      }
+      let reply
+      try {
+        reply = await replyPromise
+      } catch (error) {
+        cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
+        throw error
+      }
 
       // 6. 回复经 outbox 投递（唯一物理出口）
       if (reply) {
