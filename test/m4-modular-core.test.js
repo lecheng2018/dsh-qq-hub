@@ -307,3 +307,118 @@ test('统一出站闸 身份泄露：群回复含主人 QQ 号被闸拦下（零
   }
 })
 
+// ===== §4.5 回合结束语义专用夹具：手工 DSH 事件序列（不受 fake brain 合成限制）=====
+
+/** 事件可编程的最小 DSH：按轮次投放 assistant/message / turn/end 序列，可注入 followup 拒绝。 */
+function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
+  const listeners = new Set()
+  const session = { id: 'sess-raw' }
+  let turnNo = 0
+  const agent = {
+    ctx: { contexts: new Map() },
+    followup(msg) {
+      const n = ++turnNo
+      if (rejectTurn === n) return Promise.reject(new Error('brain boom'))
+      const events = turns[n - 1] || [{ type: 'turn/end', data: { reason: { kind: 'completed' } } }]
+      for (const ev of events) for (const fn of [...listeners]) fn(session, { ...ev, data: { ...ev.data, turn: n } })
+      return Promise.resolve()
+    },
+  }
+  const ctx = {
+    on(name, fn) { if (name !== 'session/event') return () => {}; listeners.add(fn); return () => listeners.delete(fn) },
+    services: { sessionController: { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) } },
+  }
+  return { ctx, listeners }
+}
+
+function rawCore(dshRaw, cfgOver = {}) {
+  const sent = []
+  const cfg = {
+    enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', ownerName: '主人',
+    allow: { private: ['10000001'], groups: ['777'] }, longTasks: false,
+    merge: { waitSec: 0.02, maxSec: 0.1 },
+    ...cfgOver,
+  }
+  const core = createModularCore({
+    dsh: dshRaw.ctx,
+    onebot: { call: async (action) => { sent.push(action); return { message_id: String(sent.length) } } },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    getConfig: () => cfg, logger: noopLog, log: noopLog,
+  })
+  return { core, sent }
+}
+
+test('回合结束语义：interrupted 部分回复不发送（completed 结束但无定稿文本 = 不发）', async () => {
+  const dshRaw = rawFakeDsh({ turns: [
+    [
+      { type: 'assistant/message', data: { interrupted: true, message: { content: [{ type: 'text', text: '半截话' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, sent } = rawCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await sleep(300)
+    assert.deepEqual(sent, [], 'interrupted 的部分内容绝不发出（报告 §4.5）')
+  } finally { await core.dispose() }
+})
+
+test('回合结束语义：turn/end 非 completed → 不发且监听器摘除、调度槽释放（第二条照常回复）', async () => {
+  const dshRaw = rawFakeDsh({ turns: [
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '失败前的话' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'error' } } },
+    ],
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '第二条回复' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, sent } = rawCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message_id: 1, message: [{ type: 'text', data: { text: '第一条' } }] }))
+    await sleep(300)
+    assert.deepEqual(sent, [], '非 completed 不发（旧实现首个 assistant/message 就发）')
+    assert.equal(dshRaw.listeners.size, 0, '失败路径监听器已摘除，不泄漏')
+    await core.dispatchLegacyEvent(msgEv({ message_id: 2, message: [{ type: 'text', data: { text: '第二条' } }] }))
+    await sleep(300)
+    assert.deepEqual(sent, ['send_private_msg'], '调度槽已释放：第二条正常回复')
+  } finally { await core.dispose() }
+})
+
+test('回合结束语义：followup rejected 被捕获——不 hang、监听器摘除、槽释放，第二条可服务', async () => {
+  const dshRaw = rawFakeDsh({ rejectTurn: 1, turns: [
+    [],
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '恢复后的回复' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, sent } = rawCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message_id: 1, message: [{ type: 'text', data: { text: '触发拒绝' } }] }))
+    await sleep(300)
+    assert.deepEqual(sent, [], 'followup 拒绝 → 零发送')
+    assert.equal(dshRaw.listeners.size, 0, 'followup 失败路径也摘监听（finally 清理）')
+    await core.dispatchLegacyEvent(msgEv({ message_id: 2, message: [{ type: 'text', data: { text: '再试' } }] }))
+    await sleep(300)
+    assert.deepEqual(sent, ['send_private_msg'], '回合没有永久 running，调度槽已恢复')
+  } finally { await core.dispose() }
+})
+
+test('总开关 enabled=false：回合仍执行但出站被动态闸拦下（cancelled，零物理发送）', async () => {
+  const { core, dsh, mock, cfg } = await fixture()
+  try {
+    cfg.enabled = false
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1, '入站/回合不受总开关影响（与 legacy 入口语义差异按新核心：出站统一拦）')
+    assert.equal(mock.sent('send_private_msg').length, 0, 'enabled=false 不真发')
+    assert.ok((core.outbox.ledger.stats().byState.cancelled ?? 0) >= 1, '记 cancelled')
+  } finally {
+    await core.dispose()
+    await mock.close()
+  }
+})
+
+
