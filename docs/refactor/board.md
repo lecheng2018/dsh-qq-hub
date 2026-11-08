@@ -50,7 +50,7 @@
 | M2-A~F 纯模块 | ✅（58 用例：ChatKey/Session/Turn/Outbox/Assembly/SDK，7240890..62bd896） | 各 Core 工作流（单人体） | G1 | 各自新文件 + modules.js 消费点 | G2 检查单 | PR revert |
 | M3 适配器+回放 | ✅（四适配器 9 用例 + 506 例确定性回放 d6dd808；合成分支链，非新旧用户可见对照——见 review §2） | 各工作流（单人体） | G2 | adapters 新文件 | 差异零未解释 | PR revert |
 | M4-0~6 垂直切片 | ✅（FLAG_MODULAR_CORE 默认关，10 用例 ec3aafe；2026-11-08 复核修复 R1-R3：入站 ACL/preset 等价、统一出站 enabled/dryRun/身份闸/真实台账 fail-closed、turn-end 成功语义、followup rejection 清理） | Integration | G3 | host/modular-core.js + host.js 分支（串行队列） | flag-off 逐字不变 | 关开关+重启 |
-| M5 | 📄 runbook 就绪（m5-runbook.md），执行项 blocked-on-fnOS/owner | QA + Owner | G4 | — | — | — |
+| M5 | ◐ 内测进行中（2026-11-08 两轮：9 断言 8✅，#9 OneBot unknown 待 SnowLuma 可控环境；真机 10 缺陷全部修复进源码+回归；环境坑/遗留已登记 m5-runbook）| QA + Owner | G4 | — | — | — |
 | M6 | 📄 退出计划就绪（m6-exit-plan.md），切换/清理 blocked-on-G5+owner go | Integration+Release | G5 | — | — | — |
 
 ## 4. Integration 串行队列（host/hub 独占窗口）
