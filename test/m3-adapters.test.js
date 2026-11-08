@@ -109,6 +109,8 @@ test('M3-B：DSH 适配器 + SessionRegistry 全链（fake sessionController）'
         },
       },
     },
+    // 真机 cordis 契约：sessionController 走 ctx.get 拿（缺陷 3——不能直接点 .services）
+    get(name) { return this.services?.[name] ?? null },
   }
   const adapter = createDshSessionAdapter({
     dsh: fakeDsh,

@@ -146,6 +146,8 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
       rec.unknownReason = String(reason || '未知原因')
     }
     if (state === 'failed') rec.failReason = String(reason || '')
+    // 真机内测报告：cancelled 此前什么都不记——dryRun/撤权/身份闸/总开关的拒绝原因在台账里看不见，审计断言无法闭环
+    if (state === 'cancelled') rec.cancelReason = String(reason || '')
     // sending 是关键落盘（物理发送前的凭据）：失败回滚状态并抛出，outbox 据此不发起发送
     try {
       persist({ critical: state === 'sending' })
