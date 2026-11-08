@@ -48,8 +48,8 @@
 | M1-E 开关姿态 | ✅ 5896d27（flags.md + 6/6 测试；缺省全关，本阶段 0 灰度扩大） | Controller+Integration | — | docs/refactor/flags.md + 必要测试 | flag-off=基线 | — |
 | G1 放行 | ✅（M1 全绿两轮） | Controller | M1-A~E | — | G1 检查单 | — |
 | M2-A~F 纯模块 | ✅（58 用例：ChatKey/Session/Turn/Outbox/Assembly/SDK，7240890..62bd896） | 各 Core 工作流（单人体） | G1 | 各自新文件 + modules.js 消费点 | G2 检查单 | PR revert |
-| M3 适配器+回放 | ✅（四适配器 9 用例 + 511 例确定性回放 d6dd808） | 各工作流（单人体） | G2 | adapters 新文件 | 差异零未解释 | PR revert |
-| M4-0~6 垂直切片 | ✅（FLAG_MODULAR_CORE 默认关，10 用例 ec3aafe） | Integration | G3 | host/modular-core.js + host.js 分支（串行队列） | flag-off 逐字不变 | 关开关+重启 |
+| M3 适配器+回放 | ✅（四适配器 9 用例 + 506 例确定性回放 d6dd808；合成分支链，非新旧用户可见对照——见 review §2） | 各工作流（单人体） | G2 | adapters 新文件 | 差异零未解释 | PR revert |
+| M4-0~6 垂直切片 | ✅（FLAG_MODULAR_CORE 默认关，10 用例 ec3aafe；2026-11-08 复核修复 R1-R3：入站 ACL/preset 等价、统一出站 enabled/dryRun/身份闸/真实台账 fail-closed、turn-end 成功语义、followup rejection 清理） | Integration | G3 | host/modular-core.js + host.js 分支（串行队列） | flag-off 逐字不变 | 关开关+重启 |
 | M5 | 📄 runbook 就绪（m5-runbook.md），执行项 blocked-on-fnOS/owner | QA + Owner | G4 | — | — | — |
 | M6 | 📄 退出计划就绪（m6-exit-plan.md），切换/清理 blocked-on-G5+owner go | Integration+Release | G5 | — | — | — |
 

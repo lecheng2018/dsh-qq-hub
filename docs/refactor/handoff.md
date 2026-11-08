@@ -2,8 +2,14 @@
 
 > **2026-11-08 二次更新（分支 refactor/m2-m6）：M2~M4 代码交付完成，M5/M6 工件就绪。**  
 > 分支结构：`backup/m0-m1-complete` = M1 完成点备份（不再推进）；`refactor/m2-m6` = 全量工作分支。  
+> **2026-11-08 复核修复更新（分支 refactor/distill-groupmates）：** 按《M2-M6 代码审查报告》与《M0-M6 综合审查报告》逐条实证复核，R1-R3 已修并回归：
+> R1 门禁（R1 导入闭包测试 + host 入口可加载测试 + Verify 覆盖 refactor/**、backup/**）；
+> R2 安全与副作用（outbox 出队授权/FIFO、enabled/dryRun/身份闸统一出站点、OneBot 副作用 unknown 完整分类、面板 CSRF 不分方法 + 副作用路径 405、ledger fail-closed）；
+> R3 回合与状态（Turn ChatKey 不变量、排队/dispose 取消终态、DSH turn/end 成功语义 + followup rejection 清理、session registry 持久化接线）。
+> 全量测试 1442 pass / 0 fail / 4 skip；扩展 46/46。G2-G4 不放行结论需据此重跑，M5/M6 仍 blocked-on-fnOS/owner/G5+owner go。
+> 分支现状：`refactor/m2-m6` = 缺 context-assembly 的历史快照（保留只读）；`refactor/distill-groupmates` = 唯一后继集成分支（补入该文件 + 蒸馏新功能 + 本次修复）。
 > M2：六组纯模块（ChatKey/NormalizedInbound、SessionRegistry、TurnController、Outbox+Ledger、ContextAssembly、Module SDK）58 用例；  
-> M3：四适配器 + 511 例确定性回放（零差异）；M4：FLAG_MODULAR_CORE 新核心全链（默认关，10 用例，flag-off 逐字不变）；  
+> M3：四适配器 + 506 例确定性回放（合成链路不变式，非新旧用户可见对照）；M4：FLAG_MODULAR_CORE 新核心全链（默认关，flag-off 逐字不变）；  
 > M5：m5-runbook.md（执行项 blocked-on-fnOS/owner，如实标记）；M6：m6-exit-plan.md（切换/清理程序就绪，blocked-on-G5+owner go）。
 
 ## 1. 本次负责范围（M0/M1 阶段原文保留，见 git 历史）
