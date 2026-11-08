@@ -4,7 +4,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -455,26 +455,81 @@ test('真机缺陷 1：followup 消息完整形状 {id, role, content, source.ki
   } finally { await core.dispose(); await mock.close() }
 })
 
-test('真机缺陷 2：图片附件登记成功 → content 出现 image 块且回合正常', async () => {
+// 真机缺陷 10：admitContent 现在先下载图片字节 → base64 → 登记。测试按仓内约定临时 stub fetch。
+// 注意：只拦图片 URL，其余流量必须透传——OneBot 客户端也走 globalThis.fetch，全接管会误伤发送。
+const stubImageFetch = (imageImpl) => {
+  const orig = globalThis.fetch
+  globalThis.fetch = async (url, opt) => (String(url).includes('x/y.png') ? imageImpl(url, opt) : orig(url, opt))
+  return () => { globalThis.fetch = orig }
+}
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8])
+const PNG_OK = async () => ({ ok: true, arrayBuffer: async () => PNG_BYTES.buffer.slice(PNG_BYTES.byteOffset, PNG_BYTES.byteOffset + PNG_BYTES.length) })
+
+test('真机缺陷 10：图片下载成功 → base64 登记为附件，image 块带 attachment 进会话', async () => {
+  const restore = stubImageFetch(PNG_OK)
   const { core, dsh, mock } = await fixture()
   try {
     await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
     await waitSettled(core, 400)
     assert.equal(dsh.turns.length, 1)
-    assert.ok(dsh.turns[0].contentTypes.includes('image'), 'fake 附件服务登记成功后 image 块保留')
-    assert.equal(mock.sent('send_private_msg').length, 1, '回合正常出话')
-  } finally { await core.dispose(); await mock.close() }
+    assert.ok(dsh.turns[0].contentTypes.includes('image'), '登记成功的 image 块保留（fake admitPromptContent 会换成 attachment 形状）')
+    assert.equal(dsh.turns[0].userText.includes('没能'), false, '下载+登记都成功时不得出现降级文案')
+    assert.equal(mock.sent('send_private_msg').length, 1)
+  } finally { restore(); await core.dispose(); await mock.close() }
 })
 
-test('真机缺陷 2：登记失败 → 图片降级为文字说明，裸 image 块绝不进会话（毒化历史防线）', async () => {
+test('真机缺陷 10：下载失败 → 降级文字（下载文案），image 块绝不进会话', async () => {
+  const restore = stubImageFetch(async () => { throw new Error('connect ECONNREFUSED') })
+  const { core, dsh, mock } = await fixture({ brain: async ({ text }) => text.includes('没能把它下载下来') ? '图我收不到，描述一下？' : '嗯' })
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns[0].contentTypes.includes('image'), false, '毒化防线：任何 image 块不得进历史')
+    assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它下载下来/)
+    assert.equal(mock.sent('send_private_msg').length, 1, '降级不崩，回合照常有回复')
+  } finally { restore(); await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 2（回归口径更新）：下载成功但登记失败 → 登记文案降级，无 image 块', async () => {
+  const restore = stubImageFetch(PNG_OK)
   const { core, dsh, mock } = await fixture({ admitImages: false, brain: async ({ text }) => text.includes('没能把它登记成附件') ? '你描述一下图吧' : '嗯' })
   try {
     await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
     await waitSettled(core, 400)
-    assert.equal(dsh.turns.length, 1)
-    assert.equal(dsh.turns[0].contentTypes.includes('image'), false, '裸图片块不得进会话历史（每一轮都会因它而炸）')
-    assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它登记成附件/, '原文保留 + 如实降级说明')
-    assert.equal(mock.sent('send_private_msg').length, 1, '降级后回合不崩，仍能出话')
+    assert.equal(dsh.turns[0].contentTypes.includes('image'), false)
+    assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它登记成附件/)
+    assert.equal(mock.sent('send_private_msg').length, 1)
+  } finally { restore(); await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 9：建会话即命名（legacy titleFor 同语义），面板不再「未命名」', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    await core.dispatchLegacyEvent(msgEv()) // private:10000001 = ownerQQ
+    await core.dispatchLegacyEvent(msgEv({ message_type: 'group', group_id: 777, user_id: 555, sender: { user_id: 555, nickname: '甲' }, message: [{ type: 'text', data: { text: '大肥鱼 在吗' } }] }))
+    await waitSettled(core, 500)
+    const titles = dsh.renames.map((r) => r.title)
+    assert.ok(titles.includes('QQ · 主人私聊'), '主人私聊标题')
+    assert.ok(titles.includes('QQ 群 · 777'), '群标题')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 9：启动对已有映射回填标题（老会话补救）', async () => {
+  const mock = await startMockOneBot({ selfId: '20000002' })
+  const dsh = createFakeDsh({ brain: async () => '嗯' })
+  const storeFile = join(mkdtempSync(join(tmpdir(), 'm4-title-')), 'modular-sessions.json')
+  writeFileSync(storeFile, JSON.stringify({ version: 1, chats: { 'private:10000001': { sessionId: 'sess-old-1', createdAt: 1 } } }))
+  const core = createModularCore({
+    dsh: dsh.ctx,
+    onebot: { call: async () => ({ message_id: 1 }) },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    getConfig: () => ({ enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', ownerName: '主人', allow: { private: ['10000001'], groups: [] }, merge: { waitSec: 0.05, maxSec: 0.2 } }),
+    logger: noopLog, log: noopLog,
+    sessionStoreFile: storeFile,
+  })
+  try {
+    await sleep(80) // backfillTitles 是 fire-and-forget 微任务链
+    assert.ok(dsh.renames.some((r) => r.sessionId === 'sess-old-1' && r.title === 'QQ · 主人私聊'), '已有映射补上标题')
   } finally { await core.dispose(); await mock.close() }
 })
 

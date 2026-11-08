@@ -27,6 +27,7 @@ import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
+import { mimeOf } from '../chat/inbound.js'
 import { parseReply, replyRules } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
@@ -83,18 +84,39 @@ export function createModularCore({
   const ctxGet = (name) => { try { return dsh?.get?.(name) ?? null } catch { return null } }
   const admitAttachments = () => { try { return dsh?.get?.('attachments') ?? null } catch { return null } }
 
-  /** 图片段必须登记成 DSH 附件（attachmentId），否则整轮抛错且污染会话历史（真机报告 2）。
-   *  本轮不下载图片字节：登记不上就如实降级成文字说明，绝不把裸 url 图片块塞进历史。 */
+  /** 图片段必须登记成 DSH 附件（attachmentId）。DSH 只认 base64 编码图片
+   *  （`{ type:'image', data, mediaType }`），QQ 给的是 URL——所以先下载，再登记。
+   *  下载/登记任一步失败就如实降级成一行文字（绝不把裸 url 图片块塞进历史，那会让整条会话永久失败）。 */
   async function admitContent(content) {
     if (!content.some((c) => c.type === 'image')) return content
-    const att = admitAttachments()
-    if (att && typeof att.admitPromptContent === 'function') {
-      try { return await att.admitPromptContent(content) } catch (error) {
-        debug(`图片没登记成附件，本轮按看不了图处理：${error.message}`)
+    // 1) 裸 URL 的图片块 → 下载 + base64
+    const hydrated = []
+    for (const block of content) {
+      if (block.type !== 'image' || block.data) { hydrated.push(block); continue }
+      const url = String(block.url || '')
+      try {
+        if (!/^https?:\/\//i.test(url)) throw new Error('不是可下载的 http(s) 地址')
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const buf = Buffer.from(await res.arrayBuffer())
+        if (!buf.length) throw new Error('下载到 0 字节')
+        if (buf.length > 10 * 1024 * 1024) throw new Error(`图片太大（${Math.round(buf.length / 1024)}KB）`)
+        hydrated.push({ type: 'image', data: buf.toString('base64'), mediaType: mimeOf(buf), name: 'qq-image' })
+      } catch (error) {
+        debug(`图片下载失败，本轮按看不了图处理：${error?.message || error}`)
+        hydrated.push({ type: 'text', text: '（对方发来一张图片，但本机没能把它下载下来，这轮看不到）' })
       }
     }
-    // 降级：剥掉所有 image 块，保留文本，追加一行如实说明（同 legacy admit 失败分支）
-    const text = content.filter((c) => c.type !== 'image').map((c) => c.text ?? '').join('\n').trim()
+    if (!hydrated.some((c) => c.type === 'image')) return hydrated
+    // 2) 交 DSH 登记成附件
+    const att = admitAttachments()
+    if (att && typeof att.admitPromptContent === 'function') {
+      try { return await att.admitPromptContent(hydrated) } catch (error) {
+        debug(`图片没登记成附件，本轮按看不了图处理：${error?.message || error}`)
+      }
+    }
+    // 3) 降级：剥掉 image 块，保留文本 + 一行说明
+    const text = hydrated.filter((c) => c.type !== 'image').map((c) => c.text ?? '').join('\n').trim()
     const note = '（对方发来一张图片，但本机没能把它登记成附件，本轮按看不到图处理）'
     return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
   }
@@ -102,6 +124,14 @@ export function createModularCore({
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
   const sessionAdapter = createDshSessionAdapter({
     dsh,
+    // [修复] 会话标题（legacy hub.js titleFor 同语义）：新核心建完不命名，面板里全是「未命名」
+    titleOf: (chatKey) => {
+      const cfg = getConfig()
+      const owner = cfg.ownerName || '主人'
+      if (String(chatKey).startsWith('group:')) return `QQ 群 · ${String(chatKey).slice(6)}`
+      const uid = String(chatKey).slice(8)
+      return uid === String(cfg.ownerQQ || '') ? `QQ · ${owner}私聊` : `QQ 私聊 · ${uid}`
+    },
     // 会话必须带工作区，否则落到宿主 defaultCwd 直接 turn error（真机报告 5）；对齐 legacy ensureWorkspace
     ensureWorkspace: async () => {
       try {
@@ -124,11 +154,21 @@ export function createModularCore({
     },
   })
   const sessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
+  // 启动后给已有映射补标题（老映射是未命名时代建的）
+  const backfillTitles = (reg) => {
+    Promise.resolve().then(async () => {
+      for (const [chatKey, entry] of Object.entries(reg.snapshot?.() || {})) {
+        if (!entry?.sessionId) continue
+        await sessionAdapter.renameExisting?.(entry.sessionId, chatKey).catch(() => {})
+      }
+    }).catch(() => {})
+  }
   const registry = createSessionRegistry({
     createSession: sessionAdapter.createSession,
     ...(sessionStore ? { store: sessionStore } : {}),
     onError: (e) => log.warn('session 映射持久化异常：', e.message),
   })
+  backfillTitles(registry)
 
   // ---------- Context Assembly（模块上下文 + 人格） ----------
   const assembly = createContextAssembly({
