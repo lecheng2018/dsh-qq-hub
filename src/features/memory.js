@@ -636,8 +636,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     })
     let out = ''
     try {
-      // 1600 token：800 会截断五段 JSON（截了 parse 就失败，之前没日志根本看不出）
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
+      // 8000：五段 JSON 会被截断（parse 就失败）；「自适应思考」模型的思考段也吃额度。
+      // reasoningEffort 不钉死 'none'：MiniMax-M3.1-Flash 之类必须自适应思考，disabled 直接 400
+      // → 蒸馏永远失败；交给 askModel 的 pickReasoningEffort 按模型能力挑。
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3 })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -1120,8 +1122,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         // 模型只负责判断「是不是黑话、什么意思」，写进 insights['group:<gid>'] 同一套存储。
         // 群黑话学习已移交独立模块 src/modules/slang/（自带日程：03 点后学昨天完整流水，
         // 赶在本模块 04:00 整理删流水之前——旧实现挂在这里只会读到已删除的空流水）。
-        // 蒸馏群友（1.3.59）：指定的人的说话样子
-        try { await learnDistill(day) } catch (error) { log.debug('蒸馏群友失败：', error.message) }
+        // 蒸馏群友的日常学习同理已迁 src/modules/distill/（自身 tick + 模块状态）；
+        // 这里不再调用，避免两边各跑一遍重复花 token（结构红线：管线不再耦合 consolidate）。
       }
       // 这次记忆有变化的人，重写人物小档案（每次最多 8 个人）
       const live = load()
@@ -1178,71 +1180,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       return { ok: false, message: error.message }
     } finally {
       busy = false
-    }
-  }
-
-  /**
-   * 蒸馏群友（1.3.59）：指定某人当数据源，学他的说话方式/性格/语气。
-   * 每天整理时对每个目标跑一次（每群每人一次调用）；他当天说得太少就不学（学出来也是瞎猜）。
-   * 学的是「怎么说话」，不是「冒充谁」——注入文本里带硬边界。
-   */
-  async function learnDistill (day) {
-    const cfg = getConfig()
-    if (cfg.memory?.distill === false) return
-    const targets = distillTargets()
-    if (!targets.length) return
-    // 证据按「最近 3 天」累加：molroo 建议 20~30 条样本才可靠，而多数群一天攒不到 20 句
-    const days = (hub.chatLogDays ? hub.chatLogDays() : []).slice(-3)
-    const done = (load().distillLearned || {})
-    const doneToday = new Set(done[day] || [])
-    for (const t of targets) {
-      const tag = `${t.gid}#${t.uid}`
-      if (doneToday.has(tag)) continue // 这天这个人学过了（重启不重复花钱）
-      const groupLines = []
-      for (const d of days) for (const l of (hub.chatLogOf ? (hub.chatLogOf(d) || []) : [])) {
-        if (String(l.chatId) === `group:${t.gid}`) groupLines.push(l)
-      }
-      if (!groupLines.length) continue
-      const mine = collectMemberLines(groupLines, t.uid)
-      if (!enoughEvidence(mine)) {
-        log.debug(`蒸馏群友：${t.name || t.uid} 最近 3 天只说了 ${mine.length} 句，证据不够（要 20 句），跳过`)
-        continue
-      }
-      // 上下文：他说这几句时群里前后在聊什么（帮助模型判断语气）
-      const context = dedupConvo(groupLines.filter((l) => l.who !== 'bot')).slice(-80)
-      // 对照：群里别人的话（不含他、不含她自己）——靠「他和别人不一样在哪」定位特征
-      const others = groupLines
-        .filter((l) => l.who !== 'bot' && String(l.uid || '') !== String(t.uid))
-        .slice(-60)
-        .map((l) => `${l.who}：${String(l.text).slice(0, 100)}`)
-      const old = distillOf(t.gid, t.uid)
-      const { system, text } = buildDistillPrompt({ name: t.name || t.uid, uid: t.uid, memberLines: mine, context, others, old })
-      let out = ''
-      try {
-        out = await askModel(dsh, { cfg, system, text, maxTokens: 4000, temperature: 0.3, reasoningEffort: 'none' })
-      } catch (error) {
-        log.warn(`蒸馏群友：${t.name || t.uid} 提炼失败：`, error.message)
-        continue
-      }
-      const profile = parseDistillProfile(out)
-      if (!profile) {
-        log.warn(`蒸馏群友：${t.name || t.uid} 回包解析失败，前 200 字：`, String(out).slice(0, 200))
-        continue
-      }
-      if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
-        log.info(`蒸馏群友：${t.name || t.uid} 模型判空画像，前 120 字：`, String(out).slice(0, 120))
-        continue
-      }
-      putDistill(t.gid, t.uid, profile, mine.length)
-      doneToday.add(tag)
-      log.info(`蒸馏群友：学到 ${t.name || t.uid} 的说话样子（${mine.length} 句证据，含 ${(profile.samples || []).length} 条原话）`)
-      try { onDistillLearned && await onDistillLearned(String(t.gid)) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
-    }
-    if (doneToday.size) {
-      const s = load()
-      s.distillLearned = s.distillLearned || {}
-      s.distillLearned[day] = [...doneToday]
-      save(s)
     }
   }
 
