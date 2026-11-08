@@ -57,3 +57,38 @@ export function discoverSlangCandidates(lines, { topN = 12, minCount = 4, minLen
     return { word: w, count: n, samples }
   })
 }
+
+/** 黑话本学习提示词（原 memory.js 内联版搬纯逻辑层；候选来自 discoverSlangCandidates）。 */
+export function buildSlangPrompt ({ groupName = '', cands = [] } = {}) {
+  const candText = (cands || [])
+    .map((c) => `-「${c.word}」出现 ${c.count} 次，例如：${(c.samples || []).map((s) => `「${String(s).slice(0, 30)}」`).join(' ')}`)
+    .join('\n')
+  return {
+    system: [
+      '你在帮一个 QQ 群里的 AI 群友整理「这个群的黑话本」。下面是群友记录和词频统计里挑出来的高频词候选。',
+      '判断哪些候选**真的是这个群/这个圈子在用的黑话、梗、圈内称呼或缩写**（常用词、普通词汇一律不要）。',
+      '对每个入选的词给一句话解释（这个词在这个群里的意思、怎么用），一条不超过 40 字。',
+      '没有值得记的就输出 []。只输出 JSON 数组：[{"word":"词","meaning":"意思和用法"}]，最多 6 条。',
+    ].join('\n'),
+    text: `群名：${String(groupName || '').slice(0, 30)}\n\n词频候选：\n${candText || '（无）'}`,
+  }
+}
+
+/** 解析模型回包：容忍非 JSON 前后缀，收成 {word, meaning} 数组（最多 6 条）。 */
+export function parseSlangItems (raw) {
+  let items = []
+  try {
+    const arr = JSON.parse((String(raw ?? '').match(/\[[\s\S]*\]/) || [String(raw ?? '')])[0])
+    if (Array.isArray(arr)) items = arr.filter((x) => x && x.word && x.meaning).slice(0, 6)
+  } catch {}
+  return items
+    .map((x) => ({ word: String(x.word).trim().slice(0, 30), meaning: String(x.meaning).trim().slice(0, 60) }))
+    .filter((x) => x.word && x.meaning)
+}
+
+/** 注入文本（模块 context provider 用）：空串 = 这群还没有黑话。 */
+export function renderSlangHint (items) {
+  const list = (items || []).slice(0, 8)
+  if (!list.length) return ''
+  return '（这个群的黑话，听懂了就用、别硬套：' + list.map((x) => `${x.word}＝${x.meaning}`).join('；') + '）'
+}

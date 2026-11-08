@@ -124,6 +124,11 @@ export async function startMockOneBot({ selfId = '20000002', token = 'mock-token
     res.setHeader('content-type', 'application/json')
     try {
       calls.push({ action, params, t: Date.now() }) // 记「收到请求」的时间，不是延迟之后
+      // M1-C 故障注入：stall = 收到请求后挂住不回（客户端会超时，副作用可能已发生）；
+      // reset = 收到请求后直接掐断连接（响应丢失，同样无法知道结果）。
+      // 只对显式登记的动作生效，其他测试不受影响。
+      if (state.stallActions?.has(action)) return
+      if (state.resetActions?.has(action)) { req.socket.destroy(); return }
       await waitLogin(action)
       const data = handle(action, params)
       res.end(JSON.stringify({ status: 'ok', retcode: 0, data }))
