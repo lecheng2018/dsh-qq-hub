@@ -2104,6 +2104,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   return {
     // 仅关闭本中枢持有的短期媒体缓存，迟到的事件不能重新写入。
     disposeRecentMedia: () => recentMedia.dispose(),
+    // 新核心旁路指令桥（真机审计 1.9）：主人「通过 #1 / 拒绝」批复工具审批、当前聊天在等
+    // 交互提问回答时优先消费。命中返回 true 并记流水（同 legacy onMessage 两处分支语义）。
+    interceptInteraction: ({ text, userId, chatId, who } = {}) => {
+      try {
+        if (approvals.handleReply(text, userId, chatId)) { logChat(chatId, who || '', text, userId); return true }
+        if (questions.has(chatId) && questions.handleReply(chatId, text)) { logChat(chatId, who || '', text, userId); return true }
+      } catch (error) { log.debug('旁路指令判定出错：', error.message) }
+      return false
+    },
     modelFor: targetModel,
     syncAllModels,
     /** 这个聊天最近发来的图片 / 表情（新的在后面），可选只要某人发的 */

@@ -10,7 +10,7 @@
 
 /**
  * @param {object} o
- * @param {{ contextFor: (args: { chatId: string, sessionId?: string }) => string|Promise<string>, generation?: () => number }} o.mods
+ * @param {{ contextFor: (args: { chat: object, sessionId?: string }) => string|Promise<string>, generation?: () => number }} o.mods
  *   legacy 模块中枢的 contextFor（mods 对象本体，热重载由现取保证）
  * @param {number} [o.priority] 装配优先级（缺省 100，与 memory 主库同级）
  */
@@ -23,11 +23,24 @@ export function createLegacyContextAdapter({ mods, priority = 100 } = {}) {
     cacheStable: false,
     onError: 'isolate', // 模块异常按 legacy 语义隔离（contextFor 自己吞错返回空）
     /**
-     * ContextAssembly provider 签名。legacy 的 contextFor 吃 { chatId, sessionId }。
+     * ContextAssembly provider 签名。
+     * 真机审计 1.1 第二层：legacy hub 挂给 mods.contextFor 的是 **{ chat, sessionId }**
+     * （chat=解析后的会话视图，模块 provider 解构 chat.kind 直接用）；
+     * 本适配器此前传 { chatId } → provider 里 chat=undefined → 抛错被吞 → 全员空串。
+     * 现在按同一形状传：chat 视图优先由装配方透传，缺省时从 ChatKey 如实派生。
      */
-    provide: async ({ chatKey, sessionId }) => {
-      const text = await mods.contextFor({ chatId: chatKey, sessionId })
+    provide: async ({ chatKey, sessionId, chat }) => {
+      const view = chat || chatViewFromKey(chatKey)
+      const text = await mods.contextFor({ chat: view, sessionId })
       return typeof text === 'string' ? text : ''
     },
   }
+}
+
+/** 从 ChatKey 派生 legacy 兼容的 chat 视图（kind/chatId/userId/groupId）。 */
+function chatViewFromKey(chatKey) {
+  const key = String(chatKey || '')
+  if (key.startsWith('group:')) return { kind: 'group', chatId: key, groupId: key.slice(6), userId: '' }
+  if (key.startsWith('private:')) return { kind: 'private', chatId: key, groupId: '', userId: key.slice(8) }
+  return { kind: 'system', chatId: key, groupId: '', userId: '' }
 }
