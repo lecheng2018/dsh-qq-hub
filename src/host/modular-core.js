@@ -32,6 +32,9 @@ import { parseReply, replyRules } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
+import { createGroupState } from '../chat/group-state.js'
+import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
+import { agoLabel } from '../chat/clockline.js'
 
 /** 入站事件 → checkAllowed 需要的 msg 形状（从 ChatKey + sender 还原 kind/userId/groupId）。 */
 function aclMsgFromInbound(inbound) {
@@ -92,10 +95,18 @@ function segmentsToContent(members) {
  * @param {(inbound: object, view: object) => Promise<string|null>} [o.runCommand] owner 命令闸（返回回复文本或 null）
  * @param {string} [o.ledgerFile] 投递台账文件（提供则真实持久化；缺省 = 内存，测试用）
  * @param {string} [o.sessionStoreFile] 会话映射文件（提供则持久化 + 启动恢复；缺省 = 内存，测试用）
+ * @param {() => object|null} [o.moodEffects] 心情效果注入（群插话概率调制；同 hub 的 mood().chatty 乘法，缺省 1）
+ * @param {(text: string, chat: object) => number} [o.memoryScore] 话题相关度（同 hub memoryScore，缺省 0）
+ * @param {(chatId: string) => boolean} [o.isMuted] 静音判定（真机审计 1.10：入口就要拦，关了嘴不等于停脑）
+ * @param {(msg: {text: string, userId: string, chatId: string}) => boolean} [o.interceptInteraction]
+ *   旁路指令桥接（真机审计 1.9：主人「通过 #1」批复审批 / 等待中的交互提问回答优先消费；命中即不进回合）
+ * @param {(chat: object) => string|null} [o.personaTextFor] 按聊天人设（真机审计 1.2：persona.privates/groups
+ *   专用卡 + 蒸馏语感卡按群生效；返回 null = 跟随全局人设）
  */
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor,
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
 
@@ -121,6 +132,54 @@ export function createModularCore({
   function prefetchGroupNames() {
     const ids = (() => { try { return (getConfig().allow?.groups || []).map(String) } catch { return [] } })()
     Promise.resolve().then(async () => { for (const gid of ids) await groupNameOf(gid) }).catch(() => {})
+  }
+
+  // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
+  const groups = createGroupState()
+  const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
+  const moodChatty = () => {
+    try {
+      const m = typeof moodEffects === 'function' ? moodEffects() : null
+      return m && typeof m.chatty === 'number' ? m.chatty : 1
+    } catch { return 1 }
+  }
+  /** 群消息要不要回：与 hub.js:1424-1447 同一 decideGroupReply 调用形状。
+   *  repliedToBot（引用她的消息）依赖引用解析（审计 1.5，挂账），暂按 false；不猜。 */
+  function decideGroupReplyFor({ chatKey, text, mentioned, userId }) {
+    const cfg = getConfig()
+    const now = Date.now()
+    const gid = chatKey.slice(6)
+    const pol0 = policyFor(cfg.group, cfg.group?.overrides, gid)
+    const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * moodChatty()) }
+    const recentTexts = groups.buffer(gid).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
+    let memScore = 0
+    try {
+      const memChat = { chatId: chatKey, kind: 'group', groupId: gid }
+      memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0
+    } catch { memScore = 0 }
+    return decideGroupReply({
+      policy: pol,
+      relevance: topicRelevance(recentTexts, pol.interests, memScore),
+      engagedUntil: groups.engagedUntil(gid),
+      mentioned: !!mentioned,
+      repliedToBot: false,
+      fromOwner: isOwner(cfg, userId),
+      text,
+      now,
+      hour: new Date().getHours(),
+      recentTimes: groups.buffer(gid).map((x) => x.t),
+      interjectTimes: groups.interjectTimes(gid),
+      botReplyTimes: groups.speakTimes(gid),
+    })
+  }
+  /** ChatKey + 首发言者 → legacy 兼容的 chat 视图（provider / 人设 / 模型判定共用）。 */
+  function chatViewFor(chatKey, members) {
+    const key = String(chatKey || '')
+    if (key.startsWith('group:')) {
+      const lead = members?.[0]
+      return { kind: 'group', chatId: key, groupId: key.slice(6), userId: String(lead?.sender?.userId ?? ''), nickname: String(lead?.sender?.nickname || '') }
+    }
+    return { kind: 'private', chatId: key, groupId: '', userId: key.slice(8), nickname: String(members?.[0]?.sender?.nickname || '') }
   }
 
   /** 图片段必须登记成 DSH 附件（attachmentId）。DSH 只认 base64 编码图片
@@ -263,6 +322,41 @@ export function createModularCore({
   })
 
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
+  /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
+   *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
+   *  已知差异（挂账）：引用解析（1.5）与 <reply:n>/<at:>/图片说明出站（R4）未接，
+   *  故不带这些指令文案，免得教她做不到的事。 */
+  function groupPromptContent(chatKey, members) {
+    const gid = chatKey.slice(6)
+    const buf = groups.buffer(gid)
+    const fresh = buf.filter((x) => !x.fed).slice(-20)
+    const older = buf.filter((x) => x.fed).slice(-8)
+    for (const x of buf) x.fed = true
+    const mode = pendingMode.get(chatKey) || 'must'
+    pendingMode.delete(chatKey)
+    const nowAt = Date.now()
+    const ownerQQ = String(getConfig().ownerQQ || '')
+    const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${x.nick || x.uid}(${x.uid})`)
+    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${x.text || '（图片/表情）'}`
+    const name = groupNames.get(gid) || gid
+    const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
+      : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
+      : '（有人在叫你，看完这一段再回）'
+    const numbered = fresh.map((x, i) => `[${i + 1}] ${line(x)}`)
+    const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
+      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n'
+    // 触发轮自身的非文本段（图片等）照旧附上（走 admitContent 的登记/降级路线）
+    const extras = []
+    for (const m of members) for (const s of (m?.segments ?? [])) {
+      if (s?.type === 'image') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
+      else if (s?.type && s.type !== 'text') extras.push({ type: 'text', text: `\n[${s.type}]\n` })
+    }
+    return { blocks: [{ type: 'text', text: head }, ...extras], mode }
+  }
+  // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
+  const ctxBoxes = new WeakMap()
+  const personaVarSet = new WeakSet()
   const controller = createTurnController({
     log,
     merge: {
@@ -272,13 +366,23 @@ export function createModularCore({
       groupMaxMs: Number(getConfig().merge?.groupMaxSec * 1000) || 15000,
     },
     execute: async (turn, io) => {
-      // 1. 装配上下文（persona + 模块 provider）
+      const chat = chatViewFor(turn.chatKey, io.members)
+      const inGroup = chat.kind === 'group'
+      // 1. 装配上下文（persona + 模块 provider；chat 视图透传给 legacy provider 契约）
       const sessionId0 = registry.peek(turn.chatKey)?.sessionId
-      const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId: sessionId0 })
+      const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId: sessionId0, chat })
       // 2. 会话（single-flight 创建在 offer 时已发生；这里拿映射）
       const { sessionId } = await registry.sessionFor(turn.chatKey)
-      // 3. 构造会话消息（legacy 视图语义：文本 + 图片 + 其他段如实占位）
-      const content = segmentsToContent(io.members)
+      // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
+      let turnMode = null
+      let content
+      if (inGroup) {
+        const gp = groupPromptContent(turn.chatKey, io.members)
+        content = gp.blocks
+        turnMode = gp.mode
+      } else {
+        content = segmentsToContent(io.members)
+      }
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
       //    sessionController 只能走 ctx.get（真机报告 3：cordis 未声明 inject 的 .services 直接点会抛）
@@ -293,9 +397,6 @@ export function createModularCore({
       //     只改本会话下一请求（selectForNextRequest），绝不动 DSH 全局默认。
       try {
         const cfgNow = getConfig()
-        const chat = turn.chatKey.startsWith('group:')
-          ? { kind: 'group', groupId: turn.chatKey.slice(6), userId: '' }
-          : { kind: 'private', userId: turn.chatKey.slice(8), groupId: '' }
         let sel = null
         const t0 = defaultModel(dsh, cfgNow)
         if (t0) sel = { provider: t0.provider, model: t0.model, reasoningEffort: cfgNow.model?.reasoningEffort || '' }
@@ -311,12 +412,25 @@ export function createModularCore({
         }
       } catch (error) { debug(`模型选择未生效（用默认）：${error.message}`) }
 
-      // 4.6 模块上下文投喂（真机报告 4）：agent.ctx 是另一层 cordis ctx，直接 .contexts 同样会抛
+      // 4.6 上下文与人设挂载（真机审计 1.1 第一层 + 1.2）：legacy 的 seam 是
+      //     agent.ctx.systemPrompt.context()/variable()（hub.js:546/529）——宿主上
+      //     `agent.ctx.get('contexts')` 取不到服务，此前投喂因此整段丢弃。改回同款通道，
+      //     每个 agent 只注册一次，text 闭包每轮读最新（面板改动下一轮生效，同 legacy）。
       try {
-        const contexts = agent.ctx?.get?.('contexts')
-        if (contexts?.set) contexts.set('qq-hub-context', { name: 'qq-hub-context', text: () => ctxText })
-        else debug('宿主没有可用的 contexts 服务，本轮跳过模块上下文投喂（如实记录，不静默）')
-      } catch (error) { try { log?.warn?.('模块上下文投喂不可用（本轮跳过）：', error.message) } catch {} }
+        const sp = agent.ctx?.systemPrompt
+        if (sp?.context) {
+          let holder = ctxBoxes.get(agent)
+          if (!holder) { holder = { text: ctxText }; ctxBoxes.set(agent, holder); sp.context({ name: 'qq-hub-context', order: 905, text: () => holder.text }) }
+          else holder.text = ctxText
+        } else debug('宿主没有 systemPrompt.context 通道，本轮模块上下文只随装配产出留档（如实记录）')
+        if (typeof personaTextFor === 'function' && sp?.variable && !personaVarSet.has(agent)) {
+          personaVarSet.add(agent)
+          sp.variable('qq_hub_persona', () => {
+            try { const t = personaTextFor(chat); if (t) return t } catch {}
+            try { return personaText ? personaText() : '' } catch { return '' }
+          })
+        }
+      } catch (error) { try { log?.warn?.('上下文/人设挂载失败（本轮照跑）：', error.message) } catch {} }
 
       // 5. 等**回合结束**（不是首个 assistant/message）：
       //    - assistant/message：跳过 interrupted 的部分内容，记下本 turn 文本（可能多条取最后）；
@@ -393,6 +507,12 @@ export function createModularCore({
           segments: [{ type: 'text', data: { text: b.value } }],
         })
       }
+      // 8. 群说话记账（legacy noteSpeak/noteInterject 同款）：刹车（burst 上限）与冷却的数据源
+      if (inGroup && result && (result.state === 'sent' || result.state === 'unknown')) {
+        const gid = chat.groupId
+        try { groups.noteSpokeInGroup(gid) } catch {}
+        try { if (turnMode === 'interject') groups.noteInterject(gid) } catch {}
+      }
       return result
     },
   })
@@ -400,7 +520,7 @@ export function createModularCore({
   /** 聊天域消息入口（host dispatchEvent 的旗开分支）。 */
   async function dispatchLegacyEvent(ev) {
     const cfg = getConfig()
-    // 命令闸（M4-2）：主人斜杠命令先截，回复经 outbox（同 legacy：命令不进合流）
+    // 命令闸（M4-2）：主人斜杠命令先截，回复经 outbox（同 legacy：命令不进合流，总开关关着也处理）
     if (runCommand && ev.post_type === 'message') {
       const view = parseMessageEvent(ev, ev.self_id)
       const cmd = parseCommand(view.text, mods.commands())
@@ -419,13 +539,65 @@ export function createModularCore({
     }
     const { inbound } = safeAdapt(ev, 'realtime')
     if (!inbound) return { handled: 'skipped' }
-    // 入站 ACL：offer 前用 legacy 同一 checkAllowed 拒绝白名单外会话（绝不让未授权消息驱动 DSH）
+    return routeInbound(inbound, ev, 'realtime')
+  }
+
+  /**
+   * 入站主链（realtime/backfill 共用），顺序逐项对齐 legacy hub.onMessage：
+   * ACL → 旁路指令 → 总开关 → 静音 → 群缓冲 → activity 计数 → 群回复闸 → offer。
+   * （真机审计 1.9/1.10/§1：enabled=false 和静音必须**入口就拦**——不进回合不烧 token；
+   *  activity 在闸之前发：蒸馏等模块的计数不受「要不要回」影响。）
+   */
+  function routeInbound(inbound, ev, source) {
+    const cfg = getConfig()
+    // 入站 ACL：白名单外会话 offer 前即拒（绝不让未授权消息驱动 DSH）
     const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
     if (!acl.allowed) {
       debug(`入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
       return { handled: 'acl-denied', reason: acl.reason }
     }
+    // 旁路指令（审批批复 / 等待中的交互提问回答）：命中即消费，不进回合
+    if (typeof interceptInteraction === 'function') {
+      const text = textOfSegments(inbound.segments)
+      const userId = String(inbound?.sender?.userId ?? '')
+      try {
+        if (interceptInteraction({ text, userId, chatId: inbound.chatKey })) {
+          debug(`旁路指令消费：${inbound.chatKey}`)
+          return { handled: 'interaction' }
+        }
+      } catch (error) { debug(`旁路指令判定出错（照常走回合）：${error.message}`) }
+    }
+    // 总开关 / 静音：入口拦（关了开关就不跑回合，不再只靠出站闸兜底）
+    if (!cfg.enabled) {
+      log.info(`总开关关着，收到 ${inbound.chatKey} 的消息但不处理：${textOfSegments(inbound.segments).slice(0, 30)}`)
+      return { handled: 'disabled' }
+    }
+    if (typeof isMuted === 'function') {
+      let muted = false
+      try { muted = !!isMuted(inbound.chatKey) } catch {}
+      if (muted) return { handled: 'muted' }
+    }
+    const inGroup = inbound.chatKey.startsWith('group:')
+    const text = textOfSegments(inbound.segments)
+    const userId = String(inbound?.sender?.userId ?? '')
+    // 群缓冲（legacy 同款：群里的每条消息都记，给上下文和「群里在不在聊」用；ACL 后、闸前）
+    let mentioned = false
+    if (inGroup) {
+      try {
+        mentioned = !!parseMessageEvent(ev, ev.self_id).mentioned
+      } catch {}
+      const gid = inbound.chatKey.slice(6)
+      groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: false })
+    }
     emitActivity(mods, inbound)
+    if (inGroup) {
+      const decision = decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId })
+      if (!decision.reply) {
+        debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
+        return { handled: 'group-pass', reason: decision.reason }
+      }
+      if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
+    }
     controller.offer(inbound)
     return { handled: 'offered' }
   }
@@ -440,16 +612,11 @@ export function createModularCore({
     }
   }
 
-  /** 补收入口（M4-4）：补收事件带原始时间，source=backfill（M1-B 语义同款）。同样过入站 ACL。 */
+  /** 补收入口（M4-4）：补收事件带原始时间，source=backfill（M1-B 语义同款）。与实时同一条主链（ACL/闸/静音/群闸）。 */
   function dispatchBackfill(ev) {
-    const cfg = getConfig()
     const { inbound } = safeAdapt(ev, 'backfill')
     if (!inbound) return { handled: 'skipped' }
-    const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
-    if (!acl.allowed) return { handled: 'acl-denied', reason: acl.reason }
-    emitActivity(mods, inbound)
-    controller.offer(inbound)
-    return { handled: 'offered' }
+    return routeInbound(inbound, ev, 'backfill')
   }
 
   async function dispose() {
