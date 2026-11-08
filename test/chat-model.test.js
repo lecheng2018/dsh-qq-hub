@@ -134,7 +134,7 @@ before(async () => {
   const host = await import('../src/host.js')
   api = host.apply(fake.ctx)
   await api.ready
-  await fake.call('/onebot/reconnect')
+  await fake.call('/onebot/reconnect', {}) // P1 §4.9：副作用路径改为 POST（旧断言用 GET，属固化漏洞）
   await until(() => mock.connected() > 0)
   assert.equal((await fake.call('/models')).json().list.length, 5, '先让插件记下 DSH 里有哪些模型')
 })

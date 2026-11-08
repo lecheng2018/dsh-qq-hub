@@ -155,17 +155,17 @@ test('M4-2 命令闸：主人 /status 走命令（回复经 outbox），命令�
   }
 })
 
-test('M4-2 群/私隔离：群外白名单 fail-closed（授权复核拒绝，零物理发送）', async () => {
-  const { core, mock, cfg } = await fixture()
+test('M4-2 群/私隔离：群外白名单 fail-closed（入站 ACL 拒绝，零物理发送）', async () => {
+  const { core, dsh, mock, cfg } = await fixture()
   try {
     cfg.allow.groups = ['777']
     const r = await core.dispatchLegacyEvent(msgEv({ message_type: 'group', group_id: 999, user_id: 555, sender: { user_id: 555, nickname: '外人' } }))
-    assert.equal(r.handled, 'offered')
+    // 复核修复后：白名单外的群在**入站 ACL** 就被拒（不再先驱动 DSH 再出站拦截）。
+    assert.equal(r.handled, 'acl-denied', '白名单外的群入站即拒')
     await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 0, 'ACL 拒绝不驱动 DSH（未授权消息绝不进后端）')
     const groupSends = mock.sent('send_group_msg')
-    assert.equal(groupSends.length, 0, '白名单外的群零发送（复核拒绝）')
-    const stats = core.outbox.ledger.stats()
-    assert.equal(stats.byState.cancelled >= 1, true, '投递被 cancelled 记账')
+    assert.equal(groupSends.length, 0, '白名单外的群零发送')
   } finally {
     await core.dispose()
     await mock.close()
@@ -242,3 +242,68 @@ test('M4-6 dispose 顺序：registry→controller 清干净，二次 dispose 安
   await core.dispose() // 二次 dispose 不抛
   assert.equal(Object.keys(core.registry.snapshot()).length, 0)
 })
+
+// ===== 2026-11-08 复核修复回归（报告 §4.1/§4.2）=====
+
+test('入站 ACL：非白名单私聊 offer 前即拒，绝不驱动 DSH', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    const r = await core.dispatchLegacyEvent(msgEv({ user_id: 88888888, sender: { user_id: 88888888, nickname: '陌生人' } }))
+    assert.equal(r.handled, 'acl-denied', '不在私聊白名单 → 入站即拒')
+    await waitSettled(core, 300)
+    assert.equal(dsh.turns.length, 0, '未授权消息绝不进后端')
+    assert.equal(mock.sent('send_private_msg').length, 0)
+  } finally {
+    await core.dispose()
+    await mock.close()
+  }
+})
+
+test('preset 等价：非主人白名单私聊用 social 档（不再冒完整能力 preset）', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    // 30003 在 allow.private 但不是 ownerQQ
+    const r = await core.dispatchLegacyEvent(msgEv({ user_id: 30003, sender: { user_id: 30003, nickname: '好友' } }))
+    assert.equal(r.handled, 'offered', '白名单内非主人 → 放行')
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1)
+    assert.equal(dsh.turns[0].preset, 'qq-hub-social', '非主人私聊 = social 档（同 legacy levelFor/presetFor）')
+  } finally {
+    await core.dispose()
+    await mock.close()
+  }
+})
+
+test('统一出站闸 dryRun：dryRun=true 时普通回合回复零物理发送（cancelled 记账）', async () => {
+  const { core, dsh, mock, cfg } = await fixture()
+  try {
+    cfg.dryRun = true // 出队时动态读取（非入口快照）
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1, '回合仍执行（试运行只拦出站）')
+    assert.equal(mock.sent('send_private_msg').length, 0, 'dryRun 绝不真发')
+    const stats = core.outbox.ledger.stats()
+    assert.equal(stats.byState.cancelled >= 1, true, 'dryRun 投递记 cancelled')
+  } finally {
+    await core.dispose()
+    await mock.close()
+  }
+})
+
+test('统一出站闸 身份泄露：群回复含主人 QQ 号被闸拦下（零物理发送）', async () => {
+  const leak = '10000001'
+  const { core, dsh, mock } = await fixture({ brain: async () => `找他加我 ${leak}` })
+  try {
+    // 群 777 在白名单内 → 入站放行；但回复含 ownerQQ 且群闸 allowIds 不含主人号 → 拦
+    await core.dispatchLegacyEvent(msgEv({ message_type: 'group', group_id: 777, user_id: 555, sender: { user_id: 555, nickname: '甲' } }))
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1, '回合执行了（泄露发生在出站）')
+    assert.equal(mock.sent('send_group_msg').length, 0, '身份泄露闸拦下，未发出')
+    const stats = core.outbox.ledger.stats()
+    assert.ok((stats.byState.cancelled ?? 0) >= 1, '泄露投递记 cancelled')
+  } finally {
+    await core.dispose()
+    await mock.close()
+  }
+})
+

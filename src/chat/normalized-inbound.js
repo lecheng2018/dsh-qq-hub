@@ -11,6 +11,20 @@
 
 import { assertNormalizedInbound, CONTRACT_VERSION } from '../kernel/modular-contracts.js'
 
+/** 递归深冻结：只深入 plain object/array（拷贝后冻结，不触碰调用方原对象）；Buffer/Map/类实例等原样透传，不冻结进去。 */
+function freezeDeep(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map((v) => freezeDeep(v)))
+  if (value && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value)
+    if (proto === Object.prototype || proto === null) {
+      const out = {}
+      for (const [k, v] of Object.entries(value)) out[k] = freezeDeep(v)
+      return Object.freeze(out)
+    }
+  }
+  return value
+}
+
 /** 事件 ID 的确定性缺省派生：同一消息在同一聊天里重复到达时派生出同一 ID（去重语义友好）。 */
 function deriveEventId({ messageId, chatKey, timestamp }) {
   if (messageId != null && messageId !== '') return `msg:${chatKey}:${messageId}`
@@ -24,7 +38,7 @@ function deriveEventId({ messageId, chatKey, timestamp }) {
  * @param {string|number} [input.messageId] 网关消息 ID（poke 等无消息形态可缺省）
  * @param {string} input.chatKey ChatKey（private:<id> / group:<id>）
  * @param {{userId: string|number, nickname?: string, card?: string}} input.sender
- * @param {number} input.timestamp 毫秒时间戳
+ * @param {number} input.timestamp 毫秒时间戳（必须为有限正数，缺失/为 0 直接拒绝）
  * @param {'realtime'|'backfill'} input.source 来源
  * @param {Array<{type: string, data: object}>} input.segments 结构化消息段
  * @returns {Readonly<object>} 深冻结的 NormalizedInbound
@@ -45,13 +59,20 @@ export function createNormalizedInbound(input) {
       if (!seg || typeof seg !== 'object' || Array.isArray(seg)) {
         throw new TypeError('segments 每项必须是 {type, data} 对象')
       }
-      return Object.freeze({ type: String(seg.type ?? ''), data: Object.freeze({ ...(seg.data ?? {}) }) })
+      return Object.freeze({ type: String(seg.type ?? ''), data: freezeDeep(seg.data ?? {}) })
     }),
   )
 
   const normalizedSender = sender && typeof sender === 'object'
-    ? Object.freeze({ userId: String(sender.userId ?? ''), ...(sender.nickname !== undefined ? { nickname: String(sender.nickname) } : {}), ...(sender.card !== undefined ? { card: String(sender.card) } : {}) })
+    ? Object.freeze({ userId: String(sender.userId ?? ''), ...(sender.nickname !== undefined ? { nickname: String(sender.nickname) } : {}), ...(sender.card !== undefined ? { card: String(sender.card) } : {}), ...(typeof sender.role === 'string' ? { role: sender.role } : {}) })
     : undefined
+
+  // timestamp 必须为有限正数：null/undefined/'' 经 Number() 会静默变 0，这里 fail-closed 直接拒。
+  // （适配层 legacy-inbound 已负责缺失时回退 Date.now()，工厂保持严格。）
+  const ts = Number(timestamp)
+  if (!Number.isFinite(ts) || ts <= 0) {
+    throw new TypeError('timestamp 必须是有限正数毫秒时间戳（不得静默成 0）')
+  }
 
   const outbound = Object.freeze({
     contractVersion: CONTRACT_VERSION,
@@ -59,7 +80,7 @@ export function createNormalizedInbound(input) {
     ...(messageId != null && messageId !== '' ? { messageId: String(messageId) } : {}),
     chatKey: String(chatKey ?? ''),
     sender: normalizedSender,
-    timestamp: Number(timestamp),
+    timestamp: ts,
     source: String(source ?? ''),
     segments: normalizedSegments,
   })
