@@ -31,17 +31,25 @@ test('样本不足（<10 行）不统计；候选带原句采样', () => {
   assert.ok(cands[0].samples[0].length <= 30)
 })
 
-test('接线：consolidate 挂了 learnGroupSlang，开关 memory.slang 默认关', () => {
+test('接线：学习已迁独立模块 slang（自带日程+按群隔离），开关 memory.slang 默认关', () => {
+  const mod = readFileSync(new URL('../src/modules/slang/index.js', import.meta.url), 'utf8')
+  assert.match(mod, /cfg\.memory\?\.slang === true/, '默认关（面板开关打开才学）')
+  assert.match(mod, /api\.every\(60_000/, '模块自己挂每日日程')
+  assert.match(mod, /learnDay\(runDay\)/, '学习入口在模块日程里')
+  assert.match(mod, /失败.*不记 learned|不记 learned/, '失败不记冷却（诚实标记）')
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
-  assert.match(mem, /await learnGroupSlang\(day\)/)
-  assert.match(mem, /cfg\.memory\?\.slang !== true\) return/, '默认关')
+  assert.ok(!mem.includes('learnGroupSlang'), 'memory.js 旧实现已移交')
+  const idx = readFileSync(new URL('../src/modules/index.js', import.meta.url), 'utf8')
+  assert.match(idx, /import slang from '\.\/slang\/index\.js'/, 'BUILTINS 已注册')
   const cfg = readFileSync(new URL('../src/core/config.js', import.meta.url), 'utf8')
   assert.match(cfg, /c\.memory\.slang = bool\(c\.memory\.slang, false\)/)
 })
 
-test('提炼结果写进独立黑话本（1.3.58 起不再挤 insights）', () => {
+test('提炼结果写进模块命名空间存储（1.3.58 起不挤 insights；模块化后不进 memory.json）', () => {
+  const mod = readFileSync(new URL('../src/modules/slang/index.js', import.meta.url), 'utf8')
+  assert.match(mod, /api\.dataDir\('book\.json'\)/, '模块命名空间存储')
+  assert.match(mod, /putBook\(gid, items\)/, '写进独立黑话本')
+  assert.match(mod, /markLearned\(day, gid\)/, '提炼过要记账，重启不重复花调用')
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
-  assert.match(mem, /putSlang\(key\.slice\(6\), items\)/, '写进独立存储')
-  assert.match(mem, /slangLearned/, '提炼过要记账，重启不重复花调用')
-  assert.ok(!mem.includes("setInsights(key, merged, '黑话本')"), '不再和相处经验共用槽位')
+  assert.ok(!mem.includes("setInsights(key, merged, '黑话本')"), '不和相处经验共用槽位')
 })
