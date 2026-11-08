@@ -39,7 +39,10 @@ import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { BUILTINS } from './modules/index.js'
 // RFC-0001 Phase 0（US-003）：遗留核心终端化 + FLAG_USE_PIPELINE 熔断开关
-import { isPipelineEnabled, unwrapPipelineError } from './kernel/legacy-fallback.js'
+import { isPipelineEnabled, unwrapPipelineError, isModularCoreEnabled } from './kernel/legacy-fallback.js'
+import { createSharedOutbox } from './host/shared-outbox.js'
+import { createHubEgress } from './host/hub-egress.js'
+import { dataDir } from './core/store.js'
 import { isEgressShadowEnabled } from './kernel/ctx-store.js'
 // RFC-0001 Phase 1（US-007）：出口切换——pipeline 开启时 hub 的发送全部收口 ctx.reply → Dispatcher
 import { createEgressOnebot, createEgressSendHook } from './kernel/mw-egress-cutover.js'
@@ -202,10 +205,22 @@ export function apply(ctx) {
       : baseContextProvider,
   ]
 
+  // ---------- PR-1（ADR-0002）：Outbox 收口接线（FLAG_MODULAR_CORE=true 开；默认关=零改动） ----------
+  // 与洋葱 pipeline（FLAG_USE_PIPELINE）互斥：pipeline 开时其 egress 已做吞包入队，双收口冲突——
+  // 以 pipeline 优先，本接线跳过（组合语义后续如需统一再议，注释即边界）。
+  const useModularCore = isModularCoreEnabled(process.env)
+  const egressRef = { current: null }
+  if (useModularCore && !usePipeline) {
+    const sharedOutbox = createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json') })
+    egressRef.current = createHubEgress({ outbox: sharedOutbox, log: logger.child('egress') })
+    log.info('PR-1 Outbox 收口：全仓主动发送接入统一出口（消息/文件/戳一戳/模块直调/说说；台账+试运行+泄露闸对全部出口生效）')
+  }
+
   hub = createHub({
     localApi: local,
     dsh: ctx,
     getConfig,
+    egressRef,
     log: logger.child('chat'),
     onebot: hubOnebot,
     stickers,

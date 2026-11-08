@@ -71,7 +71,12 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
       const latest = getConfig()
       audience = resolveAudience(latest, visibility)
       if (!latest.enabled || latest.dryRun) return { ok: false, message: '发布前开关已变化，本次未发布。' }
-      const r = await onebot.call('send_qzone_msg', { content: text, ugc_right: audience.ugc_right, ...(audience.target_uins ? { target_uins: audience.target_uins } : {}), ...(imgs.length ? { images: imgs } : {}) }, { timeoutMs: 60000 })
+      const qParams = { content: text, ugc_right: audience.ugc_right, ...(audience.target_uins ? { target_uins: audience.target_uins } : {}), ...(imgs.length ? { images: imgs } : {}) }
+      // PR-1（ADR-0002）：开旗态说说转进统一 Outbox（bot 自身会话域；泄露闸扫正文——比 legacy 多一道）
+      const r = hub?.deliverRaw
+        ? await hub.deliverRaw({ action: 'send_qzone_msg', params: qParams, opts: { timeoutMs: 60000 }, chatKey: `private:${String(latest.botQQ || '')}`, receipt: 'optional', note: `说说（${audience.label}）`, sourceModuleId: 'qzone' })
+        : await onebot.call('send_qzone_msg', qParams, { timeoutMs: 60000 })
+      if (r === null) return { ok: false, message: '发布被出站闸拦下（试运行/开关/泄露闸），台账已记。' }
       const tid = String(r?.tid ?? r?.id ?? r ?? '')
       log.info(`发了一条说说（${audience.label}，tid ${tid || '?'}）`)
       return { ok: true, tid, visibility: audience.visibility, label: audience.label, target_uins: audience.target_uins || [] }
