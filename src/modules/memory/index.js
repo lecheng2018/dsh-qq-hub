@@ -19,7 +19,8 @@ export default {
     const { hub, http } = api.core
     const refreshCard = (gid) => {
       const entries = styleEntries((memory.distillList() || []).filter((t) => String(t.gid) === String(gid)))
-      const r = refreshDistillCard({ gid, entries, cfg: api.config(), log: api.log })
+      const growth = memory.distillGrowthList ? memory.distillGrowthList(gid) : []
+      const r = refreshDistillCard({ gid, entries, growth, cfg: api.config(), log: api.log })
       if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
       return r
     }
@@ -40,6 +41,8 @@ export default {
       try {
         if (!a || a.kind !== 'in' || !a.text) return
         memory.reportMiss(a.chatId, a.text)
+        // 蒸馏流水线：目标对象在群里说话就计数，攒够一批触发后台 L1（异步，不阻塞消息链路）
+        if (a.chatId && a.userId) memory.noteGroupMessage?.(a.chatId, a.userId)
       } catch (error) {}
     })
 

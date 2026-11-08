@@ -526,6 +526,12 @@ export function normalize(raw) {
   if (!c.memory.consolidateTimes.length) c.memory.consolidateTimes = ['04:00', '16:00']
   c.memory.slang = bool(c.memory.slang, false) // 群黑话本：每日提炼群里的黑话/梗（默认关，面板开）
   c.memory.distill = bool(c.memory.distill, true) // 蒸馏群友：学指定某个人的说话样子（有目标才跑，默认开）
+  // 蒸馏流水线（L1 增量批 → L2 场景聚合 → L3 人格增长段）：有目标才跑；distillModel 留空跟随主模型
+  c.memory.distillPipeline = bool(c.memory.distillPipeline, true)
+  c.memory.distillBatch = Math.round(num(c.memory.distillBatch, 10, 5, 50))
+  if (!isObj(c.memory.distillModel)) c.memory.distillModel = { provider: '', model: '' }
+  c.memory.distillModel.provider = String(c.memory.distillModel.provider || '').trim()
+  c.memory.distillModel.model = String(c.memory.distillModel.model || '').trim()
   c.memory.recallCount = num(c.memory.recallCount, 6, 0, 20)
   // 聊天流水滚动保留（1.3.49 #5）：每天一个 JSONL，超期自动清理；14 天下限（整理和压缩都还要翻它）
   if (!isObj(c.chatlog)) c.chatlog = {}
