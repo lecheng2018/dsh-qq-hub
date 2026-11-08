@@ -115,27 +115,8 @@ export default {
       return memory.reassignOwner(b.from, b.to)
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
-    // 群黑话本（1.3.58）：独立于相处经验的存储与面板
-    api.route('/slang', async () => {
-      const groups = memory.slang ? memory.slang() : []
-      // 带上群名（群名缓存没有的退回群号），前端选择器直接显示可读名字
-      const named = await Promise.all(groups.map(async (g) => {
-        let name = ''
-        try { name = await hub.groupName(g.gid) } catch {}
-        return { ...g, name: name && name !== g.gid ? name : '' }
-      }))
-      // 白名单里的群也要列出（还没学到词的群可以手填）
-      const allow = (api.config().allow && api.config().allow.groups) || []
-      const known = new Set(named.map((g) => String(g.gid)))
-      for (const gid of allow.map(String)) {
-        if (!known.has(gid)) {
-          let name = ''
-          try { name = await hub.groupName(gid) } catch {}
-          named.push({ gid, name: name && name !== gid ? name : '', list: [] })
-        }
-      }
-      return { ok: true, groups: named }
-    })
+    // 群黑话本路由（/slang、/slang/save、/slang/delete）已迁到独立模块 src/modules/slang/
+    //（存储/学习/注入都归它；URL 不变，面板无感）。memory.slang() 只读口保留供其迁移。
     // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
     api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
     // 蒸馏→语感人设卡（1.3.65）：学成后自动刷新；也可面板手动点
@@ -167,27 +148,7 @@ export default {
       const b = await http.body(req)
       return memory.removeDistillTarget ? memory.removeDistillTarget(b.gid, b.uid) : { ok: false, message: '记忆库没在跑' }
     })
-    api.route('/slang/save', async (req) => {
-      const b = await http.body(req)
-      const gid = String(b.gid || '').trim()
-      if (!gid) return { ok: false, message: '要先说清哪个群' }
-      const list = Array.isArray(b.list) ? b.list : String(b.text || '').split('\n')
-      // 面板按「词=意思」一行一条编辑
-      const items = list.map((x) => {
-        if (x && typeof x === 'object') return { word: x.word, meaning: x.meaning }
-        const t = String(x || '').trim()
-        const m = t.match(/^(.+?)[=＝:：](.+)$/)
-        return m ? { word: m[1].trim(), meaning: m[2].trim() } : null
-      }).filter(Boolean)
-      const saved = memory.putSlang(gid, items)
-      return { ok: true, message: '黑话本已保存（' + saved.length + ' 条）', list: saved }
-    })
-    api.route('/slang/delete', async (req) => {
-      const b = await http.body(req)
-      const gid = String(b.gid || '').trim()
-      const ok = memory.removeSlang ? memory.removeSlang(gid, b.id) : false
-      return { ok, message: ok ? '删掉了' : '没找到这条' }
-    })
+    // /slang/save、/slang/delete 路由已迁到独立模块 src/modules/slang/（URL 不变）
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
     api.route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
