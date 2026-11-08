@@ -34,7 +34,7 @@ import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
 import { defaultModel, askModel } from './core/llm.js'
 import { parseCommand, runCommand, createMutes } from './chat/commands.js'
-import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas } from './persona/personas.js'
+import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas, personaIdFor } from './persona/personas.js'
 import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
@@ -52,6 +52,7 @@ import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { assemblePipeline } from './host/pipeline.js'
 import { createModularCore } from './host/modular-core.js'
+import { createModuleSendBridge } from './host/module-send-bridge.js'
 import { createHostEffects } from './host/effects.js'
 import { createPanelOverview } from './host/panel/overview.js'
 import { registerConfigRoutes } from './host/panel/routes-config.js'
@@ -290,6 +291,20 @@ export function apply(ctx) {
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
         sessionStoreFile: dataDir('modular-sessions.json'),
+        // 真机审计补齐：群闸的心情调制/话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
+        moodEffects: () => (use('mood')?.effects?.() ?? null),
+        memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
+        isMuted: (chatId) => mutes.muted(chatId),
+        interceptInteraction: (m) => { try { return !!hub.interceptInteraction?.(m) } catch { return false } },
+        personaTextFor: (chat) => {
+          try {
+            const c = getConfig()
+            const want = personaIdFor(chat, c)
+            if (!want || want === String(c.persona?.current || '')) return null // 跟随全局
+            const p = readPersona(want)
+            return p?.body ? rewrite('persona', p.body) : null
+          } catch { return null }
+        },
       })
     : null
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
@@ -342,6 +357,8 @@ export function apply(ctx) {
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }
+  // 真机审计 §2：开旗态把模块侧文本发送并入新核心 outbox 唯一出口（台账/dryRun/泄露闸从此对模块生效）
+  if (modularCoreApi) core.hub = createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站') })
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overviewApi.overview() })
   core.bridge = bridge

@@ -50,4 +50,24 @@
 
 - #9 断言需在有 SnowLuma 可控重启的环境补测。
 - `<voice>/<sticker>/<image>/<reply:n>` 富媒体出站标记仍未接（R4）；模型无视觉能力时的图片退让探测未做（当前面板配的是 vision 模型）。
-- 模块上下文投喂在部分宿主拿不到 `contexts` 服务（如实 warn 跳过，人格不受影响）。
+- ~~模块上下文投喂在部分宿主拿不到 `contexts` 服务~~ —— 已被第四轮审计证伪并修复：真 seam 是 `agent.ctx.systemPrompt.context`（见下表 1.1）。
+
+## 第四轮：空转与缺口审计（2026-11-08 22:20 报告）→ 源码落地对照
+
+| 审计项 | 状态 | 落地方式 |
+|---|---|---|
+| §1 群回复策略缺失 | ✅ | 复用 legacy 纯函数（createGroupState/policyFor/decideGroupReply/topicRelevance），顺序=先 activity 计数后回复闸；离线+真机 22:07 双证 |
+| 1.1 模块上下文投喂（双层 bug） | ✅ | 第一层：seam 改回 legacy 同款 `agent.ctx.systemPrompt.context`（hub.js:546），agent 级注册一次、闭包每轮读最新；第二层：legacy-context adapter 改传 `{chat, sessionId}`（provider 解构 chat.kind，此前传 chatId → provider 全员抛错被吞） |
+| 1.2 按聊天人设分流 | ✅ | `personaTextFor`（personaIdFor+readPersona+rewrite）经 `systemPrompt.variable` agent 作用域遮蔽（hub.js:529 同款）；蒸馏语感群卡从此生效。persona 变更即换会话未复刻（挂账） |
+| 1.3 群聊上下文拼接 | ✅ | groupPromptLight：未投喂20+已投喂8、发言人标记、主人不落号码、相对时间、mode hint；引用/编号指令文案随 1.5/R4 配套再补 |
+| 1.4 语音转写 | ⏸ | 需抽取 hub 转写管线，独立轮 |
+| 1.5 引用解析 | ⏸ | quotedInfo/quoteCache 在 hub 内部；群闸 repliedToBot 暂 false（不猜） |
+| 1.6 偷表情 | ⏸ | collectMode 三分支在 hub 内部 |
+| 1.7 出站装饰+心情调制 | ◐ | 群闸 interjectChance 已乘 mood().chatty；语音/表情概率装饰未接 |
+| 1.8 maxChars | ✅ 澄清 | parseReply(replyRules) 内部 segmentBubbles 已按 maxChars 封顶（审计该项为误报）；m5-parity 已钉住行为 |
+| 1.9 旁路指令三件 | ✅ 审批/提问 | hub 新增 `interceptInteraction`，新核心入口消费；hooks.message 模块接管未接（挂账） |
+| 1.10 总开关/静音不拦执行 | ✅ | dispatch 入口 enabled→disabled、isMuted→muted，不跑回合不烧 token；出站动态闸保留兜底 |
+| 1.11 统计/recentMedia | ⏸ | bump/received 与「刚才那张」素材在 hub 内部 |
+| §2 模块发送绕开唯一出口 | ✅ 文本 | `createModuleSendBridge`：开旗态 sendText/reply/纯文本 sendSegments 并入 outbox（台账/dryRun/泄露闸生效）；媒体管线透传 legacy、purpose/companion 双会话问题未解（均挂账） |
+
+回归：`test/m5-parity.test.js` 8 例（群闸/群上下文/静音/旁路/双层 context/人设/发送桥/maxChars）+ m4/m3 三例改钉新现实（入口 enabled 语义、身份闸配 @ 场景、adapter chat 形状）。
