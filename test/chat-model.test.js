@@ -90,7 +90,10 @@ const OWNER = '10000001'
 const BOT = '20000002'
 const FRIEND = '30000003'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function until(fn, ms = 10000) {
+async function until(fn, ms = 30000) {
+  // 30s 等待窗口：全量并行（142 文件同跑）时本文件是起真 host + mock 网关的重用例，
+  // 10s 窗口在高负载机器上会「等不到条件成立」（M0-2 分类：负载敏感的等待预算，
+  // 不是断言放宽——条件最终必须成立这一要求不变）。
   const t = Date.now()
   while (Date.now() - t < ms) {
     const v = await fn()
@@ -131,7 +134,7 @@ before(async () => {
   const host = await import('../src/host.js')
   api = host.apply(fake.ctx)
   await api.ready
-  await fake.call('/onebot/reconnect')
+  await fake.call('/onebot/reconnect', {}) // P1 §4.9：副作用路径改为 POST（旧断言用 GET，属固化漏洞）
   await until(() => mock.connected() > 0)
   assert.equal((await fake.call('/models')).json().list.length, 5, '先让插件记下 DSH 里有哪些模型')
 })
