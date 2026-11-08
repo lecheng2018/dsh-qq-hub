@@ -25,6 +25,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { loadConfig, saveConfig } from './core/config.js'
+import { dataDir } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
@@ -286,6 +287,9 @@ export function apply(ctx) {
         log,
         personaText: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
         runCommand: async (cmd, msg) => runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] }),
+        // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
+        ledgerFile: dataDir('deliveries.json'),
+        sessionStoreFile: dataDir('modular-sessions.json'),
       })
     : null
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
@@ -297,7 +301,8 @@ export function apply(ctx) {
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
-      // M1-A：模块前缀路由与精确路由同一道防护（Host 白名单 + 改写请求同源校验）
+      // M1-A / P1 §4.9：模块前缀路由与精确路由同一道防护（Host 白名单 + 带 Origin 不分方法同源校验
+      // + 副作用路径 GET 405；模块路径不在副作用表内，靠 Origin 收紧这层挡跨站触发）
       const g = guard.check(req)
       if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''

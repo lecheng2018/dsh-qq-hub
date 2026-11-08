@@ -45,6 +45,19 @@ test('plan：API 不兼容跳过（超出版本），不合法定义 failed', ()
   assert.equal(plan.health.broken.state, 'failed')
 })
 
+test('plan：重复模块 ID——只有每 id 首现进 load，后现记 skipped（保住先装者的清理句柄）', () => {
+  const first = def({ id: 'dup', name: 'first' })
+  const second = def({ id: 'dup', name: 'second' })
+  const plan = planModules({
+    defs: [first, second, def({ id: 'other' })],
+    enabledOf: () => true,
+    runtime: { gui: true, apiVersion: API_VERSION },
+  })
+  assert.deepEqual(plan.load.map((d) => d.name), ['first', 'A'], 'load 只含重复 id 的首现者')
+  assert.deepEqual(plan.skipped, [{ id: 'dup', reason: '重复模块 ID，保留先出现者' }])
+  assert.equal(plan.health.dup.state, 'enabled', '健康登记如实反映在跑的实例（不被重复者抹成 disabled）')
+})
+
 test('plan：requires 缺依赖跳过；依赖被同批模块满足则通过', () => {
   const okPlan = planModules({
     defs: [def({ id: 'provider', provides: ['voice-engine'] }), def({ id: 'consumer', requires: ['voice-engine'] })],

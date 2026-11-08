@@ -5,7 +5,9 @@ on:
   push:
     branches:
       - main
-      - refactor/modular-core
+      # R1 门禁（报告 §6/§7.7）：覆盖所有重构工作分支，避免直接推送不触发 CI
+      - 'refactor/**'
+      - 'backup/**'
 
 permissions:
   contents: read

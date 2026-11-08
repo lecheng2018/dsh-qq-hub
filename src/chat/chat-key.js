@@ -53,7 +53,9 @@ export function isGroup(chatKey) {
  */
 export function chatKeyFromEvent(ev) {
   if (!ev || typeof ev !== 'object') return ''
-  if (ev.message_type === 'group' && ev.group_id != null) {
+  if (ev.message_type === 'group') {
+    // 群事件缺 group_id：fail-closed 返回 ''，绝不掉进私聊分支用 user_id 猜出 private 键
+    if (ev.group_id == null) return ''
     try { return createChatKey('group', ev.group_id) } catch { return '' }
   }
   const uid = ev.user_id ?? ev.sender?.user_id

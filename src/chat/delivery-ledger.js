@@ -65,7 +65,12 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
     }
   }
 
-  function persist() {
+  /**
+   * 落盘。critical=true（queued/sending 关键迁移）时失败必须 **fail-closed**：
+   * 抛错让调用方中止——没有台账凭据就不许发生物理副作用。
+   * 非关键（终态）写入失败只报告：副作用已发生，回滚状态反而是谎。
+   */
+  function persist({ critical = false } = {}) {
     if (!file) return
     try {
       writeJsonAtomic(file, {
@@ -78,6 +83,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
       })
     } catch (error) {
       onError(error)
+      if (critical) throw new Error(`台账落盘失败（fail-closed）：${error?.message || error}`, { cause: error })
     }
   }
 
@@ -104,7 +110,13 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
     }
     assertDelivery({ ...record, segments: record.segments.map((s) => ({ type: s.type, data: s.data })) })
     records.set(record.deliveryId, record)
-    persist()
+    // queued 是关键落盘：失败回滚并抛出（fail-closed，调用方中止发送）
+    try {
+      persist({ critical: true })
+    } catch (error) {
+      records.delete(record.deliveryId)
+      throw error
+    }
     return { ...record }
   }
 
@@ -122,8 +134,10 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
         throw new TypeError('sent 必须带网关真实 messageId（不冒充回执）')
       }
     }
+    const prevState = rec.state
     rec.state = state
-    rec.attemptCount++
+    // attemptCount 只统计真实物理发送尝试：进入 sending 一次 = 尝试一次（不是状态迁移次数）
+    if (state === 'sending') rec.attemptCount++
     if (gatewayMessageId !== undefined && gatewayMessageId !== '') {
       rec.gatewayMessageId = String(gatewayMessageId) // 失败但网关曾回执（如 unknown 后对账）也如实记
     }
@@ -132,7 +146,14 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
       rec.unknownReason = String(reason || '未知原因')
     }
     if (state === 'failed') rec.failReason = String(reason || '')
-    persist()
+    // sending 是关键落盘（物理发送前的凭据）：失败回滚状态并抛出，outbox 据此不发起发送
+    try {
+      persist({ critical: state === 'sending' })
+    } catch (error) {
+      rec.state = prevState
+      if (state === 'sending') rec.attemptCount--
+      throw error
+    }
     return { ...rec }
   }
 

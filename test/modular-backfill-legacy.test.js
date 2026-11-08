@@ -128,7 +128,7 @@ const privateHistory = () => [
   { message_id: 105, time: (NOW - 10 * 3600_000) / 1000, user_id: 100, message: [{ type: 'text', data: { text: '十小时前的话' } }] },
 ]
 
-function makeGateway() {
+function makeGateway(hubOverride) {
   hubCalls.length = 0
   sentTexts.length = 0
   realtimeDispatched.length = 0
@@ -149,10 +149,10 @@ function makeGateway() {
     endpoint: () => ({ httpUrl, wsUrl: '', httpToken: '', wsToken: '' }),
     logger: { child: () => ({ info() {}, warn() {}, debug() {}, error() {} }) },
     log: { info() {}, warn() {}, debug() {}, error() {} },
-    getHub: () => ({
+    getHub: () => hubOverride || {
       onMessage: async (event, opts) => { hubCalls.push({ event, opts }) },
       sendText: async (chatId, text) => { sentTexts.push({ chatId, text }) },
-    }),
+    },
     getMods: () => null,
     getDangerGuard: () => null,
     dispatch: (ev, kind) => { realtimeDispatched.push({ ev, kind }) },
@@ -208,6 +208,28 @@ test('接线：断线期间实时消息与历史补收竞争——实时先处�
   assert.equal(realtimeDispatched.length, 1, '实时路径照常派发')
   await new Promise((r) => setTimeout(r, 300))
   assert.deepEqual(hubCalls.map((x) => x.event.message_id), [], '补收侧看到同 id 必须跳过（不二次执行）')
+})
+
+test('接线：竞争——补收投递在飞（await 挂起）期间同 ID 实时事件到达，只处理一次', async () => {
+  historyFor = privateHistory
+  // 假 hub：onMessage 挂起直到手动放行，模拟「投递在飞、循环让出」
+  let release
+  const hang = new Promise((r) => { release = r })
+  const hub = {
+    onMessage: async (event, opts) => { hubCalls.push({ event, opts }); await hang },
+    sendText: async (chatId, text) => { sentTexts.push({ chatId, text }) },
+  }
+  const { gw } = makeGateway(hub)
+  // 用另一条消息（200）触发断档 → 补收开始，101 从历史里被投出并挂起在 onMessage
+  gw.handleEvent({ post_type: 'message', message_type: 'private', user_id: 100, message_id: 200, self_id: 555, time: NOW / 1000, message: [{ type: 'text', data: { text: 'ping' } }] })
+  for (let i = 0; i < 100 && !hubCalls.some((x) => x.event.message_id === 101); i++) await new Promise((r) => setTimeout(r, 20))
+  assert.ok(hubCalls.some((x) => x.event.message_id === 101), '补收 101 投递在飞（await 未返回）')
+  // 同 ID 101 实时事件此刻到达：dispatch 前复查 seen，不得二次进处理链
+  gw.handleEvent({ post_type: 'message', message_type: 'private', user_id: 100, message_id: 101, self_id: 555, time: NOW / 1000, message: [{ type: 'text', data: { text: '断线前的普通消息' } }] })
+  assert.equal(realtimeDispatched.filter((x) => x.ev.message_id === 101).length, 0, '实时侧 seen 命中，跳过派发')
+  release()
+  await new Promise((r) => setTimeout(r, 300))
+  assert.equal(hubCalls.filter((x) => x.event.message_id === 101).length, 1, '101 全链只被处理一次')
 })
 
 test('接线：过旧消息不主动唤醒（backfill.js 安全承诺 #3 的接线锁定）', async () => {

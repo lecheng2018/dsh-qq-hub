@@ -66,6 +66,10 @@ export function addMember(turn, inbound) {
 /** running 态的转向成员（onSteer 专用；去重同 addMember）。 */
 export function addSteerMember(turn, inbound) {
   if (turn.state !== 'running') throw new TypeError(`running 态才能收转向成员（当前 ${turn.state}）`)
+  // ChatKey 不变量（报告 §4.7）：转向成员必须与回合同聊天域，第三道闸（steer/deliverSteer 之外）。
+  if (String(inbound?.chatKey ?? '') !== String(turn.chatKey ?? '')) {
+    throw new TypeError(`转向成员 ChatKey 与回合不一致：${inbound?.chatKey} ≠ ${turn.chatKey}`)
+  }
   const id = String(inbound.eventId)
   if (turn.memberEventIds.includes(id)) return false
   turn.memberEventIds.push(id)
