@@ -254,6 +254,8 @@ function makeHarness() {
   let authorizeFn = null
   const fakeDsh = {
     services: { sessionController: { async create() { return { sessionId: `s-${++serial}` } }, async resolveAgent() { return { error: { code: 'session/not-found' } } } } },
+    // 真机 cordis 契约：sessionController 经 ctx.get 取（适配器不再直读 .services）
+    get(name) { return this.services?.[name] ?? null },
   }
   const dshAdapter = createDshSessionAdapter({ dsh: fakeDsh, presetOf: () => ({ agentPreset: 'preset' }) })
   const registry = createSessionRegistry({ createSession: dshAdapter.createSession })
