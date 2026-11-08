@@ -4,6 +4,9 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { isModularCoreEnabled } from '../src/kernel/legacy-fallback.js'
 import { createModularCore } from '../src/host/modular-core.js'
@@ -31,9 +34,10 @@ test('flag 解析：FLAG_MODULAR_CORE 缺省关、true/1 开、乱值关（与�
 })
 
 /** 标准夹具：fake DSH + mock OneBot + 新核心（注入 brain 可控回复）。 */
-async function fixture({ brain = async () => '好呀', cfgOver = {} } = {}) {
+async function fixture({ brain = async () => '好呀', cfgOver = {}, admitImages = true } = {}) {
   const mock = await startMockOneBot({ selfId: '20000002' })
-  const dsh = createFakeDsh({ brain })
+  const dsh = createFakeDsh({ brain, admitImages })
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'm4-ws-')) // 真机缺陷 5：建会话要带工作区；隔离到临时目录
   const cfg = {
     enabled: true,
     dryRun: false,
@@ -42,8 +46,9 @@ async function fixture({ brain = async () => '好呀', cfgOver = {} } = {}) {
     ownerName: '主人',
     allow: { private: ['10000001', '30003'], groups: ['777'] },
     longTasks: false,
-    merge: { waitSec: 0.05, maxSec: 0.2, groupWaitSec: 0.05, groupMaxSec: 0.2 },
+    merge: { waitSec: 0.05, maxSec: 0.2, groupWaitSec: 0.05, groupMaxMs: 0.2, groupMaxSec: 0.2 },
     snowluma: { autoStart: false, autoAttach: false },
+    workspaceDir,
     ...cfgOver,
   }
   const onebot = createOneBotClient({
@@ -59,7 +64,7 @@ async function fixture({ brain = async () => '好呀', cfgOver = {} } = {}) {
     logger: noopLog,
     log: noopLog,
   })
-  return { core, dsh, mock, cfg, onebot }
+  return { core, dsh, mock, cfg, onebot, workspaceDir }
 }
 
 const msgEv = (over = {}) => ({
@@ -314,8 +319,16 @@ function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
   const listeners = new Set()
   const session = { id: 'sess-raw' }
   let turnNo = 0
+  const rawWorkspaces = [{ id: 'ws-raw', path: 'raw-ws' }]
+  const contextsMap = new Map()
   const agent = {
-    ctx: { contexts: new Map() },
+    id: session.id,
+    ctx: {
+      get(name) {
+        if (name === 'contexts') return { set: (k, v) => contextsMap.set(k, v), get: (k) => contextsMap.get(k) }
+        return null
+      },
+    },
     followup(msg) {
       const n = ++turnNo
       if (rejectTurn === n) return Promise.reject(new Error('brain boom'))
@@ -324,11 +337,17 @@ function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
       return Promise.resolve()
     },
   }
+  const ctrl = { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) }
   const ctx = {
     on(name, fn) { if (name !== 'session/event') return () => {}; listeners.add(fn); return () => listeners.delete(fn) },
-    services: { sessionController: { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) } },
+    // 真机 cordis 契约：服务一律走 ctx.get（真机缺陷 3——.services 直接点会抛）
+    get(name) {
+      if (name === 'sessionController') return ctrl
+      if (name === 'workspaceRegistry') return { list: () => rawWorkspaces, create: async () => rawWorkspaces[0] }
+      return null
+    },
   }
-  return { ctx, listeners }
+  return { ctx, listeners, contextsMap }
 }
 
 function rawCore(dshRaw, cfgOver = {}) {
@@ -412,7 +431,7 @@ test('总开关 enabled=false：回合仍执行但出站被动态闸拦下（can
     cfg.enabled = false
     await core.dispatchLegacyEvent(msgEv())
     await waitSettled(core, 400)
-    assert.equal(dsh.turns.length, 1, '入站/回合不受总开关影响（与 legacy 入口语义差异按新核心：出站统一拦）')
+    assert.equal(dsh.turns.length, 1, '回合仍执行（与 legacy 入口语义差异按新核心：出站统一拦）')
     assert.equal(mock.sent('send_private_msg').length, 0, 'enabled=false 不真发')
     assert.ok((core.outbox.ledger.stats().byState.cancelled ?? 0) >= 1, '记 cancelled')
   } finally {
@@ -420,5 +439,95 @@ test('总开关 enabled=false：回合仍执行但出站被动态闸拦下（can
     await mock.close()
   }
 })
+
+// ===== 真机内测报告（1.3.65-test）缺陷 1/2/5/6/8 回归 =====
+
+test('真机缺陷 1：followup 消息完整形状 {id, role, content, source.kind}（缺 source 整轮 8ms 即 error）', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    const t = dsh.turns[0]
+    assert.equal(t.messageSource?.kind, 'qq-hub', 'source.kind 必须存在（DSH isOwned 判定字段）')
+    assert.equal(t.msgRole, 'user')
+    assert.equal(typeof t.msgId, 'string')
+    assert.ok(t.msgId.length >= 8, 'id 为真实 uuid（legacy hub.js:1902 同款契约）')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 2：图片附件登记成功 → content 出现 image 块且回合正常', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1)
+    assert.ok(dsh.turns[0].contentTypes.includes('image'), 'fake 附件服务登记成功后 image 块保留')
+    assert.equal(mock.sent('send_private_msg').length, 1, '回合正常出话')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 2：登记失败 → 图片降级为文字说明，裸 image 块绝不进会话（毒化历史防线）', async () => {
+  const { core, dsh, mock } = await fixture({ admitImages: false, brain: async ({ text }) => text.includes('没能把它登记成附件') ? '你描述一下图吧' : '嗯' })
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await waitSettled(core, 400)
+    assert.equal(dsh.turns.length, 1)
+    assert.equal(dsh.turns[0].contentTypes.includes('image'), false, '裸图片块不得进会话历史（每一轮都会因它而炸）')
+    assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它登记成附件/, '原文保留 + 如实降级说明')
+    assert.equal(mock.sent('send_private_msg').length, 1, '降级后回合不崩，仍能出话')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 5：建会话带 workspaceId（不留 defaultCwd 裸奔）', async () => {
+  const { core, dsh, mock, workspaceDir } = await fixture()
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    assert.ok(dsh.workspaces.some((w) => w.path === workspaceDir), '工作区按配置目录 find-or-create')
+    assert.equal(dsh.workspaces.find((w) => w.path === workspaceDir).sessionIds.length, 1, '会话建在该工作区内')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 6：||| 分条按序多条投递；[沉默] 整轮不发', async () => {
+  const { core, dsh, mock } = await fixture({ brain: async () => '第一点|||第二点' })
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    const sends = mock.sent('send_private_msg').map((s) => JSON.stringify(s.params.message))
+    assert.equal(sends.length, 2, '两个气泡 = 两次投递')
+    assert.match(sends[0], /第一点/)
+    assert.match(sends[1], /第二点/, '顺序保持（FIFO）')
+    assert.equal(sends.join('').includes('|||'), false, '字面 ||| 不外发')
+  } finally { await core.dispose(); await mock.close() }
+
+  const f2 = await fixture({ brain: async () => '[沉默]' })
+  try {
+    await f2.core.dispatchLegacyEvent(msgEv())
+    await waitSettled(f2.core, 400)
+    assert.equal(f2.dsh.turns.length, 1, '回合跑了')
+    assert.equal(f2.mock.sent('send_private_msg').length, 0, '[沉默] 不说话')
+  } finally { await f2.core.dispose(); await f2.mock.close() }
+})
+
+test('真机缺陷 8：面板模型配置每轮跟随（selectForNextRequest，只改本会话不动全局）', async () => {
+  const { core, dsh, mock } = await fixture({ cfgOver: { model: { provider: 'mini', model: 'MiniMax-M3.1-Flash' } } })
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await waitSettled(core, 400)
+    assert.ok(dsh.modelSelections.some((s) => s.provider === 'mini' && s.model === 'MiniMax-M3.1-Flash'), '会话模型切到面板配置')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机附带：cancelled 台账留原因（cancelReason，审计断言闭环）', async () => {
+  const { core, mock, cfg } = await fixture()
+  try {
+    cfg.dryRun = true
+    const r = await core.outbox.request({ chatKey: 'private:10000001', segments: [{ type: 'text', data: { text: '试运行' } }] })
+    assert.equal(r.state, 'cancelled')
+    const rec = core.outbox.ledger.get(r.deliveryId)
+    assert.equal(rec.cancelReason, 'dryRun', '台账记原因（真机报告：cancelled 什么都不记，审计断不了言）')
+  } finally { await core.dispose(); await mock.close() }
+})
+
 
 
