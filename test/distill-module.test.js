@@ -214,5 +214,9 @@ test('memory 模块提供 memory-store 能力；蒸馏回退干净（memory.js �
   assert.match(memoryMod, /provides: \['memory-store'\]/)
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
   assert.equal((mem.match(/distillPipe|noteGroupMessage|distill-pipeline/g) || []).length, 0, '管线已从 memory.js 移交独立模块')
-  assert.equal((mem.match(/onDistillLearned && await onDistillLearned/g) || []).length, 2, 'memory 自身仍两处刷卡（历史+每日）')
+  // 日常整理的学习已迁 distill 模块自身 tick（学成 emit('distill/growth-updated') → memory 模块刷卡）；
+  // memory.js 里只剩手动「从历史学」一处直挂 onDistillLearned。
+  assert.equal((mem.match(/onDistillLearned && await onDistillLearned/g) || []).length, 1, 'memory 保留历史学习刷卡一处')
+  const dist = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
+  assert.match(dist, /emit\('distill\/growth-updated'/, '调度侧学成走事件总线刷卡')
 })

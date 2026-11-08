@@ -10,6 +10,8 @@
  * @param {(chatKey: string) => { agentPreset: string }} o.presetOf 聊天 → preset
  * @param {() => {id:string}|undefined} [o.ensureWorkspace] 返回工作区对象（真机报告 5：建会话必须带
  *   workspaceId，否则落到宿主 defaultCwd，turn/start 立刻 error）。缺失/抛错则按 defaultCwd 建会话（如实降级）。
+ * @param {(chatKey: string) => string|Promise<string>} [o.titleOf] 会话标题（真机报告 9：不命名则面板全是
+ *   「未命名」；legacy hub.js:327 建会话后立刻 rename）。可以是 async（群名要查网关）。
  */
 export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleOf }) {
   if (!dsh) throw new TypeError('dsh 必填')
@@ -19,13 +21,33 @@ export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleO
     try { return dsh?.get?.('sessionController') ?? null } catch { return null }
   }
 
-  /** 给会话起名（读 titleOf，缺省不命名）。失败静默——只是显示问题。 */
+  /** 读当前标题（经 sessionTitle 服务 fold 会话日志）。读不到返回 undefined（老宿主没这个服务）。 */
+  async function currentTitle(ctrl, sessionId) {
+    try {
+      const r = await ctrl?.resolveAgent?.(sessionId)
+      const session = r?.agent?.session
+      if (!session) return undefined
+      const svc = (() => { try { return dsh?.get?.('sessionTitle') ?? null } catch { return null } })()
+      return svc?.get?.(session)?.title
+    } catch { return undefined }
+  }
+
+  /** 已命名缓存：DSH 的 rename 同值也会落一条新 session/title 事件，重复回填会刷屏；
+   *  进程重启后内存缓存是空的，再用回读当前标题兜一层（跨重启幂等）。 */
+  const titled = new Map()
+  /** 给会话起名（titleOf 可同步可 async——群名要去网关查；缺省不命名）。失败静默，只是显示问题。 */
   async function renameSession(ctrl, sessionId, chatKey) {
     if (typeof titleOf !== 'function') return
     let title
-    try { title = String(titleOf(chatKey) || '').trim() } catch { return }
+    try { title = String(await titleOf(chatKey) || '').trim() } catch { return }
     if (!title) return
-    try { await ctrl?.rename?.({ sessionId, title }) } catch { /* 只影响显示 */ }
+    if (titled.get(sessionId) === title) return
+    const current = await currentTitle(ctrl, sessionId)
+    if (current && current === title) { titled.set(sessionId, title); return }
+    try {
+      await ctrl?.rename?.({ sessionId, title })
+      titled.set(sessionId, title)
+    } catch { /* 只影响显示 */ }
   }
 
   return {
