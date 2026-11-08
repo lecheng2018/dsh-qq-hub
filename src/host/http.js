@@ -53,8 +53,9 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), log }) {
   // 核心自己的接口登记成精确路径；模块的接口都走一个前缀路由，请求进来再查表
   // （模块随时开关、重新加载；关着的模块的接口回「模块没开」，面板不会白屏）
   // M1-A：所有面板流量（route 精确路由 + host.js 的模块前缀路由）统一过 guard：
-  // Host 白名单（DNS rebinding）+ 改写请求同源校验（CSRF），fail-closed。
-  const guard = createPanelGuard({ getConfig, log })
+  // Host 白名单（DNS rebinding）+ 同源校验（CSRF，P1 §4.9 收紧到「带 Origin 就查、不分方法」）
+  // + 副作用路径 GET 类方法 405，fail-closed。prefix 传给 guard 用于剥前缀匹配副作用路径表。
+  const guard = createPanelGuard({ getConfig, log, prefix })
   const guardedAnswer = (res, req, fn) => answer(res, () => {
     const g = guard.check(req)
     if (!g.ok) return send(res, g.code, { ok: false, message: g.message })

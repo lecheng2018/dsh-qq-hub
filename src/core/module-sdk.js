@@ -15,7 +15,7 @@ import { validateModuleContract } from './module-contract.js'
 /**
  * 生成装载计划。
  * @param {object} o
- * @param {Array<object>} o.defs 候选模块定义（按装载顺序；同 id 后者替换前者语义归 modules.js）
+ * @param {Array<object>} o.defs 候选模块定义（按装载顺序；同 id 保留先出现者，重复者记 skipped）
  * @param {(id: string) => boolean} o.enabledOf 配置开关（唯一开关权威）
  * @param {{ gui: boolean, apiVersion?: number }} o.runtime 运行环境（gui 是否可用）
  * @param {Record<string, string>} [o.prefer] 能力 → 指定实现 moduleId（显式替代实现选择）
@@ -101,6 +101,13 @@ export function planModules({ defs, enabledOf, runtime, prefer = {} }) {
     if (dupCap) {
       skipped.push({ id, reason: `能力 ${dupCap} 已有实现（替代实现冲突；可用 prefer 指定）` })
       health[id] = { state: 'disabled', reason: `替代实现冲突 ${dupCap}` }
+      continue
+    }
+
+    // 重复 ID：只保留先出现者进 load。若两个都进，modules.js 的 live.set 会用后装者
+    // 覆盖同名条目，第一份的清理句柄就此丢失（监听器/定时器泄漏）。
+    if (loadedIds.has(id)) {
+      skipped.push({ id, reason: '重复模块 ID，保留先出现者' })
       continue
     }
 

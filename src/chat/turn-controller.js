@@ -109,6 +109,8 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     const deliverSteer = (inbound) => new Promise((resolve, reject) => {
       if (disposed || liveEntry.closed) return reject(new Error('回合已结束，转向输入无效'))
       if (isTerminal(turn)) return reject(new Error('回合已结束，转向输入无效'))
+      // 双保险：ChatKey 不变量（steer 入口已查；这里兜住任何直接持有 deliverSteer 的调用方）
+      if (String(inbound?.chatKey ?? '') !== turn.chatKey) return reject(new Error(`转向输入 ChatKey 与回合不一致：${inbound?.chatKey} ≠ ${turn.chatKey}`))
       addSteerMember(turn, inbound)
       turn.steerCount++
       if (liveEntry.steerHandler) {
@@ -127,11 +129,19 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     turn._deliverSteer = deliverSteer
     const job = async () => {
       if (disposed) throw new Error('controller 已卸载（dispose 排队任务）')
+      // 排队期间已被取消：出队直接跳过执行并清理 steer 现场（旧实现照跑 execute，
+      // 忽略 signal 的执行器甚至把它落 succeeded——谎报）。
+      if (isTerminal(turn)) {
+        const l = live.get(turn.turnId)
+        if (l) {
+          l.closed = true
+          for (const s of l.pendingSteers) s.reject(new Error('回合已取消'))
+          live.delete(turn.turnId)
+        }
+        return null
+      }
       setTurnState(turn, 'running')
       runningByChat.set(turn.chatKey, turn.turnId)
-      if (turn._pendingCancel && !abort.signal.aborted) {
-        abort.abort(new Error('回合被取消（排队期间请求）'))
-      }
       try {
         const result = await execute(turn, io)
         settleRunning(turn, null, false)
@@ -212,6 +222,11 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     const turn = turns.get(turnId)
     if (!turn) throw new Error(`没有这个回合：${turnId}`)
     if (turn.state !== 'running') throw new Error(`回合不在 running 态（${turn.state}），请改走 offer`)
+    // ChatKey 不变量（报告 §4.7）：转向输入必须与回合同聊天域，否则 private 回合会被
+    // group 事件（反之亦然）污染成员/上下文。
+    if (String(inbound?.chatKey ?? '') !== turn.chatKey) {
+      throw new Error(`转向输入的 ChatKey 与回合不一致：${inbound?.chatKey} ≠ ${turn.chatKey}`)
+    }
     const deliver = turn._deliverSteer
     if (!deliver) throw new Error('回合执行现场不存在')
     await deliver(inbound)
@@ -232,10 +247,17 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
       return { honest: 'cancelled-immediately' }
     }
     if (turn.state === 'pending') {
-      // 排队未跑：scheduler 不提供按 job 取消（保 FIFO 语义），由 flush 时的 disposed/终态检查兜住；
-      // 这里标记请求，execute 侧 abort 在 flush 前先生效。
-      turn._pendingCancel = true
-      return { honest: 'cancel-requested' }
+      // 排队未跑：直接落终态（还没发生副作用，诚实可标 cancelled），follower 事件重开为新 lead。
+      // 排队 job 出队时用 isTerminal 检查跳过执行——不再照跑 execute 甚至谎报 succeeded。
+      setTurnState(turn, 'cancelled')
+      const l = live.get(turn.turnId)
+      if (l) l.closed = true
+      const followers = turn.members.slice(1)
+      for (const f of followers) {
+        if (!f) continue
+        offer(f) // 事件不丢
+      }
+      return { honest: 'cancelled-immediately' }
     }
     if (turn.state === 'running') {
       turn._abort?.abort(new Error('回合被取消'))
@@ -278,7 +300,12 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
       l.closed = true
       for (const s of l.pendingSteers) s.reject(new Error('controller 已卸载（steer 等待唤醒）'))
       const turn = turns.get(turnId)
-      if (turn && turn.state === 'running') {
+      if (turn && turn.state === 'pending') {
+        // 被 dispose 清出队列的排队回合：scheduler.dispose 会 reject 它的 job，但 job 在
+        // 到达 isTerminal 检查前就抛“已卸载”——回合记录会永久停在 pending（P2 复核）。
+        // 这里直接落终态，保证 getTurn 可查证、不留 pending。
+        try { setTurnState(turn, 'cancelled') } catch {}
+      } else if (turn && turn.state === 'running') {
         turn.cancelRequestedAt = Date.now()
         turn._abort?.abort(new Error('controller 已卸载'))
       }

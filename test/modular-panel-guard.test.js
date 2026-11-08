@@ -3,7 +3,8 @@
 // 防护位于插件层（src/host/panel/guard.js，接线于 src/host/http.js 与 host.js 模块前缀路由）；
 // DSH 外层是否等效防护属部署形态（M5 fnOS 实测），插件层按「无则补齐」自证：
 //   1. 未授权请求（伪造 Host / 跨站 Origin / cross-site fetch）不能产生副作用；
-//   2. 合法面板流程（回环/局域网 IP 直访、同源写请求）不回归；
+//      P1 §4.9 收紧后：带 Origin 的同源校验不分方法；副作用路径的 GET/HEAD 一律 405；
+//   2. 合法面板流程（回环/局域网 IP 直访、同源写请求、只读 GET）不回归；
 //   3. trusted proxy 结论：判定只依赖 Host/Origin/Sec-Fetch-Site，X-Forwarded-* 不参与决策
 //      （伪造 XFF 无收益——guard 根本不读它）。
 //
@@ -53,9 +54,9 @@ test('Host 白名单：回环/IP 字面量放行，域名默认拒绝，allowedH
   no('other.example.com:80')
 })
 
-test('CSRF：跨站 Origin/无证据的 cross-site 拒绝；同源与无浏览器证据放行；GET 不受限', () => {
+test('CSRF：跨站 Origin/无证据的 cross-site 拒绝；同源与无浏览器证据放行（P1 §4.9 收紧：Origin 不分方法）', () => {
   const guard = createPanelGuard({ getConfig: () => ({ security: { panel: { allowedHosts: [] } } }), log: null })
-  const req = (method, headers) => ({ method, headers })
+  const req = (method, headers, url = '/qq-hub/api/state') => ({ method, url, headers })
 
   // 同源写请求：Origin 与 Host 一致 → 放行
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', origin: 'http://127.0.0.1:5666' })).ok, true)
@@ -69,9 +70,31 @@ test('CSRF：跨站 Origin/无证据的 cross-site 拒绝；同源与无浏览�
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'same-site' })).ok, true)
   // 都没有（curl/脚本）→ 放行（CSRF 由浏览器发起，浏览器必留证据）
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666' })).ok, true)
-  // GET 没有 CSRF 语义（无副作用约定），只受 Host 白名单约束
+  // Host 白名单对 GET 依然兜底（rebinding 读也不行）
   assert.equal(guard.check(req('GET', { host: 'evil.com' })).ok, false)
   assert.equal(guard.check(req('GET', { host: '127.0.0.1:5666' })).ok, true)
+
+  // ── P1 §4.9 收紧 ──
+  // 1. 带 Origin 不分方法：跨站 Origin 的 GET 也拒（旧版 GET 全豁免，img/prefetch/fetch 绕过）
+  assert.equal(guard.check(req('GET', { host: '127.0.0.1:5666', origin: 'http://evil.com' })).ok, false)
+  // 2. 同域 fetch 的 GET 带同源 Origin：不受影响
+  assert.equal(guard.check(req('GET', { host: '127.0.0.1:5666', origin: 'http://127.0.0.1:5666' })).ok, true)
+  // 3. 顶层导航式 GET（无 Origin 无 SFS）：只读路径不受影响
+  assert.equal(guard.check(req('GET', { host: '127.0.0.1:5666' }, '/qq-hub/api/logs')).ok, true)
+  // 4. 副作用路径：GET/HEAD 一律 405（即便同源、即便无浏览器证据），提交方法照常
+  const side = guard.check({ method: 'GET', url: '/qq-hub/api/save', headers: { host: '127.0.0.1:5666' } })
+  assert.equal(side.ok, false)
+  assert.equal(side.code, 405)
+  assert.match(side.message, /副作用/)
+  assert.equal(guard.check({ method: 'HEAD', url: '/qq-hub/api/sessions/reset', headers: { host: '127.0.0.1:5666' } }).code, 405)
+  assert.equal(guard.check({ method: 'GET', url: '/qq-hub/api/save/', headers: { host: '127.0.0.1:5666' } }).code, 405, '尾斜杠也要命中')
+  assert.equal(guard.check({ method: 'GET', url: '/qq-hub/api/test-send?x=1', headers: { host: '127.0.0.1:5666' } }).code, 405, '带查询串也要命中')
+  assert.equal(guard.check({ method: 'POST', url: '/qq-hub/api/save', headers: { host: '127.0.0.1:5666' } }).ok, true)
+  assert.equal(guard.check({ method: 'DELETE', url: '/qq-hub/api/workspaces/delete', headers: { host: '127.0.0.1:5666' } }).ok, true)
+  // 5. 只读路径与模块路径不在副作用表：GET 放行（模块路由只靠 Origin 收紧那层挡跨站）
+  assert.equal(guard.check({ method: 'GET', url: '/qq-hub/api/state', headers: { host: '127.0.0.1:5666' } }).ok, true)
+  assert.equal(guard.check({ method: 'GET', url: '/qq-hub/api/avatar', headers: { host: '127.0.0.1:5666' } }).ok, true)
+  assert.equal(guard.check({ method: 'GET', url: '/qq-hub/api/ext/foo/run', headers: { host: '127.0.0.1:5666' } }).ok, true)
 })
 
 // ---------- 真实 HTTP 栈：副作用路由端到端 ----------
@@ -203,6 +226,39 @@ test('allowedHosts 登记后：域名访问放行（配置热生效，无需重�
   const okRes = await raw({ method: 'POST', path: '/save', host: `nas.example.com:${port}`, body: '{}' })
   assert.equal(okRes.code, 200, '登记域名后放行')
   kit._setAllowedHosts([])
+})
+
+test('P1 §4.9 端到端：副作用路径 GET/HEAD 一律 405 零副作用；Origin 校验不分方法；只读 GET 不受影响', async () => {
+  const port = server.address().port
+  const loop = host(`127.0.0.1:${port}`)
+
+  // 1. GET 打副作用写路由（旧版全豁免的绕过面）→ 405，不进 handler
+  saveCount = 0
+  const viaGet = await raw({ method: 'GET', path: '/save', host: loop })
+  assert.equal(viaGet.code, 405, '副作用路径的 GET 必须被拒')
+  assert.match(viaGet.body, /副作用/)
+  assert.equal(saveCount, 0, 'GET 触发零副作用')
+
+  // 2. HEAD 同理
+  const viaHead = await raw({ method: 'HEAD', path: '/save', host: loop })
+  assert.equal(viaHead.code, 405)
+  assert.equal(saveCount, 0)
+
+  // 3. 顶层导航式（无 Origin 无 SFS）的 POST 仍放行（curl/脚本兼容，回归不破）
+  const plainPost = await raw({ method: 'POST', path: '/save', host: loop, body: '{}' })
+  assert.equal(plainPost.code, 200)
+  assert.equal(saveCount, 1)
+
+  // 4. 跨站 Origin 的 GET：不分方法一律 403（含只读路径）
+  const xsGet = await raw({ method: 'GET', path: '/state', host: loop, origin: 'http://evil.com' })
+  assert.equal(xsGet.code, 403, '跨站 Origin 的 GET 也拒')
+  const xsGetSide = await raw({ method: 'GET', path: '/save', host: loop, origin: 'http://evil.com' })
+  assert.equal(xsGetSide.code, 403, 'Origin 校验先于 405')
+
+  // 5. 同源 Origin 的 GET 只读路径：不受影响（同域 fetch 必带同源 Origin）
+  const sameGet = await raw({ method: 'GET', path: '/state', host: loop, origin: `http://127.0.0.1:${port}` })
+  assert.equal(sameGet.code, 200)
+  assert.match(sameGet.body, /read-only/)
 })
 
 test('trusted proxy 结论：X-Forwarded-For 伪造不参与判定（guard 不读代理头）', async () => {

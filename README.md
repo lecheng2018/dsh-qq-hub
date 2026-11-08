@@ -385,7 +385,7 @@ complete: true # 独占系统提示词，剔除 DSH 原生冗长的编程助手�
 7. **凭据保护**：
    `config.json` 落盘 0600 权限；日志出口统一脱敏（token/cookie 打码）；面板接口回包不泄露网关密钥。
 8. **面板入站防护（M1-A）**：
-   `/qq-hub/api/*` 全部路由（含扩展模块接口）经过插件内建的两道防线——**Host 白名单**（回环名与 IP 字面量默认放行；DNS rebinding 的攻击域名直接 403）与**改写请求同源校验**（跨站 Origin / `Sec-Fetch-Site: cross-site` 的 POST/PUT/DELETE 一律 403，curl/脚本等非浏览器客户端不受影响）。用域名（如 fnOS 的 DDNS 名）访问面板时，在 `config.json` 的 `security.panel.allowedHosts` 登记（每请求现读、热生效）。插件层不做来源 IP 限制、不信任 `X-Forwarded-*`（防伪造）；若 DSH 前置反向代理，来源限制由宿主层负责（该部署形态未在本插件验证）。
+   `/qq-hub/api/*` 全部路由（含扩展模块接口）经过插件内建的三道防线（P1 §4.9 收紧）——**Host 白名单**（回环名与 IP 字面量默认放行；DNS rebinding 的攻击域名直接 403）、**同源校验不分方法**（只要带 Origin 就必须与 Host 一致：跨站 Origin 的 GET/POST 一律 403；同域 fetch、顶层导航、curl/脚本不受影响；改写型方法无 Origin 时仍看 `Sec-Fetch-Site: cross-site` 拒绝）、**副作用路径只认提交方法**（发消息/改配置/启停进程/删数据类接口被 GET/HEAD 触发一律 405，面板前端全部用 POST）。用域名（如 fnOS 的 DDNS 名）访问面板时，在 `config.json` 的 `security.panel.allowedHosts` 登记（每请求现读、热生效）。插件层不做来源 IP 限制、不信任 `X-Forwarded-*`（防伪造）；若 DSH 前置反向代理，来源限制由宿主层负责（该部署形态未在本插件验证）。
 
 ---
 

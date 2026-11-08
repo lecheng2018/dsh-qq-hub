@@ -4,7 +4,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -131,16 +131,38 @@ test('outbox：队列中权限变化 → 出队复核拒绝，状态 cancelled �
     authorize: async () => allowed,
   })
   const first = outbox.request({ chatKey: 'private:3', segments: segs('先发的') })
-  await sleep(20) // 第一条进入 sending（挂在 gate 上）
+  await sleep(20) // 第一条已过出队复核，进入 sending（挂在 gate 上）
   allowed = false // 排队期间权限被收回
   const second = outbox.request({ chatKey: 'private:3', segments: segs('后到的') })
-  const r2 = await second
+  // 授权在出队复核点执行（非入队时刻快照）：第二条排在第一条之后，第一条放行后
+  // 第二条出队时 authorize 读到最新权限 → 拒。
+  firstGate.release()
+  const [r1, r2] = await Promise.all([first, second])
+  assert.equal(r1.state, 'sent')
   assert.equal(r2.state, 'cancelled')
   assert.match(r2.reason, /authorize/)
-  firstGate.release()
-  const r1 = await first
-  assert.equal(r1.state, 'sent')
   assert.equal(sends, 1, '被拒的投递从未实发（只有放行的第一条真实出门）')
+})
+
+test('outbox：慢首条 authorize 不被快第二条超车（FIFO 与授权时序）', async () => {
+  // 复核报告 §4.3：旧实现把 authorize await 插在 enqueue 与链注册之间，慢的第一条
+  // authorize 期间第二条快速入队会抢到链头先实发——顺序被破坏。
+  const order = []
+  let resolveSlowAuth
+  const slowAuth = new Promise((r) => { resolveSlowAuth = r })
+  const outbox = createOutbox({
+    send: async (action, params) => { order.push(params.message[0].data.text); return { messageId: 'm' + order.length } },
+    authorize: async (delivery) => {
+      if (delivery.segments[0].data.text === '慢一') await slowAuth // 首条授权慢
+      return true
+    },
+  })
+  const p1 = outbox.request({ chatKey: 'private:8', segments: segs('慢一') })
+  await sleep(10) // 第二条在首条 authorize 完成之前入队
+  const p2 = outbox.request({ chatKey: 'private:8', segments: segs('快二') })
+  resolveSlowAuth()
+  await Promise.all([p1, p2])
+  assert.deepEqual(order, ['慢一', '快二'], '入队顺序 = 实发顺序，慢授权不被超车')
 })
 
 test('outbox：dryRun 记台账不实发', async () => {
@@ -255,3 +277,71 @@ test('ledger：损坏文件失败关闭（空台账起步 + 上报），不猜�
     try { rmSync(dir, { recursive: true, force: true }) } catch {}
   }
 })
+
+test('ledger：attemptCount 只统计真实物理发送尝试（状态迁移不计）', () => {
+  const id = newDeliveryId()
+  const book = createDeliveryLedger({})
+  book.enqueue({ deliveryId: id, chatKey: 'private:1', segments: segs() })
+  assert.equal(book.get(id).attemptCount, 0, 'queued 时 0 次尝试')
+  book.mark(id, 'sending')
+  assert.equal(book.get(id).attemptCount, 1, '一次 sending = 一次尝试')
+  book.mark(id, 'sent', { gatewayMessageId: 'gw-1' })
+  assert.equal(book.get(id).attemptCount, 1, 'sent 迁移不再 +1（旧实现在每个 mark++，统计的是状态迁移）')
+  // 重投：再进 sending 才计第二次
+  const id2 = newDeliveryId()
+  book.enqueue({ deliveryId: id2, chatKey: 'private:2', segments: segs() })
+  book.mark(id2, 'sending'); book.mark(id2, 'failed', { reason: 'x' })
+  assert.equal(book.get(id2).attemptCount, 1, 'failed 迁移不计尝试')
+})
+
+test('ledger：关键落盘（enqueue/sending）失败 fail-closed 抛出，非关键（终态）失败不抛', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-fail-'))
+  try {
+    // 把 file 位置做成一个目录 → writeJsonAtomic 必失败
+    const file = join(dir, 'occupied')
+    mkdirSync(file)
+    const errors = []
+    const book = createDeliveryLedger({ file, onError: (e) => errors.push(e) })
+    const id = newDeliveryId()
+    assert.throws(() => book.enqueue({ deliveryId: id, chatKey: 'private:1', segments: segs() }), /fail-closed/, 'enqueue 落盘失败必须抛（不登记）')
+    assert.equal(book.get(id), null, '抛出后回滚：不留幽灵记录')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
+})
+
+test('outbox：sending 落盘失败 fail-closed，不发起物理发送', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-closed-'))
+  try {
+    const file = join(dir, 'ledger')
+    mkdirSync(file) // 目录占位，persist 必失败
+    let sent = false
+    const outbox = createOutbox({ send: async () => { sent = true; return { messageId: 'x' } }, ledger: createDeliveryLedger({ file, onError: () => {} }) })
+    const r = await outbox.request({ chatKey: 'private:9', segments: segs() })
+    assert.equal(sent, false, 'enqueue 已 fail-closed 抛出，绝不会走到 send')
+    assert.equal(r, undefined)
+  } catch (e) {
+    // request 会因 enqueue fail-closed 直接 reject（async 抛出）——同样是 fail-closed，未实发
+    assert.match(String(e.message), /fail-closed/)
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
+})
+
+test('outbox：dispose 后拒绝新请求，并把排队中的条目落 cancelled 不实发', async () => {
+  const gate1 = gate()
+  let sends = 0
+  const outbox = createOutbox({ send: async () => { sends++; await gate1.promise; return { messageId: 'g' } } })
+  const p1 = outbox.request({ chatKey: 'private:6', segments: segs('一') })
+  await sleep(15) // 第一条 sending
+  const p2 = outbox.request({ chatKey: 'private:6', segments: segs('二') })
+  await sleep(5)
+  outbox.dispose()
+  gate1.release()
+  const [r1, r2] = await Promise.all([p1, p2])
+  assert.equal(r1.state, 'sent')
+  assert.equal(r2.state, 'cancelled', '排队中被 dispose 落终态')
+  assert.equal(sends, 1, 'dispose 后第二条从未实发')
+  await assert.rejects(() => outbox.request({ chatKey: 'private:6', segments: segs() }), /已卸载/)
+})
+

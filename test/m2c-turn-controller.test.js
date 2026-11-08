@@ -308,3 +308,80 @@ test('跨聊天并行：两个聊天的回合同时执行互不阻塞', async ()
   assert.ok(overlap, '两个聊天几乎同时执行（并行）')
   await ctl.dispose()
 })
+
+// ===== 2026-11-08 复核修复回归：pending 取消、跨 ChatKey steer、dispose 排队终态 =====
+
+test('pending 取消：排队回合立即落 cancelled，execute 绝不被调用（旧 bug：照跑甚至标 succeeded）', async () => {
+  let releaseRunning
+  const runningGate = new Promise((r) => { releaseRunning = r })
+  const ran = []
+  const ctl = createTurnController({
+    merge: { waitMs: 15, maxMs: 40 },
+    execute: async (turn, io) => {
+      ran.push(io.members[0].eventId)
+      if (io.members[0].eventId === 'p1') await runningGate
+    },
+  })
+  ctl.offer(inbound('p1'))
+  await sleep(45) // p1 → running（挂住）
+  const r2 = ctl.offer(inbound('p2'))
+  await sleep(45) // p2 窗口到期 → pending（排在 p1 后）
+  assert.equal(ctl.getTurn(r2.turnId).state, 'pending')
+  const c = ctl.cancel(r2.turnId)
+  assert.equal(c.honest, 'cancelled-immediately', 'pending 还没跑，取消应立即终态')
+  assert.equal(ctl.getTurn(r2.turnId).state, 'cancelled')
+  releaseRunning() // p1 落定后轮到 p2 的 job → isTerminal 检查跳过 execute
+  await sleep(60)
+  assert.equal(ran.includes('p2'), false, '被取消的 p2 绝不进 execute')
+  assert.equal(ctl.getTurn(r2.turnId).state, 'cancelled', '落定后仍为 cancelled（不谎报 succeeded）')
+  await ctl.dispose()
+})
+
+test('steer ChatKey 不变量：private 回合拒绝 group 转向输入（跨聊天污染禁止）', async () => {
+  let release
+  const g = new Promise((r) => { release = r })
+  const ctl = createTurnController({
+    merge: { waitMs: 10, maxMs: 30 },
+    execute: async (turn, io) => {
+      io.onSteer(() => {})
+      if (turn.chatKey === 'private:1') await g
+    },
+  })
+  const lead = ctl.offer(inbound('q1', 'private:1'))
+  await sleep(40) // running
+  assert.equal(ctl.runningTurnOf('private:1'), lead.turnId)
+  await assert.rejects(() => ctl.steer(lead.turnId, inbound('x9', 'group:99')), /ChatKey/, '跨 ChatKey steer 被拒')
+  // 同 ChatKey 的正常 steer 仍可
+  await ctl.steer(lead.turnId, inbound('ok1', 'private:1'))
+  release()
+  await sleep(30)
+  assert.equal(ctl.getTurn(lead.turnId).memberEventIds.includes('x9'), false, '跨域成员未被计入')
+  await ctl.dispose()
+})
+
+test('dispose：被清出队列的 pending 回合落 cancelled，绝不残留 pending', async () => {
+  let releaseRunning
+  const runningGate = new Promise((r) => { releaseRunning = r })
+  const ctl = createTurnController({
+    merge: { waitMs: 10, maxMs: 30 },
+    execute: async (turn, io) => {
+      if (io.members[0].eventId === 'd1') {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, 5000)
+          io.signal.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('dispose'), { name: 'AbortError' })) })
+        })
+      }
+    },
+  })
+  void releaseRunning
+  const r1 = ctl.offer(inbound('d1'))
+  await sleep(40) // d1 running（挂 5s 等 abort）
+  const r2 = ctl.offer(inbound('d2'))
+  await sleep(40) // d2 pending
+  assert.equal(ctl.getTurn(r2.turnId).state, 'pending')
+  await ctl.dispose()
+  const s = ctl.getTurn(r2.turnId).state
+  assert.ok(s === 'cancelled' || s === 'failed', `排队回合 dispose 后必须终态（实际 ${s}）`)
+  assert.notEqual(ctl.getTurn(r1.turnId).state, 'running', '在飞回合也被 abort')
+})
+

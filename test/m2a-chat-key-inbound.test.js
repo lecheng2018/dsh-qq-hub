@@ -45,6 +45,8 @@ test('chatKeyFromEvent：群事件按 group_id，私聊/poke 按 user_id，缺�
   assert.equal(chatKeyFromEvent({ message_type: 'private', user_id: 555 }), 'private:555')
   assert.equal(chatKeyFromEvent({ notice_type: 'notify', sub_type: 'poke', user_id: 555 }), 'private:555')
   assert.equal(chatKeyFromEvent({ message_type: 'group' }), '') // 没带 group_id
+  assert.equal(chatKeyFromEvent({ message_type: 'group', user_id: 555 }), '', '群事件缺 group_id 不得掉进私聊分支猜 private:<user_id>')
+  assert.equal(chatKeyFromEvent({ message_type: 'group', group_id: 0, user_id: 555 }), '', 'group_id 非法成不了键也返回空串')
   assert.equal(chatKeyFromEvent({}), '')
   assert.equal(chatKeyFromEvent(null), '')
 })
@@ -80,6 +82,43 @@ test('工厂：缺字段 / 非法类型 / 未知来源直接抛（缺字段 fail
   assert.throws(() => createNormalizedInbound(okInbound({ segments: 'text' })), TypeError)
   assert.throws(() => createNormalizedInbound(null), TypeError)
   assert.throws(() => createNormalizedInbound([1, 2]), TypeError)
+})
+
+test('工厂：timestamp 严格——null/undefined/空串/0 不得静默成 0，直接抛', () => {
+  for (const bad of [null, undefined, '', 0, -1, NaN, Infinity]) {
+    assert.throws(() => createNormalizedInbound(okInbound({ timestamp: bad })), TypeError, `应拒绝 timestamp=${String(bad)}`)
+  }
+  assert.doesNotThrow(() => createNormalizedInbound(okInbound({ timestamp: 1 })))
+  assert.doesNotThrow(() => createNormalizedInbound(okInbound({ timestamp: '1763000000000' })), '数字串可 Number 化，照常接受')
+})
+
+test('工厂：sender.role 透传（只收字符串；非字符串/缺失 = undefined 不落字段）', () => {
+  const withRole = createNormalizedInbound(okInbound({ sender: { userId: '1', nickname: 'a', role: 'admin' } }))
+  assert.equal(withRole.sender.role, 'admin')
+  const noRole = createNormalizedInbound(okInbound({ sender: { userId: '1' } }))
+  assert.equal(noRole.sender.role, undefined)
+  assert.equal('role' in noRole.sender, false, '缺省不落键，冻结对象形状稳定')
+  const badRole = createNormalizedInbound(okInbound({ sender: { userId: '1', role: 7 } }))
+  assert.equal(badRole.sender.role, undefined, '非字符串 role 丢弃')
+})
+
+test('工厂：segment.data 递归深冻结——嵌套对象事后改不动，也不冻结调用方原对象', () => {
+  const srcData = { node: { cards: [{ text: '转发的卡片' }] } }
+  const inbound = createNormalizedInbound(okInbound({ segments: [{ type: 'forward', data: srcData }] }))
+  const data = inbound.segments[0].data
+  assert.equal(Object.isFrozen(data.node), true)
+  assert.equal(Object.isFrozen(data.node.cards), true)
+  assert.equal(Object.isFrozen(data.node.cards[0]), true)
+  assert.throws(() => { data.node.cards[0].text = '篡改' }, TypeError, 'strict mode 下嵌套赋值抛错')
+  // 深拷贝后再冻结：调用方原对象不被冻结、也不影响产出
+  assert.equal(Object.isFrozen(srcData.node), false, '调用方原对象零改动')
+  srcData.node.cards[0].text = '事后修改原对象'
+  assert.equal(inbound.segments[0].data.node.cards[0].text, '转发的卡片', '产出不被外部引用牵动')
+  // Buffer/Map 等非 plain 值原样透传，不递归冻结进去
+  const m = new Map([['k', 1]])
+  const rich = createNormalizedInbound(okInbound({ segments: [{ type: 'file', data: { meta: m } }] }))
+  assert.equal(rich.segments[0].data.meta, m, 'Map 实例按引用透传')
+  assert.equal(Object.isFrozen(m), false, '不冻结进 Map')
 })
 
 test('message_sent：作为 realtime 来源的自发事件建模（sender=自己，segments 原样）', () => {

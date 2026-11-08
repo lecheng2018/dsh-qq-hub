@@ -58,6 +58,8 @@ export function createGateway({
             config: cfg.backfill
           })
           for (const it of items) {
+            // 竞争复查：selectBackfill 筛选时查过 seen，但循环内 await 让出后同 ID 可能已被实时侧入册/投递
+            if (seenIds.has(`group:${gid}`, it.event.message_id)) continue
             seenIds.add(`group:${gid}`, it.event.message_id)
             // M1-B：过旧（> maxAgeMinutes）消息不主动唤醒——backfill.js 头注安全承诺 #3。
             // 它们只留在 QQ 自己的历史里；legacy 没有独立的「只落上下文」通道，
@@ -90,6 +92,8 @@ export function createGateway({
             await getHub().sendText(`private:${uid}`, `⚠️ 断线期间（约 ${describeDuration(gapMs)}）收到的管理命令 ${cmds} 未执行；如需执行请重新发送。`)
           }
           for (const it of items) {
+            // 竞争复查：同群聊循环——筛选后 await 让出期间同 ID 实时事件可能已进处理链
+            if (seenIds.has(`private:${uid}`, it.event.message_id)) continue
             seenIds.add(`private:${uid}`, it.event.message_id)
             // M1-B：同上，过旧消息不唤醒
             if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
@@ -151,6 +155,11 @@ export function createGateway({
     }
     if (ev.post_type === 'message' && ev.message_id) {
       const key = ev.message_type === 'group' ? `group:${ev.group_id}` : `private:${ev.user_id}`
+      // 竞争复查：补收循环 await 让出期间，同 ID 可能已被这里登记/投递——已见过就跳过，绝不二次进处理链
+      if (seenIds.has(key, ev.message_id)) {
+        getMods()?.emit('onebot', ev) // 原始事件仍要透传给模块（只看不拦）
+        return
+      }
       seenIds.add(key, ev.message_id)
     }
     // 模块能看到所有原始事件（加群、撤回、好友申请……），只看不拦

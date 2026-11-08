@@ -74,10 +74,11 @@ export function createSessionFileStore({ file }) {
  * @param {string} o.legacyFile 旧文件路径（hub 私有格式：{ chats: { <chatId>: { sessionId, ... } } }）
  * @param {object} o.store 新 store
  * @param {string} [o.botQQ] 旧文件裸 QQ 号键 → private:<botQQ 拥有的私聊>；群键 `group:<gid>` 直接映射
- * @returns {{ imported: number, skipped: string[], errors: string[] }}
+ * @returns {{ imported: number, skipped: string[], errors: string[], conflicts: string[] }}
+ *   conflicts：store 里已有该 chatKey 且 sessionId 与旧值不同——保留新值（陈旧映射不覆盖），键记于此。
  */
 export function migrateLegacySessions({ legacyFile, store, onError = () => {} }) {
-  const report = { imported: 0, skipped: [], errors: [] }
+  const report = { imported: 0, skipped: [], errors: [], conflicts: [] }
   let legacy
   try {
     legacy = JSON.parse(fs.readFileSync(legacyFile, 'utf8'))
@@ -105,7 +106,15 @@ export function migrateLegacySessions({ legacyFile, store, onError = () => {} })
       report.skipped.push(key)
       continue
     }
-    merged[chatKey] = { sessionId: String(entry.sessionId), ...(entry.createdAt ? { createdAt: Number(entry.createdAt) } : {}) }
+    const incoming = { sessionId: String(entry.sessionId), ...(entry.createdAt ? { createdAt: Number(entry.createdAt) } : {}) }
+    // 重复迁移防倒退：store 里该键已有不同 sessionId 说明旧映射已陈旧（会话已轮换）——
+    // 保留 current 的新值不覆盖，键记入 conflicts；同值重复导入仍照常计 imported（幂等语义不变）。
+    const existing = current[chatKey]
+    if (existing && existing.sessionId !== incoming.sessionId) {
+      report.conflicts.push(chatKey)
+      continue
+    }
+    merged[chatKey] = incoming
     report.imported++
   }
   if (report.imported > 0) store.save(merged)

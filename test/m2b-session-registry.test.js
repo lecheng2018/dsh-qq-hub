@@ -182,6 +182,32 @@ test('旧映射只读迁移：导入成功、幂等、损坏跳过，不写回�
   }
 })
 
+test('旧映射迁移防倒退：二次迁移携带陈旧 sessionId 时保留 store 新值，记 conflicts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2b-mig-'))
+  try {
+    const legacyFile = join(dir, 'stale-legacy.json')
+    writeFileSync(legacyFile, JSON.stringify({
+      chats: { 'group:777': { sessionId: 'old-g' }, 'private:555': { sessionId: 'same-p' } },
+    }))
+    const store = createSessionFileStore({ file: join(dir, 'sessions.json') })
+    const r1 = migrateLegacySessions({ legacyFile, store })
+    assert.equal(r1.imported, 2)
+
+    // 模拟迁移后会话轮换：store 里 group:777 的映射比旧文件更新
+    store.save({ 'group:777': { sessionId: 'new-g' }, 'private:555': { sessionId: 'same-p' } })
+
+    // 再跑一次同一迁移（旧文件仍带陈旧的 old-g）
+    const r2 = migrateLegacySessions({ legacyFile, store })
+    assert.deepEqual(r2.conflicts, ['group:777'], '陈旧且不同的映射记入 conflicts，不覆盖新值')
+    assert.equal(r2.imported, 1, '同值映射照常计 imported（幂等语义不变）')
+    const loaded = store.load()
+    assert.equal(loaded['group:777'].sessionId, 'new-g', '新值绝不被陈旧旧映射覆盖')
+    assert.equal(loaded['private:555'].sessionId, 'same-p')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
+})
+
 test('dispose：拒绝新请求；等待在飞的创建落定；内存清零（无残留监听）', async () => {
   const dsh = fakeDsh({ delayMs: 40 })
   const reg = createSessionRegistry({ createSession: dsh.createSession })
