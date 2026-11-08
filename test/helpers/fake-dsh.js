@@ -12,6 +12,7 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
   const workspaces = []
   const turns = [] // 记录每一轮：{ sessionId, preset, userText, images, reply, toolCalls }
   const modelSelections = [] // selectForNextRequest 调用记录（真机缺陷 8 断言面）
+  const renames = [] // sessionController.rename 调用记录（真机缺陷 9：建会话命名/回填断言面）
   const logs = []
 
   const emit = (name, ...args) => { for (const fn of listeners.get(name) || []) fn(...args) }
@@ -145,7 +146,7 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
           workspaces.find((w) => w.id === workspaceId)?.sessionIds.push(id)
           return { sessionId: id, agentPreset }
         },
-        async rename() { return {} },
+        async rename({ sessionId, title } = {}) { renames.push({ sessionId, title }); return {} },
         // 真机缺陷 8 断言面：会话级模型选择只经 agents.selectForNextRequest（不改全局默认）。
         // 模拟真宿主语义：选择落到该会话（写入其 session events = 「本会话下一请求用这个」的可见效果），
         // chat-model/e2e 既有断言读 events 的口径不变；modelSelections 另记一份供直接断言。
@@ -190,5 +191,5 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
     return { status, raw: () => out, json: () => JSON.parse(out) }
   }
 
-  return { ctx, routes, variables, agents, workspaces, turns, logs, modelSelections, call, dispose: () => disposers.reverse().forEach((d) => { try { d() } catch (e) {} }) }
+  return { ctx, routes, variables, agents, workspaces, turns, logs, modelSelections, renames, call, dispose: () => disposers.reverse().forEach((d) => { try { d() } catch (e) {} }) }
 }
