@@ -510,8 +510,33 @@ test('真机缺陷 9：建会话即命名（legacy titleFor 同语义），面�
     await waitSettled(core, 500)
     const titles = dsh.renames.map((r) => r.title)
     assert.ok(titles.includes('QQ · 主人私聊'), '主人私聊标题')
-    assert.ok(titles.includes('QQ 群 · 777'), '群标题')
+    assert.ok(titles.includes('QQ 群 · 测试群'), '群标题走 get_group_info 真名（legacy groupName 同语义，非群号）')
   } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机缺陷 9（去重）：跨重启回填不重复落 session/title（回读当前标题幂等）', async () => {
+  const mock = await startMockOneBot({ selfId: '20000002' })
+  const dsh = createFakeDsh({ brain: async () => '嗯' })
+  const storeFile = join(mkdtempSync(join(tmpdir(), 'm4-title2-')), 'modular-sessions.json')
+  const cfg = { enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', ownerName: '主人', allow: { private: ['10000001'], groups: [] }, merge: { waitSec: 0.05, maxSec: 0.2 }, workspaceDir: mkdtempSync(join(tmpdir(), 'm4-ws2-')) }
+  const mkCore = () => createModularCore({
+    dsh: dsh.ctx,
+    onebot: { call: async () => ({ message_id: 1 }) },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    getConfig: () => cfg, logger: noopLog, log: noopLog, sessionStoreFile: storeFile,
+  })
+  try {
+    const core1 = mkCore()
+    await core1.dispatchLegacyEvent(msgEv())
+    await waitSettled(core1, 400)
+    const first = dsh.renames.length
+    assert.equal(first, 1, '首建命名一次')
+    await core1.dispose()
+    const core2 = mkCore() // 模拟重启：store 里已有映射，backfill 会对同会话再跑一次 renameExisting
+    await sleep(250)
+    assert.equal(dsh.renames.length, first, '回读去重：同标题不再落新事件')
+    await core2.dispose()
+  } finally { await mock.close() }
 })
 
 test('真机缺陷 9：启动对已有映射回填标题（老会话补救）', async () => {
@@ -530,6 +555,35 @@ test('真机缺陷 9：启动对已有映射回填标题（老会话补救）', 
   try {
     await sleep(80) // backfillTitles 是 fire-and-forget 微任务链
     assert.ok(dsh.renames.some((r) => r.sessionId === 'sess-old-1' && r.title === 'QQ · 主人私聊'), '已有映射补上标题')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('真机额外缺口：开旗后新核心补发 activity（模块 L0 计数唯一来源）；ACL 拒绝不发', async () => {
+  const mock = await startMockOneBot({ selfId: '20000002' })
+  const dsh = createFakeDsh({ brain: async () => '嗯' })
+  const activities = []
+  const cfg = {
+    enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001',
+    allow: { private: ['10000001'], groups: ['777'] },
+    merge: { waitSec: 0.05, maxSec: 0.2 }, workspaceDir: mkdtempSync(join(tmpdir(), 'm4-act-')),
+  }
+  const core = createModularCore({
+    dsh: dsh.ctx,
+    onebot: { call: async () => ({ message_id: 1 }) },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null, emit: (ev, a) => { if (ev === 'activity') activities.push(a) } },
+    getConfig: () => cfg, logger: noopLog, log: noopLog,
+  })
+  try {
+    await core.dispatchLegacyEvent(msgEv()) // 主人白名单内 → 放行
+    assert.equal(activities.length, 1, 'realtime 放行补一发（等价 hub.js:1583）')
+    assert.equal(activities[0].kind, 'in')
+    assert.equal(activities[0].chatId, 'private:10000001')
+    assert.equal(activities[0].direct, true, '私聊 direct=true')
+    assert.match(activities[0].text, /在吗/)
+    await core.dispatchLegacyEvent(msgEv({ user_id: 88888888 })) // 白名单外
+    assert.equal(activities.length, 1, 'ACL 拒绝不得发 activity（未授权流量不进模块计数）')
+    core.dispatchBackfill(msgEv({ message_id: 555, time: Math.floor(Date.now() / 1000) - 60 }))
+    assert.equal(activities.length, 2, 'backfill 入口同样补发')
   } finally { await core.dispose(); await mock.close() }
 })
 
