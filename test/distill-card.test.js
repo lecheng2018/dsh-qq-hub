@@ -77,10 +77,12 @@ test('refresh 端到端：生成卡文件（front-matter 带自动生成标签�
 
 test('接线：学习成功自动刷卡 + 路由 + setConfig 只在接管时发生', () => {
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
+  // 两处：历史学习 + 日常整理（L3 增长段的刷卡在独立 distill 模块里，经模块总线协作）
   assert.equal((mem.match(/onDistillLearned && await onDistillLearned/g) || []).length, 2, '历史学习+日常整理两处都挂')
   const mod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.setConfig\(\{ persona: \{ groups: \{ \[String\(gid\)\]: r\.cardId \} \} \}\)/, '只有 r.ok 才写槽位')
   assert.match(mod, /api\.route\('\/distill\/card\/refresh'/)
+  assert.match(mod, /distill\/growth-updated/, '蒸馏模块学成事件 → 刷卡（模块总线协作）')
   const client = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
   assert.match(client, /写进群人设卡/)
   assert.match(client, /语感人设卡/)

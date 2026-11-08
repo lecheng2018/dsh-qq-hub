@@ -15,7 +15,6 @@ import { dataDir, readJson, writeJson } from '../core/store.js'
 import { askModel } from '../core/llm.js'
 import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
-import { discoverSlangCandidates } from './slang-discover.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/hub.js'
@@ -524,35 +523,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   function insightsOf(key) {
     return (load().insights || {})[key] || []
   }
-  /** 群黑话本（1.3.58 独立存储）：以前和相处经验挤在 insights[key] 的 8 条槽位里，
-   *  reflect() 每轮整体覆盖那个数组，模型不知道【黑话】条目存在 → 学到就丢。
-   *  现在单独存 s.slang[gid]，各自容量、各自注入、各自面板。 */
-  const SLANG_CAP = 12
-  function slangOf(gid) {
-    return (load().slang || {})[String(gid)] || []
-  }
-  /** 合并写入：同词更新解释，最多 SLANG_CAP 条（新的在前）。 */
-  function putSlang(gid, items) {
-    const id = String(gid)
-    const s = load()
-    s.slang = s.slang || {}
-    const old = s.slang[id] || []
-    const next = []
-    for (const it of items) {
-      const w = String(it.word || '').trim()
-      const m = String(it.meaning || '').trim()
-      if (!w || !m) continue
-      next.push({ id: randomUUID().slice(0, 8), word: w, meaning: m, at: Date.now() })
-    }
-    // 同词去重：新解释覆盖旧的
-    const byWord = new Map(next.map((x) => [x.word, x]))
-    for (const o of old) if (!byWord.has(o.word)) byWord.set(o.word, o)
-    s.slang[id] = [...byWord.values()].sort((a, b) => b.at - a.at).slice(0, SLANG_CAP)
-    s.rev = (s.rev || 0) + 1
-    save(s)
-    return s.slang[id]
-  }
-
   // ---------------- 蒸馏群友（1.3.59）----------------
   // 指定某个群的某个人当数据源，学他的说话方式/性格/语气（不冒充他本人）。
   // 目标列表和学到的画像都存在记忆库里，跟着 memories.db 一起持久化。
@@ -801,8 +771,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         const hint = renderDistillHint(t.name || t.uid, distillOf(t.gid, t.uid) || {})
         if (hint) parts.push(hint)
       }
-      const slang = slangOf(chat.groupId).slice(0, 8)
-      if (slang.length) parts.push('（这个群的黑话，听懂了就用、别硬套：' + slang.map((x) => x.word + '＝' + x.meaning).join('；') + '）')
+      // 群黑话注入已移交独立模块 src/modules/slang/（自己的 context provider）
     }
     const sty = styleOf(personKey(chat))
     const self = styleOf('self')
@@ -1149,7 +1118,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         await learnSelfStyle()
         // 蒸馏群友（1.3.53）：每个群一天一次黑话提炼——纯统计找候选（零成本），
         // 模型只负责判断「是不是黑话、什么意思」，写进 insights['group:<gid>'] 同一套存储。
-        try { await learnGroupSlang(day) } catch (error) { log.debug('群黑话提炼失败：', error.message) }
+        // 群黑话学习已移交独立模块 src/modules/slang/（自带日程：03 点后学昨天完整流水，
+        // 赶在本模块 04:00 整理删流水之前——旧实现挂在这里只会读到已删除的空流水）。
         // 蒸馏群友（1.3.59）：指定的人的说话样子
         try { await learnDistill(day) } catch (error) { log.debug('蒸馏群友失败：', error.message) }
       }
@@ -1274,66 +1244,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       s.distillLearned[day] = [...doneToday]
       save(s)
     }
-  }
-
-  /**
-   * 蒸馏群友（1.3.53）：从一天的群聊里提炼黑话/梗/圈内称呼，写进 insights（key = group:<gid>）。
-   *
-   * 三段式：
-   *   ① discoverSlangCandidates（纯本地）→ 词频候选，零模型调用；
-   *   ② 候选 + 原句采样 → 一次模型调用判断「是不是黑话/梗、什么意思、怎么用」；
-   *   ③ 写进 insights（和相处经验同一套存储/注入/面板路径），每群最多 8 条，旧的合并、冷掉的淘汰。
-   *
-   * 成本：每群每天一次模型调用，几百 token。没有候选（全是日常词）就零调用。
-   */
-  async function learnGroupSlang(day) {
-    const cfg = getConfig()
-    if (cfg.memory?.slang !== true) return // 默认关：面板开关打开才学习
-    const all = hub.chatLogOf(day) || []
-    if (all.length < 10) return
-    const byGroup = new Map()
-    for (const l of all) {
-      if (!String(l.chatId || '').startsWith('group:')) continue
-      if (!byGroup.has(l.chatId)) byGroup.set(l.chatId, [])
-      byGroup.get(l.chatId).push(l)
-    }
-    for (const [chatId, lines] of byGroup) {
-      const key = chatId // insights key 和 personKey 的 group 形态一致，contextFor 自动带上
-      const cands = discoverSlangCandidates(lines)
-      if (!cands.length) continue
-      const linesSeen = (load().slangLearned || {})
-      if ((linesSeen[day] || []).includes(chatId)) continue // 这天这个群提炼过了（重启不重复花钱）
-      const groupName = (hub.groupNames?.get?.(chatId.slice(6)) || chatId.slice(6))
-      const prompt = lines
-        .filter((l) => l.who !== 'bot')
-        .map((l) => `${l.who}：${l.text}`)
-        .slice(-120)
-        .join('\n')
-      const out = await askModel(dsh, {
-        cfg,
-        system: '你在帮一个 QQ 群里的 AI 群友整理「这个群的黑话本」。下面是群聊记录和词频统计里挑出来的高频词候选。\n'
-          + '判断哪些候选**真的是这个群/这个圈子在用的黑话、梗、圈内称呼或缩写**（常用词、普通词汇一律不要）。\n'
-          + '对每个入选的词给一句话解释（这个词在这群里的意思、怎么用），一条不超过 40 字。\n'
-          + '没有值得记的就输出 []。只输出 JSON 数组：[{"word":"词","meaning":"意思和用法"}]，最多 6 条。',
-        text: `群名：${groupName}\n\n词频候选：\n${cands.map((c) => `-「${c.word}」出现 ${c.count} 次，例如：${(c.samples || []).join(' / ')}`).join('\n')}\n\n聊天记录：\n${prompt}`,
-        maxTokens: 500,
-      })
-      let items = []
-      try {
-        const arr = JSON.parse((String(out).match(/\[[\s\S]*\]/) || [String(out)])[0])
-        if (Array.isArray(arr)) items = arr.filter((x) => x && x.word && x.meaning).slice(0, 6)
-      } catch {}
-      if (!items.length) continue
-      // 写进独立的黑话本（1.3.58）：不再和相处经验抢 insights 的 8 条槽位
-      putSlang(key.slice(6), items)
-      log.info(`群黑话（${groupName}）：学到 ${items.length} 个词（${items.map((x) => x.word).join('、')}）`)
-    }
-    // 记录「哪天哪个群提炼过」：重启/重放聊天日志时不重复花模型调用
-    const s = load()
-    s.slangLearned = s.slangLearned || {}
-    s.slangLearned[day] = [...byGroup.keys()]
-    s.rev = (s.rev || 0) + 1
-    save(s)
   }
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
@@ -1470,8 +1380,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       .map(([gid, list]) => ({ gid, list: list || [] }))
       .filter((x) => x.list.length)
       .sort((a, b) => b.list.length - a.list.length),
-    slangOf,
-    putSlang,
+    // 黑话本存储已移交独立模块 src/modules/slang/（memory.slang() 只读口保留供迁移）
     /** 蒸馏群友（1.3.59）：目标管理 + 画像读取（面板用） */
     distillList,
     distillTargets,
@@ -1481,17 +1390,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     learnDistillFromHistory,
     addDistillTarget,
     removeDistillTarget,
-    removeSlang: (gid, id) => {
-      const s = load()
-      s.slang = s.slang || {}
-      const list = s.slang[String(gid)] || []
-      const next = list.filter((x) => String(x.id) !== String(id))
-      if (next.length === list.length) return false
-      s.slang[String(gid)] = next
-      s.rev = (s.rev || 0) + 1
-      save(s)
-      return true
-    },
     /** 删一条相处经验：insights[key] 是 {id,text,at} 数组，按 id 摘掉一条。 */
     removeInsight: (key, id) => {
       const s = load()
@@ -1523,3 +1421,4 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     dispose: () => { try { flushHits() } catch (error) {} try { store?.close?.() } catch (error) {} store = null },
   }
 }
+  // 群黑话本已重构为独立模块 src/modules/slang/（存储/学习/注入迁走；slang() 只读口保留供迁移）。
