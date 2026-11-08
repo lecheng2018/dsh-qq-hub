@@ -10,6 +10,9 @@
 //
 // 红线：物理发送只有 outbox 一个 owner；unknown 不自动重发；turn 执行尊重取消信号（诚实标记）。
 
+import { randomUUID } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
+
 import { legacyEventToNormalized } from '../chat/adapters/legacy-inbound.js'
 import { createDshSessionAdapter } from '../chat/adapters/dsh-session.js'
 import { createOnebotOutboxAdapter, paramsFor } from '../chat/adapters/onebot-outbox.js'
@@ -24,6 +27,10 @@ import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
+import { parseReply, replyRules } from '../chat/reply.js'
+import { defaultModel, pickReasoningEffort } from '../core/llm.js'
+import { resolveChatModel } from '../chat/chat-model.js'
+import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
 
 /** 入站事件 → checkAllowed 需要的 msg 形状（从 ChatKey + sender 还原 kind/userId/groupId）。 */
 function aclMsgFromInbound(inbound) {
@@ -70,9 +77,44 @@ export function createModularCore({
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
 
+  // cordis 的 ctx.services / ctx.attachments / agent.ctx.contexts 都是「未声明 inject 直接点会抛」的
+  // getter（真机报告 3/4：`cannot get property "…" without inject`，可选链 `?.` 挡不住 getter 求值）。
+  // 一律走 ctx.get(...)（宿主已 inject 的服务名），拿到就 try/catch 兜住。
+  const ctxGet = (name) => { try { return dsh?.get?.(name) ?? null } catch { return null } }
+  const admitAttachments = () => { try { return dsh?.get?.('attachments') ?? null } catch { return null } }
+
+  /** 图片段必须登记成 DSH 附件（attachmentId），否则整轮抛错且污染会话历史（真机报告 2）。
+   *  本轮不下载图片字节：登记不上就如实降级成文字说明，绝不把裸 url 图片块塞进历史。 */
+  async function admitContent(content) {
+    if (!content.some((c) => c.type === 'image')) return content
+    const att = admitAttachments()
+    if (att && typeof att.admitPromptContent === 'function') {
+      try { return await att.admitPromptContent(content) } catch (error) {
+        debug(`图片没登记成附件，本轮按看不了图处理：${error.message}`)
+      }
+    }
+    // 降级：剥掉所有 image 块，保留文本，追加一行如实说明（同 legacy admit 失败分支）
+    const text = content.filter((c) => c.type !== 'image').map((c) => c.text ?? '').join('\n').trim()
+    const note = '（对方发来一张图片，但本机没能把它登记成附件，本轮按看不到图处理）'
+    return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
+  }
+
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
   const sessionAdapter = createDshSessionAdapter({
     dsh,
+    // 会话必须带工作区，否则落到宿主 defaultCwd 直接 turn error（真机报告 5）；对齐 legacy ensureWorkspace
+    ensureWorkspace: async () => {
+      try {
+        const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+        if (!reg) return undefined
+        const dir = workspaceDirOf(getConfig())
+        try { mkdirSync(dir, { recursive: true }) } catch {}
+        const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+        let ws = (reg.list?.() || []).find((w) => norm(w.path) === norm(dir))
+        if (!ws && reg.create) ws = await reg.create(dir, WORKSPACE_TITLE)
+        return ws
+      } catch { return undefined }
+    },
     presetOf: (chatKey) => {
       const cfg = getConfig()
       if (chatKey.startsWith('group:')) return { agentPreset: 'qq-hub-social' } // 群永远 ≤ social
@@ -128,6 +170,7 @@ export function createModularCore({
 
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
   const controller = createTurnController({
+    log,
     merge: {
       waitMs: Number(getConfig().merge?.waitSec * 1000) || 2500,
       maxMs: Number(getConfig().merge?.maxSec * 1000) || 8000,
@@ -144,12 +187,42 @@ export function createModularCore({
       const content = segmentsToContent(io.members)
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
-      const ctrl = dsh?.services?.sessionController ?? dsh?.get?.('sessionController')
+      //    sessionController 只能走 ctx.get（真机报告 3：cordis 未声明 inject 的 .services 直接点会抛）
+      const ctrl = ctxGet('sessionController')
       if (!ctrl?.resolveAgent) throw new Error('DSH 没有 sessionController（新核心无法驱动会话）')
       const resolved = await ctrl.resolveAgent(sessionId)
       const agent = resolved?.agent
       if (!agent?.followup) throw new Error(`会话 ${sessionId} 没有 agent.followup（适配缺口，如实失败）`)
-      agent.ctx?.contexts?.set?.('qq-hub-context', { name: 'qq-hub-context', text: () => ctxText })
+
+      // 4.5 模型跟随面板配置（真机报告 8）：不切的话会话会跑 DSH 默认模型——
+      //     风格/成本不一致，纯文本模型还会连带把看图堵死。与 legacy applyModel 同款：
+      //     只改本会话下一请求（selectForNextRequest），绝不动 DSH 全局默认。
+      try {
+        const cfgNow = getConfig()
+        const chat = turn.chatKey.startsWith('group:')
+          ? { kind: 'group', groupId: turn.chatKey.slice(6), userId: '' }
+          : { kind: 'private', userId: turn.chatKey.slice(8), groupId: '' }
+        let sel = null
+        const t0 = defaultModel(dsh, cfgNow)
+        if (t0) sel = { provider: t0.provider, model: t0.model, reasoningEffort: cfgNow.model?.reasoningEffort || '' }
+        const t1 = resolveChatModel(cfgNow, chat, null) // 主人按聊天指定的优先
+        if (t1) sel = { provider: t1.provider, model: t1.model, reasoningEffort: t1.reasoningEffort || cfgNow.model?.reasoningEffort || '' }
+        if (sel?.provider && sel?.model) {
+          const target = { provider: sel.provider, model: sel.model }
+          const effort = await pickReasoningEffort(dsh, target.provider, target.model, sel.reasoningEffort || undefined)
+          if (effort) target.reasoningEffort = effort
+          const selFn = ctrl.agents?.selectForNextRequest
+          if (typeof selFn === 'function') selFn.call(ctrl.agents, agent, target)
+          else if (typeof agent?.session?.append === 'function') agent.session.append('model/selection', target)
+        }
+      } catch (error) { debug(`模型选择未生效（用默认）：${error.message}`) }
+
+      // 4.6 模块上下文投喂（真机报告 4）：agent.ctx 是另一层 cordis ctx，直接 .contexts 同样会抛
+      try {
+        const contexts = agent.ctx?.get?.('contexts')
+        if (contexts?.set) contexts.set('qq-hub-context', { name: 'qq-hub-context', text: () => ctxText })
+        else debug('宿主没有可用的 contexts 服务，本轮跳过模块上下文投喂（如实记录，不静默）')
+      } catch (error) { try { log?.warn?.('模块上下文投喂不可用（本轮跳过）：', error.message) } catch {} }
 
       // 5. 等**回合结束**（不是首个 assistant/message）：
       //    - assistant/message：跳过 interrupted 的部分内容，记下本 turn 文本（可能多条取最后）；
@@ -184,10 +257,14 @@ export function createModularCore({
           reject(new Error('DSH 没有 session/event 流，无法取回复文本'))
         }
       })
+      // 5.5 消息完整形状（真机报告 1：DSH agent-loop 的 isOwned(message) 读 message.source.kind，
+      //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
+      const admitted = await admitContent(content)
+      const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
       // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
       let followupError = null
       try {
-        await agent.followup({ content })
+        await agent.followup(message)
       } catch (error) {
         followupError = error
       }
@@ -203,17 +280,26 @@ export function createModularCore({
         throw error
       }
 
-      // 6. 回复经 outbox 投递（唯一物理出口）
-      if (reply) {
-        const result = await outbox.request({
+      // 6. 出站后处理（真机报告 6：不处理后处理链时 `|||` 字面外发）：
+      //    stripReasoning、按 ||| 分气泡（maxBubbles 上限由 replyRules 收敛）、[沉默] 不说话——与 legacy 同一函数。
+      if (!reply) return null
+      const cfgOut = getConfig()
+      const parsed = parseReply(reply, replyRules(cfgOut, turn.chatKey.startsWith('group:')))
+      if (parsed.silent) return null
+      const bubbles = parsed.items.filter((i) => i.kind === 'text')
+      const skipped = parsed.items.length - bubbles.length
+      if (skipped > 0) debug(`本轮 ${skipped} 个富媒体/引用标记未接线（R4 已知缺口），只发文字气泡`)
+      // 7. 回复经 outbox 投递（唯一物理出口；多气泡按序多条 request，FIFO 保证顺序）
+      let result = null
+      for (const b of bubbles) {
+        result = await outbox.request({
           chatKey: turn.chatKey,
           turnId: turn.turnId,
           sourceModuleId: 'core',
-          segments: [{ type: 'text', data: { text: reply } }],
+          segments: [{ type: 'text', data: { text: b.value } }],
         })
-        return result
       }
-      return null
+      return result
     },
   })
 

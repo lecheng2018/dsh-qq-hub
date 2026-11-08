@@ -278,6 +278,14 @@ test('ledger：损坏文件失败关闭（空台账起步 + 上报），不猜�
   }
 })
 
+test('ledger：cancelled 记 cancelReason（真机报告：拒绝原因必须可审计）', () => {
+  const id = newDeliveryId()
+  const book = createDeliveryLedger({})
+  book.enqueue({ deliveryId: id, chatKey: 'private:1', segments: segs() })
+  book.mark(id, 'cancelled', { reason: '身份泄露闸：测试' })
+  assert.equal(book.get(id).cancelReason, '身份泄露闸：测试')
+})
+
 test('ledger：attemptCount 只统计真实物理发送尝试（状态迁移不计）', () => {
   const id = newDeliveryId()
   const book = createDeliveryLedger({})
