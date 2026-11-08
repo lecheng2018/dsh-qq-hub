@@ -12,6 +12,7 @@
 
 import { listPersonas, readPersona, savePersona, personaIdFor } from './personas.js'
 import { normalizeProfile } from '../features/distill.js'
+import { renderGrowthSegment } from '../features/distill-pipeline.js'
 
 /** 派生卡 id：稳定可推导，群号做后缀。 */
 export const distillCardId = (gid) => `persona-语感-${String(gid)}`
@@ -40,9 +41,14 @@ export function renderStyleBlock (entries) {
   return '\n\n' + '【从群友身上借来的说话方式】\n\n' + parts.join('\n\n') + '\n'
 }
 
-/** 派生卡正文 = 底卡正文 + 借用段。 */
-export function buildDerivedBody (baseBody, entries) {
-  return String(baseBody || '').trimEnd() + renderStyleBlock(entries)
+/** 派生卡正文 = 底卡正文 + 借用段 + 增长段（蒸馏流水线 L3，可选）。 */
+export function buildDerivedBody (baseBody, entries, growth) {
+  let body = String(baseBody || '').trimEnd() + renderStyleBlock(entries)
+  for (const g of growth || []) {
+    const block = renderGrowthSegment(g.uid || g.name, g.segment)
+    if (block) body += '\n\n' + block
+  }
+  return body
 }
 
 /**
@@ -69,22 +75,23 @@ export function styleEntries (targets) {
 
 /**
  * 生成/刷新某群的派生人设卡。
- * @param {{gid:string, entries:{name,profile}[], cfg:object, log?:object}} opts
+ * @param {{gid:string, entries:{name,profile}[], growth?:{uid,segment}[], cfg:object, log?:object}} opts
+ *   growth：蒸馏流水线 L3 的人格增长段（第二人称指令式），附在借用段之后。
  * @returns {{ok:boolean, message:string, cardId?:string, baseId?:string}}
  */
-export function refreshDistillCard ({ gid, entries, cfg, log = console }) {
+export function refreshDistillCard ({ gid, entries, growth, cfg, log = console }) {
   const cardId = distillCardId(gid)
   const dec = takeoverDecision(cfg, gid, cardId)
   if (!dec.takeover) return { ok: false, message: dec.reason }
-  if (!entries || !entries.length) return { ok: false, message: '这个群还没有学成的画像，先蒸馏一个群友再说' }
+  if ((!entries || !entries.length) && (!growth || !growth.length)) return { ok: false, message: '这个群还没有学成的画像，先蒸馏一个群友再说' }
   const base = readPersona(dec.baseId) || listPersonas()[0]
   if (!base) return { ok: false, message: '找不到底卡人设' }
-  const body = buildDerivedBody(base.body, entries)
+  const body = buildDerivedBody(base.body, entries, growth)
   savePersona(cardId, {
     name: `语感·借自${entries.map((e) => e.name).filter(Boolean).join('、') || '群友'}`,
     tags: ['自动生成'],
     body,
   })
-  log.info?.(`蒸馏语感已写进群人设卡 ${cardId}（底卡 ${base.id || dec.baseId} + ${entries.length} 个借用对象）`)
+  log.info?.(`蒸馏语感已写进群人设卡 ${cardId}（底卡 ${base.id || dec.baseId} + ${entries.length} 个借用对象${growth?.length ? ' + ' + growth.length + ' 个增长段' : ''}）`)
   return { ok: true, message: '已生成群专属人设卡', cardId, baseId: base.id || dec.baseId }
 }

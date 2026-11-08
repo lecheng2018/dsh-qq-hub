@@ -17,6 +17,7 @@ import { openMemoryDb } from './memory-sqlite.js'
 import { conceptsOf } from './memory-concepts.js'
 import { discoverSlangCandidates } from './slang-discover.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
+import { behaviorStats, renderBehaviorDigest, buildL1Prompt, parseL1, buildL2Prompt, parseL2, buildL3Prompt, parseL3, shouldTriggerL1, shouldTriggerL2, renderGrowthSegment } from './distill-pipeline.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/hub.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
@@ -25,7 +26,7 @@ export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradict
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDistillLearned }) {
+export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDistillLearned, askModelImpl = askModel }) {
   /** 从人设文本里抽「禁止」类硬规则行，给 style 学习当护栏（人设没写或没传 personaText 就返回空）。 */
   const personaGuard = () => {
     try {
@@ -686,6 +687,213 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
   }
 
+  // ---------- 蒸馏流水线（L1 原子特征 → L2 场景聚合 → L3 人格增长段） ----------
+  // 与上面的「每日全量蒸馏」并存：这里是增量触发（每 ~10 条新消息一批，带每小时限流），
+  // L3 每日随 consolidate 沉淀一次进派生人设卡的增长区段。模型可用 memory.distillModel 指定
+  // 低成本小模型（留空跟随主模型）。行为统计（时段/间隔/接话率）由代码精确计算，零 token。
+
+  function distillPipeCfg() {
+    const cfg = getConfig()
+    return {
+      enabled: cfg.enabled !== false && cfg.memory?.distill !== false && cfg.memory?.distillPipeline !== false,
+      threshold: Math.max(5, Number(cfg.memory?.distillBatch) || 10),
+      model: cfg.memory?.distillModel || { provider: '', model: '' },
+    }
+  }
+
+  /** 蒸馏用模型调用：distillModel 配了就用它（小成本），留空跟随主模型。 */
+  async function askDistillModel(prompt, maxTokens = 1200) {
+    const cfg = getConfig()
+    const model = distillPipeCfg().model || {}
+    const merged = { ...cfg, model: { ...(cfg.model || {}), ...model } }
+    return askModelImpl(dsh, { cfg: merged, ...prompt, maxTokens, temperature: 0.3 })
+  }
+
+  function pipeOf(key) {
+    return (load().distillPipe || {})[key] || { newCount: 0, batches: [], batchesSinceL2: 0, samples: [] }
+  }
+
+  function putPipe(key, patch) {
+    const s = load()
+    s.distillPipe = s.distillPipe || {}
+    s.distillPipe[key] = { newCount: 0, batches: [], batchesSinceL2: 0, samples: [], ...(s.distillPipe[key] || {}), ...patch }
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return s.distillPipe[key]
+  }
+
+  const pendingL1 = new Set() // 同一目标同时只跑一个后台 L1（防重入）
+
+  /**
+   * 群消息计数入口（模块的 activity 钩子调用）：目标是蒸馏对象才计数；
+   * 攒够 threshold 触发一次后台 L1（不 await，绝不阻塞消息链路）。
+   */
+  function noteGroupMessage(chatId, uid, t = Date.now()) {
+    try {
+      const dc = distillPipeCfg()
+      if (!dc.enabled) return
+      const cid = String(chatId || '')
+      if (!cid.startsWith('group:')) return
+      const gid = cid.slice(6)
+      const u = String(uid || '')
+      if (!gid || !u) return
+      const target = distillTargets().find((x) => String(x.gid) === gid && String(x.uid) === u)
+      if (!target) return
+      const key = distillKey(gid, u)
+      const p = pipeOf(key)
+      const newCount = (p.newCount || 0) + 1
+      const samples = [...(p.samples || []), Number(t) || Date.now()].slice(-400)
+      putPipe(key, { newCount, samples })
+      if (!shouldTriggerL1({ newCount, lastL1At: p.lastL1At }, { threshold: dc.threshold })) return
+      putPipe(key, { newCount: 0 })
+      if (pendingL1.has(key)) return
+      pendingL1.add(key)
+      Promise.resolve()
+        .then(() => runL1(gid, u, target))
+        .catch((error) => log.warn(`蒸馏L1（${target.name || u}）失败：`, error.message))
+        .finally(() => pendingL1.delete(key))
+    } catch (error) {
+      log.debug('蒸馏计数出错：', error.message)
+    }
+  }
+
+  /** L1：最近群流水 → 语言/话题特征（LLM）+ 行为统计（代码）→ 一批原子特征。 */
+  async function runL1(gid, uid, target) {
+    const dc = distillPipeCfg()
+    if (!dc.enabled) return
+    const key = distillKey(gid, uid)
+    const name = target?.name || uid
+    const days = (hub.chatLogDays?.() || []).slice(-2)
+    let lines = []
+    for (const d of days) {
+      for (const l of (hub.chatLogOf ? (hub.chatLogOf(d) || []) : [])) {
+        if (String(l.chatId) === `group:${gid}`) lines.push(l)
+      }
+    }
+    if (!lines.length) return
+    const mine = collectMemberLines(lines, uid)
+    if (!enoughEvidence(mine, { minMessages: 5, minChars: 40 })) {
+      log.debug(`蒸馏L1（${name}）：本批原话只有 ${mine.length} 句，证据不足跳过`)
+      return
+    }
+    const batchId = `b-${Date.now().toString(36)}`
+    const stats = behaviorStats(lines, uid)
+    const context = dedupConvo(lines.map((l) => ({ uid: l.uid, name: l.name || l.uid || '', text: String(l.text || '') }))).slice(-40)
+    const prompt = buildL1Prompt({
+      uid,
+      batchId,
+      messages: mine.slice(-14).map((x) => x.text),
+      context,
+      behaviorDigest: renderBehaviorDigest(stats),
+    })
+    let out = ''
+    try {
+      out = await askDistillModel(prompt)
+    } catch (error) {
+      log.warn(`蒸馏L1（${name}）模型调用失败：`, error.message)
+      return
+    }
+    const rec = parseL1(out, { uid, batchId })
+    if (!rec) {
+      log.warn(`蒸馏L1（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
+      return
+    }
+    const p = pipeOf(key)
+    const batches = [...(p.batches || []), rec].slice(-8)
+    const sinceL2 = (p.batchesSinceL2 || 0) + 1
+    const willL2 = shouldTriggerL2({ batches, batchesSinceL2: sinceL2 }, { batches: 5 })
+    putPipe(key, {
+      batches,
+      batchesSinceL2: willL2 ? 0 : sinceL2,
+      lastL1At: Date.now(),
+      behavior: stats,
+    })
+    log.info(`蒸馏L1：${name} 第 ${batches.length} 批（语言 ${rec.language_features.length} 条、话题 ${rec.topic_features.length} 条）`)
+    if (willL2) await runL2(gid, uid, target)
+  }
+
+  /** L2：累计 5 批 → 三场景行为模板。 */
+  async function runL2(gid, uid, target) {
+    const dc = distillPipeCfg()
+    if (!dc.enabled) return
+    const key = distillKey(gid, uid)
+    const name = target?.name || uid
+    const p = pipeOf(key)
+    if (!(p.batches || []).length) return
+    const digest = renderBehaviorDigest(p.behavior)
+    const prompt = buildL2Prompt({ uid, l1List: p.batches, behaviorDigest: digest })
+    let out = ''
+    try {
+      out = await askDistillModel(prompt, 1600)
+    } catch (error) {
+      log.warn(`蒸馏L2（${name}）模型调用失败：`, error.message)
+      return
+    }
+    const rec = parseL2(out, { uid })
+    if (!rec) {
+      log.warn(`蒸馏L2（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
+      return
+    }
+    putPipe(key, { l2: rec, batchesSinceL2: 0 })
+    log.info(`蒸馏L2：${name} 场景模板已聚合（闲聊/讨论/调侃）`)
+  }
+
+  /** L3：每日沉淀（挂在每日蒸馏流程尾部）——L2 模板 → 人格增长段 → 刷新派生卡。 */
+  async function runL3Daily() {
+    const dc = distillPipeCfg()
+    if (!dc.enabled) return
+    for (const t of distillTargets()) {
+      const key = distillKey(t.gid, t.uid)
+      const p = pipeOf(key)
+      if (!p?.l2) continue
+      const name = t.name || t.uid
+      const prompt = buildL3Prompt({
+        uid: t.uid,
+        oldSegment: p.l3?.persona_segment || null,
+        sceneTemplates: p.l2.scene_templates,
+        behaviorDigest: renderBehaviorDigest(p.behavior),
+      })
+      try {
+        const out = await askDistillModel(prompt, 1600)
+        const seg = parseL3(out, { uid: t.uid })
+        if (!seg) {
+          log.warn(`蒸馏L3（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
+          continue
+        }
+        putPipe(key, { l3: seg })
+        log.info(`蒸馏L3：${name} 人格增长段已更新${seg.update_note ? '（' + seg.update_note + '）' : ''}`)
+        try { onDistillLearned && await onDistillLearned(String(t.gid)) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
+      } catch (error) {
+        log.warn(`蒸馏L3（${name}）失败：`, error.message)
+      }
+    }
+  }
+
+  /** 面板/诊断：各目标的流水线状态（不含原始语料）。 */
+  function distillPipeStatus() {
+    return distillTargets().map((t) => {
+      const p = pipeOf(distillKey(t.gid, t.uid))
+      return {
+        gid: t.gid,
+        uid: t.uid,
+        name: t.name,
+        newCount: p.newCount || 0,
+        batches: (p.batches || []).length,
+        hasSceneTemplates: Boolean(p.l2),
+        hasGrowthSegment: Boolean(p.l3),
+        lastL1At: p.lastL1At || 0,
+      }
+    })
+  }
+
+  /** 派生卡渲染用：某群各目标的 L3 增长段。 */
+  function distillGrowthList(gid) {
+    return distillTargets()
+      .filter((t) => String(t.gid) === String(gid))
+      .map((t) => ({ uid: t.uid, name: t.name, segment: pipeOf(distillKey(t.gid, t.uid)).l3 }))
+      .filter((x) => x.segment)
+  }
+
   function setInsights(key, list, name) {
     const s = load()
     s.insights = s.insights || {}
@@ -1274,6 +1482,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       s.distillLearned[day] = [...doneToday]
       save(s)
     }
+    // L3 人格增长段：每日沉淀一次（有 L2 模板的目标才跑），随后刷新派生卡
+    try { await runL3Daily() } catch (error) { log.debug('蒸馏L3 失败：', error.message) }
   }
 
   /**
@@ -1481,6 +1691,11 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     learnDistillFromHistory,
     addDistillTarget,
     removeDistillTarget,
+    // 蒸馏流水线（L1/L2/L3 增量）：
+    noteGroupMessage,
+    distillPipeStatus,
+    distillGrowthList,
+    runL3Daily,
     removeSlang: (gid, id) => {
       const s = load()
       s.slang = s.slang || {}
