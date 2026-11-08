@@ -99,64 +99,7 @@ test('增长段渲染：带边界声明（不冒充、不碰身份与安全规�
   assert.equal(renderGrowthSegment('555', null), '')
 })
 
-// ---------- memory 接线：计数 → 触发 L1 → L2 → L3 → 派生卡 ----------
-
-function makeStore({ askModelImpl }) {
-  const dir = mkdtempSync(join(tmpdir(), 'distill-pipe-'))
-  process.env.AURABOT_DATA_DIR = dir
-  const calls = []
-  const chatLines = []
-  for (let i = 0; i < 9; i++) {
-    chatLines.push({ t: Date.now() - 400_000 + i * 30_000, chatId: 'group:777', uid: '555', name: '老哥', text: `今天这把游戏有点顶 ${i}` })
-  }
-  chatLines.push({ t: Date.now() - 380_000, chatId: 'group:777', uid: '666', name: '路人', text: '确实确实' })
-  const store = createMemoryStore({
-    dsh: { get: () => null },
-    getConfig: () => ({ enabled: true, botQQ: '10000', ownerQQ: '10000', memory: { enabled: true, distill: true, recallCount: 4 } }),
-    hub: {
-      ask: async () => 'x',
-      chatLogDays: () => ['d1'],
-      chatLogOf: (day) => chatLines,
-    },
-    log: { info() {}, warn() {}, debug() {}, error() {} },
-    askModelImpl: async (dsh, opts) => {
-      calls.push(opts)
-      const sys = String(opts.system || '')
-      if (sys.includes('群聊特征蒸馏引擎')) return L1_JSON
-      if (sys.includes('场景聚合引擎')) return L2_JSON
-      if (sys.includes('人格蒸馏引擎')) return L3_JSON
-      return '{}'
-    },
-    onDistillLearned: () => {},
-  })
-  return { store, calls, dir }
-}
-
-test('接线：计数达标触发 L1（用可配模型调用），攒 5 批触发 L2，L3 每日沉淀出增长段', async () => {
-  const { store, calls, dir } = makeStore({})
-  try {
-    store.addDistillTarget({ gid: '777', uid: '555', name: '老哥' })
-    // 9 条不触发；第 10 条触发（但限流窗口内最后一次清零后不再连续触发）
-    for (let i = 0; i < 10; i++) store.noteGroupMessage('group:777', '555', Date.now() + i)
-    await new Promise((r) => setTimeout(r, 80))
-    const l1Calls = calls.filter((c) => String(c.system || '').includes('蒸馏引擎'))
-    assert.equal(l1Calls.length, 1, '恰好一次后台 L1（限流内不重复）')
-    const status = store.distillPipeStatus()
-    assert.equal(status[0].newCount, 0, '触发后计数清零')
-    assert.equal(status[0].batches, 1)
-
-    // 再攒 4 批（每次 10 条消息；lastL1At 刚设过会被限流 → 直接用内部 runL1Daily 不行，改用时间回拨不可行，
-    // 这里用 4 次手工调用 runL1 的等价路径：直接走 distillPipeStatus 不可注入——改为信任 shouldTriggerL2 单测，
-    // 此处只验证 L2/L3 的可运行性：手工把 batches 塞满由 runL1 逻辑做（省去 4×10 条消息模拟）。
-    // L3 每日沉淀：当前 batches=1 < 5 → 不该有 L2/L3
-    assert.equal(status[0].hasSceneTemplates, false)
-    await store.runL3Daily()
-    assert.equal(store.distillPipeStatus()[0].hasGrowthSegment, false, '没有 L2 就不沉淀 L3')
-  } finally {
-    delete process.env.AURABOT_DATA_DIR
-    try { rmSync(dir, { recursive: true, force: true }) } catch {}
-  }
-})
+// memory 接线用例已随架构迁移到 test/distill-module.test.js（独立 optional 模块）；本文件保留纯逻辑用例。
 
 test('L3 沉淀 → 派生卡正文带增长段（底卡正文不变，边界声明随身）', () => {
   const l3 = parseL3(L3_JSON, { uid: '555' })
@@ -166,19 +109,4 @@ test('L3 沉淀 → 派生卡正文带增长段（底卡正文不变，边界声
   assert.match(body, /人格增长段/, '增长段在')
   assert.match(body, /不改变你的身份、记忆与安全规则/, '边界声明随身')
   assert.match(body, /多用短句和反问/, 'L3 的说话规则进了卡')
-})
-
-test('非蒸馏目标的消息计数零开销（无目标不写状态）', async () => {
-  const { store, dir } = makeStore({})
-  try {
-    store.addDistillTarget({ gid: '777', uid: '555', name: '老哥' })
-    for (let i = 0; i < 25; i++) store.noteGroupMessage('group:777', '999', Date.now() + i) // 999 不是目标
-    for (let i = 0; i < 5; i++) store.noteGroupMessage('private:777', '555', Date.now() + i) // 私聊不计数
-    await new Promise((r) => setTimeout(r, 50))
-    const status = store.distillPipeStatus()
-    assert.equal(status[0].newCount, 0, '非目标消息不计数')
-  } finally {
-    delete process.env.AURABOT_DATA_DIR
-    try { rmSync(dir, { recursive: true, force: true }) } catch {}
-  }
 })

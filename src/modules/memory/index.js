@@ -15,11 +15,14 @@ export default {
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
   tab: 'mood',
   files: ['features/memory.js'],
+  provides: ['memory-store'], // 蒸馏等伴生模块经 api.use('memory') 读目标列表（SDK 能力声明）
   setup(api) {
     const { hub, http } = api.core
     const refreshCard = (gid) => {
       const entries = styleEntries((memory.distillList() || []).filter((t) => String(t.gid) === String(gid)))
-      const growth = memory.distillGrowthList ? memory.distillGrowthList(gid) : []
+      // 增长段来自蒸馏模块（独立 optional 模块，经模块总线协作；没启用时就没有增长段）
+      let growth = []
+      try { growth = api.use('distill')?.growthList?.(String(gid)) || [] } catch {}
       const r = refreshDistillCard({ gid, entries, growth, cfg: api.config(), log: api.log })
       if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
       return r
@@ -41,8 +44,14 @@ export default {
       try {
         if (!a || a.kind !== 'in' || !a.text) return
         memory.reportMiss(a.chatId, a.text)
-        // 蒸馏流水线：目标对象在群里说话就计数，攒够一批触发后台 L1（异步，不阻塞消息链路）
-        if (a.chatId && a.userId) memory.noteGroupMessage?.(a.chatId, a.userId)
+        // 蒸馏计数已移交给独立 distill 模块（它自己挂 activity；这里只管召回负反馈）
+      } catch (error) {}
+    })
+    // 蒸馏模块 L3 学成 → 刷新这个群的派生人设卡（模块总线协作，不直接 import）
+    api.on('distill/growth-updated', (payload) => {
+      try {
+        const gid = String(payload?.gid || '')
+        if (gid) refreshCard(gid)
       } catch (error) {}
     })
 
