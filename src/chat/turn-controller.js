@@ -42,6 +42,8 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
   let disposed = false
 
   const debug = (msg) => { try { log?.debug?.(msg) } catch {} }
+  // 缺陷 7：flushTurn 失败此前被 `.catch(() => {})` 完全吞掉——任何回合失败零日志，排查全靠猜。留痕（不改变吞异常语义，只补可观测性）。
+  const flushFail = (turn, error) => { try { log?.warn?.(`回合执行失败：${turn?.chatKey} ${turn?.turnId}：${error?.message || error}`) } catch {} }
 
   function windowFor(chatKey) {
     let w = windows.get(chatKey)
@@ -193,7 +195,7 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
         const gen = w.generation
         w.timer = setTimeout(() => {
           if (w.generation !== gen || w.mergingTurnId !== turn.turnId) return
-          flushTurn(turn).catch(() => {})
+          flushTurn(turn).catch((error) => flushFail(turn, error))
         }, remain)
         w.timer.unref?.()
         return { role: 'follower', turnId: turn.turnId }
@@ -208,7 +210,7 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     const gen = w.generation
     w.timer = setTimeout(() => {
       if (w.generation !== gen || w.mergingTurnId !== turn.turnId) return
-      flushTurn(turn).catch(() => {})
+      flushTurn(turn).catch((error) => flushFail(turn, error))
     }, Math.min(waitMs, maxMs))
     w.timer.unref?.()
     return { role: 'lead', turnId: turn.turnId }
