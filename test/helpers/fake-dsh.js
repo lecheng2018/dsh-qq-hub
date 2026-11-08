@@ -13,6 +13,7 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
   const turns = [] // 记录每一轮：{ sessionId, preset, userText, images, reply, toolCalls }
   const modelSelections = [] // selectForNextRequest 调用记录（真机缺陷 8 断言面）
   const renames = [] // sessionController.rename 调用记录（真机缺陷 9：建会话命名/回填断言面）
+  const titlesBySession = new Map() // sessionId → 当前标题（sessionTitle 服务面：跨"重启"回读去重）
   const logs = []
 
   const emit = (name, ...args) => { for (const fn of listeners.get(name) || []) fn(...args) }
@@ -123,6 +124,8 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
       },
     },
     agents: { get: (id) => agents.get(id) },
+    // sessionTitle 服务面（真机缺陷 9 去重回读）：ctrl.rename 落到 titlesBySession，这里 fold 回读
+    sessionTitle: { get: (session) => (session?.id ? { title: titlesBySession.get(session.id) } : null) },
     attachments: {
       async admitPromptContent(content) {
         // 真机缺陷 2 测试开关：admitImages=false 模拟登记失败（EACCES/无附件目录），验证降级不毒化会话
@@ -146,7 +149,7 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
           workspaces.find((w) => w.id === workspaceId)?.sessionIds.push(id)
           return { sessionId: id, agentPreset }
         },
-        async rename({ sessionId, title } = {}) { renames.push({ sessionId, title }); return {} },
+        async rename({ sessionId, title } = {}) { renames.push({ sessionId, title }); titlesBySession.set(sessionId, title); return {} },
         // 真机缺陷 8 断言面：会话级模型选择只经 agents.selectForNextRequest（不改全局默认）。
         // 模拟真宿主语义：选择落到该会话（写入其 session events = 「本会话下一请求用这个」的可见效果），
         // chat-model/e2e 既有断言读 events 的口径不变；modelSelections 另记一份供直接断言。
