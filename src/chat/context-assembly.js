@@ -73,7 +73,7 @@ export function createContextAssembly({ providers = [] } = {}) {
     const errors = []
     for (const p of ordered) {
       try {
-        const raw = await p.provide({ chatKey, sessionId })
+        const raw = await p.provide({ chatKey, sessionId, chat: req?.chat }) // chat 视图透传（legacy provider 契约吃 chat 对象）
         const content = typeof raw === 'string' ? raw : String(raw?.content ?? '')
         if (!content) continue // 空贡献不产出 fragment（不占装配位）
         const frag = {
