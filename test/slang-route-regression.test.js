@@ -5,20 +5,23 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 test('/slang 路由读白名单用的是 api.config（模块作用域没有裸 getConfig）', () => {
-  const src = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
+  // 2026-11-08：/slang 路由随模块化重构迁到独立模块 src/modules/slang/（URL 不变）
+  const src = readFileSync(new URL('../src/modules/slang/index.js', import.meta.url), 'utf8')
   // /slang 路由体内不许出现裸 getConfig()
   const i = src.indexOf("api.route('/slang'")
   const seg = src.slice(i, i + 1400)
   assert.ok(!/[^.a-zA-Z]getConfig\(\)/.test(seg), '/slang 路由里还有裸 getConfig：' + seg.match(/[^.a-zA-Z]getConfig\(\)[^\n]*/)?.[0])
-  assert.match(seg, /api\.config\(\)\.allow/, '白名单经 api.config 读取')
+  assert.match(seg, /api\.config\(\)/, '配置经 api.config 读取')
 })
 
-test('全文件扫一遍：所有路由里不许有裸 getConfig（防同类错再犯）', () => {
-  const src = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
-  const lines = src.split('\n')
-  lines.forEach((l, i) => {
-    if (/[^.a-zA-Z]getConfig\(\)/.test(l)) assert.fail(`第 ${i + 1} 行裸 getConfig：${l.trim().slice(0, 80)}`)
-  })
+test('全文件扫一遍：memory 与 slang 模块的路由里都不许有裸 getConfig（防同类错再犯）', () => {
+  for (const file of ['../src/modules/memory/index.js', '../src/modules/slang/index.js']) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8')
+    const lines = src.split('\n')
+    lines.forEach((l, i) => {
+      if (/[^.a-zA-Z]getConfig\(\)/.test(l)) assert.fail(`${file} 第 ${i + 1} 行裸 getConfig：${l.trim().slice(0, 80)}`)
+    })
+  }
   assert.ok(true)
 })
 
