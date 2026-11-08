@@ -47,6 +47,27 @@ function textOfSegments(segments) {
     .map((s) => String(s?.data?.text || '')).join('')
 }
 
+/** 入站 → 模块中枢 activity 事件（等价 legacy hub.js:1583 那一发）。
+ *  蒸馏/心情/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
+ *  不补这一发它们永远收不到计数（验收报告「额外缺口」，真机实测 L0 batches 恒 0）。 */
+function emitActivity(mods, inbound) {
+  try {
+    const chatKey = String(inbound?.chatKey || '')
+    if (!chatKey) return
+    const kind = chatKey.startsWith('group:') ? 'group' : 'private'
+    mods?.emit?.('activity', {
+      kind: 'in',
+      chatId: chatKey,
+      userId: String(inbound?.sender?.userId || ''),
+      nickname: String(inbound?.sender?.nickname || ''),
+      text: textOfSegments(inbound.segments),
+      // direct 语义对齐 legacy：私聊/被@ 才算（新核心暂无 @ 判定，群消息先记 false，不猜）
+      direct: kind === 'private',
+      owner: false, // owner 判定归消费方按配置算，这里不猜
+    })
+  } catch { /* 计数是旁路，绝不打断主链 */ }
+}
+
 /** 入站成员段 → DSH content 块（legacy 视图语义：文本段原样、图片段带 url/file、其余如实降级）。 */
 function segmentsToContent(members) {
   const content = []
@@ -83,6 +104,24 @@ export function createModularCore({
   // 一律走 ctx.get(...)（宿主已 inject 的服务名），拿到就 try/catch 兜住。
   const ctxGet = (name) => { try { return dsh?.get?.(name) ?? null } catch { return null } }
   const admitAttachments = () => { try { return dsh?.get?.('attachments') ?? null } catch { return null } }
+
+  /** 群名缓存 + 按需查一次（legacy groupName 同语义：查不到就退群号，绝不为命名卡住主链）。 */
+  const groupNames = new Map()
+  async function groupNameOf(gid) {
+    const id = String(gid || '')
+    if (!id) return id
+    if (groupNames.has(id)) return groupNames.get(id)
+    try {
+      const info = await onebot.call('get_group_info', { group_id: Number(id) }, { retries: 0 })
+      if (info?.group_name) groupNames.set(id, String(info.group_name))
+    } catch { /* 查群名是锦上添花：失败就退回群号 */ }
+    return groupNames.get(id) || id
+  }
+  /** 预取白名单群的群名：建会话/回填时命名更准。 */
+  function prefetchGroupNames() {
+    const ids = (() => { try { return (getConfig().allow?.groups || []).map(String) } catch { return [] } })()
+    Promise.resolve().then(async () => { for (const gid of ids) await groupNameOf(gid) }).catch(() => {})
+  }
 
   /** 图片段必须登记成 DSH 附件（attachmentId）。DSH 只认 base64 编码图片
    *  （`{ type:'image', data, mediaType }`），QQ 给的是 URL——所以先下载，再登记。
@@ -124,11 +163,11 @@ export function createModularCore({
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
   const sessionAdapter = createDshSessionAdapter({
     dsh,
-    // [修复] 会话标题（legacy hub.js titleFor 同语义）：新核心建完不命名，面板里全是「未命名」
-    titleOf: (chatKey) => {
+    // 会话标题（legacy hub.js titleFor 同语义，含真实群名）：新核心建完不命名，面板里全是「未命名」
+    titleOf: async (chatKey) => {
       const cfg = getConfig()
       const owner = cfg.ownerName || '主人'
-      if (String(chatKey).startsWith('group:')) return `QQ 群 · ${String(chatKey).slice(6)}`
+      if (String(chatKey).startsWith('group:')) return `QQ 群 · ${await groupNameOf(String(chatKey).slice(6))}`
       const uid = String(chatKey).slice(8)
       return uid === String(cfg.ownerQQ || '') ? `QQ · ${owner}私聊` : `QQ 私聊 · ${uid}`
     },
@@ -154,11 +193,25 @@ export function createModularCore({
     },
   })
   const sessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
-  // 启动后给已有映射补标题（老映射是未命名时代建的）
-  const backfillTitles = (reg) => {
+  // 群名是异步查到的：建会话时可能还退着群号，拿到真名后补一次 rename（适配器内有去重，不会刷屏）。
+  function refreshGroupTitles(reg) {
     Promise.resolve().then(async () => {
       for (const [chatKey, entry] of Object.entries(reg.snapshot?.() || {})) {
-        if (!entry?.sessionId) continue
+        if (!chatKey.startsWith('group:') || !entry?.sessionId) continue
+        const gid = chatKey.slice(6)
+        const name = await groupNameOf(gid)
+        if (!name || name === gid) continue
+        await sessionAdapter.renameExisting?.(entry.sessionId, chatKey).catch(() => {})
+      }
+    }).catch(() => {})
+  }
+  // 启动后给已有映射补标题（老映射是未命名时代建的）；无存量映射就不打网关查询
+  const backfillTitles = (reg) => {
+    Promise.resolve().then(async () => {
+      const entries = Object.entries(reg.snapshot?.() || {}).filter(([, e]) => e?.sessionId)
+      if (!entries.length) return
+      prefetchGroupNames() // 先拿群名，回填才能用真名
+      for (const [chatKey, entry] of entries) {
         await sessionAdapter.renameExisting?.(entry.sessionId, chatKey).catch(() => {})
       }
     }).catch(() => {})
@@ -169,6 +222,7 @@ export function createModularCore({
     onError: (e) => log.warn('session 映射持久化异常：', e.message),
   })
   backfillTitles(registry)
+  refreshGroupTitles(registry)
 
   // ---------- Context Assembly（模块上下文 + 人格） ----------
   const assembly = createContextAssembly({
@@ -371,6 +425,7 @@ export function createModularCore({
       debug(`入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
       return { handled: 'acl-denied', reason: acl.reason }
     }
+    emitActivity(mods, inbound)
     controller.offer(inbound)
     return { handled: 'offered' }
   }
@@ -392,6 +447,7 @@ export function createModularCore({
     if (!inbound) return { handled: 'skipped' }
     const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
     if (!acl.allowed) return { handled: 'acl-denied', reason: acl.reason }
+    emitActivity(mods, inbound)
     controller.offer(inbound)
     return { handled: 'offered' }
   }
