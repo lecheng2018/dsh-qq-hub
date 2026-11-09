@@ -149,7 +149,7 @@ test('审计1.2 按聊天人设：personaTextFor 提供的专用卡遮蔽全局�
 })
 
 test('审计§2 模块发送桥：文本/图片发送并入 outbox（台账有 sourceModuleId、dryRun 能拦）；语音/文件走 legacy 但补台账（2026-11-09 现网 #13 收口）', async () => {
-  const { core, mock, cfg } = await coreFixture()
+  const { core, mock, cfg } = await coreFixture({ core: { ledgerFile: join(mkdtempSync(join(tmpdir(), 'm5p-ledger-')), 'deliveries.json') } })
   try {
     const fakeHubCalls = []
     const bridge = createModuleSendBridge({ hub: { sendText: async (...a) => { fakeHubCalls.push(a); return { message_id: 999 } }, sendSegments: async () => ({ message_id: 998 }) }, outbox: core.outbox, log: noopLog })
@@ -176,11 +176,9 @@ test('审计§2 模块发送桥：文本/图片发送并入 outbox（台账有 s
     assert.equal(hubMedia.length, 1, '非文本/图片段仍走 hub 管线')
     // 且发完补了台账（recordExternal 是 B 方案收口的公开面）
     assert.equal(typeof core.outbox.recordExternal, 'function', 'outbox 暴露 recordExternal')
-    const st1 = core.outbox.ledger.stats()
     const id = core.outbox.recordExternal({ chatKey: 'group:777', sourceModuleId: 'voice', segments: [], gatewayMessageId: '4321' })
     assert.ok(id, '外部发送拿到 deliveryId')
-    assert.ok(JSON.stringify(core.outbox.ledger.stats()).length, '台账可查询')
-    void st1
+    assert.equal(core.outbox.ledger.get(id)?.sourceModuleId, 'voice', '台账可按 deliveryId 回查归属')
   } finally { await core.dispose(); await mock.close() }
 })
 
