@@ -4,7 +4,7 @@
 // （commit aa122ea），并转正 FLAG_MODULAR_CORE 默认开（0882ed8）。现网证据在报告与
 // 真机日志；本文件是仓库侧的**行为钉**：每条对应报告一项，用 fake DSH + mock OneBot
 // 直接打新核心工厂，缺了哪根接线测试就红。
-// 尚未拉齐的 legacy 面（引用解析、<reply:n>、模块钩子改写、慢工具提示等）见
+// 引用正文、<reply:n>/<at:> 已有本文件回归；更复杂的引用历史补图与模块钩子仍见
 // docs/refactor/new-core-parity-ledger.md，不在此假装覆盖。
 
 import test from 'node:test'
@@ -299,5 +299,60 @@ test('typing 平账：私聊回合亮 set_input_status(1)，群聊不亮（e2e #
     await sleep(600)
     const groupPings = mock.calls.filter((c) => c.action === 'set_input_status' && String(c.params.user_id) === '555')
     assert.equal(groupPings.length, 0, '群聊不该亮 typing')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('引用入站：get_msg 还原被引用正文和发送者，拼入当前 DSH 回合', async () => {
+  const { core, dsh, mock } = await fixture({ brain: async ({ text }) => `读到[${text}]` })
+  try {
+    mock.state.messages = {}
+    mock.state.messages['424242'] = {
+      message_id: 424242,
+      sender: { user_id: 30003, nickname: '引用者' },
+      message: [{ type: 'text', data: { text: '需要保留的被引用原文' } }],
+    }
+    await core.dispatchLegacyEvent(privEv({
+      message: [{ type: 'reply', data: { id: '424242' } }, { type: 'text', data: { text: '这个呢' } }],
+    }))
+    await sleep(700)
+    assert.equal(dsh.turns.length, 1)
+    assert.match(dsh.turns[0].userText, /需要保留的被引用原文/)
+    assert.match(dsh.turns[0].userText, /引用者/)
+    assert.match(dsh.turns[0].userText, /这个呢/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('<reply:n> 与 <at:> 出站整条委托 legacyDeliver，不再当纯文字丢标记', async () => {
+  const delivered = []
+  const { core, mock } = await fixture({
+    brain: async ({ text }) => text.includes('引用') ? '<reply:1>引用这条回复' : '<at:30003> 提醒一下',
+    coreOver: { legacyDeliver: async (chatId, text) => { delivered.push([chatId, text]); return { state: 'sent' } } },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '测试引用' } }] }))
+    await sleep(500)
+    await core.dispatchLegacyEvent(privEv({ message_id: 987654, message: [{ type: 'text', data: { text: '测试提醒' } }] }))
+    await sleep(500)
+    assert.ok(delivered.some(([, text]) => /<reply:1>/.test(text)), `reply 未委托：${JSON.stringify(delivered)}`)
+    assert.ok(delivered.some(([, text]) => /<at:30003>/.test(text)), `at 未委托：${JSON.stringify(delivered)}`)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('群聊引用机器人消息：没有 @ 也按 repliedToBot 触发，并带被引用正文', async () => {
+  const { core, dsh, mock } = await fixture({ brain: async ({ text }) => `群引用[${text}]` })
+  try {
+    mock.state.messages = {
+      515151: {
+        message_id: 515151,
+        sender: { user_id: Number(BOT), nickname: '机器人' },
+        message: [{ type: 'text', data: { text: '机器人之前发出的正文' } }],
+      },
+    }
+    const ev = groupEv('接着这句说')
+    ev.message = [{ type: 'reply', data: { id: '515151' } }, { type: 'text', data: { text: '接着这句说' } }]
+    await core.dispatchLegacyEvent(ev)
+    await sleep(700)
+    assert.equal(dsh.turns.length, 1, '引用机器人消息没有触发群回合')
+    assert.match(dsh.turns[0].userText, /机器人之前发出的正文/)
   } finally { await core.dispose(); await mock.close() }
 })
