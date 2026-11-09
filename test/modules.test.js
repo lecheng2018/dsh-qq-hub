@@ -1,9 +1,6 @@
 // 模块系统 + 联动：自己写的模块、替换 / 关掉内置模块、热重载、安全模式、复制内置模块、开放接口、DSH 联动工具。
 //
-// 本套件钉在 legacy 逃生阀路径（同 e2e.test.js 的理由：断言引用回复、开放接口事件列表、
-// 热重载重挂等 legacy 内部形态；新核心侧由 m4/m6/m7 契约覆盖，差距记台账
-// docs/refactor/new-core-parity-ledger.md）。
-process.env.FLAG_MODULAR_CORE = 'false'
+// 默认在模块化新核心路径运行，覆盖模块接管、开放接口、联动工具、模拟测试与引用回复。
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
@@ -346,7 +343,7 @@ test('模拟测试：消息、命令、她的回复都走一遍模块，但不�
   const r = (await fake.call('/modules/simulate', { as: 'owner', kind: 'private', text: 'ping', reply: '在呢' })).json()
   assert.equal(r.ok, true)
   assert.match(r.steps.join('\n'), /接管/)
-  assert.ok(r.sent.some((s) => s.text === 'pong2'))
+  assert.ok(r.sent.some((s) => s.text === 'pong2'), JSON.stringify(r))
   assert.ok(r.sent.some((s) => s.text === '在呢～'), '她的回复经过了模块改写')
   const c = (await fake.call('/modules/simulate', { as: 'owner', kind: 'private', text: '/echo 你好' })).json()
   assert.ok(c.sent.some((s) => s.text === 'echo: 你好'))

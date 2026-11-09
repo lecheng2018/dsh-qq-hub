@@ -263,7 +263,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       send: (chatId, text) => core.hub.deliver(String(chatId), String(text ?? '')),
       sendText: (chatId, text) => core.hub.sendText(String(chatId), String(text ?? '')),
       // 回某一条消息：群里以「引用回复」发出，私聊直接发
-      reply: (msg, text) => core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
+      reply: (msg, text) => core.hub.reply
+        ? core.hub.reply(msg, String(text ?? ''), id)
+        : core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
       isOwner: (userId) => String(userId) === String(getConfig().ownerQQ),
       sendImage: (chatId, src) => core.hub.sendImage(String(chatId), src),
       sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),
@@ -276,7 +278,11 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       sendVoiceFile: (chatId, file, note) => core.hub.sendVoiceFile(String(chatId), file, note || `[${id}] 语音`),
       ask: (opts) => core.ask(typeof opts === 'string' ? { text: opts } : opts),
       think: (prompt, opts = {}) => core.hub.runSystemTurn(`ext-${id}`, opts.title || def.name || id, String(prompt), opts),
-      onebot: (action, params, opts) => core.onebot.call(action, params, opts),
+      // PR-1（ADR-0002）：发信类动作（send|upload）转走 hub.deliverRaw——开旗态进统一 Outbox
+      // （台账/dryRun/泄露闸对模块直调生效）；管理/查询类保持原直连语义不变。
+      onebot: (action, params, opts) => (/^(send|upload)_/.test(String(action)) && typeof core.hub.deliverRaw === 'function')
+        ? core.hub.deliverRaw({ action, params, opts, sourceModuleId: id })
+        : core.onebot.call(action, params, opts),
       dshTool: (tool) => { rec.dshTools.push(tool); core.bridge?.refresh(); return () => { remove(rec.dshTools, tool); core.bridge?.refresh() } },
     }
     return api

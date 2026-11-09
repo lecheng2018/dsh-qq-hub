@@ -195,9 +195,14 @@ test('M3-C：paramsFor 形状（群/私聊）与非法 ChatKey', async () => {
   assert.deepEqual(paramsFor('group:777', []), { group_id: 777, message: [] })
   assert.deepEqual(paramsFor('private:55', []), { user_id: 55, message: [] })
   assert.throws(() => paramsFor('10001', []), TypeError)
-  // 非消息动作直接拒绝（物理出口只发消息）
-  const adapter = createOnebotOutboxAdapter({ onebot: { call: async () => ({}) } })
-  await assert.rejects(() => adapter.send('set_group_ban', {}), /只发消息/)
+  // PR-1：适配器允许直通动作并保留 raw；管理动作是否允许由 hub-egress 白名单负责。
+  const calls = []
+  const adapter = createOnebotOutboxAdapter({
+    onebot: { call: async (action, params) => { calls.push([action, params]); return { file_id: 'file-1' } } },
+  })
+  const direct = await adapter.send('upload_private_file', { user_id: 55, file: '/tmp/a.txt' })
+  assert.equal(calls[0][0], 'upload_private_file')
+  assert.equal(direct.raw.file_id, 'file-1')
 })
 
 // ---------- M3-D legacy context adapter ----------
