@@ -63,6 +63,15 @@ const groupEv = (text = '在吗') => ({
   message: [{ type: 'at', data: { qq: Number(BOT) } }, { type: 'text', data: { text: ' ' + text } }],
 })
 
+/** 图片 URL 秒回 PNG 字节（同 m4 真机缺陷 10 的桩）；不桩的话新核的 15s 下载超时会拖死等待窗口。 */
+function stubPngFetch() {
+  const orig = globalThis.fetch
+  globalThis.fetch = async (url, opt) => String(url).includes('x/y.png')
+    ? { ok: true, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer }
+    : orig(url, opt)
+  return () => { globalThis.fetch = orig }
+}
+
 // —— A6/#6 入站聊天流水：ACL 放行后记一行，出站成功记 bot 行（记忆/蒸馏/黑话/日记的命门）——
 test('流水接线：入站 (chatKey,昵称,文本,uid) + 出站成功 bot 行（报告 A 组 #6）', async () => {
   const rows = []
@@ -94,11 +103,12 @@ test('偷表情接线：collectInboundStickers 收到 (chatKey, segments, userId
   const { core, mock } = await fixture({
     coreOver: { collectInboundStickers: (chatKey, segments, userId) => got.push([chatKey, segments.map((s) => s.type), userId]) },
   })
+  const restore = stubPngFetch()
   try {
     await core.dispatchLegacyEvent(privEv({ message: [{ type: 'image', data: { url: 'https://x/y.png' } }] }))
     await sleep(600)
     assert.ok(got.some(([, types]) => types.includes('image')), `未收集：${JSON.stringify(got)}`)
-  } finally { await core.dispose(); await mock.close() }
+  } finally { restore(); await core.dispose(); await mock.close() }
 })
 
 // —— #8 面板统计 + recentMedia（开旗后曾恒 0 / 丢失）——
@@ -112,13 +122,14 @@ test('统计与 recentMedia：入站 received、出站 sent、媒体段登记（
       noteMedia: (chatKey, segments, userId) => media.push([String(chatKey), segments.map((s) => s.type), String(userId)]),
     },
   })
+  const restore = stubPngFetch()
   try {
-    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '看这张图' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
     await sleep(700)
     assert.ok(stats.includes('received'), 'received 计数缺失')
     assert.ok(stats.includes('sent'), 'sent 计数缺失')
     assert.ok(media.some(([ck, types, uid]) => ck === `private:${OWNER}` && types.includes('image') && uid === OWNER), `recentMedia 缺失：${JSON.stringify(media)}`)
-  } finally { await core.dispose(); await mock.close() }
+  } finally { restore(); await core.dispose(); await mock.close() }
 })
 
 // —— A1/#1 模块工具挂载：会话级一次挂载、清单变化整套重挂、系统聊天不挂 ——
