@@ -37,16 +37,17 @@ export function isPipelineEnabled(env = process.env) {
 
 /**
  * M4 总开关解析：FLAG_MODULAR_CORE（模块化新核心主链）。
- * 解析口径与 FLAG_USE_PIPELINE 同款：仅 'true'/'1'（忽略大小写与首尾空白）算开，
- * 'false'、乱值、未设置一律 false——默认关，legacy 直调路径逐字不变（任务书 M4-0 红线）。
+ * 2026-11-09 起默认开（现网 1.3.65-test.20261108.5-local5+3 验证通过后转正）：
+ * 仅显式 'false' / '0'（忽略大小写与首尾空白）回退 legacy 直调路径；
+ * 未设置、空值、乱值一律走新核心。legacy 代码保持完整可用，作为一键逃生阀。
  * @param {Record<string, string | undefined>} [env]
  * @returns {boolean}
  */
 export function isModularCoreEnabled(env = process.env) {
   const raw = env?.FLAG_MODULAR_CORE
-  if (typeof raw !== 'string') return false
+  if (typeof raw !== 'string') return true
   const v = raw.trim().toLowerCase()
-  return v === 'true' || v === '1'
+  return !(v === 'false' || v === '0')
 }
 
 /**
