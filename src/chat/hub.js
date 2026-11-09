@@ -213,7 +213,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
       const dir = dataDir('chatlog')
       mkdirSync(dir, { recursive: true })
-      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who, ...(uid ? { uid: String(uid) } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
+      const cfg = getConfig() || {}
+      const uidText = String(uid || '')
+      const ownerName = uidText && uidText === String(cfg.ownerQQ || '') ? String(cfg.ownerName || '主人') : ''
+      const author = String(who || '').trim() || ownerName || uidText || (String(chatId).startsWith('private:') ? String(chatId).slice(8) : '群成员')
+      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who: author, ...(uid ? { uid: uidText } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
     } catch (error) {}
   }
 

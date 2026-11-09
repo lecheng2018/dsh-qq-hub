@@ -895,6 +895,10 @@ export function createModularCore({
   }
 
   async function dispose() {
+    for (const mounted of mountedTools.values()) {
+      for (const off of mounted.offs) { try { off?.() } catch {} }
+    }
+    mountedTools.clear()
     await registry.dispose()
     await controller.dispose()
     outbox.dispose()

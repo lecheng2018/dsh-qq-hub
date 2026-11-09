@@ -356,3 +356,20 @@ test('群聊引用机器人消息：没有 @ 也按 repliedToBot 触发，并带
     assert.match(dsh.turns[0].userText, /机器人之前发出的正文/)
   } finally { await core.dispose(); await mock.close() }
 })
+
+test('提问工具生命周期：核心 dispose 会卸载本会话工具，热重载后可在共享 agent 重挂', async () => {
+  const { core, dsh, mock } = await fixture({
+    coreOver: {
+      buildTools: () => [{ name: 'ask_user_question', description: 'd', execute: async () => ({ ok: true }) }],
+    },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    const sid = Object.values(core.registry.snapshot())[0]?.sessionId
+    const agent = dsh.agents.get(sid)
+    assert.ok(agent.tools.has('ask_user_question'), '首轮未挂提问工具')
+    await core.dispose()
+    assert.equal(agent.tools.has('ask_user_question'), false, 'dispose 后旧工具仍残留，下一次挂载会重复注册')
+  } finally { await mock.close() }
+})
