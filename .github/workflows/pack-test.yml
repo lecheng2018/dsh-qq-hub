@@ -1,0 +1,94 @@
+name: Pack Test Build
+
+# 官方打包通道：在 GitHub Actions 上把当前分支构建成 dsh-qq-hub 测试 tgz，
+# 发布为 prerelease（附 sha256），同时保留 workflow artifact 以便回查。
+# 与 Verify 的区别：不跑全量测试（测试是 PR 门禁的事），这里只负责可复现的打包与发布。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '测试包版本号（形如 1.3.65-test.YYYYMMDD.N）'
+        required: true
+        default: '1.3.65-test.20261109.8'
+      release_title:
+        description: 'Release 标题（留空自动生成）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set version in package.json (build-only; repo copy not committed)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs')
+          const v = process.env.VERSION || ''
+          if (!/^1\.3\.\d{2}-test\.\d{8}\.\d+$/.test(v)) {
+            console.error(`bad version: "${v}"（要求形如 1.3.65-test.20261109.8）`)
+            process.exit(2)
+          }
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          p.version = v
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n')
+          console.log('version =>', v)
+          NODE
+
+      - name: npm pack
+        run: |
+          TGZ=$(npm pack)
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+          sha256sum "$TGZ" | tee sha256.txt
+        id: pack
+
+      - name: Smoke check packaged host entrypoint
+        run: |
+          rm -rf /tmp/smoke && mkdir -p /tmp/smoke
+          tar -xzf "${{ steps.pack.outputs.tgz }}" -C /tmp/smoke
+          node --input-type=module -e "const h = await import('file:///tmp/smoke/package/src/host.js'); if (typeof h.apply !== 'function') { console.error('apply missing'); process.exit(1) }; console.log('SMOKE OK')"
+
+      - name: Release notes
+        env:
+          VERSION: ${{ inputs.version }}
+          TITLE: ${{ inputs.release_title }}
+          SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "## $VERSION"
+            echo
+            echo "- 来源：\`$GITHUB_REPOSITORY\` 分支 \`${GITHUB_REF_NAME}\`，commit \`$SHA\`"
+            echo "- 构建：GitHub Actions run \`$GITHUB_RUN_ID\`（node 22 / ubuntu-latest，npm pack）"
+            echo "- sha256：$(cut -d' ' -f1 sha256.txt)"
+            echo "- 安装/回退参照 README 与 docs/refactor/new-core-parity-ledger.md"
+          } > notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.tgz }}
+          path: |
+            ${{ steps.pack.outputs.tgz }}
+            sha256.txt
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          TITLE: ${{ inputs.release_title }}
+        run: |
+          gh release create "$VERSION" "${{ steps.pack.outputs.tgz }}" sha256.txt \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "${TITLE:-dsh-qq-hub $VERSION (test build)}" \
+            --notes-file notes.md
