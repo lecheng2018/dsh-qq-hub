@@ -29,18 +29,17 @@ import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { mimeOf } from '../chat/inbound.js'
-import { parseReply, replyRules } from '../chat/reply.js'
+import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
-import { agoLabel } from '../chat/clockline.js'
+import { agoLabel, nowLine } from '../chat/clockline.js'
 
 /**
- * 语音段转文字（真机审计 1.4：legacy transcribe 的简化复刻）。
- * 只走网关的 fetch_ptt_text（NapCat/SnowLuma 自带转写）；本地 ASR 那条链依赖 localApi/ffmpeg，
- * 属可选能力，接不上就保留 `[record]` 占位，并如实记一条 debug。失败绝不打断回合。
+ * 语音段转文字：本地 ASR 优先，网关 fetch_ptt_text 兜底；
+ * 两者都失败时保留 `[record]` 占位并记 debug，不伪称已听见，也不打断回合。
  */
 async function hydrateRecords(members, onebot, log, localApi) {
   const list = Array.isArray(members) ? members : []
@@ -103,6 +102,47 @@ async function hydrateRecords(members, onebot, log, localApi) {
   return out
 }
 
+/** 合并转发水合：展开真实消息正文，限制条数和总长度；失败保留原段，不伪称已读。 */
+async function hydrateForwards(members, onebot, log) {
+  const out = []
+  for (const member of Array.isArray(members) ? members : []) {
+    const segments = Array.isArray(member?.segments) ? member.segments : []
+    if (!segments.some((s) => s?.type === 'forward')) { out.push(member); continue }
+    const next = []
+    for (const segment of segments) {
+      if (segment?.type !== 'forward') { next.push(segment); continue }
+      const id = String(segment.data?.id ?? segment.data?.res_id ?? segment.data?.forward_id ?? '')
+      if (!id) { next.push(segment); continue }
+      try {
+        const raw = await onebot.call('get_forward_msg', { id }, { timeoutMs: 10000, retries: 0 })
+        const rows = []
+        let used = 0
+        for (const item of (raw?.messages || []).slice(0, 50)) {
+          const sender = item?.sender || {}
+          const parsed = parseMessageEvent({
+            message_type: 'private',
+            user_id: item?.user_id ?? sender.user_id,
+            sender,
+            message: item?.message ?? item?.raw_message ?? '',
+          }, '')
+          const name = String(sender.card || sender.nickname || parsed.userId || '某人')
+          const line = `${name}：${parsed.text || '（媒体/非文字消息）'}`
+          if (used + line.length > 6000) break
+          rows.push(line)
+          used += line.length
+        }
+        if (!rows.length) throw new Error('转发内容为空')
+        next.push({ type: 'text', data: { text: `[合并转发的聊天记录（${rows.length} 条）]\n${rows.map((line) => `  ${line}`).join('\n')}\n[转发结束]` } })
+      } catch (error) {
+        log?.debug?.(`合并转发读取失败（保留原段）：${error?.message || error}`)
+        next.push(segment)
+      }
+    }
+    out.push({ ...member, segments: next })
+  }
+  return out
+}
+
 /** 入站事件 → checkAllowed 需要的 msg 形状（从 ChatKey + sender 还原 kind/userId/groupId）。 */
 function aclMsgFromInbound(inbound) {
   const chatKey = String(inbound?.chatKey ?? '')
@@ -144,8 +184,10 @@ function segmentsToContent(members) {
   for (const m of members) {
     for (const s of (m?.segments ?? [])) {
       if (s?.type === 'text') { const t = String(s.data?.text ?? ''); if (t) content.push({ type: 'text', text: t }) }
-      else if (s?.type === 'image') content.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
-      else if (s?.type) content.push({ type: 'text', text: `\n[${s.type}]\n` }) // 语音/文件/转发/@：如实占位，不静默丢
+      else if (s?.type === 'image' || s?.type === 'mface') content.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
+      else if (s?.type === 'reply' || s?.type === 'at') continue
+      else if (s?.type === 'forward') content.push({ type: 'text', text: '\n[合并转发（内容没拉到）]\n' })
+      else if (s?.type) content.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
   }
   return content
@@ -193,7 +235,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage,
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
@@ -227,6 +269,7 @@ export function createModularCore({
   // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
   const groups = createGroupState()
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
+  const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const moodChatty = () => {
     try {
       const m = typeof moodEffects === 'function' ? moodEffects() : null
@@ -282,10 +325,13 @@ export function createModularCore({
       if (block.type !== 'image' || block.data) { hydrated.push(block); continue }
       const url = String(block.url || '')
       try {
-        if (!/^https?:\/\//i.test(url)) throw new Error('不是可下载的 http(s) 地址')
-        const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const buf = Buffer.from(await res.arrayBuffer())
+        let buf
+        if (url.startsWith('base64://')) buf = Buffer.from(url.slice(9), 'base64')
+        else if (/^https?:\/\//i.test(url)) {
+          const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          buf = Buffer.from(await res.arrayBuffer())
+        } else throw new Error('不是可下载的 http(s)/base64 地址')
         if (!buf.length) throw new Error('下载到 0 字节')
         if (buf.length > 10 * 1024 * 1024) throw new Error(`图片太大（${Math.round(buf.length / 1024)}KB）`)
         hydrated.push({ type: 'image', data: buf.toString('base64'), mediaType: mimeOf(buf), name: 'qq-image' })
@@ -311,6 +357,23 @@ export function createModularCore({
   const quoteCache = new Map()
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
 
+  const quoteSegUsable = (seg) => [seg?.data?.url, seg?.data?.file].some((value) => typeof value === 'string' && (/^https?:\/\//i.test(value) || value.startsWith('base64://') || value.startsWith('file://') || /^[a-zA-Z]:[\\/]/.test(value)))
+  async function quoteFromHistory(replyId, chatKey) {
+    const inGroup = chatKey.startsWith('group:')
+    const action = inGroup ? 'get_group_msg_history' : 'get_friend_msg_history'
+    const base = inGroup ? { group_id: Number(chatKey.slice(6)) } : { user_id: Number(chatKey.slice(8)) }
+    const anchor = /^-?\d+$/.test(replyId) ? Number(replyId) : 0
+    const attempts = anchor ? [{ ...base, message_id: anchor, count: 5, reverse_order: false }, { ...base, count: 30 }] : [{ ...base, count: 30 }]
+    for (const params of attempts) {
+      try {
+        const raw = await onebot.call(action, params, { timeoutMs: 8000, retries: 0 })
+        const hit = (raw?.messages || []).find((item) => String(item?.message_id ?? '') === replyId || String(item?.real_id ?? '') === replyId)
+        if (hit) return hit
+      } catch (error) { debug(`引用消息历史也拉不到（${replyId}）：${error?.message || error}`) }
+    }
+    return null
+  }
+
   async function quotedInfo(replyId, chatKey) {
     const key = `${chatKey}:${replyId}`
     if (quoteCache.has(key)) return quoteCache.get(key)
@@ -320,20 +383,28 @@ export function createModularCore({
       const sender = raw?.sender || {}
       const uid = String(sender.user_id ?? raw?.user_id ?? '')
       const inGroup = chatKey.startsWith('group:')
-      const parsed = parseMessageEvent({
+      const eventFor = (message, from = sender) => ({
         message_type: inGroup ? 'group' : 'private',
         group_id: inGroup ? chatKey.slice(6) : undefined,
         user_id: uid,
-        sender,
-        message: raw?.message ?? raw?.raw_message ?? '',
-      }, getConfig().botQQ)
+        sender: from,
+        message,
+      })
+      let parsed = parseMessageEvent(eventFor(raw?.message ?? raw?.raw_message ?? ''), getConfig().botQQ)
+      if ([...(parsed.images || []), ...(parsed.stickers || [])].some((seg) => !quoteSegUsable(seg))) {
+        const hit = await quoteFromHistory(String(replyId), chatKey)
+        if (hit) {
+          const again = parseMessageEvent(eventFor(hit.message ?? '', hit.sender || sender), getConfig().botQQ)
+          parsed = again
+        }
+      }
       out = {
         ok: true,
         who: String(sender.card || sender.nickname || uid || '某人'),
         uid,
         text: String(parsed.text || '').trim().slice(0, 300),
         media: [...(parsed.images || []), ...(parsed.stickers || [])],
-        isBot: uid === String(getConfig().botQQ || ''),
+        isBot: uid === String(getConfig().botQQ || '') || Boolean(isSentMessage?.(replyId)),
       }
     } catch (error) {
       debug(`引用消息没拉到（${replyId}）：${error?.message || error}`)
@@ -344,11 +415,11 @@ export function createModularCore({
   }
 
   function quoteNote(q) {
-    if (!q?.ok) return '（引用了一条消息，但内容没读到；需要时可以请对方重发或说明）'
+    if (!q?.ok) return '（引用了某条消息，但内容没读到；如果影响理解，可以如实说没看到，让对方重发或说一下是哪条）'
     const owner = String(getConfig().ownerQQ || '')
     const who = q.isBot ? '你' : owner && q.uid === owner ? '主人' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`
-    const body = q.text || (q.media.length ? '（图片/表情）' : '（没有文字）')
-    return `（引用 ${who} 的消息：「${body}」）`
+    const body = String(q.text || '').replace(/\[(图片|表情包)\]/g, '').trim() || (q.media.length ? '（图片/表情）' : '（没有文字）')
+    return `（引用 ${who} 的消息：「${body}」${q.media.length ? `，另有 ${q.media.length} 张图片/表情包` : ''}）`
   }
 
   async function hydrateQuotes(members, chatKey) {
@@ -428,6 +499,7 @@ export function createModularCore({
   })
   backfillTitles(registry)
   refreshGroupTitles(registry)
+  const turnAt = (chatKey) => registry.markTurn(chatKey)
 
   // ---------- Context Assembly（模块上下文 + 人格） ----------
   const assembly = createContextAssembly({
@@ -438,8 +510,8 @@ export function createModularCore({
   })
 
   // ---------- Outbox（唯一物理出口；授权/全局闸/身份闸/台账持久化全在此接线） ----------
-  const ledger = ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
-  const outbox = createOutbox({
+  const ledger = !sharedOutbox && ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
+  const outbox = sharedOutbox || createOutbox({
     send: createOnebotOutboxAdapter({ onebot }).send,
     ...(ledger ? { ledger } : {}),
     // 出站白名单复核（与 legacy checkAllowed 同一判定；出队时执行，撤权在排队期间也生效）
@@ -490,20 +562,34 @@ export function createModularCore({
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
       : '（有人在叫你，看完这一段再回）'
-    const numbered = fresh.map((x, i) => `[${i + 1}] ${line(x)}`)
+    const refs = {}
+    const numbered = fresh.map((x, i) => {
+      if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid }
+      return `[${i + 1}] ${line(x)}`
+    })
+    groups.setRefs(gid, refs)
+    const timeHead = nowLine(nowAt, turnAt(chatKey), { what: '上一段消息' })
     const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
-      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
-      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n'
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
+      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
+      '大多数时候直接说就行。只有想专门接其中某一条时才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
+      '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
     // 触发轮自身的图片与引用说明一并附上；reply 段已由 quoteNote 取代，不留下占位。
     const extras = []
     const quotes = []
     for (const m of members) for (const s of (m?.segments ?? [])) {
-      if (s?.type === 'image') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
+      if (s?.type === 'image' || s?.type === 'mface') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
       else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
-      else if (s?.type && s.type !== 'text' && s.type !== 'reply') extras.push({ type: 'text', text: `\n[${s.type}]\n` })
+      else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
     if (quotes.length) extras.unshift({ type: 'text', text: quotes.join('\n') })
-    return { blocks: [{ type: 'text', text: head }, ...extras], mode }
+    const direct = fresh.filter((x) => x.direct)
+    const directSenders = new Set(direct.map((x) => x.uid))
+    const target = directSenders.size === 1 ? direct.at(-1) : null
+    const autoReply = target ? { mid: target.mid, uid: target.uid } : null
+    const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
+    const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
+    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, query, speakers }
   }
   // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
   // 键必须是**会话 id**：resolveAgent 每轮返回新的 agent 包装对象，用对象做键永远不命中
@@ -515,6 +601,7 @@ export function createModularCore({
 
   /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
   const mountedTools = new Map() // sessionId -> { agent, key, offs }
+  const slowNoticeSent = new Set()
   function mountTools(agent, chatKey, sessionId) {
     if (typeof buildTools !== 'function') return
     const cfg = getConfig()
@@ -528,16 +615,44 @@ export function createModularCore({
     try { tools = buildTools({ chat, level, sessionId }) || [] } catch (error) { debug(`工具生成失败：${error?.message || error}`); return }
     let gen = 0
     try { gen = typeof toolsGeneration === 'function' ? Number(toolsGeneration()) || 0 : 0 } catch { gen = 0 }
-    const key = `${tools.map((t) => t.name).sort().join(',')}|gen:${gen}`
+    let denied = []
+    try { denied = moduleHooks?.deniedTools?.() || [] } catch {}
+    const key = `${tools.map((t) => t.name).sort().join(',')}|gen:${gen}|deny:${[...denied].sort().join(',')}`
     const prev = mountedTools.get(sessionId)
     if (prev && prev.agent === agent && prev.key === key) return
     if (prev) for (const off of prev.offs) { try { off?.() } catch {} }
     const offs = []
+    try {
+      const off = agent.ctx?.tools?.restrict?.({ deny: denied })
+      if (typeof off === 'function') offs.push(off)
+    } catch (error) { debug(`联动工具屏蔽失败：${error?.message || error}`) }
     let already = 0
     let failed = 0
     for (const tool of tools) {
       try {
-        const off = agent.ctx?.tools?.register?.(tool)
+        let registration = tool
+        if (tool.slow) {
+          const { slow, ...base } = tool
+          const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+          registration = {
+            ...base,
+            async execute(args, exec) {
+              let fired = false
+              const timer = setTimeout(() => {
+                if (fired || slowNoticeSent.has(sessionId)) return
+                fired = true
+                slowNoticeSent.add(sessionId)
+                Promise.resolve(outbox.request({
+                  chatKey, sourceModuleId: 'core',
+                  segments: [{ type: 'text', data: { text: notice } }],
+                })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
+              }, 1500)
+              timer.unref?.()
+              try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
+            },
+          }
+        }
+        const off = agent.ctx?.tools?.register?.(registration)
         if (typeof off === 'function') offs.push(off)
       } catch (error) {
         const msg = String(error?.message || error)
@@ -565,20 +680,43 @@ export function createModularCore({
       const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId: sessionId0, chat })
       // 2. 会话（single-flight 创建在 offer 时已发生；这里拿映射）
       const { sessionId } = await registry.sessionFor(turn.chatKey)
+      const queryText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       // 回合说话人登记（speakersOf 的数据源；群聊记忆检索要用）
-      try { noteSpeakers?.(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean)) } catch {}
+      try { noteSpeakers?.(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean), { chatId: turn.chatKey, queryText }) } catch {}
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
       let turnMode = null
+      let autoReply = null
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
-      const heard = await hydrateRecords(io.members, onebot, log, localApi)
+      const expanded = await hydrateForwards(io.members, onebot, log)
+      const heard = await hydrateRecords(expanded, onebot, log, localApi)
+      if (inGroup) {
+        for (const member of heard) {
+          const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
+          if (hit) hit.text = textOfSegments(member.segments)
+        }
+      }
       const members = await hydrateQuotes(heard, turn.chatKey)
       if (inGroup) {
         const gp = groupPromptContent(turn.chatKey, members)
         content = gp.blocks
         turnMode = gp.mode
+        autoReply = gp.autoReply
+        try { noteSpeakers?.(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
       } else {
         content = segmentsToContent(members)
+        const source = `【私聊】${chat.nickname || chat.userId}(${chat.userId})：`
+        const timeHead = nowLine(Date.now(), turnAt(turn.chatKey))
+        const index = content.findIndex((block) => block.type === 'text')
+        if (index >= 0) content[index] = { ...content[index], text: `${source}\n${timeHead}\n${content[index].text || ''}` }
+        else content.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
+      }
+      if (typeof moduleHooks?.prompt === 'function') {
+        const next = await moduleHooks.prompt(content, {
+          chat, sessionId, senderId: chat.userId, prevText: '', queryText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
+        })
+        if (next == null) return null
+        content = next
       }
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
@@ -589,6 +727,33 @@ export function createModularCore({
       const agent = resolved?.agent
       if (!agent?.followup) throw new Error(`会话 ${sessionId} 没有 agent.followup（适配缺口，如实失败）`)
       mountTools(agent, turn.chatKey, sessionId) // 模块工具（qq_send_*、记忆、B站、群管…）
+      let activeSteers = 0
+      io.onSteer(async (inbound) => {
+        activeSteers++
+        try {
+          const expandedSteer = await hydrateForwards([inbound], onebot, log)
+          const heardSteer = await hydrateRecords(expandedSteer, onebot, log, localApi)
+          const quotedSteer = await hydrateQuotes(heardSteer, turn.chatKey)
+          let steerContent = segmentsToContent(quotedSteer)
+          const source = `【私聊】${inbound.sender?.nickname || inbound.sender?.userId}(${inbound.sender?.userId})：`
+          const timeHead = nowLine(Date.now(), turnAt(turn.chatKey))
+          const index = steerContent.findIndex((block) => block.type === 'text')
+          if (index >= 0) steerContent[index] = { ...steerContent[index], text: `${source}\n${timeHead}\n${steerContent[index].text || ''}` }
+          else steerContent.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
+          const steerQuery = textOfSegments(inbound.segments)
+          try { noteSpeakers?.(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
+          if (typeof moduleHooks?.prompt === 'function') {
+            const next = await moduleHooks.prompt(steerContent, { chat, sessionId, senderId: chat.userId, prevText: '', queryText: steerQuery, steer: true })
+            if (next == null) return
+            steerContent = next
+          }
+          const admittedSteer = await admitContent(steerContent)
+          await agent.steer({ id: randomUUID(), role: 'user', content: admittedSteer, source: { kind: 'qq-hub' } })
+        } finally {
+          activeSteers--
+          if (followupDone && !activeSteers) finishReply()
+        }
+      })
 
       // 4.5 模型跟随面板配置（真机报告 8）：不切的话会话会跑 DSH 默认模型——
       //     风格/成本不一致，纯文本模型还会连带把看图堵死。与 legacy applyModel 同款：
@@ -600,6 +765,7 @@ export function createModularCore({
         if (t0) sel = { provider: t0.provider, model: t0.model, reasoningEffort: cfgNow.model?.reasoningEffort || '' }
         const t1 = resolveChatModel(cfgNow, chat, typeof availableModels === 'function' ? availableModels() : null) // 主人按聊天指定的优先；面板指定模型已从 DSH 消失时要退回下一级（与 legacy hub.js:411 同口径）
         if (t1) sel = { provider: t1.provider, model: t1.model, reasoningEffort: t1.reasoningEffort || cfgNow.model?.reasoningEffort || '' }
+        if (typeof moduleHooks?.model === 'function') sel = moduleHooks.model(sel, chat) ?? sel
         if (sel?.provider && sel?.model) {
           const target = { provider: sel.provider, model: sel.model }
           const effort = await pickReasoningEffort(dsh, target.provider, target.model, sel.reasoningEffort || undefined)
@@ -664,10 +830,19 @@ export function createModularCore({
       //    - turn/end：completed 且有文本才 resolve；非 completed 如实失败（不发、释放调度槽）；
       //    - followup rejection：捕获，回合落定异常，finally 清理监听器（防句柄泄漏）。
       let off = null
+      let followupDone = false
+      let completion = null
+      let finishReply = () => {}
       const cleanupListener = () => { try { off?.() } catch {} off = null }
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
         let lastText = ''
+        finishReply = () => {
+          if (!completion) return
+          cleanupListener()
+          if (!completion.completed) { reject(new Error(`回合未正常结束：${completion.kind || '?'}`)); return }
+          resolve(completion.text)
+        }
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
           if (ev?.type === 'assistant/message') {
@@ -679,15 +854,11 @@ export function createModularCore({
           }
           if (ev?.type === 'turn/end') {
             const d = ev?.data || {}
-            const completed = d.reason && d.reason.kind === 'completed'
-            const text = lastTurn === d.turn ? lastText : ''
-            cleanupListener()
-            if (!completed) { reject(new Error(`回合未正常结束：${d.reason?.kind || '?'}`)); return }
-            resolve(String(text ?? ''))
+            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '' }
+            if (followupDone) finishReply()
           }
         })
         if (typeof off !== 'function') {
-          // 无事件流的 DSH：followup 链落定后取不到回复文本（如实报错，不猜）
           cleanupListener()
           reject(new Error('DSH 没有 session/event 流，无法取回复文本'))
         }
@@ -700,6 +871,7 @@ export function createModularCore({
       // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
       // 现网新核心此前不亮 typing（转正补齐的 e2e 平账项）。
       activity.startTyping(String(sessionId), chat, getConfig(), pingTyping)
+      steeringChats.add(turn.chatKey)
       const stopTyping = () => { try { activity.stopTyping(String(sessionId)) } catch {} }
       let followupError = null
       try {
@@ -708,15 +880,20 @@ export function createModularCore({
         followupError = error
       }
       if (followupError) {
+        steeringChats.delete(turn.chatKey)
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
         stopTyping()
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
+      followupDone = true
+      if (!activeSteers) finishReply()
       let reply
       try {
         reply = await replyPromise
+        steeringChats.delete(turn.chatKey)
         stopTyping()
       } catch (error) {
+        steeringChats.delete(turn.chatKey)
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
         throw error
@@ -725,37 +902,58 @@ export function createModularCore({
       // 6. 出站后处理（真机报告 6：不处理后处理链时 `|||` 字面外发）：
       //    stripReasoning、按 ||| 分气泡（maxBubbles 上限由 replyRules 收敛）、[沉默] 不说话——与 legacy 同一函数。
       if (!reply) return null
+      if (typeof moduleHooks?.reply === 'function') {
+        const next = await moduleHooks.reply(String(reply), { chatId: turn.chatKey, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
+        if (next == null) return null
+        reply = String(next)
+      }
       const cfgOut = getConfig()
       const parsed = parseReply(reply, replyRules(cfgOut, turn.chatKey.startsWith('group:')))
       if (parsed.silent) return null
-      const bubbles = parsed.items.filter((i) => i.kind === 'text')
-      const skipped = parsed.items.length - bubbles.length
-      // 有富媒体标记 → 整条交给 legacy deliver（TTS/表情库/图片上传/引用/戳一戳它都有，
-      // 拆成两路发会出现「文字出去了、语音丢了」的半成品，反而不如一次交付）
-      // 系统表情 <face:名字> 也只有 legacy 会转成 QQ 小黄脸（faces.textToSegments + 去重状态），
-      // 走 outbox 会原样发出「<face:呲牙>」字面量（真机实测）。
-      const hasFaceTag = /<face:\s*[^>]{1,12}>/.test(String(reply || ''))
-      const hasReplyTag = parsed.items.some((item) => Boolean(item.replyTo))
-      const hasAtTag = /<at:\s*[^>]{1,30}>/.test(String(reply || ''))
-      if ((skipped > 0 || hasFaceTag || hasReplyTag || hasAtTag) && typeof legacyDeliver === 'function') {
+      let replyItems = parsed.items
+      if (typeof moduleHooks?.items === 'function') {
+        const next = await moduleHooks.items(replyItems, { chatId: turn.chatKey, text: String(reply), userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
+        if (next == null) return null
+        replyItems = next
+      }
+      const bubbles = replyItems.filter((i) => i.kind === 'text')
+      const skipped = replyItems.length - bubbles.length
+      // legacy deliver 只负责既有出站语义（语音/表情/图片/引用/@/概率/气泡），物理发送仍经共享 Outbox。
+      if (typeof legacyDeliver === 'function') {
         try {
-          await legacyDeliver(turn.chatKey, reply, { own: true, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
-          try { onStats?.('sent') } catch {} // 与 legacy 同口径：QQ 出去一条就计一条（委托路径也计）
-          try { logChat?.(turn.chatKey, 'bot', String(reply)) } catch {}
-          return { state: 'sent', via: 'legacy-media' }
+          await legacyDeliver(turn.chatKey, reply, {
+            own: true,
+            userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
+            wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
+            autoReply,
+            refs: inGroup ? groups.refs(chat.groupId) : {},
+          })
+          if (inGroup) {
+            try { groups.noteSpeak(chat.groupId) } catch {}
+            try { groups.noteSpokeInGroup(chat.groupId) } catch {}
+            try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
+          }
+          return { state: 'sent', via: 'legacy-deliver' }
         } catch (error) {
-          log.warn(`富媒体回复发送失败，退回只发文字：${error?.message || error}`)
+          log.warn(`回复发送失败：${error?.message || error}`)
+          throw error
         }
       }
-      if (skipped > 0) debug(`本轮 ${skipped} 个富媒体/引用标记未接线（R4 已知缺口），只发文字气泡`)
+      if (skipped > 0) debug(`未配置 legacyDeliver，本轮 ${skipped} 个富媒体/引用标记只能省略`)
       // 7. 回复经 outbox 投递（唯一物理出口；多气泡按序多条 request，FIFO 保证顺序）
       let result = null
       for (const b of bubbles) {
+        let segments = [{ type: 'text', data: { text: b.value } }]
+        if (typeof moduleHooks?.send === 'function') {
+          const next = await moduleHooks.send(segments, { chatId: turn.chatKey, note: String(b.value).slice(0, 60), force: false })
+          if (next == null) continue
+          segments = next
+        }
         result = await outbox.request({
           chatKey: turn.chatKey,
           turnId: turn.turnId,
           sourceModuleId: 'core',
-          segments: [{ type: 'text', data: { text: b.value } }],
+          segments,
         })
         try { if (result?.state === 'sent') onStats?.('sent') } catch {}
         try { if (result?.state === 'sent') logChat?.(turn.chatKey, 'bot', String(b.value)) } catch {}
@@ -768,6 +966,7 @@ export function createModularCore({
       // 8. 群说话记账（legacy noteSpeak/noteInterject 同款）：刹车（burst 上限）与冷却的数据源
       if (inGroup && result && (result.state === 'sent' || result.state === 'unknown')) {
         const gid = chat.groupId
+        try { groups.noteSpeak(gid) } catch {}
         try { groups.noteSpokeInGroup(gid) } catch {}
         try { if (turnMode === 'interject') groups.noteInterject(gid) } catch {}
       }
@@ -782,14 +981,14 @@ export function createModularCore({
     if (runCommand && ev.post_type === 'message') {
       const view = parseMessageEvent(ev, ev.self_id)
       const cmd = parseCommand(view.text, mods.commands())
-      if (cmd && !cmd.ext && isOwner(cfg, view.userId)) {
+      if (cmd && isOwner(cfg, view.userId)) {
         const reply = await runCommand(cmd, { ...view, chatId: view.chatId, nickname: cfg.ownerName || '主人', text: view.text })
         if (reply) {
           await outbox.request({
             chatKey: view.chatId,
             sourceModuleId: 'core',
             segments: [{ type: 'text', data: { text: String(reply) } }],
-            dryRun: cfg.dryRun === true,
+            force: true,
           })
           return { handled: 'command' }
         }
@@ -807,6 +1006,34 @@ export function createModularCore({
    *  activity 在闸之前发：蒸馏等模块的计数不受「要不要回」影响。）
    */
   function routeInbound(inbound, ev, source) {
+    const isPoke = (inbound?.segments || []).some((s) => s?.type === 'poke')
+    if (isPoke) {
+      const self = String(ev.self_id || getConfig().botQQ || '')
+      const poker = String(inbound.sender?.userId || '')
+      if (String(ev.target_id || '') !== self || !poker || poker === self) return { handled: 'skipped' }
+    }
+    const hook = isPoke ? moduleHooks?.poke : moduleHooks?.message
+    const continueInbound = () => {
+      if (!isPoke) return routeInboundCore(inbound, ev, source)
+      try { rememberPoker?.(inbound.chatKey, String(inbound.sender?.userId || '')) } catch {}
+      try { if (claimPoke && !claimPoke(inbound.chatKey)) return { handled: 'poke-throttled' } } catch {}
+      const poke = inbound.segments.find((s) => s?.type === 'poke')
+      const action = String(poke?.data?.action || '')
+      const suffix = String(poke?.data?.suffix || '')
+      return routeInboundCore({
+        ...inbound,
+        segments: [
+          { type: 'at', data: { qq: String(ev.self_id || getConfig().botQQ || '') } },
+          { type: 'text', data: { text: ` [戳了戳你${action ? `：${action}${suffix}` : ''}]` } },
+        ],
+      }, ev, source)
+    }
+    if (typeof hook !== 'function') return continueInbound()
+    const input = isPoke ? ev : { ...parseMessageEvent(ev, ev.self_id), raw: ev }
+    return Promise.resolve(hook(input)).then((claimed) => claimed ? { handled: 'module' } : continueInbound())
+  }
+
+  function routeInboundCore(inbound, ev, source) {
     const cfg = getConfig()
     // 入站 ACL：白名单外会话 offer 前即拒（绝不让未授权消息驱动 DSH）
     const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
@@ -840,12 +1067,16 @@ export function createModularCore({
     const userId = String(inbound?.sender?.userId ?? '')
     // 群缓冲（legacy 同款：群里的每条消息都记，给上下文和「群里在不在聊」用；ACL 后、闸前）
     let mentioned = false
+    let buffered = null
     if (inGroup) {
       try {
         mentioned = !!parseMessageEvent(ev, ev.self_id).mentioned
       } catch {}
+      const self = String(ev.self_id || getConfig().botQQ || '')
+      mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
       const gid = inbound.chatKey.slice(6)
-      groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: false })
+      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound) })
+      try { rememberSpeaker?.(inbound.chatKey, userId) } catch {}
     }
     emitActivity(mods, inbound)
     // 真机审计 1.11：面板统计与「最近发来的图/表情」（legacy 同一份内存状态）
@@ -864,14 +1095,31 @@ export function createModularCore({
         controller.offer(inbound)
         return { handled: 'offered' }
       }
+      const applyHook = (decision) => {
+        if (typeof moduleHooks?.groupDecide !== 'function') return offerWithDecision(decision)
+        const msg = { ...parseMessageEvent(ev, ev.self_id), raw: ev }
+        const policy = policyFor(cfg.group, cfg.group?.overrides, inbound.chatKey.slice(6))
+        return Promise.resolve(moduleHooks.groupDecide(decision, {
+          msg, policy, recentTexts: groups.buffer(inbound.chatKey.slice(6)).map((x) => x.text), memScore: 0,
+        })).then((next) => offerWithDecision(next || decision))
+      }
       const replyId = replyIdOf(inbound)
       if (replyId) {
-        return quotedInfo(replyId, inbound.chatKey).then((quoted) => offerWithDecision(decideGroupReplyFor({
-          chatKey: inbound.chatKey, text, mentioned, userId,
-          repliedToBot: Boolean(quoted?.ok && quoted.isBot),
-        })))
+        return quotedInfo(replyId, inbound.chatKey).then((quoted) => {
+          const repliedToBot = Boolean(quoted?.ok && quoted.isBot)
+          if (buffered && repliedToBot) buffered.direct = true
+          return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, repliedToBot }))
+        })
       }
-      return offerWithDecision(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId }))
+      return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId }))
+    }
+    const running = controller.runningTurnOf(inbound.chatKey)
+    if (running && steeringChats.has(inbound.chatKey)) {
+      controller.steer(running, inbound).catch((error) => {
+        debug(`私聊插话失败，转为下一轮：${error?.message || error}`)
+        controller.offer(inbound)
+      })
+      return { handled: 'steered' }
     }
     controller.offer(inbound)
     return { handled: 'offered' }
@@ -894,7 +1142,46 @@ export function createModularCore({
     return routeInbound(inbound, ev, 'backfill')
   }
 
+  /** 主动任务共用一个 QQ/DSH 会话，只生成文本，不在这里自动投递（调用方仍走统一 Outbox）。 */
+  async function runPromptTurn(chatKey, text) {
+    return controller.runExclusive(chatKey, async () => {
+      const { sessionId } = await registry.sessionFor(chatKey)
+      const ctrl = ctxGet('sessionController')
+      const resolved = await ctrl?.resolveAgent?.(sessionId)
+      const agent = resolved?.agent
+      if (!agent?.followup) throw new Error('当前会话没有 agent.followup')
+      let off = null
+      const cleanup = () => { try { off?.() } catch {} off = null }
+      const result = new Promise((resolve, reject) => {
+        let lastTurn = null
+        let lastText = ''
+        off = dsh.on?.('session/event', (session, ev) => {
+          if (session?.id !== sessionId) return
+          if (ev?.type === 'assistant/message') {
+            const d = ev.data || {}
+            if (d.interrupted) return
+            const value = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
+            if (value) { lastTurn = d.turn; lastText = value }
+          } else if (ev?.type === 'turn/end') {
+            const d = ev.data || {}
+            cleanup()
+            if (d.reason?.kind !== 'completed') { reject(new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`)); return }
+            resolve(lastTurn === d.turn ? String(lastText || '') : '')
+          }
+        })
+        if (typeof off !== 'function') { cleanup(); reject(new Error('DSH 没有 session/event 流')) }
+      })
+      const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(text || '') }], source: { kind: 'qq-hub' } }
+      try { await agent.followup(message) } catch (error) { cleanup(); throw error }
+      try { return await result } catch (error) { cleanup(); throw error }
+    })
+  }
+
   async function dispose() {
+    for (const mounted of mountedTools.values()) {
+      for (const off of mounted.offs) { try { off?.() } catch {} }
+    }
+    mountedTools.clear()
     await registry.dispose()
     await controller.dispose()
     outbox.dispose()
@@ -936,6 +1223,8 @@ export function createModularCore({
 
   return {
     dispatchLegacyEvent,
+    runPromptTurn,
+    markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,
     dispatchBackfill,
