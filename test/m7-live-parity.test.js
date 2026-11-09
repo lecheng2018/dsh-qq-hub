@@ -4,8 +4,8 @@
 // （commit aa122ea），并转正 FLAG_MODULAR_CORE 默认开（0882ed8）。现网证据在报告与
 // 真机日志；本文件是仓库侧的**行为钉**：每条对应报告一项，用 fake DSH + mock OneBot
 // 直接打新核心工厂，缺了哪根接线测试就红。
-// 引用正文、<reply:n>/<at:> 已有本文件回归；更复杂的引用历史补图与模块钩子仍见
-// docs/refactor/new-core-parity-ledger.md，不在此假装覆盖。
+// 引用历史补图、完整模块链路与真实出站由 e2e/modules 默认新核心套件共同覆盖；
+// 当前状态见 docs/refactor/new-core-parity-ledger.md。
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -354,5 +354,134 @@ test('群聊引用机器人消息：没有 @ 也按 repliedToBot 触发，并带
     await sleep(700)
     assert.equal(dsh.turns.length, 1, '引用机器人消息没有触发群回合')
     assert.match(dsh.turns[0].userText, /机器人之前发出的正文/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('提问工具生命周期：核心 dispose 会卸载本会话工具，热重载后可在共享 agent 重挂', async () => {
+  const { core, dsh, mock } = await fixture({
+    coreOver: {
+      buildTools: () => [{ name: 'ask_user_question', description: 'd', execute: async () => ({ ok: true }) }],
+    },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    const sid = Object.values(core.registry.snapshot())[0]?.sessionId
+    const agent = dsh.agents.get(sid)
+    assert.ok(agent.tools.has('ask_user_question'), '首轮未挂提问工具')
+    await core.dispose()
+    assert.equal(agent.tools.has('ask_user_question'), false, 'dispose 后旧工具仍残留，下一次挂载会重复注册')
+  } finally { await mock.close() }
+})
+
+test('合并转发：get_forward_msg 的消息正文和发送者进入当前回合', async () => {
+  const { core, dsh, mock } = await fixture({ brain: async ({ text }) => `转发[${text}]` })
+  try {
+    mock.state.forwards = {
+      'forward-1': [
+        { sender: { user_id: 30003, nickname: '甲' }, message: [{ type: 'text', data: { text: '转发里的第一句' } }] },
+        { sender: { user_id: 30004, nickname: '乙' }, message: [{ type: 'text', data: { text: '转发里的第二句' } }] },
+      ],
+    }
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'forward', data: { id: 'forward-1' } }] }))
+    await sleep(700)
+    assert.equal(dsh.turns.length, 1)
+    assert.match(dsh.turns[0].userText, /转发里的第一句/)
+    assert.match(dsh.turns[0].userText, /转发里的第二句/)
+    assert.match(dsh.turns[0].userText, /甲/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('慢工具：执行超过阈值先经 outbox 发提示，完成后清掉计时器', async () => {
+  const { core, dsh, mock } = await fixture({
+    brain: async ({ callTool }) => (await callTool('slow_work', {}))?.message || '没有结果',
+    coreOver: {
+      buildTools: () => [{
+        name: 'slow_work', description: 'd', slow: '正在处理，请稍等',
+        execute: async () => { await sleep(1600); return { ok: true, message: '完成了' } },
+      }],
+    },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(2000)
+    const texts = mock.sent('send_private_msg').map((x) => JSON.stringify(x.params?.message || x.params))
+    assert.ok(texts.some((x) => x.includes('正在处理')), `慢工具提示未发：${JSON.stringify(texts)}`)
+    assert.ok(texts.some((x) => x.includes('完成了')), `最终结果未发：${JSON.stringify(texts)}`)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('模块钩子：message/prompt/reply/items/send 与群策略/模型都进入新核心实际链路', async () => {
+  const calls = []
+  const moduleHooks = {
+    message: async () => { calls.push('message'); return false },
+    prompt: async (content) => { calls.push('prompt'); return content },
+    reply: async (text) => { calls.push('reply'); return `${text}·改写` },
+    items: async (items) => { calls.push('items'); return items },
+    send: async (segments) => { calls.push('send'); return segments },
+    groupDecide: async (decision) => { calls.push('groupDecide'); return decision },
+    model: (selection) => { calls.push('model'); return selection },
+  }
+  const { core, dsh, mock } = await fixture({
+    brain: async () => '原回复',
+    coreOver: { moduleHooks },
+  })
+  try {
+    await core.dispatchLegacyEvent(groupEv('调用钩子'))
+    await sleep(700)
+    for (const name of ['message', 'prompt', 'reply', 'items', 'send', 'groupDecide', 'model']) {
+      assert.ok(calls.includes(name), `${name} 未接入：${JSON.stringify(calls)}`)
+    }
+    const sent = JSON.stringify(mock.sent('send_group_msg').map((x) => x.params))
+    assert.match(sent, /原回复·改写/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('模块 message 接管：返回 true 时不建会话、不调用 DSH', async () => {
+  const { core, dsh, mock } = await fixture({ coreOver: { moduleHooks: { message: async () => true } } })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(300)
+    assert.equal(dsh.turns.length, 0)
+    assert.equal(Object.keys(core.registry.snapshot()).length, 0)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('主动任务回合：复用当前 QQ 会话且只生成不自动投递', async () => {
+  const { core, dsh, mock } = await fixture({ brain: async ({ text }) => text.includes('主动生成') ? '主动文本' : '普通回复' })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    const entry = core.registry.snapshot()[`private:${OWNER}`]
+    const sentBefore = mock.sent('send_private_msg').length
+    const raw = await core.runPromptTurn(`private:${OWNER}`, '主动生成一段文字')
+    assert.equal(raw, '主动文本')
+    assert.equal(dsh.turns.length, 2)
+    assert.equal(dsh.turns[1].sessionId, entry.sessionId, '主动任务不得创建另一套会话')
+    assert.equal(mock.sent('send_private_msg').length, sentBefore, '只生成接口不得自动投递')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('主动任务与当前聊天共用串行道：前一轮未结束时不得并发驱动同一 DSH 会话', async () => {
+  const started = []
+  let release
+  const blocker = new Promise((resolve) => { release = resolve })
+  const { core, dsh, mock } = await fixture({
+    brain: async ({ text }) => {
+      if (text.includes('阻塞聊天')) { started.push('chat'); await blocker; return '聊天完成' }
+      started.push('background')
+      return '后台文本'
+    },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '阻塞聊天' } }] }))
+    await sleep(150)
+    const pending = core.runPromptTurn(`private:${OWNER}`, '后台主动任务')
+    await sleep(100)
+    assert.deepEqual(started, ['chat'], '前台回合未结束时后台回合不能开始')
+    release()
+    assert.equal(await pending, '后台文本')
+    assert.deepEqual(started, ['chat', 'background'])
+    assert.equal(new Set(dsh.turns.map((turn) => turn.sessionId)).size, 1)
   } finally { await core.dispose(); await mock.close() }
 })
