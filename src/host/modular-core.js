@@ -679,6 +679,8 @@ export function createModularCore({
       if ((skipped > 0 || hasFaceTag) && typeof legacyDeliver === 'function') {
         try {
           await legacyDeliver(turn.chatKey, reply, { own: true, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
+          try { onStats?.('sent') } catch {} // 与 legacy 同口径：QQ 出去一条就计一条（委托路径也计）
+          try { logChat?.(turn.chatKey, 'bot', String(reply)) } catch {}
           return { state: 'sent', via: 'legacy-media' }
         } catch (error) {
           log.warn(`富媒体回复发送失败，退回只发文字：${error?.message || error}`)
@@ -696,6 +698,11 @@ export function createModularCore({
         })
         try { if (result?.state === 'sent') onStats?.('sent') } catch {}
         try { if (result?.state === 'sent') logChat?.(turn.chatKey, 'bot', String(b.value)) } catch {}
+      }
+      // 本轮没有任何文字气泡（纯富媒体/纯表情回复）：legacy 同样算「她说话了」——bot 行兜底，防流水/统计漏计
+      if (bubbles.length === 0 && result?.state === 'sent') {
+        try { onStats?.('sent') } catch {}
+        try { logChat?.(turn.chatKey, 'bot', String(reply)) } catch {}
       }
       // 8. 群说话记账（legacy noteSpeak/noteInterject 同款）：刹车（burst 上限）与冷却的数据源
       if (inGroup && result && (result.state === 'sent' || result.state === 'unknown')) {
