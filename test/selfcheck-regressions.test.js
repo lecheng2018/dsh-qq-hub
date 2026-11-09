@@ -34,7 +34,7 @@ test('聊天流水：调用方漏昵称时按主人名或 uid 兜底，不再写
     })
     hub.logChat('private:10000001', '', '私回答案', '10000001')
     hub.logChat('group:777', '', '群友答案', '30003')
-    const day = new Date().toISOString().slice(0, 10)
+    const day = hub.chatLogDays()[0]
     const rows = hub.chatLogOf(day)
     assert.equal(rows.length, 2)
     assert.equal(rows[0].who, '主人')

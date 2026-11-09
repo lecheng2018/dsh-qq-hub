@@ -64,7 +64,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -835,7 +835,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       : { user_id: Number(tgt.id), file: src, name: label }
     // PR-1：开旗态文件上传转进统一 Outbox（receipt optional：upload 回执是 file_id 不是 message_id）
     const callFile = egressRef?.current
-      ? (p) => egressRef.current.deliver({ action, params: p, opts: { timeoutMs: FILE_TIMEOUT_MS }, chatKey, receipt: 'optional', note: `[文件] ${label}`, sourceModuleId: 'hub' })
+      ? (p) => egressRef.current.deliver({ action, params: p, opts: { timeoutMs: FILE_TIMEOUT_MS }, chatKey: chatId, receipt: 'optional', note: `[文件] ${label}`, sourceModuleId: 'hub' })
       : (p) => onebot.call(action, p, { timeoutMs: FILE_TIMEOUT_MS })
     const srcLabel = external ? (src.startsWith('base64://') ? 'base64' : '外部地址') : size < 1024 ? size + ' B' : Math.round(size / 1024) + ' KB'
     try {
@@ -973,7 +973,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     // 一段只有一个人明确 @ / 引用她时，第一条回复引用并 @ 那个人；多人同时叫她不猜。
     // 模型明确选了引用编号时尊重它，不再自动引用另一条。
-    const refs = inGroup ? groups.refs(chatId.slice(6)) : {}
+    const refs = inGroup ? (opts.refs || groups.refs(chatId.slice(6))) : {}
     const explicit = items.some((item) => item.replyTo)
     const firstSendable = items.findIndex((item) => item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value))))
     const missedAt = [] // 写了 @ 却没对上群里人的名字
@@ -1996,7 +1996,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // 主人私聊里只可能是主人说话：就算这一轮的记录丢了（工具是旧闭包、排队轮次被上一轮 turn/end 清掉等，见 #90），
   // 「仅主人」也应当放行；群聊 / 别人私聊不放宽。
   function ownerPrivateChat(sessionId) {
-    try { return chatOfSession(sessionId) === `private:${getConfig().ownerQQ}` } catch (error) { return false }
+    try {
+      const chatId = chatOfSession(sessionId) || resolveChatOfSession?.(sessionId) || ''
+      return chatId === `private:${getConfig().ownerQQ}`
+    } catch (error) { return false }
   }
 
   function turnHasOwner(sessionId) {
@@ -2093,6 +2096,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const result = await captureStore.run(sent, fn)
     return { result, sent }
   }
+  function captureOnly(chatId, message, note) {
+    const cap = captureStore.getStore()
+    if (!cap) return null
+    cap.push({ chatId, note, message })
+    return { message_id: 'sim-' + cap.length }
+  }
   /** 模拟测试：假装这个会话这一轮是谁在说话（工具里的「主人才能用」靠它判断）。 */
   function simulateTurn(sessionId, senders) {
     turnState.set(sessionKey(sessionId), { lastTurn: -1, text: '', senders: new Set(senders.map(String)) })
@@ -2178,10 +2187,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     recentMedia: (chatId, userId) => recentMedia.get(chatId, userId),
     stickerOf,
     capture,
+    captureOnly,
     simulateTurn,
     onMessage,
     onPoke,
     onSessionEvent,
+    rememberPoker: (chatId, uid) => interaction.rememberPoker(chatId, uid),
+    claimPoke: (chatId) => interaction.claimPoke(chatId),
+    rememberSpeaker: (chatId, uid) => interaction.rememberSpeaker(chatId, uid),
+    wasSent: (messageId) => sentIds.has(String(messageId || '')),
     deliver,
     sendText,
     sendVoice,
@@ -2224,8 +2238,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
         const list = (senders || []).map(String).filter(Boolean)
         st.speakers = list
-        if (!(st.senders instanceof Set)) st.senders = new Set()
-        for (const u of list) st.senders.add(u)
+        st.senders = new Set(list)
+        if (opts.queryText != null) {
+          if (st.lastText) st.prevText = st.lastText
+          st.lastText = String(opts.queryText).slice(-600)
+        }
         if (opts.directOwner) st.directOwner = true
         turnState.set(key, st)
       } catch {}
@@ -2238,6 +2255,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       } catch (error) { return { ok: false, reason: String(error.message || error) } }
     },
     logChat,
+    markTurnAt,
     localTranscribe,
     ensureWorkspace,
     chatLogOf,

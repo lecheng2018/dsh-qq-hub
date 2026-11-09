@@ -37,7 +37,7 @@ export function createSessionRegistry({ createSession, store, onError = () => {}
         try {
           parseChatKey(chatKey)
           if (!entry?.sessionId) continue
-          sessions.set(chatKey, { sessionId: String(entry.sessionId), agentId: entry.agentId ? String(entry.agentId) : undefined, createdAt: Number(entry.createdAt) || 0, restored: true })
+          sessions.set(chatKey, { sessionId: String(entry.sessionId), agentId: entry.agentId ? String(entry.agentId) : undefined, createdAt: Number(entry.createdAt) || 0, ...(Number(entry.lastTurnAt) > 0 ? { lastTurnAt: Number(entry.lastTurnAt) } : {}), restored: true })
           stats.recovered++
         } catch {
           // 单条损坏：跳过该条（不拖垮整库），由 onError 上报
@@ -55,7 +55,7 @@ export function createSessionRegistry({ createSession, store, onError = () => {}
     if (!store?.save) return
     try {
       const snapshot = {}
-      for (const [k, v] of sessions) snapshot[k] = { sessionId: v.sessionId, ...(v.agentId ? { agentId: v.agentId } : {}), createdAt: v.createdAt }
+      for (const [k, v] of sessions) snapshot[k] = { sessionId: v.sessionId, ...(v.agentId ? { agentId: v.agentId } : {}), createdAt: v.createdAt, ...(v.lastTurnAt ? { lastTurnAt: v.lastTurnAt } : {}) }
       void chatKey
       store.save(snapshot)
     } catch (error) {
@@ -114,6 +114,16 @@ export function createSessionRegistry({ createSession, store, onError = () => {}
     return had
   }
 
+  function markTurn(chatKey, now = Date.now()) {
+    const hit = sessions.get(chatKey)
+    const previous = Number(hit?.lastTurnAt || 0)
+    if (hit) {
+      hit.lastTurnAt = now
+      persist(chatKey, hit)
+    }
+    return previous
+  }
+
   /** 全量只读快照（面板/诊断用）。 */
   function snapshot() {
     return Object.fromEntries([...sessions.entries()].map(([k, v]) => [k, { ...v }]))
@@ -128,5 +138,5 @@ export function createSessionRegistry({ createSession, store, onError = () => {}
     inFlight.clear()
   }
 
-  return { sessionFor, peek, forget, snapshot, dispose, stats }
+  return { sessionFor, peek, forget, markTurn, snapshot, dispose, stats }
 }

@@ -32,6 +32,7 @@ import { createSnowLumaManager } from './snowluma/manager.js'
 import { createHub, workspaceDirOf } from './chat/hub.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
+import { isStickerSegment } from './chat/inbound.js'
 import { defaultModel, askModel } from './core/llm.js'
 import { parseCommand, runCommand, createMutes } from './chat/commands.js'
 import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas, personaIdFor } from './persona/personas.js'
@@ -223,13 +224,28 @@ export function apply(ctx) {
   ]
 
   // ---------- PR-1（ADR-0002）：Outbox 收口接线 ----------
-  // 与洋葱 pipeline（FLAG_USE_PIPELINE）互斥：pipeline 开时其 egress 已做吞包入队，双收口冲突。
+  // 洋葱 pipeline 与共享 Outbox 可共存：Outbox 使用未包装的原 OneBot 客户端，不经过第二层包装。
   const useModularCore = isModularCoreEnabled(process.env)
   const egressRef = { current: null }
-  if (useModularCore && !usePipeline) {
-    const sharedOutbox = createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json') })
+  const sharedOutbox = useModularCore
+    ? createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json') })
+    : null
+  if (sharedOutbox) {
     egressRef.current = createHubEgress({ outbox: sharedOutbox, log: logger.child('egress') })
     log.info('PR-1 Outbox 收口：全仓主动发送接入统一出口（消息/文件/戳一戳/模块直调/说说；台账+试运行+泄露闸对全部出口生效）')
+  }
+
+  const sharedHooks = {
+    message: (msg) => mods.claim('message', msg),
+    persona: (text) => rewrite('persona', text),
+    reply: (text, info) => mods.filter('reply', text, info),
+    deniedTools: () => bridge?.deniedTools() || [],
+    groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
+    prompt: (content, info) => mods.filter('prompt', content, info),
+    items: (items, info) => mods.filter('reply/items', items, info),
+    send: hubSendHook,
+    model: (sel, chat) => mods.filterSync('model', sel, chat),
+    poke: (ev) => mods.claim('poke', ev),
   }
 
   hub = createHub({
@@ -237,6 +253,7 @@ export function apply(ctx) {
     dsh: ctx,
     getConfig,
     egressRef,
+    resolveChatOfSession: (sid) => modularCoreApi?.chatKeyOfSession?.(String(sid)) || '',
     log: logger.child('chat'),
     onebot: hubOnebot,
     stickers,
@@ -262,21 +279,7 @@ export function apply(ctx) {
     availableModels: () => models.cache,
     // 模块（重）启动代际：模块热重载后工具名没变、但实例换了，hub 要据此重挂工具（issue #73）
     toolsGeneration: () => (mods ? mods.generation?.() || 0 : 0),
-    hooks: {
-      message: (msg) => mods.claim('message', msg),
-      // 专用卡（按聊天换人设）也过一次模块改写，和全局人设走同一条路
-      persona: (text) => rewrite('persona', text),
-      reply: (text, info) => mods.filter('reply', text, info),
-      deniedTools: () => bridge?.deniedTools() || [],
-      groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
-      prompt: (content, info) => mods.filter('prompt', content, info),
-      items: (items, info) => mods.filter('reply/items', items, info),
-      // US-007：开启态换成出口切换变体（内部照样先跑 mods.filter('send', …)，模块语义一字不动）
-      send: hubSendHook,
-      model: (sel, chat) => mods.filterSync('model', sel, chat),
-      poke: (ev) => mods.claim('poke', ev),
-      // security-lock 模块已移除：不再提供锁状态，approvals 的锁分支自然不会触发
-    },
+    hooks: sharedHooks,
   })
 
   // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
@@ -300,13 +303,17 @@ export function apply(ctx) {
           contextFor: (args) => (mods ? mods.contextFor(args) : ''),
           commands: () => (mods ? mods.commands() : []),
           use: (id) => (mods ? mods.use(id) : null),
+          emit: (event, ...args) => mods?.emit(event, ...args),
         },
         getConfig,
         setConfig,
         logger,
         log,
         personaText: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
-        runCommand: async (cmd, msg) => runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] }),
+        runCommand: async (cmd, msg) => {
+          if (cmd.ext) return String((await cmd.ext.run(cmd.arg, msg)) ?? '')
+          return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] })
+        },
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
         sessionStoreFile: dataDir('modular-sessions.json'),
@@ -343,13 +350,20 @@ export function apply(ctx) {
             if (mode === 'ask') return // legacy 会记候选并给她轻提示，这里未接（如实跳过）
             if (mode === 'owner' && String(userId) !== String(cfg.ownerQQ || '')) return
             for (const seg of (Array.isArray(segments) ? segments : [])) {
-              if (!seg || !['image', 'mface', 'face'].includes(seg.type)) continue
+              if (!isStickerSegment(seg)) continue
               Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
             }
           } catch { /* 收表情是旁路 */ }
         },
 
-        toolsGeneration: () => TOOLS_GEN,
+        toolsGeneration: () => mods.generation?.() || 0,
+        moduleHooks: sharedHooks,
+        sharedOutbox,
+        rememberPoker: (chatId, uid) => hub.rememberPoker?.(chatId, uid),
+        claimPoke: (chatId) => hub.claimPoke?.(chatId) ?? true,
+        rememberSpeaker: (chatId, uid) => hub.rememberSpeaker?.(chatId, uid),
+        isSentMessage: (messageId) => hub.wasSent?.(messageId) ?? false,
+        markTurnAt: (chatId) => hub.markTurnAt?.(chatId),
         noteMedia: (chatKey, segments, userId) => { try { hub.noteRecentMedia?.(chatKey, segments, userId) } catch {} },
         interceptInteraction: (m) => { try { return !!hub.interceptInteraction?.(m) } catch { return false } },
         personaTextFor: (chat) => {
@@ -363,12 +377,40 @@ export function apply(ctx) {
         },
       })
     : null
+  // 主动任务只生成回合复用当前 QQ 会话；投递仍由调用方走统一 Outbox。
+  if (useModularCore && modularCoreApi) {
+    hub.runPromptTurn = (chatKey, text) => modularCoreApi.runPromptTurn(chatKey, text)
+    hub.markTurnAt = (chatKey, now) => modularCoreApi.markTurnAt(chatKey, now)
+  }
   // 开旗态：让 legacy hub 的会话查询/重置也能看到新核心的会话。
   // token-guardian、审批桥、用量转发都走这两个函数，之前它们查 legacy sessions.json → 新核心会话永远查不到
   // （真机：token-guardian 报「无可重置的会话」、审批卡发不到 QQ）。包一层即一次性修好所有调用方。
   if (useModularCore && modularCoreApi) {
     const legacyChatOfSession = hub.chatOfSession?.bind(hub)
     const legacyResetChat = hub.resetChat?.bind(hub)
+    const legacySessions = hub.sessions?.bind(hub)
+    const legacyResetSessions = hub.resetSessions?.bind(hub)
+    const legacyOnSessionEvent = hub.onSessionEvent?.bind(hub)
+    hub.sessions = () => {
+      const current = getConfig()
+      const modular = Object.fromEntries(Object.entries(modularCoreApi.registry.snapshot()).map(([chatId, entry]) => [chatId, {
+        ...entry,
+        personaId: personaIdFor({ kind: chatId.startsWith('group:') ? 'group' : 'private', groupId: chatId.slice(6), userId: chatId.slice(8) }, current),
+      }]))
+      return { ...(legacySessions?.() || {}), ...modular }
+    }
+    hub.resetSessions = () => {
+      const ids = Object.keys(modularCoreApi.registry.snapshot())
+      for (const chatId of ids) hub.resetChat(chatId)
+      return ids.length + Number(legacyResetSessions?.() || 0)
+    }
+    hub.onSessionEvent = (session, event) => {
+      if (event?.type === 'user/message' && event?.data?.source?.kind === 'user') {
+        const sid = String(session?.id || '')
+        if (modularCoreApi.chatKeyOfSession?.(sid)) hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: true })
+      }
+      return legacyOnSessionEvent?.(session, event)
+    }
     // 优先问**新核心**：开旗态下它才是真正在跑的会话；legacy 表里那份多为历史遗留
     // （真机实测：先问 legacy 会「归档了 legacy 会话、却把新核心会话留着不动」，
     //  token-guardian 以为压缩成功，实际上下文一点没变小）。
@@ -433,7 +475,7 @@ export function apply(ctx) {
     getConfig, setConfig,
   }
   // 真机审计 §2：开旗态把模块侧文本发送并入新核心 outbox 唯一出口（台账/dryRun/泄露闸从此对模块生效）
-  if (modularCoreApi) core.hub = createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站') })
+  if (modularCoreApi) core.hub = createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), legacyUnified: true })
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overviewApi.overview() })
   core.bridge = bridge

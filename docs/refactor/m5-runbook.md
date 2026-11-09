@@ -9,7 +9,7 @@
 - [ ] `git archive`/`npm pack` 固定 commit 的 tgz，记录 sha256 与内容清单
 - [ ] 隔离 DSH profile 安装（不动生产 profile）
 - [ ] 重启加载：模块清单与 feature-matrix §2 一致（23 内置模块）
-- [ ] default-off 验证：不设任何 FLAG_* 时行为与 1.3.64 一致（M4-6 已在 fake 环境背书）
+- [ ] 默认姿态验证：不设 FLAG_* 时走模块化新核心；显式 `FLAG_MODULAR_CORE=false` + 重启才回 legacy
 
 ## M5-2 真实 DSH + fake OneBot（blocked-on-fnOS）
 
@@ -71,3 +71,14 @@
 | §2 模块发送绕开唯一出口 | ✅ 文本 | `createModuleSendBridge`：开旗态 sendText/reply/纯文本 sendSegments 并入 outbox（台账/dryRun/泄露闸生效）；媒体管线透传 legacy、purpose/companion 双会话问题未解（均挂账） |
 
 回归：`test/m5-parity.test.js` 8 例（群闸/群上下文/静音/旁路/双层 context/人设/发送桥/maxChars）+ m4/m3 三例改钉新现实（入口 enabled 语义、身份闸配 @ 场景、adapter chat 形状）。
+
+## 全接入测试版验收补充（2026-11-10）
+
+代码侧已解除 e2e/modules 的 legacy 钉位；e2e 70/70、modules 22/22、扩展 46/46，打包检查通过。以下仍必须在目标环境执行，不得用 fake 结果替代：
+
+1. 安装后先开 dryRun，分别触发文本、图片、语音、表情、文件、戳、引用/@、RSS、定时、生图、翻唱和说说；确认 QQ 零实发且台账有 cancelled 记录。
+2. 恢复正常发送后逐项执行同一矩阵；文件必须实际出现在私聊/群文件中，不能只看到 `[file]` 或工具成功文本。
+3. 私聊连续输入验证 steer；在上一回复正在发送时再输入，验证它进入下一轮而不是覆盖旧回复。
+4. 引用带图/表情、合并转发、语音输入、主人权限、群刹车、命令和模块热重载各做一次。
+5. 检查 `deliveries.json` 每次物理发送仅一笔；检查 `modular-sessions.json` 与面板列表/全部重置一致。
+6. 上述通过后，再由 owner 决定是否进入小流量和 72 小时观察。

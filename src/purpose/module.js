@@ -255,7 +255,9 @@ export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, pers
     let genError = null
     try {
       log.info?.(`目的（${reason}）：${picked.purpose.text}`)
-      raw = await hub.runSystemTurn('purpose', 'QQ · 主动搭话（目的回合）', prompt, { timeoutMs: 180000, noTools: true })
+      raw = typeof hub.runPromptTurn === 'function'
+        ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
+        : await hub.runSystemTurn('purpose', 'QQ · 主动搭话（目的回合）', prompt, { timeoutMs: 180000, noTools: true })
     } catch (error) {
       genError = error
       log.warn?.('目的：生成出错：', error?.message)
@@ -309,7 +311,9 @@ export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, pers
     const owner = cfg.ownerName || '主人'
     const prompt = `【系统提醒，不是${owner}说的话】你刚才跟${owner}说「${String(lb.text || '').slice(-60)}」，${owner}已经 ${idle} 分钟没回了。可以轻轻追一句（比如「人呢」「睡着啦？」，或者换个话题），别催、别抱怨；觉得${owner}在忙就只回 ${SILENCE}。这一轮不能用工具，直接输出那句话。`
     try {
-      const raw = await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
+      const raw = typeof hub.runPromptTurn === 'function'
+        ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
+        : await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
       const text = cleanReply(raw)
       if (text) await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
     } catch (error) {

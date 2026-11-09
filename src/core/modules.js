@@ -263,7 +263,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       send: (chatId, text) => core.hub.deliver(String(chatId), String(text ?? '')),
       sendText: (chatId, text) => core.hub.sendText(String(chatId), String(text ?? '')),
       // 回某一条消息：群里以「引用回复」发出，私聊直接发
-      reply: (msg, text) => core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
+      reply: (msg, text) => core.hub.reply
+        ? core.hub.reply(msg, String(text ?? ''), id)
+        : core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
       isOwner: (userId) => String(userId) === String(getConfig().ownerQQ),
       sendImage: (chatId, src) => core.hub.sendImage(String(chatId), src),
       sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),

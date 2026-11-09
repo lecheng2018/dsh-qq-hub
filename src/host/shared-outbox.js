@@ -47,6 +47,7 @@ export function createSharedOutbox({ onebot, getConfig, log, ledgerFile }) {
     send: createOnebotOutboxAdapter({ onebot }).send,
     ...(ledger ? { ledger } : {}),
     authorize: async (delivery) => {
+      if (delivery.action === 'send_qzone_msg') return true
       const cfg = getConfig()
       return checkAllowed(cfg, msgFromChatKey(delivery.chatKey)).allowed
     },
