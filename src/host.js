@@ -313,6 +313,9 @@ export function apply(ctx) {
         // 模块工具挂载（真机实测：新核心没挂，导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，
         // 只能拿 bash+curl 自己绕）。与 legacy mount() 同一份工具生成器与代际口径。
         buildTools: (where) => mods.buildTools(where),
+        // 面板指定模型的在否校验（转正平账）：与 legacy hub 同一份在线清单缓存，
+        // 模型从 DSH 消失时 resolveChatModel 才能「退回下一级」而不是抱着死模型名硬选。
+        availableModels: () => models.cache,
         // 本地接口（语音识别等）：面板「本地」页的脚本槽，legacy transcribe 用的同一个 localApi
         localApi: local,
         // 入站聊天流水（记忆整理/蒸馏/黑话/日记的数据源）
