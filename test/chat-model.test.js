@@ -106,7 +106,14 @@ let mock, fake, api, dataDir, seq = 0
 const privMsg = (uid, t) => ({ message_type: 'private', sub_type: 'friend', user_id: Number(uid), message_id: ++seq, sender: { user_id: Number(uid), nickname: 'u' + uid }, message: [{ type: 'text', data: { text: t } }] })
 const grpMsg = (gid, t) => ({ message_type: 'group', sub_type: 'normal', group_id: Number(gid), user_id: 123456, message_id: ++seq, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '大肥鱼 ' + t } }] })
 const agentOf = (chatId) => {
-  try { return fake.agents.get(JSON.parse(readFileSync(join(dataDir, 'sessions.json'), 'utf8')).chats[chatId]?.sessionId) } catch (error) { return null }
+  // 旗开（生产缺省态）会话记在 modular-sessions.json；逃生阀态记在 sessions.json。两份都认。
+  for (const f of ['modular-sessions.json', 'sessions.json']) {
+    try {
+      const sid = JSON.parse(readFileSync(join(dataDir, f), 'utf8')).chats[chatId]?.sessionId
+      if (sid) { const a = fake.agents.get(sid); if (a) return a }
+    } catch { /* 文件不存在就试下一份 */ }
+  }
+  return null
 }
 const lastSel = (chatId) => { const a = agentOf(chatId); const e = a?.events.filter((x) => x.type === 'model/selection').at(-1); return e ? e.data : null }
 /** 发一条消息，等这个聊天的会话选中了 want（模型名）；want 为 fake-1 表示全局 */
