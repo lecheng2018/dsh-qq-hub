@@ -24,7 +24,8 @@
 | # | 项 | 落码 | 覆盖 |
 |---|---|---|---|
 | A1 | 「正在输入」指示：新核心此前完全不亮（legacy hub.js:1854/1903 有） | `modular-core` 复用 `createActivityState`：回合开始 `startTyping`、回合终（含失败路径）`stopTyping`；私聊/enabled/非 dryRun 门在 activity-state 内 | `test/m7-live-parity.test.js` typing 平账例 |
-| A2 | 桥的媒体新口径（图片段进 outbox、语音/文件 legacy+补台账）测试跟现实 | `m5-parity` 「审计§2」例更新 | 同左 |
+| A2 | 桥的媒体新口径（图片段进 outbox、语音/文件 legacy+补台账）测试跟现实 | `m5-parity` 「审计§2」例更新（补 ledgerFile 夹具 + deliveryId 回查断言） | 同左 |
+| A3 | 面板指定模型从 DSH 消失时的「退回下一级」校验缺失：新核心调 `resolveChatModel(cfg, chat, null)`，legacy 传在线清单（hub.js:411）——抱着死模型名硬选会静默用不存在的模型 | 新核心新增 `availableModels` 装配项，host 注入 `models.cache`（与 legacy 同一份） | `test/chat-model.test.js` #43（转正在默认开姿态跑出此缺口） |
 
 > A1 属于现网未观察到的行为差（主人没抱怨过没 typing，但 e2e 钉着）。改动只在新核路径，legacy 一字未动；
 > 需在 fnOS `.7` 包上真机复验（见文末验收清单）。
