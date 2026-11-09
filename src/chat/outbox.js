@@ -201,5 +201,23 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     chains.clear()
   }
 
-  return { request, cancel, dispose, ledger: book }
+  /**
+   * 外部发送记账（真机审计 §2 收口的 B 方案）：语音/文件这类必须走 legacy 上载管线的发送，
+   * 发成功后补一条台账，保证「台账覆盖全部出站」。不重发、不参与队列。
+   * @returns {string|null} 台账 deliveryId
+   */
+  function recordExternal({ chatKey, sourceModuleId, segments, gatewayMessageId, state = 'sent', reason } = {}) {
+    if (!ledger) return null
+    const id = newDeliveryId()
+    ledger.enqueue({ deliveryId: id, chatKey: String(chatKey), sourceModuleId: String(sourceModuleId || 'module'), segments: segments || [] })
+    ledger.mark(id, 'sending')
+    if (state === 'sent' && gatewayMessageId != null && gatewayMessageId !== '') {
+      ledger.mark(id, 'sent', { gatewayMessageId: String(gatewayMessageId) })
+    } else {
+      ledger.mark(id, 'unknown', { reason: reason || 'external: 网关没回执' })
+    }
+    return id
+  }
+
+  return { request, cancel, dispose, recordExternal, ledger: book }
 }

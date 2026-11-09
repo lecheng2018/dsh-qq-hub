@@ -7,10 +7,21 @@
 export function createHostEffects({
   ctx, logger, log, getConfig,
   hub, mods, use, snowluma, onebot, gatewayState,
+  /** 会话 id → chatKey 反查（新核心会话不在 legacy sessions.json 里，真机实测审批卡发不到 QQ） */
+  chatKeyOfSession,
 }) {
   const sessionKey = (id) => {
     const s = String(id ?? '')
     return s.startsWith('session-') ? s.slice(8) : s
+  }
+
+  /** 会话 → chatKey：先问新核心（开旗时的会话都在这），再退回 legacy hub。 */
+  const chatOfSession = (sid) => {
+    try {
+      const k = typeof chatKeyOfSession === 'function' ? chatKeyOfSession(sid) : ''
+      if (k) return k
+    } catch { /* 忽略 */ }
+    try { return hub.chatOfSession?.(sid) || '' } catch { return '' }
   }
 
   const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
@@ -21,10 +32,18 @@ export function createHostEffects({
     ctx.effect(() => {
       let off = null
       try {
-        off = ctx.on('approval/request', async (req, next) => {
+        // 必须带 { global: true }：DSH 用 agent 作用域的 waterfall 派发审批
+        // （dsh-user-approval: ctx.waterfall(scopeTarget(agent, agent), 'approval/request', …)），
+        // 不带 global 的监听器收不到 → 审批只能弹在 GUI，QQ 永远没有卡（真机实测）。
+        const rootCtx = ctx.root ?? ctx
+        log.debug(`审批监听挂载位置：${rootCtx === ctx ? '插件 ctx（root 不可用）' : 'ctx.root'}`)
+        off = rootCtx.on('approval/request', async (req, next) => {
           try {
-            const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
-            const chatId = hub.chatOfSession?.(sid)
+            const rawSid = req.agent?.session?.id || req.agent?.id || ''
+            const sid = sessionKey(rawSid)
+            const chatId = chatOfSession(sid)
+            // 诊断（真机排查用）：审批事件到底有没有进来、反查到哪个 chat（2026-11-09）
+            log.debug(`审批事件到达：rawSid=${String(rawSid)} sid=${sid} chatId=${chatId || '(空)'} tool=${String(req?.toolName || req?.name || req?.tool || '?')}`)
             // 非 QQ 会话的 agent 请求，委托给下一个应答者
             if (!chatId) return next()
 
@@ -44,10 +63,39 @@ export function createHostEffects({
             log.warn('审批处理异常：', error.message)
             return 'rejected'
           }
-        })
+        }, { global: true })
       } catch (error) {
         log.debug('挂通用审批流失败：', error.message)
       }
+      // 兜底（真机实测：waterfall 监听在 root/agent 作用域都收不到本版本派发的事件）：
+      // 直接拿 approval 服务实例，把 request() 包一层——它内部才是真正派发 waterfall 的地方。
+      // 命中 QQ 会话就自己发卡等批复，不命中就原样交回（GUI 照旧）。
+      try {
+        const svc = ctx.get?.('approval')
+        if (svc && typeof svc.request === 'function' && !svc.__qqhubPatched) {
+          const orig = svc.request.bind(svc)
+          svc.request = async (req) => {
+            try {
+              const raw = req?.agent?.session?.id || req?.agent?.id || ''
+              const chatId = chatOfSession(sessionKey(raw))
+              if (chatId) {
+                const args = req?.arguments || null
+                log.info(`审批请求：${String(req?.toolName || 'tool')} → ${chatId}`)
+                const out = await hub.requestApproval(req, { chatId, sessionId: raw, command: args?.command || '', args })
+                log.info(`审批结果：${out}（${String(req?.toolName || 'tool')}）`)
+                return out
+              }
+            } catch (error) { log.warn('QQ 审批处理失败，回退 GUI：', error.message) }
+            return orig(req)
+          }
+          svc.__qqhubPatched = true
+          log.info('已接管 approval 服务：QQ 会话的审批走 QQ 卡片')
+        } else if (svc && svc.__qqhubPatched) {
+          log.debug('approval 服务已由本插件接管（跳过重复包装）')
+        } else {
+          log.debug('拿不到 approval 服务实例，审批只弹 GUI')
+        }
+      } catch (error) { log.debug('接管 approval 服务失败：', error.message) }
       return () => { try { if (typeof off === 'function') off() } catch (error) {} }
     }, 'qq-hub: 通用工具审批')
   }
@@ -66,7 +114,7 @@ export function createHostEffects({
       uq.provider = {
         async ask(req) {
           const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
-          const chatId = hub.chatOfSession?.(sid)
+          const chatId = chatOfSession(sid)
           if (chatId) {
             return await hub.askUserQuestion(chatId, req)
           }
@@ -80,7 +128,7 @@ export function createHostEffects({
           const off = uq.registerProvider({
             async ask(req) {
               const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
-              const chatId = hub.chatOfSession?.(sid)
+              const chatId = chatOfSession(sid)
               if (chatId) {
                 return await hub.askUserQuestion(chatId, req)
               }
@@ -113,7 +161,7 @@ export function createHostEffects({
             const sid = session && session.id
             mods.emit('session/usage', {
               sessionId: sid ? String(sid) : '',
-              chatId: (sid && hub.chatOfSession?.(String(sid))) || '',
+              chatId: (sid && chatOfSession(String(sid))) || '',
               model: (getConfig().model && getConfig().model.model) || '',
               usage: d.usage,
             })
