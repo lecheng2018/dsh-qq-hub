@@ -1,8 +1,9 @@
 // flag-off 真实装配回归（合并确认书第 3 条 / 复核报告 §6.3 补口）
 //
-// 旧 M4-6 用例只断言 isModularCoreEnabled(默认env)===false，没有实际跑 host 的 flag-off 装配路径。
+// 2026-11-09 新核心转正后，本文件的语义从「默认关」改为「显式逃生阀」：
+// 设 FLAG_MODULAR_CORE=false 时必须完整回到 legacy 主链，legacy 行为零变化。
 // 本文件用完整 host（fake DSH + mock OneBot + 临时数据目录）断言三件事：
-//   1) flag 关（默认 env）时 host 正常装载并走 legacy 主链回复；
+//   1) flag 显式关时 host 正常装载并走 legacy 主链回复；
 //   2) 新核心的持久化痕迹（deliveries.json / modular-sessions.json）一个都不存在——
 //      证明 flag-off 态 createModularCore 真的零装配（而不是装了不用）；
 //   3) legacy 入口 ACL 行为不受新核心影响：白名单外私聊仍被旧链拒绝（零回复）。
@@ -30,9 +31,9 @@ const text = (t) => [{ type: 'text', data: { text: t } }]
 let mock, fake, api, dataDir
 
 before(async () => {
-  // 关键：flag 环境变量必须缺席（不是设 false），才等价于真实默认部署形态
-  delete process.env.FLAG_MODULAR_CORE
-  assert.equal(isModularCoreEnabled(process.env), false, '前置：默认 env 下 flag 关')
+  // 转正后缺省是开；本回归测的是显式关（逃生阀），必须把 env 设成 'false' 而非删除
+  process.env.FLAG_MODULAR_CORE = 'false'
+  assert.equal(isModularCoreEnabled(process.env), false, '前置：显式 false 下 flag 关')
 
   dataDir = mkdtempSync(join(tmpdir(), 'flagoff-e2e-'))
   process.env.AURABOT_DATA_DIR = dataDir
