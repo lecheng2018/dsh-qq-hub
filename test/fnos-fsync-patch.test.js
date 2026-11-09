@@ -16,9 +16,10 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
-const HERE = dirname(new URL(import.meta.url).pathname)
+const HERE = dirname(fileURLToPath(import.meta.url))
 const PATCH = join(HERE, '..', 'src', 'core', 'fnos-fsync-patch.js')
 const NODE = process.execPath
 
@@ -118,7 +119,11 @@ test('祖先目录不可读时，补丁让附件登记成功', { skip: ATT_LIB ?
   })
 })
 
-test('补丁只兜只读打开目录，不掩盖写入路径与只读普通文件的真实权限错误', async () => {
+test('补丁只兜只读打开目录，不掩盖写入路径与只读普通文件的真实权限错误', {
+  // chmod 0o000 → open EACCES 是 POSIX 语义；Windows 上 0o000 只清只读属性，
+  // open 照样成功，「Missing expected rejection」是环境差异不是补丁缺陷。
+  skip: process.platform === 'win32' ? 'POSIX chmod 权限语义，Windows 无法复现 EACCES（CI/Linux 上照常跑）' : false,
+}, async () => {
   const { patchFnosFsync } = await import(`file://${PATCH}`)
   assert.equal(patchFnosFsync(), true, '补丁应该装上')
   const fs = require('node:fs')

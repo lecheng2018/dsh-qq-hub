@@ -7,8 +7,9 @@ import assert from 'node:assert/strict'
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 
 // 用独立的 data 目录，避免测试写进真实的 personas 目录
 const dataRoot = join(tmpdir(), `persona-unicode-data-${process.pid}`)

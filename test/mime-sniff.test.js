@@ -1,8 +1,9 @@
 // 图片类型嗅探：QQ 表情包常见 webp / gif / png，认不出就不能静默丢弃。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const { mimeOf } = await import(`file:///${REPO}/src/chat/inbound.js`)
 
 const head = (bytes) => { const b = Buffer.alloc(64); Buffer.from(bytes).copy(b); return b }
