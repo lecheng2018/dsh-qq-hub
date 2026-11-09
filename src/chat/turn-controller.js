@@ -285,6 +285,11 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     return runningByChat.get(chatKey) ?? null
   }
 
+  function runExclusive(chatKey, job) {
+    parseChatKey(chatKey)
+    return scheduler.submit(chatKey, job)
+  }
+
   /** 卸载：清定时器、merging 全取消、在飞 execute 收到 abort（诚实标记后自然落定）、等待者全部唤醒。 */
   async function dispose() {
     disposed = true
@@ -316,5 +321,5 @@ export function createTurnController({ execute, merge = {}, log } = {}) {
     await scheduler.dispose()
   }
 
-  return { offer, steer, cancel, getTurn, mergingTurnOf, runningTurnOf, dispose }
+  return { offer, steer, cancel, getTurn, mergingTurnOf, runningTurnOf, runExclusive, dispose }
 }

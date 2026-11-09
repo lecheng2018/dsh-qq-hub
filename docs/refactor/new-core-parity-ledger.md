@@ -1,78 +1,59 @@
-# 新核心转正台账（parity ledger）—— 2026-11-09
+# 新核心功能等价台账（parity ledger）
 
-> 背景：现网验证树（官方 `.5` + 19 项 local 热修 + 3 项未固化 = 汇总报告 22 项）经
-> `aa122ea` 逐字节合入本分支，`0882ed8` 把 `FLAG_MODULAR_CORE` 翻为**缺省开**。
-> 本文件是转正时点的**诚实欠账清单**：新核心相对 legacy 尚未拉齐的行为面，全部有出处、有归属、有收口路径。
-> 回滚姿态：显式 `FLAG_MODULAR_CORE=false` + 重启（`test/r3-flagoff-regression.test.js` 持续钉住逃生阀）。
+> 更新：2026-11-10。本文只把可执行测试或真机证据算作完成；历史“已知缺口”不再作为当前状态引用。
+> 回滚仍是显式 `FLAG_MODULAR_CORE=false` + 重启，由 `test/r3-flagoff-regression.test.js` 覆盖。
 
-## 验证锚点（数据，不是感觉）
+## 当前验证基线
 
-| 面 | 数值 | 出处 |
+| 验证面 | 当前结果 | 说明 |
 |---|---|---|
-| 基线（282b64a3，flag 缺省关）全量 | **1470 pass / 0 fail**（本机 Windows） | `C:\Temp\m7-base-test.log` |
-| 转正首跑（集成树，缺省开） | 1425 pass / 45 fail | `C:\Temp\m7-int-test.log` |
-| e2e 70 例在新核心下 | 40 pass / 30 fail（下表 B 类） | 同上 |
-| modules 22 例在新核心下 | 15 pass / 7 fail | 同上 |
-| chat-model 12 例在新核心下 | 12 pass（观察面修复后；模型选择本身新核无缺） | `test/chat-model.test.js` agentOf 双文件回退 |
-| 现网真机 | 25 模块 0 error、工具 66、审批触达 QQ、流水 128 行/日、压缩 144802→784 | 《全部修复汇总-20261109.md》§四 |
+| `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
+| `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
+| M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
+| 主仓 `npm test` | 1502 pass / 1 fail / 4 skip（共 1507） | 唯一失败是既有 `local.test.js` 硬编码 `/tmp/aurabot-local-img.png`，其他用户占用导致 EACCES；以干净 CI 复核 |
+| 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
+| `npm run pack:check` | 通过 | npm 包内容可生成 |
 
-45 例失败的处置去向：38 例随文件钉回 legacy（B 类挂账）、7 例改为跟新现实/观察面修复（A 类已补 + 测试更新），
-另有 m7-live-parity 13 例**新增**在默认开姿态下钉住 22 项热修的关键接线。
+## 本轮已收口的行为差异
 
-## A 类 · 转正时点顺手补齐（新增代码，不在现网热修内）
+### 入站与回合
 
-| # | 项 | 落码 | 覆盖 |
-|---|---|---|---|
-| A1 | 「正在输入」指示：新核心此前完全不亮（legacy hub.js:1854/1903 有） | `modular-core` 复用 `createActivityState`：回合开始 `startTyping`、回合终（含失败路径）`stopTyping`；私聊/enabled/非 dryRun 门在 activity-state 内 | `test/m7-live-parity.test.js` typing 平账例 |
-| A2 | 桥的媒体新口径（图片段进 outbox、语音/文件 legacy+补台账）测试跟现实 | `m5-parity` 「审计§2」例更新（补 ledgerFile 夹具 + deliveryId 回查断言） | 同左 |
-| A3 | 面板指定模型从 DSH 消失时的「退回下一级」校验缺失：新核心调 `resolveChatModel(cfg, chat, null)`，legacy 传在线清单（hub.js:411）——抱着死模型名硬选会静默用不存在的模型 | 新核心新增 `availableModels` 装配项，host 注入 `models.cache`（与 legacy 同一份） | `test/chat-model.test.js` #43（转正在默认开姿态跑出此缺口） |
+- 私聊运行中消息通过 `controller.steer` 注入当前 DSH 会话；已进入出站阶段后不再 steer，而是排入下一回合，避免旧回复覆盖新回复。
+- 合并转发经 `get_forward_msg` 展开，保留发送者与正文；语音走本地 ASR 优先、网关转写兜底。
+- 引用恢复正文、发送者、图片和表情；空 URL/裸文件名会从私聊或群消息历史补地址；失败提示明确允许模型回答“没看到”。
+- 图片和表情支持 HTTP(S) 与 `base64://`，经 DSH 附件登记；普通照片不因收藏入口而误收进表情库。
+- 群缓冲保留整段发言人、引用编号、直接呼叫者和时间锚；时间锚持久化在新核心会话注册表。
+- 戳一戳有过滤目标、20 秒节流、回戳目标登记；群刹车使用 `noteSpeak` 的真实发言计数。
 
-> A1 属于现网未观察到的行为差（主人没抱怨过没 typing，但 e2e 钉着）。改动只在新核路径，legacy 一字未动；
-> 需在 fnOS `.7` 包上真机复验（见文末验收清单）。
+### 会话与模块
 
-## B 类 · 钉在 legacy 的挂账（文件头 `process.env.FLAG_MODULAR_CORE = 'false'`）
+- 面板会话列表、单个/全部重置、人设切换、审批反查、主人私聊权限兜底均能看到新核心注册表。
+- 主人在 DSH 会话窗口直接输入会登记 `directOwner`；排队回合不会继承上一轮的群友集合。
+- purpose/companion 优先用 `runPromptTurn` 复用当前 QQ/DSH 会话，只生成、不在核心内自动投递。
+- message/prompt/reply/items/send/groupDecide/model/poke 钩子接入；扩展命令不再被命令闸排除。
+- 工具按 `mods.generation()` 重挂；联动工具 deny 清单变化也会重挂；dispose 卸载已挂工具。
+- `mods.emit` 已透传，activity、开放接口事件和依赖它的模块不再断供。
 
-### B1 `test/e2e.test.js` — 30 例
+### 出站
 
-**真缺口（新核心行为未实现，收口=PR-2/PR-4）**
-| 用例 | 缺口 | 归属 |
-|---|---|---|
-| 引用消息 ×6（#221-#226：私聊/群聊 quotedInfo、引用内图/表情、get_msg 空 url 补历史、拉不到要明说） | 基础正文/发送者已水合并有 m7 回归；空 url 历史补图等完整 e2e 尚钉在 legacy，解除 pin 后才算全量收口 | PR-2 InboundService |
-| 群聊被引用回复 + `<reply:n>` ×2（#208/#209） | reply/at 已委托 legacyDeliver 并有 m7 回归；完整群聊 e2e 尚钉在 legacy，待解除 pin | PR-3 |
-| 戳一戳回戳（#212） | poke 的 legacy 交互语义（回戳+20s 去重）未接 | PR-4 |
-| 合并转发读记录（#213） | forward 段展开（get_forward_msg）未进新核内容拼装 | PR-2 |
-| 模块接管/改写/热重载重挂/慢工具「正在做」/排队轮说话人兜底/DSH 窗口直打字（#921/#923/#255/#257/#258/#259/#254） | 模块钩子在新核的等价面：takeover/rewrite 已桥接但 e2e 断言的是 legacy 装配细节；「正在做」提示与排队兜底未实现 | PR-4 交互+钩子 |
-| 空间日记/换头像/表情整理/翻记录/强制语音（#227/#239/#241/#242/#233） | 命令/工具旁路的 legacy 内部时序断言（deliver 节奏、TTS 强制） | PR-3 |
-| 重新开始（#231）、时间锚 ×2（#261/#262） | userText 来源行/时间锚格式与 legacy pushToSession 不同构（内容都在，形态断言钉死） | PR-3 |
+- 新核心与 legacy 在生产中共用同一个 Shared Outbox/台账，不再各自创建写同一文件的实例。
+- 所有模型回复复用 legacy deliver 的出站语义适配（分条、长度、语音、表情、图片、`<reply:n>`、`<at:>`、`<poke>`、自动引用和概率装饰），物理发送仍只经 Shared Outbox。
+- 模块 `api.reply` 保留群消息真实引用；模拟发送经 `captureOnly` 截获，不触发物理写。
+- 私聊/群文件上传及路径失败后的 base64 回退均进入 Outbox；修复了 `chatKey` 未定义导致的上传前失败。
+- 空间说说不按“机器人自身私聊”套用聊天白名单，但仍受总开关、dryRun、身份闸和台账约束。
+- 生产媒体路径由 hub 入账，模块桥不再额外 `recordExternal` 造成重复记录。
 
-**观察面（新核心行为大概率等价，但断言面钉 legacy 内部）**
-| 用例 | 说明 |
-|---|---|
-| 主人私聊拆条（#194 除 typing 外的来源行断言）、群刹车（#214）、看图收藏（#215/#216） | 收藏/刹车已接线（热修 #18/#7），e2e 读的是 hub 内部状态；待 PR-3 把断言面改双源 |
+## 仍需真实环境验收（不是代码侧已完成）
 
-### B2 `test/modules.test.js` — 7 例
+- [ ] fnOS/DSH 安装固定提交构建的测试包，核对模块加载、会话创建、真实模型回合和日志无重复注册。
+- [ ] 发送矩阵：文本、图片、语音、表情、文件、戳一戳、引用/@、RSS、定时任务、生图、翻唱、空间说说；每项核对 `deliveries.json`。
+- [ ] dryRun/总开关对上述出口全部零实发；身份泄露闸覆盖消息与直通参数。
+- [ ] 真实本地 ASR、TTS 与远程 SnowLuma 文件路径不可见场景。
+- [ ] 可控网关的 OneBot unknown：发送中途断连只记 unknown，不自动重发。
+- [ ] owner 批准后才做小流量实发，并完成 72 小时观察与回滚演练。
 
-模块接管、热重载、开放接口事件列表、ctx.get(aurabot) 全局工具、钩子改「怎么想怎么说」、模拟(dryRun)测试、api.reply 引用回复 + api.isOwner：
-同属 B1 的钩子面/引用面缺口；模块系统本身在新核下 15/22 直接绿。
+## 测试维护约定
 
-## C 类 · 报告点名、本合并不解决
-
-| 项 | 现状 | 收口 |
-|---|---|---|
-| `ask_user_question` 服务接线 | 已改 `userQuestions.ask()` 包装，按会话分流且可卸载；工具在自定义 preset 的挂载仍需真机/上游时序验证 | `test/modular-user-questions.test.js` + fnOS 验收 |
-| 富媒体出站/模块媒体台账「代码已接、待真实流量触发」 | 单测已钉（m7 富媒体例）；真机以 `.7` 包跑一次生图+语音验证 | fnOS 验收 |
-| PR-1 共享 Outbox（#13） | 独立 base-main 线，不动本次合并；发送面矩阵（imagegen/rss/scheduler/song）在其分支完成后跑 | PR #13 |
-
-## 摘钉流程（怎么让 B 类回到新核路径）
-
-1. 每个缺口：先写 m8 契约测试（新核路径），实现，`C:\Temp` 全量回归 0 新增失败；
-2. 整批（如「引用族」）齐了就删对应文件的 `process.env.FLAG_MODULAR_CORE = 'false'` 行——
-   删行本身即 PR 的验收证据（套件立刻在新核跑那批用例）；
-3. verify.yml 后续可加 flag-on/off 双跑矩阵（CI infra 已随 #13 落 main 的话）。
-
-## fnOS `.7` 验收清单（真机部分，合并后立刻做）
-
-- [ ] 装 `.7`（由本分支构建）后 25 模块 0 error、网关 connected、工具 66
-- [ ] 私聊回合 QQ 端出现「正在输入」（A1 新行为）
-- [ ] 生图/语音主动发 → deliveries.json 有 sourceModuleId；dryRun 全拦
-- [ ] 现网热修行为抽查：审批卡到 QQ、流水在长、上下文跟轮（连发三轮不重复注入）
+- 不再用删除断言、恢复 legacy 钉位或缩短功能面来让测试变绿。
+- 存储格式已迁到 `modular-sessions.json` 时，测试使用注册表/公共接口，不直接修改旧 `sessions.json` 冒充新核心状态。
+- 选择部分测试运行时要注意跨用例前置条件；最终结论必须以完整文件和全量测试为准。

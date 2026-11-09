@@ -143,6 +143,7 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Release ${{ steps.meta.outputs.tag }}
           body_path: RELEASE_NOTES.md
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-test.') }}
           files: |
             ${{ steps.pack.outputs.tgz_path }}
             dist/dsh-qq-hub.tgz
