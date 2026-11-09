@@ -74,6 +74,8 @@ const PKG = (() => {
   try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) } catch (error) { return { version: '?' } }
 })()
 const VERSION = PKG.version
+// 模块工具代际：本实例内的自增号（热重载会新建实例，配合 mountedTools 的 Map 实现「整套重挂」）
+let TOOLS_GEN = 1
 const PREFIX = '/qq-hub/api'
 
 export function apply(ctx) {
@@ -108,15 +110,20 @@ export function apply(ctx) {
   const rulesOpts = (kind) => (mods ? { off: mods.builtinOff(), extra: mods.rules(kind) } : {})
   // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
   const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
-  variable('qq_hub_persona', () => rewrite('persona', currentPersonaText(cfg.persona.current)))
-  variable('qq_hub_rules_private', () => {
-    const base = rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private')
-    // 危险命令确认开着时补一句：被拦下要如实告诉主人，别绕着写
-    return base + (cfg.security && cfg.security.dangerConfirm
-      ? '\n【危险命令】终端命令如果被安全策略拦下（删根目录/格式化/关机/下载后直接执行等），把命令原文和原因如实告诉主人，等主人回复「确认」后再重试；不要换一种写法绕过。'
-      : '')
-  })
-  variable('qq_hub_rules_social', () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'))
+  // 三个变量的取值函数抽出来复用：新核心按会话再注册一遍（热重载后宿主侧变量可能缺失，
+  // 缺了就报 unknown prompt variable "{{qq_hub_rules_private}}" → 整轮直接 error）
+  const promptVarText = {
+    qq_hub_persona: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
+    qq_hub_rules_private: () => {
+      const base = rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private')
+      // 危险命令确认开着时补一句：被拦下要如实告诉主人，别绕着写
+      return base + (cfg.security && cfg.security.dangerConfirm
+        ? '\n【危险命令】终端命令如果被安全策略拦下（删根目录/格式化/关机/下载后直接执行等），把命令原文和原因如实告诉主人，等主人回复「确认」后再重试；不要换一种写法绕过。'
+        : '')
+    },
+    qq_hub_rules_social: () => rewrite('rules', rulesText('social', cfg, rulesOpts('social')), 'social'),
+  }
+  for (const [n, fn] of Object.entries(promptVarText)) variable(n, fn)
 
   // ---------- QQ 网关（连接层：SnowLuma + OneBot 状态机，见 host/gateway.js） ----------
   const snowluma = createSnowLumaManager({
@@ -295,6 +302,40 @@ export function apply(ctx) {
         moodEffects: () => (use('mood')?.effects?.() ?? null),
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
         isMuted: (chatId) => mutes.muted(chatId),
+        // 真机审计 1.11：面板统计与「最近发来的图/表情」登记（legacy 同一份内存状态）
+        onStats: (k) => { try { hub.bumpStats?.(k) } catch {} },
+        // 宿主侧变量缺失兜底：热重载后根作用域的 variable 可能已失效，按会话补注册
+        promptVars: promptVarText,
+        // 富媒体出站（真机审计：语音/表情/图片/引用/戳一戳）交给 legacy deliver——那条管线里
+        // 有 TTS 合成、表情库取图、图片上传、引用拼装、气泡节奏，全部现成且经过线上验证；
+        // 只在「这一轮回复里确实带富媒体标记」时才走它，纯文字仍走 outbox（台账/试运行/泄漏闸照旧）。
+        legacyDeliver: (chatId, text, opts) => hub.deliver(chatId, text, opts),
+        // 模块工具挂载（真机实测：新核心没挂，导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，
+        // 只能拿 bash+curl 自己绕）。与 legacy mount() 同一份工具生成器与代际口径。
+        buildTools: (where) => mods.buildTools(where),
+        // 本地接口（语音识别等）：面板「本地」页的脚本槽，legacy transcribe 用的同一个 localApi
+        localApi: local,
+        // 入站聊天流水（记忆整理/蒸馏/黑话/日记的数据源）
+        logChat: (chatId, who, text, uid) => { try { hub.logChat?.(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
+        // 回合说话人登记（hub.turnState；speakersOf 的数据源）
+        noteSpeakers: (sessionId, senders, opts) => { try { hub.noteTurnSenders?.(String(sessionId), senders, opts) } catch {} },
+        // 入站表情收集（按 collectMode：owner 只听主人 / ask 不收（legacy 的候选提示未接，如实跳过））
+        collectInboundStickers: (chatKey, segments, userId) => {
+          try {
+            const cfg = getConfig()
+            if (!cfg.stickers?.enabled || !cfg.stickers?.collect) return
+            const mode = cfg.stickers.collectMode || 'auto'
+            if (mode === 'ask') return // legacy 会记候选并给她轻提示，这里未接（如实跳过）
+            if (mode === 'owner' && String(userId) !== String(cfg.ownerQQ || '')) return
+            for (const seg of (Array.isArray(segments) ? segments : [])) {
+              if (!seg || !['image', 'mface', 'face'].includes(seg.type)) continue
+              Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
+            }
+          } catch { /* 收表情是旁路 */ }
+        },
+
+        toolsGeneration: () => TOOLS_GEN,
+        noteMedia: (chatKey, segments, userId) => { try { hub.noteRecentMedia?.(chatKey, segments, userId) } catch {} },
         interceptInteraction: (m) => { try { return !!hub.interceptInteraction?.(m) } catch { return false } },
         personaTextFor: (chat) => {
           try {
@@ -307,6 +348,25 @@ export function apply(ctx) {
         },
       })
     : null
+  // 开旗态：让 legacy hub 的会话查询/重置也能看到新核心的会话。
+  // token-guardian、审批桥、用量转发都走这两个函数，之前它们查 legacy sessions.json → 新核心会话永远查不到
+  // （真机：token-guardian 报「无可重置的会话」、审批卡发不到 QQ）。包一层即一次性修好所有调用方。
+  if (useModularCore && modularCoreApi) {
+    const legacyChatOfSession = hub.chatOfSession?.bind(hub)
+    const legacyResetChat = hub.resetChat?.bind(hub)
+    // 优先问**新核心**：开旗态下它才是真正在跑的会话；legacy 表里那份多为历史遗留
+    // （真机实测：先问 legacy 会「归档了 legacy 会话、却把新核心会话留着不动」，
+    //  token-guardian 以为压缩成功，实际上下文一点没变小）。
+    hub.chatOfSession = (sid) => {
+      try { const k = modularCoreApi.chatKeyOfSession?.(String(sid)); if (k) return k } catch {}
+      try { return legacyChatOfSession?.(sid) || '' } catch { return '' }
+    }
+    hub.resetChat = (chatId) => {
+      try { if (modularCoreApi.resetChat?.(String(chatId))) return true } catch {}
+      try { return Boolean(legacyResetChat?.(chatId)) } catch { return false }
+    }
+    log.debug('已把 hub.chatOfSession / hub.resetChat 接到新核心会话表')
+  }
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
@@ -380,7 +440,11 @@ export function apply(ctx) {
   }, 'qq-hub: 危险命令确认')
 
   // ---------- 宿主旁路 seam（审批流/交互提问/会话监听/看门狗，见 host/effects.js） ----------
-  const effects = createHostEffects({ ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState })
+  const effects = createHostEffects({
+    ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState,
+    // 开旗后会话由新核心创建，legacy sessions.json 里没有 → 审批/提问桥接要能反查到 chatKey
+    chatKeyOfSession: (sid) => (modularCoreApi?.chatKeyOfSession?.(String(sid)) || ''),
+  })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
 

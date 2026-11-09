@@ -35,7 +35,8 @@ export function formatApprovalCard(entry) {
     parts.push(`🔒 提示：当前权限锁处于锁定状态，回复前请先发 /unlock 输入动态口令。`)
   }
 
-  parts.push(`\n回复「通过 #${entry.id}」放行，回复「拒绝 #${entry.id}」拦截（60秒内有效）`)
+  parts.push(`\n✅ 回复「同意」放行（或 yes / y）\n❌ 回复「拒绝」拦下（或 no / n）`)
+  parts.push(`有多条待办时带上编号，例如「同意 #${entry.id}」（60 秒内有效）`)
   return parts.join('\n')
 }
 
@@ -168,12 +169,15 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
         }
         return true
       }
+    } else if (pending.size === 1) {
+      // 只有一条待审批：允许不带编号（「同意」/yes/y、「拒绝」/no/n 直接生效）——
+      // 主人反馈「同意命令太复杂」，单条时再要求编号纯属多余。
+      target = [...pending.values()][0]
     } else {
-      // 未带编号：不自动选中（审计建议——宽匹配「可以/ok」可能误批别的待办项），
-      // 无论几个待审批，都回显编号与工具名让主人确认。
+      // 多条待审批：不自动选中（宽匹配「可以/ok」可能误批别的待办项），回显编号让主人指定。
       const lines = [...pending.entries()].map(([i, t]) => `#${i} ${t.toolName || '操作'}`).join('、')
       if (typeof deliver === 'function') {
-        deliver(chatId, `⚠️ 当前有待审批操作：${lines}。请指定编号，例如「通过 #${[...pending.keys()][0]}」`).catch(() => {})
+        deliver(chatId, `⚠️ 当前有多条待审批：${lines}。请带上编号，例如「同意 #${[...pending.keys()][0]}」`).catch(() => {})
       }
       return true
     }

@@ -36,6 +36,72 @@ import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
 import { agoLabel } from '../chat/clockline.js'
 
+/**
+ * 语音段转文字（真机审计 1.4：legacy transcribe 的简化复刻）。
+ * 只走网关的 fetch_ptt_text（NapCat/SnowLuma 自带转写）；本地 ASR 那条链依赖 localApi/ffmpeg，
+ * 属可选能力，接不上就保留 `[record]` 占位，并如实记一条 debug。失败绝不打断回合。
+ */
+async function hydrateRecords(members, onebot, log, localApi) {
+  const list = Array.isArray(members) ? members : []
+  let budget = 3 // 一轮最多转写 3 条，避免长语音把回合拖死
+  const out = []
+  for (const m of list) {
+    const segs = Array.isArray(m?.segments) ? m.segments : []
+    if (!segs.some((x) => x && x.type === 'record') || budget <= 0) { out.push(m); continue }
+    budget--
+    let text = ''
+    // ① 本地 ASR 优先（真机：QQ 网关的 fetch_ptt_text 常年 error=9，本地 faster-whisper 才是可靠路径）
+    try {
+      if (localApi?.active?.('asr')) {
+        const rec = segs.find((x) => x && x.type === 'record')
+        const file = String(rec?.data?.file || '')
+        if (file) {
+          const got = await onebot?.call?.('get_record', { file, out_format: 'wav' }, { timeoutMs: 30000 })
+          const b64 = String(got?.base64 || '')
+          if (b64) {
+            const { writeFileSync, mkdirSync, unlinkSync } = await import('node:fs')
+            const { join } = await import('node:path')
+            const dir = join(String(localApi.dir?.() || '/tmp'), 'out')
+            mkdirSync(dir, { recursive: true })
+            const wav = join(dir, `asr-${Date.now()}.wav`)
+            writeFileSync(wav, Buffer.from(b64, 'base64'))
+            try {
+              const r = await localApi.call('asr', { file: wav })
+              text = String(typeof r === 'string' ? r : r?.text || '').trim()
+            } finally { try { unlinkSync(wav) } catch {} }
+            if (text) log?.debug?.(`本地 ASR 识别成功：${text.slice(0, 40)}`)
+          }
+        }
+      }
+    } catch (error) {
+      try { log?.debug?.(`本地 ASR 失败（继续试网关）：${error?.message || error}`) } catch {}
+    }
+    // ② 网关自带转写兜底
+    if (!text) {
+      try {
+        const mid = m?.messageId
+        if (mid != null) {
+          const r = await onebot?.call?.('fetch_ptt_text', { message_id: Number(mid) || mid }, { timeoutMs: 20000 })
+          text = String(r?.text || '').trim()
+        }
+      } catch (error) {
+        try { log?.debug?.(`语音转写失败（保留占位）：${error?.message || error}`) } catch {}
+      }
+    }
+    if (!text) { out.push(m); continue }
+    // 成员对象是冻结的：不能就地改 segments，换成新对象（真机事故：
+    // Cannot assign to read only property 'segments' → 整个回合 error）
+    const nextSegs = []
+    let replaced = false
+    for (const x of segs) {
+      if (!replaced && x && x.type === 'record') { nextSegs.push({ type: 'text', data: { text: `[语音] ${text}` } }); replaced = true }
+      else nextSegs.push(x)
+    }
+    out.push({ ...m, segments: nextSegs })
+  }
+  return out
+}
+
 /** 入站事件 → checkAllowed 需要的 msg 形状（从 ChatKey + sender 还原 kind/userId/groupId）。 */
 function aclMsgFromInbound(inbound) {
   const chatKey = String(inbound?.chatKey ?? '')
@@ -102,11 +168,31 @@ function segmentsToContent(members) {
  *   旁路指令桥接（真机审计 1.9：主人「通过 #1」批复审批 / 等待中的交互提问回答优先消费；命中即不进回合）
  * @param {(chat: object) => string|null} [o.personaTextFor] 按聊天人设（真机审计 1.2：persona.privates/groups
  *   专用卡 + 蒸馏语感卡按群生效；返回 null = 跟随全局人设）
+ * @param {(chatId: string, who: string, text: string, uid?: string) => void} [o.logChat]
+ *   聊天流水（真机审计：新核心不写 chatlog → 记忆整理/蒸馏/黑话/日记四条链无料；实测当天进站 5900、流水 12 行）
+ * @param {(sessionId: string, senders: string[], opts?: object) => void} [o.noteSpeakers]
+ *   回合说话人登记（hub.turnState 数据源；memory.contextFor 取「正在说话的几个人」靠它）
+ * @param {(chatId: string, segments: Array, userId: string) => void} [o.collectInboundStickers]
+ *   入站表情收集（真机审计：不调 stickers.collect → 表情库不再增长）
+ * @param {(where: object) => Array<object>} [o.buildTools]
+ *   模块工具生成器（与 legacy hub.mount 同一份）。新核心此前**完全没挂工具**，
+ *   导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，只能拿 bash+curl 自己绕（真机实测）。
+ * @param {() => number} [o.toolsGeneration] 模块代际（热重载后整套重挂，同 legacy issue #73）
+ * @param {(chatId: string, text: string, opts?: object) => Promise<*>} [o.legacyDeliver]
+ *   富媒体出站委托（真机审计：语音/表情/图片/引用/戳一戳）。带富媒体标记的回复整条交给它，
+ *   纯文字仍走 outbox（台账/试运行/身份闸照旧）。
+ * @param {Record<string, () => string>} [o.promptVars]
+ *   宿主侧提示词变量兜底（qq_hub_persona / qq_hub_rules_private / qq_hub_rules_social）：
+ *   热重载后根作用域注册可能已失效，缺了就报 unknown prompt variable → 整轮 error（实测）
+ * @param {(k: 'received'|'sent'|'errors') => void} [o.onStats]
+ *   面板统计（真机审计 1.11：开旗后进站/出站不经 legacy hub，统计以前恒为 0）
+ * @param {(chatKey: string, segments: Array, userId: string) => void} [o.noteMedia]
+ *   最近发来的图/表情登记（「把刚才那张存下来」类工具依赖它，真机审计 1.11）
  */
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers,
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
 
@@ -312,10 +398,13 @@ export function createModularCore({
       const text = textOfSegments(delivery.segments)
       const chatKey = String(delivery.chatKey || '')
       const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
+      const isPrivate = chatKey.startsWith('private:')
       return checkIdentityLeak(text, {
-        surface: chatKey.startsWith('group:') ? '群消息' : '私聊消息',
+        surface: isPrivate ? '私聊消息' : '群消息',
         ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-        allowIds: [ownGroup, ...(chatKey.startsWith('private:') ? [cfg.ownerQQ] : [])].filter(Boolean),
+        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
+        // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
+        allowBareNumbers: isPrivate,
         mode: ig.mode === 'warn' ? 'warn' : 'block',
       })
     },
@@ -355,8 +444,49 @@ export function createModularCore({
     return { blocks: [{ type: 'text', text: head }, ...extras], mode }
   }
   // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
-  const ctxBoxes = new WeakMap()
-  const personaVarSet = new WeakSet()
+  // 键必须是**会话 id**：resolveAgent 每轮返回新的 agent 包装对象，用对象做键永远不命中
+  const ctxBoxes = new Map() // sessionId -> { text }
+  const ctxBound = new Set() // 已注册过 context 的 sessionId
+  const personaBound = new Set() // 已注册过 persona 变量的 sessionId
+  const ctxFallback = new Set() // 宿主已占用同名 context：退回「把背景拼进消息」
+  const ctxFallbackDone = new Set() // 已经投过一次的会话（避免每轮重复注入）
+
+  /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
+  const mountedTools = new Map() // sessionId -> { agent, key, offs }
+  function mountTools(agent, chatKey, sessionId) {
+    if (typeof buildTools !== 'function') return
+    const cfg = getConfig()
+    const level = levelFor(cfg, aclMsgFromInbound({ chatKey }))
+    if (level === 'chat') return // 系统会话不挂业务工具（同 legacy）
+    const parts = String(chatKey).split(':')
+    const chat = parts[0] === 'group'
+      ? { chatId: chatKey, kind: 'group', groupId: parts[1], userId: '', nickname: '' }
+      : { chatId: chatKey, kind: 'private', userId: parts[1], groupId: '', nickname: cfg.ownerName || '' }
+    let tools = []
+    try { tools = buildTools({ chat, level, sessionId }) || [] } catch (error) { debug(`工具生成失败：${error?.message || error}`); return }
+    let gen = 0
+    try { gen = typeof toolsGeneration === 'function' ? Number(toolsGeneration()) || 0 : 0 } catch { gen = 0 }
+    const key = `${tools.map((t) => t.name).sort().join(',')}|gen:${gen}`
+    const prev = mountedTools.get(sessionId)
+    if (prev && prev.agent === agent && prev.key === key) return
+    if (prev) for (const off of prev.offs) { try { off?.() } catch {} }
+    const offs = []
+    let already = 0
+    let failed = 0
+    for (const tool of tools) {
+      try {
+        const off = agent.ctx?.tools?.register?.(tool)
+        if (typeof off === 'function') offs.push(off)
+      } catch (error) {
+        const msg = String(error?.message || error)
+        // legacy hub.mount 可能已经挂过同一份工具（同一 agent 作用域）：这不是失败
+        if (msg.includes('already registered')) already++
+        else { failed++; debug(`工具 ${tool?.name} 挂载失败：${msg}`) }
+      }
+    }
+    mountedTools.set(sessionId, { agent, key, offs })
+    debug(`模块工具 → ${chatKey}：新挂 ${offs.length}、已存在 ${already}、失败 ${failed}（清单 ${tools.length} 个）`)
+  }
   const controller = createTurnController({
     log,
     merge: {
@@ -373,15 +503,19 @@ export function createModularCore({
       const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId: sessionId0, chat })
       // 2. 会话（single-flight 创建在 offer 时已发生；这里拿映射）
       const { sessionId } = await registry.sessionFor(turn.chatKey)
+      // 回合说话人登记（speakersOf 的数据源；群聊记忆检索要用）
+      try { noteSpeakers?.(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean)) } catch {}
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
       let turnMode = null
       let content
+      // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
+      const members = await hydrateRecords(io.members, onebot, log, localApi)
       if (inGroup) {
-        const gp = groupPromptContent(turn.chatKey, io.members)
+        const gp = groupPromptContent(turn.chatKey, members)
         content = gp.blocks
         turnMode = gp.mode
       } else {
-        content = segmentsToContent(io.members)
+        content = segmentsToContent(members)
       }
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
@@ -391,6 +525,7 @@ export function createModularCore({
       const resolved = await ctrl.resolveAgent(sessionId)
       const agent = resolved?.agent
       if (!agent?.followup) throw new Error(`会话 ${sessionId} 没有 agent.followup（适配缺口，如实失败）`)
+      mountTools(agent, turn.chatKey, sessionId) // 模块工具（qq_send_*、记忆、B站、群管…）
 
       // 4.5 模型跟随面板配置（真机报告 8）：不切的话会话会跑 DSH 默认模型——
       //     风格/成本不一致，纯文本模型还会连带把看图堵死。与 legacy applyModel 同款：
@@ -416,21 +551,50 @@ export function createModularCore({
       //     agent.ctx.systemPrompt.context()/variable()（hub.js:546/529）——宿主上
       //     `agent.ctx.get('contexts')` 取不到服务，此前投喂因此整段丢弃。改回同款通道，
       //     每个 agent 只注册一次，text 闭包每轮读最新（面板改动下一轮生效，同 legacy）。
-      try {
-        const sp = agent.ctx?.systemPrompt
-        if (sp?.context) {
-          let holder = ctxBoxes.get(agent)
-          if (!holder) { holder = { text: ctxText }; ctxBoxes.set(agent, holder); sp.context({ name: 'qq-hub-context', order: 905, text: () => holder.text }) }
-          else holder.text = ctxText
-        } else debug('宿主没有 systemPrompt.context 通道，本轮模块上下文只随装配产出留档（如实记录）')
-        if (typeof personaTextFor === 'function' && sp?.variable && !personaVarSet.has(agent)) {
-          personaVarSet.add(agent)
+      // 用 sessionId 做键：resolveAgent 每轮返回新的 agent 包装对象，对象键会导致「每轮都当第一次」
+      // → 重复注册被宿主拒绝 → holder 不更新 → 上下文永远停在第 1 轮的内容（实测 warn 刷屏 + 上下文冻结）。
+      const sidKey = String(sessionId)
+      const sp = (() => { try { return agent.ctx?.systemPrompt } catch { return undefined } })()
+      if (sp?.context) {
+        let holder = ctxBoxes.get(sidKey)
+        if (!holder) { holder = { text: ctxText }; ctxBoxes.set(sidKey, holder) }
+        else holder.text = ctxText // 每轮都更新（面板/记忆改动下一轮生效，同 legacy）
+        if (!ctxBound.has(sidKey)) {
+          ctxBound.add(sidKey)
+          try { sp.context({ name: 'qq-hub-context', order: 905, text: () => holder.text }) }
+          catch (error) {
+            ctxFallback.add(sidKey) // 宿主已注册同名（多为热重载残留）：改为拼进消息，保证内容送达
+            debug(`qq-hub-context 已存在，改为随消息投喂：${error?.message || error}`)
+          }
+        }
+      } else debug('宿主没有 systemPrompt.context 通道，本轮模块上下文只随装配产出留档（如实记录）')
+      // 提示词变量兜底（真机实测：热重载后 {{qq_hub_rules_private}} 会变成 unknown → 回合直接 error）。
+      // 每个会话尝试一次，失败不记「已绑定」，下一轮继续试。
+      if (promptVars && typeof promptVars === 'object' && sp?.variable) {
+        for (const [n, fn] of Object.entries(promptVars)) {
+          // 人设交给下面的「按聊天人设」块注册（它要带 chat 作用域），这里别抢先占名
+          if (n === 'qq_hub_persona' && typeof personaTextFor === 'function') continue
+          const key = `${sidKey}::${n}`
+          if (personaBound.has(key)) continue
+          try { sp.variable(n, fn); personaBound.add(key) } catch { /* 宿主已有同名：下一轮再试 */ }
+        }
+      }
+      // 宿主已占用同名 context（多为热重载残留）时的兜底：**每个会话只投一次**。
+      // 会话历史会一直带着这一条，后面每轮再塞相当于把人设卡和记忆重复注入（真机实测：
+      // 22 轮里每轮都带一整份角色卡，既费 token 又让她像在重新读档）。
+      if (ctxFallback.has(sidKey) && ctxText && !ctxFallbackDone.has(sidKey)) {
+        ctxFallbackDone.add(sidKey)
+        content = [{ type: 'text', text: `【本聊天背景，供参考（不必复述）】\n${ctxText}` }, ...content]
+      }
+      if (typeof personaTextFor === 'function' && sp?.variable && !personaBound.has(sidKey)) {
+        personaBound.add(sidKey)
+        try {
           sp.variable('qq_hub_persona', () => {
             try { const t = personaTextFor(chat); if (t) return t } catch {}
             try { return personaText ? personaText() : '' } catch { return '' }
           })
-        }
-      } catch (error) { try { log?.warn?.('上下文/人设挂载失败（本轮照跑）：', error.message) } catch {} }
+        } catch (error) { debug(`人设变量已存在，沿用宿主里那份：${error?.message || error}`) }
+      }
 
       // 5. 等**回合结束**（不是首个 assistant/message）：
       //    - assistant/message：跳过 interrupted 的部分内容，记下本 turn 文本（可能多条取最后）；
@@ -496,6 +660,19 @@ export function createModularCore({
       if (parsed.silent) return null
       const bubbles = parsed.items.filter((i) => i.kind === 'text')
       const skipped = parsed.items.length - bubbles.length
+      // 有富媒体标记 → 整条交给 legacy deliver（TTS/表情库/图片上传/引用/戳一戳它都有，
+      // 拆成两路发会出现「文字出去了、语音丢了」的半成品，反而不如一次交付）
+      // 系统表情 <face:名字> 也只有 legacy 会转成 QQ 小黄脸（faces.textToSegments + 去重状态），
+      // 走 outbox 会原样发出「<face:呲牙>」字面量（真机实测）。
+      const hasFaceTag = /<face:\s*[^>]{1,12}>/.test(String(reply || ''))
+      if ((skipped > 0 || hasFaceTag) && typeof legacyDeliver === 'function') {
+        try {
+          await legacyDeliver(turn.chatKey, reply, { own: true, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
+          return { state: 'sent', via: 'legacy-media' }
+        } catch (error) {
+          log.warn(`富媒体回复发送失败，退回只发文字：${error?.message || error}`)
+        }
+      }
       if (skipped > 0) debug(`本轮 ${skipped} 个富媒体/引用标记未接线（R4 已知缺口），只发文字气泡`)
       // 7. 回复经 outbox 投递（唯一物理出口；多气泡按序多条 request，FIFO 保证顺序）
       let result = null
@@ -506,6 +683,8 @@ export function createModularCore({
           sourceModuleId: 'core',
           segments: [{ type: 'text', data: { text: b.value } }],
         })
+        try { if (result?.state === 'sent') onStats?.('sent') } catch {}
+        try { if (result?.state === 'sent') logChat?.(turn.chatKey, 'bot', String(b.value)) } catch {}
       }
       // 8. 群说话记账（legacy noteSpeak/noteInterject 同款）：刹车（burst 上限）与冷却的数据源
       if (inGroup && result && (result.state === 'sent' || result.state === 'unknown')) {
@@ -590,6 +769,12 @@ export function createModularCore({
       groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: false })
     }
     emitActivity(mods, inbound)
+    // 真机审计 1.11：面板统计与「最近发来的图/表情」（legacy 同一份内存状态）
+    try { onStats?.('received') } catch {}
+    try { noteMedia?.(inbound.chatKey, inbound.segments, userId) } catch {}
+    // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/蒸馏/黑话/日记都从它取料
+    try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
+    try { collectInboundStickers?.(inbound.chatKey, inbound.segments, userId) } catch {}
     if (inGroup) {
       const decision = decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId })
       if (!decision.reply) {
@@ -625,8 +810,44 @@ export function createModularCore({
     outbox.dispose()
   }
 
+  /** 重置某个聊天的会话（真机：token-guardian 压缩后要 resetChat 才能让摘要生效；
+   *  它读的是 legacy sessions.json，新核心会话不在里面 → 之前一直「无可重置的会话」）。
+   *  同步返回 bool（调用方同步判断），归档异步做、失败不影响「已重置」的语义（映射已忘掉，下条消息开新会话）。 */
+  function resetChat(chatKey) {
+    const key = String(chatKey || '')
+    const entry = registry.peek?.(key)
+    if (!entry?.sessionId) return false
+    try {
+      const reg = ctxGet('workspaceRegistry')
+      Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
+    } catch { /* 归档失败不影响重置 */ }
+    try { registry.forget?.(key) } catch { /* ignore */ }
+    debug(`会话已重置（新核心）：${key}`)
+    return true
+  }
+
+  /** 会话 id → chatKey 反查（审批/交互提问桥接用：新核心的会话不在 legacy sessions.json 里，
+   *  hub.chatOfSession 查不到 → 审批卡只能弹在 GUI，发不到 QQ。真机实测 2026-11-09）。 */
+  function chatKeyOfSession(sessionId) {
+    const sid = String(sessionId || '')
+    if (!sid) return ''
+    const snap = registry.snapshot?.() || {}
+    for (const [chatKey, entry] of Object.entries(snap)) {
+      if (entry && String(entry.sessionId) === sid) return chatKey
+    }
+    // 兼容带/不带 session- 前缀两种写法
+    const bare = sid.startsWith('session-') ? sid.slice(8) : sid
+    for (const [chatKey, entry] of Object.entries(snap)) {
+      const v = String(entry?.sessionId || '')
+      if (v === sid || v.endsWith(bare)) return chatKey
+    }
+    return ''
+  }
+
   return {
     dispatchLegacyEvent,
+    chatKeyOfSession,
+    resetChat,
     dispatchBackfill,
     outbox,
     registry,
