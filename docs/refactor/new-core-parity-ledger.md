@@ -37,8 +37,8 @@
 **真缺口（新核心行为未实现，收口=PR-2/PR-4）**
 | 用例 | 缺口 | 归属 |
 |---|---|---|
-| 引用消息 ×6（#221-#226：私聊/群聊 quotedInfo、引用内图/表情、get_msg 空 url 补历史、拉不到要明说） | 入站引用解析整段未移植（报告「仍未解决」第 2 条） | PR-2 InboundService |
-| 群聊被引用回复 + `<reply:n>` ×2（#208/#209） | 出站引用段拼装未移植 | PR-3 |
+| 引用消息 ×6（#221-#226：私聊/群聊 quotedInfo、引用内图/表情、get_msg 空 url 补历史、拉不到要明说） | 基础正文/发送者已水合并有 m7 回归；空 url 历史补图等完整 e2e 尚钉在 legacy，解除 pin 后才算全量收口 | PR-2 InboundService |
+| 群聊被引用回复 + `<reply:n>` ×2（#208/#209） | reply/at 已委托 legacyDeliver 并有 m7 回归；完整群聊 e2e 尚钉在 legacy，待解除 pin | PR-3 |
 | 戳一戳回戳（#212） | poke 的 legacy 交互语义（回戳+20s 去重）未接 | PR-4 |
 | 合并转发读记录（#213） | forward 段展开（get_forward_msg）未进新核内容拼装 | PR-2 |
 | 模块接管/改写/热重载重挂/慢工具「正在做」/排队轮说话人兜底/DSH 窗口直打字（#921/#923/#255/#257/#258/#259/#254） | 模块钩子在新核的等价面：takeover/rewrite 已桥接但 e2e 断言的是 legacy 装配细节；「正在做」提示与排队兜底未实现 | PR-4 交互+钩子 |
@@ -59,7 +59,7 @@
 
 | 项 | 现状 | 收口 |
 |---|---|---|
-| `ask_user_question` 整条不可用 | 工具清单没有它；桥 seam 需改 `user-questions/request` waterfall(global) | 单独修复批次 |
+| `ask_user_question` 服务接线 | 已改 `userQuestions.ask()` 包装，按会话分流且可卸载；工具在自定义 preset 的挂载仍需真机/上游时序验证 | `test/modular-user-questions.test.js` + fnOS 验收 |
 | 富媒体出站/模块媒体台账「代码已接、待真实流量触发」 | 单测已钉（m7 富媒体例）；真机以 `.7` 包跑一次生图+语音验证 | fnOS 验收 |
 | PR-1 共享 Outbox（#13） | 独立 base-main 线，不动本次合并；发送面矩阵（imagegen/rss/scheduler/song）在其分支完成后跑 | PR #13 |
 
