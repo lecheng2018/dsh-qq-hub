@@ -576,9 +576,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     save(s)
     return s.distill[key]
   }
-  /** 面板用：目标 + 各自画像，合成一份。 */
+  /** 面板用：显式目标与已学习画像的并集；历史学习即使没建目标也不能从面板消失。 */
   function distillList () {
-    return distillTargets().map((t) => ({ ...t, profile: distillOf(t.gid, t.uid) }))
+    const rows = distillTargets().map((t) => ({ ...t, profile: distillOf(t.gid, t.uid) }))
+    const seen = new Set(rows.map((t) => `${t.gid}#${t.uid}`))
+    for (const [key, profile] of Object.entries(load().distill || {})) {
+      const match = /^group:(\d+)#(\d+)$/.exec(key)
+      if (!match || seen.has(`${match[1]}#${match[2]}`)) continue
+      rows.push({ gid: match[1], uid: match[2], name: String(profile?.name || match[2]), profile })
+    }
+    return rows
   }
 
   // ---------------- 从会话历史蒸馏（1.3.63）----------------

@@ -1,12 +1,7 @@
 // 端到端：假 DSH 宿主 + 假 QQ 网关，跑通 Aurabot 整条链路。
 //
-// 本套件钉在 **legacy 逃生阀路径**（FLAG_MODULAR_CORE=false）上：这些用例逐条断言 legacy
-// hub 的内部行为形态（来源行/userText、引用 quotedInfo、<reply:n>、戳一戳回戳、typing、
-// 慢工具「正在做」提示、排队轮说话人兜底……），其中一部分是新核心**已知未拉齐**的差距
-// （见 docs/refactor/new-core-parity-ledger.md，即汇总报告「仍未解决」项的完整版）。
-// 新核心的主链覆盖：m4/m5/m6 契约套件 + m7-live-parity（现网 22 项固化）+ 本次转正实测
-// ——e2e 全量在新核缺省姿态下跑过：约 120 例中 90 例直接绿、30 例为台账差距（日志存档）。
-process.env.FLAG_MODULAR_CORE = 'false'
+// 默认在模块化新核心路径运行；legacy 逃生阀由 r3-flagoff-regression 单独覆盖。
+// 断言用户可观察行为与共享会话/出站接口，不再通过 FLAG_MODULAR_CORE=false 跳过差异。
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
@@ -509,7 +504,9 @@ test('语音：回复里的 <voice> 变成 QQ 语音条', async () => {
   try {
     const n = sentTo('private', OWNER).length
     mock.push(priv(OWNER, text('晚安')))
-    await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'record'), 20000)
+    await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'record'), 20000).catch((error) => {
+      throw new Error(`${error.message}；本轮出站=${JSON.stringify(sentTo('private', OWNER).slice(n).map((c) => c.params.message))}；最近回合=${JSON.stringify(fake.turns.slice(-3))}`)
+    })
     const rec = sentTo('private', OWNER).slice(n).find((c) => c.params.message[0].type === 'record')
     assert.match(rec.params.message[0].data.file, /^base64:\/\//)
   } finally { await tts.close() }
@@ -1238,7 +1235,7 @@ test('主人私聊里这一轮的说话人记录丢了，也按主人算（#90 �
   assert.ok(sid, '主人私聊会话应该已经建过')
   api.hub.simulateTurn(sid, [])
   api.hub.onSessionEvent({ id: sid }, { type: 'turn/end', data: { turn: 999, reason: { kind: 'completed' } } })
-  assert.equal(api.hub.turnSendersAllOwner(sid), true, '主人私聊里仅主人操作不该被误拒')
+  assert.equal(api.hub.turnSendersAllOwner(sid), true, `主人私聊里仅主人操作不该被误拒：sid=${sid} chat=${api.hub.chatOfSession(sid)} sessions=${JSON.stringify(api.hub.sessions())}`)
   assert.equal(api.hub.turnHasOwner(sid), true)
   const gsid = api.hub.sessions()['group:557']?.sessionId
   if (gsid) {
@@ -1305,15 +1302,12 @@ test('按聊天换人设：这个群只渲染专用卡，不再追加「专用�
 // 现在每轮在消息最前面加一行中文时间，群聊每条消息再标「（2 小时前）」。
 
 test('时间锚：私聊隔了两小时，她会知道「现在几点、隔了多久」', async () => {
-  const mapFile = join(dataDir, 'sessions.json')
   mock.push(priv(OWNER, text('时间锚预热')))
   await until(() => String(fake.turns.at(-1)?.userText || '').includes('时间锚预热'), 12000)
   // 把她上一次收到消息的时间拨回两小时前，模拟「两小时后再回一句」
-  const m = JSON.parse(readFileSync(mapFile, 'utf8'))
   const key = `private:${OWNER}`
-  assert.ok(m.chats[key], '私聊会话要记在 sessions.json 里：' + Object.keys(m.chats).join(','))
-  m.chats[key].lastTurnAt = Date.now() - 2 * 3600_000
-  writeFileSync(mapFile, JSON.stringify(m))
+  assert.ok(api.hub.sessions()[key], '私聊会话要记在新核心注册表里')
+  api.hub.markTurnAt(key, Date.now() - 2 * 3600_000)
   const n = fake.turns.length
   mock.push(priv(OWNER, text('时间锚两小时后')))
   const turn = await until(() => fake.turns.slice(n).find((t) => String(t.userText).includes('时间锚两小时后')), 12000)

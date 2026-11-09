@@ -32,7 +32,7 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 
 ## 📦 版本与发版流程
 
-- 当前版本：**v1.3.64**（RFC-0001 洋葱内核重构并入主干）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
+- 当前测试版：**v1.3.65-test.20261110.1**（模块化核心全接入候选；真机验收清单见 `docs/refactor/m5-runbook.md`）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
 - **自动化发版**：push `main` 触发 `.github/workflows/release.yml` —— 全量测试门禁（0 失败）→ 自动提取 `CHANGELOG.md` 生成 Release 正文 → 打包 `.tgz` 离线插件包挂到 Release 附件。
 - 安装源三选一：`dsh plugin add github:lecheng2018/dsh-qq-hub`（跟随最新 tag）、GitHub Releases 下载 `.tgz` 离线安装、或本地 `npm pack` 后安装。
 
