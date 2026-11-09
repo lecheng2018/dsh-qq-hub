@@ -1,8 +1,9 @@
 // 辅助看图模型：主模型不支持多模态时，临时请另一个视觉模型转述画面。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const { askModel, clearVisionCache } = await import(`file:///${REPO}/src/core/llm.js`)
 const { describeText, wrapForMain, describePrompt } = await import(`file:///${REPO}/src/core/vision-helper.js`)
 

@@ -36,6 +36,21 @@ export function isPipelineEnabled(env = process.env) {
 }
 
 /**
+ * M4 总开关解析：FLAG_MODULAR_CORE（模块化新核心主链）。
+ * 2026-11-09 起默认开（现网 1.3.65-test.20261108.5-local5+3 验证通过后转正）：
+ * 仅显式 'false' / '0'（忽略大小写与首尾空白）回退 legacy 直调路径；
+ * 未设置、空值、乱值一律走新核心。legacy 代码保持完整可用，作为一键逃生阀。
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function isModularCoreEnabled(env = process.env) {
+  const raw = env?.FLAG_MODULAR_CORE
+  if (typeof raw !== 'string') return true
+  const v = raw.trim().toLowerCase()
+  return !(v === 'false' || v === '0')
+}
+
+/**
  * 旧 OneBot v11 事件 → RFC §3.1 InboundEnvelope 适配层。
  * 信封字段尽量填全；事件里没有的字段置 undefined（见各行注释），
  * rawPayload 保留原事件引用不拷贝——旧入口要吃的就是这份原始报文。

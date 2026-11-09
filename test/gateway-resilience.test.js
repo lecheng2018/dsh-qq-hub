@@ -124,3 +124,72 @@ test('超时不重试（可能已经发出去了，重试会重复）', async ()
     assert.equal(h.calls.length, 1, '超时只调一次')
   } finally { h.restore() }
 })
+
+// ---------- C. unknown 防护覆盖面（代码审查 P1：副作用白名单反转） ----------
+
+test('SEND_ACTIONS 之外的副作用动作（forward/qzone/set_*/delete_*）：连接中途断开 = unknown，只发一次', async () => {
+  // ECONNRESET 不在 PRE_SEND_CODES：请求可能已到达网关，副作用可能已发生
+  for (const action of ['send_group_forward_msg', 'send_private_forward_msg', 'send_qzone_msg', 'set_group_ban', 'delete_qzone_msg', 'set_friend_add_request']) {
+    const h = client(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }) })
+    try {
+      await assert.rejects(() => h.c.call(action, {}, { retries: 2 }), (e) => {
+        assert.equal(e.unknown, true, `${action} 必须标 unknown`)
+        return true
+      })
+      assert.equal(h.calls.length, 1, `${action} 断线后不许补发第二遍`)
+    } finally { h.restore() }
+  }
+})
+
+test('HTTP 应答不是合法 OneBot 信封（502 HTML）：副作用动作 = unknown，不得冒充明确拒绝', async () => {
+  // 旧行为：r.json().catch 合成 retcode:502，下游按 definite failure 重发（base64 回退等）——错
+  const h = client(async () => new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }))
+  try {
+    await assert.rejects(() => h.c.call('send_group_msg', {}, { retries: 2 }), (e) => {
+      assert.ok(e instanceof OneBotError)
+      assert.equal(e.unknown, true, '非 JSON 应答对副作用只能是结果不明')
+      assert.equal(e.transport, false, '连接其实通了，只是应答没法解读')
+      return true
+    })
+    assert.equal(h.calls.length, 1, 'unknown 不许自动重发')
+  } finally { h.restore() }
+})
+
+test('HTTP 应答不是合法信封：查询动作按传输失败处理，允许重试（幂等，安全）', async () => {
+  const h = client(async () => new Response('<html>502</html>', { status: 502 }))
+  try {
+    await assert.rejects(() => h.c.call('get_group_info', {}, { retries: 2 }), (e) => e.transport === true && e.unknown === false)
+    assert.equal(h.calls.length, 3, '查询类把重试预算用完')
+  } finally { h.restore() }
+})
+
+test('查询动作：HTTP 网络错误可在同调用内 WS 回退；副作用动作禁止 WS 补发', async () => {
+  const sentFrames = []
+  class FakeWS {
+    constructor() { this.readyState = 1; setTimeout(() => this.onopen?.(), 0) }
+    send(raw) {
+      const m = JSON.parse(raw)
+      sentFrames.push(m.action)
+      setTimeout(() => this.onmessage?.({ data: JSON.stringify({ status: 'ok', retcode: 0, data: { via: 'ws' }, echo: m.echo }) }), 0)
+    }
+    close() { this.readyState = 3 }
+  }
+  const origWS = globalThis.WebSocket
+  globalThis.WebSocket = FakeWS
+  const h = client(async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }) }, {
+    endpoint: () => ({ httpUrl: 'http://127.0.0.1:3000', httpToken: '', wsUrl: 'ws://127.0.0.1:3000', wsToken: '' }),
+  })
+  try {
+    h.c.start()
+    await new Promise((r) => setTimeout(r, 10))
+    // 查询：HTTP 断线 → 同一调用里走 WS 拿到结果
+    const data = await h.c.call('get_group_info', { group_id: 1 }, { retries: 0 })
+    assert.deepEqual(data, { via: 'ws' })
+    assert.deepEqual(sentFrames, ['get_group_info'])
+    // 副作用：HTTP 断线 → 禁止 WS 补发（HTTP 请求可能已被网关执行），标 unknown 上抛
+    await assert.rejects(() => h.c.call('send_group_forward_msg', {}, { retries: 0 }), (e) => e.unknown === true)
+    assert.equal(sentFrames.length, 1, '副作用动作一条 WS 帧都不许发')
+    h.c.stop()
+  } finally { try { h.c.stop() } catch {} h.restore(); globalThis.WebSocket = origWS }
+})
+
