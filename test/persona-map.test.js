@@ -1,8 +1,9 @@
 // 按聊天换人设：优先级必须和 chatModels 一致，且没配时行为完全不变。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const { personaIdFor } = await import(`file:///${REPO}/src/persona/personas.js`)
 
 const cfg = (p) => ({ persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {}, ...p } })

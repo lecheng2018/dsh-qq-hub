@@ -10,8 +10,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 const PANEL = readFileSync(join(ROOT, 'src/modules/rss/panel.js'), 'utf8')
 

@@ -7,8 +7,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
 const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
 const PERSONAS = readFileSync(join(ROOT, 'src/persona/personas.js'), 'utf8')
