@@ -587,6 +587,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           surface: tgt.kind === 'group' ? '群消息' : '私聊消息',
           ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
           allowIds: [ownGroup, ...(tgt.kind === 'private' ? [cfg.ownerQQ] : [])].filter(Boolean),
+          // 私聊放宽裸长数字（与新区心同口径）：技术文档里的端口/版本号不该把整条吞掉
+          allowBareNumbers: tgt.kind === 'private',
           mode: igCfg.mode === 'warn' ? 'warn' : 'block',
         })
         if (guard.hits.length) {
@@ -2157,6 +2159,27 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
     prevTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.prevText || '',
     speakersOf: (sessionId) => turnState.get(sessionKey(sessionId))?.speakers || [],
+    // 新核心登记本轮说话人（真机审计：新核心不经 pushToSession，turnState 一直是空的 →
+    // memory.contextFor 取「正在说话的几个人」永远为空、turnHasOwner/turnSendersAllOwner 判定失真）
+    noteTurnSenders: (sessionId, senders = [], opts = {}) => {
+      try {
+        const key = sessionKey(sessionId)
+        const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+        const list = (senders || []).map(String).filter(Boolean)
+        st.speakers = list
+        if (!(st.senders instanceof Set)) st.senders = new Set()
+        for (const u of list) st.senders.add(u)
+        if (opts.directOwner) st.directOwner = true
+        turnState.set(key, st)
+      } catch {}
+    },
+    /** 入站表情收集（新核心调；按 collectMode 决定收不收）。 */
+    collectInboundSticker: async (seg, chatId) => {
+      try {
+        if (!getConfig().stickers?.enabled || !getConfig().stickers?.collect) return { ok: false, reason: '偷表情关着' }
+        return await stickers.collect(seg, chatId)
+      } catch (error) { return { ok: false, reason: String(error.message || error) } }
+    },
     logChat,
     localTranscribe,
     ensureWorkspace,
@@ -2167,6 +2190,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     resolveTarget,
     groupName,
     stats: () => ({ ...stats }),
+    // 真机审计 1.11：开旗后进站/出站都不走本文件，面板统计以前全 0。把计数入口与
+    // 「最近发来的图/表情」登记入口公开给新核心（同一份内存状态，面板读的仍是 stats()）。
+    bumpStats: (k) => { try { if (k in stats) bump(k) } catch {} },
+    noteRecentMedia: (chatId, segs, userId) => {
+      try {
+        const items = (segs || []).filter((x) => x && ['image', 'mface', 'face'].includes(x.type))
+        if (items.length) recentMedia.remember(String(chatId), items.map((seg) => ({ seg, userId: String(userId || ''), sticker: seg.type !== 'image' })))
+      } catch {}
+    },
     get lastChatAt() { return lastChatAt },
     get lastOwnerChatAt() { return lastOwnerChatAt },
     get lastBotToOwner() { return lastBotToOwner },
