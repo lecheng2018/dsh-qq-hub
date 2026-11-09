@@ -5,8 +5,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SRC = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
 
 test('先重置会话、后落摘要（reset 成功才换摘要文本）', () => {

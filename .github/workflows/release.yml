@@ -51,9 +51,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Extension Test Dependencies
+        run: npm ci --prefix extensions/tieba-reader
+
       - name: Run Test Suite
-        run: |
-          node --test "test/**/*.test.js"
+        run: npm run test:all
+
+      - name: Check Package Contents
+        run: npm run pack:check
 
       - name: Determine Version and Tag
         id: meta

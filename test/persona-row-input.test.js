@@ -3,8 +3,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const src = readFileSync(`${REPO}/client/client.js`, 'utf8')
 
 // 从面板源码里抠出 planPersonaRow 本体来跑（面板是浏览器脚本，不能直接 import）

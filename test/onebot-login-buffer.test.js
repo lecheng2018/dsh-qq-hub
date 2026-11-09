@@ -57,7 +57,7 @@ before(async () => {
   host.apply(fake.ctx)
 
   // 全新启动：第一轮连接就在核对。注意 reconnect 要等核对通过才返回，所以先不 await
-  const reconnect = fake.call('/onebot/reconnect').catch(() => null)
+  const reconnect = fake.call('/onebot/reconnect', {}).catch(() => null) // P1 §4.9：副作用路径改为 POST
   const started = await until(() => mock.calls.some((c) => c.action === 'get_login_info'))
   assert.ok(started, '连接后应该发起登录核对')
   seen.loginCall = mock.calls.filter((c) => c.action === 'get_login_info').at(-1)
