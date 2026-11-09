@@ -24,6 +24,7 @@ import { createContextAssembly } from '../chat/context-assembly.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
+import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
@@ -195,6 +196,9 @@ export function createModularCore({
   moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers,
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
+  // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
+  const activity = createActivityState({ onTypingPing: () => {} })
+  const pingTyping = (userId) => { try { Promise.resolve(onebot?.call?.('set_input_status', { user_id: Number(userId), event_type: 1 }, { timeoutMs: 5000 })).catch(() => {}) } catch {} }
 
   // cordis 的 ctx.services / ctx.attachments / agent.ctx.contexts 都是「未声明 inject 直接点会抛」的
   // getter（真机报告 3/4：`cannot get property "…" without inject`，可选链 `?.` 挡不住 getter 求值）。
@@ -634,6 +638,10 @@ export function createModularCore({
       const admitted = await admitContent(content)
       const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
       // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
+      // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
+      // 现网新核心此前不亮 typing（转正补齐的 e2e 平账项）。
+      activity.startTyping(String(sessionId), chat, getConfig(), pingTyping)
+      const stopTyping = () => { try { activity.stopTyping(String(sessionId)) } catch {} }
       let followupError = null
       try {
         await agent.followup(message)
@@ -642,13 +650,16 @@ export function createModularCore({
       }
       if (followupError) {
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
+        stopTyping()
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
       let reply
       try {
         reply = await replyPromise
+        stopTyping()
       } catch (error) {
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
+        stopTyping()
         throw error
       }
 
