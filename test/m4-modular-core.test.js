@@ -22,12 +22,14 @@ test.after(() => { setTimeout(() => process.exit(0), 200).unref() })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
 
-test('flag 解析：FLAG_MODULAR_CORE 缺省关、true/1 开、乱值关（与四开关同口径）', () => {
-  assert.equal(isModularCoreEnabled({}), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: undefined }), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '' }), false)
+test('flag 解析：FLAG_MODULAR_CORE 缺省开（2026-11-09 转正），仅 false/0 显式关，乱值随默认开', () => {
+  assert.equal(isModularCoreEnabled({}), true)
+  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: undefined }), true)
+  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '' }), true)
+  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'garbage' }), true)
   assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'false' }), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'garbage' }), false)
+  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '0' }), false)
+  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: ' FALSE ' }), false)
   assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'true' }), true)
   assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '1' }), true)
   assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'TRUE ' }), true)

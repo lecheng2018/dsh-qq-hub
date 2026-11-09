@@ -145,8 +145,8 @@ export function apply(ctx) {
   }
 
   /** RFC-0001 熔断开关路由 + M4 模块化新核心总开关：
-   *  FLAG_MODULAR_CORE 开（默认关）→ 实时事件走新核心（Registry→Turn→Assembly→Outbox）；
-   *  否则 FLAG_USE_PIPELINE 开 → 洋葱管道；都关 → 直调遗留 hub（默认路径逐字不变）。 */
+   *  FLAG_MODULAR_CORE 默认开（2026-11-09 转正，现网 .5-local5+3 验证树）→ 实时事件走新核心（Registry→Turn→Assembly→Outbox）；
+   *  显式 false/0 逃生阀：否则 FLAG_USE_PIPELINE 开 → 洋葱管道；都关 → 直调遗留 hub（legacy 路径逐字不变）。 */
   function dispatchEvent (ev, kind) {
     const sink = (error) => log.error(kind === 'poke' ? '处理戳一戳出错：' : '处理消息出错：', (usePipeline ? unwrapPipelineError(error) : error).message)
     if (useModularCore && modularCoreApi) {
@@ -277,7 +277,7 @@ export function apply(ctx) {
     listModels: models.listModels,
   })
 
-  // ---------- M4：模块化新核心组装根（FLAG_MODULAR_CORE，默认关；关闭态零装配） ----------
+  // ---------- M4：模块化新核心组装根（FLAG_MODULAR_CORE，默认开；显式关闭态零装配） ----------
   const useModularCore = isModularCoreEnabled(process.env)
   const modularCoreApi = useModularCore
     ? createModularCore({
