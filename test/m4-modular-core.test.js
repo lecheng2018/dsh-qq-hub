@@ -362,7 +362,7 @@ function rawCore(dshRaw, cfgOver = {}) {
   }
   const core = createModularCore({
     dsh: dshRaw.ctx,
-    onebot: { call: async (action) => { sent.push(action); return { message_id: String(sent.length) } } },
+    onebot: { call: async (action) => { if (action.startsWith('send_')) sent.push(action); return { message_id: String(sent.length) } }, }, // 只记发送族：set_input_status 等旁路状态调用不算「发消息」（2026-11-09 typing 平账后语义）
     mods: { contextFor: async () => '', commands: () => [], use: () => null },
     getConfig: () => cfg, logger: noopLog, log: noopLog,
   })
