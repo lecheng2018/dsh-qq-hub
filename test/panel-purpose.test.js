@@ -46,7 +46,7 @@ before(async () => {
   const host = await import('../src/host.js')
   api = host.apply(fake.ctx)
   await api.ready.catch(() => {})
-  await fake.call('/onebot/reconnect')
+  await fake.call('/onebot/reconnect', {}) // P1 §4.9：副作用路径改为 POST（空 body 也算 POST）
 })
 
 after(async () => {
@@ -118,13 +118,13 @@ test('预览零副作用：/panel/purpose/preview 收素材拼提示词，但不
 })
 
 test('手动试跑：引擎关着时明确拒绝；打开后能真跑一轮并投递私聊', async () => {
-  const r0 = await call('/panel/purpose/run')
+  const r0 = await call('/panel/purpose/run', {}) // P1 §4.9：副作用路径改为 POST
   assert.equal(r0.ok, false, '默认关：run 明确报「开关是关的」')
   assert.match(String(r0.message || ''), /开关/)
   const on = await call('/panel/purpose/config', { enabled: true })
   assert.equal(on.ok, true)
   const before = sentToOwner().length
-  const r = await call('/panel/purpose/run')
+  const r = await call('/panel/purpose/run', {}) // P1 §4.9：副作用路径改为 POST
   assert.equal(r.ok, true, JSON.stringify(r))
   assert.equal(sentToOwner().length, before + 1, '真跑一轮：私聊里多发了一条')
   await call('/panel/purpose/config', { enabled: false })

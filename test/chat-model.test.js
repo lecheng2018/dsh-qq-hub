@@ -90,7 +90,10 @@ const OWNER = '10000001'
 const BOT = '20000002'
 const FRIEND = '30000003'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-async function until(fn, ms = 10000) {
+async function until(fn, ms = 30000) {
+  // 30s 等待窗口：全量并行（142 文件同跑）时本文件是起真 host + mock 网关的重用例，
+  // 10s 窗口在高负载机器上会「等不到条件成立」（M0-2 分类：负载敏感的等待预算，
+  // 不是断言放宽——条件最终必须成立这一要求不变）。
   const t = Date.now()
   while (Date.now() - t < ms) {
     const v = await fn()
@@ -103,7 +106,14 @@ let mock, fake, api, dataDir, seq = 0
 const privMsg = (uid, t) => ({ message_type: 'private', sub_type: 'friend', user_id: Number(uid), message_id: ++seq, sender: { user_id: Number(uid), nickname: 'u' + uid }, message: [{ type: 'text', data: { text: t } }] })
 const grpMsg = (gid, t) => ({ message_type: 'group', sub_type: 'normal', group_id: Number(gid), user_id: 123456, message_id: ++seq, sender: { user_id: 123456, nickname: '群友', card: '群友', role: 'member' }, message: [{ type: 'text', data: { text: '大肥鱼 ' + t } }] })
 const agentOf = (chatId) => {
-  try { return fake.agents.get(JSON.parse(readFileSync(join(dataDir, 'sessions.json'), 'utf8')).chats[chatId]?.sessionId) } catch (error) { return null }
+  // 旗开（生产缺省态）会话记在 modular-sessions.json；逃生阀态记在 sessions.json。两份都认。
+  for (const f of ['modular-sessions.json', 'sessions.json']) {
+    try {
+      const sid = JSON.parse(readFileSync(join(dataDir, f), 'utf8')).chats[chatId]?.sessionId
+      if (sid) { const a = fake.agents.get(sid); if (a) return a }
+    } catch { /* 文件不存在就试下一份 */ }
+  }
+  return null
 }
 const lastSel = (chatId) => { const a = agentOf(chatId); const e = a?.events.filter((x) => x.type === 'model/selection').at(-1); return e ? e.data : null }
 /** 发一条消息，等这个聊天的会话选中了 want（模型名）；want 为 fake-1 表示全局 */
@@ -131,7 +141,7 @@ before(async () => {
   const host = await import('../src/host.js')
   api = host.apply(fake.ctx)
   await api.ready
-  await fake.call('/onebot/reconnect')
+  await fake.call('/onebot/reconnect', {}) // P1 §4.9：副作用路径改为 POST（旧断言用 GET，属固化漏洞）
   await until(() => mock.connected() > 0)
   assert.equal((await fake.call('/models')).json().list.length, 5, '先让插件记下 DSH 里有哪些模型')
 })

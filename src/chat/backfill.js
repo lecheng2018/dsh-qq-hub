@@ -7,7 +7,9 @@
 // 安全保障：
 // 1. 补收到的消息注入提示给 AI「这是断线期间错过的消息，带原始时间」；
 // 2. 补收消息严禁执行任何管理命令、审批放行或确认码（防止重放攻击）；
-// 3. 超过 maxAgeMinutes（默认 6 小时）的过旧消息只落上下文不主动唤醒。
+// 3. 超过 maxAgeMinutes（默认 6 小时）的过旧消息不主动唤醒（M1-B 锁定：
+//    gateway.triggerBackfill 对 tooOld 条目整个跳过——legacy 无独立「只落上下文」通道，
+//    「落上下文」语义待 M2-A NormalizedInbound 承接，见 test/modular-backfill-legacy.test.js）。
 
 import fs from 'node:fs'
 import path from 'node:path'

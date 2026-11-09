@@ -569,7 +569,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return kind === 'group' ? { kind: 'group', id } : kind === 'private' ? { kind: 'private', id } : null
   }
 
-  async function sendSegments(chatId, message, note, { force = false } = {}) {
+  async function sendSegments(chatId, message, note, { force = false, onResult } = {}) {
     const cfg = getConfig()
     const tgt = targetOf(chatId)
     if (!tgt) return null
@@ -587,6 +587,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           surface: tgt.kind === 'group' ? '群消息' : '私聊消息',
           ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
           allowIds: [ownGroup, ...(tgt.kind === 'private' ? [cfg.ownerQQ] : [])].filter(Boolean),
+          // 私聊放宽裸长数字（与新区心同口径）：技术文档里的端口/版本号不该把整条吞掉
+          allowBareNumbers: tgt.kind === 'private',
           mode: igCfg.mode === 'warn' ? 'warn' : 'block',
         })
         if (guard.hits.length) {
@@ -633,6 +635,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       if (!gr.ok) {
         bump('errors')
         log.warn(`发到 ${chatId} 失败：`, gr.error?.message || '未知')
+        // M1-C：向调用方如实报告投递状态——unknown = 副作用可能已发生（超时/中途断连），
+        // 调用方（sendVoice 等）不得对该状态自动重试或改发另一形式
+        onResult?.({ ok: false, unknown: gr.error?.unknown === true, error: gr.error })
         return null
       }
       const r = gr.result
@@ -641,10 +646,12 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
       }
       bump('sent')
+      onResult?.({ ok: true, result: r })
       return r
     } catch (error) {
       bump('errors')
       log.warn(`发到 ${chatId} 失败：`, error.message)
+      onResult?.({ ok: false, unknown: error?.unknown === true, error })
       return null
     }
   }
@@ -684,11 +691,22 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       // QQ 客户端不支持「引用 / @ + 语音」同一条消息：这样发电脑 QQ 是空白气泡、手机 QQ 提示
       // 「该消息类型暂不支持查看」，语音也听不到（issue #103）。语音条一律单独成条，引用和 @ 只能放弃。
       if (replyId || userId) log.debug(`语音条不能带引用/@（QQ 限制），单独发：${chatId}`)
-      const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`)
+      let outcome = null
+      const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`, { onResult: (o) => { outcome = o } })
       if (r || getConfig().dryRun || !getConfig().enabled) bump('voice')
-      if (!r && getConfig().enabled && !getConfig().dryRun) throw new Error('网关没接受语音')
+      if (!r && getConfig().enabled && !getConfig().dryRun) {
+        const err = new Error('网关没接受语音')
+        err.unknown = outcome?.unknown === true
+        throw err
+      }
       return true
     } catch (error) {
+      // M1-C：unknown（超时/中途断连，语音可能已经发出去了）不改发文字——
+      // 那等于「盲发第二遍」；只有确定没发出去的失败才走文字兜底（voice 模块文档行为）
+      if (error?.unknown) {
+        log.warn(`语音发送状态未知（可能已发出），不改发文字：${chatId}`)
+        return false
+      }
       log.warn('语音没发出去，改发文字：', error.message)
       await sendText(chatId, text, replyId, undefined, userId)
       return false
@@ -781,8 +799,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       log.info(`${chatId}：发文件「${label}」（${srcLabel}）`)
       return r
     } catch (error) {
-      // 网关看不到本机路径（远程 / 容器）时，小文件改用 base64 再试
-      const canRetryBase64 = !external && size <= Math.min(FILE_BASE64_MAX, maxBytes)
+      // 网关看不到本机路径（远程 / 容器）时，小文件改用 base64 再试。
+      // M1-C：只允许在「确定没发出去」的失败上走这个约定内 fallback
+      // （网关明确拒绝 / 连接没建立起来）；unknown（超时、中途断连）可能已经
+      // 发出去了，再补一发 base64 就是重复文件。
+      const canRetryBase64 = !external && size <= Math.min(FILE_BASE64_MAX, maxBytes) && error?.unknown !== true
       if (!canRetryBase64) {
         bump('errors')
         throw new Error(`发文件失败：${error.message}`)
@@ -2085,6 +2106,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   return {
     // 仅关闭本中枢持有的短期媒体缓存，迟到的事件不能重新写入。
     disposeRecentMedia: () => recentMedia.dispose(),
+    // 新核心旁路指令桥（真机审计 1.9）：主人「通过 #1 / 拒绝」批复工具审批、当前聊天在等
+    // 交互提问回答时优先消费。命中返回 true 并记流水（同 legacy onMessage 两处分支语义）。
+    interceptInteraction: ({ text, userId, chatId, who } = {}) => {
+      try {
+        if (approvals.handleReply(text, userId, chatId)) { logChat(chatId, who || '', text, userId); return true }
+        if (questions.has(chatId) && questions.handleReply(chatId, text)) { logChat(chatId, who || '', text, userId); return true }
+      } catch (error) { log.debug('旁路指令判定出错：', error.message) }
+      return false
+    },
     modelFor: targetModel,
     syncAllModels,
     /** 这个聊天最近发来的图片 / 表情（新的在后面），可选只要某人发的 */
@@ -2129,6 +2159,27 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     lastTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.lastText || '',
     prevTextOf: (sessionId) => turnState.get(sessionKey(sessionId))?.prevText || '',
     speakersOf: (sessionId) => turnState.get(sessionKey(sessionId))?.speakers || [],
+    // 新核心登记本轮说话人（真机审计：新核心不经 pushToSession，turnState 一直是空的 →
+    // memory.contextFor 取「正在说话的几个人」永远为空、turnHasOwner/turnSendersAllOwner 判定失真）
+    noteTurnSenders: (sessionId, senders = [], opts = {}) => {
+      try {
+        const key = sessionKey(sessionId)
+        const st = turnState.get(key) || { lastTurn: -1, text: '', senders: new Set() }
+        const list = (senders || []).map(String).filter(Boolean)
+        st.speakers = list
+        if (!(st.senders instanceof Set)) st.senders = new Set()
+        for (const u of list) st.senders.add(u)
+        if (opts.directOwner) st.directOwner = true
+        turnState.set(key, st)
+      } catch {}
+    },
+    /** 入站表情收集（新核心调；按 collectMode 决定收不收）。 */
+    collectInboundSticker: async (seg, chatId) => {
+      try {
+        if (!getConfig().stickers?.enabled || !getConfig().stickers?.collect) return { ok: false, reason: '偷表情关着' }
+        return await stickers.collect(seg, chatId)
+      } catch (error) { return { ok: false, reason: String(error.message || error) } }
+    },
     logChat,
     localTranscribe,
     ensureWorkspace,
@@ -2139,6 +2190,15 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     resolveTarget,
     groupName,
     stats: () => ({ ...stats }),
+    // 真机审计 1.11：开旗后进站/出站都不走本文件，面板统计以前全 0。把计数入口与
+    // 「最近发来的图/表情」登记入口公开给新核心（同一份内存状态，面板读的仍是 stats()）。
+    bumpStats: (k) => { try { if (k in stats) bump(k) } catch {} },
+    noteRecentMedia: (chatId, segs, userId) => {
+      try {
+        const items = (segs || []).filter((x) => x && ['image', 'mface', 'face'].includes(x.type))
+        if (items.length) recentMedia.remember(String(chatId), items.map((seg) => ({ seg, userId: String(userId || ''), sticker: seg.type !== 'image' })))
+      } catch {}
+    },
     get lastChatAt() { return lastChatAt },
     get lastOwnerChatAt() { return lastOwnerChatAt },
     get lastBotToOwner() { return lastBotToOwner },

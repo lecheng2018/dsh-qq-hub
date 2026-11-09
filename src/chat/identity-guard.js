@@ -21,7 +21,7 @@
  *   ids = 受保护 ID（主人/别人的 QQ 号、B站 mid 等）；allowIds = 允许出现（比如这个群自己的群号）
  * @returns {Array<{kind:string,label:string,value:string,index:number}>}
  */
-export function findIdentityLeaks(text, { ids = [], allowIds = [] } = {}) {
+export function findIdentityLeaks(text, { ids = [], allowIds = [], allowBareNumbers = false } = {}) {
   const raw = String(text ?? '')
   if (!raw.trim()) return []
   const allow = new Set([...allowIds].map((x) => String(x ?? '').trim()).filter(Boolean))
@@ -48,8 +48,10 @@ export function findIdentityLeaks(text, { ids = [], allowIds = [] } = {}) {
   // 3) 裸的 5~12 位连续数字：QQ 号/群号最常见的形态（「333444555 加进白名单了」）。
   // 只认**独立成词**的长数字串，长度 ≥8（QQ 号/群号现在普遍 9~11 位；5~7 位更像数量/楼层，误伤代价高）。
   // 误伤代价：把播放量/楼层当成号码会拦掉正常内容——所以要求长度 ≥5 且前后不接数字/小数点。
-  const bare = /(?<![\d.])(\d{8,12})(?![\d.]|\.\d)/g
-  while ((match = bare.exec(raw)) !== null) {
+  // 私聊放宽（真机实测）：给主人自己的私聊里，8~12 位裸数字多半是技术文档里的端口/版本/ID，
+  // 拦掉会把整篇报告吞了。私聊只对「已知账号」和「QQ/群号 + 数字」这两种明确形态把关。
+  const bare = allowBareNumbers ? null : /(?<![\d.])(\d{8,12})(?![\d.]|\.\d)/g
+  while (bare && (match = bare.exec(raw)) !== null) {
     const v = match[1]
     if (allow.has(v) || seen.has('bare:' + v)) continue
     // 年份（19xx / 20xx）和全 0 开头不当作号码
@@ -84,8 +86,8 @@ export function formatIdentityLeakError(hits, surface = '消息') {
  *   mode=block 直接拦下（返回 ok:false）；mode=warn 只记日志照发
  * @returns {{ok:boolean, hits:Array, message:string}}
  */
-export function checkIdentityLeak(text, { surface = '消息', ids = [], allowIds = [], mode = 'block' } = {}) {
-  const hits = findIdentityLeaks(text, { ids, allowIds })
+export function checkIdentityLeak(text, { surface = '消息', ids = [], allowIds = [], mode = 'block', allowBareNumbers = false } = {}) {
+  const hits = findIdentityLeaks(text, { ids, allowIds, allowBareNumbers })
   if (!hits.length) return { ok: true, hits: [], message: '' }
   const message = formatIdentityLeakError(hits, surface)
   if (mode === 'warn') return { ok: true, hits, message }
