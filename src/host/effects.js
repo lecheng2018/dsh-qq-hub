@@ -101,47 +101,27 @@ export function createHostEffects({
   }
 
   // ---------- 交互式提问 (userQuestions / ask_user_question) ----------
-  // 接入 DSH 官方 userQuestions seam：当模型通过 ask_user_question 提问时，格式化为 A/B/C 选项卡发往 QQ
+  // 当前 DSH 的稳定入口是 userQuestions.ask() 服务方法；provider/registerProvider 不是该服务的公开 API。
   function setupUserQuestions() {
-    // 读 ctx.userQuestions 时如果没在 inject 里声明，Cordis 会直接抛，所以整段包起来，
-    // 而且做成「有就接、没有就跳过」，绝不能让交互提问这个可选能力把整个插件带崩。
     let uq = null
-    try { uq = ctx.userQuestions } catch (error) { log.debug('DSH 没提供 userQuestions（跳过交互提问桥接）：', error.message) }
-    if (!uq) { try { uq = ctx.get?.('userQuestions') } catch (error) {} }
-    if (!uq) return
-    if (uq.provider) {
-      const orig = uq.provider
-      uq.provider = {
-        async ask(req) {
-          const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
-          const chatId = chatOfSession(sid)
-          if (chatId) {
-            return await hub.askUserQuestion(chatId, req)
-          }
-          return await orig.ask(req)
-        }
-      }
-      log.info('已将 QQ 交互提问桥接接入现有 userQuestions 提供方')
-    } else if (typeof uq.registerProvider === 'function') {
-      try {
-        ctx.effect(() => {
-          const off = uq.registerProvider({
-            async ask(req) {
-              const sid = sessionKey(req.agent?.session?.id || req.agent?.id)
-              const chatId = chatOfSession(sid)
-              if (chatId) {
-                return await hub.askUserQuestion(chatId, req)
-              }
-              throw new Error('当前会话不在 QQ 机器人管辖内')
-            }
-          })
-          return () => { try { if (typeof off === 'function') off() } catch (error) {} }
-        }, 'qq-hub: QQ交互提问提供方')
-        log.info('已成功注册 QQ userQuestions 交互提问提供方')
-      } catch (error) {
-        log.debug('注册 userQuestions 失败：', error.message)
-      }
+    try { uq = ctx.get?.('userQuestions') } catch (error) {
+      log.debug('DSH 没提供 userQuestions（跳过交互提问桥接）：', error.message)
     }
+    if (!uq || typeof uq.ask !== 'function') return
+    ctx.effect(() => {
+      const original = uq.ask.bind(uq)
+      const wrapped = async (req) => {
+        const sid = sessionKey(req?.agent?.session?.id || req?.agent?.id)
+        const chatId = chatOfSession(sid)
+        if (chatId) return await hub.askUserQuestion(chatId, req)
+        return await original(req)
+      }
+      uq.ask = wrapped
+      log.info('已接管 userQuestions 服务：QQ 会话的提问走 QQ 卡片')
+      return () => {
+        if (uq.ask === wrapped) uq.ask = original
+      }
+    }, 'qq-hub: QQ交互提问服务')
   }
 
   // ---------- 盯会话：一轮结束就发回 QQ ----------

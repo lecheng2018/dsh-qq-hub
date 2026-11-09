@@ -233,9 +233,8 @@ export function createModularCore({
       return m && typeof m.chatty === 'number' ? m.chatty : 1
     } catch { return 1 }
   }
-  /** 群消息要不要回：与 hub.js:1424-1447 同一 decideGroupReply 调用形状。
-   *  repliedToBot（引用她的消息）依赖引用解析（审计 1.5，挂账），暂按 false；不猜。 */
-  function decideGroupReplyFor({ chatKey, text, mentioned, userId }) {
+  /** 群消息要不要回：与 legacy 同一 decideGroupReply 调用形状。 */
+  function decideGroupReplyFor({ chatKey, text, mentioned, userId, repliedToBot = false }) {
     const cfg = getConfig()
     const now = Date.now()
     const gid = chatKey.slice(6)
@@ -252,7 +251,7 @@ export function createModularCore({
       relevance: topicRelevance(recentTexts, pol.interests, memScore),
       engagedUntil: groups.engagedUntil(gid),
       mentioned: !!mentioned,
-      repliedToBot: false,
+      repliedToBot: !!repliedToBot,
       fromOwner: isOwner(cfg, userId),
       text,
       now,
@@ -307,6 +306,63 @@ export function createModularCore({
     const text = hydrated.filter((c) => c.type !== 'image').map((c) => c.text ?? '').join('\n').trim()
     const note = '（对方发来一张图片，但本机没能把它登记成附件，本轮按看不到图处理）'
     return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
+  }
+
+  const quoteCache = new Map()
+  const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
+
+  async function quotedInfo(replyId, chatKey) {
+    const key = `${chatKey}:${replyId}`
+    if (quoteCache.has(key)) return quoteCache.get(key)
+    let out = { ok: false, who: '', uid: '', text: '', media: [], isBot: false }
+    try {
+      const raw = await onebot.call('get_msg', { message_id: Number(replyId) || replyId }, { timeoutMs: 5000, retries: 0 })
+      const sender = raw?.sender || {}
+      const uid = String(sender.user_id ?? raw?.user_id ?? '')
+      const inGroup = chatKey.startsWith('group:')
+      const parsed = parseMessageEvent({
+        message_type: inGroup ? 'group' : 'private',
+        group_id: inGroup ? chatKey.slice(6) : undefined,
+        user_id: uid,
+        sender,
+        message: raw?.message ?? raw?.raw_message ?? '',
+      }, getConfig().botQQ)
+      out = {
+        ok: true,
+        who: String(sender.card || sender.nickname || uid || '某人'),
+        uid,
+        text: String(parsed.text || '').trim().slice(0, 300),
+        media: [...(parsed.images || []), ...(parsed.stickers || [])],
+        isBot: uid === String(getConfig().botQQ || ''),
+      }
+    } catch (error) {
+      debug(`引用消息没拉到（${replyId}）：${error?.message || error}`)
+    }
+    if (quoteCache.size >= 200) quoteCache.delete(quoteCache.keys().next().value)
+    quoteCache.set(key, out)
+    return out
+  }
+
+  function quoteNote(q) {
+    if (!q?.ok) return '（引用了一条消息，但内容没读到；需要时可以请对方重发或说明）'
+    const owner = String(getConfig().ownerQQ || '')
+    const who = q.isBot ? '你' : owner && q.uid === owner ? '主人' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`
+    const body = q.text || (q.media.length ? '（图片/表情）' : '（没有文字）')
+    return `（引用 ${who} 的消息：「${body}」）`
+  }
+
+  async function hydrateQuotes(members, chatKey) {
+    const out = []
+    for (const member of Array.isArray(members) ? members : []) {
+      const replyId = replyIdOf(member)
+      if (!replyId) { out.push(member); continue }
+      const quoted = await quotedInfo(replyId, chatKey)
+      out.push({
+        ...member,
+        segments: [...(member.segments || []), { type: 'text', data: { text: `\n${quoteNote(quoted)}` } }, ...quoted.media],
+      })
+    }
+    return out
   }
 
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
@@ -417,8 +473,7 @@ export function createModularCore({
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
    *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
-   *  已知差异（挂账）：引用解析（1.5）与 <reply:n>/<at:>/图片说明出站（R4）未接，
-   *  故不带这些指令文案，免得教她做不到的事。 */
+   *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一委托 legacyDeliver。 */
   function groupPromptContent(chatKey, members) {
     const gid = chatKey.slice(6)
     const buf = groups.buffer(gid)
@@ -439,12 +494,15 @@ export function createModularCore({
     const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n'
-    // 触发轮自身的非文本段（图片等）照旧附上（走 admitContent 的登记/降级路线）
+    // 触发轮自身的图片与引用说明一并附上；reply 段已由 quoteNote 取代，不留下占位。
     const extras = []
+    const quotes = []
     for (const m of members) for (const s of (m?.segments ?? [])) {
       if (s?.type === 'image') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
-      else if (s?.type && s.type !== 'text') extras.push({ type: 'text', text: `\n[${s.type}]\n` })
+      else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
+      else if (s?.type && s.type !== 'text' && s.type !== 'reply') extras.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
+    if (quotes.length) extras.unshift({ type: 'text', text: quotes.join('\n') })
     return { blocks: [{ type: 'text', text: head }, ...extras], mode }
   }
   // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
@@ -513,7 +571,8 @@ export function createModularCore({
       let turnMode = null
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
-      const members = await hydrateRecords(io.members, onebot, log, localApi)
+      const heard = await hydrateRecords(io.members, onebot, log, localApi)
+      const members = await hydrateQuotes(heard, turn.chatKey)
       if (inGroup) {
         const gp = groupPromptContent(turn.chatKey, members)
         content = gp.blocks
@@ -676,7 +735,9 @@ export function createModularCore({
       // 系统表情 <face:名字> 也只有 legacy 会转成 QQ 小黄脸（faces.textToSegments + 去重状态），
       // 走 outbox 会原样发出「<face:呲牙>」字面量（真机实测）。
       const hasFaceTag = /<face:\s*[^>]{1,12}>/.test(String(reply || ''))
-      if ((skipped > 0 || hasFaceTag) && typeof legacyDeliver === 'function') {
+      const hasReplyTag = parsed.items.some((item) => Boolean(item.replyTo))
+      const hasAtTag = /<at:\s*[^>]{1,30}>/.test(String(reply || ''))
+      if ((skipped > 0 || hasFaceTag || hasReplyTag || hasAtTag) && typeof legacyDeliver === 'function') {
         try {
           await legacyDeliver(turn.chatKey, reply, { own: true, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
           try { onStats?.('sent') } catch {} // 与 legacy 同口径：QQ 出去一条就计一条（委托路径也计）
@@ -794,12 +855,23 @@ export function createModularCore({
     try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
     try { collectInboundStickers?.(inbound.chatKey, inbound.segments, userId) } catch {}
     if (inGroup) {
-      const decision = decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId })
-      if (!decision.reply) {
-        debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
-        return { handled: 'group-pass', reason: decision.reason }
+      const offerWithDecision = (decision) => {
+        if (!decision.reply) {
+          debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
+          return { handled: 'group-pass', reason: decision.reason }
+        }
+        if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
+        controller.offer(inbound)
+        return { handled: 'offered' }
       }
-      if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
+      const replyId = replyIdOf(inbound)
+      if (replyId) {
+        return quotedInfo(replyId, inbound.chatKey).then((quoted) => offerWithDecision(decideGroupReplyFor({
+          chatKey: inbound.chatKey, text, mentioned, userId,
+          repliedToBot: Boolean(quoted?.ok && quoted.isBot),
+        })))
+      }
+      return offerWithDecision(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId }))
     }
     controller.offer(inbound)
     return { handled: 'offered' }
