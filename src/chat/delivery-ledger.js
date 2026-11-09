@@ -132,9 +132,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
       throw new Error(`已 sent 的投递不许再变更（防重放）：${deliveryId} → ${state}`)
     }
     if (state === 'sent') {
-      // 红线：msg 投递的 sent 必须携带网关真实回执（空串/缺省/queued/sending/deliveryId 一律不许冒充）。
-      // PR-1 直通动作（record.action 存在：upload/poke/qzone…）本身没有 message_id 概念，
-      // 「无回执不算 sent」的判定前移到 outbox 的 receipt 策略；这里只守空串冒充。
+      // msg 投递的 sent 必须携带网关真实回执；直通动作由 outbox 的 receipt 策略先行判定。
       if (!rec.action && (gatewayMessageId == null || gatewayMessageId === '')) {
         throw new TypeError('sent 必须带网关真实 messageId（不冒充回执）')
       }

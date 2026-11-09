@@ -41,16 +41,22 @@ export async function downloadVideo(v, opts = {}) {
     try {
       const ctl = new AbortController()
       const timer = setTimeout(() => ctl.abort(), 120000)
-      const res = await fetch(url, {
-        signal: ctl.signal,
-        headers: {
-          // 不带 Referer 大概率 403；抖音自己的域名最稳
-          referer: opts.referer || 'https://www.douyin.com/',
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-          range: 'bytes=0-',
-        },
-      })
-      clearTimeout(timer)
+      let res
+      try {
+        res = await fetch(url, {
+          signal: ctl.signal,
+          headers: {
+            // 不带 Referer 大概率 403；抖音自己的域名最稳
+            referer: opts.referer || 'https://www.douyin.com/',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            range: 'bytes=0-',
+          },
+        })
+      } finally {
+        // fetch 拒绝（连不上/被拒）也要清掉 abort 定时器：否则这 120s 里
+        // 事件循环被钉住，测试跑不退、生产进程延迟退出（M0 基线卡住根因）
+        clearTimeout(timer)
+      }
       if (!res.ok || !res.body) throw new Error(`${host} 返回 ${res.status}`)
 
       // 先看 Content-Length，超限就别下完再报错

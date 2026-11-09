@@ -27,7 +27,7 @@ test('未核对不能跳过；已有连接核对机器人号后可以完成并�
   let result = (await fake.call('/setup/done', { existingConnection: true })).json()
   assert.equal(result.ok, false)
   assert.equal(api.getConfig().setupDone, false)
-  result = (await fake.call('/onebot/reconnect')).json()
+  result = (await fake.call('/onebot/reconnect', {})).json() // P1 §4.9：副作用路径面板只认 POST，空 body 也算 POST
   assert.equal(result.ok, true, result.message)
   result = (await fake.call('/setup/done', { existingConnection: true })).json()
   assert.equal(result.ok, true, result.message)

@@ -23,15 +23,13 @@ export { newDeliveryId }
 
 /**
  * @param {object} o
- * @param {(action: string, params: object, opts?: object) => Promise<{messageId?: string}>} o.send
- *   物理发送注入点：send_group_msg / send_private_msg 二选一由 outbox 决定；
- *   返回 { messageId }（网关真实回执）；抛错时 error.unknown === true 表示副作用未知。
+ * @param {(action: string, params: object, opts?: object) => Promise<{messageId?: string, raw?: object}>} o.send
+ *   物理发送注入点；抛错时 error.unknown === true 表示副作用未知。
  * @param {object} [o.ledger] 已有台账（缺省自建内存台账）
  * @param {(delivery: object) => Promise<boolean>} [o.authorize] 授权复核（缺省全放行；出队时执行）
  * @param {() => boolean} [o.dryRun] 全局试运行注入（出队时动态读取；true = 只记台账不实发）
  * @param {() => boolean} [o.enabled] 全局总开关注入（出队时动态读取；false = 不发）
  * @param {(delivery: object) => {ok: boolean, message?: string}} [o.guard] 身份泄露闸注入
- *   （出队后、物理发送前执行；ok=false 拦下记 cancelled；req.force=true 时同 legacy 豁免）
  */
 export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard } = {}) {
   if (typeof send !== 'function') throw new TypeError('send 必须是函数')
@@ -40,34 +38,21 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
   const chains = new Map()
   /** 还没出队的 deliveryId（dispose 清理对象） */
   const pending = new Set()
-  /** PR-1 直通模式登记：deliveryId -> {action, params, opts, receipt}（内存态；崩溃恢复不重发故无需持久） */
+  /** PR-1 直通模式登记：deliveryId -> {action, params, opts, receipt} */
   const passMap = new Map()
   let disposed = false
 
   /**
    * 请求发送（模块/核心统一入口）。
-   * @param {object} req
-   * @param {string} req.chatKey
-   * @param {string} [req.turnId]
-   * @param {string} [req.sourceModuleId] 来源模块（审计用）
-   * @param {Array<{type:string,data:object}>} [req.segments] 消息模式段列表（与 action 直通二选一）
-   * @param {string} [req.action] PR-1 直通模式：任意 OneBot 发信动作（send_poke/upload_group_file/…）
-   * @param {object} [req.params] 直通模式的完整 RPC 参数（wire 形状由调用方保证=legacy 等价）
-   * @param {object} [req.opts] 直通模式透传 RPC 选项（timeoutMs/retries 等，legacy 语义保留）
-   * @param {'required'|'optional'} [req.receipt] 回执要求：msg 类 required（无 message_id=unknown 红线）；
-   *   upload/poke/qzone 等无 message_id 回执的动作=optional（不抛即 sent，file_id 等存 raw）
-   * @param {string} [req.note] 台账备注（legacy note 语义，审计可读）
-   * @param {string} [req.deliveryId] 幂等键（缺省生成）
-   * @param {boolean} [req.dryRun] 按次试运行（调用方显式语义，立即记台账不实发）
-   * @param {boolean} [req.force] 同 legacy force：豁免全局 enabled/dryRun/身份闸（授权仍执行）
-   * @returns {Promise<{state:'sent'|'failed'|'unknown'|'cancelled', deliveryId:string, gatewayMessageId?:string, raw?:object, reason?:string}>}
+   * 消息模式使用 segments；直通模式使用 action + params + opts + receipt。
+   * receipt=required 时无 messageId 必须记 unknown；optional 用于 upload/poke/qzone 等动作。
    */
   async function request(req) {
     if (disposed) throw new Error('outbox 已卸载')
     const chatKey = String(req?.chatKey ?? '')
     parseChatKey(chatKey)
     const passThrough = Boolean(req?.action)
-    const segments = passThrough ? (req?.segments ?? []) : req?.segments
+    const segments = req?.segments ?? []
     if (!passThrough && (!Array.isArray(segments) || segments.length === 0)) {
       throw new TypeError('segments 必须是非空数组')
     }
@@ -93,9 +78,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       return { state: 'cancelled', deliveryId, reason: 'dryRun' }
     }
 
-    // 每聊天 FIFO：链式串行；授权 / 全局闸 / 身份闸都在**出队时**执行。
-    // 关键：链注册（读取并覆盖 chains）本身同步发生在 enqueue 之后、无任何 await，
-    // 保证同聊天两条请求按入队顺序挂链——慢授权不会被后入队的快授权超车。
+    // 每聊天 FIFO：链注册同步发生，慢授权不会被后入队的快授权超车。
     const prev = chains.get(chatKey) || Promise.resolve()
     const chain = prev.catch(() => {}).then(() => drainOne(rec, req))
     chains.set(chatKey, chain)
@@ -112,13 +95,11 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     const { deliveryId, chatKey } = rec
     const force = req?.force === true
 
-    // 出队复核一：排队期间被取消 / 台账已变 → 不发
     let current = book.get(deliveryId)
     if (!current || current.state !== 'queued') {
       return { state: current?.state ?? 'cancelled', deliveryId, reason: '排队期间台账已变更（取消 / 重复请求）' }
     }
 
-    // 全局 enabled / dryRun：出队时刻动态读（面板随时可改；入口时刻快照不作数）。force 同 legacy 豁免。
     if (!force) {
       if (dryRun?.() === true) {
         book.mark(deliveryId, 'cancelled', { reason: 'dryRun' })
@@ -130,12 +111,9 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       }
     }
 
-    // 授权/闸的 delivery 视图带上直通上下文（guard 文本回退要读 params；authorize 仍按 chatKey 判定）
-    const view = () => ({ ...current, action: passInfo?.action, params: passInfo?.params, note: current.note })
     const passInfo = passMap.get(deliveryId)
+    const view = () => ({ ...current, action: passInfo?.action, params: passInfo?.params, note: current.note })
 
-    // 授权复核：出队后、标记 sending 前执行（撤权在排队期间发生也能拦住）。
-    // authorize 内部有 await：唤醒后必须再复核一次台账（排队期间可能已被 cancel）。
     if (authorize) {
       let ok = false
       try {
@@ -153,7 +131,6 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       }
     }
 
-    // 身份泄露闸（唯一出站点；同 legacy：force 豁免；闸自身异常放行不误伤，legacy 同语义）。
     if (guard && !force) {
       try {
         const g = guard(view())
@@ -164,7 +141,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       } catch { /* 闸本身出错：legacy 同语义放行 */ }
     }
 
-    // 标记 sending：关键落盘（fail-closed）——台账写不进去就不发起物理发送
+    // 标记 sending：关键落盘失败时不发起物理发送。
     try {
       book.mark(deliveryId, 'sending')
     } catch (error) {
@@ -184,7 +161,6 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     }
     try {
       const result = await send(action, params, opts)
-      // 红线：required 回执下，没有真实 messageId 的「成功」不是 sent——诚实降级为 unknown
       if (receipt !== 'optional' && (result?.messageId == null || result.messageId === '')) {
         book.mark(deliveryId, 'unknown', { reason: '发送调用无异常但网关未回 messageId，不冒充 sent' })
         return { state: 'unknown', deliveryId, reason: '网关未回 messageId' }
@@ -198,7 +174,6 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       }
     } catch (error) {
       if (error?.unknown === true) {
-        // 副作用可能已发生：绝不重试、绝不降级 failed（重发=重复消息）
         book.mark(deliveryId, 'unknown', { reason: String(error?.message || '发送结果未知') })
         return { state: 'unknown', deliveryId, reason: String(error?.message || '发送结果未知') }
       }
@@ -207,7 +182,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     }
   }
 
-  /** 取消还在队列里的投递（已 sending/sent 的不可取消——副作用已发生或正在发生）。 */
+  /** 取消还在队列里的投递（已 sending/sent 的不可取消）。 */
   function cancel(deliveryId, reason = '调用方取消') {
     const rec = book.get(deliveryId)
     if (!rec) return { state: 'unknown-delivery' }
@@ -218,7 +193,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     return { state: rec.state, reason: `已 ${rec.state}，不可取消` }
   }
 
-  /** 卸载：拒绝新请求；还在排队的条目全部落 cancelled（链上的 drainOne 出队复核会跳过发送）。 */
+  /** 卸载：拒绝新请求；还在排队的条目全部落 cancelled。 */
   function dispose() {
     if (disposed) return
     disposed = true
@@ -233,5 +208,19 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     chains.clear()
   }
 
-  return { request, cancel, dispose, ledger: book }
+  /** 外部 legacy 媒体管线的发送补账：不重发、不参与队列。 */
+  function recordExternal({ chatKey, sourceModuleId, segments, gatewayMessageId, state = 'sent', reason } = {}) {
+    if (!ledger) return null
+    const id = newDeliveryId()
+    ledger.enqueue({ deliveryId: id, chatKey: String(chatKey), sourceModuleId: String(sourceModuleId || 'module'), segments: segments || [] })
+    ledger.mark(id, 'sending')
+    if (state === 'sent' && gatewayMessageId != null && gatewayMessageId !== '') {
+      ledger.mark(id, 'sent', { gatewayMessageId: String(gatewayMessageId) })
+    } else {
+      ledger.mark(id, 'unknown', { reason: reason || 'external: 网关没回执' })
+    }
+    return id
+  }
+
+  return { request, cancel, dispose, recordExternal, ledger: book }
 }

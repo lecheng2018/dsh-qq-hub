@@ -12,16 +12,11 @@ import { parseChatKey } from '../chat-key.js'
 /**
  * @param {object} o
  * @param {{ call: (action: string, params: object, opts?: object) => Promise<object> }} o.onebot
- *   OneBot 客户端（真实 createOneBotClient / fake 网关都实现同一签名）
  */
 export function createOnebotOutboxAdapter({ onebot }) {
   if (!onebot || typeof onebot.call !== 'function') throw new TypeError('onebot.call 必填')
   return {
-    /**
-     * Outbox send 注入点签名：send(action, params, opts) → { messageId?, raw }；
-     * 失败按错误原样上抛（client.js 已标 unknown/definite，outbox 据此记账）。
-     * raw 保留网关原始回执（message_id/file_id/itemid…）供 hub 兼容层返回 legacy 形状。
-     */
+    /** send(action, params, opts) → { messageId?, raw }；失败按错误原样上抛。 */
     async send(action, params, opts) {
       const result = await onebot.call(action, params, opts)
       const messageId = result?.message_id

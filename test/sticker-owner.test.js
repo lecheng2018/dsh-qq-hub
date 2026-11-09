@@ -4,8 +4,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+const REPO = fileURLToPath(new URL('..', import.meta.url))
 const dataDir = mkdtempSync(join(tmpdir(), 'aurabot-owner-sticker-'))
 process.env.AURABOT_DATA_DIR = dataDir
 process.env.AURABOT_WORKSPACE = join(dataDir, 'ws')

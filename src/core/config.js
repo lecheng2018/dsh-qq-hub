@@ -48,6 +48,9 @@ const DEFAULTS_RAW = {
     dangerConfirm: false,
     // 身份泄露闸（移植自 surfcore）：出站前扫主人的 QQ 号 / 别的群号
     identityGuard: { enabled: true, mode: 'block' },
+    // 面板入站防护（M1-A）：Host 白名单的额外放行名单（回环名与 IP 字面量默认放行）。
+    // 用 DDNS 域名访问面板的在这里登记，如 ['nas.example.com']
+    panel: { allowedHosts: [] },
   },
   snowluma: {
     dir: 'C:\\Aurabot\\snowluma', // 主人自己下载解压到这里（EULA 不允许自动部署）
@@ -393,6 +396,12 @@ export function normalize(raw) {
   if (!isObj(c.security.identityGuard)) c.security.identityGuard = { enabled: true, mode: 'block' }
   c.security.identityGuard.enabled = bool(c.security.identityGuard.enabled, true)
   c.security.identityGuard.mode = c.security.identityGuard.mode === 'warn' ? 'warn' : 'block'
+  // 面板 Host 白名单（M1-A）：字符串/数组都收，非法值 fail-closed 到空列表（只放回环与 IP）
+  if (!isObj(c.security.panel)) c.security.panel = { allowedHosts: [] }
+  c.security.panel.allowedHosts = (Array.isArray(c.security.panel.allowedHosts)
+    ? c.security.panel.allowedHosts
+    : String(c.security.panel.allowedHosts ?? '').split(/[\s,，;；]+/))
+    .map((s) => String(s).trim().toLowerCase()).filter(Boolean).slice(0, 20)
   c.files.enabled = bool(c.files.enabled, true)
   c.files.maxMB = num(c.files.maxMB, 50, 1, 2048)
   c.files.dirs = (Array.isArray(c.files.dirs) ? c.files.dirs : String(c.files.dirs || '').split(/[\n,，;；]+/))
@@ -526,6 +535,12 @@ export function normalize(raw) {
   if (!c.memory.consolidateTimes.length) c.memory.consolidateTimes = ['04:00', '16:00']
   c.memory.slang = bool(c.memory.slang, false) // 群黑话本：每日提炼群里的黑话/梗（默认关，面板开）
   c.memory.distill = bool(c.memory.distill, true) // 蒸馏群友：学指定某个人的说话样子（有目标才跑，默认开）
+  // 蒸馏流水线（L1 增量批 → L2 场景聚合 → L3 人格增长段）：有目标才跑；distillModel 留空跟随主模型
+  c.memory.distillPipeline = bool(c.memory.distillPipeline, true)
+  c.memory.distillBatch = Math.round(num(c.memory.distillBatch, 10, 5, 50))
+  if (!isObj(c.memory.distillModel)) c.memory.distillModel = { provider: '', model: '' }
+  c.memory.distillModel.provider = String(c.memory.distillModel.provider || '').trim()
+  c.memory.distillModel.model = String(c.memory.distillModel.model || '').trim()
   c.memory.recallCount = num(c.memory.recallCount, 6, 0, 20)
   // 聊天流水滚动保留（1.3.49 #5）：每天一个 JSONL，超期自动清理；14 天下限（整理和压缩都还要翻它）
   if (!isObj(c.chatlog)) c.chatlog = {}

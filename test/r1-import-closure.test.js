@@ -70,7 +70,7 @@ test('R1：插件入口 src/host.js 可被实际 import（DSH 插件契约：nam
   assert.equal(typeof mod.apply, 'function', '入口导出 apply(ctx) 装载函数')
 })
 
-test('R1：新核心组装根可被 import（flag-on 依赖链完整，正是 m2-m6 缺失的那条）', { skip: !existsSync(join(SRC, 'host', 'modular-core.js')) && '本分支未含模块化新核心（后续 PR 引入时自动生效）' }, async () => {
+test('R1：新核心组装根可被 import（flag-on 依赖链完整，正是 m2-m6 缺失的那条）', async () => {
   const mod = await import('../src/host/modular-core.js')
   assert.equal(typeof mod.createModularCore, 'function')
 })
