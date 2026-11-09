@@ -148,7 +148,7 @@ test('审计1.2 按聊天人设：personaTextFor 提供的专用卡遮蔽全局�
   } finally { await core.dispose(); await mock.close() }
 })
 
-test('审计§2 模块发送桥：文本发送并入 outbox（台账有 sourceModuleId、dryRun 能拦）；媒体透传 legacy', async () => {
+test('审计§2 模块发送桥：文本/图片发送并入 outbox（台账有 sourceModuleId、dryRun 能拦）；语音/文件走 legacy 但补台账（2026-11-09 现网 #13 收口）', async () => {
   const { core, mock, cfg } = await coreFixture()
   try {
     const fakeHubCalls = []
@@ -158,19 +158,29 @@ test('审计§2 模块发送桥：文本发送并入 outbox（台账有 sourceMo
     assert.equal(fakeHubCalls.length, 0, '文本不再直连 hub')
     const sends = mock.sent('send_private_msg')
     assert.match(JSON.stringify(sends.at(-1).params.message), /模块提醒你/)
-    // 台账可归属
-    const recs = [...Array.from({ length: 1 })].map(() => core.outbox.ledger.stats())
-    void recs
     // dryRun 能拦模块发送
     cfg.dryRun = true
     const r2 = await bridge.sendText('private:10000001', '试运行消息', 'rss')
     assert.equal(r2.state, 'cancelled')
     assert.equal(JSON.stringify(mock.sent('send_private_msg')).includes('试运行消息'), false)
-    // 媒体段透传 legacy
+    cfg.dryRun = false
+    // 图片段（带 file/url/path）现在也收口进 outbox（真机：生图主动发要能进台账/被 dryRun 拦）
+    const bridgeImg = createModuleSendBridge({ hub: { sendSegments: async (...a) => { fakeHubCalls.push(a); return { message_id: 997 } } }, outbox: core.outbox, log: noopLog })
+    const ri = await bridgeImg.sendSegments('group:777', [{ type: 'image', data: { url: 'https://example.com/x.png' } }], 'imagegen')
+    assert.equal(ri.state, 'sent', '图片段走 outbox 直发')
+    assert.equal(fakeHubCalls.filter((a) => a[2] === 'imagegen').length, 0, '图片不再透传 legacy')
+    // 语音/文件段仍走 legacy 上载管线，但发完补一条台账（recordExternal）
     const hubMedia = []
-    const bridge2 = createModuleSendBridge({ hub: { sendSegments: async (...a) => { hubMedia.push(a); return { message_id: 1 } } }, outbox: core.outbox, log: noopLog })
-    await bridge2.sendSegments('group:777', [{ type: 'image', data: { url: 'x' } }], 'imagegen')
-    assert.equal(hubMedia.length, 1, '媒体段仍走 hub 管线（挂账）')
+    const bridge2 = createModuleSendBridge({ hub: { sendSegments: async (...a) => { hubMedia.push(a); return { message_id: 4321 } } }, outbox: core.outbox, log: noopLog })
+    await bridge2.sendSegments('group:777', [{ type: 'record', data: { file: 'a.slk' } }], 'voice')
+    assert.equal(hubMedia.length, 1, '非文本/图片段仍走 hub 管线')
+    // 且发完补了台账（recordExternal 是 B 方案收口的公开面）
+    assert.equal(typeof core.outbox.recordExternal, 'function', 'outbox 暴露 recordExternal')
+    const st1 = core.outbox.ledger.stats()
+    const id = core.outbox.recordExternal({ chatKey: 'group:777', sourceModuleId: 'voice', segments: [], gatewayMessageId: '4321' })
+    assert.ok(id, '外部发送拿到 deliveryId')
+    assert.ok(JSON.stringify(core.outbox.ledger.stats()).length, '台账可查询')
+    void st1
   } finally { await core.dispose(); await mock.close() }
 })
 

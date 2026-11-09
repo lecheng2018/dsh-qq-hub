@@ -1,4 +1,9 @@
 // 模块系统 + 联动：自己写的模块、替换 / 关掉内置模块、热重载、安全模式、复制内置模块、开放接口、DSH 联动工具。
+//
+// 本套件钉在 legacy 逃生阀路径（同 e2e.test.js 的理由：断言引用回复、开放接口事件列表、
+// 热重载重挂等 legacy 内部形态；新核心侧由 m4/m6/m7 契约覆盖，差距记台账
+// docs/refactor/new-core-parity-ledger.md）。
+process.env.FLAG_MODULAR_CORE = 'false'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs'
