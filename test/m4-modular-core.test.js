@@ -235,10 +235,10 @@ test('M4-0 启动失败 fail-closed：DSH 无 sessionController 时回合执行�
   }
 })
 
-test('M4-6 flag-off 基线等价：默认环境变量下 host 不装配新核心（dispatch 直调 legacy hub）', async () => {
-  // 静态验证：默认 env 下 isModularCoreEnabled=false，host.js 的旗开分支不装配
-  // （动态 flag-on 全链已由上面各用例覆盖；flag-off 等价性由 e2e 全量套件在默认关姿态下持续背书）
-  assert.equal(isModularCoreEnabled(process.env), false, '默认关闭')
+test('M4-6 转正基线：默认 env 下 flag 开（legacy 等价改由 r3-flagoff-regression 显式 false 钉住）', async () => {
+  // 2026-11-09：现网 .5-local5+3 验证树合入 main，缺省姿态翻转 → 装配期读到 flag 开。
+  // 逃生阀（显式 false）下的 legacy 真实装配回归由 r3-flagoff-regression.test.js 持续背书。
+  assert.equal(isModularCoreEnabled(process.env), true, '缺省开')
 })
 
 test('M4-6 dispose 顺序：registry→controller 清干净，二次 dispose 安全', async () => {

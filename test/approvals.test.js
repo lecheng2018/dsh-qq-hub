@@ -19,7 +19,9 @@ test('formatApprovalCard: 审批卡内容格式化', () => {
   assert.match(card, /🔧 工具：bash/)
   assert.match(card, /💻 命令：rm -rf \/var\/cache\/apt/)
   assert.match(card, /❓ 原因：释放磁盘空间/)
-  assert.match(card, /回复「通过 #1」放行/)
+  // 2026-11-09 现网反馈「审批回复太复杂」→ 单条免编号新文案（真机修复 #19）
+  assert.match(card, /回复「同意」放行/)
+  assert.match(card, /多条待办时带上编号，例如「同意 #1」/)
 })
 
 test('parseApprovalCommand: 审批指令解析', () => {
