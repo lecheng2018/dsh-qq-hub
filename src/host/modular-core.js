@@ -193,7 +193,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels,
 }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
@@ -539,7 +539,7 @@ export function createModularCore({
         let sel = null
         const t0 = defaultModel(dsh, cfgNow)
         if (t0) sel = { provider: t0.provider, model: t0.model, reasoningEffort: cfgNow.model?.reasoningEffort || '' }
-        const t1 = resolveChatModel(cfgNow, chat, null) // 主人按聊天指定的优先
+        const t1 = resolveChatModel(cfgNow, chat, typeof availableModels === 'function' ? availableModels() : null) // 主人按聊天指定的优先；面板指定模型已从 DSH 消失时要退回下一级（与 legacy hub.js:411 同口径）
         if (t1) sel = { provider: t1.provider, model: t1.model, reasoningEffort: t1.reasoningEffort || cfgNow.model?.reasoningEffort || '' }
         if (sel?.provider && sel?.model) {
           const target = { provider: sel.provider, model: sel.model }
