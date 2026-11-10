@@ -67,3 +67,10 @@
 - Outbox 链收尾改为 `then(cleanup, cleanup)`；独立 Node 子进程回归证明调用方捕获异常后进程不退出。
 - 台账采用 H-A：超过 7 天的 sent/cancelled 正文只留前 200 字并保留元数据；unknown/failed 永不裁。
 - 群刹车“双记”报告经源码与 e2e 复核不采纳删除方案：legacy 与新核心是不同状态实例；新核心的 `noteSpeak` 是刹车数据源，`noteSpokeInGroup` 是话题状态，不是重复计数。
+
+## purpose 与真实补收时长修复（2026-11-10 下午）
+
+- 修复目的引擎跨文件依赖：`kindLabel` 从 seeds 导入 prompt；`actionForNeed`/`kindForAction` 从 goals 导入 seeds；`emotionCues` 补 import。
+- `purpose.test.js` 新增全入口冒烟：使用字段不完整但合法的 pending 与素材，实际执行 minePurposeSeeds → selectPurpose → buildPurposePrompt → summarizePurposeState；不再被字段齐全的既有用例绕过。
+- gateway 调用 `dispatchBackfill(event, { gapMs, earliestAgeMs })`；新核心用 WeakMap 保存适配外元数据，提示词同时使用真实断线时长与消息年龄，不再硬编码“约 2 分钟”。
+- 验证：purpose 23/23；backfill 接线 13/13；新核心补收提示回归通过。

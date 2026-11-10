@@ -598,7 +598,7 @@ export function goalToCandidate(goal) {
  * 注意：这里给的是「想做什么」的方向，不是要她照读的句子；模型会改写成自己的话。
  */
 const UNRESOLVED_RE = /[?？]|吗|呢|回头|下次|改天|答应|说好|等你|要不要|能不能|想不想/;
-function kindForAction(action, need) {
+export function kindForAction(action, need) {
   if (action === 'ask' || action === 'invite') return 'ask';
   if (action === 'curiosity') return 'curiosity';
   if (action === 'follow') return 'follow-up';
@@ -607,7 +607,7 @@ function kindForAction(action, need) {
   return 'share';
 }
 
-function actionForNeed(need, topic, { emotion = '', hoursSinceMaster = 24 } = {}) {
+export function actionForNeed(need, topic, { emotion = '', hoursSinceMaster = 24 } = {}) {
   switch (need) {
     case 'play': return topic ? 'invite' : 'ask';
     case 'install': return 'ask';
