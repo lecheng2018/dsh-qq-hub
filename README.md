@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DSH-Plugin-0969da)](https://github.com/deepseek-ai)
 
-**DSH-QQ-Hub** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。当前测试版 **v1.3.65-test.20261110.2**（模块化核心全接入与提问工具修复，见下文🧅）。
+**DSH-QQ-Hub** 是为 **DeepSeek Harness (DSH)** 深度定制的进程内原生插件（In-Process Native Plugin），基于 `@deepseek-ai/cordis` 微内核架构构建。当前测试版 **v1.3.65-test.20261110.3**（模块化核心全接入与提问工具修复，见下文🧅）。
 
 它兼具 **顶尖的拟人化社交聊天伙伴** 与 **强大的生产力 Agent 远程交互终端** 双重能力：
 - **拟人伙伴**：有性格、有心情、懂记忆。看图、听发语音、发表情包、RVC 翻唱变声、写空间日记、刷 B 站/抖音/小黑盒。
@@ -32,7 +32,7 @@ QQ 移动/桌面端 ⇄ OneBot v11 网关 (SnowLuma / NapCat) ⇄ DSH-QQ-Hub 插
 
 ## 📦 版本与发版流程
 
-- 当前测试版：**v1.3.65-test.20261110.2**（模块化核心全接入候选；真机验收清单见 `docs/refactor/m5-runbook.md`）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
+- 当前测试版：**v1.3.65-test.20261110.3**（模块化核心全接入候选；真机验收清单见 `docs/refactor/m5-runbook.md`）。完整历史见 [CHANGELOG.md](CHANGELOG.md)，逐版本记录以它为准。
 - **自动化发版**：push `main` 触发 `.github/workflows/release.yml` —— 全量测试门禁（0 失败）→ 自动提取 `CHANGELOG.md` 生成 Release 正文 → 打包 `.tgz` 离线插件包挂到 Release 附件。
 - 安装源三选一：`dsh plugin add github:lecheng2018/dsh-qq-hub`（跟随最新 tag）、GitHub Releases 下载 `.tgz` 离线安装、或本地 `npm pack` 后安装。
 

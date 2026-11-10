@@ -36,6 +36,8 @@ import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
+import { backfillNoticeBlock } from '../chat/backfill.js'
+import { isBackfill } from '../chat/normalized-inbound.js'
 
 /**
  * 语音段转文字：本地 ASR 优先，网关 fetch_ptt_text 兜底；
@@ -160,20 +162,18 @@ function textOfSegments(segments) {
 /** 入站 → 模块中枢 activity 事件（等价 legacy hub.js:1583 那一发）。
  *  蒸馏/心情/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
  *  不补这一发它们永远收不到计数（验收报告「额外缺口」，真机实测 L0 batches 恒 0）。 */
-function emitActivity(mods, inbound) {
+function emitActivity(mods, inbound, { direct = false, owner = false } = {}) {
   try {
     const chatKey = String(inbound?.chatKey || '')
     if (!chatKey) return
-    const kind = chatKey.startsWith('group:') ? 'group' : 'private'
     mods?.emit?.('activity', {
       kind: 'in',
       chatId: chatKey,
       userId: String(inbound?.sender?.userId || ''),
       nickname: String(inbound?.sender?.nickname || ''),
       text: textOfSegments(inbound.segments),
-      // direct 语义对齐 legacy：私聊/被@ 才算（新核心暂无 @ 判定，群消息先记 false，不猜）
-      direct: kind === 'private',
-      owner: false, // owner 判定归消费方按配置算，这里不猜
+      direct,
+      owner,
     })
   } catch { /* 计数是旁路，绝不打断主链 */ }
 }
@@ -603,6 +603,7 @@ export function createModularCore({
   const mountedTools = new Map() // sessionId -> { agent, key, offs }
   const slowNoticeSent = new Set()
   function mountTools(agent, chatKey, sessionId) {
+    slowNoticeSent.delete(sessionId)
     if (typeof buildTools !== 'function') return
     const cfg = getConfig()
     const level = levelFor(cfg, aclMsgFromInbound({ chatKey }))
@@ -710,6 +711,14 @@ export function createModularCore({
         const index = content.findIndex((block) => block.type === 'text')
         if (index >= 0) content[index] = { ...content[index], text: `${source}\n${timeHead}\n${content[index].text || ''}` }
         else content.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
+      }
+      const recovered = io.members.filter((member) => isBackfill(member))
+      if (recovered.length) {
+        const earliest = Math.min(...recovered.map((member) => Number(member.timestamp) || Date.now()))
+        content = [{
+          type: 'text',
+          text: backfillNoticeBlock({ gapMs: 120_000, count: recovered.length, earliestAgeMs: Math.max(0, Date.now() - earliest) }),
+        }, ...content]
       }
       if (typeof moduleHooks?.prompt === 'function') {
         const next = await moduleHooks.prompt(content, {
@@ -1078,7 +1087,7 @@ export function createModularCore({
       buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound) })
       try { rememberSpeaker?.(inbound.chatKey, userId) } catch {}
     }
-    emitActivity(mods, inbound)
+    const fromOwner = isOwner(cfg, userId)
     // 真机审计 1.11：面板统计与「最近发来的图/表情」（legacy 同一份内存状态）
     try { onStats?.('received') } catch {}
     try { noteMedia?.(inbound.chatKey, inbound.segments, userId) } catch {}
@@ -1087,6 +1096,7 @@ export function createModularCore({
     try { collectInboundStickers?.(inbound.chatKey, inbound.segments, userId) } catch {}
     if (inGroup) {
       const offerWithDecision = (decision) => {
+        emitActivity(mods, inbound, { direct: mentioned || decision.mode === 'must', owner: fromOwner })
         if (!decision.reply) {
           debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
           return { handled: 'group-pass', reason: decision.reason }
@@ -1113,6 +1123,7 @@ export function createModularCore({
       }
       return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId }))
     }
+    emitActivity(mods, inbound, { direct: true, owner: fromOwner })
     const running = controller.runningTurnOf(inbound.chatKey)
     if (running && steeringChats.has(inbound.chatKey)) {
       controller.steer(running, inbound).catch((error) => {
