@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1540 pass / 0 fail / 4 skip（共 1544） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1541 pass / 0 fail / 4 skip（共 1545） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -136,3 +136,4 @@
 - 台账 enqueue 的审计副本每记录最多 2048 字并记 contentChars；outbox 物理发送使用请求原始 segments，新增全文发送 + 文件裁剪回归。
 - modular 默认路径复用 createRatelimitMiddleware.take，按 chatKey+userId 限流；scheduler 默认每聊天最多 50 排队任务，超限 queue full。
 - 定向：面板敏感信息 3/3 + modules 22/22；ledger 22/22；scheduler 与 modular 限流各 1/1。
+- 补充：历史 sent/cancelled 在加载时也立即裁至 2048 字并 persist，unknown/failed 全文保留；ledger 最终 23/23。
