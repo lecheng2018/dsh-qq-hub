@@ -287,7 +287,7 @@ export const distillModule = {
       try {
         if (!a || a.kind !== 'in') return
         if (a.chatId && a.userId) engine.noteMessage(a.chatId, a.userId)
-      } catch (error) {}
+      } catch (error) { api.log.debug?.('蒸馏消息计数失败：', error.message) }
     })
 
     // 每日 L3 沉淀 + 学成事件（memory 模块监听后刷新派生卡）

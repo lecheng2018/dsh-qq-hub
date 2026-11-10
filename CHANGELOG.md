@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.3.65-test.20261110.9
+
+- 新增 ESLint 静态门禁：`no-undef` 直接失败，`no-use-before-define` 与 `no-empty` 输出告警；Verify 和 Release 均先执行 `npm run lint`。
+- 静态扫描确认 0 个未定义符号；声明前使用逐项区分安全闭包与初始化风险，不机械移动 48 处代码。
+- token-guardian 忙时状态读取和 distill 消息计数的异常改为脱敏 debug，不再静默吞掉控制流错误。
+- 新增根依赖锁文件，确保 CI 可重复安装；npm audit 为 0。
+
+---
+
 ## 1.3.65-test.20261110.8
 
 - 修复 token-guardian 在 `chatId` 初始化前调用 `hub.isBusy()`，异常被吞后忙时保护失效的问题。现在模型或工具正在运行时不会发起自动压缩。
