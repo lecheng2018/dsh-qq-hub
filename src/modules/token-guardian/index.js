@@ -136,6 +136,8 @@ export default {
     // 每 chatId 一把并发锁：tickOnce 每 30 秒轮询、面板「现在压一次」随时可点，
     // 同一个聊天两个压缩同时跑就是双 resetChat + 双摘要。锁按 chatId 分开，不同聊天互不挡。
     const compactBusy = new Set()
+    const compactControllers = new Map()
+    let disposed = false
     async function compact(sessionKey, chat, meta = {}) {
       const cfg = api.settings()
       const hub = api.core.hub
@@ -155,6 +157,7 @@ export default {
     }
 
     async function doCompact(sessionKey, chat, meta = {}) {
+      if (disposed) return { ok: false, reason: 'disposed', message: '模块已停止' }
       const cfg = api.settings()
       const hub = api.core.hub
       const chatId = chat?.chatId || ''
@@ -173,6 +176,7 @@ export default {
         if (t && t.provider && t.model) askOpts = { provider: t.provider, model: t.model }
       } catch (error) { api.log.debug(`${ID}：拿聊天模型失败，摘要用默认模型（${error.message}）`) }
       const controller = new AbortController()
+      if (chatId) compactControllers.set(chatId, controller)
       const timeoutSeconds = Math.max(0.01, Number(cfg.askTimeoutSeconds) || 90)
       let askTimer = null
       const timeout = new Promise((_, reject) => {
@@ -199,6 +203,7 @@ export default {
           ...askOpts,
         }), timeout])
       } catch (error) {
+        if (disposed) return { ok: false, reason: 'disposed', message: '模块已停止' }
         const msg = String(error?.message || error)
         noteFailure(sessionKey, msg)
         if (error?.turnTimedOut) {
@@ -214,7 +219,9 @@ export default {
         return { ok: false, reason: 'ask-failed', message: '模型调用失败：' + msg.slice(0, 80) }
       } finally {
         if (askTimer) clearTimeout(askTimer)
+        if (compactControllers.get(chatId) === controller) compactControllers.delete(chatId)
       }
+      if (disposed) return { ok: false, reason: 'disposed', message: '模块已停止' }
       const body = String(text || '').trim().slice(0, cfg.summaryMaxChars)
       if (!body) {
         noteFailure(sessionKey, '模型没给出可用的摘要')
@@ -292,9 +299,6 @@ export default {
         if (tokens < Number(cfg.threshold)) continue
         if (now < Number(st.nextAttemptAt || 0)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
-        // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
-        //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
-        try { if (hub.isBusy?.(chatId)) continue } catch (error) {}
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
         // state 的 key 就是 chatId（'activity' 里直接拿 a.chatId 当 key），直接用，
         // **不要拿 chatId 去问 hub.chatOfSession()** —— 那个函数要的是 sessionId，
@@ -307,6 +311,9 @@ export default {
           try { const c = hub.chatOfSession?.(key); if (typeof c === 'string' && c) chatId = c } catch (error) {}
         }
         if (!chatId) continue
+        // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
+        //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
+        try { if (hub.isBusy?.(chatId)) continue } catch (error) {}
         const r = await compact(key, { chatId }, { tokens, measured })
         // 自动压缩失败（常见：模型被限流）不要每 30 秒刷一遍 warn，交给面板/手动重试
         if (!r.ok && r.reason !== 'no-transcript') api.log.debug(`${ID}：自动压缩没成，下次再试`);
@@ -405,7 +412,14 @@ export default {
       })
     })
 
-    api.onDispose(() => { if (timer) clearInterval(timer); if (flushTimer) clearInterval(flushTimer); persist() })
+    api.onDispose(() => {
+      disposed = true
+      if (timer) clearInterval(timer)
+      if (flushTimer) clearInterval(flushTimer)
+      for (const controller of compactControllers.values()) controller.abort(new Error('模块已停止'))
+      compactControllers.clear()
+      persist()
+    })
 
     return {
       compact,
