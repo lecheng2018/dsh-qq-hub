@@ -112,3 +112,11 @@
 - token-guardian 记录在途 AbortController，dispose 统一 abort；doCompact 在入口、异常和模型返回后检查 disposed，旧请求不再 reset、写摘要或记失败。
 - 新增 `withAbortTimeout`，distill 模型请求默认 120 秒超时，L1 失败退避 5 分钟并释放 pendingL1，后续批次可恢复。
 - 定向回归：distill/token-guardian 32/32。主回合 followup 只停止等待的既有边界保持不变。
+
+## 静态门禁与静默异常治理（2026-11-10 晚）
+
+- 新增 ESLint + globals 开发依赖和根 package-lock；Verify/Release 先 `npm ci` 再 `npm run lint`。
+- `no-undef` 为 error；`no-use-before-define`、`no-empty` 为 warn。首轮扫描 0 个未定义符号、48 个声明前使用、231 个空 catch；多数是延后执行的安全闭包或明确预期的能力降级，不批量改写。
+- token-guardian 的 isBusy 同类问题由行为回归钉住，忙时读取异常与 distill 计数异常改为 debug。
+- 依赖链 minimatch 通过 overrides 固定到修复版本，npm audit 0。
+- 本地 lint：0 errors / 277 warnings（其中两个关键空 catch 已修）。
