@@ -429,14 +429,13 @@ export function apply(ctx) {
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
-  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, log: logger.child('panel') })
+  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req) === true, log: logger.child('panel') })
   const { send, readBody, readRaw, query, answer, route, guard } = http
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
-      // M1-A / P1 §4.9：模块前缀路由与精确路由同一道防护（Host 白名单 + 带 Origin 不分方法同源校验
-      // + 副作用路径 GET 405；模块路径不在副作用表内，靠 Origin 收紧这层挡跨站触发）
+      // 模块前缀路由与精确路由同一道防护（Host/CSRF、副作用方法约束、写请求联动密钥鉴权；普通只读请求免密钥）。
       const g = guard.check(req)
       if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''

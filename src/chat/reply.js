@@ -35,6 +35,118 @@ export function stripInternalMemo(text) {
   return second ? s.slice(0, first.index) : s
 }
 
+function protectExamples(text) {
+  const examples = []
+  const placeholder = (value) => {
+    const token = `\uE000${examples.length}\uE001`
+    examples.push(value)
+    return token
+  }
+  const s = String(text ?? '').replace(/```[\s\S]*?```|```[\s\S]*$/g, placeholder).replace(/`[^`\n]+`/g, placeholder)
+  return { text: s, restore: (value) => value.replace(/\uE000(\d+)\uE001/g, (_, i) => examples[Number(i)] ?? '') }
+}
+
+function protectJsonExamples(text) {
+  const examples = []
+  const stack = []
+  let out = ''
+  let cursor = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (start < 0) {
+      if (ch !== '{' && ch !== '[') continue
+      start = i
+      stack.push(ch)
+      continue
+    }
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{' || ch === '[') stack.push(ch)
+    else if (ch === '}' || ch === ']') {
+      const open = stack.pop()
+      if ((open === '{' && ch !== '}') || (open === '[' && ch !== ']')) {
+        stack.length = 0
+        start = -1
+        continue
+      }
+      if (stack.length === 0) {
+        const candidate = text.slice(start, i + 1)
+        try {
+          const value = JSON.parse(candidate)
+          if (value && typeof value === 'object') {
+            const token = `\uE100${examples.length}\uE101`
+            examples.push(candidate)
+            out += text.slice(cursor, start) + token
+            cursor = i + 1
+          }
+        } catch {}
+        start = -1
+      }
+    }
+  }
+  if (cursor > 0) text = out + text.slice(cursor)
+  return { text, restore: (value) => value.replace(/\uE100(\d+)\uE101/g, (_, i) => examples[Number(i)] ?? '') }
+}
+
+function stripToolOutput(text) {
+  let s = text.replace(/<(?:\|DSML\||｜DSML｜)function_calls\s*>[\s\S]*?(?:<(?:\|DSML\||｜DSML｜)\/function_calls\s*>|<\/(?:\|DSML\||｜DSML｜)function_calls\s*>)/gi, '')
+  s = s.replace(/<(?:\|DSML\||｜DSML｜)invoke\b[^>]*>[\s\S]*?(?:<(?:\|DSML\||｜DSML｜)\/invoke\s*>|<\/(?:\|DSML\||｜DSML｜)invoke\s*>)/gi, '')
+  const openDsml = /<(?:\|DSML\||｜DSML｜)[^>]*>/i.exec(s)
+  if (openDsml) s = s.slice(0, openDsml.index)
+  s = s.replace(/<\|(python|browser|qq_[a-z0-9_.-]+|[a-z0-9_.-]*tool[a-z0-9_.-]*)\|>[\s\S]*?(?:<\|im_end\|>|$)/gi, '')
+  s = s.replace(/<\|im_start\|>([\s\S]*?)(?:<\|im_end\|>|<\|fim_suffix\|>|$)/gi, (message) => {
+    const sep = message.indexOf('<|im_sep|>')
+    if (sep < 0) return ''
+    const header = message.slice('<|im_start|>'.length, sep).trim()
+    if (!/^assistant(?:\s|<|$)/i.test(header) || /\bto=\S+/i.test(header)) return ''
+    const channel = header.match(/<\|(?:meta_sep|meta_start)\|>(\S+)/i)?.[1]?.toLowerCase()
+    if (channel && channel !== 'final') return ''
+    return message.slice(sep + '<|im_sep|>'.length).replace(/<\|(?:im_end|fim_suffix)\|>$/i, '')
+  })
+  const route = /(?:^|\s)(?:assistant\s+to=|<\|(?:tool_call|call)\|>)[^\n]*/i.exec(s)
+  if (route) s = s.slice(0, route.index)
+  s = s.replace(/<(tool_call|function_call|tool_calls)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, '')
+  return s.replace(/<\/?(?:\|DSML\||｜DSML｜)[^>]*>|<\|(?:im_start|im_sep|im_end|fim_suffix|ghissue|ghreview|meta_sep|meta_start|meta_end|tool_call|call|python|browser)\|>/gi, '')
+}
+
+function stripPromptEcho(text) {
+  const markers = [
+    /你是大肥鱼，一个真实存在的人，正在用手机 QQ 和对面聊天。不是 AI，不是助手，不是机器人/i,
+    /【你现在在 QQ 上】/,
+    /【怎么说话：像人在打字】/,
+    /【打字习惯】/,
+    /【最重要的一条】/,
+    /【绝对禁止】/,
+    /【你的样子】/,
+    /【最后自检】/,
+    /【什么时候别说话：潜水规则】/,
+    /- 你的整段回复会被直接发到 QQ/,
+    /- 每条用户消息开头会标明来源/,
+  ]
+  const matches = markers.map((marker) => marker.exec(text)).filter(Boolean)
+  const fullPersona = matches.find((match) => match[0].startsWith('你是大肥鱼'))
+  if (matches.length < 2 && !fullPersona) return text
+  const cut = Math.min(...matches.map((match) => match.index))
+  return text.slice(0, cut)
+}
+
+/** 去掉出站中的工具协议残片和被复读的人设提示词；示例代码不参与检测。 */
+function sanitizeOutbound(text) {
+  const protectedText = protectExamples(text)
+  const protectedJson = protectJsonExamples(protectedText.text)
+  const cleaned = stripInternalMemo(stripReasoning(protectedJson.text))
+  const sanitized = stripPromptEcho(stripToolOutput(cleaned))
+  return protectedText.restore(protectedJson.restore(sanitized))
+}
+
 /** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
 export function stripMarkdown(text) {
   let s = stripReasoning(text)
@@ -79,7 +191,7 @@ export function isSilence(text) {
  * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
 export function parseReply(text, rules = {}) {
-  let raw = stripReasoning(stripInternalMemo(text)).trim()
+  let raw = sanitizeOutbound(text).trim()
   if (isSilence(raw)) return { silent: true, items: [] }
   // 报告标记（1.3.48）：<report>…</report> 里的内容是「给主人看的数据」。
   // 摘出来当**一条**整段气泡（在 ||| 拆分之前摘，标记里的空行不能当气泡边界）；

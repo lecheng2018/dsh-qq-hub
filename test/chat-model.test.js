@@ -136,6 +136,7 @@ before(async () => {
     voice: { engine: 'windows', autoChance: 0 }, stickers: { autoChance: 0 },
     merge: { waitSec: 0.2, maxSec: 2 },
     modules: { bili: { enabled: false } },
+    bridge: { http: true, token: 'chat-model-panel-admin-token' },
   }))
   fake = createFakeDsh({ brain: async () => '嗯' })
   const host = await import('../src/host.js')

@@ -84,6 +84,7 @@ before(async () => {
     voice: { engine: 'windows', autoChance: 0 }, stickers: { autoChance: 0 },
     merge: { waitSec: 0.2, maxSec: 2 },
     bili: { enabled: true },
+    bridge: { http: true, token: 'modules-panel-admin-token' },
     modules: { bili: { enabled: false } },
     files: { enabled: true, maxMB: 5, dirs: [dataDir] },
   }))
@@ -245,8 +246,8 @@ test('模块设置里的密码不回传给面板', async () => {
 test('联动：开放接口要密钥，只能发给白名单，能调模块', async () => {
   assert.equal((await fake.call('/open/info')).json().ok, false)
   await fake.call('/save', { bridge: { http: true } })
-  const token = api.bridge.ensureToken()
-  assert.match(token, /^ab_/)
+  const token = api.getConfig().bridge.token
+  assert.equal(token, 'modules-panel-admin-token')
   const h = { authorization: 'Bearer ' + token }
   assert.equal((await fake.call('/open/info', null, { authorization: 'Bearer wrong' })).json().ok, false)
   const info = (await fake.call('/open/info', null, h)).json()
