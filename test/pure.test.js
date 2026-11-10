@@ -21,6 +21,12 @@ test('parseReply 剥离 purpose 内部备忘，不污染普通回复', () => {
   assert.equal(onlyMemo.silent, true)
 })
 
+test('parseReply 单个备忘样式标签只是正文，两个标签才按内部块截断', () => {
+  const r = parseReply('她问：\n【目的】是什么意思？')
+  assert.equal(r.silent, false)
+  assert.equal(r.items.map((x) => x.value).join('\n'), '她问：\n【目的】是什么意思？')
+})
+
 test('parseReply 识别语音和表情标记', () => {
   const r = parseReply('哼 谁要你夸 <sticker:卖萌>|||<voice>晚安啦</voice>')
   assert.deepEqual(r.items, [

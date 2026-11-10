@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1533 pass / 0 fail / 4 skip（共 1537） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1534 pass / 0 fail / 4 skip（共 1538） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -127,3 +127,4 @@
 - `stripInternalMemo` 下沉到 chat/reply.js，parseReply 在分条前调用；purpose cleanReply 复用同一实现，parsePurposeMemo 不变。
 - 新核心普通回合的发送与 bot logChat 均新增行为回归；legacy deliver 的 said 同样来自过滤后的 items。
 - 定向 89/89；历史三条污染流水不做数据迁移或删除。
+- 后续边界修正：stripInternalMemo 至少匹配两个行首备忘标签才截断，单个【目的】等格式说明保留为正文；新增回归。

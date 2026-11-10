@@ -28,8 +28,11 @@ export function stripReasoning(text) {
 /** purpose 的结构化内部备忘只供状态机消费，不能进入 QQ 或 bot 聊天流水。 */
 export function stripInternalMemo(text) {
   const s = String(text ?? '')
-  const cut = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/.exec(s)
-  return cut ? s.slice(0, cut.index) : s
+  const labels = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/g
+  const first = labels.exec(s)
+  if (!first) return s
+  const second = labels.exec(s)
+  return second ? s.slice(0, first.index) : s
 }
 
 /** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
