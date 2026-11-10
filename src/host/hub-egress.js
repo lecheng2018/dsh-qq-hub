@@ -11,6 +11,7 @@
 export function createHubEgress({ outbox, log }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   return {
+    outbox,
     /**
      * @param {object} req
      * @param {string} req.action OneBot 动作（send_·_msg / upload_·_file / send_poke / send_qzone_msg / forward…）

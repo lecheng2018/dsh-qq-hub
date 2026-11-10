@@ -25,7 +25,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { loadConfig, saveConfig } from './core/config.js'
-import { dataDir } from './core/store.js'
+import { dataDir, readJson, writeJson } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
@@ -282,6 +282,35 @@ export function apply(ctx) {
     hooks: sharedHooks,
   })
 
+  const stickerStash = new Map()
+  const stickerTtl = 30 * 60_000
+  function loadStickerStash() {
+    const stored = readJson(dataDir('sticker-stash.json'), () => ({}))
+    for (const [chatId, entry] of Object.entries(stored || {})) {
+      if (Array.isArray(entry?.segs) && entry.segs.length && Date.now() - Number(entry.at || 0) < stickerTtl
+        && Number(entry.at) >= Number(stickerStash.get(chatId)?.at || 0)) stickerStash.set(chatId, entry)
+    }
+  }
+  function rememberStickers(chatId, segments) {
+    loadStickerStash()
+    const segs = segments.slice(0, 4)
+    if (!segs.length) return 0
+    stickerStash.set(chatId, { at: Date.now(), segs })
+    const stored = Object.fromEntries([...stickerStash].filter(([, entry]) => Date.now() - entry.at < stickerTtl))
+    try { writeJson(dataDir('sticker-stash.json'), stored) } catch (error) { log.debug('表情暂存落盘失败：', error.message) }
+    return segs.length
+  }
+  if (useModularCore) {
+    const legacyStickerOf = hub.stickerOf.bind(hub)
+    hub.stickerOf = (chatId, index) => {
+      loadStickerStash()
+      const entry = stickerStash.get(String(chatId))
+      if (!entry) return legacyStickerOf(chatId, index)
+      const i = Number(index) - 1
+      return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
+    }
+  }
+
   // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
   // 开关关闭（默认）：dispatchEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
   // 开关打开：onebot 实时事件流走 compose([tracing → ratelimit → acl → dedup → 边界 flush → egress → 入口合流 → 遗留终端])。
@@ -341,18 +370,21 @@ export function apply(ctx) {
         logChat: (chatId, who, text, uid) => { try { hub.logChat?.(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
         // 回合说话人登记（hub.turnState；speakersOf 的数据源）
         noteSpeakers: (sessionId, senders, opts) => { try { hub.noteTurnSenders?.(String(sessionId), senders, opts) } catch {} },
-        // 入站表情收集（按 collectMode：owner 只听主人 / ask 不收（legacy 的候选提示未接，如实跳过））
         collectInboundStickers: (chatKey, segments, userId) => {
           try {
             const cfg = getConfig()
-            if (!cfg.stickers?.enabled || !cfg.stickers?.collect) return
-            const mode = cfg.stickers.collectMode || 'auto'
-            if (mode === 'ask') return // legacy 会记候选并给她轻提示，这里未接（如实跳过）
-            if (mode === 'owner' && String(userId) !== String(cfg.ownerQQ || '')) return
-            for (const seg of (Array.isArray(segments) ? segments : [])) {
-              if (!isStickerSegment(seg)) continue
-              Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
+            const settings = cfg.stickers
+            if (!settings?.enabled || !settings.collect) return
+            if (chatKey.startsWith('group:') ? !settings.fromGroups : !settings.fromPrivate) return
+            const stickers = (Array.isArray(segments) ? segments : []).filter(isStickerSegment)
+            if (!stickers.length) return
+            const mode = settings.collectMode || 'auto'
+            if (mode === 'auto') {
+              for (const seg of stickers) Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
+              return
             }
+            const count = rememberStickers(chatKey, stickers)
+            return mode === 'owner' && String(userId) !== String(cfg.ownerQQ || '') ? 0 : count
           } catch { /* 收表情是旁路 */ }
         },
 
@@ -391,16 +423,18 @@ export function apply(ctx) {
     const legacySessions = hub.sessions?.bind(hub)
     const legacyResetSessions = hub.resetSessions?.bind(hub)
     const legacyOnSessionEvent = hub.onSessionEvent?.bind(hub)
-    hub.sessions = () => {
-      const current = getConfig()
-      const modular = Object.fromEntries(Object.entries(modularCoreApi.registry.snapshot()).map(([chatId, entry]) => [chatId, {
-        ...entry,
-        personaId: personaIdFor(chatId.startsWith('group:')
-          ? { kind: 'group', groupId: chatId.slice(6) }
-          : { kind: 'private', userId: chatId.slice(8) }, current),
-      }]))
-      return { ...(legacySessions?.() || {}), ...modular }
+    const legacySyncAllModels = hub.syncAllModels.bind(hub)
+    hub.syncAllModels = async () => {
+      const results = await Promise.all([legacySyncAllModels(), modularCoreApi.syncAllModels()])
+      return {
+        applied: results.reduce((n, r) => n + r.applied, 0),
+        skipped: results.reduce((n, r) => n + r.skipped, 0),
+        failed: results.reduce((n, r) => n + r.failed, 0),
+        dropped: results.reduce((n, r) => n + (r.dropped || 0), 0),
+        detail: results.flatMap((r) => r.detail || []),
+      }
     }
+    hub.sessions = () => ({ ...(legacySessions?.() || {}), ...modularCoreApi.sessions() })
     hub.resetSessions = () => {
       const ids = Object.keys(modularCoreApi.registry.snapshot())
       for (const chatId of ids) hub.resetChat(chatId)
@@ -552,10 +586,31 @@ export function apply(ctx) {
     pkg: PKG, version: VERSION, root: ROOT,
     send, bridge,
   })
+  // /persona/use 的既有筛选匹配新 current；仅向该路由提供有效人设真正改变的会话视图。
+  let personaSwitchSessions = null
+  const personaPanelHub = useModularCore ? Object.create(hub) : hub
+  if (useModularCore) {
+    personaPanelHub.sessions = () => {
+      if (personaSwitchSessions === null) return hub.sessions()
+      const sessions = personaSwitchSessions
+      personaSwitchSessions = null
+      return sessions
+    }
+  }
+  const setPersonaPanelConfig = useModularCore ? (next) => {
+    const before = hub.sessions()
+    const current = setConfig(next)
+    personaSwitchSessions = Object.fromEntries(Object.entries(before).filter(([chatId, entry]) => {
+      const chat = chatId.startsWith('group:') ? { kind: 'group', groupId: chatId.slice(6) }
+        : chatId.startsWith('private:') ? { kind: 'private', userId: chatId.slice(8) } : { kind: 'system' }
+      return entry?.personaId && entry.personaId !== personaIdFor(chat, current)
+    }).map(([chatId, entry]) => [chatId, { ...entry, personaId: current.persona.current }]))
+    return current
+  } : setConfig
   registerPersonaRoutes({
     route, readBody, query,
-    ctx, getConfig, setConfig,
-    hub, log,
+    ctx, getConfig, setConfig: setPersonaPanelConfig,
+    hub: personaPanelHub, log,
   })
   registerModulesRoutes({
     route, readBody, query, send,

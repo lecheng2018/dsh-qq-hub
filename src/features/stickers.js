@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { dataDir, readJson, writeJson } from '../core/store.js'
+import { dataDir, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { imageSize, mimeOf, stickerSizeOk } from '../chat/inbound.js'
 import { segmentBytes, fetchImage } from '../core/net.js'
 import { askModel, canSeeImages } from '../core/llm.js'
@@ -15,12 +15,20 @@ const ext = (mime) => ({ 'image/png': 'png', 'image/gif': 'gif', 'image/webp': '
 
 export const DEFAULT_TAGS = ['开心', '卖萌', '生气', '委屈', '无语', '嘲讽', '疑惑', '早晚安']
 
-export function loadLibrary() {
-  return readJson(indexFile(), () => ({ items: [] }))
+function validLibrary(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.items)
+    && value.items.every((item) => item && typeof item === 'object' && !Array.isArray(item)
+      && typeof item.md5 === 'string' && item.md5 && typeof item.file === 'string' && item.file
+      && (item.name === undefined || typeof item.name === 'string')
+      && (item.tags === undefined || (Array.isArray(item.tags) && item.tags.every((tag) => typeof tag === 'string')))))
 }
 
-function saveLibrary(lib) {
-  writeJson(indexFile(), lib)
+export function loadLibrary(onError) {
+  return readJsonWithBackup(indexFile(), { validate: validLibrary, label: '表情库索引', fallback: () => ({ items: [] }), onError }).value
+}
+
+function saveLibrary(lib, onError) {
+  writeJsonWithBackup(indexFile(), lib, { validate: validLibrary, label: '表情库索引', onError })
 }
 
 export function stickerPath(item) {
@@ -80,6 +88,9 @@ export function pickEvict(items) {
 }
 
 export function createStickerStore({ dsh, getConfig, onebot, log }) {
+  const warn = (error) => log?.warn ? log.warn(error.message) : console.warn(error.message)
+  const load = () => loadLibrary(warn)
+  const save = (lib) => saveLibrary(lib, warn)
   const recent = [] // 每小时限额
 
   // 附件服务把图登记成附件时失败（例如工作区目录不可写 → EACCES），
@@ -157,7 +168,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       return { ok: false, reason: `尺寸或体积不像表情（${width}x${height}，${Math.round(buf.length / 1024)}KB，类型 ${mime}，允许上限 ${Math.round(allowedBytes / 1024 / 1024)}MB）` }
     }
     const md5 = createHash('md5').update(buf).digest('hex')
-    const lib = loadLibrary()
+    const lib = load()
     if (lib.items.some((i) => i.md5 === md5)) return { ok: false, reason: '已经有了' }
     mkdirSync(dir(), { recursive: true })
     const file = `collected-${md5}.${ext(mime)}`
@@ -177,18 +188,18 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       }
     }
     lib.items.push(item)
-    saveLibrary(lib)
+    save(lib)
     log.info(`收了一张表情 ${md5.slice(0, 8)}（${width}x${height}）`)
     await trim()
     // 后台起备注，写回 QQ 和本地
     if (getConfig().stickers.caption) {
       caption(buf, mime, item.summary).then(async ({ name, tags }) => {
-        const l = loadLibrary()
+        const l = load()
         const it = l.items.find((i) => i.md5 === md5)
         if (!it) return
         it.name = name || item.summary || '表情'
         it.tags = tags.length ? tags : it.tags
-        saveLibrary(l)
+        save(l)
         if (it.emojiId && it.name) {
           try { await onebot.call('modify_custom_face', { emoji_id: it.emojiId, desc: it.name.slice(0, 20) }) } catch (error) { log.warn('写回 QQ 备注失败：', error.message) }
         }
@@ -201,7 +212,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
   /** 手动添加（工具 / 面板上传）。 */
   async function addFromBuffer(buf, { name = '', tags = [], from = 'manual', toQQ = true } = {}) {
     const md5 = createHash('md5').update(buf).digest('hex')
-    const lib = loadLibrary()
+    const lib = load()
     const exist = lib.items.find((i) => i.md5 === md5)
     if (exist) return { ok: true, item: exist, existed: true }
     const mime = mimeOf(buf)
@@ -221,7 +232,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       }
     }
     lib.items.push(item)
-    saveLibrary(lib)
+    save(lib)
     return { ok: true, item }
   }
 
@@ -229,7 +240,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
   async function trim() {
     const max = getConfig().stickers.maxLibrary
     for (let guard = 0; guard < 20; guard++) {
-      const items = loadLibrary().items
+      const items = load().items
       if (items.length <= max) return
       const out = pickEvict(items)
       if (!out) return
@@ -240,16 +251,16 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
 
   /** 发出去一次：记下来，常用的不会被清掉。 */
   function markUsed(md5) {
-    const lib = loadLibrary()
+    const lib = load()
     const it = lib.items.find((i) => i.md5 === md5)
     if (!it) return
     it.uses = (it.uses || 0) + 1
     it.lastUsed = Date.now()
-    saveLibrary(lib)
+    save(lib)
   }
 
   async function remove(md5, { fromQQ = true } = {}) {
-    const lib = loadLibrary()
+    const lib = load()
     const it = lib.items.find((i) => i.md5 === md5)
     if (!it) return { ok: false, reason: '没有这张' }
     if (fromQQ && it.emojiId) {
@@ -257,17 +268,17 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     }
     try { unlinkSync(join(dir(), it.file)) } catch (error) {}
     lib.items = lib.items.filter((i) => i.md5 !== md5)
-    saveLibrary(lib)
+    save(lib)
     return { ok: true }
   }
 
   function rename(md5, name, tags) {
-    const lib = loadLibrary()
+    const lib = load()
     const it = lib.items.find((i) => i.md5 === md5)
     if (!it) return { ok: false }
     if (name !== undefined) it.name = String(name).trim().slice(0, 12)
     if (tags !== undefined) it.tags = [...new Set((Array.isArray(tags) ? tags : []).map((t) => String(t).replace(/^#/, '').trim().slice(0, 8)).filter(Boolean))].slice(0, 5)
-    saveLibrary(lib)
+    save(lib)
     if (it.emojiId && !getConfig().dryRun) onebot.call('modify_custom_face', { emoji_id: it.emojiId, desc: it.name }).catch(() => {})
     return { ok: true, item: it }
   }
@@ -303,7 +314,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         let buf
         try { buf = await fetchImage(url, { maxBytes: 5 * 1024 * 1024, allowLocal: true }) } catch (error) { failed++; continue }
         const md5 = createHash('md5').update(buf).digest('hex')
-        if (loadLibrary().items.some((i) => i.md5 === md5)) { existed++; continue }
+        if (load().items.some((i) => i.md5 === md5)) { existed++; continue }
         const r = await addFromBuffer(buf, { from: 'qq', toQQ: false })
         if (r.ok && !r.existed) { added++; named.push({ md5, buf }) } else failed++
       }
@@ -313,12 +324,12 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         ;(async () => {
           for (const { md5, buf } of named) {
             const { name, tags } = await caption(buf, mimeOf(buf), '')
-            const l = loadLibrary()
+            const l = load()
             const it = l.items.find((i) => i.md5 === md5)
             if (!it || it.name) continue
             it.name = name || '表情'
             if (tags.length) it.tags = tags
-            saveLibrary(l)
+            save(l)
           }
         })().catch((error) => log.warn('给导入的表情起名出错：', error.message))
       }
@@ -327,5 +338,5 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     return importing
   }
 
-  return { importFromQQ, collect, addFromBuffer, remove, rename, segmentFor, markUsed, trim, library: loadLibrary, match: (q) => matchSticker(loadLibrary().items, q), pickForReply: (t) => pickForReply(loadLibrary().items, t) }
+  return { importFromQQ, collect, addFromBuffer, remove, rename, segmentFor, markUsed, trim, library: load, match: (q) => matchSticker(load().items, q), pickForReply: (t) => pickForReply(load().items, t) }
 }

@@ -6,6 +6,7 @@
 // 为什么放在 tools/pre-execute 这一层：DSH 在工具真正执行前会走这个 waterfall，
 // 这里返回 deny 就不会执行，能拿到「命令原文」，比只靠提示词可靠。
 
+import path from 'node:path'
 import { isOwner } from '../chat/access.js'
 
 const CONFIRM_RE = /^(确认|确认执行|同意|同意执行|允许|允许执行|可以|执行吧|放行|yes|y|ok)$/i
@@ -38,20 +39,276 @@ const DANGER_RULES = [
   { label: 'xxd/printf 解码执行', re: /\b(?:xxd\s+-[rp]|printf\s+(?:\\x|0x))[^\n|;]*\|\s*(?:ba|z|k|da)?sh\b/i },
 ]
 
-/** 判断一条命令是否危险；返回命中的规则（含中文标签），不危险返回 null。
- *  1.3.49 起：明文判完再做一层「解码探测」——base64/hex/拼接变形的命令还原后再判一遍，
- *  绕过姿势（`echo cm0gLXJmIC8= | base64 -d | sh`、`\rm -rf /`、`r''m -rf /`、`$(printf ...) | sh`）不再漏网。 */
+function shellCommands (text) {
+  const commands = []
+  let words = []
+  let word = ''
+  let started = false
+  let quote = ''
+  const pushWord = () => {
+    if (started) words.push(word)
+    word = ''
+    started = false
+  }
+  const pushCommand = () => {
+    pushWord()
+    if (words.length) commands.push(words)
+    words = []
+  }
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (quote === "'") {
+      if (ch === "'") quote = ''
+      else word += ch
+      continue
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = ''
+      else if (ch === '\\' && /["\\$`\n]/.test(text[i + 1] || '')) {
+        if (text[++i] !== '\n') word += text[i]
+      } else word += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch
+      started = true
+    } else if (ch === '\\' && i + 1 < text.length) {
+      started = true
+      if (text[++i] !== '\n') word += text[i]
+    } else if (ch === '#' && !started) {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++
+    } else if (';|&()\n'.includes(ch)) {
+      pushCommand()
+    } else if (/\s/.test(ch)) {
+      pushWord()
+    } else {
+      word += ch
+      started = true
+    }
+  }
+  pushCommand()
+  return commands
+}
+
+function commandWords (words) {
+  let i = 0
+  while (i < words.length) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue }
+    const name = words[i].split('/').pop()
+    if (!['sudo', 'env', 'command'].includes(name)) break
+    i++
+    while (i < words.length && words[i].startsWith('-')) {
+      const option = words[i++]
+      if (option === '--') break
+      if (['-u', '-g', '-h', '-p', '--user', '--group', '--unset'].includes(option)) i++
+    }
+  }
+  return words.slice(i)
+}
+
+function rootTarget (target) {
+  const normalized = path.posix.normalize(target)
+  return normalized === '/' || /^\/\*+\/?$/.test(normalized) || /^(?:~|\$HOME)(?:\/\*?)?$/.test(target)
+}
+
+function systemTarget (target) {
+  const normalized = path.posix.normalize(target)
+  return rootTarget(target) || /^\/(?:etc|usr|bin|sbin|boot|lib|lib64)(?:\/|$)/.test(normalized)
+}
+
+function callArguments (text, start, parenthesized) {
+  const args = []
+  const closing = { '(': ')', '[': ']', '{': '}' }
+  const stack = []
+  let quote = ''
+  let argStart = start
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (quote) {
+      if (ch === '\\') i++
+      else if (ch === quote) quote = ''
+    } else if (ch === "'" || ch === '"') {
+      quote = ch
+    } else if (closing[ch]) {
+      stack.push(closing[ch])
+    } else if (stack.length && ch === stack[stack.length - 1]) {
+      stack.pop()
+    } else if (!stack.length && ((parenthesized && ch === ')') || (!parenthesized && (ch === ';' || ch === '\n')))) {
+      args.push(text.slice(argStart, i).trim())
+      return args
+    } else if (!stack.length && ch === ',') {
+      args.push(text.slice(argStart, i).trim())
+      argStart = i + 1
+    }
+  }
+  if (!parenthesized) args.push(text.slice(argStart).trim())
+  return args
+}
+
+function literalString (expression) {
+  const text = expression.trim()
+  const quote = text[0]
+  if (quote !== "'" && quote !== '"') return null
+  let value = ''
+  for (let i = 1; i < text.length; i++) {
+    if (text[i] === '\\' && i + 1 < text.length) value += text[++i]
+    else if (text[i] === quote) return text.slice(i + 1).trim() ? null : value
+    else value += text[i]
+  }
+  return null
+}
+
+function literalList (expression) {
+  const text = expression.trim()
+  if (!((text.startsWith('[') && text.endsWith(']')) || (text.startsWith('(') && text.endsWith(')')))) return null
+  const args = callArguments(`(${text.slice(1, -1)})`, 1, true).filter(Boolean)
+  const values = args.map(literalString)
+  return values.every((value) => value !== null) ? values : null
+}
+
+function maskStrings (code) {
+  let masked = ''
+  let quote = ''
+  let comment = false
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i]
+    if (comment) {
+      if (ch === '\n') { comment = false; masked += '\n' } else masked += ' '
+    } else if (quote) {
+      masked += ' '
+      if (ch === '\\' && i + 1 < code.length) { masked += ' '; i++ }
+      else if (ch === quote) quote = ''
+    } else if (ch === "'" || ch === '"') {
+      quote = ch
+      masked += ' '
+    } else if (ch === '#') {
+      comment = true
+      masked += ' '
+    } else masked += ch
+  }
+  return masked
+}
+
+function inspectCode (code, language, depth) {
+  const masked = maskStrings(code)
+  const calls = language === 'python'
+    ? /\b(?:os\.(?:system|popen|exec(?:l|le|lp|lpe|v|ve|vp|vpe))|subprocess\.(?:run|call|check_call|check_output|Popen))\s*\(/g
+    : /\b(?:system|exec)\b/g
+  for (const match of masked.matchAll(calls)) {
+    let open = match.index + match[0].length
+    if (language === 'perl') while (/\s/.test(code[open] || '')) open++
+    const parenthesized = language === 'python' || masked[open] === '('
+    const args = callArguments(code, open + (language === 'perl' && parenthesized ? 1 : 0), parenthesized)
+    if (!args.length) continue
+    const list = literalList(args[0])
+    if (list) {
+      const danger = inspectWords(list, depth + 1)
+      if (danger) return danger
+      continue
+    }
+    const first = literalString(args[0])
+    if (first === null) continue
+    if (language === 'perl' && args.length > 1) {
+      const values = args.map(literalString)
+      if (values.every((value) => value !== null)) {
+        const danger = inspectWords(values, depth + 1)
+        if (danger) return danger
+      }
+    } else if (/\bos\.exec/.test(match[0]) && args.length > 1) {
+      const argv = literalList(args[1])
+      const values = args.map(literalString)
+      const command = argv ? [first, ...argv.slice(1)] : values.every((value) => value !== null) ? [first, ...values.slice(2)] : null
+      if (command) {
+        const danger = inspectWords(command, depth + 1)
+        if (danger) return danger
+      }
+    } else {
+      const danger = inspectShell(first, depth + 1)
+      if (danger) return danger
+    }
+  }
+  return null
+}
+
+function inspectWords (input, depth) {
+  if (depth > 12) return null
+  const words = commandWords(input)
+  if (!words.length) return null
+  const name = words[0].split('/').pop()
+  const args = words.slice(1)
+  const normalized = [name, ...args].join(' ')
+  for (const rule of DANGER_RULES) {
+    const match = rule.re.exec(normalized)
+    if (match && match.index === 0) return { label: rule.label }
+  }
+  if (name === 'rm' && args.some((arg) => arg === '--recursive' || (/^-[^-]+$/.test(arg) && /[rR]/.test(arg))) && args.some(rootTarget)) {
+    return { label: '递归删除根目录/盘符' }
+  }
+  if (name === 'find' && args.includes('-delete')) {
+    const paths = []
+    for (const arg of args) {
+      if (['-H', '-L', '-P'].includes(arg) && !paths.length) continue
+      if (arg.startsWith('-') || arg === '!' || arg === '(') break
+      paths.push(arg)
+    }
+    if (paths.some(rootTarget)) return { label: '递归删除根目录' }
+  }
+  if (name === 'truncate') {
+    let zeroSize = false
+    const targets = []
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (arg === '-s' || arg === '--size') zeroSize = args[++i] === '0' || zeroSize
+      else if (arg === '-s0' || arg === '--size=0') zeroSize = true
+      else if (arg === '-r' || arg === '--reference') i++
+      else if (!arg.startsWith('-')) targets.push(arg)
+    }
+    if (zeroSize && targets.some(systemTarget)) return { label: '清空根目录/系统文件' }
+  }
+  if (name === 'chmod' && args.some((arg) => arg === '--recursive' || (/^-[^-]+$/.test(arg) && arg.includes('R'))) && args.some((arg) => /^0*777$/.test(arg)) && args.some(systemTarget)) {
+    return { label: '强制改系统目录权限' }
+  }
+  if (/^(?:ba|da|z|k|a)?sh$/.test(name)) {
+    const index = args.findIndex((arg) => arg === '--command' || /^-[^-]*c/.test(arg))
+    if (index >= 0 && args[index + 1] !== undefined) return inspectShell(args[index + 1], depth + 1)
+  }
+  if (/^python(?:\d+(?:\.\d+)*)?$/.test(name)) {
+    const index = args.indexOf('-c')
+    if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'python', depth + 1)
+  }
+  if (/^perl(?:\d+(?:\.\d+)*)?$/.test(name)) {
+    const index = args.findIndex((arg) => /^-[^-]*[eE]$/.test(arg))
+    if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'perl', depth + 1)
+  }
+  return null
+}
+
+function inspectShell (text, depth = 0) {
+  if (depth > 12) return null
+  for (const words of shellCommands(text)) {
+    const danger = inspectWords(words, depth)
+    if (danger) return danger
+  }
+  return null
+}
+
+/** 判断命令是否命中静态危险规则；返回中文标签，否则返回 null。
+ *  同时探测部分 shell/解释器包装及编码变形；不能保证识别动态生成的全部命令。 */
 export function isDangerousCommand (command) {
   const text = String(command || '')
   if (!text.trim()) return null
   for (const rule of DANGER_RULES) {
     if (rule.re.test(text)) return { label: rule.label }
   }
+  const parsed = inspectShell(text)
+  if (parsed) return parsed
   // 解码探测：把命令里可还原的片段解出来再判一轮。命中同一条规则，标签标注「变形」。
   for (const variant of decodeVariants(text)) {
     for (const rule of DANGER_RULES) {
       if (rule.re.test(variant)) return { label: rule.label, label2: `${rule.label}（编码/变形绕过）`, obfuscated: true }
     }
+    const parsedVariant = inspectShell(variant)
+    if (parsedVariant) return { ...parsedVariant, label2: `${parsedVariant.label}（编码/变形绕过）`, obfuscated: true }
   }
   return null
 }
