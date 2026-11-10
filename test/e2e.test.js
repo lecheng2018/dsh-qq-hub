@@ -142,6 +142,7 @@ before(async () => {
     qzoneSocial: { friendChance: 1, ownerChance: 1, intervalMin: 1440 },
     merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
     files: { enabled: true, maxMB: 1, dirs: [] },
+    bridge: { http: true, token: 'e2e-panel-admin-token' },
   }))
   fake = createFakeDsh({ brain })
   const host = await import('../src/host.js')

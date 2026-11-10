@@ -11,9 +11,10 @@ import { createPanelGuard } from './panel/guard.js'
  * @param {object} o.ctx DSH 插件上下文（route 登记 webServer 要用）
  * @param {string} o.prefix 接口前缀（/qq-hub/api）
  * @param {() => object} o.getConfig 面板防护每请求现读配置（Host 白名单热生效）
+ * @param {(req: object) => boolean} [o.isAuthorized] 管理接口鉴权（复用联动密钥校验）
  * @param {object} [o.log] 防护拒绝时的 debug 日志出口
  */
-export function createHttpKit({ ctx, prefix, getConfig = () => ({}), log }) {
+export function createHttpKit({ ctx, prefix, getConfig = () => ({}), isAuthorized, log }) {
   const send = (res, code, body, type = 'application/json; charset=utf-8') => {
     try {
       res.statusCode = code
@@ -52,10 +53,10 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), log }) {
   }
   // 核心自己的接口登记成精确路径；模块的接口都走一个前缀路由，请求进来再查表
   // （模块随时开关、重新加载；关着的模块的接口回「模块没开」，面板不会白屏）
-  // M1-A：所有面板流量（route 精确路由 + host.js 的模块前缀路由）统一过 guard：
-  // Host 白名单（DNS rebinding）+ 同源校验（CSRF，P1 §4.9 收紧到「带 Origin 就查、不分方法」）
-  // + 副作用路径 GET 类方法 405，fail-closed。prefix 传给 guard 用于剥前缀匹配副作用路径表。
-  const guard = createPanelGuard({ getConfig, log, prefix })
+  // 所有面板流量（route 精确路由 + host.js 的模块前缀路由）统一过 guard：
+  // Host 白名单 + 同源校验（CSRF）+ 副作用路径方法约束 + 写请求联动密钥鉴权。
+  // prefix 传给 guard 用于剥前缀匹配副作用路径表；普通只读请求免管理密钥，/open 仍保留原鉴权。
+  const guard = createPanelGuard({ getConfig, log, prefix, isAuthorized })
   const guardedAnswer = (res, req, fn) => answer(res, () => {
     const g = guard.check(req)
     if (!g.ok) return send(res, g.code, { ok: false, message: g.message })

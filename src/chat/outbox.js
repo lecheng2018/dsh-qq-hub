@@ -62,18 +62,25 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     const deliveryId = String(req?.deliveryId || newDeliveryId())
     if (passThrough) passMap.set(deliveryId, { action: req.action, params: req.params, opts: req.opts, receipt: req.receipt || 'required' })
     // 同步登记台账：FIFO 顺序 = enqueue 顺序（台账落盘失败 fail-closed 直接抛出，不发送）
-    const rec = book.enqueue({
-      deliveryId,
-      chatKey,
-      turnId: req?.turnId,
-      sourceModuleId: req?.sourceModuleId,
-      segments,
-      note: req.note,
-      action: passThrough ? req.action : undefined,
-    })
+    let rec
+    try {
+      rec = book.enqueue({
+        deliveryId,
+        chatKey,
+        turnId: req?.turnId,
+        sourceModuleId: req?.sourceModuleId,
+        segments,
+        note: req.note,
+        action: passThrough ? req.action : undefined,
+      })
+    } catch (error) {
+      passMap.delete(deliveryId)
+      throw error
+    }
 
     // 按次试运行：调用方显式语义，不排队（无 await 在 enqueue 与链注册之间插入任何东西）
     if (req?.dryRun === true) {
+      passMap.delete(deliveryId)
       book.mark(deliveryId, 'cancelled', { reason: 'dryRun' })
       return { state: 'cancelled', deliveryId, reason: 'dryRun' }
     }
@@ -85,6 +92,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     pending.add(deliveryId)
     const cleanup = () => {
       pending.delete(deliveryId)
+      passMap.delete(deliveryId)
       if (chains.get(chatKey) === chain) chains.delete(chatKey)
     }
     chain.then(cleanup, cleanup)

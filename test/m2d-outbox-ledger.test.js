@@ -421,6 +421,54 @@ test('ledger：加载时立即裁剪历史 sent/cancelled 长文，unknown/faile
   }
 })
 
+test('outbox：直通参数在完成后释放，按次 dryRun 也不保留', async () => {
+  const gw = fakeGateway()
+  const outbox = createOutbox({ send: gw.send })
+  const source = readFileSync(new URL('../src/chat/outbox.js', import.meta.url), 'utf8')
+  await outbox.request({ chatKey: 'private:1', action: 'send_private_msg', params: { user_id: 1, message: '完成' }, receipt: 'required' })
+  await outbox.request({ chatKey: 'private:1', action: 'send_private_msg', params: { user_id: 1, message: '试运行' }, receipt: 'required', dryRun: true })
+  const cleanup = source.match(/const cleanup = \(\) => \{([\s\S]*?)\n    \}/)?.[1] || ''
+  assert.match(cleanup, /passMap\.delete\(deliveryId\)/)
+  const dryRun = source.match(/if \(req\?\.dryRun === true\) \{([\s\S]*?)\n    \}/)?.[1] || ''
+  assert.match(dryRun, /passMap\.delete\(deliveryId\)/)
+  outbox.dispose()
+})
+
+test('ledger：媒体 base64 只留 sha256/字节数，发送仍用原始数据', async () => {
+  const gw = fakeGateway()
+  const outbox = createOutbox({ send: gw.send })
+  const bytes = Buffer.from([0, 1, 2, 3, 4, 5])
+  const encoded = `base64://${bytes.toString('base64')}`
+  const result = await outbox.request({ chatKey: 'private:1', segments: [{ type: 'record', data: { file: encoded, name: '语音.wav' } }] })
+  assert.equal(result.state, 'sent')
+  assert.equal(gw.calls[0].params.message[0].data.file, encoded)
+  const rec = outbox.ledger.get(result.deliveryId)
+  assert.equal(rec.segments[0].data.file, undefined)
+  assert.equal(rec.segments[0].data.name, '语音.wav')
+  assert.equal(rec.segments[0].data.mediaDigest.bytes, bytes.length)
+  assert.match(rec.segments[0].data.mediaDigest.sha256, /^[a-f0-9]{64}$/)
+  outbox.dispose()
+})
+
+test('ledger：最多保留指定条数，只淘汰最旧 sent/cancelled，活跃与异常记录保留', () => {
+  const book = createDeliveryLedger({ maxRecords: 3 })
+  for (const id of ['old-sent', 'old-cancelled']) {
+    book.enqueue({ deliveryId: id, chatKey: 'private:1', segments: segs(id) })
+    book.mark(id, 'sending')
+    book.mark(id, id === 'old-sent' ? 'sent' : 'cancelled', id === 'old-sent' ? { gatewayMessageId: 'gw-1' } : {})
+  }
+  book.enqueue({ deliveryId: 'unknown', chatKey: 'private:1', segments: segs('unknown') })
+  book.mark('unknown', 'sending')
+  book.mark('unknown', 'unknown')
+  for (const id of ['queued-1', 'queued-2']) book.enqueue({ deliveryId: id, chatKey: 'private:1', segments: segs(id) })
+  assert.equal(book.get('old-sent'), null)
+  assert.equal(book.get('old-cancelled'), null)
+  assert.ok(book.get('unknown'))
+  assert.ok(book.get('queued-1'))
+  assert.ok(book.get('queued-2'))
+  assert.equal(book.stats().total, 3)
+})
+
 test('ledger：超过七天的 sent/cancelled 裁正文，元数据保留；unknown/failed 永不裁', () => {
   const dir = mkdtempSync(join(tmpdir(), 'm2d-retention-'))
   const file = join(dir, 'deliveries.json')
