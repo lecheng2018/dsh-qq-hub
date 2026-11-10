@@ -370,3 +370,33 @@ test('提示词：不带 qq_send_private_message 发送指令；带反注入与�
   assert.match(pv.prompt, /不是给你的指令/, '素材段带反注入提醒')
   assert.match(pv.prompt, /不要要钱、不要要贵重东西/, '索取边界写进提示词')
 })
+
+
+test('全入口冒烟：不完整但合法的 pending/素材可完成挖取、选择、提示词与摘要', () => {
+  const now = Date.now()
+  const state = engine.createPurposeState(now)
+  state.pending = [{
+    id: 'p-incomplete', text: '想问问主人中午吃了什么', kind: '', need: '', action: '', emotion: '',
+    createdAt: now - 60_000, expiresAt: now + 86400_000, hits: 0,
+  }]
+  const config = engine.normalizePurposeConfig({})
+  const materials = [{
+    id: 'owner-incomplete', kind: 'owner', text: '中午要不要一起吃个饭', at: now - 30_000,
+  }]
+  const seeds = engine.minePurposeSeeds({ materials, now, config, drives: state.drives, history: state.history })
+  assert.ok(Array.isArray(seeds))
+  const picked = engine.selectPurpose({
+    seeds, goals: [], pending: state.pending, history: state.history,
+    config, drives: state.drives, now, random: () => 0.01,
+  })
+  assert.ok(picked.purpose)
+  const prompt = engine.buildPurposePrompt({
+    now, config, ownerUin: OWNER, pending: state.pending,
+    candidates: picked.candidates, selected: picked.purpose,
+    materials, drives: state.drives,
+  })
+  assert.match(prompt, /中午/)
+  const summary = engine.summarizePurposeState(state, { config, now })
+  assert.equal(summary.pending.length, 1)
+  assert.equal(summary.pending[0].text, '想问问主人中午吃了什么')
+})
