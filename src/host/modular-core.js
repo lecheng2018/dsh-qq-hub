@@ -270,6 +270,7 @@ export function createModularCore({
   const groups = createGroupState()
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
+  const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const moodChatty = () => {
     try {
       const m = typeof moodEffects === 'function' ? moodEffects() : null
@@ -715,9 +716,15 @@ export function createModularCore({
       const recovered = io.members.filter((member) => isBackfill(member))
       if (recovered.length) {
         const earliest = Math.min(...recovered.map((member) => Number(member.timestamp) || Date.now()))
+        const gaps = recovered.map((member) => Number(backfillMeta.get(member)?.gapMs)).filter((value) => value > 0)
+        const ages = recovered.map((member) => Number(backfillMeta.get(member)?.earliestAgeMs)).filter((value) => value > 0)
         content = [{
           type: 'text',
-          text: backfillNoticeBlock({ gapMs: 120_000, count: recovered.length, earliestAgeMs: Math.max(0, Date.now() - earliest) }),
+          text: backfillNoticeBlock({
+            gapMs: gaps.length ? Math.max(...gaps) : 120_000,
+            count: recovered.length,
+            earliestAgeMs: ages.length ? Math.max(...ages) : Math.max(0, Date.now() - earliest),
+          }),
         }, ...content]
       }
       if (typeof moduleHooks?.prompt === 'function') {
@@ -1147,9 +1154,13 @@ export function createModularCore({
   }
 
   /** 补收入口（M4-4）：补收事件带原始时间，source=backfill（M1-B 语义同款）。与实时同一条主链（ACL/闸/静音/群闸）。 */
-  function dispatchBackfill(ev) {
+  function dispatchBackfill(ev, meta = {}) {
     const { inbound } = safeAdapt(ev, 'backfill')
     if (!inbound) return { handled: 'skipped' }
+    backfillMeta.set(inbound, {
+      gapMs: Number(meta.gapMs) || 120_000,
+      earliestAgeMs: Number(meta.earliestAgeMs) || 0,
+    })
     return routeInbound(inbound, ev, 'backfill')
   }
 

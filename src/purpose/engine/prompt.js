@@ -5,7 +5,7 @@ import { DEFAULT_PURPOSE_CONFIG } from './shared.js';
 import { ACTION_LABELS, DEFAULT_DRIVES, EMOTION_LABELS, NEED_LABELS, PURPOSE_NEEDS, normalizeDrives } from './drives.js'
 import { clockText, localDateKey } from './clock.js';
 import { GOAL_OWNER_LABELS } from './goals.js'
-import { formatMaterialLine, relTime } from './seeds.js'
+import { formatMaterialLine, kindLabel, relTime } from './seeds.js'
 import { textSimilarity } from './similarity.js'
 
 export function buildPurposePrompt({

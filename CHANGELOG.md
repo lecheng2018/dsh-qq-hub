@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.3.65-test.20261110.4
+
+- 修复 purpose 主动搭话引擎的四个跨文件符号故障：`kindLabel`、`actionForNeed`、`kindForAction`、`emotionCues`。解决 pending 非空时每分钟反复报 `is not defined`、主动搭话停摆的问题。
+- 新增 purpose 全入口回归：使用合法但不完整的 state 条目实际执行素材挖取、目的选择、提示词渲染和状态摘要，覆盖原测试绕过的分支。
+- 补收提示使用 gateway 实测断线时长和消息年龄，不再硬编码“约 2 分钟”而与旧消息时间矛盾。
+- 验证：purpose 23/23、补收接线 13/13；预发布仍需目标环境复核。
+
+---
+
 ## 1.3.65-test.20261110.3
 
 - 修复 Shared Outbox 与 legacy 私聊身份闸口径不一致：私聊裸数字不再误吞长文；群聊拦截新增脱敏 warn。
