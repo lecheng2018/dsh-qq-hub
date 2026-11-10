@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1534 pass / 0 fail / 4 skip（共 1538） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1540 pass / 0 fail / 4 skip（共 1544） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -128,3 +128,11 @@
 - 新核心普通回合的发送与 bot logChat 均新增行为回归；legacy deliver 的 said 同样来自过滤后的 items。
 - 定向 89/89；历史三条污染流水不做数据迁移或删除。
 - 后续边界修正：stripInternalMemo 至少匹配两个行首备忘标签才截断，单个【目的】等格式说明保留为正文；新增回归。
+
+## 面板敏感信息、台账与入站防护（2026-11-11）
+
+- SnowLuma password 只返回 configured/auto；bridge token 只返回 configured；示例中的真实 token 替换为占位。set/reset password、/save 改密和 bridge token reset 统一走 bridge.authorized，失败真实 HTTP 401。
+- 面板按当前标签页保存联动密钥，所有请求自动携带 x-qq-hub-token；不再通过 API ensure/reset 密钥。
+- 台账 enqueue 的审计副本每记录最多 2048 字并记 contentChars；outbox 物理发送使用请求原始 segments，新增全文发送 + 文件裁剪回归。
+- modular 默认路径复用 createRatelimitMiddleware.take，按 chatKey+userId 限流；scheduler 默认每聊天最多 50 排队任务，超限 queue full。
+- 定向：面板敏感信息 3/3 + modules 22/22；ledger 22/22；scheduler 与 modular 限流各 1/1。

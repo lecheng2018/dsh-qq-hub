@@ -72,6 +72,20 @@ test('scheduler：异常唤醒下一个（无空档），排队任务在 dispose
   await disposeP
 })
 
+test('scheduler：排队达到上限后拒绝新任务，释放后恢复接收', async () => {
+  const s = createTurnScheduler({ maxQueue: 2 })
+  let release
+  const blocker = new Promise((resolve) => { release = resolve })
+  const first = s.submit('private:1', () => blocker)
+  s.submit('private:1', async () => '第二')
+  s.submit('private:1', async () => '第三')
+  await assert.rejects(() => s.submit('private:1', async () => '超载'), /queue full/)
+  release()
+  await first
+  assert.equal(await s.submit('private:1', async () => '恢复'), '恢复')
+  await s.dispose()
+})
+
 test('合流：lead 开窗，follower 加入同一回合；窗口到期整回合执行（成员齐全）', async () => {
   const executed = []
   const ctl = createTurnController({

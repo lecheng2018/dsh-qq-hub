@@ -138,6 +138,7 @@ export function createRatelimitMiddleware(options = {}) {
     await next()
   }
 
+  ratelimit.take = take
   ratelimit.stats = () => ({
     ...counters,
     keys: buckets.size,

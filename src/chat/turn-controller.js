@@ -26,10 +26,10 @@ const DEFAULT_MERGE = Object.freeze({ waitMs: 2500, maxMs: 8000, groupWaitMs: 50
  * @param {{waitMs?:number, maxMs?:number, groupWaitMs?:number, groupMaxMs?:number}} [o.merge] 合流窗口参数
  * @param {() => number} [o.now] 时间注入（测试用）
  */
-export function createTurnController({ execute, merge = {}, log } = {}) {
+export function createTurnController({ execute, merge = {}, log, maxQueue = 50 } = {}) {
   if (typeof execute !== 'function') throw new TypeError('execute 必须是函数')
   const m = { ...DEFAULT_MERGE, ...merge }
-  const scheduler = createTurnScheduler()
+  const scheduler = createTurnScheduler({ maxQueue })
 
   /** turnId -> turn */
   const turns = new Map()
