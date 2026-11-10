@@ -494,12 +494,13 @@ test('主动任务与当前聊天共用串行道：前一轮未结束时不得�
 test('补收入站：提示模型这些是断线期间的旧消息，并保留原始时间语义', async () => {
   const { core, dsh, mock } = await fixture()
   try {
-    await core.dispatchBackfill(privEv({ time: Math.floor((Date.now() - 120_000) / 1000) }))
+    await core.dispatchBackfill(privEv({ time: Math.floor((Date.now() - 120_000) / 1000) }), { gapMs: 6 * 3600_000 })
     await sleep(600)
     const text = String(dsh.turns[0]?.userText || '')
     assert.match(text, /补收提示/)
     assert.match(text, /断线期间错过/)
-    assert.match(text, /约 2 分钟/)
+    assert.match(text, /断开连接约 6 小时/)
+    assert.match(text, /最早一条在约 2 分钟前/)
   } finally { await core.dispose(); await mock.close() }
 })
 

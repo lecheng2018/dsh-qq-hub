@@ -67,7 +67,7 @@ export function createGateway({
             // 新核心 M2-A 起由 NormalizedInbound.source + 时间戳承接「落上下文」语义。
             if (it.tooOld) { log.debug(`[backfill] 群 ${gid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             const mc = getModularCore?.()
-            if (mc) await mc.dispatchBackfill(it.event)
+            if (mc) await mc.dispatchBackfill(it.event, { gapMs, earliestAgeMs: it.ageMs })
             else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
@@ -98,7 +98,7 @@ export function createGateway({
             // M1-B：同上，过旧消息不唤醒
             if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             const mc = getModularCore?.()
-            if (mc) await mc.dispatchBackfill(it.event)
+            if (mc) await mc.dispatchBackfill(it.event, { gapMs, earliestAgeMs: it.ageMs })
             else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
