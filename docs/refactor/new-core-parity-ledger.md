@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1502 pass / 1 fail / 4 skip（共 1507） | 唯一失败是既有 `local.test.js` 硬编码 `/tmp/aurabot-local-img.png`，其他用户占用导致 EACCES；以干净 CI 复核 |
+| 主仓 `npm test` | 1518 pass / 0 fail / 4 skip（共 1522） | `local.test.js` 使用测试进程独立数据目录，不再共享 `/tmp/aurabot-local-img.png` |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
