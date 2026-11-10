@@ -8,9 +8,8 @@
 //   - 已 sent 的条目永不重放；unknown 有审计（unknownAt 原因）；
 //   - 状态机与 ADR 六态一致：queued/sending/sent/failed/unknown/cancelled。
 
-import fs from 'node:fs'
-import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { assertDelivery, CONTRACT_VERSION } from '../kernel/modular-contracts.js'
 
 const LEDGER_VERSION = 1
@@ -75,21 +74,21 @@ function trimTerminalContent(rec, now) {
   return { ...rec, segments, contentTruncated: true, contentOriginalChars: originalChars }
 }
 
-/** 原子写 JSON（tmp+rename，Windows EPERM/EBUSY 微重试）。 */
-function writeJsonAtomic(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
-  for (let i = 0; ; i++) {
-    try {
-      fs.renameSync(tmp, file)
-      return
-    } catch (error) {
-      if (i >= 3 || (error.code !== 'EPERM' && error.code !== 'EBUSY')) throw error
-      const end = Date.now() + 25
-      while (Date.now() < end) { /* 让步后重试 */ }
-    }
+function validLedgerDocument(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || (value.version !== undefined && value.version !== LEDGER_VERSION)
+    || !Array.isArray(value.deliveries)) return false
+  const ids = new Set()
+  for (const rec of value.deliveries) {
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)
+      || !rec.deliveryId || !STATES.has(rec.state)
+      || (rec.segments !== undefined && (!Array.isArray(rec.segments)
+        || rec.segments.some((segment) => !segment || typeof segment !== 'object' || Array.isArray(segment))))) return false
+    const id = String(rec.deliveryId)
+    if (ids.has(id)) return false
+    ids.add(id)
   }
+  return true
 }
 
 let seq = 0
@@ -100,7 +99,8 @@ let seq = 0
  * @param {string} [o.file] 台账文件路径（缺省 = 纯内存）
  * @param {(error: Error) => void} [o.onError] 持久化错误出口
  */
-export function createDeliveryLedger({ file, onError = () => {}, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
+export function createDeliveryLedger({ file, onError = (error) => console.warn(error.message), maxRecords = DEFAULT_MAX_RECORDS } = {}) {
+  const options = { validate: validLedgerDocument, label: '投递台账', onError }
   /** deliveryId -> record */
   const records = new Map()
   const limit = Math.max(1, Math.floor(Number(maxRecords) || DEFAULT_MAX_RECORDS))
@@ -120,9 +120,9 @@ export function createDeliveryLedger({ file, onError = () => {}, maxRecords = DE
 
   if (file) {
     try {
-      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
-      for (const rec of Array.isArray(raw?.deliveries) ? raw.deliveries : []) {
-        if (!rec?.deliveryId) continue
+      const loaded = readJsonWithBackup(file, { ...options, fallback: () => ({ version: LEDGER_VERSION, deliveries: [] }), repairPrimary: false })
+      if (loaded.fromBackup) recovered = true
+      for (const rec of loaded.value.deliveries) {
         if (rec.state === 'sending') {
           // 崩溃恢复红线：sending → unknown（副作用可能已发生），留审计原因，绝不重发
           rec.state = 'unknown'
@@ -130,6 +130,13 @@ export function createDeliveryLedger({ file, onError = () => {}, maxRecords = DE
           rec.unknownReason = rec.unknownReason || 'crash-recovery: 落盘时处于 sending，副作用未知'
           rec.recoveredAt = Date.now()
           crashedSending++
+          recovered = true
+        } else if (loaded.fromBackup && ['queued', 'failed', 'cancelled'].includes(rec.state)) {
+          const previous = rec.state
+          rec.state = 'unknown'
+          rec.unknownAt = rec.unknownAt || Date.now()
+          rec.unknownReason = `backup-recovery: 备份可能落后（原状态 ${previous}），副作用未知`
+          rec.recoveredAt = Date.now()
           recovered = true
         } else if (rec.state === 'queued') {
           // 已登记但还没开始物理发送：标 cancelled，不恢复队列、不自动重发。
@@ -169,11 +176,11 @@ export function createDeliveryLedger({ file, onError = () => {}, maxRecords = DE
         const trimmed = trimTerminalContent(rec, now)
         if (trimmed !== rec) records.set(id, trimmed)
       }
-      writeJsonAtomic(file, {
+      writeJsonWithBackup(file, {
         version: LEDGER_VERSION,
         savedAt: now,
         deliveries: [...records.values()],
-      })
+      }, options)
     } catch (error) {
       onError(error)
       if (critical) throw new Error(`台账落盘失败（fail-closed）：${error?.message || error}`, { cause: error })
