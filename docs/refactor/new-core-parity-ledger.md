@@ -74,3 +74,16 @@
 - `purpose.test.js` 新增全入口冒烟：使用字段不完整但合法的 pending 与素材，实际执行 minePurposeSeeds → selectPurpose → buildPurposePrompt → summarizePurposeState；不再被字段齐全的既有用例绕过。
 - gateway 调用 `dispatchBackfill(event, { gapMs, earliestAgeMs })`；新核心用 WeakMap 保存适配外元数据，提示词同时使用真实断线时长与消息年龄，不再硬编码“约 2 分钟”。
 - 验证：purpose 23/23；backfill 接线 13/13；新核心补收提示回归通过。
+
+## 入站文件、回合恢复与缓存收口（2026-11-10）
+
+- J：新增 `src/chat/inbound-files.js`，新核心与 legacy 共用入站文件处理。文本最多读取 60000 字；二进制落盘到 `qq-inbox` 并向模型提供真实路径；失败时明确说明。
+- K：legacy 的二进制文件落盘改用共享实现中的 `node:fs/promises` `mkdir`/`writeFile`，不再因未定义导入而失败。
+- M：普通回合和主动任务均有 `turnTimeoutMs`（默认 600000）超时。超时清理监听与输入状态、释放串行道并归档旧会话；下一条消息新建会话，迟到旧回复不投递。
+- L：新核心将 JSON 卡片解析为标题、摘要和链接，XML 卡片显示 `[卡片消息]`。
+- N：重置会话时清理上下文、人设、工具和慢提示缓存，`stats().cacheEntries` 提供可验证计数。
+- O：台账崩溃恢复将 queued 标为 cancelled、sending 标为 unknown，恢复结果立即落盘；两者均不自动重发。
+- P：私聊人设查询只传 `userId`，群聊只传 `groupId`。
+- Q：每轮只计算一次 `previousTurnAt`，装配、群聊和 steer 复用该时间锚。
+- 定向验证：113/113，通过 `m7-live-parity`、`m2d-outbox-ledger`、`r3-flagoff-regression`、`purpose`、`m4-modular-core`、`m6-outbox-unification`。
+- 真机门禁未取消：入站文本/二进制、超时后新消息、卡片展示、reset 和崩溃恢复仍需在 fnOS/DSH 的 `.5` 包上复核。

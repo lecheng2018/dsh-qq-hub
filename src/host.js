@@ -395,7 +395,9 @@ export function apply(ctx) {
       const current = getConfig()
       const modular = Object.fromEntries(Object.entries(modularCoreApi.registry.snapshot()).map(([chatId, entry]) => [chatId, {
         ...entry,
-        personaId: personaIdFor({ kind: chatId.startsWith('group:') ? 'group' : 'private', groupId: chatId.slice(6), userId: chatId.slice(8) }, current),
+        personaId: personaIdFor(chatId.startsWith('group:')
+          ? { kind: 'group', groupId: chatId.slice(6) }
+          : { kind: 'private', userId: chatId.slice(8) }, current),
       }]))
       return { ...(legacySessions?.() || {}), ...modular }
     }
