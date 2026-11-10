@@ -220,3 +220,34 @@ test('memory 模块提供 memory-store 能力；蒸馏回退干净（memory.js �
   const dist = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(dist, /emit\('distill\/growth-updated'/, '调度侧学成走事件总线刷卡')
 })
+
+test('蒸馏模型挂起：超时 abort 并释放 L1 锁，后续批次可重试', async () => {
+  let now = Date.now()
+  const calls = []
+  const lines = Array.from({ length: 10 }, (_, i) => ({ t: now - i * 1000, chatId: 'group:777', uid: '555', name: '老哥', text: `原话 ${i}` }))
+  const state = {}
+  const engine = createDistillEngine({
+    config: () => ({ enabled: true, memory: { distill: true, distillBatch: 10, distillTimeoutMs: 20, distillRetryMs: 0 } }),
+    targetsOf: () => [{ gid: '777', uid: '555', name: '老哥' }],
+    loadState: () => state,
+    saveState() {},
+    chatLogDays: () => ['d1'],
+    chatLogOf: () => lines,
+    askModelImpl: async (dsh, opts) => {
+      calls.push(opts)
+      if (calls.length > 1) return L1_JSON
+      return await new Promise(() => {})
+    },
+    now: () => now,
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+  })
+  for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', now + i)
+  await new Promise((r) => setTimeout(r, 100))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].signal?.aborted, true, '超时必须 abort 模型流')
+  now += 3600_000
+  for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', now + i)
+  await new Promise((r) => setTimeout(r, 60))
+  assert.equal(calls.length, 2, '锁释放后下一批可以重试')
+  assert.equal(engine.status()[0].batches, 1)
+})
