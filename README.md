@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-success)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-当前版本：**v1.3.65-test.20261110.11（预发布）**。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：**v1.3.65-test.20261111.1（预发布）**。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 能做什么
 

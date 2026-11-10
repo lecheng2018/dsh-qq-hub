@@ -84,9 +84,15 @@ window.__ModuleLoader__.load({
       return { ok: false, status: r.status, message: 'HTTP ' + r.status + '：' + (snippet || '空响应') }
     })
     const failed = (e) => ({ ok: false, message: '连不上插件：' + (e && e.message ? e.message : e) + '（接口 ' + API + '）' })
-    const get = (p) => fetch(API + p, { cache: 'no-store' }).then(readJson).catch(failed)
+    const authHeaders = () => {
+      try {
+        const token = sessionStorage.getItem('qq-hub-token') || ''
+        return token ? { 'x-qq-hub-token': token } : {}
+      } catch (e) { return {} }
+    }
+    const get = (p) => fetch(API + p, { cache: 'no-store', headers: authHeaders() }).then(readJson).catch(failed)
     const post = (p, body) =>
-      fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
+      fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() }, body: JSON.stringify(body || {}) })
         .then(readJson)
         .catch(failed)
     const clone = (o) => JSON.parse(JSON.stringify(o))
@@ -869,15 +875,17 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         } }, '重置为自动密码')))
     }
 
-    /** 控制台密码：插件登得上时显示状态，能看一眼、复制（打开 SnowLuma 自己的控制台要用）。 */
-    function PasswordPeek({ toast, auto }) {
-      const [pw, setPw] = useState('')
-      const peek = async () => { const r = await get('/snowluma/password'); setPw(r.password || '（还没有）') }
-      return h('div', { className: 'ab-flex' },
-        h('span', { className: 'ab-small', style: { color: 'var(--ab-ok)' } }, auto ? '✓ 控制台密码由插件自动管理' : '✓ 用的是你设的控制台密码'),
-        pw ? h('code', { className: 'ab-small' }, pw) : null,
-        h(Btn, { small: true, kind: 'ghost', onClick: () => (pw ? setPw('') : peek()) }, pw ? '隐藏' : '显示密码'),
-        h(Btn, { small: true, kind: 'ghost', onClick: async () => { const r = await get('/snowluma/password'); copy(r.password || '', toast, '密码复制好了，打开 SnowLuma 控制台时粘贴') } }, '复制密码'))
+    /** 控制台密码只显示托管状态；明文不经过面板 API。 */
+    function PasswordPeek({ auto }) {
+      const [token, setToken] = useState(() => { try { return sessionStorage.getItem('qq-hub-token') || '' } catch (e) { return '' } })
+      const update = (value) => {
+        setToken(value)
+        try { sessionStorage.setItem('qq-hub-token', value) } catch (e) {}
+      }
+      return h('div', null,
+        h('div', { className: 'ab-small', style: { color: 'var(--ab-ok)' } }, auto ? '✓ 控制台密码由插件自动管理' : '✓ 用的是你设的控制台密码'),
+        h('div', { className: 'ab-muted ab-small' }, '明文请在本机配置文件中查看，面板不再显示或复制。修改或重置密码需要联动密钥。'),
+        h('input', { className: 'ab-input', type: 'password', value: token, placeholder: '联动密钥（仅本次标签页保存）', onChange: (e) => update(e.target.value) }))
     }
 
     /** 在面板里阅读并同意 SnowLuma 的用户协议和隐私说明（必须由用户本人勾选、点击）。 */

@@ -645,6 +645,28 @@ test('回合超时：提示用户且不立即归档；下一条消息重建，�
   }
 })
 
+test('默认 modular 入站限流：同一用户刷屏被挡在回合外', async () => {
+  const oldCapacity = process.env.QQHUB_RL_CAPACITY
+  const oldRefill = process.env.QQHUB_RL_REFILL_PER_SEC
+  process.env.QQHUB_RL_CAPACITY = '2'
+  process.env.QQHUB_RL_REFILL_PER_SEC = '0'
+  const { core, mock } = await fixture()
+  try {
+    const first = await core.dispatchLegacyEvent(groupEv('第一句'))
+    const second = await core.dispatchLegacyEvent(groupEv('第二句'))
+    const third = await core.dispatchLegacyEvent(groupEv('第三句'))
+    assert.notEqual(first.handled, 'ratelimited')
+    assert.notEqual(second.handled, 'ratelimited')
+    assert.equal(third.handled, 'ratelimited')
+  } finally {
+    if (oldCapacity === undefined) delete process.env.QQHUB_RL_CAPACITY
+    else process.env.QQHUB_RL_CAPACITY = oldCapacity
+    if (oldRefill === undefined) delete process.env.QQHUB_RL_REFILL_PER_SEC
+    else process.env.QQHUB_RL_REFILL_PER_SEC = oldRefill
+    await core.dispose(); await mock.close()
+  }
+})
+
 test('purpose 备忘格式污染：普通回合发送与 bot 流水都只保留人话', async () => {
   const chats = []
   const { core, mock } = await fixture({
