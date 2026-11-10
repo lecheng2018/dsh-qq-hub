@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.3.65-test.20261110.10
+
+- 将 purpose 内部备忘剥离下沉到 `chat/reply.js` 的共享 `stripInternalMemo`，所有模型回复在分条前统一过滤，不再只有 purpose 模块自己清洗。
+- 修复 purpose 与普通聊天共用 DSH 会话后，普通回复模仿并外发【目的】【需求】【状态】等结构化备忘的问题。
+- legacy 与新核心的 bot 流水同步只记录过滤后的正文，避免新增污染记忆整理和蒸馏素材。
+- purpose 的 `parsePurposeMemo` 与状态推进保持原样；历史已存在的流水不做数据改写。
+
+---
+
 ## 1.3.65-test.20261110.9
 
 - 新增 ESLint 静态门禁：`no-undef` 直接失败，`no-use-before-define` 与 `no-empty` 输出告警；Verify 和 Release 均先执行 `npm run lint`。
