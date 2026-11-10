@@ -39,6 +39,7 @@ import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
 import { readInboundFiles, inboundFileBlocks } from '../chat/inbound-files.js'
+import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 
 /**
  * 语音段转文字：本地 ASR 优先，网关 fetch_ptt_text 兜底；
@@ -271,6 +272,12 @@ export function createModularCore({
   function prefetchGroupNames() {
     const ids = (() => { try { return (getConfig().allow?.groups || []).map(String) } catch { return [] } })()
     Promise.resolve().then(async () => { for (const gid of ids) await groupNameOf(gid) }).catch(() => {})
+  }
+
+  const inboundRateLimit = createRatelimitMiddleware({ ...ratelimitOptionsFromEnv() })
+  function rateAllowed(inbound) {
+    const key = `${inbound.chatKey}:${String(inbound?.sender?.userId || '')}`
+    try { return inboundRateLimit.take(key) } catch { return true }
   }
 
   // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
@@ -724,6 +731,7 @@ export function createModularCore({
   }
   const controller = createTurnController({
     log,
+    maxQueue: Math.max(1, Number(process.env.QQHUB_MAX_QUEUE) || 50),
     merge: {
       waitMs: Number(getConfig().merge?.waitSec * 1000) || 2500,
       maxMs: Number(getConfig().merge?.maxSec * 1000) || 8000,
@@ -1153,6 +1161,10 @@ export function createModularCore({
       let muted = false
       try { muted = !!isMuted(inbound.chatKey) } catch {}
       if (muted) return { handled: 'muted' }
+    }
+    if (!rateAllowed(inbound)) {
+      debug(`入站限流：${inbound.chatKey} 用户 ${String(inbound?.sender?.userId || '')} 消息未进入回合`)
+      return { handled: 'ratelimited' }
     }
     const inGroup = inbound.chatKey.startsWith('group:')
     const text = textOfSegments(inbound.segments)

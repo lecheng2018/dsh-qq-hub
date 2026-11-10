@@ -245,7 +245,7 @@ test('模块设置里的密码不回传给面板', async () => {
 test('联动：开放接口要密钥，只能发给白名单，能调模块', async () => {
   assert.equal((await fake.call('/open/info')).json().ok, false)
   await fake.call('/save', { bridge: { http: true } })
-  const token = (await fake.call('/bridge/token')).json().token
+  const token = api.bridge.ensureToken()
   assert.match(token, /^ab_/)
   const h = { authorization: 'Bearer ' + token }
   assert.equal((await fake.call('/open/info', null, { authorization: 'Bearer wrong' })).json().ok, false)
@@ -414,7 +414,9 @@ test('#3 表情：从 QQ 收藏导入（已有的跳过、不再往 QQ 里加一
 
 test('#3 控制台密码：不合格的不会只改配置；主人设的密码要真的去 SnowLuma 改', async () => {
   const before = api.getConfig().snowluma.webuiPassword
-  const r = (await fake.call('/save', { snowluma: { webuiPassword: 'weak' } })).json()
+  const token = api.bridge.ensureToken()
+  const headers = { 'x-qq-hub-token': token }
+  const r = (await fake.call('/save', { snowluma: { webuiPassword: 'weak' } }, headers)).json()
   assert.equal(r.ok, false)
   assert.match(r.message, /控制台密码没改.*至少 10 位/)
   assert.equal(api.getConfig().snowluma.webuiPassword, before)
@@ -422,7 +424,7 @@ test('#3 控制台密码：不合格的不会只改配置；主人设的密码�
   assert.deepEqual(passwordProblems('Abcdefgh1!'), [])
   assert.deepEqual(passwordProblems('abc def'), ['至少 10 位', '要有大写字母', '要有符号（比如 ! @ #）', '不能有空格'])
   // 这台测试机没装 SnowLuma：好密码也改不了，会说清原因，配置不动
-  const g = (await fake.call('/save', { snowluma: { webuiPassword: 'Abcdefgh1!' } })).json()
+  const g = (await fake.call('/save', { snowluma: { webuiPassword: 'Abcdefgh1!' } }, headers)).json()
   assert.equal(g.ok, false)
   assert.equal(api.getConfig().snowluma.webuiPassword, before)
 })

@@ -6,8 +6,8 @@ import { commandList } from '../../chat/commands.js'
 import { createUpdateChecker, changelogSection } from '../../core/update.js'
 
 export function registerGatewayRoutes({
-  route, readBody, query,
-  getConfig, setConfig,
+  route, readBody, query, send,
+  getConfig, setConfig, bridge,
   snowluma, onebot, gatewayState, hub,
   connectionProblem, overview, resetConsent,
   getMods, log,
@@ -42,10 +42,16 @@ export function registerGatewayRoutes({
     resetConsent()
     return snowluma.consent(b.version)
   })
-  route('/snowluma/reset-password', async () => snowluma.resetPassword())
-  // 控制台密码：看一眼（打开 SnowLuma 自己的控制台要用）、自己设一个
-  route('/snowluma/password', async () => ({ ok: true, password: snowluma.password(), auto: getConfig().snowluma.passwordAuto }))
-  route('/snowluma/set-password', async (req) => snowluma.setPassword(String((await readBody(req)).password || '')))
+  route('/snowluma/reset-password', async (req, res) => {
+    if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
+    return snowluma.resetPassword()
+  })
+  // 控制台密码只显示托管状态；明文只能到本机配置文件查看
+  route('/snowluma/password', async () => ({ ok: true, configured: Boolean(getConfig().snowluma.webuiPassword), auto: getConfig().snowluma.passwordAuto }))
+  route('/snowluma/set-password', async (req, res) => {
+    if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
+    return snowluma.setPassword(String((await readBody(req)).password || ''))
+  })
   route('/setup/done', async (req) => {
     const body = await readBody(req)
     const cfg = getConfig()
