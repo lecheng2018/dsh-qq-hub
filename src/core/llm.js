@@ -176,6 +176,26 @@ async function runStream (llm, params) {
   return out.trim()
 }
 
+export async function withAbortTimeout(run, timeoutMs = 120_000, label = '模型请求') {
+  const ms = Math.max(1, Number(timeoutMs) || 120_000)
+  const controller = new AbortController()
+  let timer = null
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label}超过 ${Math.ceil(ms / 1000)} 秒，已中止`)
+      error.turnTimedOut = true
+      controller.abort(error)
+      reject(error)
+    }, ms)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([Promise.resolve().then(() => run(controller.signal)), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /**
  * 主模型看不了图时，请辅助视觉模型「看一眼」，返回一段文字描述。
  * 没配 / 关着 / 调用失败都返回空串，绝不抛——调用方据此退回纯文字。

@@ -15,7 +15,7 @@
 // 底卡正文与安全规则不可被蒸馏修改；数据全程本地。
 
 import { readJson, writeJson } from '../../core/store.js'
-import { askModel } from '../../core/llm.js'
+import { askModel, withAbortTimeout } from '../../core/llm.js'
 import { collectMemberLines, enoughEvidence, dedupConvo } from '../../features/distill.js'
 import {
   behaviorStats, renderBehaviorDigest, buildL1Prompt, parseL1, buildL2Prompt, parseL2,
@@ -40,6 +40,7 @@ export function createDistillEngine({
 }) {
   let state = loadState() || {}
   const pendingL1 = new Set()
+  const retryL1After = new Map()
 
   const pipeOf = (key) => state[key] || EMPTY
   function putPipe(key, patch) {
@@ -54,15 +55,22 @@ export function createDistillEngine({
       enabled: cfg.enabled !== false && cfg.memory?.distill !== false && cfg.memory?.distillPipeline !== false,
       threshold: Math.max(5, Number(cfg.memory?.distillBatch) || 10),
       model: cfg.memory?.distillModel || { provider: '', model: '' },
+      timeoutMs: Math.max(1, Number(cfg.memory?.distillTimeoutMs) || 120_000),
+      retryMs: Math.max(0, Number(cfg.memory?.distillRetryMs ?? 300_000) || 0),
     }
   }
 
   /** 蒸馏用模型调用：distillModel 配了就走它（小成本），留空跟随主模型。 */
   async function askDistillModel(prompt, maxTokens = 1200) {
     const cfg = config() || {}
-    const model = distillCfg().model || {}
+    const dc = distillCfg()
+    const model = dc.model || {}
     const merged = { ...cfg, model: { ...(cfg.model || {}), ...model } }
-    return askModelImpl(dsh, { cfg: merged, ...prompt, maxTokens, temperature: 0.3 })
+    return withAbortTimeout(
+      (signal) => askModelImpl(dsh, { cfg: merged, ...prompt, maxTokens, temperature: 0.3, signal }),
+      dc.timeoutMs,
+      '蒸馏请求',
+    )
   }
 
   /** L0 计数入口：目标对象在群里说话才计数；攒够一批触发后台 L1（不阻塞）。 */
@@ -81,12 +89,17 @@ export function createDistillEngine({
     const newCount = (p.newCount || 0) + 1
     putPipe(key, { newCount, samples: [...(p.samples || []), Number(t) || now()].slice(-400) })
     if (!shouldTriggerL1({ newCount, lastL1At: p.lastL1At }, { threshold: dc.threshold, now: now() })) return
+    if (now() < Number(retryL1After.get(key) || 0)) return
     putPipe(key, { newCount: 0 })
     if (pendingL1.has(key)) return
     pendingL1.add(key)
     Promise.resolve()
       .then(() => runL1(gid, u, target))
-      .catch((error) => log.warn?.(`蒸馏L1（${target.name || u}）失败：`, error.message))
+      .then(() => retryL1After.delete(key))
+      .catch((error) => {
+        retryL1After.set(key, now() + dc.retryMs)
+        log.warn?.(`蒸馏L1（${target.name || u}）失败：`, error.message)
+      })
       .finally(() => pendingL1.delete(key))
   }
 

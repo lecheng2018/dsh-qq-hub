@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1528 pass / 0 fail / 4 skip（共 1532） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1531 pass / 0 fail / 4 skip（共 1535） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -105,3 +105,10 @@
 - 模型失败记录 lastAttemptAt、lastError、failures、nextAttemptAt，按 30 秒/1 分钟/5 分钟/15 分钟/30 分钟退避；成功清零。lastCompactAt 仍只表示成功压缩。
 - chars 只保存真实字符数，estimate 是唯一 token 换算点；面板增加压缩中、失败原因和下次重试时间。
 - 新增 `token-guardian-recovery.test.js` 四项行为回归，与既有 token-guardian 套件合计 27/27。真机需复核挂起后解锁、失败退避和再次成功压缩。
+
+## 后台任务生命周期修复（2026-11-10 晚）
+
+- 启发式自检动态探针证实：`hub.isBusy(chatId)` 位于 `let chatId` 之前，TDZ 异常被空 catch 吞掉，busyChecks=0 且仍调用模型。现将判断移到 chatId 计算后，并新增忙时零模型调用回归。
+- token-guardian 记录在途 AbortController，dispose 统一 abort；doCompact 在入口、异常和模型返回后检查 disposed，旧请求不再 reset、写摘要或记失败。
+- 新增 `withAbortTimeout`，distill 模型请求默认 120 秒超时，L1 失败退避 5 分钟并释放 pendingL1，后续批次可恢复。
+- 定向回归：distill/token-guardian 32/32。主回合 followup 只停止等待的既有边界保持不变。
