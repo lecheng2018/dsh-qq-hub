@@ -155,9 +155,13 @@ function aclMsgFromInbound(inbound) {
 
 /** 段列表 → 纯文本（身份闸用；同 legacy sendSegments 的取词）。 */
 function textOfSegments(segments) {
-  return (Array.isArray(segments) ? segments : [])
-    .filter((s) => s && s.type === 'text')
-    .map((s) => String(s?.data?.text || '')).join('')
+  return (Array.isArray(segments) ? segments : []).map((s) => {
+    if (s?.type === 'text') return String(s?.data?.text || '')
+    if (s?.type === 'file') return `[文件 ${s.data?.file_name || s.data?.name || s.data?.file || '未命名'}]`
+    if (s?.type === 'record') return '[语音]'
+    if (s?.type === 'video') return '[视频]'
+    return ''
+  }).join('')
 }
 
 /** 入站 → 模块中枢 activity 事件（等价 legacy hub.js:1583 那一发）。
@@ -583,6 +587,7 @@ export function createModularCore({
     const quotes = []
     for (const m of members) for (const s of (m?.segments ?? [])) {
       if (s?.type === 'image' || s?.type === 'mface') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
+      else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: String(s.data.text || '') })
       else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
       else if (s?.type === 'json') extras.push({ type: 'text', text: cardText(s.data?.data) })
       else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
@@ -700,7 +705,7 @@ export function createModularCore({
         ...member,
         segments: [
           ...(member.segments || []).filter((segment) => segment?.type !== 'file'),
-          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: block.text } })),
+          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: block.text, inboundFile: true } })),
         ],
       })
     }
@@ -734,7 +739,7 @@ export function createModularCore({
       const heard = await hydrateRecords(expanded, onebot, log, localApi)
       const heardWithFiles = await hydrateInboundFiles(heard, turn.chatKey)
       if (inGroup) {
-        for (const member of heardWithFiles) {
+        for (const member of heard) {
           const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
           if (hit) hit.text = textOfSegments(member.segments)
         }
