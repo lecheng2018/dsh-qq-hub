@@ -645,6 +645,23 @@ test('回合超时：提示用户且不立即归档；下一条消息重建，�
   }
 })
 
+test('purpose 备忘格式污染：普通回合发送与 bot 流水都只保留人话', async () => {
+  const chats = []
+  const { core, mock } = await fixture({
+    brain: async () => '这是正常回复\n【目的】邀请主人玩游戏\n【需求】玩\n【状态】完成\n【待续】无',
+    coreOver: { logChat: (...args) => chats.push(args) },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    const sent = mock.sent('send_private_msg').map((call) => JSON.stringify(call.params.message)).join('\n')
+    assert.match(sent, /这是正常回复/)
+    assert.doesNotMatch(sent, /【目的】|【需求】|【状态】|【待续】/)
+    const bot = chats.find((row) => row[1] === 'bot')
+    assert.equal(bot?.[2], '这是正常回复')
+  } finally { await core.dispose(); await mock.close() }
+})
+
 test('JSON/XML 卡片：新核心保留分享标题和链接，不只给模型类型占位', async () => {
   const { core, dsh, mock } = await fixture()
   try {
