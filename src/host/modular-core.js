@@ -277,6 +277,7 @@ export function createModularCore({
   const groups = createGroupState()
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
+  const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const moodChatty = () => {
     try {
@@ -711,6 +712,16 @@ export function createModularCore({
     }
     return out
   }
+  function handleTurnTimeout(chatKey, timeoutMs, { notify = true } = {}) {
+    timedOutChats.add(chatKey)
+    const minutes = Math.max(1, Math.ceil(timeoutMs / 60000))
+    log.warn(`回合超过 ${minutes} 分钟未结束：${chatKey}；已释放等待，下一条消息将新建会话`)
+    if (!notify) return
+    Promise.resolve(outbox.request({
+      chatKey, sourceModuleId: 'core',
+      segments: [{ type: 'text', data: { text: `刚才的回复超过 ${minutes} 分钟还没完成，我先停止等待了，这条旧回复不会再补发。你发下一条消息时我会重新开始。` } }],
+    })).catch((error) => debug(`回合超时提示没发出去：${error?.message || error}`))
+  }
   const controller = createTurnController({
     log,
     merge: {
@@ -720,6 +731,7 @@ export function createModularCore({
       groupMaxMs: Number(getConfig().merge?.groupMaxSec * 1000) || 15000,
     },
     execute: async (turn, io) => {
+      if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
       // 1. 装配上下文（persona + 模块 provider；chat 视图透传给 legacy provider 契约）
@@ -959,7 +971,7 @@ export function createModularCore({
         steeringChats.delete(turn.chatKey)
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
         stopTyping()
-        if (followupError.turnTimedOut) resetChat(turn.chatKey)
+        if (followupError.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
       followupDone = true
@@ -975,7 +987,7 @@ export function createModularCore({
         steeringChats.delete(turn.chatKey)
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
-        if (error.turnTimedOut) resetChat(turn.chatKey)
+        if (error.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
         throw error
       }
 
@@ -1231,6 +1243,7 @@ export function createModularCore({
   /** 主动任务共用一个 QQ/DSH 会话，只生成文本，不在这里自动投递（调用方仍走统一 Outbox）。 */
   async function runPromptTurn(chatKey, text) {
     return controller.runExclusive(chatKey, async () => {
+      if (timedOutChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await registry.sessionFor(chatKey)
       const ctrl = ctxGet('sessionController')
       const resolved = await ctrl?.resolveAgent?.(sessionId)
@@ -1273,7 +1286,7 @@ export function createModularCore({
         return await Promise.race([result, timeout])
       } catch (error) {
         cleanup()
-        if (error.turnTimedOut) resetChat(chatKey)
+        if (error.turnTimedOut) handleTurnTimeout(chatKey, timeoutMs, { notify: false })
         throw error
       } finally {
         if (timer) clearTimeout(timer)
