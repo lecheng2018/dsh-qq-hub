@@ -112,6 +112,15 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
           rec.recoveredAt = Date.now()
           recovered = true
         }
+        if (rec.state === 'sent' || rec.state === 'cancelled') {
+          const audit = auditSegments(rec.segments)
+          if (rec.contentChars === undefined) rec.contentChars = audit.contentChars
+          if (audit.contentTruncated) {
+            rec.segments = audit.segments
+            rec.contentTruncated = true
+            recovered = true
+          }
+        }
         records.set(String(rec.deliveryId), rec)
       }
       if (recovered) persist()

@@ -399,6 +399,28 @@ test('ledger：enqueue 只保留 2KB 审计摘要，真实消息仍完整发送'
   }
 })
 
+test('ledger：加载时立即裁剪历史 sent/cancelled 长文，unknown/failed 仍保留全文', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-load-cap-'))
+  const file = join(dir, 'deliveries.json')
+  const long = '长'.repeat(5000)
+  const base = { contractVersion: 1, chatKey: 'private:1', sourceModuleId: 'core', attemptCount: 1, createdAt: Date.now(), segments: segs(long) }
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, deliveries: [
+      { ...base, deliveryId: 'recent-sent', state: 'sent', gatewayMessageId: 'gw-1' },
+      { ...base, deliveryId: 'recent-unknown', state: 'unknown' },
+    ] }))
+    const book = createDeliveryLedger({ file })
+    assert.equal(book.get('recent-sent').segments[0].data.text.length, 2048)
+    assert.equal(book.get('recent-sent').contentChars, long.length)
+    assert.equal(book.get('recent-unknown').segments[0].data.text.length, long.length)
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    assert.equal(saved.deliveries.find((item) => item.deliveryId === 'recent-sent').segments[0].data.text.length, 2048)
+    assert.equal(saved.deliveries.find((item) => item.deliveryId === 'recent-unknown').segments[0].data.text.length, long.length)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('ledger：超过七天的 sent/cancelled 裁正文，元数据保留；unknown/failed 永不裁', () => {
   const dir = mkdtempSync(join(tmpdir(), 'm2d-retention-'))
   const file = join(dir, 'deliveries.json')
