@@ -46,10 +46,20 @@ export function registerMiscRoutes({
     }
   })
 
-  // 联动
-  route('/bridge/token', async () => ({ ok: true, token: getConfig().bridge.http ? bridge.ensureToken() : '' }))
-  route('/bridge/token/reset', async () => ({ ok: true, token: bridge.resetToken(), message: '换了新密钥，旧的立刻失效' }))
-  route('/bridge/examples', async (req) => ({ ok: true, ...bridge.examples(String(query(req).base || 'http://127.0.0.1:端口')) }))
+  // 联动密钥只显示配置状态，不通过面板 API 回显、生成或重置
+  route('/bridge/token', async () => ({ ok: true, configured: Boolean(getConfig().bridge.token) }))
+  route('/bridge/token/reset', async (req, res) => {
+    if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
+    bridge.resetToken()
+    return { ok: true, message: '换了新密钥，旧的立刻失效；请到本机配置文件查看' }
+  })
+  route('/bridge/examples', async (req) => {
+    const base = String(query(req).base || 'http://127.0.0.1:端口')
+    const examples = bridge.examples(base)
+    const token = getConfig().bridge.token
+    if (!token) return { ok: true, ...examples }
+    return JSON.parse(JSON.stringify(examples).replaceAll(token, '<密钥>'))
+  })
   // 开放接口：都要带密钥
   const open = (path, fn) => route('/open' + path, async (req) => {
     if (!bridge.authorized(req)) return { ok: false, code: 401, message: getConfig().bridge.http ? '密钥不对（请求头 Authorization: Bearer 密钥）' : '开放接口没打开（面板「扩展」→ 联动）' }

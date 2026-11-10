@@ -4,10 +4,11 @@
 // 不同 chatKey 互不阻塞。异常/完成都会唤醒队列（无空档）。
 // dispose：清空排队（以 dispose 错误唤醒）+ 等待在飞 job 落定。
 
-export function createTurnScheduler() {
+export function createTurnScheduler({ maxQueue = 50 } = {}) {
   /** chatKey -> { running: Promise|null, queue: [ {job, resolve, reject} ] } */
   const lanes = new Map()
   let disposed = false
+  const limit = Math.max(1, Math.floor(Number(maxQueue) || 50))
 
   function lane(chatKey) {
     let l = lanes.get(chatKey)
@@ -48,6 +49,7 @@ export function createTurnScheduler() {
     if (disposed) return Promise.reject(new Error('scheduler 已卸载'))
     if (typeof job !== 'function') return Promise.reject(new TypeError('job 必须是函数'))
     const l = lane(chatKey)
+    if (l.queue.length >= limit) return Promise.reject(new Error(`queue full: ${chatKey} 排队已达到 ${limit} 个任务`))
     return new Promise((resolve, reject) => {
       l.queue.push({ job, resolve, reject })
       pump(chatKey)

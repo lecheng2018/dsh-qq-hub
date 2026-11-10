@@ -16,6 +16,26 @@ const LEDGER_VERSION = 1
 const STATES = new Set(['queued', 'sending', 'sent', 'failed', 'unknown', 'cancelled'])
 const CONTENT_RETENTION_MS = 7 * 86400_000
 const CONTENT_KEEP_CHARS = 200
+const ENQUEUE_CONTENT_KEEP_CHARS = 2048
+
+function auditSegments(input) {
+  const segments = (input ?? []).map((s) => ({ type: String(s?.type ?? ''), data: { ...(s?.data ?? {}) } }))
+  let contentChars = 0
+  let remaining = ENQUEUE_CONTENT_KEEP_CHARS
+  let contentTruncated = false
+  for (const seg of segments) {
+    if (seg.type !== 'text' || typeof seg.data.text !== 'string') continue
+    const text = seg.data.text
+    contentChars += text.length
+    const kept = text.slice(0, Math.max(0, remaining))
+    remaining -= kept.length
+    if (kept.length !== text.length) {
+      seg.data.text = kept
+      contentTruncated = true
+    }
+  }
+  return { segments, contentChars, contentTruncated }
+}
 
 function trimTerminalContent(rec, now) {
   if (!['sent', 'cancelled'].includes(rec.state) || rec.contentTruncated) return rec
@@ -133,6 +153,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
     if (records.has(String(deliveryId))) {
       throw new Error(`deliveryId 重复：${deliveryId}（已存在记录，不覆盖）`)
     }
+    const audit = auditSegments(segments)
     const record = {
       contractVersion: CONTRACT_VERSION,
       deliveryId: String(deliveryId),
@@ -141,7 +162,9 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
       sourceModuleId: String(sourceModuleId || 'core'),
       state: 'queued',
       attemptCount: 0,
-      segments: (segments ?? []).map((s) => ({ type: String(s?.type ?? ''), data: { ...(s?.data ?? {}) } })),
+      segments: audit.segments,
+      contentChars: audit.contentChars,
+      ...(audit.contentTruncated ? { contentTruncated: true } : {}),
       // PR-1 直通投递：审计可读的备注与动作名（msg 模式 action 缺省 = send_*_msg 由 chatKey 推）
       ...(note ? { note: String(note) } : {}),
       ...(action ? { action: String(action) } : {}),
