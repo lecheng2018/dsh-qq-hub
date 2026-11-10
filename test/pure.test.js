@@ -13,6 +13,14 @@ test('parseReply 拆 ||| 成多条', () => {
   assert.deepEqual(r.items.map((x) => x.value), ['在呢', '刚睡醒 嗯…', '你呢'])
 })
 
+test('parseReply 剥离 purpose 内部备忘，不污染普通回复', () => {
+  const r = parseReply('这是正常回复\n【目的】邀请主人玩游戏\n【需求】玩\n【状态】完成\n【待续】无')
+  assert.equal(r.silent, false)
+  assert.deepEqual(r.items.map((x) => x.value), ['这是正常回复'])
+  const onlyMemo = parseReply('【目的】无\n【状态】跳过')
+  assert.equal(onlyMemo.silent, true)
+})
+
 test('parseReply 识别语音和表情标记', () => {
   const r = parseReply('哼 谁要你夸 <sticker:卖萌>|||<voice>晚安啦</voice>')
   assert.deepEqual(r.items, [
