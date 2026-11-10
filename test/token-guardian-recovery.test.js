@@ -17,12 +17,13 @@ async function until(fn, timeout = 500) {
 }
 let seq = 0
 
-async function boot({ ask, cfgOver = {}, withIntervals = false } = {}) {
+async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false } = {}) {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'tg-recovery-'))
   const mod = (await import(`../src/modules/token-guardian/index.js?recovery=${seq++}`)).default
   const routes = {}
   const handlers = {}
   const intervals = []
+  const disposers = []
   const originalInterval = globalThis.setInterval
   if (withIntervals) {
     globalThis.setInterval = (fn) => {
@@ -31,13 +32,15 @@ async function boot({ ask, cfgOver = {}, withIntervals = false } = {}) {
     }
   }
   const chatId = 'group:1'
+  let busyChecks = 0
+  let resetCalls = 0
   const api = {
     dataDir: (...parts) => join(process.env.AURABOT_DATA_DIR, ...parts),
     settings: () => ({ enabled: true, threshold: 1, idleSeconds: 0, cooldownMinutes: 120, summaryMaxChars: 1200, askTimeoutSeconds: 0.05, ...cfgOver }),
     log: { info() {}, warn() {}, debug() {}, error() {} },
     route: (path, fn) => { routes[path] = fn },
     on: (name, fn) => { (handlers[name] ||= []).push(fn) },
-    context() {}, rule() {}, tool() {}, emit() {}, onDispose() {},
+    context() {}, rule() {}, tool() {}, emit() {}, onDispose: (fn) => disposers.push(fn),
     defineTool: (value) => value,
     ask,
     core: {
@@ -45,15 +48,15 @@ async function boot({ ask, cfgOver = {}, withIntervals = false } = {}) {
       hub: {
         chatLogDays: () => ['2026-11-10'],
         chatLogOf: () => [{ chatId, who: 'user', text: '需要压缩的聊天正文' }],
-        resetChat: () => true,
+        resetChat: () => { resetCalls++; return true },
         logChat() {},
-        isBusy: () => false,
+        isBusy: () => { busyChecks++; return busy },
       },
     },
   }
   let out
   try { out = mod.setup(api) } finally { if (withIntervals) globalThis.setInterval = originalInterval }
-  return { out, routes, handlers, intervals, chatId }
+  return { out, routes, handlers, intervals, disposers, chatId, busyChecks: () => busyChecks, resetCalls: () => resetCalls }
 }
 
 test('压缩请求超时：中止模型流、释放锁并留下可诊断状态', async () => {
@@ -118,6 +121,40 @@ test('压缩成功后 chars 仍保存真实字符数，不预先乘 token 系数
   assert.equal(out.estimate(st.chars), Math.round('四字节吗'.length * 1.4))
   assert.equal(st.failures, 0)
   assert.equal(st.lastError, '')
+})
+
+test('忙时不压缩：isBusy 真正被调用，模型请求不得发起', async () => {
+  let calls = 0
+  const { handlers, intervals, busyChecks, chatId } = await boot({
+    withIntervals: true, busy: true,
+    ask: async () => { calls++; return '不应生成' },
+  })
+  for (const fn of handlers.activity || []) fn({ kind: 'in', chatId, text: '正文' })
+  intervals[0]()
+  await sleep(30)
+  assert.equal(busyChecks(), 1)
+  assert.equal(calls, 0)
+})
+
+test('dispose：中止在途压缩，旧请求不得 reset 或写失败状态', async () => {
+  let signal
+  let calls = 0
+  const { out, disposers, resetCalls, chatId } = await boot({
+    ask: async (opts) => { calls++; signal = opts.signal; return await new Promise(() => {}) },
+  })
+  const pending = out.compact(chatId, { chatId })
+  await until(() => calls === 1)
+  assert.equal(disposers.length, 1)
+  disposers[0]()
+  const result = await Promise.race([
+    pending,
+    sleep(500).then(() => { throw new Error('dispose 后压缩仍未落定') }),
+  ])
+  assert.equal(result.reason, 'disposed')
+  assert.equal(signal?.aborted, true)
+  assert.equal(resetCalls(), 0)
+  assert.equal(out.state()[chatId]?.failures || 0, 0)
+  assert.equal(out.summaries()[chatId], undefined)
 })
 
 test('askModel 把调用方 signal 传给 DSH llm.stream', async () => {
