@@ -7,63 +7,41 @@
 // 损坏记录跳过并上报，绝不写回旧文件（不自动反向迁移新数据，回滚时旧路径照常用旧文件）。
 
 import fs from 'node:fs'
-import path from 'node:path'
+import { readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { parseChatKey } from './chat-key.js'
 
 const STORE_VERSION = 1
 
-/** 原子写 JSON（tmp + rename，Windows EPERM 微重试）。 */
-function writeJsonAtomic(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8')
-  for (let i = 0; ; i++) {
-    try {
-      fs.renameSync(tmp, file)
-      return
-    } catch (error) {
-      if (i >= 3 || (error.code !== 'EPERM' && error.code !== 'EBUSY')) throw error
-      const end = Date.now() + 25
-      while (Date.now() < end) { /* 让出一步再试 */ }
-    }
-  }
+function validSessionDocument(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value)
+    && (value.version === undefined || value.version === STORE_VERSION)
+    && value.chats && typeof value.chats === 'object' && !Array.isArray(value.chats))
 }
 
 /**
  * JSON 文件存储。
  * @param {object} o
  * @param {string} o.file 存储文件路径
+ * @param {(error: Error) => void} [o.onError] 恢复与损坏告警
  */
-export function createSessionFileStore({ file }) {
+export function createSessionFileStore({ file, onError = (error) => console.warn(error.message) }) {
   if (!file) throw new TypeError('file 必填')
+  const options = { validate: validSessionDocument, label: 'session 映射', onError }
   return {
-    /** 读全量映射；文件缺失 = {}；损坏 = 抛错（registry 失败关闭为空映射）。 */
+    /** 读全量映射；无法恢复时抛错，由 registry 告警并以空映射启动。 */
     load() {
-      let raw
-      try {
-        raw = fs.readFileSync(file, 'utf8')
-      } catch (error) {
-        if (error?.code === 'ENOENT') return {}
-        throw error
-      }
-      const parsed = JSON.parse(raw)
-      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.chats)) {
-        // 旧版兼容：数组形态视为空（不会 happen 于 v1，防御性拒绝）
-        return {}
-      }
-      const chats = parsed?.chats
-      if (!chats || typeof chats !== 'object' || Array.isArray(chats)) {
-        throw new TypeError('session store 格式不对（缺 chats 对象）')
-      }
+      const result = readJsonWithBackup(file, { ...options, fallback: () => ({ version: STORE_VERSION, chats: {} }) })
+      if (result.error) throw result.error
       const out = {}
-      for (const [k, v] of Object.entries(chats)) {
-        if (v && typeof v === 'object' && v.sessionId) out[k] = v
+      for (const [k, v] of Object.entries(result.value.chats)) {
+        if (v && typeof v === 'object' && !Array.isArray(v) && v.sessionId) out[k] = v
+        else onError(new Error(`session 映射 ${file} 中的记录 ${k} 无效，已跳过`))
       }
       return out
     },
-    /** 原子写全量映射。 */
+    /** 原子写全量映射及备份。 */
     save(snapshot) {
-      writeJsonAtomic(file, { version: STORE_VERSION, savedAt: Date.now(), chats: snapshot ?? {} })
+      writeJsonWithBackup(file, { version: STORE_VERSION, savedAt: Date.now(), chats: snapshot ?? {} }, options)
     },
   }
 }

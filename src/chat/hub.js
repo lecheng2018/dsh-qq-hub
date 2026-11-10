@@ -626,7 +626,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     if (eg) {
       const eAction = tgt.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
       const eParams = tgt.kind === 'group' ? { group_id: Number(tgt.id), message } : { user_id: Number(tgt.id), message }
-      const eDeliver = () => eg.deliver({ action: eAction, params: eParams, chatKey: chatId, receipt: 'required', note, sourceModuleId: 'hub', force })
+      const eDeliver = () => eg.deliver({ action: eAction, params: eParams, chatKey: chatId, receipt: 'required', note, sourceModuleId: 'hub', force, _outboxTicket: deliveryContext.getStore()?.ticket })
       try {
         const eGr = tgt.kind === 'group' ? await groupQuota.send(tgt.id, eDeliver) : { ok: true, result: await eDeliver() }
         if (!eGr.ok) {
@@ -698,7 +698,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   const mention = (userId, segs = []) => (userId && !segs.some((s) => s.type === 'at' && String(s.data?.qq) === String(userId)) ? [{ type: 'at', data: { qq: String(userId) } }, { type: 'text', data: { text: ' ' } }] : [])
 
-  async function sendText(chatId, text, replyId, missed, userId) {
+  async function textSegments(chatId, text, missed) {
     // 文字里的 <face:名字> 换成 QQ 系统表情，和文字在同一条消息里；系统表情关着就去掉标签
     let body = text
     if (getConfig().stickers.faces) {
@@ -706,16 +706,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const d = dedupeFaces(body, interaction.facesUsed(chatId))
       if (d.text !== body) {
         body = d.text
-        if (!body) return null
+        if (!body) return { body, segs: [] }
       }
       interaction.rememberFaces(chatId, d.used)
     }
     let segs = getConfig().stickers.faces ? textToSegments(body, faces.idOf) : [{ type: 'text', data: { text: stripFaceTags(body) } }]
-    text = body
     // 群里的 @名字 / <at:QQ号> 换成真 @（对方会收到提醒）
-    if (chatId.startsWith('group:') && hasMention(text)) segs = expandMentions(segs, await membersOf(chatId.slice(6)), missed)
-    if (!segs.length || (segs.length === 1 && segs[0].type === 'text' && !segs[0].data.text.trim())) return null
-    return sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], (replyId ? '[引用] ' : '') + text.slice(0, 60))
+    if (chatId.startsWith('group:') && hasMention(body)) segs = expandMentions(segs, await membersOf(chatId.slice(6)), missed)
+    if (!segs.length || (segs.length === 1 && segs[0].type === 'text' && !segs[0].data.text.trim())) segs = []
+    return { body, segs }
+  }
+
+  async function sendText(chatId, text, replyId, missed, userId) {
+    const { body, segs } = await textSegments(chatId, text, missed)
+    if (!segs.length) return null
+    return sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], (replyId ? '[引用] ' : '') + body.slice(0, 60))
   }
 
   async function sendVoice(chatId, text, replyId, userId) {
@@ -898,8 +903,56 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
+  async function sendMixed(chatId, parts, replyId, missed, userId) {
+    const segs = []
+    const used = []
+    for (const part of parts) {
+      if (part.kind === 'text') {
+        const prepared = await textSegments(chatId, part.value, missed)
+        segs.push(...prepared.segs)
+      } else if (part.kind === 'image') {
+        try {
+          const buf = await fetchImage(part.value, { maxBytes: 10 * 1024 * 1024, allowLocal: true })
+          segs.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } })
+        } catch (error) { log.warn('图片发不出去：', error.message) }
+      } else if (part.kind === 'voice') {
+        await sendVoice(chatId, part.value, part.replyTo, undefined)
+      } else if (part.kind === 'sticker' && getConfig().stickers.enabled) {
+        const item = part.value && typeof part.value === 'object' ? part.value : stickers.match(part.value)
+        const seg = item && stickers.segmentFor(item)
+        if (seg) { segs.push(seg); used.push(item) }
+      }
+    }
+    if (!segs.length) return null
+    const note = parts.map((part) => part.kind === 'text' ? part.value : `[${part.kind}]`).join(' ').slice(0, 60)
+    const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
+    for (const item of used) { stickers.markUsed?.(item.md5); bump('stickers') }
+    return result
+  }
+
+  const deliveryChains = new Map()
+  const deliveryContext = new AsyncLocalStorage()
+
   /** 一轮回复落地：拆条、语音、表情。 */
-  async function deliver(chatId, text, opts = {}) {
+  function deliver(chatId, text, opts = {}) {
+    if (opts.simulate || captureStore.getStore()) return deliverNow(chatId, text, opts)
+    const reservation = egressRef?.current?.outbox?.reserve?.(chatId) || null
+    const run = () => {
+      const context = { chatId, active: true, ticket: reservation?.ticket }
+      return deliveryContext.run(context, () => deliverNow(chatId, text, opts).finally(() => {
+        context.active = false
+        reservation?.release?.()
+      }))
+    }
+    const previous = deliveryChains.get(chatId)
+    const current = previous ? previous.catch(() => {}).then(run) : run()
+    deliveryChains.set(chatId, current)
+    const cleanup = () => { if (deliveryChains.get(chatId) === current) deliveryChains.delete(chatId) }
+    current.then(cleanup, cleanup)
+    return current
+  }
+
+  async function deliverNow(chatId, text, opts = {}) {
     const cfg = getConfig()
     if (hooks?.reply) {
       try {
@@ -911,14 +964,14 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       }
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
-    const rules = replyRules(cfg, chatId.startsWith('group:'))
+    const inGroup = chatId.startsWith('group:')
+    const rules = replyRules(cfg, inGroup)
     // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
     // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
     if (opts.forceReport || reportTurns.get(chatId)) rules.forceReport = true
-    // 只有一个判断分条的地方：规则。她怎么断（|||）写在提示词里，规则只负责认和收尾。
-    // 1.3.43 删掉了「多问一次模型挑断点」——那是第二个权威，会跟规则打架，
-    // 而且每次都要多等一次模型往返（免费中转一卡，整条回复跟着卡住发不出去）。
-    const r = parseReply(text, rules)
+    // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
+    const parseRules = inGroup ? { ...rules, maxBubbles: Number.MAX_SAFE_INTEGER } : rules
+    const r = parseReply(text, parseRules)
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groups.leaveTopic(chatId.slice(6)) // 不想聊就退出这个话题
@@ -936,27 +989,30 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       const all = texts.map((t) => t.value).join('，')
       if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance * mood().voice) items = [{ kind: 'voice', value: all }]
     }
-    const inGroup = chatId.startsWith('group:')
-    // 群里别刷屏：一段最多 3 条 —— 但**超出的部分不能丢**。
-    // 原来这里直接 slice(0,3)，第 4 条起静默消失（2026-11-04 真实事故：
-    // 她答「备用码」讲了四段，群里只出现第一段，用户看到的是「没回答完就停了」）。
-    // 现在把多出来的并进第 3 条，宁可这一条长一点，也不让话少一半。
-    if (inGroup && items.length > 3) {
-      // 文本合并成气泡，**非文本（表情/图片/戳）保留成独立 item**。
-      // 上一版把非文本也拼成了字符串（"× y [sticker]" 这种），结果表情变成
-      // 字面文本发到群里 —— 群里真的出现了「[sticker]」这三个字（2026-11-04 事故）。
+    const groupLimit = Math.max(1, Math.min(3, Number(rules.maxBubbles) || 3))
+    let needsGroupPacking = false
+    if (inGroup && items.length > groupLimit) {
       const nonText = items.filter((i) => i.kind !== 'text' && i.kind !== 'voice')
-      const texts = items.filter((i) => i.kind === 'text' || i.kind === 'voice').map((i) => String(i.value || '')).filter(Boolean)
-      // 非文本最多留 2 条（表情/图片本来就该是独立气泡），其余名额给文本
-      const keepNonText = nonText.slice(-2)
-      const textSlots = Math.max(1, 3 - keepNonText.length)
-      const mergedTexts = []
-      for (let i = 0; i < texts.length; i += 1) {
-        if (mergedTexts.length === textSlots - 1) { mergedTexts.push(texts.slice(i).join(' ')); break }
-        mergedTexts.push(texts[i])
+      const keepNonText = nonText.slice(-groupLimit)
+      const referenced = nonText.find((item) => item.replyTo)
+      if (referenced && !keepNonText.includes(referenced)) keepNonText[0] = referenced
+      items = items.filter((item) => item.kind === 'text' || item.kind === 'voice' || keepNonText.includes(item))
+      while (items.length > groupLimit) {
+        let mergeAt = -1
+        for (let i = items.length - 2; i >= 0; i--) {
+          const a = items[i]
+          const b = items[i + 1]
+          if (!['text', 'voice'].includes(a.kind) || a.kind !== b.kind || (a.replyTo && b.replyTo && a.replyTo !== b.replyTo)) continue
+          if (mergeAt < 0) mergeAt = i
+          if (!b.replyTo) { mergeAt = i; break }
+        }
+        if (mergeAt < 0) break
+        const a = items[mergeAt]
+        const b = items[mergeAt + 1]
+        items.splice(mergeAt, 2, { ...a, value: `${a.value} ${b.value}`, ...(a.replyTo || b.replyTo ? { replyTo: a.replyTo || b.replyTo } : {}) })
       }
-      items = [...mergedTexts.map((v) => ({ kind: 'text', value: v })), ...keepNonText]
-      log.info(`${chatId}：回复超过 3 条，合并成 ${mergedTexts.length} 条文字 + ${keepNonText.length} 条非文字（不丢内容，表情原样保留）`)
+      needsGroupPacking = items.length > groupLimit
+      log.info(`${chatId}：回复超过 ${groupLimit} 条，按原顺序合并相邻气泡`)
     }
     // 按概率补一张表情（群里已经有两条以上就不补了）
     if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
@@ -972,11 +1028,45 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         log.warn('扩展模块改写回复出错：', error.message)
       }
     }
+    if (needsGroupPacking && items.length > groupLimit) {
+      const packed = items.slice()
+      const packable = (item) => ['text', 'voice', 'image', 'sticker', 'mixed'].includes(item.kind)
+      while (packed.length > groupLimit) {
+        let mergeAt = -1
+        for (let i = packed.length - 2; i >= 0; i--) {
+          const a = packed[i]
+          const b = packed[i + 1]
+          if (packable(a) && packable(b) && !(a.replyTo && b.replyTo && a.replyTo !== b.replyTo)) { mergeAt = i; break }
+        }
+        if (mergeAt < 0) break
+        const a = packed[mergeAt]
+        const b = packed[mergeAt + 1]
+        const parts = [...(a.kind === 'mixed' ? a.parts : [a]), ...(b.kind === 'mixed' ? b.parts : [b])]
+        const replyTo = a.replyTo || b.replyTo
+        packed.splice(mergeAt, 2, { kind: 'mixed', parts, value: parts.filter((part) => part.kind === 'text').map((part) => part.value).join(' '), ...(replyTo ? { replyTo } : {}) })
+      }
+      if (packed.length <= groupLimit) items = packed
+      else {
+        log.warn(`${chatId}：语音或戳一戳与其他内容交错，无法在 3 条内保留全部类型和顺序，沿用旧合并策略`)
+        const nonText = items.filter((item) => item.kind !== 'text' && item.kind !== 'voice').slice(-2)
+        const textItems = items.filter((item) => item.kind === 'text' || item.kind === 'voice')
+        const slots = Math.max(1, 3 - nonText.length)
+        const merged = []
+        for (let i = 0; i < textItems.length; i++) {
+          const group = merged.length === slots - 1 ? textItems.slice(i) : [textItems[i]]
+          const replyTo = group.find((item) => item.replyTo)?.replyTo
+          merged.push({ kind: 'text', value: group.map((item) => item.value).join(' '), ...(replyTo ? { replyTo } : {}) })
+          if (group.length > 1) break
+        }
+        items = [...merged, ...nonText]
+      }
+    }
     // 一段只有一个人明确 @ / 引用她时，第一条回复引用并 @ 那个人；多人同时叫她不猜。
     // 模型明确选了引用编号时尊重它，不再自动引用另一条。
     const refs = inGroup ? (opts.refs || groups.refs(chatId.slice(6))) : {}
     const explicit = items.some((item) => item.replyTo)
-    const firstSendable = items.findIndex((item) => item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value))))
+    const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
+    const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
@@ -991,6 +1081,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId, userId)
       else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
       else if (it.kind === 'image') await sendImage(chatId, it.value, replyId, userId)
+      else if (it.kind === 'mixed') await sendMixed(chatId, it.parts, replyId, missedAt, userId)
       if (i < items.length - 1 && !opts.simulate) await sleep(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
     }
     if (opts.simulate) return items
@@ -999,7 +1090,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       groups.noteSpeak(gid)
       groups.noteSpokeInGroup(gid) // 在群里说了话 = 加入了话题
     }
-    const said = items.map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
+    const said = items.flatMap((item) => item.kind === 'mixed' ? item.parts : [item]).map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
     logChat(chatId, 'bot', said)
     // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
     if (!opts.own) interaction.queueAside(chatId, said)

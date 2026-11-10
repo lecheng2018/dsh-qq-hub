@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1558 pass / 0 fail / 4 skip（共 1562） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1668 pass / 0 fail / 4 skip（共 1672） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -151,3 +151,11 @@
 - auditSegments 对 file/url/base64 中的 base64 内容改存 sha256+bytes+encoding，不修改原始请求。
 - 默认 maxRecords=2000，只淘汰最旧 sent/cancelled；活跃、失败和 unknown 记录豁免。加载旧文件也执行同一上限。
 - 新增三项回归，ledger/outbox 定向 26/26。
+
+## P2 面板、FIFO、恢复与危险命令（2026-11-11）
+
+- 新核心持久化 personaId 并在变化时重建；syncAllModels 合并新旧结果；表情 collectMode/fromGroups/fromPrivate 接入。
+- Outbox reserve/ticket 保证异步准备期间同聊天顺序；群合并不再丢 voice/replyTo 或移动媒体，自定义 maxBubbles 贯穿。
+- session/ledger/stickers 支持损坏隔离与备份恢复；台账备份恢复的 queued/sending 等按 unknown 保守处理，sent 保留。
+- danger 命令增加嵌套与系统破坏覆盖，默认 dangerConfirm 不改，README/配置文档明确风险与面板密钥。
+- 定向：A 156/156、B 21/21、C 106/106、D 73/73。
