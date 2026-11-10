@@ -70,6 +70,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
   /** deliveryId -> record */
   const records = new Map()
   let crashedSending = 0
+  let recovered = false
 
   if (file) {
     try {
@@ -83,9 +84,17 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
           rec.unknownReason = rec.unknownReason || 'crash-recovery: 落盘时处于 sending，副作用未知'
           rec.recoveredAt = Date.now()
           crashedSending++
+          recovered = true
+        } else if (rec.state === 'queued') {
+          // 已登记但还没开始物理发送：标 cancelled，不恢复队列、不自动重发。
+          rec.state = 'cancelled'
+          rec.cancelReason = 'crash-recovery: 崩溃前仍未出队，未恢复发送'
+          rec.recoveredAt = Date.now()
+          recovered = true
         }
         records.set(String(rec.deliveryId), rec)
       }
+      if (recovered) persist()
     } catch (error) {
       if (error?.code !== 'ENOENT') onError(error) // 首次无文件 = 正常
     }
