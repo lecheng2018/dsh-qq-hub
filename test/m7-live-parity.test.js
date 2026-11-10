@@ -405,9 +405,13 @@ test('慢工具：执行超过阈值先经 outbox 发提示，完成后清掉计
   try {
     await core.dispatchLegacyEvent(privEv())
     await sleep(2000)
-    const texts = mock.sent('send_private_msg').map((x) => JSON.stringify(x.params?.message || x.params))
+    let texts = mock.sent('send_private_msg').map((x) => JSON.stringify(x.params?.message || x.params))
     assert.ok(texts.some((x) => x.includes('正在处理')), `慢工具提示未发：${JSON.stringify(texts)}`)
     assert.ok(texts.some((x) => x.includes('完成了')), `最终结果未发：${JSON.stringify(texts)}`)
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(2000)
+    texts = mock.sent('send_private_msg').map((x) => JSON.stringify(x.params?.message || x.params))
+    assert.equal(texts.filter((x) => x.includes('正在处理')).length, 2, `每一轮慢工具都应有提示：${JSON.stringify(texts)}`)
   } finally { await core.dispose(); await mock.close() }
 })
 
@@ -483,5 +487,49 @@ test('主动任务与当前聊天共用串行道：前一轮未结束时不得�
     assert.equal(await pending, '后台文本')
     assert.deepEqual(started, ['chat', 'background'])
     assert.equal(new Set(dsh.turns.map((turn) => turn.sessionId)).size, 1)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+
+test('补收入站：提示模型这些是断线期间的旧消息，并保留原始时间语义', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    await core.dispatchBackfill(privEv({ time: Math.floor((Date.now() - 120_000) / 1000) }))
+    await sleep(600)
+    const text = String(dsh.turns[0]?.userText || '')
+    assert.match(text, /补收提示/)
+    assert.match(text, /断线期间错过/)
+    assert.match(text, /约 2 分钟/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('activity：私聊/必回群消息的 direct 与主人 owner 权重和 legacy 一致', async () => {
+  const events = []
+  const { core, mock } = await fixture({
+    modsOver: { emit: (name, event) => { if (name === 'activity') events.push(event) } },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    const ownerAt = {
+      ...groupEv('主人点名'), user_id: Number(OWNER),
+      sender: { user_id: Number(OWNER), nickname: '主人' },
+    }
+    await core.dispatchLegacyEvent(ownerAt)
+    await core.dispatchLegacyEvent(groupEv('肥鱼 在吗'))
+    await core.dispatchLegacyEvent({
+      ...groupEv('普通旁听'), message: [{ type: 'text', data: { text: '普通旁听' } }],
+    })
+    const ownerPrivate = events.find((event) => event.chatId === `private:${OWNER}`)
+    assert.equal(ownerPrivate?.direct, true)
+    assert.equal(ownerPrivate?.owner, true)
+    const directOwner = events.find((event) => event.chatId === 'group:777' && event.text.includes('主人点名'))
+    assert.equal(directOwner?.direct, true, '@主人的群消息也是 direct')
+    assert.equal(directOwner?.owner, true, '主人发言必须有 owner=true')
+    const wake = events.find((event) => event.text.includes('肥鱼 在吗'))
+    assert.equal(wake?.direct, true, '唤醒词形成的 must 轮也是 direct')
+    assert.equal(wake?.owner, false)
+    const passive = events.find((event) => event.text.includes('普通旁听'))
+    assert.equal(passive?.direct, false)
+    assert.equal(passive?.owner, false)
   } finally { await core.dispose(); await mock.close() }
 })
