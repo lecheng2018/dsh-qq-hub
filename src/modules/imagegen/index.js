@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createImageGen, drawResultBlocks, drawToolMessage, imageToolBlock } from '../../features/imagegen.js'
 import { listPaintings, openPaintFolder, paintingPath, rememberPainting, removePainting, savePainting } from '../../features/paintings.js'
 import { defineTool, str } from '../../tools/tools.js'
-import { mimeOf } from '../../chat/inbound.js'
+import { mimeOf, parseMessageEvent } from '../../chat/inbound.js'
 
 export default {
   id: 'imagegen',
@@ -18,7 +18,56 @@ export default {
     const memory = api.lazy('memory')
     const gen = createImageGen({ getConfig: api.config, log: api.log, local })
     const auth = gen.codexAuth
-    api.onDispose?.(() => gen.dispose())
+    const directRequests = new Map()
+    const noteDirectRequest = (event) => {
+      const chatId = `group:${event.group_id}`
+      const userId = String(event.user_id ?? event.sender?.user_id ?? '')
+      const text = parseMessageEvent(event, event.self_id || api.config().botQQ).text
+      if (!userId || !text) return
+      const now = Date.now()
+      const requests = (directRequests.get(chatId) || []).filter((request) => now - request.at < 10 * 60_000)
+      requests.push({ userId, text, at: now })
+      directRequests.set(chatId, requests.slice(-100))
+    }
+    const offOnebot = api.on?.('onebot', (event) => {
+      if (event?.post_type !== 'message' || event.message_type !== 'group') return
+      const segments = Array.isArray(event.message) ? event.message : []
+      const botQQ = String(event.self_id || api.config().botQQ || '')
+      const userId = String(event.user_id ?? event.sender?.user_id ?? '')
+      if (!userId || userId === botQQ) return
+      if (segments.some((segment) => segment?.type === 'at' && String(segment.data?.qq) === botQQ)) {
+        noteDirectRequest(event)
+        return
+      }
+      const replyId = String(segments.find((segment) => segment?.type === 'reply')?.data?.id || '')
+      if (!replyId) return
+      if (hub.wasSent?.(replyId) === true) return noteDirectRequest(event)
+      api.onebot('get_msg', { message_id: Number(replyId) || replyId }, { timeoutMs: 5000, retries: 0 }).then((quoted) => {
+        const quotedUser = String(quoted?.sender?.user_id ?? quoted?.user_id ?? '')
+        if (quotedUser && quotedUser === botQQ) noteDirectRequest(event)
+      }).catch(() => {})
+    })
+    const offSession = api.dsh?.on?.('session/event', (session, event) => {
+      if (event?.type !== 'turn/end') return
+      const chatId = hub.chatOfSession?.(session?.id) || ''
+      if (!chatId.startsWith('group:')) return
+      const lines = new Map()
+      for (const line of String(hub.lastTextOf?.(session.id) || '').split('\n')) lines.set(line, (lines.get(line) || 0) + 1)
+      const requests = []
+      for (const request of directRequests.get(chatId) || []) {
+        const count = lines.get(request.text) || 0
+        if (count) lines.set(request.text, count - 1)
+        else requests.push(request)
+      }
+      if (requests.length) directRequests.set(chatId, requests)
+      else directRequests.delete(chatId)
+    })
+    api.onDispose?.(() => {
+      directRequests.clear()
+      offOnebot?.()
+      offSession?.()
+      gen.dispose()
+    })
     const accountAction = (fn) => async (req) => {
       if (req?.method !== 'POST' || !/^application\/json(?:\s*;|$)/i.test(String(req.headers?.['content-type'] || ''))) return { ok: false, message: '账号操作需要 POST JSON 请求' }
       return fn(req)
@@ -64,7 +113,10 @@ export default {
       // 能看图时把原图放进工具结果（image 块），她当轮就能看见自己画了什么
       render: drawResultBlocks,
       execute: async ({ prompt, shape }) => {
-        if (api.config().imageGen.ownerOnly && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '画图只给主人画哦' }
+        if (api.config().imageGen.ownerOnly && !hub.turnSendersAllOwner(sessionId)) {
+          const requests = (directRequests.get(chat.chatId) || []).filter((request) => Date.now() - request.at < 10 * 60_000)
+          if (!hub.turnHasUniqueImageGenOwnerRequester?.(sessionId, requests)) return { ok: false, message: '画图只给主人画哦' }
+        }
         const startedAt = Date.now()
         const buf = await gen.generate(String(prompt || ''), { shape })
         const sent = await hub.sendSegments(chat.chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[生图] ${String(prompt).slice(0, 30)}`)

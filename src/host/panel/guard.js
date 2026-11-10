@@ -1,9 +1,9 @@
-// QQ Hub · 面板入站防护（M1-A）：Host 白名单（DNS rebinding）+ 改写请求同源校验（CSRF）
+// QQ Hub · 面板入站防护：Host 白名单、CSRF、副作用方法约束与管理请求鉴权
 //
 // 背景（M1-A 侦察结论，2026-11-08）：
-//   面板 59 条 /qq-hub/api/* 路由此前零鉴权零防护（仅 /open/* 有 bridge Bearer token），
+//   多数面板路由此前只有 Host/CSRF 防护；少数敏感接口和 /open/* 已单独校验 bridge 密钥。
 //   DSH 外层 webServer 是否限制监听地址/来源属部署形态（fnOS 实测留 M5），
-//   插件层按「无则补齐」补上两条不破坏合法使用的防线：
+//   插件层按「无则补齐」统一 Host/CSRF、副作用方法和管理请求鉴权，同时保留合法只读访问：
 //
 //   1. Host 白名单（挡 DNS rebinding + 跨站伪造指向）：
 //      只接受 回环名（localhost/127.0.0.1/[::1]/::1）、IP 字面量（v4/v6，含端口），
@@ -20,7 +20,7 @@
 //      浏览器一定留下上述证据之一。
 //
 //   2.5 副作用路径只认提交方法（P1 §4.9 主修）：面板有大批「有副作用但曾挂 GET 也能触发」的
-//      接口（发测试消息、重置会话、换密钥、启停进程、删数据…，逐个处理器判定，见下面
+//      接口（发测试消息、重置会话、启停进程、删数据…，逐个处理器判定，见下面
 //      SIDE_EFFECT_PATHS 的行内注释）。这类路径遇到 GET/HEAD 等非提交方法一律 405，不进 handler
 //      ——挡住「跨站 <img src=…>/顶层链接点一下」这类不带 Origin 的无状态触发；
 //      面板前端（client/client.js）对这些全部走 POST，合法流程不受影响；
@@ -78,7 +78,7 @@ const SIDE_EFFECT_PATHS = new Set([
   '/local/open',           // :30 spawn explorer
   '/local/test',           // :31 跑本地 tts/image 脚本、产文件
   '/local/template',       // :25 mkdir + copyFileSync 写模板文件
-  '/bridge/token/reset',   // :51 resetToken 作废旧密钥
+  '/bridge/token/reset',   // 仅保留 GET 类方法约束；密钥禁止通过 API 轮换
   '/open/send',            // :59 bridge.ops.send 发 QQ 消息
   '/open/think',           // :60 bridge.ops.think 起系统轮次、可能投递回复
   '/open/call',            // :61 bridge.ops.call 调任意模块函数
@@ -109,7 +109,7 @@ function subPath(req, prefix) {
   return p.startsWith('/') ? p : ''
 }
 
-export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX }) {
+export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAuthorized }) {
   const debug = (msg) => { try { log?.debug?.(msg) } catch {} }
 
   function hostAllowed(hostHeader) {
@@ -151,11 +151,21 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX }) {
       debug('面板 CSRF 拒绝：Sec-Fetch-Site=cross-site 且无 Origin')
       return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
     }
+    const path = subPath(req, prefix)
     // 4. 副作用路径只认提交方法：GET/HEAD/OPTIONS/TRACE 等非提交方法一律 405，不进 handler
     //    （挡掉不带 Origin 的 <img>/顶层链接/prefetch 式触发；面板前端对这些全部用 POST）
-    if (!MUTATING.has(method) && SIDE_EFFECT_PATHS.has(subPath(req, prefix))) {
-      debug(`面板副作用路径拒 GET 类方法：${method} ${subPath(req, prefix)}`)
+    if (!MUTATING.has(method) && SIDE_EFFECT_PATHS.has(path)) {
+      debug(`面板副作用路径拒 GET 类方法：${method} ${path}`)
       return { ok: false, code: 405, message: `这个接口有副作用，不接受 ${method} 触发（请通过面板按钮以 POST 调用）` }
+    }
+    // 面板管理请求均需联动密钥；开放 HTTP API 的只读接口原本也要求密钥，维持其保护。
+    if ((MUTATING.has(method) || path === '/open' || path.startsWith('/open/')) && isAuthorized && !isAuthorized(req)) {
+      debug(`面板管理请求鉴权失败：${method} ${path}`)
+      return { ok: false, code: 401, message: '需要有效联动密钥' }
+    }
+    if (path === '/bridge/token/reset') {
+      debug('面板联动密钥禁止通过 API 重置')
+      return { ok: false, code: 403, message: '联动密钥不能通过面板 API 重置，请在本机配置文件中修改' }
     }
     return { ok: true }
   }

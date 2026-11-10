@@ -1974,6 +1974,21 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return [...st.senders].every((u) => isOwner(getConfig(), u))
   }
 
+  function turnHasUniqueImageGenOwnerRequester(sessionId, requests = []) {
+    const st = turnState.get(sessionKey(sessionId))
+    const chatId = chatOfSession(sessionId) || resolveChatOfSession?.(sessionId) || ''
+    if (!chatId.startsWith('group:') || !st || st.directOwner) return false
+    const senders = new Set([...(st.senders || [])].map(String))
+    const query = String(st.lastText || '')
+    const requesters = new Set()
+    for (const request of requests || []) {
+      const uid = String(request?.userId || '')
+      const text = String(request?.text || '').trim()
+      if (uid && senders.has(uid) && text && query.includes(text)) requesters.add(uid)
+    }
+    return requesters.size === 1 && isOwner(getConfig(), requesters.values().next().value)
+  }
+
   function chatOfSession(sessionId) {
     const key = sessionKey(sessionId)
     const live = sessionToChat.get(key)
@@ -2165,6 +2180,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     pushToSession,
     runSystemTurn,
     turnSendersAllOwner,
+    turnHasUniqueImageGenOwnerRequester,
     turnHasOwner,
     resetChat,
     /** 这个聊天她是不是正忙着一轮（在想 / 在跑工具 / 在发）：压缩、插话这类后台动作拿来避让。 */
