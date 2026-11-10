@@ -61,12 +61,15 @@ export function createSharedOutbox({ onebot, getConfig, log, ledgerFile }) {
       const text = textForGuard(delivery)
       const chatKey = String(delivery.chatKey || '')
       const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
-      return checkIdentityLeak(text, {
+      const result = checkIdentityLeak(text, {
         surface: chatKey.startsWith('group:') ? '群消息' : '私聊消息',
         ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
         allowIds: [ownGroup, ...(chatKey.startsWith('private:') ? [cfg.ownerQQ] : [])].filter(Boolean),
+        allowBareNumbers: !chatKey.startsWith('group:'),
         mode: ig.mode === 'warn' ? 'warn' : 'block',
       })
+      if (!result.ok) log?.warn?.(`身份泄露闸拦下 → ${chatKey}：${result.message || ''}`)
+      return result
     },
   })
 }

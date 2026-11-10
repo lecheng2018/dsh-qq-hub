@@ -4,9 +4,10 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 import { createOutbox, newDeliveryId } from '../src/chat/outbox.js'
 import { createDeliveryLedger } from '../src/chat/delivery-ledger.js'
@@ -353,3 +354,60 @@ test('outbox：dispose 后拒绝新请求，并把排队中的条目落 cancelle
   await assert.rejects(() => outbox.request({ chatKey: 'private:6', segments: segs() }), /已卸载/)
 })
 
+
+
+test('outbox：调用方捕获发送链异常后，收尾不得再制造未处理 rejection', () => {
+  const moduleUrl = new URL('../src/chat/outbox.js', import.meta.url).href
+  const script = `
+    import { createOutbox } from ${JSON.stringify(moduleUrl)};
+    const ledger = {
+      enqueue: (rec) => rec,
+      get: (id) => ({ deliveryId: id, chatKey: 'private:1', state: 'queued', segments: [] }),
+      mark: (id, state) => { if (state === 'sent' || state === 'failed') throw new Error('terminal ledger failure') },
+    };
+    const outbox = createOutbox({ ledger, send: async () => ({ messageId: 'gw-1' }) });
+    await outbox.request({ chatKey: 'private:1', segments: [{ type: 'text', data: { text: 'x' } }] }).catch(() => {});
+    setTimeout(() => console.log('process-alive'), 30);
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 })
+  assert.equal(result.status, 0, `调用方捕获后进程仍应存活：${result.stderr}`)
+  assert.match(result.stdout, /process-alive/)
+})
+
+
+test('ledger：超过七天的 sent/cancelled 裁正文，元数据保留；unknown/failed 永不裁', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-retention-'))
+  const file = join(dir, 'deliveries.json')
+  const now = Date.now()
+  const old = now - 8 * 86400_000
+  const text = '长'.repeat(500)
+  const record = (deliveryId, state, createdAt) => ({
+    contractVersion: 1, deliveryId, chatKey: 'private:1', sourceModuleId: 'core', state,
+    attemptCount: 1, createdAt, gatewayMessageId: `gw-${deliveryId}`,
+    segments: [{ type: 'text', data: { text } }],
+  })
+  const initial = [
+    record('old-sent', 'sent', old), record('old-cancelled', 'cancelled', old),
+    record('old-unknown', 'unknown', old), record('old-failed', 'failed', old),
+    record('recent-sent', 'sent', now),
+  ]
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, deliveries: initial }))
+    const book = createDeliveryLedger({ file })
+    book.enqueue({ deliveryId: 'trigger-persist', chatKey: 'private:1', segments: segs('新消息') })
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    const byId = new Map(saved.deliveries.map((item) => [item.deliveryId, item]))
+    for (const id of ['old-sent', 'old-cancelled']) {
+      assert.equal(byId.get(id).segments[0].data.text.length, 200, `${id} 应只留前 200 字`)
+      assert.equal(byId.get(id).contentTruncated, true)
+      assert.equal(byId.get(id).gatewayMessageId, `gw-${id}`, '回执元数据必须保留')
+      assert.equal(byId.get(id).createdAt, old, '时间元数据必须保留')
+    }
+    for (const id of ['old-unknown', 'old-failed', 'recent-sent']) {
+      assert.equal(byId.get(id).segments[0].data.text.length, 500, `${id} 不应裁切`)
+      assert.equal(byId.get(id).contentTruncated, undefined)
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

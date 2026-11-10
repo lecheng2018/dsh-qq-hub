@@ -176,7 +176,7 @@ test('接线：整理不再学（管线移交 distill 模块）、群聊时注�
   assert.match(dist, /shouldTriggerL1/, 'L1 批阈值在模块')
   // 新核心补 activity 发射（开旗后 hub 不被调用，否则模块永远收不到计数）
   const mc = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
-  assert.match(mc, /emitActivity\(mods, inbound\)/, '新核心 realtime 入口发 activity')
+  assert.match(mc, /emitActivity\(mods, inbound(?:,|\))/, '新核心 realtime 入口发 activity（含 direct/owner 参数）')
   const mod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.route\('\/distill\/list'/)
   assert.match(mod, /api\.route\('\/distill\/card\/refresh'/)

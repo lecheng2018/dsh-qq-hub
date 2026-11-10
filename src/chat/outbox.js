@@ -83,10 +83,11 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     const chain = prev.catch(() => {}).then(() => drainOne(rec, req))
     chains.set(chatKey, chain)
     pending.add(deliveryId)
-    chain.finally(() => {
+    const cleanup = () => {
       pending.delete(deliveryId)
       if (chains.get(chatKey) === chain) chains.delete(chatKey)
-    })
+    }
+    chain.then(cleanup, cleanup)
     return chain
   }
 
