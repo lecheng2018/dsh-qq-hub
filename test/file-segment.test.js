@@ -3,6 +3,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { parseMessageEvent } from '../src/chat/inbound.js'
+import { fileSegmentBytes } from '../src/core/net.js'
+import { inboundFileBlocks, readInboundFiles } from '../src/chat/inbound-files.js'
 
 const evt = (segs, extra = {}) => ({
   message_type: 'private', user_id: '111', self_id: '999',
@@ -53,4 +55,29 @@ test('图片和文件混发：各归各的，不串', () => {
   ]), '999')
   assert.equal(m.images.length, 1)
   assert.equal(m.files.length, 1)
+})
+
+test('直接给 url/base64 时也先检查声明大小，不绕过上限', async () => {
+  const seg = { type: 'file', data: { file_name: '大文件.bin', file_size: 2048, base64: 'base64://AAE=' } }
+  await assert.rejects(fileSegmentBytes(seg, null, { maxBytes: 1024 }), /文件太大/)
+})
+
+test('超过 3 个文件时明确告诉模型剩余文件未读取', async () => {
+  const files = ['一.txt', '二.txt', '三.txt', '四.txt'].map((name) => ({
+    type: 'file', data: { file_name: name, base64: `base64://${Buffer.from(name).toString('base64')}` },
+  }))
+  const got = await readInboundFiles({ kind: 'private', userId: '111', files }, { workspaceDir: '/tmp' })
+  assert.equal(got.length, 4)
+  const text = inboundFileBlocks(got, '主人').map((block) => block.text).join('\n')
+  assert.match(text, /四\.txt/)
+  assert.match(text, /最多.*3/)
+})
+
+test('小于 1KB 的文件不会显示成 0KB', async () => {
+  const got = await readInboundFiles({ kind: 'private', userId: '111', files: [
+    { type: 'file', data: { file_name: '小.txt', base64: `base64://${Buffer.from('abc').toString('base64')}` } },
+  ] }, { workspaceDir: '/tmp' })
+  const text = inboundFileBlocks(got, '主人')[0].text
+  assert.match(text, /<1KB/)
+  assert.doesNotMatch(text, /0KB/)
 })

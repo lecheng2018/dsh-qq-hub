@@ -7,7 +7,8 @@ const TEXT_MAX_CHARS = 60000
 
 export async function readInboundFiles(msg, { onebot, workspaceDir, log, maxBytes = 20 * 1024 * 1024 } = {}) {
   const out = []
-  for (const seg of (msg.files || []).slice(0, 3)) {
+  const files = Array.isArray(msg.files) ? msg.files : []
+  for (const seg of files.slice(0, 3)) {
     const data = seg.data || {}
     const name = String(data.file_name || data.name || data.file || 'file')
     const ext = (name.includes('.') ? name.split('.').pop() : '').toLowerCase()
@@ -34,7 +35,17 @@ export async function readInboundFiles(msg, { onebot, workspaceDir, log, maxByte
       out.push({ kind: 'failed', name, reason: error.message })
     }
   }
+  for (const seg of files.slice(3)) {
+    const data = seg.data || {}
+    out.push({ kind: 'skipped', name: String(data.file_name || data.name || data.file || 'file'), reason: '一条消息最多读取前 3 个文件，这个文件未下载' })
+  }
   return out
+}
+
+function fileSize(bytes) {
+  const n = Number(bytes) || 0
+  if (n > 0 && n < 1024) return '<1KB'
+  return `${Math.round(n / 1024)}KB`
 }
 
 export function inboundFileBlocks(files, nickname) {
@@ -42,11 +53,11 @@ export function inboundFileBlocks(files, nickname) {
     if (file.kind === 'text') {
       return {
         type: 'text',
-        text: `【${nickname} 发来文件 ${file.name}（${Math.round(file.bytes / 1024)}KB）${file.truncated ? '，太长了只给了前 6 万字' : ''}】\n${file.text}\n【文件结束】`,
+        text: `【${nickname} 发来文件 ${file.name}（${fileSize(file.bytes)}）${file.truncated ? '，太长了只给了前 6 万字' : ''}】\n${file.text}\n【文件结束】`,
       }
     }
     if (file.kind === 'file') {
-      return { type: 'text', text: `【${nickname} 发来文件 ${file.name}（${Math.round(file.bytes / 1024)}KB），已经存在 ${file.path}，要看得用工具读】` }
+      return { type: 'text', text: `【${nickname} 发来文件 ${file.name}（${fileSize(file.bytes)}），已经存在 ${file.path}，要看得用工具读】` }
     }
     return { type: 'text', text: `【${nickname} 发来文件 ${file.name}，但没取下来：${file.reason}】` }
   })
