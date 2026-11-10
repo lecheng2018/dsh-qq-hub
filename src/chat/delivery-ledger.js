@@ -14,6 +14,32 @@ import { assertDelivery, CONTRACT_VERSION } from '../kernel/modular-contracts.js
 
 const LEDGER_VERSION = 1
 const STATES = new Set(['queued', 'sending', 'sent', 'failed', 'unknown', 'cancelled'])
+const CONTENT_RETENTION_MS = 7 * 86400_000
+const CONTENT_KEEP_CHARS = 200
+
+function trimTerminalContent(rec, now) {
+  if (!['sent', 'cancelled'].includes(rec.state) || rec.contentTruncated) return rec
+  const createdAt = Number(rec.createdAt)
+  if (!Number.isFinite(createdAt) || now - createdAt < CONTENT_RETENTION_MS) return rec
+  let remaining = CONTENT_KEEP_CHARS
+  let originalChars = 0
+  let changed = false
+  const segments = (rec.segments || []).map((seg) => {
+    if (seg?.type !== 'text' || typeof seg.data?.text !== 'string') return seg
+    const text = seg.data.text
+    originalChars += text.length
+    if (remaining <= 0 && text.length) {
+      changed = true
+      return { ...seg, data: { ...seg.data, text: '' } }
+    }
+    const kept = text.slice(0, remaining)
+    remaining -= kept.length
+    if (kept.length !== text.length) changed = true
+    return changed ? { ...seg, data: { ...seg.data, text: kept } } : seg
+  })
+  if (!changed) return rec
+  return { ...rec, segments, contentTruncated: true, contentOriginalChars: originalChars }
+}
 
 /** 原子写 JSON（tmp+rename，Windows EPERM/EBUSY 微重试）。 */
 function writeJsonAtomic(file, value) {
@@ -73,13 +99,15 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
   function persist({ critical = false } = {}) {
     if (!file) return
     try {
+      const now = Date.now()
+      for (const [id, rec] of records) {
+        const trimmed = trimTerminalContent(rec, now)
+        if (trimmed !== rec) records.set(id, trimmed)
+      }
       writeJsonAtomic(file, {
         version: LEDGER_VERSION,
-        savedAt: Date.now(),
-        deliveries: [...records.values()].map((r) => {
-          const { ...rest } = r
-          return rest
-        }),
+        savedAt: now,
+        deliveries: [...records.values()],
       })
     } catch (error) {
       onError(error)

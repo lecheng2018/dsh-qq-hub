@@ -57,3 +57,13 @@
 - 不再用删除断言、恢复 legacy 钉位或缩短功能面来让测试变绿。
 - 存储格式已迁到 `modular-sessions.json` 时，测试使用注册表/公共接口，不直接修改旧 `sessions.json` 冒充新核心状态。
 - 选择部分测试运行时要注意跨用例前置条件；最终结论必须以完整文件和全量测试为准。
+
+## 第二轮真机自检收口（2026-11-10）
+
+- 私聊身份闸补 `allowBareNumbers=true`，与 legacy 一致；群聊仍拦裸号码，拦截新增脱敏 warn。真实 Shared Outbox 回归见 `m6-outbox-unification`。
+- 补收消息在装配头部加入 `backfillNoticeBlock`，带条数与最早消息年龄。
+- activity 按 legacy 计算 direct（私聊/被 @/must）与 owner，不再固定为 false。
+- 慢工具提示在每轮挂载时重置，同一聊天后续慢任务仍会收到提示。
+- Outbox 链收尾改为 `then(cleanup, cleanup)`；独立 Node 子进程回归证明调用方捕获异常后进程不退出。
+- 台账采用 H-A：超过 7 天的 sent/cancelled 正文只留前 200 字并保留元数据；unknown/failed 永不裁。
+- 群刹车“双记”报告经源码与 e2e 复核不采纳删除方案：legacy 与新核心是不同状态实例；新核心的 `noteSpeak` 是刹车数据源，`noteSpokeInGroup` 是话题状态，不是重复计数。
