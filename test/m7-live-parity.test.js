@@ -562,6 +562,49 @@ test('入站文件：文本正文与二进制真实路径都进入新核心回�
 })
 
 
+test('群文件：正文只进当前回合，后续群缓冲只保留文件摘要', async () => {
+  const body = '不应重复注入的正文'.repeat(100)
+  const { core, dsh, mock } = await fixture()
+  try {
+    await core.dispatchLegacyEvent(groupEv(''))
+    await sleep(500)
+    await core.dispatchLegacyEvent({
+      ...groupEv(''), message_id: 818181,
+      message: [{ type: 'at', data: { qq: Number(BOT) } }, { type: 'file', data: { file_name: '长文.txt', base64: `base64://${Buffer.from(body).toString('base64')}` } }],
+    })
+    await sleep(700)
+    const fileTurn = dsh.turns.find((turn) => String(turn.userText).includes('长文.txt'))
+    assert.match(String(fileTurn?.userText), /不应重复注入的正文/)
+    await core.dispatchLegacyEvent(groupEv('下一句话'))
+    await sleep(700)
+    const next = dsh.turns.at(-1)
+    assert.match(String(next?.userText), /\[文件 长文\.txt\]/)
+    assert.doesNotMatch(String(next?.userText), /不应重复注入的正文/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('文件/语音/视频有文本视图：流水和 activity 不再收到空文本', async () => {
+  const chats = []
+  const activities = []
+  const { core, mock } = await fixture({
+    coreOver: { logChat: (...args) => chats.push(args) },
+    modsOver: { emit: (name, event) => { if (name === 'activity') activities.push(event) } },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv({ message: [
+      { type: 'file', data: { file_name: '说明.txt', base64: `base64://${Buffer.from('正文').toString('base64')}` } },
+      { type: 'record', data: { file: 'voice.amr' } },
+      { type: 'video', data: { file: 'video.mp4' } },
+    ] }))
+    await sleep(700)
+    assert.match(String(chats[0]?.[2]), /\[文件 说明\.txt\]/)
+    assert.match(String(chats[0]?.[2]), /\[语音\]/)
+    assert.match(String(chats[0]?.[2]), /\[视频\]/)
+    assert.match(String(activities[0]?.text), /\[文件 说明\.txt\]/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+
 test('回合超时：DSH 不发 turn/end 时释放串行道，下一条消息仍可服务', async () => {
   let release
   const blocker = new Promise((resolve) => { release = resolve })
