@@ -605,7 +605,17 @@ test('文件/语音/视频有文本视图：流水和 activity 不再收到空�
 })
 
 
-test('回合超时：DSH 不发 turn/end 时释放串行道，下一条消息仍可服务', async () => {
+test('回合超时配置：面板可设分钟，配置归一化限制在 1～120 分钟', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { normalize } = await import('../src/core/config.js')
+  const source = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
+  assert.match(source, /turnTimeoutMs/)
+  assert.match(source, /回合.*超时|回合等待/)
+  assert.equal(normalize({ turnTimeoutMs: 1 }).turnTimeoutMs, 60_000)
+  assert.equal(normalize({ turnTimeoutMs: 99999999 }).turnTimeoutMs, 7_200_000)
+})
+
+test('回合超时：提示用户且不立即归档；下一条消息重建，迟到回复不投递', async () => {
   let release
   const blocker = new Promise((resolve) => { release = resolve })
   const { core, dsh, mock } = await fixture({
@@ -618,9 +628,14 @@ test('回合超时：DSH 不发 turn/end 时释放串行道，下一条消息仍
   try {
     await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '卡住' } }] }))
     await sleep(250)
-    assert.equal(core.controller.runningTurnOf(`private:${OWNER}`), null, '超时后旧回合必须释放调度槽')
+    const key = `private:${OWNER}`
+    const timedOut = core.registry.peek(key)
+    assert.ok(timedOut?.sessionId, '超时时不能立即归档并忘记会话')
+    assert.equal(core.controller.runningTurnOf(key), null, '超时后旧回合必须释放调度槽')
+    assert.ok(mock.sent('send_private_msg').some((call) => JSON.stringify(call.params.message).includes('超过')), '用户应收到明确的超时提示')
     await core.dispatchLegacyEvent(privEv())
     await sleep(600)
+    assert.notEqual(core.registry.peek(key)?.sessionId, timedOut.sessionId, '下一条消息到来时才重建旧会话')
     assert.ok(mock.sent('send_private_msg').some((call) => JSON.stringify(call.params.message).includes('已恢复')), '后续消息必须仍能完成')
     assert.ok(!mock.sent('send_private_msg').some((call) => JSON.stringify(call.params.message).includes('迟到的旧回复')))
   } finally {
