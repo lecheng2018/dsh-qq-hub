@@ -156,8 +156,8 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
       const parsed = parseChatKey(chatKey)
       action = parsed.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
       params = parsed.kind === 'group'
-        ? { group_id: Number(parsed.id), message: current.segments }
-        : { user_id: Number(parsed.id), message: current.segments }
+        ? { group_id: Number(parsed.id), message: req.segments }
+        : { user_id: Number(parsed.id), message: req.segments }
       receipt = 'required'
     }
     try {

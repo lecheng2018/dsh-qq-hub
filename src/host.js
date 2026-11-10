@@ -536,6 +536,7 @@ export function apply(ctx) {
     getConfig, setConfig,
     snowluma, onebot, gatewayState, hub, getMods: () => mods,
     overview: overviewApi.overview, log, safe: effects.safe, watchdog: effects.watchdog,
+    send, bridge,
   })
   registerPurposeRoutes({
     route, readBody,
@@ -550,6 +551,7 @@ export function apply(ctx) {
     connectionProblem: overviewApi.connectionProblem, overview: overviewApi.overview, resetConsent: overviewApi.resetConsent,
     getMods: () => mods, log,
     pkg: PKG, version: VERSION, root: ROOT,
+    send, bridge,
   })
   registerPersonaRoutes({
     route, readBody, query,

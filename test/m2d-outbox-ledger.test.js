@@ -375,6 +375,30 @@ test('outbox：调用方捕获发送链异常后，收尾不得再制造未处�
 })
 
 
+test('ledger：enqueue 只保留 2KB 审计摘要，真实消息仍完整发送', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-enqueue-cap-'))
+  const file = join(dir, 'deliveries.json')
+  const gw = fakeGateway()
+  const outbox = createOutbox({ send: gw.send, ledger: createDeliveryLedger({ file }) })
+  const long = '报'.repeat(5000)
+  try {
+    const result = await outbox.request({ chatKey: 'private:1', segments: segs(long) })
+    assert.equal(result.state, 'sent')
+    assert.equal(gw.calls[0].params.message[0].data.text, long, '物理发送正文不得截断')
+    const rec = outbox.ledger.get(result.deliveryId)
+    assert.equal(rec.contentChars, long.length)
+    assert.equal(rec.contentTruncated, true)
+    assert.equal(rec.segments[0].data.text.length, 2048)
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    const persisted = saved.deliveries.find((item) => item.deliveryId === result.deliveryId)
+    assert.equal(persisted.contentChars, long.length)
+    assert.equal(persisted.segments[0].data.text.length, 2048)
+  } finally {
+    outbox.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('ledger：超过七天的 sent/cancelled 裁正文，元数据保留；unknown/failed 永不裁', () => {
   const dir = mkdtempSync(join(tmpdir(), 'm2d-retention-'))
   const file = join(dir, 'deliveries.json')
