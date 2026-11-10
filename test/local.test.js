@@ -59,7 +59,7 @@ test('生图：脚本返回 Buffer / base64 / 文件都认；接管后不需要�
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
   assert.deepEqual(await L.toImageBuffer(png), png)
   assert.deepEqual(await L.toImageBuffer({ base64: 'data:image/png;base64,' + png.toString('base64') }), png)
-  const f = join(tmpdir(), 'aurabot-local-img.png')
+  const f = join(process.env.AURABOT_DATA_DIR, 'local-img.png')
   writeFileSync(f, png)
   assert.deepEqual(await L.toImageBuffer({ file: f }), png)
   await assert.rejects(L.toImageBuffer({}), /没返回图片/)
