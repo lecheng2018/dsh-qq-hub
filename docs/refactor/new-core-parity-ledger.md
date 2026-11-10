@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1518 pass / 0 fail / 4 skip（共 1522） | `local.test.js` 使用测试进程独立数据目录，不再共享 `/tmp/aurabot-local-img.png` |
+| 主仓 `npm test` | 1524 pass / 0 fail / 4 skip（共 1528） | `local.test.js` 使用测试进程独立数据目录，不再共享 `/tmp/aurabot-local-img.png` |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -86,4 +86,14 @@
 - P：私聊人设查询只传 `userId`，群聊只传 `groupId`。
 - Q：每轮只计算一次 `previousTurnAt`，装配、群聊和 steer 复用该时间锚。
 - 定向验证：113/113，通过 `m7-live-parity`、`m2d-outbox-ledger`、`r3-flagoff-regression`、`purpose`、`m4-modular-core`、`m6-outbox-unification`。
-- 真机门禁未取消：入站文本/二进制、超时后新消息、卡片展示、reset 和崩溃恢复仍需在 fnOS/DSH 的 `.5` 包上复核。
+- 真机门禁未取消：入站文本/二进制、超时后新消息、卡片展示、reset 和崩溃恢复仍需在 fnOS/DSH 的后续包上复核。
+
+## 文件入站收尾与超时策略（2026-11-10）
+
+- 群缓冲使用水合前的文件段，只保留 `[文件 名称]`；文件正文块带内部标记，只加入当前回合。回归同时证明群聊当前回合能读正文、后续回合不重复注入。
+- `textOfSegments` 对文件、语音、视频提供非空文本，聊天流水和 activity 不再丢失这类事件。
+- 文件声明大小检查移到 url/base64 快捷路径之前；超出前 3 个的文件生成明确未下载说明；小文件显示 `<1KB`。
+- 文件修复独立经 PR #23 合并；定向 41/41，主仓当时 1523 pass / 0 fail / 4 skip。
+- 回合超时改为发送提示并标记待重建，不立即 reset；下一条普通消息或主动任务到来时才归档旧会话。迟到回复仍由监听清理保证不投递。
+- 面板新增分钟单位的 `turnTimeoutMs`，配置归一化限制 1～120 分钟，默认 10 分钟不变。
+- `.6` 最终验证：主仓 1524 pass / 0 fail / 4 skip；扩展 46/46；打包通过。真机仍需复核群文件后续回合、超时提示和面板保存。

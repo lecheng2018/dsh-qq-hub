@@ -382,6 +382,7 @@ export function normalize(raw) {
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
+  c.turnTimeoutMs = Math.round(num(c.turnTimeoutMs, 600000, 60000, 7200000))
   c.chatModels = normalizeChatModels(c.chatModels)
   // 人设：兼容老配置（早期直接存字符串 / 只有 current 两种形状）。
   // 不在这里校验人设是否存在——config 不认识文件系统，校验放到 personas.js 里做。
