@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createOutbox, newDeliveryId } from '../src/chat/outbox.js'
 import { createHubEgress } from '../src/host/hub-egress.js'
+import { createSharedOutbox } from '../src/host/shared-outbox.js'
 import { checkIdentityLeak } from '../src/chat/identity-guard.js'
 
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
@@ -122,7 +123,33 @@ test('PR-1 源码面：send|upload 动作已无绕过 hub.deliverRaw 的写者�
   assert.match(hub, /egressRef\?\.current/, 'hub 物理出口读 egress 插槽')
   const host = read('../src/host.js')
   assert.match(host, /egressRef\.current = createHubEgress/, 'host 开旗接线')
+  assert.doesNotMatch(host, /useModularCore\s*&&\s*!usePipeline/, 'pipeline 与共享 Outbox 不再互斥，物理发送仍只有一处')
   // multi-parser 走 api.onebot('send_*forward…'/'upload_…')——由 modules.js 集中规则覆盖，无需逐处改
   const mp = read('../src/modules/multi-parser/delivery.js')
   assert.match(mp, /api\.onebot\('send_group_forward_msg'/, '转发保持 api.onebot 调用=经集中分流')
+})
+
+
+test('Shared Outbox 身份闸与 legacy 同口径：私聊裸数字放行、群聊拦截且写 warn', async () => {
+  const calls = []
+  const warnings = []
+  const cfg = {
+    enabled: true, dryRun: false, ownerQQ: '10000001', botQQ: '20000002',
+    allow: { private: ['10000001'], groups: ['777'] },
+    security: { identityGuard: { enabled: true, mode: 'block' } },
+  }
+  const log = { info() {}, debug() {}, error() {}, warn: (...args) => warnings.push(args.join(' ')) }
+  const outbox = createSharedOutbox({
+    onebot: { call: async (action, params) => { calls.push({ action, params }); return { message_id: calls.length } } },
+    getConfig: () => cfg, log,
+  })
+  const text = '调研记录：文档 1042525600，端口 19881234。'
+  const privateResult = await outbox.request({ chatKey: 'private:10000001', segments: [{ type: 'text', data: { text } }] })
+  assert.equal(privateResult.state, 'sent', `私聊长文不应被裸数字误拦：${privateResult.reason || ''}`)
+  assert.equal(calls.length, 1)
+
+  const groupResult = await outbox.request({ chatKey: 'group:777', segments: [{ type: 'text', data: { text } }] })
+  assert.equal(groupResult.state, 'cancelled')
+  assert.equal(calls.length, 1, '群聊裸数字不能放行')
+  assert.ok(warnings.some((line) => line.includes('身份泄露闸') && line.includes('group:777')), `拦截必须写日志：${JSON.stringify(warnings)}`)
 })

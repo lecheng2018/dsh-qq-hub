@@ -1,5 +1,15 @@
 # 更新记录
 
+## 1.3.65-test.20261110.3
+
+- 修复 Shared Outbox 与 legacy 私聊身份闸口径不一致：私聊裸数字不再误吞长文；群聊拦截新增脱敏 warn。
+- 补收消息加入迟到语义；activity 恢复 direct/owner 权重；每轮慢工具都能发送处理提示。
+- 修复 Outbox `chain.finally()` 派生 Promise 未捕获导致 Node 进程退出的问题；独立子进程回归覆盖。
+- 投递台账采用保守保留策略：超过 7 天的 sent/cancelled 正文裁至 200 字并保留元数据，unknown/failed 永不裁。
+- 群刹车计数经源码与 e2e 复核保持现状：新核心与 legacy 的状态实例不同，不删除新核心刹车数据源。
+
+---
+
 ## 1.3.65-test.20261110.2
 
 - 修复主人私聊中 `ask_user_question` 不在工具表的问题：`qq-hub-private` 与 `qq-hub-private-long` 现在显式加载 `@deepseek-ai/dsh-tool-ask-user`。
