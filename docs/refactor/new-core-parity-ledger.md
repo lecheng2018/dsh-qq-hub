@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1524 pass / 0 fail / 4 skip（共 1528） | `local.test.js` 使用测试进程独立数据目录，不再共享 `/tmp/aurabot-local-img.png` |
+| 主仓 `npm test` | 1528 pass / 0 fail / 4 skip（共 1532） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -97,3 +97,11 @@
 - 回合超时改为发送提示并标记待重建，不立即 reset；下一条普通消息或主动任务到来时才归档旧会话。迟到回复仍由监听清理保证不投递。
 - 面板新增分钟单位的 `turnTimeoutMs`，配置归一化限制 1～120 分钟，默认 10 分钟不变。
 - `.6` 最终验证：主仓 1524 pass / 0 fail / 4 skip；扩展 46/46；打包通过。真机仍需复核群文件后续回合、超时提示和面板保存。
+
+## token-guardian 超时与退避修复（2026-11-10 晚）
+
+- 真机出现两种故障：模型 Request timed out 后每 30 秒重试，以及请求挂起后 compactBusy 永久占用。源码确认 api.ask 无超时、失败无状态、成功后 chars 被提前乘 1.4。
+- 压缩请求新增可配置 `askTimeoutSeconds`（默认 90 秒），Promise.race 保证落定，AbortSignal 经 askModel 传入 DSH `llm.stream` 的 `signal`；外层 finally 继续负责放锁。
+- 模型失败记录 lastAttemptAt、lastError、failures、nextAttemptAt，按 30 秒/1 分钟/5 分钟/15 分钟/30 分钟退避；成功清零。lastCompactAt 仍只表示成功压缩。
+- chars 只保存真实字符数，estimate 是唯一 token 换算点；面板增加压缩中、失败原因和下次重试时间。
+- 新增 `token-guardian-recovery.test.js` 四项行为回归，与既有 token-guardian 套件合计 27/27。真机需复核挂起后解锁、失败退避和再次成功压缩。
