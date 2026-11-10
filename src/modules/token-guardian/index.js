@@ -313,7 +313,7 @@ export default {
         if (!chatId) continue
         // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
         //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
-        try { if (hub.isBusy?.(chatId)) continue } catch (error) {}
+        try { if (hub.isBusy?.(chatId)) continue } catch (error) { api.log.debug(`${ID}：忙时状态读取失败：${error.message}`) }
         const r = await compact(key, { chatId }, { tokens, measured })
         // 自动压缩失败（常见：模型被限流）不要每 30 秒刷一遍 warn，交给面板/手动重试
         if (!r.ok && r.reason !== 'no-transcript') api.log.debug(`${ID}：自动压缩没成，下次再试`);
