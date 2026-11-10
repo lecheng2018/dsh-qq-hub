@@ -1,5 +1,13 @@
 # 更新记录
 
+## 1.3.65-test.20261110.2
+
+- 修复主人私聊中 `ask_user_question` 不在工具表的问题：`qq-hub-private` 与 `qq-hub-private-long` 现在显式加载 `@deepseek-ai/dsh-tool-ask-user`。
+- `qq-hub-social` 仍不开放提问工具，不扩大群聊权限。
+- 新增 preset 配置契约测试；修复前明确失败，修复后与服务包装、QQ 答案回填及工具生命周期测试共同通过。
+
+---
+
 ## 1.3.65-test.20261110.1
 
 > 模块化新核心全接入测试版。面向 fnOS 上部署的 DSH 插件；仍是预发布，真机发送矩阵、OneBot unknown 与 72 小时观察未完成前不作为稳定版。
