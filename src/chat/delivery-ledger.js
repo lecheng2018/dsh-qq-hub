@@ -10,6 +10,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { assertDelivery, CONTRACT_VERSION } from '../kernel/modular-contracts.js'
 
 const LEDGER_VERSION = 1
@@ -17,6 +18,7 @@ const STATES = new Set(['queued', 'sending', 'sent', 'failed', 'unknown', 'cance
 const CONTENT_RETENTION_MS = 7 * 86400_000
 const CONTENT_KEEP_CHARS = 200
 const ENQUEUE_CONTENT_KEEP_CHARS = 2048
+const DEFAULT_MAX_RECORDS = 2000
 
 function auditSegments(input) {
   const segments = (input ?? []).map((s) => ({ type: String(s?.type ?? ''), data: { ...(s?.data ?? {}) } }))
@@ -24,6 +26,18 @@ function auditSegments(input) {
   let remaining = ENQUEUE_CONTENT_KEEP_CHARS
   let contentTruncated = false
   for (const seg of segments) {
+    for (const key of ['file', 'url', 'base64']) {
+      const value = seg.data[key]
+      if (typeof value !== 'string') continue
+      const encoded = key === 'base64' ? value
+        : value.startsWith('base64://') ? value.slice(9)
+        : /^data:[^,]*;base64,/i.test(value) ? value.slice(value.indexOf(',') + 1) : ''
+      if (!encoded) continue
+      const bytes = Buffer.from(encoded, 'base64')
+      seg.data.mediaDigest = { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, encoding: 'base64' }
+      delete seg.data[key]
+      contentTruncated = true
+    }
     if (seg.type !== 'text' || typeof seg.data.text !== 'string') continue
     const text = seg.data.text
     contentChars += text.length
@@ -86,11 +100,23 @@ let seq = 0
  * @param {string} [o.file] 台账文件路径（缺省 = 纯内存）
  * @param {(error: Error) => void} [o.onError] 持久化错误出口
  */
-export function createDeliveryLedger({ file, onError = () => {} } = {}) {
+export function createDeliveryLedger({ file, onError = () => {}, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
   /** deliveryId -> record */
   const records = new Map()
+  const limit = Math.max(1, Math.floor(Number(maxRecords) || DEFAULT_MAX_RECORDS))
   let crashedSending = 0
   let recovered = false
+
+  function prune() {
+    let removed = 0
+    while (records.size > limit) {
+      const oldest = [...records.values()].find((rec) => rec.state === 'sent' || rec.state === 'cancelled')
+      if (!oldest) break
+      records.delete(oldest.deliveryId)
+      removed++
+    }
+    return removed
+  }
 
   if (file) {
     try {
@@ -123,6 +149,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
         }
         records.set(String(rec.deliveryId), rec)
       }
+      if (prune() > 0) recovered = true
       if (recovered) persist()
     } catch (error) {
       if (error?.code !== 'ENOENT') onError(error) // 首次无文件 = 正常
@@ -182,6 +209,7 @@ export function createDeliveryLedger({ file, onError = () => {} } = {}) {
     }
     assertDelivery({ ...record, segments: record.segments.map((s) => ({ type: s.type, data: s.data })) })
     records.set(record.deliveryId, record)
+    prune()
     // queued 是关键落盘：失败回滚并抛出（fail-closed，调用方中止发送）
     try {
       persist({ critical: true })
