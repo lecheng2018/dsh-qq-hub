@@ -9,7 +9,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -532,5 +532,86 @@ test('activity：私聊/必回群消息的 direct 与主人 owner 权重和 lega
     const passive = events.find((event) => event.text.includes('普通旁听'))
     assert.equal(passive?.direct, false)
     assert.equal(passive?.owner, false)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+
+test('入站文件：文本正文与二进制真实路径都进入新核心回合', async () => {
+  const logs = []
+  const log = { info: (...args) => logs.push(args.join(' ')), warn: (...args) => logs.push(args.join(' ')), debug: (...args) => logs.push(args.join(' ')), error: (...args) => logs.push(args.join(' ')), child: () => log }
+  const { core, dsh, mock } = await fixture({ coreOver: { log, logger: log } })
+  try {
+    const textBody = '这是文本文件的实际正文：白米饭。'
+    const event = privEv({
+      message: [
+        { type: 'file', data: { file_name: '说明.txt', base64: `base64://${Buffer.from(textBody).toString('base64')}` } },
+        { type: 'file', data: { file_name: '资料.bin', base64: `base64://${Buffer.from([0, 1, 2, 3, 4]).toString('base64')}` } },
+      ],
+    })
+    await core.dispatchLegacyEvent(event)
+    await sleep(700)
+    const text = String(dsh.turns[0]?.userText || '')
+    assert.match(text, /说明\.txt/, `日志：${logs.join('\n')}`)
+    assert.match(text, /白米饭/)
+    assert.match(text, /【文件结束】/)
+    assert.match(text, /资料\.bin/)
+    const path = text.match(/已经存在 ([^，\n]+)，要看得用工具读/)?.[1]
+    assert.ok(path && path.includes('qq-inbox'), `二进制应落盘并给出路径：${text}`)
+    assert.equal(existsSync(path), true, '路径对应的真实文件必须存在')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+
+test('回合超时：DSH 不发 turn/end 时释放串行道，下一条消息仍可服务', async () => {
+  let release
+  const blocker = new Promise((resolve) => { release = resolve })
+  const { core, dsh, mock } = await fixture({
+    cfgOver: { turnTimeoutMs: 50 },
+    brain: async ({ text }) => {
+      if (text.includes('卡住')) { await blocker; return '迟到的旧回复' }
+      return '已恢复'
+    },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '卡住' } }] }))
+    await sleep(250)
+    assert.equal(core.controller.runningTurnOf(`private:${OWNER}`), null, '超时后旧回合必须释放调度槽')
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    assert.ok(mock.sent('send_private_msg').some((call) => JSON.stringify(call.params.message).includes('已恢复')), '后续消息必须仍能完成')
+    assert.ok(!mock.sent('send_private_msg').some((call) => JSON.stringify(call.params.message).includes('迟到的旧回复')))
+  } finally {
+    release?.()
+    await core.dispose()
+    await mock.close()
+  }
+})
+
+test('JSON/XML 卡片：新核心保留分享标题和链接，不只给模型类型占位', async () => {
+  const { core, dsh, mock } = await fixture()
+  try {
+    const card = JSON.stringify({ meta: { detail_1: { desc: '示例文章摘要', qqdocurl: 'https://example.com/article' } } })
+    await core.dispatchLegacyEvent(privEv({
+      message: [{ type: 'json', data: { data: card } }, { type: 'xml', data: { data: '<xml />' } }],
+    }))
+    await sleep(600)
+    const text = String(dsh.turns[0]?.userText || '')
+    assert.match(text, /示例文章摘要/)
+    assert.match(text, /https:\/\/example\.com\/article/)
+    assert.match(text, /\[卡片消息\]/)
+    assert.doesNotMatch(text, /\[json\]/)
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('会话 reset：旧 session 的上下文、人格和工具缓存被回收', async () => {
+  const { core, dsh, mock } = await fixture({
+    coreOver: { personaTextFor: () => '专用人格', promptVars: { qq_hub_rules_private: () => '规则' } },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    assert.ok(core.stats().cacheEntries > 0, '首轮应建立会话缓存')
+    assert.equal(core.resetChat(`private:${OWNER}`), true)
+    assert.equal(core.stats().cacheEntries, 0, 'reset 后旧 session 缓存必须清理')
   } finally { await core.dispose(); await mock.close() }
 })
