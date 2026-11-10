@@ -10,6 +10,7 @@
 // 想换引擎的主人自己开关，迁移说明见 docs/PURPOSE_MODULE_API.md。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
+import { stripInternalMemo } from '../chat/reply.js'
 import {
   DEFAULT_PURPOSE_CONFIG, PURPOSE_NEEDS, NEED_LABELS,
   normalizePurposeConfig, createPurposeState, normalizePurposeState,
@@ -71,9 +72,7 @@ export function purposeConfig(cfg = {}) {
 
 /** 模型回包清洗：去掉备忘段、引号、「大肥鱼：」前缀；空/沉默返回 ''。 */
 export function cleanReply(raw) {
-  let s = String(raw ?? '')
-  const cut = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/.exec(s)
-  if (cut) s = s.slice(0, cut.index) // 内部备忘不发到 QQ
+  let s = stripInternalMemo(raw)
   s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
   s = s.replace(new RegExp(`^${ROLE}\\s*[:：]\\s*`), '')
   s = s.trim()

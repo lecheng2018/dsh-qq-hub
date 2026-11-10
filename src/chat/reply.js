@@ -25,6 +25,13 @@ export function stripReasoning(text) {
   return s
 }
 
+/** purpose 的结构化内部备忘只供状态机消费，不能进入 QQ 或 bot 聊天流水。 */
+export function stripInternalMemo(text) {
+  const s = String(text ?? '')
+  const cut = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/.exec(s)
+  return cut ? s.slice(0, cut.index) : s
+}
+
 /** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
 export function stripMarkdown(text) {
   let s = stripReasoning(text)
@@ -69,7 +76,7 @@ export function isSilence(text) {
  * @returns {{silent: boolean, items: Array<{kind:'text'|'voice'|'sticker'|'image', value:string, replyTo?:string}>}}
  */
 export function parseReply(text, rules = {}) {
-  let raw = stripReasoning(text).trim()
+  let raw = stripReasoning(stripInternalMemo(text)).trim()
   if (isSilence(raw)) return { silent: true, items: [] }
   // 报告标记（1.3.48）：<report>…</report> 里的内容是「给主人看的数据」。
   // 摘出来当**一条**整段气泡（在 ||| 拆分之前摘，标记里的空行不能当气泡边界）；
