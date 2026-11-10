@@ -128,7 +128,7 @@ const privateHistory = () => [
   { message_id: 105, time: (NOW - 10 * 3600_000) / 1000, user_id: 100, message: [{ type: 'text', data: { text: '十小时前的话' } }] },
 ]
 
-function makeGateway(hubOverride) {
+function makeGateway(hubOverride, modularCore = null) {
   hubCalls.length = 0
   sentTexts.length = 0
   realtimeDispatched.length = 0
@@ -154,6 +154,7 @@ function makeGateway(hubOverride) {
       sendText: async (chatId, text) => { sentTexts.push({ chatId, text }) },
     },
     getMods: () => null,
+    getModularCore: () => modularCore,
     getDangerGuard: () => null,
     dispatch: (ev, kind) => { realtimeDispatched.push({ ev, kind }) },
   })
@@ -268,4 +269,18 @@ test('gapTracker：断档超过阈值才触发，落盘恢复后仍记得上次�
   const t2 = 2_000_000
   const tracker2 = createUpstreamGapTracker({ file, gapMs: 60_000, now: () => t2 })
   assert.equal(tracker2.lastPacketAt(), t, '重启后游标从盘上恢复')
+})
+
+
+test('新核心补收：gateway 把真实断线时长和消息年龄一并传递', async () => {
+  historyFor = privateHistory
+  const calls = []
+  const modularCore = { dispatchBackfill: async (event, meta) => { calls.push({ event, meta }) } }
+  const { gw } = makeGateway(null, modularCore)
+  const gapMs = 6 * 3600_000
+  await gw.triggerBackfill({ since: NOW - 300_000, gapMs })
+  const call = calls.find((x) => x.event.message_id === 101)
+  assert.ok(call, '普通补收消息应进入新核心')
+  assert.equal(call.meta?.gapMs, gapMs)
+  assert.ok(call.meta?.earliestAgeMs > 0)
 })
