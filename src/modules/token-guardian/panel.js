@@ -15,7 +15,7 @@ return function TokenGuardianPanel(props) {
   if (!d) return h(Card, { title: '用量' }, h(Empty, { icon: '⏳', text: '读着呢…' }))
   if (d.ok === false) return h(Card, { title: '用量' }, h('div', { className: 'ab-note err' }, '读不到用量（扩展模块没在跑？）'))
   const items = d.items || []
-  return h(Card, { title: '各聊天用了多少', desc: `有真实用量就用真实值（DSH 上报的 input+cache），没有才按字符数 ÷ 1.2 估。超过 ${fmt(d.threshold)} 就会在你空闲时自动压一次。` },
+  return h(Card, { title: '各聊天用了多少', desc: `有真实用量就用真实值（DSH 上报的 input+cache），没有才按字符数 × 1.4 估。超过 ${fmt(d.threshold)} 就会在你空闲时自动压一次。` },
     items.length ? h('div', null, items.map((it, i) => {
       const pct = Math.min(100, Math.round((it.tokens / Math.max(1, d.threshold)) * 100))
       return h('div', { key: it.chatId, style: { marginBottom: 10 } },
@@ -23,12 +23,13 @@ return function TokenGuardianPanel(props) {
           h('span', { className: 'ab-small' }, it.chatId),
           h('span', { className: 'ab-small ab-muted' }, `${fmt(it.tokens)} / ${fmt(d.threshold)}`),
           h(Btn, {
-            small: true, disabled: busy === it.chatId,
+            small: true, disabled: busy === it.chatId || it.busy,
             onClick: async () => { setBusy(it.chatId); try { // 走 GET query：call 带第二个参数会发 POST 把参数放 body，后端读 query 就永远读不到
             const r = await call('/token-guardian/compact-now?chatId=' + encodeURIComponent(it.chatId)); props.toast && props.toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err'); await load() } finally { setBusy('') } },
-          }, busy === it.chatId ? '压着呢…' : '现在压一次')),
+          }, busy === it.chatId || it.busy ? '压着呢…' : '现在压一次')),
         h('div', { style: { height: 6, borderRadius: 3, background: 'var(--ab-line, #e5e7eb)', marginTop: 4 } },
           h('div', { style: { height: 6, borderRadius: 3, width: pct + '%', background: pct >= 100 ? '#ef4444' : pct > 60 ? '#f59e0b' : '#22c55e' } })),
-        h('div', { className: 'ab-small ab-muted' }, `${it.estimated ? '（字符估算）' : '（真实用量）'}压过 ${it.compacts} 次，上次说话 ${ago(it.lastAt)}，上次压缩 ${ago(it.lastCompactAt)}${it.hasSummary ? '，有摘要' : ''}`))
+        h('div', { className: 'ab-small ab-muted' }, `${it.estimated ? '（字符估算）' : '（真实用量）'}压过 ${it.compacts} 次，上次说话 ${ago(it.lastAt)}，上次压缩 ${ago(it.lastCompactAt)}${it.hasSummary ? '，有摘要' : ''}${it.busy ? '，正在压缩' : ''}`),
+        it.failures ? h('div', { className: 'ab-small', style: { color: 'var(--ab-warn, #b45309)' } }, `连续失败 ${it.failures} 次：${it.lastError || '未知原因'}；下次自动重试 ${new Date(it.nextAttemptAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`) : null)
     })) : h(Empty, { icon: '📊', text: '还没有聊天记录，聊几句就有了' }))
 }

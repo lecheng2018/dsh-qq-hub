@@ -26,7 +26,7 @@ export default {
   tab: 'model',
   defaults: {
     enabled: false,
-    /** 触发阈值（token 估算，按字符数 / 3 粗算） */
+    /** 触发阈值（token 估算，真实 usage 不可用时按字符数 × 1.4 粗算） */
     threshold: 300000,
     /** 空闲多少秒后压缩，避免打断正在进行的对话 */
     idleSeconds: 20,
@@ -34,6 +34,8 @@ export default {
     cooldownMinutes: 120,
     /** 摘要最多保留多少字 */
     summaryMaxChars: 1200,
+    /** 单次摘要模型请求上限；超时中止并释放压缩锁 */
+    askTimeoutSeconds: 90,
   },
   settings: [
     { key: 'enabled', label: '启用提前压缩', type: 'switch', hint: '关着的时候完全不动，按 DSH 默认行为走' },
@@ -41,6 +43,7 @@ export default {
     { key: 'idleSeconds', label: '空闲多久后压缩（秒）', type: 'number', min: 5, max: 600, step: 5, hint: '正在聊天时不会打断' },
     { key: 'cooldownMinutes', label: '两次压缩最小间隔（分钟）', type: 'number', min: 10, max: 1440, step: 10 },
     { key: 'summaryMaxChars', label: '摘要最大字数', type: 'number', min: 200, max: 4000, step: 100 },
+    { key: 'askTimeoutSeconds', label: '摘要请求超时（秒）', type: 'number', min: 30, max: 300, step: 30, hint: '超时后取消请求并释放压缩锁；失败会指数退避，不会每 30 秒重试' },
   ],
   setup(api) {
     const stateFile = () => api.dataDir('state.json')
@@ -87,6 +90,18 @@ export default {
      * 旧口径 chars/1.2 会低估三成（上下文 80k 按成 60k，压缩该触发不触发，2026-11-05 复盘）。 */
     const CHARS_TO_TOKEN = 1.4
     const estimate = (chars) => Math.round(Number(chars || 0) * CHARS_TO_TOKEN)
+    const RETRY_BACKOFFS = [30_000, 60_000, 300_000, 900_000, 1800_000]
+
+    function noteFailure(sessionKey, message) {
+      const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
+      const now = Date.now()
+      st.failures = Number(st.failures || 0) + 1
+      st.lastAttemptAt = now
+      st.lastError = String(message || '未知错误').slice(0, 160)
+      st.nextAttemptAt = now + RETRY_BACKOFFS[Math.min(st.failures - 1, RETRY_BACKOFFS.length - 1)]
+      state[sessionKey] = st
+      persist()
+    }
 
     /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。
      * 开头带上上一份摘要（若有）：连续压缩时，第一次压缩摘掉的那段聊天只存在于摘要里，
@@ -157,8 +172,20 @@ export default {
         const t = await hub.resolveTarget?.(chat)
         if (t && t.provider && t.model) askOpts = { provider: t.provider, model: t.model }
       } catch (error) { api.log.debug(`${ID}：拿聊天模型失败，摘要用默认模型（${error.message}）`) }
+      const controller = new AbortController()
+      const timeoutSeconds = Math.max(0.01, Number(cfg.askTimeoutSeconds) || 90)
+      let askTimer = null
+      const timeout = new Promise((_, reject) => {
+        askTimer = setTimeout(() => {
+          const error = new Error(`压缩请求超过 ${timeoutSeconds} 秒，已中止`)
+          error.turnTimedOut = true
+          controller.abort(error)
+          reject(error)
+        }, timeoutSeconds * 1000)
+        askTimer.unref?.()
+      })
       try {
-        text = await api.ask({
+        text = await Promise.race([api.ask({
           // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
           // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
           system: '你是「大肥鱼」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：'
@@ -168,10 +195,16 @@ export default {
             + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题。',
           text: transcript,
           maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars * 1.4))),
+          signal: controller.signal,
           ...askOpts,
-        })
+        }), timeout])
       } catch (error) {
         const msg = String(error?.message || error)
+        noteFailure(sessionKey, msg)
+        if (error?.turnTimedOut) {
+          api.log.warn(`${ID}：${msg}，稍后按退避时间重试`)
+          return { ok: false, reason: 'timeout', message: msg }
+        }
         // 限流最容易被误当成「功能坏了」：明确告诉她切模型或等重置，别让她以为是代码问题
         if (/429|rate.?limit|频率限制|quota|限额/i.test(msg)) {
           api.log.warn(`${ID}：压缩请求被限流（${msg.slice(0, 120)}），额度恢复后再试`)
@@ -179,9 +212,14 @@ export default {
         }
         api.log.warn(`${ID}：压缩请求失败（${msg}），下次再试`)
         return { ok: false, reason: 'ask-failed', message: '模型调用失败：' + msg.slice(0, 80) }
+      } finally {
+        if (askTimer) clearTimeout(askTimer)
       }
       const body = String(text || '').trim().slice(0, cfg.summaryMaxChars)
-      if (!body) return { ok: false, reason: 'empty-summary', message: '模型没给出可用的摘要' }
+      if (!body) {
+        noteFailure(sessionKey, '模型没给出可用的摘要')
+        return { ok: false, reason: 'empty-summary', message: '模型没给出可用的摘要' }
+      }
       // 摘要文本一变，DSH 会把它作为新快照追加进当前历史（旧块不删）。
       // 所以必须「先重置会话，再落摘要」：resetChat 成功后新会话历史里只有最新这一份摘要；
       // resetChat 失败（没 QQ 会话/归档失败）就不更新摘要 —— 宁可不压，也不让同一段历史里
@@ -198,8 +236,8 @@ export default {
       }
       if (!resetOk) {
         // 没清场就不换摘要：旧摘要继续用，等下次压缩成功一起换。
-        // 冷却分开记：no-reset 多是暂时性失败（会话正被归档/还没建），10 分钟就该重试；
-        // 真打了一次模型的失败（no-reset 之外）和成功才吃完整冷却 —— 暂时性失败不该被罚 2 小时。
+        // no-reset 多是暂时性失败（会话正被归档/还没建），10 分钟重试；
+        // 模型请求失败使用 noteFailure 的指数退避，成功后才记录完整压缩冷却。
         const st0 = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
         st0.lastCompactAt = Date.now() - (Number(cfg.cooldownMinutes) * 60_000 - 10 * 60_000)
         state[sessionKey] = st0
@@ -218,10 +256,13 @@ export default {
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
       persistSummary()
       const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
-      // 压缩完相当于把历史折成摘要，把估算值重置成摘要本身的规模
-      st.chars = Math.round(body.length * CHARS_TO_TOKEN)
+      // chars 永远只存真实字符数；estimate() 是唯一的 token 换算点
+      st.chars = body.length
       st.lastCompactAt = Date.now()
       st.compacts = (st.compacts || 0) + 1
+      st.failures = 0
+      st.lastError = ''
+      st.nextAttemptAt = 0
       state[sessionKey] = st
       persist()
       api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens / CHARS_TO_TOKEN : st.chars)} token`}`)
@@ -249,6 +290,7 @@ export default {
           if (real && Number.isFinite(real.tokens) && real.tokens > 0) { tokens = real.tokens; measured = true }
         } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
+        if (now < Number(st.nextAttemptAt || 0)) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
         //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
@@ -320,6 +362,11 @@ export default {
         compacts: Number(st.compacts || 0),
         lastAt: Number(st.lastAt || 0),
         lastCompactAt: Number(st.lastCompactAt || 0),
+        lastAttemptAt: Number(st.lastAttemptAt || 0),
+        nextAttemptAt: Number(st.nextAttemptAt || 0),
+        failures: Number(st.failures || 0),
+        lastError: String(st.lastError || ''),
+        busy: compactBusy.has(chatId),
         hasSummary: Boolean(summaries[chatId]),
       })).sort((a, b) => b.tokens - a.tokens).slice(0, 30)
       return { ok: true, threshold: api.settings().threshold, items: rows }
