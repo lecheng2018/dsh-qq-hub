@@ -1,5 +1,14 @@
 # 更新记录
 
+## 1.3.65-test.20261110.8
+
+- 修复 token-guardian 在 `chatId` 初始化前调用 `hub.isBusy()`，异常被吞后忙时保护失效的问题。现在模型或工具正在运行时不会发起自动压缩。
+- token-guardian 停止或热重载时会 abort 所有在途摘要请求；旧请求不得再重置会话、写摘要或记录失败状态。
+- distill 模型调用新增 120 秒超时与 AbortSignal 取消，L1 失败后释放锁并按 5 分钟退避，后续批次可以恢复。
+- 新增 `withAbortTimeout` 共用模型超时封装。主回合 `agent.followup` 的取消协议不在本轮扩大修改。
+
+---
+
 ## 1.3.65-test.20261110.7
 
 - 修复 token-guardian 摘要模型请求挂起后永久占用压缩锁的问题。默认 90 秒超时，可在模块设置中调整；超时通过 AbortSignal 取消 DSH 模型流并释放锁。
