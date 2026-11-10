@@ -26,7 +26,7 @@ import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
-import { parseMessageEvent } from '../chat/inbound.js'
+import { parseMessageEvent, cardText } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { mimeOf } from '../chat/inbound.js'
 import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
@@ -38,6 +38,7 @@ import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-polic
 import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
+import { readInboundFiles, inboundFileBlocks } from '../chat/inbound-files.js'
 
 /**
  * 语音段转文字：本地 ASR 优先，网关 fetch_ptt_text 兜底；
@@ -187,6 +188,8 @@ function segmentsToContent(members) {
       else if (s?.type === 'image' || s?.type === 'mface') content.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
       else if (s?.type === 'reply' || s?.type === 'at') continue
       else if (s?.type === 'forward') content.push({ type: 'text', text: '\n[合并转发（内容没拉到）]\n' })
+      else if (s?.type === 'json') content.push({ type: 'text', text: `\n${cardText(s.data?.data)}\n` })
+      else if (s?.type === 'xml') content.push({ type: 'text', text: '\n[卡片消息]\n' })
       else if (s?.type) content.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
   }
@@ -547,7 +550,7 @@ export function createModularCore({
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
    *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
    *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一委托 legacyDeliver。 */
-  function groupPromptContent(chatKey, members) {
+  function groupPromptContent(chatKey, members, previousTurnAt) {
     const gid = chatKey.slice(6)
     const buf = groups.buffer(gid)
     const fresh = buf.filter((x) => !x.fed).slice(-20)
@@ -569,7 +572,7 @@ export function createModularCore({
       return `[${i + 1}] ${line(x)}`
     })
     groups.setRefs(gid, refs)
-    const timeHead = nowLine(nowAt, turnAt(chatKey), { what: '上一段消息' })
+    const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
     const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
@@ -581,6 +584,8 @@ export function createModularCore({
     for (const m of members) for (const s of (m?.segments ?? [])) {
       if (s?.type === 'image' || s?.type === 'mface') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
       else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
+      else if (s?.type === 'json') extras.push({ type: 'text', text: cardText(s.data?.data) })
+      else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
       else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
     if (quotes.length) extras.unshift({ type: 'text', text: quotes.join('\n') })
@@ -603,6 +608,21 @@ export function createModularCore({
   /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
   const mountedTools = new Map() // sessionId -> { agent, key, offs }
   const slowNoticeSent = new Set()
+  function cleanupSession(sessionId) {
+    const sid = String(sessionId || '')
+    if (!sid) return
+    const mounted = mountedTools.get(sid)
+    if (mounted) {
+      for (const off of mounted.offs) { try { off?.() } catch {} }
+      mountedTools.delete(sid)
+    }
+    ctxBoxes.delete(sid)
+    ctxBound.delete(sid)
+    ctxFallback.delete(sid)
+    ctxFallbackDone.delete(sid)
+    slowNoticeSent.delete(sid)
+    for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
+  }
   function mountTools(agent, chatKey, sessionId) {
     slowNoticeSent.delete(sessionId)
     if (typeof buildTools !== 'function') return
@@ -666,6 +686,26 @@ export function createModularCore({
     mountedTools.set(sessionId, { agent, key, offs })
     debug(`模块工具 → ${chatKey}：新挂 ${offs.length}、已存在 ${already}、失败 ${failed}（清单 ${tools.length} 个）`)
   }
+  async function hydrateInboundFiles(members, chatKey) {
+    const out = []
+    for (const member of members) {
+      const fileSegments = (member.segments || []).filter((segment) => segment?.type === 'file')
+      if (!fileSegments.length) { out.push(member); continue }
+      const memberChat = chatViewFor(chatKey, [member])
+      const files = await readInboundFiles({
+        kind: memberChat.kind, userId: memberChat.userId, groupId: memberChat.groupId, files: fileSegments,
+      }, { onebot, workspaceDir: workspaceDirOf(getConfig()), log })
+      if (files.length) log.info(`${chatKey} 收到 ${files.length} 个文件：` + files.map((file) => file.name).join('、'))
+      out.push({
+        ...member,
+        segments: [
+          ...(member.segments || []).filter((segment) => segment?.type !== 'file'),
+          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: block.text } })),
+        ],
+      })
+    }
+    return out
+  }
   const controller = createTurnController({
     log,
     merge: {
@@ -692,15 +732,17 @@ export function createModularCore({
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
       const expanded = await hydrateForwards(io.members, onebot, log)
       const heard = await hydrateRecords(expanded, onebot, log, localApi)
+      const heardWithFiles = await hydrateInboundFiles(heard, turn.chatKey)
       if (inGroup) {
-        for (const member of heard) {
+        for (const member of heardWithFiles) {
           const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
           if (hit) hit.text = textOfSegments(member.segments)
         }
       }
-      const members = await hydrateQuotes(heard, turn.chatKey)
+      const members = await hydrateQuotes(heardWithFiles, turn.chatKey)
+      const previousTurnAt = turnAt(turn.chatKey)
       if (inGroup) {
-        const gp = groupPromptContent(turn.chatKey, members)
+        const gp = groupPromptContent(turn.chatKey, members, previousTurnAt)
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
@@ -708,7 +750,7 @@ export function createModularCore({
       } else {
         content = segmentsToContent(members)
         const source = `【私聊】${chat.nickname || chat.userId}(${chat.userId})：`
-        const timeHead = nowLine(Date.now(), turnAt(turn.chatKey))
+        const timeHead = nowLine(Date.now(), previousTurnAt)
         const index = content.findIndex((block) => block.type === 'text')
         if (index >= 0) content[index] = { ...content[index], text: `${source}\n${timeHead}\n${content[index].text || ''}` }
         else content.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
@@ -749,10 +791,11 @@ export function createModularCore({
         try {
           const expandedSteer = await hydrateForwards([inbound], onebot, log)
           const heardSteer = await hydrateRecords(expandedSteer, onebot, log, localApi)
-          const quotedSteer = await hydrateQuotes(heardSteer, turn.chatKey)
+          const filesSteer = await hydrateInboundFiles(heardSteer, turn.chatKey)
+          const quotedSteer = await hydrateQuotes(filesSteer, turn.chatKey)
           let steerContent = segmentsToContent(quotedSteer)
           const source = `【私聊】${inbound.sender?.nickname || inbound.sender?.userId}(${inbound.sender?.userId})：`
-          const timeHead = nowLine(Date.now(), turnAt(turn.chatKey))
+          const timeHead = nowLine(Date.now(), previousTurnAt)
           const index = steerContent.findIndex((block) => block.type === 'text')
           if (index >= 0) steerContent[index] = { ...steerContent[index], text: `${source}\n${timeHead}\n${steerContent[index].text || ''}` }
           else steerContent.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
@@ -886,32 +929,48 @@ export function createModularCore({
       // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
       // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
       // 现网新核心此前不亮 typing（转正补齐的 e2e 平账项）。
+      const turnTimeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
+      let turnTimer = null
+      const timeoutPromise = new Promise((resolve, reject) => {
+        turnTimer = setTimeout(() => {
+          const error = new Error(`DSH 回合超过 ${Math.ceil(turnTimeoutMs / 1000)} 秒未结束；已释放等待，迟到回复不会投递`)
+          error.turnTimedOut = true
+          reject(error)
+        }, turnTimeoutMs)
+        turnTimer.unref?.()
+      })
+      const clearTurnTimer = () => { if (turnTimer) clearTimeout(turnTimer); turnTimer = null }
       activity.startTyping(String(sessionId), chat, getConfig(), pingTyping)
       steeringChats.add(turn.chatKey)
       const stopTyping = () => { try { activity.stopTyping(String(sessionId)) } catch {} }
       let followupError = null
       try {
-        await agent.followup(message)
+        await Promise.race([agent.followup(message), timeoutPromise])
       } catch (error) {
         followupError = error
       }
       if (followupError) {
+        clearTurnTimer()
         steeringChats.delete(turn.chatKey)
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
         stopTyping()
+        if (followupError.turnTimedOut) resetChat(turn.chatKey)
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
       followupDone = true
       if (!activeSteers) finishReply()
       let reply
       try {
-        reply = await replyPromise
+        reply = await Promise.race([replyPromise, timeoutPromise])
+        clearTurnTimer()
         steeringChats.delete(turn.chatKey)
         stopTyping()
       } catch (error) {
+        clearTurnTimer()
         steeringChats.delete(turn.chatKey)
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
+        if (error.turnTimedOut) resetChat(turn.chatKey)
         throw error
       }
 
@@ -1194,8 +1253,26 @@ export function createModularCore({
         if (typeof off !== 'function') { cleanup(); reject(new Error('DSH 没有 session/event 流')) }
       })
       const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(text || '') }], source: { kind: 'qq-hub' } }
-      try { await agent.followup(message) } catch (error) { cleanup(); throw error }
-      try { return await result } catch (error) { cleanup(); throw error }
+      const timeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
+      let timer = null
+      const timeout = new Promise((resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error(`主动回合超过 ${Math.ceil(timeoutMs / 1000)} 秒未结束`)
+          error.turnTimedOut = true
+          reject(error)
+        }, timeoutMs)
+        timer.unref?.()
+      })
+      try {
+        await Promise.race([agent.followup(message), timeout])
+        return await Promise.race([result, timeout])
+      } catch (error) {
+        cleanup()
+        if (error.turnTimedOut) resetChat(chatKey)
+        throw error
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
     })
   }
 
@@ -1220,6 +1297,7 @@ export function createModularCore({
       const reg = ctxGet('workspaceRegistry')
       Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
     } catch { /* 归档失败不影响重置 */ }
+    cleanupSession(entry.sessionId)
     try { registry.forget?.(key) } catch { /* ignore */ }
     debug(`会话已重置（新核心）：${key}`)
     return true
@@ -1254,6 +1332,9 @@ export function createModularCore({
     registry,
     controller,
     dispose,
-    stats: () => ({ sessions: Object.keys(registry.snapshot()).length }),
+    stats: () => ({
+      sessions: Object.keys(registry.snapshot()).length,
+      cacheEntries: ctxBoxes.size + ctxBound.size + personaBound.size + ctxFallback.size + ctxFallbackDone.size + mountedTools.size,
+    }),
   }
 }

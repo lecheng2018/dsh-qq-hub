@@ -84,3 +84,23 @@ test('flag-off：legacy 入口 ACL 不受新核心影响——白名单外私聊
   await sleep(600) // 给足异步窗口；正确行为是入口就拒，不该有任何发送
   assert.equal(mock.sent('send_private_msg').length, beforeCount, '白名单外的私聊在 legacy 入口被拒')
 })
+
+
+test('flag-off：legacy 入站二进制文件会实际落盘，不因缺少异步 fs 导入而失败', async () => {
+  const event = priv(OWNER, [{
+    type: 'file',
+    data: { file_name: '资料.bin', base64: `base64://${Buffer.from([0, 1, 2, 3]).toString('base64')}` },
+  }])
+  mock.push(event)
+  let turn
+  for (let i = 0; i < 100; i++) {
+    turn = fake.turns.find((item) => String(item.userText).includes('资料.bin'))
+    if (turn) break
+    await sleep(50)
+  }
+  const text = String(turn?.userText || '')
+  assert.match(text, /已经存在 .*qq-inbox.*要看得用工具读/, `legacy 二进制入站失败：${text}`)
+  assert.doesNotMatch(text, /mkdir is not defined|writeFile is not defined/)
+  const file = text.match(/已经存在 (.+?)，要看得用工具读/)?.[1]
+  assert.ok(file && existsSync(file), '落盘文件必须真实存在')
+})
