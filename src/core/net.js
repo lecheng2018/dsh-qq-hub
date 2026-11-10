@@ -74,6 +74,10 @@ export async function fileSegmentBytes(seg, onebot, o = {}) {
   const d = (seg && seg.data) || {}
   const maxBytes = o.maxBytes ?? 20 * 1024 * 1024
 
+  // 先按大小挡一刀，省得白跑一趟；直接给 url/base64 也不能绕过
+  const declared = Number(d.file_size ?? d.fileSize ?? 0)
+  if (declared > maxBytes) throw new Error(`文件太大了（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+
   // 少数实现会直接给 url / base64，能用就直接用
   for (const src of [d.url, d.base64].filter((x) => typeof x === 'string' && x.trim())) {
     return await fetchImage(src, { ...o, maxBytes })
@@ -81,10 +85,6 @@ export async function fileSegmentBytes(seg, onebot, o = {}) {
 
   const fileId = String(d.file_id || d.fileId || d.id || '').trim()
   if (!fileId) throw new Error('这个文件段没有 file_id，拿不到下载地址')
-
-  // 先按大小挡一刀，省得白跑一趟
-  const declared = Number(d.file_size ?? d.fileSize ?? 0)
-  if (declared > maxBytes) throw new Error(`文件太大了（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
 
   const chat = o.chat || {}
   const isGroup = (chat.kind || d._kind || '') === 'group' || Boolean(chat.groupId)
