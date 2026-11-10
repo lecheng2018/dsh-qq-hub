@@ -411,3 +411,26 @@ test('ledger：超过七天的 sent/cancelled 裁正文，元数据保留；unkn
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+test('ledger 崩溃恢复：queued 标 cancelled 并落盘，sending 仍恢复 unknown，均不重发', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'm2d-queued-recovery-'))
+  const file = join(dir, 'deliveries.json')
+  const base = { contractVersion: 1, chatKey: 'private:1', sourceModuleId: 'core', attemptCount: 0, createdAt: Date.now(), segments: segs() }
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, deliveries: [
+      { ...base, deliveryId: 'queued-before-crash', state: 'queued' },
+      { ...base, deliveryId: 'sending-before-crash', state: 'sending', attemptCount: 1 },
+    ] }))
+    const book = createDeliveryLedger({ file })
+    assert.equal(book.get('queued-before-crash').state, 'cancelled', 'queued 不能永远伪装成排队中')
+    assert.match(book.get('queued-before-crash').cancelReason, /crash-recovery/)
+    assert.equal(book.get('sending-before-crash').state, 'unknown')
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    const byId = new Map(saved.deliveries.map((item) => [item.deliveryId, item.state]))
+    assert.equal(byId.get('queued-before-crash'), 'cancelled', '恢复结果必须写回台账')
+    assert.equal(byId.get('sending-before-crash'), 'unknown')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
