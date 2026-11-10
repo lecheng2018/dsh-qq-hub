@@ -48,7 +48,7 @@ test('修改或重置控制台密码必须带有效联动密钥', async () => {
   try {
     const before = api.getConfig().snowluma.webuiPassword
     for (const path of ['/snowluma/set-password', '/snowluma/reset-password']) {
-      const denied = await fake.call(path, { password: 'weak' })
+      const denied = await fake.call(path, { password: 'weak' }, {}, { admin: false })
       assert.equal(denied.status, 401, path)
       const wrong = await fake.call(path, { password: 'weak' }, { 'x-qq-hub-token': 'wrong' })
       assert.equal(wrong.status, 401, path)
@@ -63,7 +63,7 @@ test('/save 修改控制台密码也要求鉴权且失败时不改配置', async
   const { fake, mock, api } = await fixture()
   try {
     const before = api.getConfig().snowluma.webuiPassword
-    const denied = await fake.call('/save', { snowluma: { webuiPassword: 'weak' } })
+    const denied = await fake.call('/save', { snowluma: { webuiPassword: 'weak' } }, {}, { admin: false })
     assert.equal(denied.status, 401)
     assert.equal(api.getConfig().snowluma.webuiPassword, before)
     const allowed = await fake.call('/save', { snowluma: { webuiPassword: 'weak' } }, { 'x-qq-hub-token': TOKEN })

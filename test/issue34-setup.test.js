@@ -20,6 +20,7 @@ test('未核对不能跳过；已有连接核对机器人号后可以完成并�
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
     enabled: true, setupDone: false, botQQ: BOT, ownerQQ: OWNER,
     snowluma: { httpUrl: mock.httpUrl, wsUrl: mock.wsUrl, httpToken: mock.token, wsToken: mock.token },
+    bridge: { http: true, token: 'setup-panel-admin-token' },
   }))
   const { apply } = await import('../src/host.js')
   const api = apply(fake.ctx)

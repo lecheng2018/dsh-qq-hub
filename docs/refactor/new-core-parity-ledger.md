@@ -10,7 +10,7 @@
 | `test/e2e.test.js` | 70/70 | 默认新核心，不再设置 `FLAG_MODULAR_CORE=false` |
 | `test/modules.test.js` | 22/22 | 模块、开放接口、DSH 联动、模拟测试均走默认新核心 |
 | M2/M4/M5/M6/M7 + 自检定向套件 | 79 项中 78 通过后被修正；需随最终全量复核 | 流水测试原先用 UTC 日期读本地流水，已改用 `chatLogDays()` |
-| 主仓 `npm test` | 1541 pass / 0 fail / 4 skip（共 1545） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
+| 主仓 `npm test` | 1558 pass / 0 fail / 4 skip（共 1562） | 跳过项为 Windows 平台、CI 性能门禁和本机缺少 DSH 附件组件 |
 | 扩展 `npm run test:extensions` | 46/46 | tieba-reader |
 | `npm run pack:check` | 通过 | npm 包内容可生成 |
 
@@ -137,3 +137,17 @@
 - modular 默认路径复用 createRatelimitMiddleware.take，按 chatKey+userId 限流；scheduler 默认每聊天最多 50 排队任务，超限 queue full。
 - 定向：面板敏感信息 3/3 + modules 22/22；ledger 22/22；scheduler 与 modular 限流各 1/1。
 - 补充：历史 sent/cancelled 在加载时也立即裁至 2048 字并 persist，unknown/failed 全文保留；ledger 最终 23/23。
+
+## AuraBot 借鉴三项落地（2026-11-11）
+
+- 出站 sanitize 在 parseReply 前处理 DSML/Harmony、工具残片和提示词复读；代码与 JSON 示例先隔离再恢复，防误删。
+- createPanelGuard 对所有 mutating 请求统一 bridge 鉴权，真实 HTTP 401；只读和 CSRF 规则保持，API 不允许轮换联动密钥。
+- imagegen 记录本轮唯一明确 @/引用请求，hub 只给该主人在当前文本中的生图请求借权；其他权限面不变。
+- 整合回归：新增出站/面板/生图用例通过，原失败 E2E 已恢复；旧夹具改为显式持密钥，无生产后门。
+
+## Outbox 与台账资源收口（2026-11-11）
+
+- passMap 在链收尾、按次 dryRun、enqueue 失败时均 delete；dispose 原有 clear 保留。
+- auditSegments 对 file/url/base64 中的 base64 内容改存 sha256+bytes+encoding，不修改原始请求。
+- 默认 maxRecords=2000，只淘汰最旧 sent/cancelled；活跃、失败和 unknown 记录豁免。加载旧文件也执行同一上限。
+- 新增三项回归，ledger/outbox 定向 26/26。
