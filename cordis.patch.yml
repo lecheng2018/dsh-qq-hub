@@ -31,6 +31,8 @@
               #（实测 19:50 的消息，她手里还是 19:42 那个时间戳）。改成 1 分钟。
               # 每轮那行中文时间锚是插件自己加的（src/chat/clockline.js），这条只管 DSH 那份也保持新鲜。
               refreshIntervalMs: 60000
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
             disabled: !!js process.platform === 'win32'
@@ -87,6 +89,8 @@
               #（实测 19:50 的消息，她手里还是 19:42 那个时间戳）。改成 1 分钟。
               # 每轮那行中文时间锚是插件自己加的（src/chat/clockline.js），这条只管 DSH 那份也保持新鲜。
               refreshIntervalMs: 60000
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-bash
             name: '@deepseek-ai/dsh-tool-bash'
             disabled: !!js process.platform === 'win32'

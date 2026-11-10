@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { createHostEffects } from '../src/host/effects.js'
 
@@ -55,4 +56,20 @@ test('userQuestions：卸载后恢复原服务，不保留旧会话闭包', asyn
   const result = await service.ask({ agent: { session: { id: 'qq-session' } } })
   assert.equal(result.source, 'original')
   assert.equal(original.length, 1)
+})
+
+
+test('userQuestions：主人私聊 preset 声明提问工具，social 不声明', () => {
+  const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+  const presetBlock = (id) => {
+    const start = patch.indexOf(`    - id: preset-${id}`)
+    assert.ok(start >= 0, `缺少 preset ${id}`)
+    const rest = patch.slice(start)
+    const next = rest.slice(1).search(/\n    - id: preset-/)
+    return next < 0 ? rest : rest.slice(0, next + 1)
+  }
+  for (const id of ['qq-hub-private', 'qq-hub-private-long']) {
+    assert.match(presetBlock(id), /name: '@deepseek-ai\/dsh-tool-ask-user'/, `${id} 首轮不会有 ask_user_question`)
+  }
+  assert.doesNotMatch(presetBlock('qq-hub-social'), /dsh-tool-ask-user/, '群聊不开放提问卡')
 })
