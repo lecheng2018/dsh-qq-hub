@@ -24,8 +24,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Root Test Dependencies
+        run: npm ci
+
       - name: Install Extension Test Dependencies
         run: npm ci --prefix extensions/tieba-reader
+
+      - name: Run Static Checks
+        run: npm run lint
 
       - name: Run All Tests
         run: npm run test:all
