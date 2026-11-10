@@ -427,8 +427,8 @@ test('outbox：直通参数在完成后释放，按次 dryRun 也不保留', asy
   const source = readFileSync(new URL('../src/chat/outbox.js', import.meta.url), 'utf8')
   await outbox.request({ chatKey: 'private:1', action: 'send_private_msg', params: { user_id: 1, message: '完成' }, receipt: 'required' })
   await outbox.request({ chatKey: 'private:1', action: 'send_private_msg', params: { user_id: 1, message: '试运行' }, receipt: 'required', dryRun: true })
-  const cleanup = source.match(/const cleanup = \(\) => \{([\s\S]*?)\n    \}/)?.[1] || ''
-  assert.match(cleanup, /passMap\.delete\(deliveryId\)/)
+  const cleanups = [...source.matchAll(/const cleanup = \(\) => \{([\s\S]*?)\n    \}/g)].map((match) => match[1])
+  assert.ok(cleanups.some((cleanup) => cleanup.includes('pending.delete(deliveryId)') && cleanup.includes('passMap.delete(deliveryId)')))
   const dryRun = source.match(/if \(req\?\.dryRun === true\) \{([\s\S]*?)\n    \}/)?.[1] || ''
   assert.match(dryRun, /passMap\.delete\(deliveryId\)/)
   outbox.dispose()

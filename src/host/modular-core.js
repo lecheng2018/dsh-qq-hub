@@ -32,6 +32,7 @@ import { mimeOf } from '../chat/inbound.js'
 import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
+import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
@@ -223,8 +224,8 @@ function segmentsToContent(members) {
  *   聊天流水（真机审计：新核心不写 chatlog → 记忆整理/蒸馏/黑话/日记四条链无料；实测当天进站 5900、流水 12 行）
  * @param {(sessionId: string, senders: string[], opts?: object) => void} [o.noteSpeakers]
  *   回合说话人登记（hub.turnState 数据源；memory.contextFor 取「正在说话的几个人」靠它）
- * @param {(chatId: string, segments: Array, userId: string) => void} [o.collectInboundStickers]
- *   入站表情收集（真机审计：不调 stickers.collect → 表情库不再增长）
+ * @param {(chatId: string, segments: Array, userId: string) => number|void} [o.collectInboundStickers]
+ *   入站表情收集；返回暂存候选数供本轮提示
  * @param {(where: object) => Array<object>} [o.buildTools]
  *   模块工具生成器（与 legacy hub.mount 同一份）。新核心此前**完全没挂工具**，
  *   导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，只能拿 bash+curl 自己绕（真机实测）。
@@ -286,6 +287,8 @@ export function createModularCore({
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
+  const stickerPicks = new WeakMap()
+  const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
   const moodChatty = () => {
     try {
       const m = typeof moodEffects === 'function' ? moodEffects() : null
@@ -328,6 +331,33 @@ export function createModularCore({
       return { kind: 'group', chatId: key, groupId: key.slice(6), userId: String(lead?.sender?.userId ?? ''), nickname: String(lead?.sender?.nickname || '') }
     }
     return { kind: 'private', chatId: key, groupId: '', userId: key.slice(8), nickname: String(members?.[0]?.sender?.nickname || '') }
+  }
+
+  const selectedModels = new Map()
+  const modelKey = (target) => target ? `${target.provider}::${target.model}::${target.reasoningEffort || ''}` : ''
+  async function resolveTarget(chat) {
+    const cfg = getConfig()
+    const base = defaultModel(dsh, cfg)
+    let sel = base ? { provider: base.provider, model: base.model, reasoningEffort: cfg.model?.reasoningEffort || '' } : null
+    const specific = resolveChatModel(cfg, chat, typeof availableModels === 'function' ? availableModels() : null)
+    if (specific) sel = { provider: specific.provider, model: specific.model, reasoningEffort: specific.reasoningEffort || cfg.model?.reasoningEffort || '' }
+    if (typeof moduleHooks?.model === 'function') sel = moduleHooks.model(sel, chat) ?? sel
+    if (!sel?.provider || !sel?.model) return null
+    const target = { provider: sel.provider, model: sel.model }
+    const effort = await pickReasoningEffort(dsh, target.provider, target.model, sel.reasoningEffort || undefined)
+    if (effort) target.reasoningEffort = effort
+    return target
+  }
+  async function applySessionModel(agent, sessionId, target) {
+    const ctrl = ctxGet('sessionController')
+    const select = ctrl?.agents?.selectForNextRequest
+    let result
+    if (typeof select === 'function') result = await select.call(ctrl.agents, agent, target)
+    else if (typeof agent?.session?.append === 'function') result = await agent.session.append('model/selection', target)
+    else return false
+    if (result === false) return false
+    selectedModels.set(String(sessionId), modelKey(target))
+    return true
   }
 
   /** 图片段必须登记成 DSH 附件（attachmentId）。DSH 只认 base64 编码图片
@@ -484,7 +514,30 @@ export function createModularCore({
       return { agentPreset: presetFor(level, cfg) }
     },
   })
-  const sessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
+  const sessionPersonas = new Map()
+  const currentPersona = (chatKey) => personaIdFor(chatViewFor(chatKey), getConfig())
+  const baseSessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
+  const sessionStore = baseSessionStore && {
+    load() {
+      const entries = baseSessionStore.load()
+      for (const [chatKey, entry] of Object.entries(entries)) {
+        if (!entry?.sessionId) continue
+        sessionPersonas.set(chatKey, { sessionId: String(entry.sessionId), personaId: entry.personaId || currentPersona(chatKey) })
+      }
+      return entries
+    },
+    save(entries) {
+      const enriched = Object.fromEntries(Object.entries(entries).map(([chatKey, entry]) => {
+        let persona = sessionPersonas.get(chatKey)
+        if (!persona || persona.sessionId !== entry.sessionId) {
+          persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+          sessionPersonas.set(chatKey, persona)
+        }
+        return [chatKey, { ...entry, personaId: persona.personaId }]
+      }))
+      baseSessionStore.save(enriched)
+    },
+  }
   // 群名是异步查到的：建会话时可能还退着群号，拿到真名后补一次 rename（适配器内有去重，不会刷屏）。
   function refreshGroupTitles(reg) {
     Promise.resolve().then(async () => {
@@ -509,13 +562,40 @@ export function createModularCore({
     }).catch(() => {})
   }
   const registry = createSessionRegistry({
-    createSession: sessionAdapter.createSession,
+    createSession: async (chatKey, hint) => {
+      const personaId = currentPersona(chatKey)
+      const created = await sessionAdapter.createSession(chatKey, hint)
+      if (created?.sessionId) sessionPersonas.set(chatKey, { sessionId: String(created.sessionId), personaId })
+      return created
+    },
     ...(sessionStore ? { store: sessionStore } : {}),
     onError: (e) => log.warn('session 映射持久化异常：', e.message),
   })
   backfillTitles(registry)
   refreshGroupTitles(registry)
   const turnAt = (chatKey) => registry.markTurn(chatKey)
+  const sessions = () => Object.fromEntries(Object.entries(registry.snapshot()).map(([chatKey, entry]) => {
+    let persona = sessionPersonas.get(chatKey)
+    if (!persona || persona.sessionId !== entry.sessionId) {
+      persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+      sessionPersonas.set(chatKey, persona)
+    }
+    return [chatKey, { ...entry, personaId: persona.personaId }]
+  }))
+  async function sessionForChat(chatKey) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const entry = await registry.sessionFor(chatKey)
+      if (registry.peek(chatKey)?.sessionId !== entry.sessionId) continue
+      let persona = sessionPersonas.get(chatKey)
+      if (!persona || persona.sessionId !== entry.sessionId) {
+        persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+        sessionPersonas.set(chatKey, persona)
+      }
+      if (persona.personaId === currentPersona(chatKey)) return entry
+      resetChat(chatKey)
+    }
+    throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
+  }
 
   // ---------- Context Assembly（模块上下文 + 人格） ----------
   const assembly = createContextAssembly({
@@ -633,6 +713,7 @@ export function createModularCore({
     ctxBound.delete(sid)
     ctxFallback.delete(sid)
     ctxFallbackDone.delete(sid)
+    selectedModels.delete(sid)
     slowNoticeSent.delete(sid)
     for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
   }
@@ -742,11 +823,9 @@ export function createModularCore({
       if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
-      // 1. 装配上下文（persona + 模块 provider；chat 视图透传给 legacy provider 契约）
-      const sessionId0 = registry.peek(turn.chatKey)?.sessionId
-      const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId: sessionId0, chat })
-      // 2. 会话（single-flight 创建在 offer 时已发生；这里拿映射）
-      const { sessionId } = await registry.sessionFor(turn.chatKey)
+      const { sessionId } = await sessionForChat(turn.chatKey)
+      // 装配上下文时使用当前会话，避免重建人设后仍传入旧 sessionId。
+      const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId, chat })
       const queryText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       // 回合说话人登记（speakersOf 的数据源；群聊记忆检索要用）
       try { noteSpeakers?.(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean), { chatId: turn.chatKey, queryText }) } catch {}
@@ -780,6 +859,8 @@ export function createModularCore({
         if (index >= 0) content[index] = { ...content[index], text: `${source}\n${timeHead}\n${content[index].text || ''}` }
         else content.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
       }
+      const stickerPick = io.members.reduce((count, member) => stickerPicks.has(member) ? stickerPicks.get(member) : count, 0)
+      if (stickerPick) content.push({ type: 'text', text: stickerHint(stickerPick) })
       const recovered = io.members.filter((member) => isBackfill(member))
       if (recovered.length) {
         const earliest = Math.min(...recovered.map((member) => Number(member.timestamp) || Date.now()))
@@ -824,6 +905,8 @@ export function createModularCore({
           const index = steerContent.findIndex((block) => block.type === 'text')
           if (index >= 0) steerContent[index] = { ...steerContent[index], text: `${source}\n${timeHead}\n${steerContent[index].text || ''}` }
           else steerContent.unshift({ type: 'text', text: `${source}\n${timeHead}\n` })
+          const stickerPick = stickerPicks.get(inbound)
+          if (stickerPick) steerContent.push({ type: 'text', text: stickerHint(stickerPick) })
           const steerQuery = textOfSegments(inbound.segments)
           try { noteSpeakers?.(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
           if (typeof moduleHooks?.prompt === 'function') {
@@ -843,21 +926,8 @@ export function createModularCore({
       //     风格/成本不一致，纯文本模型还会连带把看图堵死。与 legacy applyModel 同款：
       //     只改本会话下一请求（selectForNextRequest），绝不动 DSH 全局默认。
       try {
-        const cfgNow = getConfig()
-        let sel = null
-        const t0 = defaultModel(dsh, cfgNow)
-        if (t0) sel = { provider: t0.provider, model: t0.model, reasoningEffort: cfgNow.model?.reasoningEffort || '' }
-        const t1 = resolveChatModel(cfgNow, chat, typeof availableModels === 'function' ? availableModels() : null) // 主人按聊天指定的优先；面板指定模型已从 DSH 消失时要退回下一级（与 legacy hub.js:411 同口径）
-        if (t1) sel = { provider: t1.provider, model: t1.model, reasoningEffort: t1.reasoningEffort || cfgNow.model?.reasoningEffort || '' }
-        if (typeof moduleHooks?.model === 'function') sel = moduleHooks.model(sel, chat) ?? sel
-        if (sel?.provider && sel?.model) {
-          const target = { provider: sel.provider, model: sel.model }
-          const effort = await pickReasoningEffort(dsh, target.provider, target.model, sel.reasoningEffort || undefined)
-          if (effort) target.reasoningEffort = effort
-          const selFn = ctrl.agents?.selectForNextRequest
-          if (typeof selFn === 'function') selFn.call(ctrl.agents, agent, target)
-          else if (typeof agent?.session?.append === 'function') agent.session.append('model/selection', target)
-        }
+        const target = await resolveTarget(chat)
+        if (target) await applySessionModel(agent, sessionId, target)
       } catch (error) { debug(`模型选择未生效（用默认）：${error.message}`) }
 
       // 4.6 上下文与人设挂载（真机审计 1.1 第一层 + 1.2）：legacy 的 seam 是
@@ -1188,7 +1258,10 @@ export function createModularCore({
     try { noteMedia?.(inbound.chatKey, inbound.segments, userId) } catch {}
     // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/蒸馏/黑话/日记都从它取料
     try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
-    try { collectInboundStickers?.(inbound.chatKey, inbound.segments, userId) } catch {}
+    try {
+      const count = collectInboundStickers?.(inbound.chatKey, inbound.segments, userId)
+      if (typeof count === 'number') stickerPicks.set(inbound, count)
+    } catch {}
     if (inGroup) {
       const offerWithDecision = (decision) => {
         emitActivity(mods, inbound, { direct: mentioned || decision.mode === 'must', owner: fromOwner })
@@ -1256,7 +1329,7 @@ export function createModularCore({
   async function runPromptTurn(chatKey, text) {
     return controller.runExclusive(chatKey, async () => {
       if (timedOutChats.delete(chatKey)) resetChat(chatKey)
-      const { sessionId } = await registry.sessionFor(chatKey)
+      const { sessionId } = await sessionForChat(chatKey)
       const ctrl = ctxGet('sessionController')
       const resolved = await ctrl?.resolveAgent?.(sessionId)
       const agent = resolved?.agent
@@ -1328,6 +1401,7 @@ export function createModularCore({
       Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
     } catch { /* 归档失败不影响重置 */ }
     cleanupSession(entry.sessionId)
+    sessionPersonas.delete(key)
     try { registry.forget?.(key) } catch { /* ignore */ }
     debug(`会话已重置（新核心）：${key}`)
     return true
@@ -1351,9 +1425,49 @@ export function createModularCore({
     return ''
   }
 
+  async function syncAllModels() {
+    let applied = 0
+    let skipped = 0
+    let failed = 0
+    let dropped = 0
+    const detail = []
+    for (const [chatId, entry] of Object.entries(registry.snapshot())) {
+      const sessionId = String(entry?.sessionId || '')
+      if (!sessionId) { skipped++; continue }
+      let want = ''
+      try {
+        const target = await resolveTarget(chatViewFor(chatId))
+        want = modelKey(target)
+        if (!want || selectedModels.get(sessionId) === want) { skipped++; continue }
+        const ctrl = ctxGet('sessionController')
+        if (!ctrl?.resolveAgent) throw new Error('DSH 没有 sessionController.resolveAgent')
+        const resolved = await ctrl.resolveAgent(sessionId)
+        if (!resolved?.agent) throw new Error(resolved?.error?.message || resolved?.error?.code || 'no session')
+        if (registry.peek(chatId)?.sessionId !== sessionId) { skipped++; continue }
+        if (!await applySessionModel(resolved.agent, sessionId, target)) throw new Error('会话模型选择不可用')
+        applied++
+        detail.push({ chatId, want, ok: true })
+      } catch (error) {
+        failed++
+        const item = { chatId, ...(want ? { want } : {}), ok: false, error: String(error?.message || error) }
+        if (/not[ -]found|不存在|已归档|no session/i.test(item.error) && registry.peek(chatId)?.sessionId === sessionId) {
+          cleanupSession(sessionId)
+          sessionPersonas.delete(chatId)
+          registry.forget(chatId)
+          item.dropped = true
+          dropped++
+        }
+        detail.push(item)
+      }
+    }
+    return { applied, skipped, failed, dropped, detail }
+  }
+
   return {
     dispatchLegacyEvent,
     runPromptTurn,
+    syncAllModels,
+    sessions,
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,

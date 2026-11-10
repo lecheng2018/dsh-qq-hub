@@ -42,6 +42,20 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
   const passMap = new Map()
   let disposed = false
 
+  function reserve(chatKey) {
+    if (disposed) return null
+    parseChatKey(chatKey)
+    const ticket = { previous: chains.get(chatKey) || Promise.resolve(), chain: null }
+    let releaseGate
+    const gate = new Promise((resolve) => { releaseGate = resolve })
+    const chain = ticket.previous.catch(() => {}).then(() => gate)
+    ticket.chain = chain
+    chains.set(chatKey, chain)
+    const cleanup = () => { if (chains.get(chatKey) === chain) chains.delete(chatKey) }
+    chain.then(cleanup, cleanup)
+    return { ticket, release: releaseGate }
+  }
+
   /**
    * 请求发送（模块/核心统一入口）。
    * 消息模式使用 segments；直通模式使用 action + params + opts + receipt。
@@ -86,7 +100,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     }
 
     // 每聊天 FIFO：链注册同步发生，慢授权不会被后入队的快授权超车。
-    const prev = chains.get(chatKey) || Promise.resolve()
+    const prev = req?._outboxTicket?.previous || chains.get(chatKey) || Promise.resolve()
     const chain = prev.catch(() => {}).then(() => drainOne(rec, req))
     chains.set(chatKey, chain)
     pending.add(deliveryId)
@@ -231,5 +245,5 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     return id
   }
 
-  return { request, cancel, dispose, recordExternal, ledger: book }
+  return { request, reserve, cancel, dispose, recordExternal, ledger: book }
 }
