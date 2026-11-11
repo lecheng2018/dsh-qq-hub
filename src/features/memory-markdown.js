@@ -131,7 +131,6 @@ export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
   const prologueLines = []
 
   let inEntry = false
-  let seenEntry = false
   let entryMeta = null
   let entryLines = []
   let entryStartLine = 0
@@ -158,7 +157,6 @@ export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
       }
       seenIds.add(entryMeta.id)
       inEntry = true
-      seenEntry = true
       entryLines = []
       entryStartLine = i + 1
       continue
@@ -188,8 +186,7 @@ export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
 
     if (inEntry) {
       entryLines.push(line)
-    } else if (!seenEntry) {
-      // 仅在首个 entry 之前提取前言，且过滤掉结构化 Section 标题（防止重复追加膨胀）
+    } else {
       if (!/^##\s+(当前记忆|历史记录|历史档案)\s*$/.test(trimmed)) {
         prologueLines.push(line)
       }

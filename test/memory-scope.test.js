@@ -252,8 +252,12 @@ test('无 scope 的老记忆不会出现在任何作用域索引里（迁移必�
   }), 'utf8')
   const prev = process.env.AURABOT_DATA_DIR
   process.env.AURABOT_DATA_DIR = alone
-  const s3 = createMemoryStore({ dsh: { get: () => null }, getConfig: () => cfg,
-    hub: { ask: noop, speakersOf: () => [] }, log: { info: noop, warn: noop, debug: noop, error: noop } })
+  const { migrateToMarkdown } = await import('../scripts/migrate-memory-markdown.js')
+  const options = { dsh: { get: () => null }, getConfig: () => cfg,
+    hub: { ask: noop, speakersOf: () => [] }, log: { info: noop, warn: noop, debug: noop, error: noop } }
+  assert.throws(() => createMemoryStore(options), /迁移/)
+  migrateToMarkdown(alone, { log: options.log })
+  const s3 = createMemoryStore(options)
   try {
     const own = { chatId: 'private:' + cfg.ownerQQ, kind: 'private', userId: String(cfg.ownerQQ) }
     assert.ok(!s3.indexFor(own).docs.some((x) => x.it.id === 'raw01'), '主人私聊的索引里也不该有它')
