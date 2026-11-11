@@ -17,33 +17,48 @@ import { renderGrowthSegment } from '../features/distill-pipeline.js'
 /** 派生卡 id：稳定可推导，群号做后缀。 */
 export const distillCardId = (gid) => `persona-语感-${String(gid)}`
 
-/** 画像 → 「【从群友身上借来的说话方式】」段落。多个目标就拼多块。 */
-export function renderStyleBlock (entries) {
+/** 画像 → 「【当前群聊语感微调 · 风格参考】」段落（RFC 蒸馏群友重构 模块三）。
+ * 旧版开头写「我在这个群接话就照着他的应对方式来」——第一人称接管式表述会把底卡人设整个
+ * 掀掉（底卡是撒娇弱妹、尾部是技术爹味，人格撕裂）。新版是「外挂滤镜」协议：底卡身份不动，
+ * 语感只在语境契合时生效；且永不渲染他的真实经历（学的时候就不该提炼，渲染再拦一道）。 */
+export function renderStyleBlock (entries, { syntaxOnly = false } = {}) {
   const parts = []
   for (const { name, profile } of entries || []) {
     const p = normalizeProfile(profile || {})
-    if (!p.exchanges.length && !p.syntax.length && !p.catchphrases.length && !p.persona.length && !p.samples.length && !p.style.length) continue
     const who = String(name || '那位群友').slice(0, 20)
+    const footer = `（只借说话方式，不借身份：我不是${who}，不自称他、不替他表态、不提他个人隐私、不复述他的真实经历。）`
+    if (syntaxOnly) {
+      // 底卡冲突保护：强特化底卡只借节奏与断句习惯，性格类标签一律不注入（防双重人格）
+      if (!p.syntax.length) continue
+      parts.push(`【语感参考 · ${who}】\n- 发言节奏参考：\n  · ${p.syntax.join('\n  · ')}\n（只借说话节奏，不借身份：我不是${who}，不自称他、不替他表态。）`)
+      continue
+    }
     const blocks = []
-    if (p.exchanges.length) blocks.push('我在这个群接话就照着他的应对方式来（学应对方式，聊天内容绝不照搬）：\n' + p.exchanges.map((x) => '- ' + x).join('\n'))
-    const voice = []
-    if (p.catchphrases.length) voice.push('口头禅：' + p.catchphrases.join('；'))
-    if (p.syntax.length) voice.push('句子架构：' + p.syntax.join('；'))
-    if (p.rhetoric.length) voice.push('修辞招式：' + p.rhetoric.join('；'))
-    if (voice.length) blocks.push(voice.join('\n'))
-    if (p.never.length) blocks.push('我不用他绝不会用的东西：' + p.never.join('；'))
-    if (p.persona.length) blocks.push('我借他神韵的地方：' + p.persona.join('；'))
-    if (p.samples.length) blocks.push('他的原话（校准节奏用，不引用）：' + p.samples.map((x) => '「' + x + '」').join(' '))
-    if (p.style.length) blocks.push('（旧画像）' + p.style.join('；') + (p.avoid.length ? '；他不会：' + p.avoid.join('；') : ''))
-    parts.push(`【语感·借自「${who}」】\n${blocks.join('\n')}\n（只借说话方式，不借身份：我不是${who}，不自称他、不替他表态、不提他个人隐私。）`)
+    if (p.exchanges.length) blocks.push('- 接话示范参考（学其接话姿势与语调节奏，不照搬字面内容）：\n  ' + p.exchanges.map((x) => String(x).replace(/\n/g, '\n  ')).join('\n  '))
+    if (p.syntax.length) blocks.push('- 发言节奏参考：\n  · ' + p.syntax.join('\n  · '))
+    if (p.rhetoric.length) blocks.push('- 态度取向：\n  · ' + p.rhetoric.join('\n  · '))
+    if (p.never.length) blocks.push('- 边界（不模仿他的私人经历；下列表达他从不使用，也不要从他身上学）：' + p.never.join('；'))
+    if (p.catchphrases.length) blocks.push('- 口头禅（多场景复现过的，仍带使用语境）：' + p.catchphrases.join('；'))
+    if (p.persona.length) blocks.push('- 可观察行为（旧画像遗留，逐条核对过依据的才保留）：' + p.persona.join('；'))
+    if (p.samples.length) blocks.push('- 原话校准（只校准节奏，绝不引用）：' + p.samples.map((x) => '「' + x + '」').join(' '))
+    if (p.style.length) blocks.push('- （旧画像）' + p.style.join('；') + (p.avoid.length ? '；他不会：' + p.avoid.join('；') : ''))
+    if (!blocks.length) continue
+    parts.push(`【语感参考 · ${who}】\n${blocks.join('\n')}\n${footer}`)
   }
   if (!parts.length) return ''
-  return '\n\n' + '【从群友身上借来的说话方式】\n\n' + parts.join('\n\n') + '\n'
+  return '\n\n' + '【当前群聊语感微调 · 风格参考】\n'
+    + '（本段属于外部语感滤镜：你在本群发言时，在保持自身原本身份设定的前提下，自然融入以下说话风格与聊天节奏。'
+    + '仅在语境契合时生效，日常闲聊切勿机械套用模板；严禁冒充对方真实身份或盗用其真实个人经历。）\n\n'
+    + parts.join('\n\n') + '\n'
 }
+
+/** 强特化底卡标签：命中就只借节奏与断句，性格类借用全部跳过（RFC 模块三 6.2）。 */
+export const STRONG_BASE_RE = /(妹妹|女仆|傲娇|萝莉|御姐|甜妹|撒娇|病娇|元气)/
 
 /** 派生卡正文 = 底卡正文 + 借用段 + 增长段（蒸馏流水线 L3，可选）。 */
 export function buildDerivedBody (baseBody, entries, growth) {
-  let body = String(baseBody || '').trimEnd() + renderStyleBlock(entries)
+  const strong = STRONG_BASE_RE.test(String(baseBody || ''))
+  let body = String(baseBody || '').trimEnd() + renderStyleBlock(entries, strong ? { syntaxOnly: true } : {})
   for (const g of growth || []) {
     const block = renderGrowthSegment(g.uid || g.name, g.segment)
     if (block) body += '\n\n' + block

@@ -16,7 +16,7 @@ import { dataDir } from '../core/store.js'
 import { askModel } from '../core/llm.js'
 import { openMemoryFiles } from './memory-files.js'
 import { conceptsOf } from './memory-concepts.js'
-import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
+import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo, extractMeaningfulInteractions } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
@@ -723,6 +723,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     }
     const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)
+    // RFC 模块一：先洗出「互动回执对」（别人说什么 → 他怎么接），光给原话模型只能提炼空中楼阁
+    const interactions = extractMeaningfulInteractions(hist.lines, u)
     const { system, text } = buildDistillPrompt({
       name: name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u,
       uid: u,
@@ -730,13 +732,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       context: dedupConvo(hist.lines).slice(-80),
       others,
       old,
+      interactions,
     })
     let out = ''
     try {
       // 8000：五段 JSON 会被截断（parse 就失败）；「自适应思考」模型的思考段也吃额度。
-      // reasoningEffort 不钉死 'none'：MiniMax-M3.1-Flash 之类必须自适应思考，disabled 直接 400
-      // → 蒸馏永远失败；交给 askModel 的 pickReasoningEffort 按模型能力挑。
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3 })
+      // reasoningEffort 默认 off：蒸馏是特征提取的机械任务（RFC 四维模型），推理模型的思考
+      // 会把答案发散成画像报告正文而不是约定 JSON（2026-11-12 生产排查：L1 两跑两败）。
+      // 想开思考用 memory.distillModel.reasoningEffort 指定；不支持 off 的模型由
+      // pickReasoningEffort 收敛回默认档，行为与旧版一致。
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3, reasoningEffort: cfg.memory?.distillModel?.reasoningEffort || 'off' })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -745,7 +750,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       log.warn(`蒸馏群友（历史）：${t0name} 回包解析失败，原始前 200 字：`, String(out).slice(0, 200))
       return { ok: false, message: '模型回包没解析成 JSON（原因已记日志，可再点一次重试）' }
     }
-    const hasProfile = Boolean(profile.exchanges?.length || profile.syntax?.length || profile.catchphrases?.length || profile.rhetoric?.length || profile.persona?.length || profile.samples?.length || profile.style?.length)
+    const hasProfile = Boolean(profile.exchanges?.length || profile.syntax?.length || profile.catchphrases?.length || profile.rhetoric?.length || profile.never?.length || profile.persona?.length || profile.samples?.length || profile.style?.length)
     if (!hasProfile) {
       log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
       return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }

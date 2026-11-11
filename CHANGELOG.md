@@ -1,5 +1,18 @@
 # 更新记录
 
+## 1.3.66-test.20261112.3
+
+- **蒸馏群友语感迁移按 RFC 重构（模块一/二/三/七）**，解决"学出来的画像没营养、用不上还容易撕裂人设"的问题：
+  - 语料清洗：新增 `extractMeaningfulInteractions`，把流水洗成「别人说什么 → 他怎么接」的互动回执对（滤纯转发/超短/系统噪声，凑不成对不收），对话对不再靠模型在两坨原文里自己猜；
+  - 四维微画像提示词：`buildDistillPrompt` 重写为 `dialogue_samples / typing_habits / tone_stance / negative_avoid` 四维模型，附三条铁律——只收高频共性（单次突发的专有名词不得升格为口头禅）、**绝对禁止把真实经历提炼成可模仿内容**（旧版学出过"拿自己旧号被封的经历作证"）、证据不足给空数组；
+  - 渲染层防撕裂：借用段从第一人称接管式（"我在这个群接话就照着他的应对方式来"）改为**外挂语感滤镜协议**（保持底卡身份、语境契合才生效、严禁冒充/盗用经历）；底卡含强特化标签（妹妹/女仆/傲娇等）时只注入节奏与断句习惯；
+  - 新旧 schema 双兼容：`normalizeProfile` 同时认 `dialogue_samples/typing_habits/tone_stance/negative_avoid`（新）与 `exchanges/syntax/rhetoric/never`（旧），对话对截断放宽到 220 字不再拦腰截断问答对；
+  - 历史学习（`learnDistillFromHistory`）：接互动对进 prompt、`reasoningEffort` 默认 `off`（蒸馏是机械提取，推理模型思考会发散成报告体，生产已复现；可用 `memory.distillModel.reasoningEffort` 覆盖）、判空检查补上 `never` 字段。
+- 测试夹具与注释脱敏：distill-card 测试里的真实群号/QQ号/昵称替换为假数据。
+- 新增回归测试：语料清洗成对、新 schema 解析映射、220 字放宽、协议头渲染、强特化底卡降级、提示词三条铁律在位。
+
+---
+
 ## 1.3.66-test.20261112.1
 
 - 预算守门员的压缩摘要请求显式关闭推理（`reasoningEffort: 'off'`）：推理模型默认 low 档先思考，会把 `maxTokens` 输出预算吃掉 —— 摘要被截断（实测群摘要只有 64 字且断在句中）甚至正文为空，空回包再触发 `askModel` 整轮重试，合计超过看门狗 90 秒，压缩反复失败（单日 25 次超时、单群连续 30 次失败）。关掉思考后输出预算全部给摘要正文，请求时长大幅缩短；不支持 `off` 档的模型由 `pickReasoningEffort` 收敛回默认档，行为不变。

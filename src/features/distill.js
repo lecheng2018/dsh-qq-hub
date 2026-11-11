@@ -57,6 +57,34 @@ export function collectMemberLines (lines, uid) {
   return out
 }
 
+/**
+ * 提取「互动回执对」：别人说了什么 → 他怎么接（RFC 蒸馏群友重构 模块一）。
+ * 光给他的原话，模型不知道每句是「在什么情境下脱口而出的」，提炼出来就是空中楼阁；
+ * 这里的清洗规则：
+ *   1. 剔除纯转发/链接/系统通知/超短拟声词（JUNK_RE + 最短长度）；
+ *   2. 每条回复必须带上前 1~3 条里最近的一条「别人说的」当语境，凑不成对的不收；
+ *   3. 截到 maxTurns 条为止——喂得再多模型也只看得见最后几屏。
+ */
+export function extractMeaningfulInteractions (lines, targetUid, { minLen = 3, maxTurns = 40 } = {}) {
+  const want = String(targetUid || '').trim()
+  if (!want) return []
+  const rows = (lines || [])
+    .map((l) => ({ ...l, t: Number(l.t ?? l.at) || 0, text: String(l.text || '').trim() }))
+    .filter((l) => l.text && !l.text.startsWith('【系统') && !JUNK_RE.test(l.text))
+    .sort((a, b) => a.t - b.t)
+  const out = []
+  for (let i = 1; i < rows.length && out.length < maxTurns; i++) {
+    const cur = rows[i]
+    if (String(cur.uid || '') !== want || cur.text.length < minLen || JUNK_RE.test(cur.text)) continue
+    let prev = null
+    for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+      if (String(rows[j].uid || '') !== want && rows[j].text) { prev = rows[j]; break }
+    }
+    if (prev) out.push({ t: cur.t, prompt: `${prev.name || prev.uid || '群友'}：${String(prev.text).slice(0, 120)}`, response: cur.text })
+  }
+  return out
+}
+
 /** 话太少就不值得花一次模型调用（学出来也是瞎猜）。门槛 20 句对齐 molroo 的 20~30 条建议。 */
 export function enoughEvidence (memberLines, { minMessages = 20, minChars = 120 } = {}) {
   const list = memberLines || []
@@ -68,49 +96,53 @@ export function enoughEvidence (memberLines, { minMessages = 20, minChars = 120 
 // dedupConvo 挪到了 chat/fish-guard.js（防刷屏工具归防刷屏模块），这里 re-export 保持既有调用方
 export { dedupConvo } from '../chat/fish-guard.js'
 
-export function buildDistillPrompt ({ name = '这个人', uid = '', memberLines = [], context = [], others = [], old = null } = {}) {
+export function buildDistillPrompt ({ name = '这个人', uid = '', memberLines = [], context = [], others = [], old = null, interactions = [] } = {}) {
   const who = String(name || '这个人').slice(0, 20)
   const said = (memberLines || []).slice(-120).map((x) => `他：${x.text.slice(0, 160)}`).join('\n')
-  // 交错的群聊原文（含别人和他），用来挑「一问一答」对话对；按 uid 标出「他：」
-  const want = String(uid || '')
-  const isHim = (x) => want && String((x && x.uid) || '') === want
   const convoLines = (context || []).slice(-160).map((x) => {
     if (typeof x === 'string') return x
     const text = String(x.text || '').slice(0, 120)
-    return isHim(x) ? `他：${text}` : `${x.name || ''}：${text}`
+    return String(x.uid || '') === String(uid) ? `他：${text}` : `${x.name || ''}：${text}`
   })
   const convo = convoLines.join('\n')
   const contrast = (others || []).slice(-20).map((x) => String(x).slice(0, 100)).join('\n')
+  const pairs = (interactions || []).slice(-24).map((x) => `- 对方：${String(x.prompt || '').slice(0, 120)}\n  他：${String(x.response || '').slice(0, 160)}`).join('\n')
   const oldText = old
-    ? `\n已有的旧画像（新证据里仍成立的保留、被推翻的丢掉，合并成一份，别越写越多）：\n`
-      + `句子架构：${(old.syntax || []).join('；') || '（无）'}\n`
-      + `口头禅：${(old.catchphrases || []).join('；') || '（无）'}\n`
+    ? `\n已有的旧画像（同字段结构；新证据里仍成立的保留、被推翻的丢掉，合并成一份，别越写越多）：\n`
+      + `dialogue_samples：${(old.exchanges || []).join(' ‖ ') || '（无）'}\n`
+      + `typing_habits：${(old.syntax || []).join('；') || '（无）'}\n`
+      + `tone_stance：${(old.rhetoric || []).join('；') || '（无）'}\n`
+      + `negative_avoid：${(old.never || []).join('；') || '（无）'}\n`
     : ''
   return {
+    // RFC 蒸馏群友重构 模块二：四维微画像（对话接话示范 / 打字节奏 / 态度倾向 / 负向边界）。
+    // 与旧版的关键区别：只借「语言组织方式」，明令禁止把他的真实经历提炼成可模仿内容——
+    // 旧版学出过「拿自己旧号被封的经历作证」这种模仿项，说了就是冒充本人。
     system: [
-      '你是语言风格分析师，擅长把「一个具体的人」蒸馏成可执行的模仿模板（参照角色卡工程的做法：',
-      '示例对话 > 形容词，行为 > 标签）。给你他在 QQ 群里的发言和群聊原文，输出 JSON 对象：',
-      '{"exchanges":[...],"syntax":[...],"catchphrases":[...],"rhetoric":[...],"never":[...],"persona":[...]}',
+      '你是语言风格分析师，从一个真实 QQ 群友的历史发言里，提炼他最具辨识度的「说话节奏与语感风格」，给另一个 AI 在该群参考着说。',
+      '只提炼语言组织方式（节奏、断句、口吻、接话套路）；绝不提炼他的个人经历、身份信息和具体生活事实。',
+      '输出且仅输出一个合法 JSON 对象，不要 Markdown 围栏、不要任何解释或前后缀：',
+      '{"dialogue_samples":["问：对方的话\\n答：他的原话（逐字保留）"],"typing_habits":["…"],"tone_stance":["…"],"negative_avoid":["…"]}',
       '',
-      'exchanges（最重要）：从群聊原文里挑 2~3 组**一问一答**——别人问/说什么、他怎么接。',
-      '  格式一组一条字符串："问：\u201c对方的话（可截短）\u201d\n答：\u201c他的原话（逐字，别改写）\u201d"。',
-      '  要能看出他的接话方式（先 @ 谁、语气词怎么带、答多长）。没有一问一答就退化成「他说：\u201c…\u201d」独立句。',
-      'syntax（句子架构）：句子长短怎么搭、用什么断句（逗号串/空格/换行）、开头习惯',
-      '  （先 @ 人？先喊兄弟们？）、一条说完还是分几条。每条不超过 25 字。',
-      'catchphrases（口头禅）：格式 `词/句式（什么时候用）`，如「斩（随口催办时）」「我瞅瞅（答应看一眼时）」。',
-      'rhetoric（修辞招式）：他反复用的表达套路，3 条内，每条带一个真实例子的短引用。',
-      'never（从不用）：他从不用的词（如感谢/请问/抱歉）、从不做的行为（分点写教程、卖萌表情）。',
-      'persona（性格锚）：2~4 条**可观察行为**（如「被封号就自嘲」），不许写「他很友善」这种换成谁都成立的话。',
+      'dialogue_samples（最重要，2~3 条）：挑「别人问/说什么 → 他怎么接」的真实对话对。学的是接话的姿势与语调节奏；他的回答逐字保留，不改写。',
+      'typing_habits（≤3 条）：打字节奏与习惯——短句还是长句、逗号/空格/换行怎么断、句号用不用、一条发完还是拆几条、@ 不 @ 人。每条 ≤25 字。',
+      'tone_stance（≤3 条）：态度倾向——对求助、开玩笑、倒霉事、争议话题分别是什么姿态（如：遇到技术问题先给核心排查点；被开玩笑时轻微自嘲）。每条 ≤40 字。',
+      'negative_avoid（≤4 条）：他从不用/不做的表达——如客服式客套话、编号分点长教程、卖萌表情。每条 ≤30 字。',
       '',
-      '三条硬规矩：1) 每条都要能在上面原话/原文里找到依据，找不到依据的不写；',
-      '2) 自检：换成群里另一个人也成立的就删；3) 证据不足的字段给空数组，不要编。',
-      '只输出 JSON 对象，正文别加分析。',
+      '三条铁律：',
+      '1. 只收高频共性：同一表达至少出现在两个不同对话里才算口头禅/习惯；单次突发事件里的专有名词（某次故障的行话）不算。',
+      '2. 绝对禁止把他的真实经历提炼成「可模仿的内容」（如自己被封过号、买过什么、去过哪）——那些是身份事实，学了就是冒充本人。',
+      '3. 证据不足的字段直接给空数组 []，严禁编造；换成一个泛用聊天者也成立的描述就删掉（自检误读）。',
     ].join('\n'),
-    text: `要学的人：${who}\n\n他的原话：\n${said}\n\n`
-      + (convo ? `群聊原文（用来挑一问一答的对话对，他的回答在原文里标了「他：」）：\n${convo}\n\n` : '')
-      + (contrast ? `群里别人说的话（用来对照出他跟别人的不同，不要学这些）：\n${contrast}\n\n` : '')
-      + oldText
-      + '只输出 JSON 对象。',
+    text: [
+      `要学的人：${who}`,
+      pairs ? `\n他回应别人的真实切片（dialogue_samples 从这里挑）：\n${pairs}` : '',
+      said ? `\n他的原话（打字节奏/习惯的证据）：\n${said}` : '',
+      convo ? `\n群聊原文（交错语境，用来确认他在回应什么）：\n${convo}` : '',
+      contrast ? `\n群里别人说的话（对照出他的不同，不要学这些）：\n${contrast}` : '',
+      oldText,
+      '只输出 JSON 对象。',
+    ].filter(Boolean).join('\n'),
   }
 }
 
@@ -130,7 +162,9 @@ export function parseDistillProfile (raw) {
   }
 }
 
-/** 收成固定字段，去空、去重、截长度和条数（纯数字条目丢弃：旧版曾把句数存进 samples）。 */
+/** 收成固定字段，去空、去重、截长度和条数（纯数字条目丢弃：旧版曾把句数存进 samples）。
+ * 同时兼容 RFC 四维新 schema（dialogue_samples/typing_habits/tone_stance/negative_avoid）
+ * 与 1.3.63 旧 schema（exchanges/syntax/catchphrases/rhetoric/never/persona）：新名字优先。 */
 export function normalizeProfile (obj) {
   const pick = (v, cap, maxLen = 90) => {
     const list = Array.isArray(v) ? v : v ? [v] : []
@@ -145,18 +179,19 @@ export function normalizeProfile (obj) {
     }
     return out
   }
+  const o = obj || {}
   return {
-    exchanges: pick(obj && obj.exchanges, FIELD_CAP.exchanges, 220),
-    syntax: pick(obj && obj.syntax, FIELD_CAP.syntax),
-    catchphrases: pick(obj && obj.catchphrases, FIELD_CAP.catchphrases),
-    rhetoric: pick(obj && obj.rhetoric, FIELD_CAP.rhetoric, 160),
-    never: pick(obj && obj.never, FIELD_CAP.never),
-    persona: pick(obj && obj.persona, FIELD_CAP.persona),
+    exchanges: pick(o.dialogue_samples || o.exchanges, FIELD_CAP.exchanges, 220),
+    syntax: pick(o.typing_habits || o.syntax, FIELD_CAP.syntax),
+    catchphrases: pick(o.catchphrases, FIELD_CAP.catchphrases),
+    rhetoric: pick(o.tone_stance || o.rhetoric, FIELD_CAP.rhetoric, 160),
+    never: pick(o.negative_avoid || o.never, FIELD_CAP.never),
+    persona: pick(o.persona, FIELD_CAP.persona),
     // 旧字段兼容渲染（不再由新学习产出）
-    style: pick(obj && obj.style, FIELD_CAP.style),
-    tone: pick(obj && obj.tone, FIELD_CAP.tone),
-    samples: pick(obj && obj.samples, FIELD_CAP.samples),
-    avoid: pick(obj && obj.avoid, FIELD_CAP.avoid),
+    style: pick(o.style, FIELD_CAP.style),
+    tone: pick(o.tone, FIELD_CAP.tone),
+    samples: pick(o.samples, FIELD_CAP.samples),
+    avoid: pick(o.avoid, FIELD_CAP.avoid),
   }
 }
 

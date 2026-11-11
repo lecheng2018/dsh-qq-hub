@@ -105,7 +105,7 @@ test('L3 沉淀 → 派生卡正文带增长段（底卡正文不变，边界声
   const l3 = parseL3(L3_JSON, { uid: '555' })
   const body = buildDerivedBody('你是大肥鱼。安全规则：不碰危险命令。', [{ name: '老哥', profile: { exchanges: ['问：吃了吗\n答：斩'] } }], [{ uid: '555', segment: l3 }])
   assert.match(body, /^你是大肥鱼。安全规则：不碰危险命令。/, '底卡正文原样保留（人设基底锁定）')
-  assert.match(body, /从群友身上借来的说话方式/, '借用段在')
+  assert.match(body, /当前群聊语感微调/, '借用段在')
   assert.match(body, /人格增长段/, '增长段在')
   assert.match(body, /不改变你的身份、记忆与安全规则/, '边界声明随身')
   assert.match(body, /多用短句和反问/, 'L3 的说话规则进了卡')

@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import {
   collectMemberLines, enoughEvidence, buildDistillPrompt, dedupConvo,
   parseDistillProfile, normalizeProfile, mergeProfile, renderDistillHint,
+  extractMeaningfulInteractions,
 } from '../src/features/distill.js'
 
 const L = (uid, text, t = 0) => ({ uid, text, t, who: 'u' + uid })
@@ -95,23 +96,53 @@ test('旧画像字段（style/samples/avoid 存量）兼容渲染，不至于白
   assert.doesNotMatch(renderDistillHint('老王', { style: ['短句'], samples: 44 }), /「44」/)
 })
 
-test('提示词（新模板）：exchanges 首要、口头禅带「什么时候用」、never 词表、性格写可观察行为', () => {
+test('提示词（RFC 四维）：接话示范首要、节奏/态度/边界分层、三条铁律在位', () => {
   const p = buildDistillPrompt({
     name: '老王', uid: '111',
     memberLines: [L('111', '草 这也能崩')],
     context: [{ uid: '222', name: '小李', text: '这游戏又崩了？' }, { uid: '111', name: '老王', text: '草 这也能崩' }],
     others: ['小李：请问这个怎么弄呀'],
     old: { syntax: ['旧架构'], persona: [] },
+    interactions: [{ prompt: '小李：这游戏又崩了？', response: '草 这也能崩' }],
   })
-  assert.match(p.system, /exchanges（最重要）/, '对话对是首要产出')
-  assert.match(p.system, /他的原话（逐字，别改写）/, '回答逐字')
-  assert.match(p.system, /什么时候用/, '口头禅带语境')
-  assert.match(p.system, /never（从不用）/, '负向词表')
-  assert.match(p.system, /可观察行为/, '性格写行为不写标签')
-  assert.match(p.system, /换成群里另一个人/, 'misreading 自检')
-  assert.match(p.text, /群聊原文（用来挑一问一答的对话对/, '交错原文进 prompt')
-  assert.match(p.text, /小李：这游戏又崩了？\n他：草 这也能崩/, '按 uid 标「他：」')
-  assert.match(p.text, /句子架构：旧架构/, '旧画像按新字段回填')
+  assert.match(p.system, /dialogue_samples（最重要/, '对话对是首要产出')
+  assert.match(p.system, /逐字保留/, '回答逐字')
+  assert.match(p.system, /typing_habits（≤3 条）/, '节奏习惯维度')
+  assert.match(p.system, /tone_stance（≤3 条）/, '态度倾向维度')
+  assert.match(p.system, /negative_avoid（≤4 条）/, '负向边界维度')
+  assert.match(p.system, /只收高频共性/, '铁律1：偶发不当口头禅')
+  assert.match(p.system, /绝对禁止把他的真实经历提炼成「可模仿的内容」/, '铁律2：不借经历')
+  assert.match(p.system, /证据不足的字段直接给空数组/, '铁律3：不足给空')
+  assert.match(p.system, /换成.+也成立的描述就删掉/, 'misreading 自检保留')
+  assert.match(p.text, /他回应别人的真实切片/, '互动对进 prompt')
+  assert.match(p.text, /对方：小李：这游戏又崩了？\n  他：草 这也能崩/, '回执对成对出现')
+  assert.match(p.text, /typing_habits：旧架构/, '旧画像按新字段回填')
+})
+
+test('语料清洗：互动回执对带语境、滤纯转发/超短、凑不成对不收', () => {
+  const rows = [
+    { uid: '1', name: '小李', text: '[分享卡片：abc]', t: 1 },
+    { uid: '2', name: '老王', text: '嗯', t: 2 },
+    { uid: '2', name: '老王', text: '重启一下就好了', t: 3 },
+    { uid: '1', name: '小李', text: '还是不行', t: 4 },
+    { uid: '2', name: '老王', text: '那看下日志第几行报错', t: 5 },
+  ]
+  const pairs = extractMeaningfulInteractions(rows, '2')
+  assert.equal(pairs.length, 1, '纯卡片被滤、「嗯」超短被滤、前面只有自己发言的回复凑不成对不收')
+  assert.equal(pairs[0].prompt, '小李：还是不行', '语境取最近一条非本人发言')
+  assert.equal(pairs[0].response, '那看下日志第几行报错')
+})
+
+test('normalizeProfile：RFC 新 schema 与旧字段双兼容，exchanges 放宽到 220 字', () => {
+  const fresh = normalizeProfile({
+    dialogue_samples: ['问：怎么弄\n答：重启'], typing_habits: ['短句'], tone_stance: ['先给排查点'], negative_avoid: ['不说客套话'],
+  })
+  assert.deepEqual(fresh.exchanges, ['问：怎么弄\n答：重启'], 'dialogue_samples → exchanges')
+  assert.deepEqual(fresh.syntax, ['短句'], 'typing_habits → syntax')
+  assert.deepEqual(fresh.rhetoric, ['先给排查点'], 'tone_stance → rhetoric')
+  assert.deepEqual(fresh.never, ['不说客套话'], 'negative_avoid → never')
+  const long = { exchanges: ['问：' + '很'.repeat(300) + '\n答：好'] }
+  assert.equal(normalizeProfile(long).exchanges[0].length, 220, '对话对放宽到 220 字不截腰')
 })
 
 // ---------------- 存储与接线 ----------------

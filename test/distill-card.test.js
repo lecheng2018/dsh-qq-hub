@@ -21,51 +21,63 @@ const PROFILE = {
   // 旧字段也塞一点，验证兼容
   samples: ['毕竟是别人的卡，对你肯定没影响啊'], style: [], tone: [], avoid: [],
 }
-const ENTRIES = styleEntries([{ gid: '249729644', uid: '1040489623', name: '炙心', profile: PROFILE }])
+const ENTRIES = styleEntries([{ gid: '777', uid: '555', name: '老王', profile: PROFILE }])
 
-test('借用段（新模板）：对话对在最前、口头禅带语境、never/锚齐备、边界收尾', () => {
+test('借用段（RFC 外挂滤镜协议）：底卡身份不动、四维齐备、边界收尾、旧字段兼容', () => {
   const block = renderStyleBlock(ENTRIES)
-  assert.match(block, /【语感·借自「炙心」】/)
-  assert.match(block, /我在这个群接话就照着他的应对方式来（学应对方式，聊天内容绝不照搬）：\n- 问：「号全封了吗」/, '对话对是首要块')
-  assert.match(block, /口头禅：斩（随口催办时）；我瞅瞅（答应看一眼）/, '口头禅带使用语境')
-  assert.match(block, /句子架构：长句靠逗号串，不分点/)
-  assert.match(block, /修辞招式：被封号就自嘲/)
-  assert.match(block, /我不用他绝不会用的东西：从不说感谢、请问/, 'never 词表')
-  assert.match(block, /我借他神韵的地方：热心答疑，谁问都回/, '性格锚')
+  assert.match(block, /【当前群聊语感微调 · 风格参考】/, '协议头')
+  assert.match(block, /外部语感滤镜：你在本群发言时，在保持自身原本身份设定的前提下/, '滤镜定位：不掀底卡')
+  assert.match(block, /严禁冒充对方真实身份或盗用其真实个人经历/, '禁止盗用经历')
+  assert.match(block, /【语感参考 · 老王】/)
+  assert.match(block, /- 接话示范参考（学其接话姿势与语调节奏，不照搬字面内容）：\n  问：「号全封了吗」/, '对话对是首要块')
+  assert.match(block, /- 发言节奏参考：\n  · 长句靠逗号串，不分点/, '节奏习惯')
+  assert.match(block, /- 态度取向：\n  · 被封号就自嘲/, '态度倾向')
+  assert.match(block, /- 边界（不模仿他的私人经历；下列表达他从不使用，也不要从他身上学）：从不说感谢、请问/, 'never 词表')
+  assert.match(block, /- 口头禅（多场景复现过的，仍带使用语境）：斩（随口催办时）/, '旧口头禅兼容渲染')
+  assert.match(block, /- 可观察行为（旧画像遗留，逐条核对过依据的才保留）：热心答疑，谁问都回/, '旧性格锚兼容渲染')
   assert.match(block, /旧原话|校准节奏|毕竟是别人的卡/, '旧 samples 兼容渲染')
-  assert.match(block, /只借说话方式，不借身份：我不是炙心，不自称他、不替他表态、不提他个人隐私/, '边界随段走')
+  assert.match(block, /只借说话方式，不借身份：我不是老王，不自称他、不替他表态、不提他个人隐私、不复述他的真实经历/, '边界随段走')
   assert.equal(renderStyleBlock([]), '')
   assert.equal(renderStyleBlock([{ name: '甲', profile: {} }]), '', '空画像不出段')
+})
+
+test('底卡冲突保护：强特化底卡只借节奏与断句，性格类借用全部跳过', () => {
+  const body = buildDerivedBody('你是大肥鱼妹妹，爱撒娇。', ENTRIES)
+  assert.match(body, /发言节奏参考/, '节奏与断句仍保留')
+  assert.doesNotMatch(body, /接话示范参考/, '对话对不注入')
+  assert.doesNotMatch(body, /态度取向/, '态度类不注入')
+  assert.doesNotMatch(body, /口头禅/, '口头禅不注入')
+  assert.match(body, /只借说话节奏，不借身份/, '降级后的边界声明')
 })
 
 test('派生卡 = 底卡正文 + 借用段；底卡本体一个字不动', () => {
   const body = buildDerivedBody('你是大肥鱼。\n\n【怎么说话：像人在打字】\n短句对仗。', ENTRIES)
   assert.ok(body.startsWith('你是大肥鱼。'), '底卡原文在前且原样')
-  assert.match(body, /【从群友身上借来的说话方式】/)
+  assert.match(body, /当前群聊语感微调/, '借用段在')
   const base = readFileSync(join(dir, 'personas', 'dafeiyu.md'), 'utf8')
-  assert.doesNotMatch(base, /借来的说话方式/, '底卡文件没被改写')
+  assert.doesNotMatch(base, /当前群聊语感微调/, '底卡文件没被改写')
 })
 
 test('接管判定：没指定过才接管；手动指定过（哪怕和默认撞值）绝不抢', () => {
-  const cardId = distillCardId('249729644')
+  const cardId = distillCardId('777')
   const open = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: {} } }
-  assert.equal(takeoverDecision(open, '249729644', cardId).takeover, true, '没指定 → 可接管，底卡=groupDefault')
-  assert.equal(takeoverDecision(open, '249729644', cardId).baseId, 'dafeiyu')
-  const mine = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: { '249729644': 'persona-gen2' } } }
-  const d = takeoverDecision(mine, '249729644', cardId)
+  assert.equal(takeoverDecision(open, '777', cardId).takeover, true, '没指定 → 可接管，底卡=groupDefault')
+  assert.equal(takeoverDecision(open, '777', cardId).baseId, 'dafeiyu')
+  const mine = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: { '777': 'persona-gen2' } } }
+  const d = takeoverDecision(mine, '777', cardId)
   assert.equal(d.takeover, false, '明确指定了别的卡 → 不抢')
   assert.match(d.reason, /不抢它的槽位/)
-  const already = { persona: { current: 'dafeiyu', groups: { '249729644': cardId } } }
-  assert.equal(takeoverDecision(already, '249729644', cardId).takeover, true, '槽位已经是派生卡 → 允许更新自己')
+  const already = { persona: { current: 'dafeiyu', groups: { '777': cardId } } }
+  assert.equal(takeoverDecision(already, '777', cardId).takeover, true, '槽位已经是派生卡 → 允许更新自己')
 })
 
 test('refresh 端到端：生成卡文件（front-matter 带自动生成标签与借用对象名）', () => {
   const cfg = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: {} } }
-  const r = refreshDistillCard({ gid: '249729644', entries: ENTRIES, cfg, log: { info: () => {} } })
+  const r = refreshDistillCard({ gid: '777', entries: ENTRIES, cfg, log: { info: () => {} } })
   assert.equal(r.ok, true)
-  assert.equal(r.cardId, 'persona-语感-249729644')
-  const raw = readFileSync(join(dir, 'personas', 'persona-语感-249729644.md'), 'utf8')
-  assert.match(raw, /name: 语感·借自炙心/)
+  assert.equal(r.cardId, 'persona-语感-777')
+  const raw = readFileSync(join(dir, 'personas', 'persona-语感-777.md'), 'utf8')
+  assert.match(raw, /name: 语感·借自老王/)
   assert.match(raw, /tags: \[自动生成\]/)
   assert.match(raw, /短句对仗/)
   assert.match(raw, /我瞅瞅（答应看一眼）/)
@@ -94,7 +106,7 @@ test('接线：学习成功自动刷卡 + 路由 + setConfig 只在接管时发�
 test('派生卡会出现在人设列表里（面板人设页能看到、可手动切走）', async () => {
   const { listPersonas } = await import('../src/persona/personas.js')
   const ids = listPersonas().map((p) => p.id)
-  assert.ok(ids.includes('persona-语感-249729644'), '列表里有派生卡')
-  const card = listPersonas().find((p) => p.id === 'persona-语感-249729644')
+  assert.ok(ids.includes('persona-语感-777'), '列表里有派生卡')
+  const card = listPersonas().find((p) => p.id === 'persona-语感-777')
   assert.ok(card.tags.includes('自动生成'))
 })
