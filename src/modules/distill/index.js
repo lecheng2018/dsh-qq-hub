@@ -67,10 +67,41 @@ export function createDistillEngine({
     const model = dc.model || {}
     const merged = { ...cfg, model: { ...(cfg.model || {}), ...model } }
     return withAbortTimeout(
-      (signal) => askModelImpl(dsh, { cfg: merged, ...prompt, maxTokens, temperature: 0.3, signal }),
+      (signal) => askModelImpl(dsh, {
+        cfg: merged, ...prompt, maxTokens, temperature: 0.3,
+        // 蒸馏是特征提取/聚合的机械任务，不需要推理：推理模型开着思考会把请求拉长，
+        // 还爱把答案写成画像报告而不是约定的 JSON（2026-11-12 排查：L1 上线首日两跑两败，
+        // 回包开头就是「用户画像与行为分析报告」正文，全程无 JSON，prompt 里「只输出标准
+        // JSON」被无视）。不支持 off 档的模型由 pickReasoningEffort 收敛回默认档，行为不变。
+        reasoningEffort: 'off',
+        signal,
+      }),
       dc.timeoutMs,
       '蒸馏请求',
     )
+  }
+
+  /** 回包不是约定 JSON 时的当场纠正提示：比整批丢掉、等攒够下一批再重跑省得多。 */
+  const JSON_NUDGE = '\n\n（上一轮回包不是约定格式。重新只输出 JSON 对象本身：以 { 开头、} 结尾，不要标题、前言、解释或 Markdown 列表。）'
+
+  /** 问一次并解析；解析失败当场带纠正提示重试一次。
+   * 返回 {rec}=成功 / {out}=两次都解析失败 / {error}=模型调用失败；日志措辞由调用方保持原样。 */
+  async function askJson(parse, prompt, maxTokens) {
+    let out = ''
+    try {
+      out = await askDistillModel(prompt, maxTokens)
+    } catch (error) {
+      return { error }
+    }
+    let rec = parse(out)
+    if (rec) return { rec }
+    try {
+      out = await askDistillModel({ ...prompt, text: (prompt.text || '') + JSON_NUDGE }, maxTokens)
+    } catch (error) {
+      return { error }
+    }
+    rec = parse(out)
+    return rec ? { rec } : { out }
   }
 
   /** L0 计数入口：目标对象在群里说话才计数；攒够一批触发后台 L1（不阻塞）。 */
@@ -130,14 +161,11 @@ export function createDistillEngine({
       context,
       behaviorDigest: renderBehaviorDigest(stats),
     })
-    let out = ''
-    try {
-      out = await askDistillModel(prompt)
-    } catch (error) {
+    const { rec, out, error } = await askJson((raw) => parseL1(raw, { uid, batchId }), prompt)
+    if (error) {
       log.warn?.(`蒸馏L1（${name}）模型调用失败：`, error.message)
       return
     }
-    const rec = parseL1(out, { uid, batchId })
     if (!rec) {
       log.warn?.(`蒸馏L1（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
       return
@@ -160,14 +188,11 @@ export function createDistillEngine({
     const p = pipeOf(key)
     if (!(p.batches || []).length) return
     const prompt = buildL2Prompt({ uid, l1List: p.batches, behaviorDigest: renderBehaviorDigest(p.behavior) })
-    let out = ''
-    try {
-      out = await askDistillModel(prompt, 1600)
-    } catch (error) {
+    const { rec, out, error } = await askJson((raw) => parseL2(raw, { uid }), prompt, 1600)
+    if (error) {
       log.warn?.(`蒸馏L2（${name}）模型调用失败：`, error.message)
       return
     }
-    const rec = parseL2(out, { uid })
     if (!rec) {
       log.warn?.(`蒸馏L2（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
       return
@@ -193,8 +218,8 @@ export function createDistillEngine({
         behaviorDigest: renderBehaviorDigest(p.behavior),
       })
       try {
-        const out = await askDistillModel(prompt, 1600)
-        const seg = parseL3(out, { uid: t.uid })
+        const { rec: seg, out, error } = await askJson((raw) => parseL3(raw, { uid: t.uid }), prompt, 1600)
+        if (error) throw error
         if (!seg) {
           log.warn?.(`蒸馏L3（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
           continue
