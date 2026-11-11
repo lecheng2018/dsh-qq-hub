@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { askModel } from '../core/llm.js'
-import { openMemoryDb } from './memory-sqlite.js'
+import { openMemoryFiles } from './memory-files.js'
 import { conceptsOf } from './memory-concepts.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
@@ -39,12 +39,13 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   const file = () => dataDir('memories.json')
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
   function evictIfNeeded(s, scope) {
-    // 快路径：这个作用域还没大到可能超它自己的配额就别扫（M3：按 scope 配额判断，不再按全库长度）
+    // 作用域配额淘汰：超额则裁掉超额部分
     const quota = quotaForScope(scope)
     const inScope = s.items.reduce((n, m) => n + (String(m.scope || '') === String(scope) ? 1 : 0), 0)
-    if (inScope <= quota) return
-    const removed = evictScopeItems(s.items, scope, quota)
-    if (removed > 0) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
+    if (inScope > quota) {
+      const removed = evictScopeItems(s.items, scope, quota)
+      if (removed > 0) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
+    }
     // 全库兜底上限：防极端情况（大量小作用域）无限涨
     if (s.items.length > TOTAL_CAP) {
       const victims = s.items.slice().sort((a, b) => (Number(a.importance || 0.5) - Number(b.importance || 0.5)) || (Number(a.at || 0) - Number(b.at || 0)))
@@ -65,13 +66,12 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     if (!t) { t = new Set(tokenize(m.text)); tokCache.set(m.id, t) }
     return t
   }
-  // 存储层（P1-1）：SQLite 单表 + 内存镜像。load() 返回镜像（不再整读 541KB），
-  // save() 算 diff 增量写库（不再整份重写）。db 打不开（老 Node/文件锁）自动退回 JSON 全量读写。
+  // 存储层：Markdown 记忆档案（features/memory-files.js）。
   let store = null
   try {
-    store = openMemoryDb(dataDir('memories.db'), { log })
+    store = openMemoryFiles(dataDir('memory'), { log })
   } catch (error) {
-    log?.warn?.('SQLite 记忆库打不开，退回 JSON 存储：', error.message)
+    log?.warn?.('Markdown 记忆库打不开：', error.message)
     store = null
   }
   const jsonLoad = () => readJson(file(), () => ({ items: [] }))
@@ -655,7 +655,8 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       log.warn(`蒸馏群友（历史）：${t0name} 回包解析失败，原始前 200 字：`, String(out).slice(0, 200))
       return { ok: false, message: '模型回包没解析成 JSON（原因已记日志，可再点一次重试）' }
     }
-    if (!profile.style.length && !profile.persona.length && !profile.tone.length && !profile.samples.length) {
+    const hasProfile = Boolean(profile.exchanges?.length || profile.syntax?.length || profile.catchphrases?.length || profile.rhetoric?.length || profile.persona?.length || profile.samples?.length || profile.style?.length)
+    if (!hasProfile) {
       log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
       return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }
     }
@@ -1058,11 +1059,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         if (revise(target.id, x.text, x.importance)) n++
         continue
       }
-      // 旧的过时了：先标过时（这样新的不会被当成重复合并进去），再记新的
+      // 旧的过时了：先记新的，新事实写入成功后再标旧的过时与替代关系（R2）
       if (op === 'outdated' && target) {
-        invalidate(target.id)
         const r = add({ text: x.text, aboutName: x.about || target.aboutName || '', about: about || target.about || '', importance: x.importance ?? target.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
-        if (r.id || r.updated) {
+        if (r.ok && (r.id || r.updated)) {
           invalidate(target.id, r.id || r.updated)
           log.info(`记忆更新：「${target.text}」过时了 → 「${String(x.text).slice(0, 60)}」`)
           n++
