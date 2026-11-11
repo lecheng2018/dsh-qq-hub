@@ -552,6 +552,7 @@ export function apply(ctx) {
     try { pipelineApi.aggregator?.dispose?.() } catch (error) { log.warn('入口合流卸载出错：', error.message) }
     hub.disposeRecentMedia()
     mods.dispose()
+    try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
     onebot.stop()
     snowluma.dispose()
   }, 'qq-hub: 收尾')

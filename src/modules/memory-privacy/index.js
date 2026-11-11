@@ -103,14 +103,14 @@ export default {
         },
         required: ['text'],
         execute: async ({ text, scope, importance }) => {
-          const memory = api.use('memory')
-          if (!memory?.add) return { ok: false, message: '主记忆库没在跑' }
+          const liveMem = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
+          if (!liveMem?.add) return { ok: false, message: '主记忆库没在跑' }
           const finalScope = !scope || scope === 'auto'
             ? (api.settings().autoScope ? scopeOf(chat) : 'global')
             : scope
           try {
             // 走总线（1.3.48）：所有记忆写入口收拢到 features/memory-bus.js
-            const r = bus.add({
+            const r = liveMem.add({
               text: String(text || '').trim(),
               importance: Math.max(0, Math.min(1, Number(importance) || 0.6)),
               source: 'tool',
@@ -139,7 +139,7 @@ export default {
       const preview = Boolean(cfg.previewPrivate)
       const mask = (m) => (preview || !String(m.scope).startsWith('private:') ? m : { ...m, text: '（私聊内容，面板不预览）' })
       // 查看、条数都以主记忆库为准（scoped.json 已迁移停用，永远查不出东西）
-      const memory = api.use('memory')
+      const memory = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
       if (kind === 'profiles') {
         const profs = (memory && typeof memory.profiles === 'function' ? memory.profiles() : []) || []
         const items = profs.filter((p) => !scope || String(p.scope || 'global') === scope).map(mask)
@@ -155,7 +155,7 @@ export default {
       if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
       const scope = String(q || body?.scope || '')
       if (!scope) return { ok: false, message: '要先说清哪个分区' }
-      const memory = api.use('memory')
+      const memory = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
       if (!memory?.list) return { ok: false, message: '主记忆库没在跑' }
       let n = 0
       for (const m of memory.list() || []) {
