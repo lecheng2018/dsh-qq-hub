@@ -227,7 +227,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     return false
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', chatId = '', scope = '', ephemeral = false }) {
+  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '' }) {
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
@@ -254,6 +254,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       dup.text = t.length >= dup.text.length ? t : dup.text
       dup.at = Date.now()
       dup.importance = Math.max(Number(dup.importance) || 0, Number(importance) || 0)
+      if (evidence) dup.evidence = String(evidence).slice(0, 200)
+      if (entity) dup.entity = String(entity).slice(0, 30)
+      if (topic) dup.topic = String(topic).slice(0, 20)
+      if (pinned) dup.pinned = 1
       s.rev = (s.rev || 0) + 1
       save(s)
       return { ok: true, message: '✓', updated: dup.id }
@@ -262,12 +266,82 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
-    const item = { id: randomUUID().slice(0, 8), text: t, about: String(about || ''), aboutName: String(aboutName || ''), tags: (tags || []).slice(0, 5), importance: Math.max(0, Math.min(1, Number(importance) || 0.5)), source, chatId, scope: finalScope, at: Date.now(), hits: 0, clarity: 'vivid', ephemeral: ephemeral ? 1 : '' }
+    const item = {
+      id: randomUUID().slice(0, 8),
+      text: t,
+      about: String(about || ''),
+      aboutName: String(aboutName || ''),
+      tags: (tags || []).slice(0, 5),
+      importance: Math.max(0, Math.min(1, Number(importance) || 0.5)),
+      source,
+      sourceId,
+      chatId,
+      scope: finalScope,
+      at: Date.now(),
+      hits: 0,
+      clarity: 'vivid',
+      ephemeral: ephemeral ? 1 : '',
+      pinned: pinned ? 1 : 0,
+      entity: String(entity || '').slice(0, 30),
+      topic: String(topic || '').slice(0, 20),
+      evidence: String(evidence || '').slice(0, 200),
+      title: String(title || '').slice(0, 50),
+    }
     s.items.push(item)
     evictIfNeeded(s, finalScope)
     s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
     save(s)
     return { ok: true, message: '✓', id: item.id }
+  }
+
+  /**
+   * 显式替代操作（C-01 规范）：用新事实替代某条过时旧事实。
+   * 新事实创建、旧事实失效（invalidAt 与 supersededBy）在单次事务中原子完成。
+   */
+  function supersede({ oldId, text, about = '', aboutName = '', tags = [], importance, source = 'auto', sourceId = '', chatId = '', scope = '', evidence = '', entity = '', topic = '', title = '' }) {
+    const s = load()
+    const target = s.items.find((x) => x.id === oldId)
+    if (!target) return { ok: false, message: '未找到被替代的旧事实' }
+    if (target.pinned) return { ok: false, message: '手工固定的重要事实不能自动被替代' }
+
+    const finalScope = String(scope || '').trim() || target.scope || scopeFromChatId(chatId)
+    if (target.scope !== finalScope) {
+      return { ok: false, message: '不同作用域的事实不能互相替代' }
+    }
+
+    const t = String(text || '').trim().slice(0, 200)
+    if (!t) return { ok: false, message: '新事实内容为空' }
+
+    const newId = randomUUID().slice(0, 8)
+    const newItem = {
+      id: newId,
+      text: t,
+      about: String(about || target.about || ''),
+      aboutName: String(aboutName || target.aboutName || ''),
+      tags: (tags && tags.length ? tags : target.tags || []).slice(0, 5),
+      importance: Math.max(0, Math.min(1, Number(importance ?? target.importance ?? 0.5))),
+      source,
+      sourceId,
+      chatId: chatId || target.chatId || '',
+      scope: finalScope,
+      at: Date.now(),
+      hits: 0,
+      clarity: 'vivid',
+      evidence: String(evidence || '').slice(0, 200),
+      entity: String(entity || '').slice(0, 30),
+      topic: String(topic || '').slice(0, 20),
+      title: String(title || target.title || '').slice(0, 50),
+      supersededFrom: target.id,
+    }
+
+    target.invalidAt = Date.now()
+    target.supersededBy = newId
+    s.items.push(newItem)
+    evictIfNeeded(s, finalScope)
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    log.info?.(`记忆替代（Supersede）：「${target.text}」已失效 → 「${t}」[ID: ${newId}]`)
+    return { ok: true, id: newId, oldId: target.id }
   }
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
@@ -1059,19 +1133,39 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         if (revise(target.id, x.text, x.importance)) n++
         continue
       }
-      // 旧的过时了：先记新的，新事实写入成功后再标旧的过时与替代关系（R2）
+      // 旧的过时了：调用原子 supersede 替代操作（C-01 规范）
       if (op === 'outdated' && target) {
-        const r = add({ text: x.text, aboutName: x.about || target.aboutName || '', about: about || target.about || '', importance: x.importance ?? target.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
-        if (r.ok && (r.id || r.updated)) {
-          invalidate(target.id, r.id || r.updated)
-          log.info(`记忆更新：「${target.text}」过时了 → 「${String(x.text).slice(0, 60)}」`)
-          n++
-        }
+        const r = supersede({
+          oldId: target.id,
+          text: x.text,
+          aboutName: x.about || target.aboutName || '',
+          about: about || target.about || '',
+          importance: x.importance ?? target.importance ?? 0.5,
+          source: 'auto',
+          chatId,
+          scope: scopeFromChatId(chatId),
+          evidence: x.evidence,
+          entity: x.entity,
+          topic: x.topic,
+        })
+        if (r.ok) n++
         continue
       }
       const tags = Array.isArray(x.tags) ? x.tags.map((t) => String(t).slice(0, 8)).slice(0, 2) : []
-      const r = add({ text: x.text, aboutName: x.about || '', about, tags, importance: x.importance ?? 0.5, source: 'auto', chatId, scope: scopeFromChatId(chatId) })
-      if (r.ok && r.id) n++
+      const r = add({
+        text: x.text,
+        aboutName: x.about || '',
+        about,
+        tags,
+        importance: x.importance ?? 0.5,
+        source: 'auto',
+        chatId,
+        scope: scopeFromChatId(chatId),
+        evidence: x.evidence,
+        entity: x.entity,
+        topic: x.topic,
+      })
+      if (r.ok && (r.id || r.updated)) n++
     }
     return n
   }
@@ -1159,8 +1253,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         try { if (await buildProfile(qq, scope)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
       }
       const s = load()
-      // ① 模糊化（surfcore 记忆卡设计）：fuzzy 档把正文截断成「只剩大意」，trace 档只留标题。
-      //    只动经历类（event）且非主人相关的；正文一截，检索和上下文都省，但还认得出是什么事。
+      // ① 模糊化（C-02 规范）：不再破坏性截断原文，仅调整 clarity 档位用于展示与遗忘决策
       const nowC = Date.now()
       let blurred = 0
       for (const it of s.items) {
@@ -1168,10 +1261,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         if (it.source !== 'event' && it.source !== 'auto') continue
         const item = { ...it, ownerQQ: getConfig()?.ownerQQ || '' }
         const step = clarityOf(item, nowC)
-        if (step !== 'fuzzy' && step !== 'trace') continue
-        const raw = String(it.text || '')
-        if (step === 'fuzzy' && raw.length > 40) { it.text = raw.slice(0, 40) + '…（记不太清了）'; it.clarity = 'fuzzy'; blurred++ }
-        else if (step === 'trace' && raw.length > 16) { it.text = raw.slice(0, 16) + '…（只剩个印象）'; it.clarity = 'trace'; blurred++ }
+        if (it.clarity !== step) {
+          it.clarity = step
+          blurred++
+        }
       }
       // ② 遗忘：不重要、很久没被想起的清掉，记忆库不会越堆越乱
       const before = s.items.length
@@ -1298,7 +1391,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   return {
     recallHint,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    add, addEvent, supersede, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, consolidate, tick, topicScore, importCandidates, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {

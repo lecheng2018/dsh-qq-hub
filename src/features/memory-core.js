@@ -90,14 +90,21 @@ export function similarity(a, b) {
 export function buildIndex(items) {
   const df = new Map()
   const docs = items.map((it) => {
-    const toks = tokenize(`${it.text} ${(it.tags || []).join(' ')} ${it.aboutName || ''}`)
+    const toks = tokenize(`${it.text} ${(it.tags || []).join(' ')} ${it.aboutName || ''} ${it.entity || ''} ${it.topic || ''}`)
     const tf = new Map()
     for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1)
     for (const t of tf.keys()) df.set(t, (df.get(t) || 0) + 1)
     // 概念集合（P2-1）：「他最近过得怎么样」和「阿强搬家到上海」没有共同字词，
     // 但共享「近况/居住」概念 —— 靠这个重叠把纯语义提问捞回来。
     const concepts = conceptsOf(`${it.text} ${(it.tags || []).join(' ')}`)
-    return { it, tf, len: toks.length || 1, concepts }
+    return {
+      it,
+      tf,
+      len: toks.length || 1,
+      concepts,
+      entity: String(it.entity || '').toLowerCase().trim(),
+      topic: String(it.topic || '').toLowerCase().trim(),
+    }
   })
   const avgLen = docs.reduce((s, d) => s + d.len, 0) / (docs.length || 1)
   return { docs, df, avgLen, N: docs.length }
@@ -143,10 +150,26 @@ export function search(idx, query, o = {}) {
       for (const c of qConcepts) if (d.concepts.has(c)) overlap++
       if (overlap) conceptScore = overlap / Math.min(qConcepts.size, d.concepts.size)
     }
-    if (s <= 0 && !aboutHit && conceptScore <= 0) continue
+
+    // 实体与话题槽位直召（C-03 规范）：当提问包含特定实体时大幅提权，告别脆弱分词
+    const qLower = String(query || '').toLowerCase()
+    let entityHit = false
+    if (d.entity && d.entity.length >= 2 && qLower.includes(d.entity)) {
+      entityHit = true
+    }
+    let topicHit = false
+    if (d.topic && d.topic.length >= 2 && qLower.includes(d.topic)) {
+      topicHit = true
+    }
+
+    if (s <= 0 && !aboutHit && conceptScore <= 0 && !entityHit) continue
     const importance = 0.6 + 0.8 * (Number(it.importance) || 0.5)
-    const score = (s + (aboutHit ? 0.8 : 0) + conceptScore * 1.2) * importance * (0.55 + 0.45 * retention(it, now))
-    scored.push({ it, score, why: why.sort((x, y) => y[1] - x[1]).slice(0, 3).map((w) => w[0]).concat(aboutHit ? ['（关于这个人）'] : []).concat(conceptScore > 0.3 ? ['（语义相关）'] : []) })
+    const score = (s + (aboutHit ? 0.8 : 0) + (entityHit ? 1.6 : 0) + (topicHit ? 0.5 : 0) + conceptScore * 1.2) * importance * (0.55 + 0.45 * retention(it, now))
+    const whyHits = why.sort((x, y) => y[1] - x[1]).slice(0, 3).map((w) => w[0])
+      .concat(aboutHit ? ['（关于这个人）'] : [])
+      .concat(entityHit ? ['（实体命中）'] : [])
+      .concat(conceptScore > 0.3 ? ['（语义相关）'] : [])
+    scored.push({ it, score, why: whyHits })
   }
   scored.sort((x, y) => y.score - x.score)
   return scored.filter((x) => x.score >= (o.minScore ?? 0.35)).slice(0, o.limit ?? 6)
