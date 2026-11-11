@@ -70,17 +70,20 @@ export default {
             importance: { type: 'number', description: '0~1，约定、关系、核心喜好写高一点，随口一提写低一点，不确定写 0.5' },
           },
           required: ['text'],
-          execute: async ({ text, about, importance }) => memory.add({
-            text,
-            aboutName: about || '',
-            about: chat.kind === 'private' ? chat.userId : '',
-            importance: importance ?? 0.5,
-            source: 'tool',
-            chatId: current,
-            // 私聊记的只在这个私聊可见，群里记的只在这个群可见（global 才到处可见）。
-            // 不这样打标，私聊说的「我的猫叫粥粥」会在群里被检索出来 —— 记忆隔离就形同虚设。
-            scope: memory.scopeOfChat(chat),
-          }),
+          execute: async ({ text, about, importance }) => {
+            const activeMem = api.use('memory')?.store || globalThis.qqHub?.modules?.use('memory')?.store || memory
+            return activeMem.add({
+              text,
+              aboutName: about || '',
+              about: chat.kind === 'private' ? chat.userId : '',
+              importance: importance ?? 0.5,
+              source: 'tool',
+              chatId: current,
+              // 私聊记的只在这个私聊可见，群里记的只在这个群可见（global 才到处可见）。
+              // 不这样打标，私聊说的「我的猫叫粥粥」会在群里被检索出来 —— 记忆隔离就形同虚设。
+              scope: activeMem.scopeOfChat(chat),
+            })
+          },
         }),
         defineTool({
           name: 'recall_memory',
@@ -89,7 +92,8 @@ export default {
           required: ['query'],
           execute: async ({ query }) => {
             // chat 一定要传：不传就跨作用域召回，群里能把私聊记的事翻出来
-            const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
+            const activeMem = api.use('memory')?.store || globalThis.qqHub?.modules?.use('memory')?.store || memory
+            const hits = activeMem.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
             return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
           },
         }),
