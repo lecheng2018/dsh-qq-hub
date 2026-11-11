@@ -23,13 +23,14 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const PATCH = join(HERE, '..', 'src', 'core', 'fnos-fsync-patch.js')
 const NODE = process.execPath
 
-/** 找 Harness 进程真正加载的 dsh-attachment-local 副本（.pnpm 里的那份）。
- *  只扫 version/node_modules/.pnpm 的一层目录名，不递归整棵依赖树（太慢）。
+/** 找本机 DSH 进程真正加载的 dsh-attachment-local 副本（.pnpm 里的那份）。
+ *  只扫 DSH server 目录（可用环境变量 QQHUB_DSH_SERVER_DIR 指定）下 version/node_modules/.pnpm
+ *  的一层目录名，不递归整棵依赖树（太慢）。
  *  顶层 node_modules/@deepseek-ai/... 可能是后装的、自带 fnos 容错的新版本，
  *  拿它当「不打补丁」基线会假阳性，所以必须精确指向 .pnpm 副本。
  */
 function findAttachmentLib () {
-  const servers = ['/opt/dsh/server', '/opt/dsh'].filter(existsSync)
+  const servers = [process.env.QQHUB_DSH_SERVER_DIR, '/opt/dsh/server'].filter(Boolean).filter(existsSync)
   const hits = []
   for (const server of servers) {
     let versions = []
