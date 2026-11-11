@@ -745,29 +745,29 @@ export function createModularCore({
     let already = 0
     let failed = 0
     for (const tool of tools) {
-      try {
-        let registration = tool
-        if (tool.slow) {
-          const { slow, ...base } = tool
-          const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
-          registration = {
-            ...base,
-            async execute(args, exec) {
-              let fired = false
-              const timer = setTimeout(() => {
-                if (fired || slowNoticeSent.has(sessionId)) return
-                fired = true
-                slowNoticeSent.add(sessionId)
-                Promise.resolve(outbox.request({
-                  chatKey, sourceModuleId: 'core',
-                  segments: [{ type: 'text', data: { text: notice } }],
-                })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
-              }, 1500)
-              timer.unref?.()
-              try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
-            },
-          }
+      let registration = tool
+      if (tool.slow) {
+        const { slow, ...base } = tool
+        const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+        registration = {
+          ...base,
+          async execute(args, exec) {
+            let fired = false
+            const timer = setTimeout(() => {
+              if (fired || slowNoticeSent.has(sessionId)) return
+              fired = true
+              slowNoticeSent.add(sessionId)
+              Promise.resolve(outbox.request({
+                chatKey, sourceModuleId: 'core',
+                segments: [{ type: 'text', data: { text: notice } }],
+              })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
+            }, 1500)
+            timer.unref?.()
+            try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
+          },
         }
+      }
+      try {
         const off = agent.ctx?.tools?.register?.(registration)
         if (typeof off === 'function') offs.push(off)
       } catch (error) {
