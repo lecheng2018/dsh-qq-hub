@@ -204,6 +204,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             chatId: e.chatId || '',
             scope: scope,
             at: typeof e.at === 'number' ? e.at : Date.now(),
+            eventAt: typeof e.eventAt === 'number' ? e.eventAt : undefined,
+            entity: e.entity || undefined,
+            topic: e.topic || undefined,
             hits: Number(hitInfo.hits || e.hits || 0),
             hitDays: Number(hitInfo.hitDays || e.hitDays || 0),
             lastHit: Number(hitInfo.lastHit || e.lastHit || 0),
@@ -420,6 +423,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           tags: it.tags,
           source: it.source,
           sourceId: it.sourceId,
+          chatId: it.chatId || undefined,
+          entity: it.entity || undefined,
+          topic: it.topic || undefined,
         })
       }
 

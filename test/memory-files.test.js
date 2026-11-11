@@ -125,3 +125,62 @@ test('memory-files: 超过单文件上限 (2 MiB) 抛出异常并阻止写入', 
 
   store.close()
 })
+
+test('memory-files: 实体槽位 (entity/topic) 与事件时间 (eventAt/chatId) 完整持久化', () => {
+  const memDir = join(dir, 'store4')
+  const s1 = openMemoryFiles(memDir)
+
+  s1.save({
+    items: [
+      {
+        id: 'slot_1',
+        text: '中兴G7615光猫需要进uboot刷底包',
+        scope: 'group:111222333',
+        chatId: 'group:111222333',
+        entity: '中兴G7615',
+        topic: '数码硬件',
+        eventAt: 1794350000000,
+        at: 1794360000000,
+      },
+    ],
+  })
+  s1.close()
+
+  // 读回核验
+  const s2 = openMemoryFiles(memDir)
+  const loaded = s2.load()
+  assert.equal(loaded.items.length, 1)
+  const item = loaded.items[0]
+  assert.equal(item.id, 'slot_1')
+  assert.equal(item.entity, '中兴G7615', 'entity 槽位必须持久化保留')
+  assert.equal(item.topic, '数码硬件', 'topic 槽位必须持久化保留')
+  assert.equal(item.eventAt, 1794350000000, 'eventAt 必须持久化保留')
+  assert.equal(item.chatId, 'group:111222333', 'chatId 必须持久化保留')
+  s2.close()
+})
+
+test('memory-files: 多次 save() 与重载后，Markdown 中的 ## 当前记忆 不会重复累积膨胀（自愈与幂等）', () => {
+  const memDir = join(dir, 'store5')
+  const store = openMemoryFiles(memDir)
+
+  const state = {
+    items: [
+      { id: 'it_repeat', text: '多次保存测试', scope: 'global' },
+    ],
+  }
+
+  // 连续执行 5 次保存
+  for (let i = 0; i < 5; i++) {
+    store.save(state)
+  }
+  store.close()
+
+  // 读取生成的 global/memory.md
+  const globalFile = join(memDir, 'global', 'memory.md')
+  const mdRaw = readFileSync(globalFile, 'utf8')
+  const matches = mdRaw.match(/^##\s+当前记忆\s*$/gm)
+
+  assert.ok(matches, '应该包含 ## 当前记忆')
+  assert.equal(matches.length, 1, '多次保存后 ## 当前记忆 只能有且仅有 1 行，绝不应累积堆叠')
+})
+
