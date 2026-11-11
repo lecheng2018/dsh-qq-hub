@@ -1176,7 +1176,7 @@ function Agreement({ running, toast, onChange }) {
     )
   );
 }
-function GatewayChoice2({ draft, setDraft }) {
+function GatewayChoice({ draft, setDraft }) {
   return h(Choices, { value: draft.gateway || "snowluma", onChange: (v) => setDraft(setPath(draft, "gateway", v)), options: [
     { value: "snowluma", label: "用 SnowLuma（Windows，推荐）", desc: "插件帮你启动、接入机器人号、断线重连" },
     { value: "onebot", label: "接我已有的 OneBot 机器人", desc: "NapCat、LLOneBot、Lagrange、Docker 里的 SnowLuma 等任何 OneBot v11 实现；Linux / Docker 部署选这个" }
@@ -1225,7 +1225,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
   return h(
     "div",
     { className: "ab-grid" },
-    h(Card, { title: "用什么接 QQ", right: openWizard ? h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, h(GatewayChoice2, { draft, setDraft })),
+    h(Card, { title: "用什么接 QQ", right: openWizard ? h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, h(GatewayChoice, { draft, setDraft })),
     external ? h(
       Card,
       { title: "接上 QQ（已有的 OneBot 机器人）", desc: "让你的 OneBot 服务登录机器人号 " + (draft.botQQ || "") + "，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。插件只连接，不会启动或注入任何东西；连上后会先核对登录的是不是机器人号，不是就断开。" },
@@ -1871,6 +1871,44 @@ function GroupRoles() {
     )
   );
 }
+function OwnerBrief({ draft, setDraft }) {
+  const f = useField(draft, setDraft);
+  const ob = draft.group.ownerBrief || { enabled: false, lines: 12, groups: [] };
+  const groups = (draft.allow.groups || []).map(String);
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    get("/groups/titles").then((r) => {
+      if (r.ok) setInfo(r);
+    }).catch(() => {
+    });
+  }, []);
+  const nameOf = (gid) => {
+    const g = (info && info.groups || []).find((x) => x.groupId === gid);
+    return g && g.name && g.name !== gid ? g.name : "";
+  };
+  const on = (gid) => (ob.groups || []).includes(gid);
+  const toggle = (gid) => setDraft(setPath(draft, "group.ownerBrief.groups", on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...ob.groups || [], gid]));
+  return h(
+    Card,
+    {
+      title: "主人私聊：群聊摘要",
+      right: f.sw("group.ownerBrief.enabled"),
+      desc: "主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在「主人私聊 + 这句话提到群相关」时触发，不常驻、不写进记忆；默认关。开启前先在「权限」页把群加进白名单。"
+    },
+    h(Row, { label: "每个群给几条", hint: "越少越省上下文；最多 30 条" }, f.range("group.ownerBrief.lines", 1, 30, 1, (v) => v + " 条")),
+    h(
+      Row,
+      { label: "只取哪些群", hint: "没勾 = 所有白名单群；只列白名单里的群" },
+      groups.length ? h("div", { className: "ab-flex" }, groups.map((gid) => h(
+        "button",
+        { key: gid, type: "button", className: cx("ab-chip", on(gid) && "on"), onClick: () => toggle(gid) },
+        (on(gid) ? "✓ " : "") + (nameOf(gid) || "群"),
+        h("span", { className: "n" }, gid)
+      ))) : h("span", { className: "ab-muted ab-small" }, "群白名单是空的，先在「权限」页加群。")
+    ),
+    h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。")
+  );
+}
 
 // client/src/views/group.js
 function Group({ draft, setDraft }) {
@@ -2163,6 +2201,30 @@ function Model({ draft, setDraft, toast }) {
         } }, "用这个"))
       ))))
     )
+  );
+}
+function VoiceSongModel({ draft, setDraft }) {
+  const [s, setS] = useState(null);
+  const f = useField(draft, setDraft);
+  useEffect(() => {
+    get("/voice/song-voices").then(setS).catch(() => setS({ ok: false, voices: [], message: "没查到翻唱音色" }));
+  }, []);
+  const voices = s && s.voices || [];
+  return h(
+    Card,
+    { title: "语音条变声（用翻唱音色）", desc: "把她说话的声音也换成「翻唱」页导入的 RVC 音色模型：先 TTS 念出来，再用同一个音色变声。默认不变声，直接用 TTS 原声；变声失败会自动回退原声，不影响发送。" },
+    h(
+      Row,
+      { label: "翻唱音色", hint: s && s.available === false ? s.message || "翻唱环境还没装好，装好并导入音色后才能选" : "只列「翻唱」页导入过的 .pth 音色（带 index 的会标出来）" },
+      f.select("voice.songVoice", [{ value: "", label: "不变声（TTS 原声）" }, ...voices.map((v) => ({ value: v.id, label: v.id + (v.hasIndex ? "（有 index）" : "") }))], { width: 280 })
+    ),
+    h(
+      Row,
+      { label: "变调", hint: "模型是男声训练的、想变成女声一般 +12；不确定就 0" },
+      f.num("voice.songPitch", { min: -24, max: 24 }),
+      h("span", { className: "ab-muted" }, " 半音")
+    ),
+    h("div", { className: "ab-muted ab-small" }, !s ? "正在查翻唱音色…" : s.available ? "变声要跑一次 RVC，会比普通语音慢几秒；单次变声失败会自动用原声。" : s.message || "翻唱环境还没装好（面板「翻唱」页一键安装、导入音色后才能给语音条变声）")
   );
 }
 
