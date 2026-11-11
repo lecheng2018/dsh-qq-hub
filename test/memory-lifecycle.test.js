@@ -70,7 +70,7 @@ test('lifecycle: dispose 同步中止在途任务，迟到结果禁止写回（B
           }
           // 模拟延迟挂起
           await new Promise((resolve) => setTimeout(resolve, 50))
-          yield { type: 'text', text: '[{"op":"add","text":"迟到结果不应被记录","about":"10002"}]' }
+          yield { type: 'text-delta', text: '[{"op":"add","text":"迟到结果不应被记录","about":"10002"}]' }
         })()
       },
     },
