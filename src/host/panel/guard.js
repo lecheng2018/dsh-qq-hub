@@ -68,6 +68,7 @@ const SIDE_EFFECT_PATHS = new Set([
   '/panel/purpose/run',    // :20 跑一轮目的引擎（可能真的发 QQ 消息）
   '/panel/purpose/config', // :27 setConfig
   // routes-modules.js
+  '/memory/reload',
   '/modules/reload',       // :17 重新加载并执行模块代码
   '/modules/create',       // :23 写模块目录
   '/modules/fork',         // :29 复制模块目录
