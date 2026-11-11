@@ -85,6 +85,13 @@ export function createMemoryBus({ store, log } = {}) {
     })
   }
 
+  /** 原子替代一条旧事实（C-01 规范） */
+  function supersede(o = {}) {
+    const st = requireStore('supersede')
+    if (!st || typeof st.supersede !== 'function') return { ok: false, message: '主记忆库未就绪' }
+    return st.supersede(o)
+  }
+
   /**
    * 按查询检索（主库负责作用域过滤，fail-closed）。
    * @param {string} query
@@ -132,7 +139,7 @@ export function createMemoryBus({ store, log } = {}) {
   }
 
   return {
-    add, addEvent, recall, listFor, recentEventsFor, list, remove,
+    add, addEvent, supersede, recall, listFor, recentEventsFor, list, remove,
     /** 作用域口径的唯一真相（转发 memory-privacy 的纯函数） */
     scopeOf: (chat) => scopeOf(chat),
     visibleScopes: (chat) => visibleScopes(chat),
