@@ -43,13 +43,13 @@ export function registerGatewayRoutes({
     return snowluma.consent(b.version)
   })
   route('/snowluma/reset-password', async (req, res) => {
-    if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
+    if (!bridge.authorized(req, true)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
     return snowluma.resetPassword()
   })
   // 控制台密码只显示托管状态；明文只能到本机配置文件查看
   route('/snowluma/password', async () => ({ ok: true, configured: Boolean(getConfig().snowluma.webuiPassword), auto: getConfig().snowluma.passwordAuto }))
   route('/snowluma/set-password', async (req, res) => {
-    if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
+    if (!bridge.authorized(req, true)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
     return snowluma.setPassword(String((await readBody(req)).password || ''))
   })
   route('/setup/done', async (req) => {
