@@ -463,13 +463,13 @@ export function apply(ctx) {
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
-  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req, true) === true, log: logger.child('panel') })
+  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req) === true, log: logger.child('panel') })
   const { send, readBody, readRaw, query, answer, route, guard } = http
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
-      // 模块前缀路由与精确路由同一道防护（Host/CSRF、副作用方法约束、写请求联动密钥鉴权；普通只读请求免密钥）。
+      // 模块前缀路由与精确路由同一道防护（Host/CSRF、副作用方法约束；/open/* 保留联动密钥鉴权）。
       const g = guard.check(req)
       if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''
@@ -569,7 +569,6 @@ export function apply(ctx) {
     getConfig, setConfig,
     snowluma, onebot, gatewayState, hub, getMods: () => mods,
     overview: overviewApi.overview, log, safe: effects.safe, watchdog: effects.watchdog,
-    send, bridge,
   })
   registerPurposeRoutes({
     route, readBody,
@@ -584,7 +583,6 @@ export function apply(ctx) {
     connectionProblem: overviewApi.connectionProblem, overview: overviewApi.overview, resetConsent: overviewApi.resetConsent,
     getMods: () => mods, log,
     pkg: PKG, version: VERSION, root: ROOT,
-    send, bridge,
   })
   // /persona/use 的既有筛选匹配新 current；仅向该路由提供有效人设真正改变的会话视图。
   let personaSwitchSessions = null
