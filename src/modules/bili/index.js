@@ -14,14 +14,14 @@ export default {
   tab: 'bili',
   files: ['bili/duty.js', 'bili/api.js', 'bili/vision.js', 'bili/shots.js'],
   setup(api) {
-    const { hub } = api.core
+    const { hub, chatLog } = api.core
     const lastImage = new Map() // chatId → 最近一张图的网址（给 bili_set_avatar 的 last 用）
     api.on('message', (msg) => {
       const url = (msg.images || []).slice(-1)[0]?.data?.url
       if (url && /^https?:\/\//i.test(url)) lastImage.set(msg.chatId, url)
       return false
     })
-    const bili = createBili({ getConfig: api.config, hub, memory: api.lazy('memory'), log: api.log, dsh: api.dsh })
+    const bili = createBili({ getConfig: api.config, hub, chatLog, memory: api.lazy('memory'), log: api.log, dsh: api.dsh })
     api.every(60_000, () => bili.tick(), '刷B站')
 
     // 看视频谁发的链接都能看，评论要主人开口
