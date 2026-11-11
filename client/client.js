@@ -1992,7 +1992,7 @@ function Group({ draft, setDraft }) {
         // 敲到分隔符的那一刻内容就被吃掉了
         h(ListInput, {
           value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
-          placeholder: "例如 321321321, 456456456",
+          placeholder: "例如 123456789, 987654321",
           numbers: true,
           onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
         })
