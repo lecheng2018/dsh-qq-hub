@@ -106,15 +106,15 @@ export default {
     /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。
      * 开头带上上一份摘要（若有）：连续压缩时，第一次压缩摘掉的那段聊天只存在于摘要里，
      * chatlog 早就翻不到了 —— 不带它，第二次压缩就会把更早的对话彻底丢掉（2026-11-05 排查）。 */
-    function recentTranscript(hub, chatId, maxChars = 12000) {
+    function recentTranscript(chatLog, chatId, maxChars = 12000) {
       try {
         const prev = summaries[chatId]
         const head = prev && prev.text ? `【更早聊天的摘要（${new Date(prev.at).toLocaleString('zh-CN').slice(0, 16)}）】\n${prev.text}\n\n【以下是之后新说的】\n` : ''
-        const days = hub.chatLogDays ? hub.chatLogDays() : []
+        const days = chatLog?.listDays?.() || []
         if (!days.length) return head.trim() ? head : ''
         const rows = []
         for (let i = days.length - 1; i >= 0 && rows.join('').length < maxChars * 2; i--) {
-          const list = hub.chatLogOf ? hub.chatLogOf(days[i]) : []
+          const list = chatLog.readDay(days[i]) || []
           // chatlog 里 bot 自己的 who 是 'bot'（不是 'self'）：判错了会让摘要里全是「对方」，
           // 分不清哪句是她说的，摘要质量直接废掉一半。
           for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${(r.who === 'bot' || r.who === 'self') ? '你' : '对方'}：${r.text}`)
@@ -161,7 +161,7 @@ export default {
       const cfg = api.settings()
       const hub = api.core.hub
       const chatId = chat?.chatId || ''
-      const transcript = chatId ? recentTranscript(hub, chatId) : ''
+      const transcript = chatId ? recentTranscript(api.core.chatLog, chatId) : ''
       // 返回结构：ok + reason（让面板能说清「为什么没压成」，而不是一句笼统的「看日志」）
       if (!transcript) {
         api.log.debug(`${ID}：${chatId} 没有聊天流水，跳过压缩`)
@@ -258,12 +258,12 @@ export default {
         return { ok: false, reason: 'no-reset', message: '旧会话没归档成功，摘要保持原样（10 分钟内会自动重试）' }
       }
       // 摘要写回 chatlog（她自己的名字记一笔，who 用 'bot'）：
-      //   1. chatlog 保留 14 天，而摘要 7 天就过期 —— 过期后她对这些对话失忆，且没有任何机制重建；
+      //   1. chatlog 由共享服务保留至少 14 天，而摘要 7 天就过期 —— 过期后她对这些对话失忆，且没有任何机制重建；
       //      写回之后，下次压缩的输入天然带上旧摘要，连续压缩也不会再丢更早的对话（和 recentTranscript 的摘要头双保险）。
       //   2. 只在会话真的换了（resetOk）时写，避免旧会话里堆两份。
-      if (chatId && typeof hub.logChat === 'function') {
+      if (chatId && typeof api.core.chatLog?.append === 'function') {
         try {
-          hub.logChat(chatId, 'bot', `【更早聊天的摘要（${new Date().toLocaleString('zh-CN').slice(0, 16)}）】\n${body}`)
+          api.core.chatLog.append(chatId, 'bot', `【更早聊天的摘要（${new Date().toLocaleString('zh-CN').slice(0, 16)}）】\n${body}`)
         } catch (error) { api.log.debug(`${ID}：摘要写回聊天流水失败（不影响压缩）：`, error.message) }
       }
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
