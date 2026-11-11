@@ -166,3 +166,4 @@
 - 密钥只存当前标签页，不回显；无密钥时指引本机配置文件。
 - bridge.authorized 支持面板管理 allowDisabled，/open/* 仍受 bridge.http；有效密钥可先管理面板再开启接口。
 - 新增 UI 与关闭开放接口时的鉴权回归，定向 7/7。
+- 修正 SnowLuma set/reset 与 /save 内层仍严格校验的问题：三个 handler 与总闸同用 allowDisabled=true；/open/* 不变。

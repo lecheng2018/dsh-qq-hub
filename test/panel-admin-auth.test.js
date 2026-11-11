@@ -127,6 +127,12 @@ test('已有密钥可校验并管理面板，即使开放 HTTP 暂时关闭', as
     const enabled = await f.fake.call('/save', { bridge: { http: true } }, { 'x-qq-hub-token': TOKEN })
     assert.equal(enabled.status, 200)
     assert.equal(f.api.getConfig().bridge.http, true)
+    await f.api.setConfig({ ...f.api.getConfig(), bridge: { ...f.api.getConfig().bridge, http: false } })
+    for (const path of ['/snowluma/set-password', '/snowluma/reset-password', '/save']) {
+      const body = path === '/save' ? { snowluma: { webuiPassword: 'weak' } } : { password: 'weak' }
+      const result = await f.fake.call(path, body, { 'x-qq-hub-token': TOKEN })
+      assert.notEqual(result.status, 401, `${path} 不应被开放接口开关误拦`)
+    }
     const open = await f.fake.call('/open/info')
     assert.equal(open.status, 401)
   } finally {
