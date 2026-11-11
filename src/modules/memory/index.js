@@ -70,17 +70,20 @@ export default {
             importance: { type: 'number', description: '0~1，约定、关系、核心喜好写高一点，随口一提写低一点，不确定写 0.5' },
           },
           required: ['text'],
-          execute: async ({ text, about, importance }) => memory.add({
-            text,
-            aboutName: about || '',
-            about: chat.kind === 'private' ? chat.userId : '',
-            importance: importance ?? 0.5,
-            source: 'tool',
-            chatId: current,
-            // 私聊记的只在这个私聊可见，群里记的只在这个群可见（global 才到处可见）。
-            // 不这样打标，私聊说的「我的猫叫粥粥」会在群里被检索出来 —— 记忆隔离就形同虚设。
-            scope: memory.scopeOfChat(chat),
-          }),
+          execute: async ({ text, about, importance }) => {
+            const activeMem = api.use('memory')?.store || globalThis.qqHub?.modules?.use('memory')?.store || memory
+            return activeMem.add({
+              text,
+              aboutName: about || '',
+              about: chat.kind === 'private' ? chat.userId : '',
+              importance: importance ?? 0.5,
+              source: 'tool',
+              chatId: current,
+              // 私聊记的只在这个私聊可见，群里记的只在这个群可见（global 才到处可见）。
+              // 不这样打标，私聊说的「我的猫叫粥粥」会在群里被检索出来 —— 记忆隔离就形同虚设。
+              scope: activeMem.scopeOfChat(chat),
+            })
+          },
         }),
         defineTool({
           name: 'recall_memory',
@@ -89,14 +92,19 @@ export default {
           required: ['query'],
           execute: async ({ query }) => {
             // chat 一定要传：不传就跨作用域召回，群里能把私聊记的事翻出来
-            const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
+            const activeMem = api.use('memory')?.store || globalThis.qqHub?.modules?.use('memory')?.store || memory
+            const hits = activeMem.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
             return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
           },
         }),
       ]
     })
 
-    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '').slice(0, 300), stats: memory.stats() }))
+    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '').slice(0, 300), stats: memory.stats(), health: memory.health() }))
+    api.route('/memory/reload', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请使用 POST 重新载入档案' }
+      return memory.reload()
+    })
     api.route('/memory/add', async (req) => {
       const b = await http.body(req)
       return memory.add({ text: b.text, aboutName: b.aboutName || '', about: b.about || '', importance: b.importance ?? 0.6, tags: b.tags || [], source: 'panel' })
@@ -125,7 +133,7 @@ export default {
       if (!b.gid) return { ok: false, message: '没给群号' }
       return refreshCard(b.gid)
     })
-    // 从会话历史蒸馏（1.3.63）：chatlog 每天删，DSH 会话记录留得久，翻它能立刻学
+    // 从会话历史蒸馏：不依赖共享流水的保留窗口。
     api.route('/distill/history', async (req) => {
       if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
       const q = http.query(req) || {}
@@ -197,7 +205,7 @@ export default {
     })
     api.route('/memory/extract', async (req) => {
       const b = await http.body(req)
-      // 立即整理一次：连今天的也提炼（今天的聊天流水不删，写日记还要用）
+      // 共享流水只读消费，整理进度由记忆模块独立记录。
       return memory.consolidate({ includeToday: b.includeToday !== false })
     })
 

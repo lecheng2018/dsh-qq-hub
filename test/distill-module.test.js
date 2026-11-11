@@ -118,6 +118,69 @@ test('引擎：L0 计数 → 满 10 条触发一次 L1（模型调用恰好一�
   }
 })
 
+test('引擎：L1 回包不是 JSON 时当场带纠正提示重试一次，第二次成功入批', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'distill-mod-'))
+  const stateFile = join(dir, 'pipeline.json')
+  const calls = []
+  const lines = []
+  for (let i = 0; i < 9; i++) lines.push({ t: Date.now() - 400_000 + i * 30_000, chatId: 'group:777', uid: '555', name: '老哥', text: `今天这把游戏有点顶 ${i}` })
+  lines.push({ t: Date.now() - 380_000, chatId: 'group:777', uid: '666', name: '路人', text: '确实确实' })
+  const engine = createDistillEngine({
+    config: () => ({ enabled: true, memory: { distill: true, distillBatch: 10 } }),
+    targetsOf: () => [{ gid: '777', uid: '555', name: '老哥' }],
+    loadState: () => { try { return JSON.parse(readFileSync(stateFile, 'utf8')) } catch { return null } },
+    saveState: (s) => writeFileSync(stateFile, JSON.stringify(s)),
+    chatLogDays: () => ['d1'],
+    chatLogOf: () => lines,
+    askModelImpl: async (dsh, opts) => {
+      calls.push(opts)
+      if (calls.length === 1) return '（模型跑偏了，输出一段没有 JSON 的分析正文）'
+      return L1_JSON
+    },
+    dsh: null,
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+  })
+  try {
+    for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', Date.now() + i)
+    await new Promise((r) => setTimeout(r, 60))
+    assert.equal(calls.length, 2, '首次解析失败必须当场重试一次')
+    assert.ok(String(calls[1].text || '').includes('上一轮回包不是约定格式'), '重试请求要带纠正提示')
+    assert.equal(calls[0].reasoningEffort, 'off', '蒸馏是机械提取，不传推理档（推理模型会把答案写成报告正文）')
+    assert.equal(calls[1].reasoningEffort, 'off', '纠正重试同样关闭推理')
+    assert.equal(engine.status()[0].batches, 1, '重试成功后批次正常入账')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
+})
+
+test('引擎：两次都解析失败 → 批次不入账，不无限重试', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'distill-mod-'))
+  const stateFile = join(dir, 'pipeline.json')
+  const calls = []
+  const lines = []
+  for (let i = 0; i < 9; i++) lines.push({ t: Date.now() - 400_000 + i * 30_000, chatId: 'group:777', uid: '555', name: '老哥', text: `今天这把游戏有点顶 ${i}` })
+  lines.push({ t: Date.now() - 380_000, chatId: 'group:777', uid: '666', name: '路人', text: '确实确实' })
+  const engine = createDistillEngine({
+    config: () => ({ enabled: true, memory: { distill: true, distillBatch: 10 } }),
+    targetsOf: () => [{ gid: '777', uid: '555', name: '老哥' }],
+    loadState: () => { try { return JSON.parse(readFileSync(stateFile, 'utf8')) } catch { return null } },
+    saveState: (s) => writeFileSync(stateFile, JSON.stringify(s)),
+    chatLogDays: () => ['d1'],
+    chatLogOf: () => lines,
+    askModelImpl: async (dsh, opts) => { calls.push(opts); return '还是没有 JSON 的正文' },
+    dsh: null,
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+  })
+  try {
+    for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', Date.now() + i)
+    await new Promise((r) => setTimeout(r, 60))
+    assert.equal(calls.length, 2, '只重试一次，不得无限打模型')
+    assert.equal(engine.status()[0].batches, 0, '两次都失败则批次丢弃')
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }) } catch {}
+  }
+})
+
 test('引擎：限流（1 小时内不重复触发）', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'distill-mod-'))
   const stateFile = join(dir, 'pipeline.json')

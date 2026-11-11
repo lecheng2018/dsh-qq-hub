@@ -33,7 +33,7 @@ import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
-import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/hub.js'
+import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
@@ -745,36 +745,52 @@ export function createModularCore({
     let already = 0
     let failed = 0
     for (const tool of tools) {
-      try {
-        let registration = tool
-        if (tool.slow) {
-          const { slow, ...base } = tool
-          const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
-          registration = {
-            ...base,
-            async execute(args, exec) {
-              let fired = false
-              const timer = setTimeout(() => {
-                if (fired || slowNoticeSent.has(sessionId)) return
-                fired = true
-                slowNoticeSent.add(sessionId)
-                Promise.resolve(outbox.request({
-                  chatKey, sourceModuleId: 'core',
-                  segments: [{ type: 'text', data: { text: notice } }],
-                })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
-              }, 1500)
-              timer.unref?.()
-              try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
-            },
-          }
+      let registration = tool
+      if (tool.slow) {
+        const { slow, ...base } = tool
+        const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+        registration = {
+          ...base,
+          async execute(args, exec) {
+            let fired = false
+            const timer = setTimeout(() => {
+              if (fired || slowNoticeSent.has(sessionId)) return
+              fired = true
+              slowNoticeSent.add(sessionId)
+              Promise.resolve(outbox.request({
+                chatKey, sourceModuleId: 'core',
+                segments: [{ type: 'text', data: { text: notice } }],
+              })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
+            }, 1500)
+            timer.unref?.()
+            try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
+          },
         }
+      }
+      try {
         const off = agent.ctx?.tools?.register?.(registration)
         if (typeof off === 'function') offs.push(off)
       } catch (error) {
         const msg = String(error?.message || error)
-        // legacy hub.mount 可能已经挂过同一份工具（同一 agent 作用域）：这不是失败
-        if (msg.includes('already registered')) already++
-        else { failed++; debug(`工具 ${tool?.name} 挂载失败：${msg}`) }
+        if (msg.includes('already registered')) {
+          try {
+            // 热重载保护：若会话作用域内残留同名工具，从作用域层强制移除旧登记项并重挂新实例
+            const scope = agent.ctx?._scope || agent.ctx
+            const layer = agent.ctx?.tools?.layers?.peek?.(scope)
+            if (layer?.tools?.data?.has?.(tool.name)) {
+              layer.tools.data.delete(tool.name)
+              const offRetry = agent.ctx?.tools?.register?.(registration)
+              if (typeof offRetry === 'function') {
+                offs.push(offRetry)
+                continue
+              }
+            }
+          } catch {}
+          already++
+        } else {
+          failed++
+          debug(`工具 ${tool?.name} 挂载失败：${msg}`)
+        }
       }
     }
     mountedTools.set(sessionId, { agent, key, offs })
