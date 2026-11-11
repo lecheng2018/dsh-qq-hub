@@ -31,12 +31,11 @@ test('样本不足（<10 行）不统计；候选带原句采样', () => {
   assert.ok(cands[0].samples[0].length <= 30)
 })
 
-test('接线：学习已迁独立模块 slang（自带日程+按群隔离），开关 memory.slang 默认关', () => {
+test('接线：学习已迁独立模块 slang（自带日程+共享流水），开关 memory.slang 默认关', () => {
   const mod = readFileSync(new URL('../src/modules/slang/index.js', import.meta.url), 'utf8')
   assert.match(mod, /cfg\.memory\?\.slang === true/, '默认关（面板开关打开才学）')
   assert.match(mod, /api\.every\(60_000/, '模块自己挂每日日程')
-  assert.match(mod, /learnDay\(runDay\)/, '学习入口在模块日程里')
-  assert.match(mod, /失败.*不记 learned|不记 learned/, '失败不记冷却（诚实标记）')
+  assert.match(mod, /chatLog: api\.core\.chatLog/, '模块接宿主共享流水，不依赖记忆整理时序')
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
   assert.ok(!mem.includes('learnGroupSlang'), 'memory.js 旧实现已移交')
   const idx = readFileSync(new URL('../src/modules/index.js', import.meta.url), 'utf8')
@@ -45,11 +44,54 @@ test('接线：学习已迁独立模块 slang（自带日程+按群隔离），�
   assert.match(cfg, /c\.memory\.slang = bool\(c\.memory\.slang, false\)/)
 })
 
-test('提炼结果写进模块命名空间存储（1.3.58 起不挤 insights；模块化后不进 memory.json）', () => {
+test('黑话产物与来源进度一起持久化，失败不标成功，重启不重复调用', async (t) => {
+  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { createSlangEngine } = await import('../src/modules/slang/index.js')
+  const dir = mkdtempSync(join(tmpdir(), 'slang-progress-'))
+  const file = join(dir, 'book.json')
+  const engines = []
+  t.after(() => {
+    engines.forEach((engine) => engine.dispose())
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const day = '2026-11-10'
+  const rows = Array.from({ length: 12 }, (_, i) => ({ chatId: 'group:777', uid: String(i), text: `石化流这波太强了 ${i}` }))
+  let fail = true
+  let calls = 0
+  const create = () => {
+    const engine = createSlangEngine({
+      config: () => ({ enabled: true, memory: { slang: true } }),
+      chatLog: { listDays: () => [day], readDay: () => rows },
+      loadState: () => existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null,
+      saveState: (state) => writeFileSync(file, JSON.stringify(state)),
+      askModelImpl: async () => {
+        calls++
+        if (fail) throw new Error('模型暂时失败')
+        return '[{"word":"石化流","meaning":"一套打法"}]'
+      },
+      log: { warn() {} },
+    })
+    engines.push(engine)
+    return engine
+  }
+  const first = create()
+  assert.equal((await first.learnDay(day)).results[0].ok, false)
+  assert.equal(existsSync(file), false, '失败不保存产物或成功进度')
+  fail = false
+  assert.equal((await first.learnDay(day)).results[0].ok, true)
+  const state = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(state.groups['777'][0].word, '石化流')
+  assert.deepEqual(state.learned[day], ['777'])
+  assert.equal(state.sources[day]['777'].count, rows.length)
+  assert.match(state.sources[day]['777'].fingerprint, /^[a-f0-9]{64}$/)
+  first.dispose()
+  const before = calls
+  assert.equal((await create().learnDay(day)).results[0].ok, true)
+  assert.equal(calls, before, '成功游标重启后仍有效')
   const mod = readFileSync(new URL('../src/modules/slang/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.dataDir\('book\.json'\)/, '模块命名空间存储')
-  assert.match(mod, /putBook\(gid, items\)/, '写进独立黑话本')
-  assert.match(mod, /markLearned\(day, gid\)/, '提炼过要记账，重启不重复花调用')
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
   assert.ok(!mem.includes("setInsights(key, merged, '黑话本')"), '不和相处经验共用槽位')
 })
