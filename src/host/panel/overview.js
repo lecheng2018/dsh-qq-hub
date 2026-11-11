@@ -6,7 +6,7 @@
 import { statSync } from 'node:fs'
 import { publicConfig } from '../../core/config.js'
 import { listPersonas } from '../../persona/personas.js'
-import { workspaceDirOf } from '../../chat/hub.js'
+import { workspaceDirOf } from '../../chat/workspace.js'
 import { DOWNLOAD_PAGE } from '../../snowluma/manager.js'
 import { dataDir } from '../../core/store.js'
 
