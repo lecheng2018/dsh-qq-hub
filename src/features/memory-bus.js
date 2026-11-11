@@ -17,7 +17,7 @@
 // 底下仍然是 features/memory.js 那一套（它的去重/清晰度/遗忘/SQLite 都比这里强）。
 // 以后真要加新轨道（比如向量库），在 createMemoryStore 后面加实现、总线分发，调用方一行不改。
 
-import { visibleScopes, isVisible, scopeOf } from '../modules/memory-privacy/index.js'
+import { visibleScopes, isVisible, scopeOf } from './memory-scope.js'
 
 export { visibleScopes, isVisible, scopeOf }
 
