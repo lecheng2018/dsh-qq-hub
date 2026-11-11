@@ -13,7 +13,6 @@ export function registerConfigRoutes({
   getConfig, setConfig,
   snowluma, onebot, gatewayState, hub, getMods,
   overview, log, safe, watchdog,
-  send, bridge,
 }) {
   route('/state', async () => overview())
 
@@ -68,12 +67,11 @@ export function registerConfigRoutes({
     return { ok: failed.length === 0, done, failed }
   })
 
-  route('/save', async (req, res) => {
+  route('/save', async (req) => {
     const body = await readBody(req)
     const before = getConfig()
     // 控制台密码不能只改配置（SnowLuma 那边还是旧的）：拿出来单独去 SnowLuma 改
     const newPw = typeof body?.snowluma?.webuiPassword === 'string' ? body.snowluma.webuiPassword : ''
-    if (newPw && newPw !== before.snowluma.webuiPassword && !bridge.authorized(req, true)) return send(res, 401, { ok: false, message: '修改控制台密码需要有效联动密钥' })
     if (body?.snowluma) delete body.snowluma.webuiPassword
     const cfg = setConfig(mergeFromPanel(before, body))
     let pw = null
