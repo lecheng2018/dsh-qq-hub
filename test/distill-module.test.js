@@ -175,10 +175,44 @@ test('引擎：两次都解析失败 → 批次不入账，不无限重试', asy
     for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', Date.now() + i)
     await new Promise((r) => setTimeout(r, 60))
     assert.equal(calls.length, 2, '只重试一次，不得无限打模型')
-    assert.equal(engine.status()[0].batches, 0, '两次都失败则批次丢弃')
+    assert.equal(engine.status()[0].batches, 0, '两次都失败则批次不提交')
   } finally {
     try { rmSync(dir, { recursive: true, force: true }) } catch {}
   }
+})
+
+test('L1 模型失败保留未消费计数，并在可重试时再次运行', async () => {
+  let now = Date.now()
+  let shouldFail = true
+  let secondResolve
+  const state = {}
+  const lines = Array.from({ length: 10 }, (_, i) => ({ t: now - i * 1000, chatId: 'group:777', uid: '555', name: '老哥', text: `原话 ${i}` }))
+  const engine = createDistillEngine({
+    config: () => ({ enabled: true, memory: { distill: true, distillBatch: 10, distillRetryMs: 0 } }),
+    targetsOf: () => [{ gid: '777', uid: '555', name: '老哥' }],
+    loadState: () => state,
+    saveState: (next) => Object.assign(state, next),
+    chatLogDays: () => ['d1'],
+    chatLogOf: () => lines,
+    askModelImpl: async () => {
+      if (shouldFail) throw new Error('临时模型故障')
+      return new Promise((resolve) => { secondResolve = () => resolve(L1_JSON) })
+    },
+    now: () => now,
+    log: { info() {}, warn() {}, debug() {} },
+  })
+  for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', now + i)
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(engine.status()[0].newCount, 10, '失败时计数仍待消费')
+  assert.equal(engine.status()[0].batches, 0)
+  shouldFail = false
+  engine.noteMessage('group:777', '555', now + 20)
+  await new Promise((r) => setTimeout(r, 20))
+  engine.noteMessage('group:777', '555', now + 21)
+  secondResolve()
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(engine.status()[0].newCount, 1, '处理期间新到的计数仍保留')
+  assert.equal(engine.status()[0].batches, 1)
 })
 
 test('引擎：限流（1 小时内不重复触发）', async () => {
@@ -205,7 +239,10 @@ test('引擎：限流（1 小时内不重复触发）', async () => {
     await new Promise((r) => setTimeout(r, 40))
     assert.equal(calls.length, 1)
     t += 60_000 // 1 分钟后又是 10 条 → 被限流
-    for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', t + i)
+    for (let i = 0; i < 10; i++) {
+      lines.push({ t: t + i, chatId: 'group:777', uid: '555', text: `新增游戏原话 ${i}，用于验证限流后的新批次` })
+      engine.noteMessage('group:777', '555', t + i)
+    }
     await new Promise((r) => setTimeout(r, 40))
     assert.equal(calls.length, 1, '限流窗口内不重复触发（计数已攒着）')
     assert.equal(engine.status()[0].newCount, 10, '计数保留，窗口过了就触发')
@@ -249,6 +286,7 @@ test('引擎：L2 累计 5 批聚合；L3 每日一次出增长段；事件回�
     // 5 批：每批之间把 lastL1At 拨回 1 小时前（绕过限流，等价于时间流逝）
     for (let b = 0; b < 5; b++) {
       t += 3600_000
+      if (b > 0) for (let i = 0; i < 10; i++) lines.push({ t: t + i, chatId: 'group:777', uid: '555', text: `第 ${b} 批新增游戏聊天记录 ${i}，保持真实追加` })
       for (let i = 0; i < 10; i++) engine.noteMessage('group:777', '555', t + i)
       await new Promise((r) => setTimeout(r, 30))
     }

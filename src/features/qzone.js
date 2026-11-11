@@ -27,7 +27,7 @@ export function planDiaryTimes({ timesPerDay, windowStart, windowEnd, minGapMinu
   return Array.from({ length: n }, (_, i) => a + Math.floor((span / n) * (i + 0.5)))
 }
 
-export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage }) {
+export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pickImage }) {
   const file = () => dataDir('diary.json')
   const state = () => readJson(file(), () => ({ plan: { day: '', times: [], done: [] }, history: [] }))
   const save = (s) => writeJson(file(), s)
@@ -152,7 +152,7 @@ export function createQzone({ getConfig, onebot, hub, log, onDiary, pickImage })
   }
 
   function todayExcerpt(maxLines = 60) {
-    const lines = hub.chatLogOf(dayKey())
+    const lines = (chatLog?.readDay?.(dayKey()) ?? hub.chatLogOf(dayKey()))
       .filter((l) => !String(l.chatId).startsWith('system:'))
       .slice(-maxLines)
       .map((l) => `${new Date(l.t).toTimeString().slice(0, 5)} ${l.who === 'bot' ? '我' : l.who}：${l.text}`)

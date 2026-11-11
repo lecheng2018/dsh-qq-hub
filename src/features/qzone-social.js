@@ -51,9 +51,9 @@ export function pickFeeds(feeds, selfId, now = Date.now()) {
   return (feeds || []).filter((f) => f && f.appid === 311 && Number(f.uin) > 0 && String(f.uin) !== String(selfId) && f.key && now / 1000 - Number(f.time || 0) < 86400)
 }
 
-export function createQzoneSocial({ getConfig, onebot, hub, log, memory }) {
+export function createQzoneSocial({ getConfig, onebot, hub, chatLog, log, memory }) {
   // 空间里看到的东西记进流水（chatId = qzone），每次整理记忆时从里面提炼关于好友的事
-  const remember = (who, uin, text) => { try { hub.logChat?.('qzone', who, text, uin) } catch (error) {} }
+  const remember = (who, uin, text) => { try { (chatLog?.append || hub.logChat)?.('qzone', who, text, uin) } catch (error) {} }
   const file = () => dataDir('qzone-social.json')
   const load = () => readJson(file(), () => ({ day: '', count: 0, lastRun: 0, replied: {}, seen: [], history: [] }))
   const save = (s) => writeJson(file(), s)

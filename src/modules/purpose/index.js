@@ -37,6 +37,7 @@ export default {
     const purpose = createPurpose({
       getConfig: api.config,
       hub: api.core.hub,
+      chatLog: api.core.chatLog,
       log: api.log,
       isMuted: (chatId) => { try { return api.core.mutes.muted(chatId) } catch { return false } },
       mood: () => api.use('mood'),

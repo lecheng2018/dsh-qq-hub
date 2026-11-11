@@ -176,11 +176,19 @@ async function runStream (llm, params) {
   return out.trim()
 }
 
-export async function withAbortTimeout(run, timeoutMs = 120_000, label = '模型请求') {
+export async function withAbortTimeout(run, timeoutMs = 120_000, label = '模型请求', parentSignal) {
   const ms = Math.max(1, Number(timeoutMs) || 120_000)
   const controller = new AbortController()
   let timer = null
+  let onAbort
   const timeout = new Promise((_, reject) => {
+    onAbort = () => {
+      const error = parentSignal.reason || new Error(`${label}已中止`)
+      controller.abort(error)
+      reject(error)
+    }
+    if (parentSignal?.aborted) { onAbort(); return }
+    parentSignal?.addEventListener('abort', onAbort, { once: true })
     timer = setTimeout(() => {
       const error = new Error(`${label}超过 ${Math.ceil(ms / 1000)} 秒，已中止`)
       error.turnTimedOut = true
@@ -190,9 +198,13 @@ export async function withAbortTimeout(run, timeoutMs = 120_000, label = '模型
     timer.unref?.()
   })
   try {
-    return await Promise.race([Promise.resolve().then(() => run(controller.signal)), timeout])
+    return await Promise.race([Promise.resolve().then(() => {
+      controller.signal.throwIfAborted()
+      return run(controller.signal)
+    }), timeout])
   } finally {
     if (timer) clearTimeout(timer)
+    parentSignal?.removeEventListener('abort', onAbort)
   }
 }
 

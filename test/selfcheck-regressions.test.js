@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createHub } from '../src/chat/hub.js'
+import { createChatLog, createChatLogApi } from '../src/chat/chat-log.js'
 import { createMemoryStore } from '../src/features/memory.js'
 import { normalize } from '../src/core/config.js'
 
@@ -28,6 +29,7 @@ test('聊天流水：调用方漏昵称时按主人名或 uid 兜底，不再写
     const cfg = normalize({ ownerQQ: '10000001', ownerName: '主人' })
     const hub = createHub({
       dsh: {}, getConfig: () => cfg, log, onebot: {}, stickers: {}, tts: {},
+      chatLog: createChatLogApi(createChatLog({ getConfig: () => cfg, log })),
       buildTools: () => [], contextProviders: [], onActivity: () => {}, memoryScore: () => 0,
       onCommand: async () => null, isMuted: () => false, moodEffects: () => null,
       localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,

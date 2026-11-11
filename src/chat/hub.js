@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync, unlinkSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { dataDir, readJson, writeJson } from '../core/store.js'
@@ -62,7 +62,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -204,19 +204,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     stats[k]++
   }
 
-  // ---------- 聊天流水（给空间日记、主动搭话、面板用） ----------
+  // 兼容旧 hub 调用方；流水的读写与保留期由宿主持有的独立服务负责。
   function logChat(chatId, who, text, uid = '') {
-    try {
-      const d = new Date()
-      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      const dir = dataDir('chatlog')
-      mkdirSync(dir, { recursive: true })
-      const cfg = getConfig() || {}
-      const uidText = String(uid || '')
-      const ownerName = uidText && uidText === String(cfg.ownerQQ || '') ? String(cfg.ownerName || '主人') : ''
-      const author = String(who || '').trim() || ownerName || uidText || (String(chatId).startsWith('private:') ? String(chatId).slice(8) : '群成员')
-      appendFileSync(join(dir, `${day}.jsonl`), JSON.stringify({ t: Date.now(), chatId, who: author, ...(uid ? { uid: uidText } : {}), text: redact(String(text).slice(0, 500)) }) + '\n', 'utf8')
-    } catch (error) {}
+    try { return chatLog?.append?.(chatId, who, text, uid) } catch (error) {}
   }
 
   /** 有聊天流水的日期（升序）。 */
@@ -234,25 +224,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   }
 
   function chatLogDays() {
-    try {
-      return readdirSync(dataDir('chatlog')).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).map((n) => n.slice(0, 10)).sort()
-    } catch (error) {
-      return []
-    }
-  }
-
-  function deleteChatLog(day) {
-    try { unlinkSync(join(dataDir('chatlog'), `${day}.jsonl`)) } catch (error) {}
+    try { return chatLog?.listDays?.() || [] } catch (error) { return [] }
   }
 
   function chatLogOf(day) {
-    try {
-      const f = join(dataDir('chatlog'), `${day}.jsonl`)
-      if (!existsSync(f)) return []
-      return readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-    } catch (error) {
-      return []
-    }
+    try { return chatLog?.readDay?.(day) || [] } catch (error) { return [] }
   }
 
   // ---------- 工作区与会话 ----------
@@ -2335,7 +2311,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     ensureWorkspace,
     chatLogOf,
     chatLogDays,
-    deleteChatLog,
     sessions: () => map().chats,
     resolveTarget,
     groupName,

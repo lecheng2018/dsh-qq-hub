@@ -129,12 +129,15 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   // 读写锁与缓存
   const scopeSnapshots = new Map() // scope -> { rawText, entries, prologue, mtimeMs, file }
   const brokenScopes = new Map()
-  const emptyState = () => ({ version: 1, hits: {}, processed: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
+  const emptyState = () => ({ version: 1, hits: {}, processed: {}, processedSources: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
   const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
   const validState = (v) => isRecord(v)
-    && ['hits', 'processed', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
+    && ['hits', 'processed', 'processedSources', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
     && (v.distillTargets === undefined || Array.isArray(v.distillTargets))
     && Object.values(v.processed || {}).every((n) => Number.isSafeInteger(n) && n >= 0)
+    && Object.values(v.processedSources || {}).every((source) => isRecord(source)
+      && Number.isSafeInteger(source.count) && source.count >= 0
+      && typeof source.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(source.fingerprint))
   let stateSnapshot = emptyState()
   let stateError = null
   let stateRaw = null
@@ -285,6 +288,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       insightNames: stateSnapshot.insightNames || {},
       slang: stateSnapshot.slang || {},
       processed: stateSnapshot.processed || {},
+      processedSources: stateSnapshot.processedSources || {},
       runs: stateSnapshot.runs || {},
       lastConsolidate: stateSnapshot.lastConsolidate || {},
       rev,
@@ -342,6 +346,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       if (s.insightNames) stateChanges.insightNames = s.insightNames
       if (s.slang) stateChanges.slang = s.slang
       if (s.processed) stateChanges.processed = s.processed
+      if (s.processedSources) stateChanges.processedSources = s.processedSources
       if (s.runs) stateChanges.runs = s.runs
       if (s.lastConsolidate) stateChanges.lastConsolidate = s.lastConsolidate
 

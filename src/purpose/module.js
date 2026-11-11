@@ -80,7 +80,7 @@ export function cleanReply(raw) {
   return s
 }
 
-export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, personaText }) {
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, mood, memory, personaText }) {
   const moodOf = () => { try { return mood?.() || null } catch { return null } }
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
@@ -135,7 +135,7 @@ export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, pers
     }
   }
 
-  // 聊天流水（hub.chatLogOf）→ 引擎的 conversations 结构：只看主人私聊 + 最近群
+  // 共享聊天流水 → 引擎的 conversations 结构：只看主人私聊 + 最近群
   function conversations(cfg, now = Date.now()) {
     const ownerKey = chatIdOf(cfg)
     const per = new Map()
@@ -145,9 +145,9 @@ export function createPurpose({ getConfig, hub, log, isMuted, mood, memory, pers
       return c
     }
     try {
-      const days = hub.chatLogDays?.() || []
+      const days = chatLog?.listDays?.() || hub.chatLogDays?.() || []
       for (const day of days.slice(-2)) {
-        for (const e of hub.chatLogOf?.(day) || []) {
+        for (const e of chatLog?.readDay?.(day) || hub.chatLogOf?.(day) || []) {
           if (!e?.chatId) continue
           if (e.chatId !== ownerKey && !String(e.chatId).startsWith('group:')) continue
           pick(e.chatId).recentMessages.push({

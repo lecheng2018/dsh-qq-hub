@@ -14,10 +14,10 @@ export default {
   tab: 'diary',
   files: ['features/qzone.js', 'features/qzone-audience.js', 'features/diary-image.js'],
   setup(api) {
-    const { hub, onebot, http } = api.core
+    const { hub, chatLog, onebot, http } = api.core
     const memory = api.lazy('memory')
     const qzone = createQzone({
-      getConfig: api.config, onebot, hub, log: api.log,
+      getConfig: api.config, onebot, hub, chatLog, log: api.log,
       pickImage: () => pickDiaryImage(),
       // 写过的空间日记也进记忆库：以后聊到相关的事，她会想起自己那天写过什么
       onDiary: (text) => memory.add?.({ text: `我在 QQ 空间写过：${text}`, importance: 0.55, tags: ['空间日记'], source: 'diary' }),

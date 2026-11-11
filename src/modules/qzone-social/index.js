@@ -10,8 +10,8 @@ export default {
   tab: 'diary',
   files: ['features/qzone-social.js'],
   setup(api) {
-    const { hub, onebot } = api.core
-    const social = createQzoneSocial({ getConfig: api.config, onebot, hub, memory: api.lazy('memory'), log: api.log })
+    const { hub, chatLog, onebot } = api.core
+    const social = createQzoneSocial({ getConfig: api.config, onebot, hub, chatLog, memory: api.lazy('memory'), log: api.log })
     api.every(60_000, () => social.tick(), '空间互动')
     api.route('/qzone/social/run', async () => social.run({ force: true }))
     api.route('/qzone/social/state', async () => ({ ok: true, ...social.state() }))
