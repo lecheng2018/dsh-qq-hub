@@ -37,11 +37,8 @@ import { readInboundFiles, inboundFileBlocks } from './inbound-files.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
-const LEGACY_WORKSPACE = 'C:\\Aurabot\\qq-chats'
-export const WORKSPACE_DIR = process.env.QQ_HUB_WORKSPACE || process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
-/** 现在用的工作区目录：面板里填了就用填的，否则默认。 */
-export const workspaceDirOf = (cfg) => String(cfg?.workspaceDir || '').trim() || WORKSPACE_DIR
-export const WORKSPACE_TITLE = 'QQ Hub'
+import { WORKSPACE_DIR, workspaceDirOf, WORKSPACE_TITLE } from './workspace.js'
+export { WORKSPACE_DIR, workspaceDirOf, WORKSPACE_TITLE }
 const SOURCE_KIND = 'qq-hub'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
