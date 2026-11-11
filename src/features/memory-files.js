@@ -16,11 +16,10 @@ import {
   openSync,
   closeSync,
   fsyncSync,
-  statSync,
   unlinkSync,
 } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { renameWithRetry } from '../core/store.js'
+import { renameWithRetry, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { parseMarkdownArchive, serializeMarkdownArchive, MEMORY_FORMAT } from './memory-markdown.js'
 
 export const MAX_SCOPE_FILE_BYTES = 2 * 1024 * 1024 // 2 MiB 单文件硬守卫
@@ -40,7 +39,7 @@ export function scopeToFilePath(scope) {
     const kind = parts[0].toLowerCase()
     const id = parts[1].trim()
     // 安全校验：禁止路径穿越与非法字符
-    if (!/^[a-zA-Z0-9_\-\.]+$/.test(id)) {
+    if (id === '.' || id === '..' || !/^[a-zA-Z0-9_\-\.]+$/.test(id)) {
       throw new Error(`非法的作用域 ID: "${id}"`)
     }
     if (kind === 'private' || kind === 'group' || kind === 'system') {
@@ -53,6 +52,7 @@ export function scopeToFilePath(scope) {
 
   // 兜底其它单层安全标识
   const safeStr = s.replace(/[^a-zA-Z0-9_\-\.]/g, '_')
+  if (safeStr === '.' || safeStr === '..') throw new Error(`非法的作用域: "${s}"`)
   return join('custom', safeStr, 'memory.md')
 }
 
@@ -128,48 +128,52 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
 
   // 读写锁与缓存
   const scopeSnapshots = new Map() // scope -> { rawText, entries, prologue, mtimeMs, file }
-  let stateSnapshot = {
-    version: 1,
-    hits: {},
-    processed: {},
-    runs: {},
-    lastConsolidate: {},
-    distillTargets: [],
-    insightNames: {},
-    slang: {},
-  }
+  const brokenScopes = new Map()
+  const emptyState = () => ({ version: 1, hits: {}, processed: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
+  const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  const validState = (v) => isRecord(v)
+    && ['hits', 'processed', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
+    && (v.distillTargets === undefined || Array.isArray(v.distillTargets))
+    && Object.values(v.processed || {}).every((n) => Number.isSafeInteger(n) && n >= 0)
+  let stateSnapshot = emptyState()
+  let stateError = null
+  let stateRaw = null
 
-  // 加载 state.json
-  if (existsSync(stateFile)) {
-    try {
-      const parsed = JSON.parse(readFileSync(stateFile, 'utf8'))
-      stateSnapshot = { ...stateSnapshot, ...parsed }
-    } catch (err) {
-      log.warn?.('读取 state.json 失败，使用默认运行状态:', err.message)
-    }
-  }
-
-  // 加载所有 scope 的 memory.md
   function reloadAllScopes() {
+    if (closed) throw new Error('记忆存储已关闭')
+    const recovered = readJsonWithBackup(stateFile, { fallback: emptyState, validate: validState, label: '记忆运行状态', onError: (err) => log.warn?.(err.message) })
+    stateError = recovered.error?.message || null
+    if (!existsSync(stateFile) && readdirSync(memoryDir).some((name) => /^state\.json(?:\.bak)?\.corrupt-/.test(name))) {
+      stateError ||= '记忆运行状态缺失且存在损坏原件，请修复 state.json 后重载'
+    }
+    stateSnapshot = { ...emptyState(), ...recovered.value }
+    stateRaw = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null
     scopeSnapshots.clear()
+    brokenScopes.clear()
     const mdFiles = scanMemoryFiles(memoryDir)
     for (const file of mdFiles) {
       try {
         const raw = readFileSync(file, 'utf8')
-        const stat = statSync(file)
         const parsed = parseMarkdownArchive(raw)
         const scope = parsed.meta.scope
+        if (join(memoryDir, scopeToFilePath(scope)) !== file) throw new Error(`作用域 ${scope} 与档案路径不匹配`)
+        if (scopeSnapshots.has(scope)) throw new Error(`重复的作用域 ${scope}`)
         scopeSnapshots.set(scope, {
           rawText: raw,
           entries: parsed.entries,
           prologue: parsed.prologue,
-          mtimeMs: stat.mtimeMs,
           file,
         })
       } catch (err) {
+        brokenScopes.set(file, { file, error: err.message })
         log.error?.(`解析记忆文档失败: ${file}:`, err.message)
       }
     }
+    rev++
+  }
+
+  function health() {
+    return { ok: !stateError && brokenScopes.size === 0, stateError, brokenScopes: [...brokenScopes.values()] }
   }
 
   reloadAllScopes()
@@ -204,6 +208,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             chatId: e.chatId || '',
             scope: scope,
             at: typeof e.at === 'number' ? e.at : Date.now(),
+            eventAt: typeof e.eventAt === 'number' ? e.eventAt : undefined,
+            entity: e.entity || undefined,
+            topic: e.topic || undefined,
             hits: Number(hitInfo.hits || e.hits || 0),
             hitDays: Number(hitInfo.hitDays || e.hitDays || 0),
             lastHit: Number(hitInfo.lastHit || e.lastHit || 0),
@@ -284,92 +291,52 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     }
   }
 
-  /**
-   * 提交单个 scope 的更新至 Markdown 文档
-   */
-  function commitScopeDocument(scope, newEntries, prologue = '') {
-    if (closed) throw new Error('记忆存储已关闭，拒绝提交')
-
-    const relPath = scopeToFilePath(scope)
-    const absPath = join(memoryDir, relPath)
-
-    if (newEntries.length === 0) {
-      if (existsSync(absPath)) {
-        try { unlinkSync(absPath) } catch {}
-      }
-      scopeSnapshots.delete(scope)
-      rev++
-      return
+  function prepareScopeDocument(scope, entries, prologue = '') {
+    const file = join(memoryDir, scopeToFilePath(scope))
+    if (brokenScopes.has(file)) throw new Error(`记忆档案损坏: ${file}；请修复后重载档案`)
+    const previous = scopeSnapshots.get(scope)
+    const diskRaw = existsSync(file) ? readFileSync(file, 'utf8') : null
+    if (diskRaw !== (previous?.rawText ?? null)) {
+      throw new Error(`作用域 ${scope} 的档案已在外部被修改、删除或新增，请先重载档案`)
     }
-
-    const archive = {
-      meta: {
-        format: MEMORY_FORMAT,
-        scope,
-      },
-      entries: newEntries,
-      prologue,
-    }
-
-    const markdownText = serializeMarkdownArchive(archive)
-
-    // 文件大小防卫（2 MiB）
-    if (Buffer.byteLength(markdownText, 'utf8') > MAX_SCOPE_FILE_BYTES) {
+    const rawText = entries.length || prologue.trim() ? serializeMarkdownArchive({ meta: { format: MEMORY_FORMAT, scope }, entries, prologue }) : null
+    if (rawText && Buffer.byteLength(rawText, 'utf8') > MAX_SCOPE_FILE_BYTES) {
       throw new Error(`记忆档案超限: 作用域 ${scope} 大小超过 ${MAX_SCOPE_FILE_BYTES / 1024 / 1024} MiB 上限，已阻止写入`)
     }
+    if (rawText) parseMarkdownArchive(rawText, { expectedScope: scope })
+    return { scope, file, rawText, entries, prologue }
+  }
 
-    // 检查磁盘外部并发修改冲突（如果文件已存在）
-    const prevSnap = scopeSnapshots.get(scope)
-    if (prevSnap && existsSync(absPath)) {
-      const currentStat = statSync(absPath)
-      if (Math.abs(currentStat.mtimeMs - prevSnap.mtimeMs) > 100) {
-        const diskRaw = readFileSync(absPath, 'utf8')
-        if (diskRaw !== prevSnap.rawText) {
-          log.warn?.(`检测到外部程序修改了 ${absPath}，中止本次覆盖以保护人工修改`)
-          throw new Error(`作用域 ${scope} 的 memory.md 已在外部被修改，请先重载档案`)
-        }
-      }
+  function commitScopeDocument(doc) {
+    if (doc.rawText === null) {
+      if (existsSync(doc.file)) unlinkSync(doc.file)
+      scopeSnapshots.delete(doc.scope)
+    } else {
+      writeTextAtomic(doc.file, doc.rawText)
+      scopeSnapshots.set(doc.scope, doc)
     }
-
-    // 原子写入
-    writeTextAtomic(absPath, markdownText)
-
-    const newStat = statSync(absPath)
-    scopeSnapshots.set(scope, {
-      rawText: markdownText,
-      entries: newEntries,
-      prologue,
-      mtimeMs: newStat.mtimeMs,
-      file: absPath,
-    })
-
     rev++
   }
 
-  /**
-   * 同步更新并保存 state.json
-   */
-  function commitState(changes) {
-    if (closed) return
-    stateSnapshot = {
-      ...stateSnapshot,
-      ...changes,
-      updatedAt: Date.now(),
-    }
-    const stateText = JSON.stringify(stateSnapshot, null, 2)
-    writeTextAtomic(stateFile, stateText)
+  function commitState(next) {
+    writeJsonWithBackup(stateFile, next, { validate: validState, label: '记忆运行状态', onError: (err) => log.warn?.(err.message) })
+    stateSnapshot = next
+    stateRaw = readFileSync(stateFile, 'utf8')
   }
 
   return {
     load: () => {
       if (closed) throw new Error('记忆存储已关闭')
-      return assembleState()
+      return structuredClone(assembleState())
     },
 
     save: (s) => {
       if (closed) throw new Error('记忆存储已关闭')
-
-      // 1. 同步更新 state.json 中的元数据
+      if (stateError) throw new Error(`记忆运行状态不可用: ${stateError}`)
+      if ((existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null) !== stateRaw) {
+        throw new Error('记忆运行状态已在外部被修改，请先重载档案')
+      }
+      s = structuredClone(s)
       const stateChanges = {}
       if (s.distillTargets) stateChanges.distillTargets = s.distillTargets
       if (s.insightNames) stateChanges.insightNames = s.insightNames
@@ -378,8 +345,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       if (s.runs) stateChanges.runs = s.runs
       if (s.lastConsolidate) stateChanges.lastConsolidate = s.lastConsolidate
 
-      // 收集并记录 items 上的 hits/lastHit 统计，避免污染 Markdown 正文
-      const hitsMap = stateSnapshot.hits || {}
+      const hitsMap = structuredClone(stateSnapshot.hits || {})
       let hitsChanged = false
       for (const it of s.items || []) {
         if (it.hits || it.lastHit) {
@@ -391,14 +357,13 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         }
       }
       if (hitsChanged) stateChanges.hits = hitsMap
-      commitState(stateChanges)
+      const nextState = { ...stateSnapshot, ...stateChanges, updatedAt: Date.now() }
+      if (!validState(nextState)) throw new Error('记忆运行状态结构不符合预期，拒绝写入')
 
-      // 2. 按 scope 分组条目，仅更新发生变动的 scope 的 memory.md
-      const byScope = new Map() // scope -> entries
-
-      // 收集 facts
+      const byScope = new Map()
       for (const it of s.items || []) {
-        const sc = it.scope || 'global'
+        if (!it.scope) throw new Error(`记忆 ${it.id} 缺少作用域 scope，拒绝提升为 global`)
+        const sc = it.scope
         if (!byScope.has(sc)) byScope.set(sc, [])
         byScope.get(sc).push({
           id: it.id,
@@ -420,6 +385,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           tags: it.tags,
           source: it.source,
           sourceId: it.sourceId,
+          chatId: it.chatId || undefined,
+          entity: it.entity || undefined,
+          topic: it.topic || undefined,
         })
       }
 
@@ -490,19 +458,19 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         }
       }
 
-      // 覆盖全部已知 scope（包括以前有、但本次被清空的 scope）
       const allScopes = new Set([...scopeSnapshots.keys(), ...byScope.keys()])
+      const pending = []
+      const paths = new Set()
       for (const sc of allScopes) {
         const newEntries = byScope.get(sc) || []
         const oldSnap = scopeSnapshots.get(sc)
-        const oldEntriesJson = oldSnap ? JSON.stringify(oldSnap.entries) : ''
-        const newEntriesJson = JSON.stringify(newEntries)
-
-        if (oldEntriesJson !== newEntriesJson) {
-          commitScopeDocument(sc, newEntries, oldSnap?.prologue || '')
-        }
+        const doc = prepareScopeDocument(sc, newEntries, oldSnap?.prologue || '')
+        if (paths.has(doc.file)) throw new Error(`作用域路径冲突: ${sc}`)
+        paths.add(doc.file)
+        if (JSON.stringify(oldSnap?.entries) !== JSON.stringify(newEntries)) pending.push(doc)
       }
-
+      for (const doc of pending) commitScopeDocument(doc)
+      commitState(nextState)
       return rev
     },
 
@@ -510,6 +478,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       closed = true
       scopeSnapshots.clear()
     },
+
+    health,
+    reload: reloadAllScopes,
 
     stats: () => ({
       scopes: scopeSnapshots.size,

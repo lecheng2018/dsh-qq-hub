@@ -14,7 +14,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { dataDir } from './store.js'
 import { registerSecretField } from './config.js'
 import { defineTool } from '../tools/tools.js'
-import { workspaceDirOf } from '../chat/hub.js'
+import { workspaceDirOf } from '../chat/workspace.js'
 // M2-F：能力声明规划层与健康注册表（在现有装载流程上消费，不另起第二套模块系统）
 import { planModules, createModuleHealth } from './module-sdk.js'
 import { EnvironmentDetector } from '../runtime/environment-detector.js'

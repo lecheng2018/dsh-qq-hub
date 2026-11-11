@@ -212,9 +212,21 @@ B 站、抖音、小黑盒、RSS、生图、翻唱等设置位于各自顶层字
 | `config.json` | 面板与功能配置 |
 | `modular-sessions.json` | 新核心的聊天与 DSH 会话映射 |
 | `deliveries.json` | 投递状态、原因和网关回执 |
-| `memories.json`、`memories.db` | 长期记忆存储 |
+| `memory/global/memory.md`、`memory/private/<uid>/memory.md`、`memory/group/<gid>/memory.md` | 分作用域的长期记忆正文及画像等档案 |
+| `memory/state.json`、`memory/state.json.bak` | 处理进度、命中统计与任务状态；正文成功后才推进进度 |
+| `memory/migration.json`、`backups/pre-markdown-migration-*/` | 显式迁移凭据与旧库备份 |
+| `memory/quarantine/memory.md` | 无作用域旧条目隔离区，不参与活动召回 |
+| `memories.json`、`memories.db`、`memories.meta.json` | 旧版迁移来源，运行时不读、不回退 |
 | `stickers/` | 表情库 |
 | `modules/`、`modules-data/` | 自定义模块及其数据 |
 | `logs/` | 脱敏运行日志 |
+
+长期记忆恢复与写入边界：
+
+- 正常运行只读写 Markdown 档案，不回退旧库。旧数据迁移须停写、完整备份后执行 README 中的显式 CLI；已有目标档案而无成功凭据时拒绝覆盖，不自动合并新旧内容。
+- `state.json` 损坏时尝试备份；主备都不可用会保留 `.corrupt-*` 原件并暂停自动任务。即使重载或重启，也不会把缺失的进度当作新安装清零重跑；须人工核对并修复状态文件，不能通过删除进度“恢复”。
+- 手改档案后使用面板「重新载入档案」，或同源 `POST /qq-hub/api/memory/reload`。该接口有副作用，拒绝 GET/HEAD；重载会取消在途整理、刷新缓存，并返回 `health` 中的坏文件与状态错误。
+- 坏档案不会被当作空档案覆盖。保存前检查外部修改、作用域和体积，正文成功后才保存进度；原子性是单文件级别，不是跨所有作用域的整库事务。磁盘 I/O 中途失败时，可能已有部分正文写入但进度未推进，须检查诊断后再重试。
+- 记忆整理不再删除消费过的共享聊天流水；滚动过期清理目前仍由记忆 tick 调度，后续迁至独立流水服务，不能把这一步视为已完全解耦。
 
 台账中超过 7 天的 sent/cancelled 记录只保留前 200 字正文和元数据；unknown/failed 不裁切，便于后续审计。

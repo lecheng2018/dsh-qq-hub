@@ -29,7 +29,8 @@ import { dataDir, readJson, writeJson } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
-import { createHub, workspaceDirOf } from './chat/hub.js'
+import { createHub } from './chat/hub.js'
+import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
 import { isStickerSegment } from './chat/inbound.js'
@@ -551,6 +552,7 @@ export function apply(ctx) {
     try { pipelineApi.aggregator?.dispose?.() } catch (error) { log.warn('入口合流卸载出错：', error.message) }
     hub.disposeRecentMedia()
     mods.dispose()
+    try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
     onebot.stop()
     snowluma.dispose()
   }, 'qq-hub: 收尾')

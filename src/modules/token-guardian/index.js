@@ -199,6 +199,12 @@ export default {
             + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题。',
           text: transcript,
           maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars * 1.4))),
+          // 摘要是机械整理，不需要推理：推理模型（如 MiniMax-M3.1）默认 low 档会先思考，
+          // 思考把 maxTokens 预算吃掉后正文被截断甚至为空 —— 截断摘要照样算成功（2026-11-11 实测
+          // 群摘要只有 64 字且断在句中），空回包则再触发 askModel 的整轮重试，合计超过看门狗 90 秒，
+          // 压缩永远完不成（单日 25 次超时、两个群 failures 18/30）。不支持 off 的模型由
+          // pickReasoningEffort 收敛回默认档，行为和以前一样。
+          reasoningEffort: 'off',
           signal: controller.signal,
           ...askOpts,
         }), timeout])
