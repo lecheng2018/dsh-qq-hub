@@ -98,11 +98,14 @@ test('说话方式会进到聊天上下文里', () => {
   assert.match(ctx, /完全以人设为准/, 'styles 注入必须带上人设优先声明')
 })
 
-test('过了一天的流水整理完删掉', async () => {
+test('昨日流水整理后仍保留，消费进度避免再次提炼', async () => {
   const y = new Date(Date.now() - 86400000)
   logs.set(day(y), [line('昨天吃了火锅 好辣'), line('哈哈'), line('晚安')])
   await mem.consolidate({ includeToday: false })
-  assert.equal(logs.has(day(y)), false)
+  assert.equal(logs.has(day(y)), true)
+  const n = asked.length
+  await mem.consolidate({ includeToday: false })
+  assert.equal(asked.length, n)
 })
 
 test('检索：同时偏向好几个说话人（群里这一段谁在说）', async () => {

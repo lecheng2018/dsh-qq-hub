@@ -1896,7 +1896,9 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const [ins, setIns] = useState(null)
       const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
       const [browseOpen, setBrowseOpen] = useState(false) // 「翻一翻」默认收起：整页长度不再被几百条记忆拉爆
-      const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null) })
+      const [health, setHealth] = useState(null)
+      const [reloading, setReloading] = useState(false)
+      const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null); setHealth(r.health || null) })
       const [styles, setStyles] = useState({})
       const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
       const times = draft.memory.consolidateTimes || []
@@ -1935,7 +1937,21 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.count : '–'), h('div', { className: 'l' }, '条长期记忆')),
             h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.auto : '–'), h('div', { className: 'l' }, '条来自每日整理' + (stats && stats.outdated ? '（另有 ' + stats.outdated + ' 条已过时）' : ''))),
             h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n', style: { fontSize: 16, paddingTop: 6 } }, last ? new Date(last.at).toLocaleString() : '还没整理过'), h('div', { className: 'l' }, '上次整理'))),
-          h(Row, { label: '每天自动整理两次', hint: '把临时记忆（聊天流水）提炼成长期记忆、相处经验和说话方式；第二次只处理新聊天，过了一天的流水整理完清空；各会话自己的上下文不受影响' },
+          health && !health.ok ? h('div', { className: 'ab-note err', role: 'alert' },
+            h('b', null, '档案异常，自动整理已暂停。修复文件后点击「重新载入档案」。'),
+            health.stateError ? h('div', null, health.stateError) : null,
+            (health.brokenScopes || []).map((item) => h('div', { key: item.file }, item.file + '：' + item.error))) : null,
+          h(Row, { label: '档案维护', hint: '手动修改 memory.md 后重新载入；在途整理会被取消，损坏档案不会被覆盖。' },
+            h(Btn, { small: true, disabled: reloading, onClick: async () => {
+              setReloading(true)
+              try {
+                const r = await post('/memory/reload', {})
+                setHealth(r.health || null)
+                toast(r.message, r.ok ? 'ok' : 'err')
+                await Promise.all([load(), loadIns()])
+              } catch (error) { toast(error.message, 'err') } finally { setReloading(false) }
+            } }, reloading ? '正在载入…' : '重新载入档案')),
+          h(Row, { label: '每天自动整理两次', hint: '把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。整理不删除共享流水，流水按保留天数另行清理；各会话上下文不受影响' },
             f.sw('memory.dailyConsolidate'), h('span', { className: 'ab-muted' }, '每天'),
             h('input', { className: 'ab-input sm', type: 'time', value: times[0] || '04:00', onChange: (e) => setTime(0, e.target.value) }),
             h('span', { className: 'ab-muted' }, '和'),
