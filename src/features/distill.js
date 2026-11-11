@@ -132,12 +132,12 @@ export function parseDistillProfile (raw) {
 
 /** 收成固定字段，去空、去重、截长度和条数（纯数字条目丢弃：旧版曾把句数存进 samples）。 */
 export function normalizeProfile (obj) {
-  const pick = (v, cap) => {
+  const pick = (v, cap, maxLen = 90) => {
     const list = Array.isArray(v) ? v : v ? [v] : []
     const seen = new Set()
     const out = []
     for (const x of list) {
-      const t = String(x == null ? '' : x).trim().slice(0, 90)
+      const t = String(x == null ? '' : x).trim().slice(0, maxLen)
       if (!t || /^\d+$/.test(t) || seen.has(t)) continue
       seen.add(t)
       out.push(t)
@@ -146,10 +146,10 @@ export function normalizeProfile (obj) {
     return out
   }
   return {
-    exchanges: pick(obj && obj.exchanges, FIELD_CAP.exchanges),
+    exchanges: pick(obj && obj.exchanges, FIELD_CAP.exchanges, 220),
     syntax: pick(obj && obj.syntax, FIELD_CAP.syntax),
     catchphrases: pick(obj && obj.catchphrases, FIELD_CAP.catchphrases),
-    rhetoric: pick(obj && obj.rhetoric, FIELD_CAP.rhetoric),
+    rhetoric: pick(obj && obj.rhetoric, FIELD_CAP.rhetoric, 160),
     never: pick(obj && obj.never, FIELD_CAP.never),
     persona: pick(obj && obj.persona, FIELD_CAP.persona),
     // 旧字段兼容渲染（不再由新学习产出）
