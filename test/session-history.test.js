@@ -94,9 +94,9 @@ test('接线：面板和路由都在，且真读了历史', () => {
   assert.match(client, /从历史学/, '每个目标有立刻学的按钮')
 })
 
-// 真实数据冒烟（有会话记录才跑，CI 上跳过）
+// 真实数据冒烟（有会话记录才跑，CI 上跳过；本机想跑就设 QQHUB_SMOKE_WORKSPACE / QQHUB_SMOKE_DSH_HOME）
 test('真实会话目录能扫出东西（本机有才跑）', () => {
-  const dir = sessionsDirFor('/home/user/harness/Aurabot/qq-chats2', { dshHome: '/home/user/harness/.dsh' })
+  const dir = sessionsDirFor(process.env.QQHUB_SMOKE_WORKSPACE || '/home/user/harness/Aurabot/qq-chats2', { dshHome: process.env.QQHUB_SMOKE_DSH_HOME || '/home/user/harness/.dsh' })
   if (!dir) return
   const r = scanTranscripts(dir)
   assert.ok(r.sessions > 0, '扫到会话')
