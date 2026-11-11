@@ -1,9 +1,8 @@
-// QQ Hub · 面板入站防护：Host 白名单、CSRF、副作用方法约束与管理请求鉴权
+// QQ Hub · 面板入站防护：Host 白名单、CSRF、副作用方法约束与开放接口鉴权
 //
 // 背景（M1-A 侦察结论，2026-11-08）：
-//   多数面板路由此前只有 Host/CSRF 防护；少数敏感接口和 /open/* 已单独校验 bridge 密钥。
-//   DSH 外层 webServer 是否限制监听地址/来源属部署形态（fnOS 实测留 M5），
-//   插件层按「无则补齐」统一 Host/CSRF、副作用方法和管理请求鉴权，同时保留合法只读访问：
+//   面板沿用 DSH/fnOS 外层访问控制；插件层统一 Host/CSRF 和副作用方法约束。
+//   面向外部程序的 /open/* 继续单独校验 bridge 密钥，同时保留合法只读访问：
 //
 //   1. Host 白名单（挡 DNS rebinding + 跨站伪造指向）：
 //      只接受 回环名（localhost/127.0.0.1/[::1]/::1）、IP 字面量（v4/v6，含端口），
@@ -158,9 +157,9 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
       debug(`面板副作用路径拒 GET 类方法：${method} ${path}`)
       return { ok: false, code: 405, message: `这个接口有副作用，不接受 ${method} 触发（请通过面板按钮以 POST 调用）` }
     }
-    // 面板管理请求均需联动密钥；开放 HTTP API 的只读接口原本也要求密钥，维持其保护。
-    if ((MUTATING.has(method) || path === '/open' || path.startsWith('/open/')) && isAuthorized && !isAuthorized(req)) {
-      debug(`面板管理请求鉴权失败：${method} ${path}`)
+    // 仅开放 HTTP API 要求联动密钥；插件面板沿用宿主的访问控制。
+    if ((path === '/open' || path.startsWith('/open/')) && isAuthorized && !isAuthorized(req)) {
+      debug(`开放接口鉴权失败：${method} ${path}`)
       return { ok: false, code: 401, message: '需要有效联动密钥' }
     }
     if (path === '/bridge/token/reset') {
