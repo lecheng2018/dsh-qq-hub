@@ -34,10 +34,15 @@ const DANGER_RULES = [
 
 // A bounded lexical view, not a complete shell parser. Keep argument data separate
 // from operators and expansions; never evaluate the supplied command.
+function isProcessSubstitution (text, start) {
+  return (text[start] === '<' || text[start] === '>') && text[start + 1] === '('
+}
+
 function substitutionAt (text, start, depth = 0) {
   if (depth > 12) return null
   const backtick = text[start] === '`'
-  if (!backtick && !text.startsWith('$(', start)) return null
+  const processSubstitution = isProcessSubstitution(text, start)
+  if (!backtick && !processSubstitution && !text.startsWith('$(', start)) return null
   const begin = start + (backtick ? 1 : 2)
   let quote = ''
   let nesting = 1
@@ -45,18 +50,20 @@ function substitutionAt (text, start, depth = 0) {
     const ch = text[i]
     if (ch === '\\' && quote !== "'") { i++; continue }
     if (backtick) {
-      if (ch === '`') return { code: text.slice(begin, i), end: i }
+      if (ch === '`') return { code: text.slice(begin, i), end: i, processSubstitution }
       continue
     }
     if (quote === "'") { if (ch === "'") quote = ''; continue }
-    if (ch === '`' || text.startsWith('$(', i)) {
+    if (ch === '`' || text.startsWith('$(', i) || (!quote && isProcessSubstitution(text, i))) {
       const nested = substitutionAt(text, i, depth + 1)
       if (nested) { i = nested.end; continue }
     }
     if (quote === '"') { if (ch === '"') quote = ''; continue }
-    if (ch === "'" || ch === '"') quote = ch
+    if (ch === '#' && (i === begin || /[\s;|&()<>]/.test(text[i - 1]))) {
+      while (i + 1 < text.length && text[i + 1] !== '\n') i++
+    } else if (ch === "'" || ch === '"') quote = ch
     else if (ch === '(') nesting++
-    else if (ch === ')' && --nesting === 0) return { code: text.slice(begin, i), end: i }
+    else if (ch === ')' && --nesting === 0) return { code: text.slice(begin, i), end: i, processSubstitution }
   }
   return null
 }
@@ -80,7 +87,7 @@ function shellCommands (text) {
   }
   const pushCommand = (operator = '') => {
     pushWord()
-    if (words.length) commands.push({ words, substitutions, redirects, operator })
+    if (words.length || substitutions.length || redirects.length) commands.push({ words, substitutions, redirects, operator })
     words = []
     substitutions = []
     redirects = []
@@ -95,7 +102,9 @@ function shellCommands (text) {
       } else word += ch
       continue
     }
-    if (ch === '`' || text.startsWith('$(', i)) {
+    // Process substitutions are single outer words, not command separators.
+    // Unlike $(), <(...) and >(...) inside quotes are literal text.
+    if (ch === '`' || text.startsWith('$(', i) || (!quote && isProcessSubstitution(text, i))) {
       const sub = substitutionAt(text, i)
       if (sub) {
         const token = `__QQ_SUB_${substitutions.length}__`
@@ -383,9 +392,9 @@ function inspectShell (text, depth = 0, outputExecuted = false) {
     const name = (command[0] || '').split('/').pop()
     const shellIndex = SHELL_NAME.test(name) ? command.findIndex((arg, index) => index > 0 && (arg === '--command' || /^-[^-]*c/.test(arg))) : -1
     for (const sub of substitutions) {
-      // Expansion code runs even inside echo/grep arguments. Its output is code
-      // only when used at an execution position, including inside shell -c.
-      const executed = command[0]?.includes(sub.token) || (shellIndex >= 0 && tokenIsCommand(command[shellIndex + 1] || '', sub.token, depth + 1))
+      // Inspect the commands inside both substitution forms. A process
+      // substitution supplies a file path, not command-substitution output.
+      const executed = !sub.processSubstitution && (command[0]?.includes(sub.token) || (shellIndex >= 0 && tokenIsCommand(command[shellIndex + 1] || '', sub.token, depth + 1)))
       const danger = inspectShell(sub.code, depth + 1, Boolean(executed))
       if (danger) return danger
     }
