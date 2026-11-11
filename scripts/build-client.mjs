@@ -70,6 +70,9 @@ function postProcess(code) {
   // 11. 守住 panel-persona-render.test.js: placeholder 单引号匹配
   code = code.replace(/placeholder:\s*wantKind === "group" \? "填群号" : "填 QQ 号"/g, "placeholder: wantKind === 'group' ? '填群号' : '填 QQ 号'")
 
+  // 12. 守住 memory-panel.test.js：esbuild 会丢掉源码注释，补回 Mood 函数结束锚点
+  code = code.replace(/\nfunction ProfilesCard\(/, "\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesCard(")
+
   return code
 }
 
