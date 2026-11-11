@@ -112,6 +112,17 @@ test('自动压缩失败：指数退避，不再每 30 秒无效调用', async (
   assert.ok(second.nextAttemptAt - second.lastAttemptAt >= 60_000, '第二次失败至少退避一分钟')
 })
 
+test('压缩摘要不带推理：显式 reasoningEffort off，思考不吃 maxTokens 预算', async () => {
+  const seen = []
+  const { out, chatId } = await boot({
+    ask: async (opts) => { seen.push(opts); return '摘要正文' },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.ok, true)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].reasoningEffort, 'off', '推理模型的思考会吃掉 maxTokens 预算：正文截断/为空 + 二次重试，合计超 90 秒（2026-11-11 排查）')
+})
+
 test('压缩成功后 chars 仍保存真实字符数，不预先乘 token 系数', async () => {
   const { out, chatId } = await boot({ ask: async () => '四字节吗' })
   const result = await out.compact(chatId, { chatId })
