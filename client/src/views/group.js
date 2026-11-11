@@ -58,7 +58,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         // 输入过程保留原文（能敲逗号和空格），失焦才解析写回 —— 原来逐键 split+filter，
         // 敲到分隔符的那一刻内容就被吃掉了
         h(ListInput, { value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []),
-          placeholder: '例如 321321321, 456456456', numbers: true,
+          placeholder: '例如 123456789, 987654321', numbers: true,
           onChange: (list) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', list)) })),
       h(Row, { label: '按名字认同类 bot', hint: '在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。' },
         h(ListInput, { value: (Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : []),
