@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '
 import { Card, Row, Btn, Switch, Select, ListInput, PercentRow } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath } from '../core/utils.js'
+import { OwnerBrief } from './access.js'
 
 function Group({ draft, setDraft }) {
   const f = useField(draft, setDraft)

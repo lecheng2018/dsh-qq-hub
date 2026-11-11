@@ -4,6 +4,7 @@ import { useField } from '../ui/form.js'
 import { setPath, pitchNum, pitchText, pitchLabel, cx } from '../core/utils.js'
 import { get, post, failed } from '../core/http.js'
 import { modOn } from '../domain/nav.js'
+import { VoiceSongModel } from './model.js'
 
 function Voice({ st, draft, setDraft, toast, reload }) {
   const f = useField(draft, setDraft)
