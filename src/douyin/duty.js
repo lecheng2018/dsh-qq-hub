@@ -9,7 +9,7 @@ import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
 import { join } from 'node:path'
 import { downloadVideo, safeName, discardDownloaded } from './media.js'
-import { workspaceDirOf } from '../chat/hub.js'
+import { workspaceDirOf } from '../chat/workspace.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const between = (lo, hi) => Math.floor(lo + Math.random() * (Math.max(lo, hi) - lo + 1))

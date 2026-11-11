@@ -17,7 +17,7 @@ import { openMemoryFiles } from './memory-files.js'
 import { conceptsOf } from './memory-concepts.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
-import { workspaceDirOf } from '../chat/hub.js'
+import { workspaceDirOf } from '../chat/workspace.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
@@ -66,7 +66,29 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     if (!t) { t = new Set(tokenize(m.text)); tokCache.set(m.id, t) }
     return t
   }
-  // 存储层：Markdown 记忆档案（features/memory-files.js）。
+  // 存储层与生命周期管理（B-01 规范）
+  let status = 'active' // 'active' | 'closed'
+  let activeGeneration = 1
+  const abortControllers = new Set()
+
+  function createGenerationSignal(timeoutMs = 60000) {
+    const ac = new AbortController()
+    const gen = activeGeneration
+    abortControllers.add(ac)
+    const timer = setTimeout(() => {
+      try { ac.abort(new Error('模型请求超时')) } catch {}
+    }, timeoutMs)
+    timer.unref?.()
+    return {
+      signal: ac.signal,
+      isValid: () => status === 'active' && activeGeneration === gen,
+      cleanup: () => {
+        clearTimeout(timer)
+        abortControllers.delete(ac)
+      },
+    }
+  }
+
   let store = null
   try {
     store = openMemoryFiles(dataDir('memory'), { log })
@@ -76,7 +98,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
   const jsonLoad = () => readJson(file(), () => ({ items: [] }))
   const jsonSave = (s) => writeJson(file(), s)
-  const load = () => (store ? store.load() : jsonLoad())
+  const load = () => {
+    if (status === 'closed' || !store) throw new Error('主记忆库未就绪或已关闭')
+    return store.load()
+  }
 
   const pendingHitUpdates = new Map()
   let hitFlushTimer = null
@@ -228,6 +253,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
 
   function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '' }) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
@@ -299,6 +325,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
    * 新事实创建、旧事实失效（invalidAt 与 supersededBy）在单次事务中原子完成。
    */
   function supersede({ oldId, text, about = '', aboutName = '', tags = [], importance, source = 'auto', sourceId = '', chatId = '', scope = '', evidence = '', entity = '', topic = '', title = '' }) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
     const target = s.items.find((x) => x.id === oldId)
     if (!target) return { ok: false, message: '未找到被替代的旧事实' }
@@ -388,12 +415,13 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
    *
    *  所以：默认 private:<主人QQ>；要公开进所有聊天，必须显式传 scope: 'global'
    *  （只有「在别人空间公开评论」这种对方本来就看得见的事才配）。 */
-  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '', ephemeral = false }) {
+  function addEvent({ text, about = '', aboutName = '', tags = [], importance = 0.45, scope = '', chat = null, chatId = '', ephemeral = false, sourceId = '', evidence = '' }) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     // 优先级：显式 scope > 当前 chat > chatId 推断 > 主人私聊（兜底不再是 global）
     const sc = String(scope || '').trim() || (chat ? scopeOfChat(chat) : scopeFromChatId(chatId))
     const ownerScope = String(getConfig()?.ownerQQ || '')
     const finalScope = sc === 'global' ? 'global' : sc || (ownerScope ? `private:${ownerScope}` : 'global')
-    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', chatId: chatId || (chat && chat.chatId) || '', scope: finalScope, ephemeral })
+    return add({ text, about, aboutName, tags: ['经历', ...tags], importance, source: 'event', sourceId, chatId: chatId || (chat && chat.chatId) || '', scope: finalScope, ephemeral, evidence })
   }
 
   /** 最近 hours 小时里她做过的事（经历 + 空间日记），新的在前。
@@ -433,6 +461,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
 
   function update(id, patch) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
     const m = s.items.find((x) => x.id === id)
     if (!m) return { ok: false, message: '没有这条' }
@@ -444,6 +473,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
 
   /** 补充或改正一条旧记忆：换成新说法，旧说法留进 history。 */
   function revise(id, text, importance) {
+    if (status === 'closed') return false
     const s = load()
     const m = s.items.find((x) => x.id === id)
     const t = String(text || '').trim().slice(0, 200)
@@ -459,6 +489,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
 
   /** 标成过时：不再被想起，但不删（面板里能看到被哪条取代、能恢复）。 */
   function invalidate(id, byId = '') {
+    if (status === 'closed') return false
     const s = load()
     const m = s.items.find((x) => x.id === id)
     if (!m) return false
@@ -470,6 +501,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
 
   function restore(id) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
     const m = s.items.find((x) => x.id === id)
     if (!m) return { ok: false, message: '没有这条' }
@@ -481,6 +513,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
 
   function remove(id) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
     s.items = s.items.filter((m) => m.id !== id)
     s.rev = (s.rev || 0) + 1
@@ -793,7 +826,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   }
 
   /** 按这个人的记忆重写小档案（记忆少于 3 条的不写）。scope 限定只用哪个作用域的记忆来写。 */
-  async function buildProfile(qq, scope = '') {
+  async function buildProfile(qq, scope = '', genSignal = null) {
+    if (status === 'closed') return false
+    if (genSignal && !genSignal.isValid()) return false
     const cfg = getConfig()
     // 只用「这个作用域自己的」记忆写档案。
     // 以前还会把 global 记忆也喂进来（`|| scope === 'global'`），后果是：
@@ -809,13 +844,21 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
     const old = profileOf(qq, scope)?.text || ''
-    const out = await askModel(dsh, {
-      cfg,
-      system: '你是「大肥鱼」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
-      text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}`,
-      maxTokens: 1500,
-      temperature: 0.3,
-    })
+    let out = ''
+    try {
+      out = await askModel(dsh, {
+        cfg,
+        system: '你是「大肥鱼」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
+        text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}`,
+        maxTokens: 1500,
+        temperature: 0.3,
+        signal: genSignal?.signal,
+      })
+    } catch (err) {
+      if (genSignal && !genSignal.isValid()) return false
+      throw err
+    }
+    if (status === 'closed' || (genSignal && !genSignal.isValid())) return false
     const text = String(out || '').trim().replace(/^[「"]|[」"]$/g, '')
     if (!text) throw new Error('模型没写出东西，等会儿再试')
     setProfile(qq, text, name, scope)
@@ -1014,7 +1057,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   // 各个 DSH 会话自己的对话上下文不动；这里只处理插件记下的聊天流水。
 
   /** 从一段聊天里提炼长期记忆，并回顾相处经验。lines：[{who, text}] */
-  async function extractLines(chatId, lines) {
+  async function extractLines(chatId, lines, genSignal = null) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭', added: 0, insights: 0 }
+    if (genSignal && !genSignal.isValid()) return { ok: false, message: '任务已取消', added: 0, insights: 0 }
     const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
     const isQzone = chatId === 'qzone'
     // 空间动态一条就可能有料；聊天至少要几句（3 行太少——「早」「早」「哈哈」也够得着，
@@ -1039,7 +1084,10 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       let n = 0
       // 全量分段提炼（原来只挖最后 3 块=240 行，长群聊前半场直接丢）。
       // 上限 8 块：一天超过 640 行的活跃群，太老的流水价值也低，砍掉头部。
-      for (const part of chunks.slice(-8)) n += await extractFacts(chatId, part.map(line).join('\n'))
+      for (const part of chunks.slice(-8)) {
+        if (genSignal && !genSignal.isValid()) break
+        n += await extractFacts(chatId, part.map(line).join('\n'), genSignal)
+      }
       log.info(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${n} 条新记忆`)
       if (isQzone) return { ok: true, added: n, insights: 0 }
       // 顺便回顾一次相处经验（用全天的聊天，最多最近 120 行）
@@ -1047,7 +1095,9 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       try {
         const [kind, id] = chatId.split(':')
         const chat = kind === 'group' ? { kind, groupId: id, nickname: '' } : { kind: 'private', userId: id, nickname: talk.filter((l) => l.who !== 'bot').at(-1)?.who || '' }
-        ins = await reflect(chat, talk.slice(-120).map((l) => `${l.who === 'bot' ? '我' : l.who}：${l.text}`).join('\n'))
+        if (chat && (!genSignal || genSignal.isValid())) {
+          ins = await reflect(chat, talk.slice(-120).map((l) => `${l.who === 'bot' ? '我' : l.who}：${l.text}`).join('\n'))
+        }
       } catch (error) {
         log.warn('回顾相处经验失败：', error.message)
       }
@@ -1084,14 +1134,18 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     return out
   }
 
-  async function extractFacts(chatId, transcript) {
+  async function extractFacts(chatId, transcript, genSignal = null) {
+    if (status === 'closed') return 0
+    if (genSignal && !genSignal.isValid()) return 0
     const cfg = getConfig()
     const source = chatId === 'qzone' ? '下面是 QQ 空间里的动态（好友发的说说、别人给你的评论、你的回复）' : '下面是一段聊天'
     const related = relatedTo(chatId, transcript)
     const known = new Map(related.map((m) => [m.id, m]))
-    const out = await askModel(dsh, {
-      cfg,
-      system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
+    let out = ''
+    try {
+      out = await askModel(dsh, {
+        cfg,
+        system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
 
 记什么（三类）：
 1. 人：别人的名字/称呼/身份/关系，喜好和讨厌的东西，雷区和禁忌，近况变化，你们之间的约定。
@@ -1110,10 +1164,16 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
 - 反例：「在B站看了《选硬盘搭RAID建Docker》这个视频」` +
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
         `只输出 JSON 数组，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。`,
-      text: (related.length ? `已经记得的事：\n${related.map((m) => `#${m.id} [${whenText(m.at)}] ${m.aboutName ? '[' + m.aboutName + '] ' : ''}${m.text}`).join('\n')}\n\n` : '') + transcript,
-      maxTokens: 1500,
-      temperature: 0.2,
-    })
+        text: (related.length ? `已经记得的事：\n${related.map((m) => `#${m.id} [${whenText(m.at)}] ${m.aboutName ? '[' + m.aboutName + '] ' : ''}${m.text}`).join('\n')}\n\n` : '') + transcript,
+        maxTokens: 1500,
+        temperature: 0.2,
+        signal: genSignal?.signal,
+      })
+    } catch (err) {
+      if (genSignal && !genSignal.isValid()) return 0
+      throw err
+    }
+    if (status === 'closed' || (genSignal && !genSignal.isValid())) return 0
     const m = out.match(/\[[\s\S]*\]/)
     let arr = []
     if (m) {
@@ -1178,23 +1238,27 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
    * @param {{includeToday?:boolean}} o includeToday：连今天的也提炼（手动整理时），但今天的流水不删（写日记还要用）
    */
   async function consolidate(o = {}) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     if (busy) return { ok: false, message: '正在整理中' }
     busy = true
+    const genSignal = createGenerationSignal(120000)
     const today = dayKey()
     const startedAt = Date.now()
     let added = 0
     let insights = 0
     let days = 0
     let profiles = 0
+    const failedChats = []
     try {
       for (const day of hub.chatLogDays()) {
+        if (!genSignal.isValid()) break
         if (day > today || (day === today && !o.includeToday)) continue
         // 同一天整理过一部分的（比如下午那次），只处理之后新增的聊天
         const done = (load().processed || {})[day] || 0
         const all = hub.chatLogOf(day)
         const byChat = new Map()
         for (const l of all.slice(done)) {
-          if (String(l.chatId).startsWith('system:')) continue
+          if (!l || !l.chatId || String(l.chatId).startsWith('system:')) continue
           // token-guardian 写回的摘要（【更早聊天的摘要】开头）不是聊天：它已经以运行时上下文
           // 的形式常驻注入，再提炼一遍等于把摘要又「记」成长期记忆，一次压缩刷好几条重复项。
           if (/^【更早聊天的摘要/.test(String(l.text || ''))) continue
@@ -1202,23 +1266,31 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
           byChat.get(l.chatId).push(l)
         }
         for (const [chatId, lines] of byChat) {
-          const r = await extractLines(chatId, lines)
-          added += r.added || 0
-          insights += r.insights ? 1 : 0
+          if (!genSignal.isValid()) break
+          try {
+            const r = await extractLines(chatId, lines, genSignal)
+            added += r.added || 0
+            insights += r.insights ? 1 : 0
+          } catch (err) {
+            failedChats.push({ chatId, error: err.message })
+            log?.warn?.(`提炼聊天 ${chatId} 记忆失败:`, err.message)
+          }
         }
-        const s = load()
-        s.processed = s.processed || {}
-        if (day < today) {
-          hub.deleteChatLog(day) // 整理完清空（今天的留着，写日记还要用）
-          delete s.processed[day]
-        } else {
-          s.processed[day] = all.length
+        if (genSignal.isValid()) {
+          const s = load()
+          s.processed = s.processed || {}
+          if (day < today) {
+            hub.deleteChatLog?.(day) // 整理完清空（今天的留着，写日记还要用）
+            delete s.processed[day]
+          } else {
+            s.processed[day] = all.length
+          }
+          save(s)
+          days++
         }
-        save(s)
-        days++
       }
-      if (days) {
-        await learnSelfStyle()
+      if (days && genSignal.isValid()) {
+        await learnSelfStyle(genSignal)
         // 蒸馏群友（1.3.53）：每个群一天一次黑话提炼——纯统计找候选（零成本），
         // 模型只负责判断「是不是黑话、什么意思」，写进 insights['group:<gid>'] 同一套存储。
         // 群黑话学习已移交独立模块 src/modules/slang/（自带日程：03 点后学昨天完整流水，
@@ -1247,10 +1319,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         .map(([key]) => key)
       const targets = [...new Set([...touched, ...missing])].slice(0, 8)
       for (const key of targets) {
+        if (!genSignal.isValid()) break
         const at = key.lastIndexOf('@')
         const qq = at > 0 ? key.slice(0, at) : key
         const scope = at > 0 ? key.slice(at + 1) : 'global'
-        try { if (await buildProfile(qq, scope)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
+        try { if (await buildProfile(qq, scope, genSignal)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
+      }
+      if (!genSignal.isValid()) {
+        return { ok: false, message: '整理任务已中止或已关闭', failed: failedChats }
       }
       const s = load()
       // ① 模糊化（C-02 规范）：不再破坏性截断原文，仅调整 clarity 档位用于展示与遗忘决策
@@ -1274,17 +1350,20 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles }
       save(s)
       log.info(`整理临时记忆：处理了 ${days} 天，新增或更新 ${added} 条长期记忆，更新了 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条旧的变模糊了` : ''}${forgot ? `，忘掉 ${forgot} 条不重要的旧记忆` : ''}`)
-      return { ok: true, added, insights, days, forgot, blurred, profiles, message: `整理好了：新增或更新 ${added} 条记忆，更新 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条变模糊` : ''}${forgot ? `，忘掉 ${forgot} 条旧的` : ''}` }
+      return { ok: failedChats.length === 0, added, insights, days, forgot, blurred, profiles, failed: failedChats, message: `整理好了：新增或更新 ${added} 条记忆，更新 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条变模糊` : ''}${forgot ? `，忘掉 ${forgot} 条旧的` : ''}` }
     } catch (error) {
       log.warn('整理临时记忆失败：', error.message)
       return { ok: false, message: error.message }
     } finally {
+      genSignal.cleanup()
       busy = false
     }
   }
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
-  async function learnSelfStyle() {
+  async function learnSelfStyle(genSignal = null) {
+    if (status === 'closed') return
+    if (genSignal && !genSignal.isValid()) return
     const s = load()
     const pool = Object.entries(s.styles || {}).filter(([k]) => k !== 'self').flatMap(([, v]) => v)
     if (pool.length < 3) return
@@ -1295,11 +1374,14 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
         text: `已经养成的：\n${styleOf('self').map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}`,
         maxTokens: 800,
         temperature: 0.3,
+        signal: genSignal?.signal,
       })
+      if (status === 'closed' || (genSignal && !genSignal.isValid())) return
       const m = out.match(/\[[\s\S]*\]/)
       const arr = m ? JSON.parse(m[0]).map((t) => String(typeof t === 'string' ? t : t?.text || '')) : []
       if (arr.length) setStyle('self', arr)
     } catch (error) {
+      if (genSignal && !genSignal.isValid()) return
       log.warn('沉淀说话方式失败：', error.message)
     }
   }
@@ -1362,6 +1444,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
    * @returns {{items:number, profile:number, insights:number, style:number}} 各清了多少
    */
   function clearScope(chat) {
+    if (status === 'closed') return { scope: '', items: 0, profile: 0, insights: 0, style: 0 }
     const scope = scopeOfChat(chat)
     const key = personKey(chat)
     const s = load()
@@ -1454,8 +1537,31 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
       const live = items.filter((m) => !m.invalidAt)
       return { count: live.length, auto: live.filter((m) => m.source === 'auto').length, events: live.filter((m) => m.source === 'event').length, outdated: items.length - live.length }
     },
-    /** 关闭存储层（宿主退出/热重载时调用；SQLite 要 close 才不落脏 WAL）。 */
-    dispose: () => { try { flushHits() } catch (error) {} try { store?.close?.() } catch (error) {} store = null },
+    /** 关闭存储层与生命周期管理（B-01 规范，同步且幂等）。 */
+    dispose: () => {
+      if (status === 'closed') return
+      try { flushHits() } catch (error) {}
+      if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
+      status = 'closed'
+      activeGeneration++
+      for (const ac of abortControllers) {
+        try { ac.abort(new Error('memory disposed')) } catch {}
+      }
+      abortControllers.clear()
+      try { store?.close?.() } catch (error) {}
+      store = null
+    },
+    /** 手工维护重载接口（B-03 规范）：重新加载 memory.md 并失效缓存。 */
+    reload: () => {
+      if (status === 'closed') throw new Error('记忆模块已关闭')
+      if (store && typeof store.reload === 'function') {
+        store.reload()
+      }
+      cache.clear()
+      tokCache.clear()
+      log?.info?.('记忆档案已在内存中重新加载并重建索引')
+      return { ok: true, stats: store?.stats?.() }
+    },
   }
 }
   // 群黑话本已重构为独立模块 src/modules/slang/（存储/学习/注入迁走；slang() 只读口保留供迁移）。
