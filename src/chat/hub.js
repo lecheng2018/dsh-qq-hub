@@ -472,35 +472,35 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     {
       for (const tool of tools) {
-        try {
-          // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
-          // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
-          let reg = tool
-          if (tool.slow) {
-            const { slow, ...base } = tool
-            const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
-            reg = {
-              ...base,
-              async execute(args, exec) {
-                let fired = false
-                const timer = setTimeout(() => {
-                  if (fired) return
-                  fired = true
-                  if (slowNoticeSent.has(sid)) return
-                  slowNoticeSent.add(sid)
-                  sendText(chat.chatId, notice, undefined, [], undefined).catch((error) => log.debug('慢工具提示没发出去：', error.message))
-                }, 1500)
-                timer.unref?.()
-                try {
-                  return await tool.execute(args, exec)
-                } finally {
-                  clearTimeout(timer)
-                }
-              },
-            }
+        // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
+        // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
+        let reg = tool
+        if (tool.slow) {
+          const { slow, ...base } = tool
+          const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+          reg = {
+            ...base,
+            async execute(args, exec) {
+              let fired = false
+              const timer = setTimeout(() => {
+                if (fired) return
+                fired = true
+                if (slowNoticeSent.has(sid)) return
+                slowNoticeSent.add(sid)
+                sendText(chat.chatId, notice, undefined, [], undefined).catch((error) => log.debug('慢工具提示没发出去：', error.message))
+              }, 1500)
+              timer.unref?.()
+              try {
+                return await tool.execute(args, exec)
+              } finally {
+                clearTimeout(timer)
+              }
+            },
           }
+        }
+        const dkey = sid + '|' + tool.name
+        try {
           // 注册表里如果残留同名工具（旧 agent 作用域/旧版泄漏），先把我们记着的旧 disposer 清掉再注册
-          const dkey = sid + '|' + tool.name
           const stale = toolDisposers.get(dkey)
           if (stale) { try { stale() } catch (error) {} toolDisposers.delete(dkey) }
           const off = agent.ctx.tools.register(reg)
