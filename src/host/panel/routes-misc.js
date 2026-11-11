@@ -48,6 +48,7 @@ export function registerMiscRoutes({
 
   // 联动密钥只显示配置状态，不通过面板 API 回显、生成或重置
   route('/bridge/token', async () => ({ ok: true, configured: Boolean(getConfig().bridge.token) }))
+  route('/bridge/verify', async (req) => ({ ok: bridge.authorized(req, true) }))
   route('/bridge/token/reset', async (req, res) => {
     if (!bridge.authorized(req)) return send(res, 401, { ok: false, message: '需要有效联动密钥' })
     bridge.resetToken()
