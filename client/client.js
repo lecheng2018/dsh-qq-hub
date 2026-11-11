@@ -84,15 +84,9 @@ window.__ModuleLoader__.load({
       return { ok: false, status: r.status, message: 'HTTP ' + r.status + '：' + (snippet || '空响应') }
     })
     const failed = (e) => ({ ok: false, message: '连不上插件：' + (e && e.message ? e.message : e) + '（接口 ' + API + '）' })
-    const authHeaders = () => {
-      try {
-        const token = sessionStorage.getItem('qq-hub-token') || ''
-        return token ? { 'x-qq-hub-token': token } : {}
-      } catch (e) { return {} }
-    }
-    const get = (p) => fetch(API + p, { cache: 'no-store', headers: authHeaders() }).then(readJson).catch(failed)
+    const get = (p) => fetch(API + p, { cache: 'no-store' }).then(readJson).catch(failed)
     const post = (p, body) =>
-      fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() }, body: JSON.stringify(body || {}) })
+      fetch(API + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) })
         .then(readJson)
         .catch(failed)
     const clone = (o) => JSON.parse(JSON.stringify(o))
@@ -877,15 +871,9 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 
     /** 控制台密码只显示托管状态；明文不经过面板 API。 */
     function PasswordPeek({ auto }) {
-      const [token, setToken] = useState(() => { try { return sessionStorage.getItem('qq-hub-token') || '' } catch (e) { return '' } })
-      const update = (value) => {
-        setToken(value)
-        try { sessionStorage.setItem('qq-hub-token', value) } catch (e) {}
-      }
       return h('div', null,
         h('div', { className: 'ab-small', style: { color: 'var(--ab-ok)' } }, auto ? '✓ 控制台密码由插件自动管理' : '✓ 用的是你设的控制台密码'),
-        h('div', { className: 'ab-muted ab-small' }, '明文请在本机配置文件中查看，面板不再显示或复制。修改或重置密码需要联动密钥。'),
-        h('input', { className: 'ab-input', type: 'password', value: token, placeholder: '联动密钥（仅本次标签页保存）', onChange: (e) => update(e.target.value) }))
+        h('div', { className: 'ab-muted ab-small' }, '明文请在本机配置文件中查看，面板不再显示或复制。'))
     }
 
     /** 在面板里阅读并同意 SnowLuma 的用户协议和隐私说明（必须由用户本人勾选、点击）。 */
@@ -2627,35 +2615,6 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           : h('div', { className: 'ab-small ab-muted' }, '这个场合没有工具'))
     }
 
-    function BridgeAccess({ st, toast, reload }) {
-      const [token, setToken] = useState(() => { try { return sessionStorage.getItem('qq-hub-token') || '' } catch (e) { return '' } })
-      const [checking, setChecking] = useState(false)
-      const bridge = st.config.bridge || {}
-      const update = (value) => {
-        setToken(value)
-        try { sessionStorage.setItem('qq-hub-token', value) } catch (e) {}
-      }
-      const verify = async () => {
-        setChecking(true)
-        try {
-          const r = await get('/bridge/verify')
-          toast(r.ok ? '密钥正确，面板写操作可以使用它了' : '密钥不对，或还没有在配置文件里设置', r.ok ? 'ok' : 'err')
-        } finally { setChecking(false) }
-      }
-      const toggle = async (enabled) => {
-        const r = await post('/save', { bridge: { http: enabled } })
-        toast(r.ok === false ? r.message : enabled ? '开放接口已打开' : '开放接口已关闭', r.ok === false ? 'err' : 'ok')
-        if (r.ok !== false) reload()
-      }
-      return h(Card, { title: '联动与管理员密钥', desc: '这个密钥同时保护面板写操作和开放接口。粘贴已有密钥并校验；它只保存在当前标签页，面板不会回显或替你生成明文。' },
-        h(Row, { label: '开放 HTTP 接口', hint: '只控制 /open/*；面板管理仍可使用已有密钥' }, h(Switch, { on: bridge.http === true, onChange: toggle })),
-        h(Row, { label: '已有密钥', hint: bridge.tokenSet ? '配置文件中已有密钥；输入后即可使用' : '还没有密钥时，请先在本机配置文件的 bridge.token 中设置' },
-          h('div', { className: 'ab-flex' },
-            h('input', { className: 'ab-input', type: 'password', value: token, placeholder: bridge.tokenSet ? '输入已有联动密钥' : '请先在配置文件中设置', autoComplete: 'off', onChange: (e) => update(e.target.value) }),
-            h(Btn, { small: true, disabled: checking || !token, onClick: verify }, checking ? '校验中…' : '校验密钥'))),
-        h('div', { className: 'ab-muted ab-small' }, bridge.tokenSet ? '已配置密钥。只保存在当前标签页，关闭后需重新输入。' : '尚未配置密钥。请先在本机配置文件中设置 bridge.token。'))
-    }
-
     /** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式。 */
     function Modules({ st, draft, toast, reload }) {
       const [data, setData] = useState(null)
@@ -2688,7 +2647,6 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h(Row, { label: '安全模式', hint: '打开后你写的模块一个都不加载，内置的全部恢复。出了问题先开它，看是不是你的模块引起的。' },
             h(Switch, { on: st.config.safeMode, onChange: async (v) => { const r = await post('/save', { safeMode: v }); toast(v ? '安全模式开了：只跑内置模块' : '安全模式关了', 'ok'); setModules(r.modules); reload() } })),
           st.config.safeMode ? h('div', { className: 'ab-note warn' }, '安全模式开着：你写的模块现在都没加载。') : null),
-        h(BridgeAccess, { st, toast, reload }),
         h(Card, { title: '新建一个模块', desc: '从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。想改内置的本事，用下面内置模块那一行的「复制一份来改」。' },
           h('div', { className: 'ab-flex' },
             h('input', { className: 'ab-input', style: { maxWidth: 180 }, placeholder: 'id，如 weather', value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }),

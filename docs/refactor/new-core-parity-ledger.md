@@ -131,19 +131,18 @@
 
 ## 面板敏感信息、台账与入站防护（2026-11-11）
 
-- SnowLuma password 只返回 configured/auto；bridge token 只返回 configured；示例中的真实 token 替换为占位。set/reset password、/save 改密和 bridge token reset 统一走 bridge.authorized，失败真实 HTTP 401。
-- 面板按当前标签页保存联动密钥，所有请求自动携带 x-qq-hub-token；不再通过 API ensure/reset 密钥。
+- SnowLuma password 只返回 configured/auto；bridge token 只返回 configured；示例中的真实 token 替换为占位；不再通过 API ensure/reset 密钥。
+- 面板不保存或携带联动密钥，身份认证由 DSH/fnOS 外层或反向代理负责。
 - 台账 enqueue 的审计副本每记录最多 2048 字并记 contentChars；outbox 物理发送使用请求原始 segments，新增全文发送 + 文件裁剪回归。
 - modular 默认路径复用 createRatelimitMiddleware.take，按 chatKey+userId 限流；scheduler 默认每聊天最多 50 排队任务，超限 queue full。
-- 定向：面板敏感信息 3/3 + modules 22/22；ledger 22/22；scheduler 与 modular 限流各 1/1。
-- 补充：历史 sent/cancelled 在加载时也立即裁至 2048 字并 persist，unknown/failed 全文保留；ledger 最终 23/23。
+- 补充：历史 sent/cancelled 在加载时也立即裁至 2048 字并 persist，unknown/failed 全文保留。
 
 ## AuraBot 借鉴三项落地（2026-11-11）
 
 - 出站 sanitize 在 parseReply 前处理 DSML/Harmony、工具残片和提示词复读；代码与 JSON 示例先隔离再恢复，防误删。
-- createPanelGuard 对所有 mutating 请求统一 bridge 鉴权，真实 HTTP 401；只读和 CSRF 规则保持，API 不允许轮换联动密钥。
+- createPanelGuard 保持 Host、只读、CSRF 和副作用方法规则；仅 /open/* 走 bridge 鉴权，API 不允许轮换联动密钥。
 - imagegen 记录本轮唯一明确 @/引用请求，hub 只给该主人在当前文本中的生图请求借权；其他权限面不变。
-- 整合回归：新增出站/面板/生图用例通过，原失败 E2E 已恢复；旧夹具改为显式持密钥，无生产后门。
+- 测试夹具不自动携带密钥，直接验证面板无密钥流程和开放接口鉴权边界。
 
 ## Outbox 与台账资源收口（2026-11-11）
 
@@ -157,13 +156,10 @@
 - 新核心持久化 personaId 并在变化时重建；syncAllModels 合并新旧结果；表情 collectMode/fromGroups/fromPrivate 接入。
 - Outbox reserve/ticket 保证异步准备期间同聊天顺序；群合并不再丢 voice/replyTo 或移动媒体，自定义 maxBubbles 贯穿。
 - session/ledger/stickers 支持损坏隔离与备份恢复；台账备份恢复的 queued/sending 等按 unknown 保守处理，sent 保留。
-- danger 命令增加嵌套与系统破坏覆盖，默认 dangerConfirm 不改，README/配置文档明确风险与面板密钥。
-- 定向：A 156/156、B 21/21、C 106/106、D 73/73。
+- danger 命令增加嵌套与系统破坏覆盖，默认 dangerConfirm 不改，README/配置文档明确风险与面板访问边界。
 
-## 联动密钥可用性修正（2026-11-11）
+## 面板管理鉴权回退（2026-11-11）
 
-- 扩展页新增 BridgeAccess：已有密钥输入、/bridge/verify 校验、开放接口开关与配置状态。
-- 密钥只存当前标签页，不回显；无密钥时指引本机配置文件。
-- bridge.authorized 支持面板管理 allowDisabled，/open/* 仍受 bridge.http；有效密钥可先管理面板再开启接口。
-- 新增 UI 与关闭开放接口时的鉴权回归，定向 7/7。
-- 修正 SnowLuma set/reset 与 /save 内层仍严格校验的问题：三个 handler 与总闸同用 allowDisabled=true；/open/* 不变。
+- 面板写操作和 SnowLuma 密码操作不再要求联动密钥，首次配置可直接在面板完成。
+- 移除 BridgeAccess、/bridge/verify、标签页密钥存储和 bridge.authorized 的 allowDisabled 特判。
+- /open/* 仍受 bridge.http 与联动密钥保护；Host、CSRF 和副作用 POST 约束不变。
