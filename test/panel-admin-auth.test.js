@@ -118,6 +118,22 @@ test('面板管理接口要求有效联动密钥；合法只读接口仍可匿�
   }
 })
 
+test('已有密钥可校验并管理面板，即使开放 HTTP 暂时关闭', async () => {
+  const f = await fixture()
+  try {
+    await f.api.setConfig({ ...f.api.getConfig(), bridge: { ...f.api.getConfig().bridge, http: false } })
+    assert.equal((await f.fake.call('/bridge/verify')).json().ok, false)
+    assert.equal((await f.fake.call('/bridge/verify', undefined, { 'x-qq-hub-token': TOKEN })).json().ok, true)
+    const enabled = await f.fake.call('/save', { bridge: { http: true } }, { 'x-qq-hub-token': TOKEN })
+    assert.equal(enabled.status, 200)
+    assert.equal(f.api.getConfig().bridge.http, true)
+    const open = await f.fake.call('/open/info')
+    assert.equal(open.status, 401)
+  } finally {
+    await f.dispose()
+  }
+})
+
 test('副作用路径仍拒绝 GET，合法只读 GET 不受影响', async () => {
   const f = await fixture()
   try {
