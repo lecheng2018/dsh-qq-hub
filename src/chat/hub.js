@@ -37,11 +37,8 @@ import { readInboundFiles, inboundFileBlocks } from './inbound-files.js'
 
 // QQ 会话的工作区目录，第一次收到消息时自动创建。面板「连接」页能改（config.workspaceDir，#32）；
 // 没填就用环境变量 AURABOT_WORKSPACE，再没有：老安装沿用 C:\Aurabot\qq-chats，新安装放在用户目录下（不用往 C 盘根目录写）
-const LEGACY_WORKSPACE = 'C:\\Aurabot\\qq-chats'
-export const WORKSPACE_DIR = process.env.QQ_HUB_WORKSPACE || process.env.AURABOT_WORKSPACE || (existsSync(LEGACY_WORKSPACE) ? LEGACY_WORKSPACE : join(homedir(), 'Aurabot', 'qq-chats'))
-/** 现在用的工作区目录：面板里填了就用填的，否则默认。 */
-export const workspaceDirOf = (cfg) => String(cfg?.workspaceDir || '').trim() || WORKSPACE_DIR
-export const WORKSPACE_TITLE = 'QQ Hub'
+import { WORKSPACE_DIR, workspaceDirOf, WORKSPACE_TITLE } from './workspace.js'
+export { WORKSPACE_DIR, workspaceDirOf, WORKSPACE_TITLE }
 const SOURCE_KIND = 'qq-hub'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -475,47 +472,60 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     {
       for (const tool of tools) {
-        try {
-          // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
-          // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
-          let reg = tool
-          if (tool.slow) {
-            const { slow, ...base } = tool
-            const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
-            reg = {
-              ...base,
-              async execute(args, exec) {
-                let fired = false
-                const timer = setTimeout(() => {
-                  if (fired) return
-                  fired = true
-                  if (slowNoticeSent.has(sid)) return
-                  slowNoticeSent.add(sid)
-                  sendText(chat.chatId, notice, undefined, [], undefined).catch((error) => log.debug('慢工具提示没发出去：', error.message))
-                }, 1500)
-                timer.unref?.()
-                try {
-                  return await tool.execute(args, exec)
-                } finally {
-                  clearTimeout(timer)
-                }
-              },
-            }
+        // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
+        // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
+        let reg = tool
+        if (tool.slow) {
+          const { slow, ...base } = tool
+          const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
+          reg = {
+            ...base,
+            async execute(args, exec) {
+              let fired = false
+              const timer = setTimeout(() => {
+                if (fired) return
+                fired = true
+                if (slowNoticeSent.has(sid)) return
+                slowNoticeSent.add(sid)
+                sendText(chat.chatId, notice, undefined, [], undefined).catch((error) => log.debug('慢工具提示没发出去：', error.message))
+              }, 1500)
+              timer.unref?.()
+              try {
+                return await tool.execute(args, exec)
+              } finally {
+                clearTimeout(timer)
+              }
+            },
           }
+        }
+        const dkey = sid + '|' + tool.name
+        try {
           // 注册表里如果残留同名工具（旧 agent 作用域/旧版泄漏），先把我们记着的旧 disposer 清掉再注册
-          const dkey = sid + '|' + tool.name
           const stale = toolDisposers.get(dkey)
           if (stale) { try { stale() } catch (error) {} toolDisposers.delete(dkey) }
           const off = agent.ctx.tools.register(reg)
           toolDisposers.set(dkey, off)
           offs.push(() => { toolDisposers.delete(dkey); try { off() } catch (error) {} })
         } catch (error) {
-          // 「already registered in this scope」= 同名工具的旧实例还挂在同一 scope 上；
-          // 实测功能不受影响（表情等工具照常可用，只是这一份注册失败），所以降成 debug 别刷屏。
-          // 其余错误（参数不对、ctx 没准备好）才是真要看的，保持 warn。
           const dup = /already registered/i.test(error.message || '')
-          if (dup) log.debug(`工具 ${tool.name} 已存在同名实例，跳过重复注册`)
-          else log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+          if (dup) {
+            try {
+              const scope = agent.ctx?._scope || agent.ctx
+              const layer = agent.ctx?.tools?.layers?.peek?.(scope)
+              if (layer?.tools?.data?.has?.(tool.name)) {
+                layer.tools.data.delete(tool.name)
+                const off2 = agent.ctx.tools.register(reg)
+                if (typeof off2 === 'function') {
+                  toolDisposers.set(dkey, off2)
+                  offs.push(() => { toolDisposers.delete(dkey); try { off2() } catch (error) {} })
+                  continue
+                }
+              }
+            } catch {}
+            log.debug(`工具 ${tool.name} 已存在同名实例，跳过重复注册`)
+          } else {
+            log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+          }
         }
       }
     }

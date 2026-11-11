@@ -187,7 +187,9 @@ export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
     if (inEntry) {
       entryLines.push(line)
     } else {
-      prologueLines.push(line)
+      if (!/^##\s+(当前记忆|历史记录|历史档案)\s*$/.test(trimmed)) {
+        prologueLines.push(line)
+      }
     }
   }
 
@@ -226,8 +228,15 @@ export function serializeMarkdownArchive({ meta = {}, entries = [], prologue = '
   }
   lines.push('---', '')
 
-  if (prologue && prologue.trim()) {
-    lines.push(prologue.trim(), '')
+  // 自愈过滤：清理传入前言中残留的结构化 Section 标题（彻底终结标题堆叠累积）
+  const cleanPrologue = String(prologue || '')
+    .split(/\r?\n/)
+    .filter((l) => !/^##\s+(当前记忆|历史记录|历史档案)\s*$/.test(l.trim()))
+    .join('\n')
+    .trim()
+
+  if (cleanPrologue) {
+    lines.push(cleanPrologue, '')
   } else {
     // 默认文档大标题
     const isGroup = scope.startsWith('group:')
@@ -259,6 +268,7 @@ export function serializeMarkdownArchive({ meta = {}, entries = [], prologue = '
     if (e.aboutName !== undefined && e.aboutName !== '') entryMeta.aboutName = String(e.aboutName)
     if (e.source !== undefined && e.source !== '') entryMeta.source = String(e.source)
     if (e.sourceId !== undefined && e.sourceId !== '') entryMeta.sourceId = String(e.sourceId)
+    if (e.chatId !== undefined && e.chatId !== '') entryMeta.chatId = String(e.chatId)
     if (typeof e.at === 'number' && !Number.isNaN(e.at)) entryMeta.at = e.at
     if (typeof e.eventAt === 'number' && !Number.isNaN(e.eventAt)) entryMeta.eventAt = e.eventAt
     if (typeof e.importance === 'number' && e.importance !== 0.5) entryMeta.importance = Number(e.importance.toFixed(2))
@@ -268,9 +278,11 @@ export function serializeMarkdownArchive({ meta = {}, entries = [], prologue = '
     if (e.supersededBy !== undefined && e.supersededBy !== '') entryMeta.supersededBy = String(e.supersededBy)
     if (Array.isArray(e.tags) && e.tags.length > 0) entryMeta.tags = e.tags
     if (Array.isArray(e.history) && e.history.length > 0) entryMeta.history = e.history
+    if (e.entity !== undefined && e.entity !== '') entryMeta.entity = String(e.entity)
+    if (e.topic !== undefined && e.topic !== '') entryMeta.topic = String(e.topic)
 
     // 保留其它自定义扩展属性
-    const standardKeys = new Set(['id', 'kind', 'about', 'aboutName', 'source', 'sourceId', 'at', 'eventAt', 'importance', 'pinned', 'ephemeral', 'invalidAt', 'supersededBy', 'tags', 'history', 'title', 'text', 'evidence', 'revision', 'scope'])
+    const standardKeys = new Set(['id', 'kind', 'about', 'aboutName', 'source', 'sourceId', 'chatId', 'at', 'eventAt', 'importance', 'pinned', 'ephemeral', 'invalidAt', 'supersededBy', 'tags', 'history', 'title', 'text', 'evidence', 'revision', 'scope', 'entity', 'topic'])
     for (const [k, v] of Object.entries(e)) {
       if (!standardKeys.has(k) && v !== undefined) {
         entryMeta[k] = v
