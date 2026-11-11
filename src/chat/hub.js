@@ -507,12 +507,25 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           toolDisposers.set(dkey, off)
           offs.push(() => { toolDisposers.delete(dkey); try { off() } catch (error) {} })
         } catch (error) {
-          // 「already registered in this scope」= 同名工具的旧实例还挂在同一 scope 上；
-          // 实测功能不受影响（表情等工具照常可用，只是这一份注册失败），所以降成 debug 别刷屏。
-          // 其余错误（参数不对、ctx 没准备好）才是真要看的，保持 warn。
           const dup = /already registered/i.test(error.message || '')
-          if (dup) log.debug(`工具 ${tool.name} 已存在同名实例，跳过重复注册`)
-          else log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+          if (dup) {
+            try {
+              const scope = agent.ctx?._scope || agent.ctx
+              const layer = agent.ctx?.tools?.layers?.peek?.(scope)
+              if (layer?.tools?.data?.has?.(tool.name)) {
+                layer.tools.data.delete(tool.name)
+                const off2 = agent.ctx.tools.register(reg)
+                if (typeof off2 === 'function') {
+                  toolDisposers.set(dkey, off2)
+                  offs.push(() => { toolDisposers.delete(dkey); try { off2() } catch (error) {} })
+                  continue
+                }
+              }
+            } catch {}
+            log.debug(`工具 ${tool.name} 已存在同名实例，跳过重复注册`)
+          } else {
+            log.warn(`工具 ${tool.name} 挂不上：`, error.message)
+          }
         }
       }
     }
