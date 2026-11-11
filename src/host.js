@@ -463,7 +463,7 @@ export function apply(ctx) {
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
-  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req) === true, log: logger.child('panel') })
+  const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req, true) === true, log: logger.child('panel') })
   const { send, readBody, readRaw, query, answer, route, guard } = http
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
