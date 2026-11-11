@@ -934,20 +934,45 @@ test('换头像：主人发来的图也能用，不能被「她的画作」抢�
   assert.deepEqual(sent, png, '换上去的是主人发的那张图，不是她自己的画')
 })
 
-test('每日整理：往日的临时流水整理后清空，今天的保留；空间日记进了记忆库', async () => {
+test('每日整理：成功后保留共享流水且重跑不重复提炼；空间日记进了记忆库', async () => {
   const { existsSync } = await import('node:fs')
   const dir = join(dataDir, 'chatlog')
   mkdirSync(dir, { recursive: true })
   const old = join(dir, '2026-01-01.jsonl')
-  writeFileSync(old, ['你好', '我喜欢吃辣', '周末一起打游戏吧', '好呀'].map((t, i) => JSON.stringify({ t: i, chatId: 'private:' + OWNER, who: i % 2 ? 'bot' : 'xiaoming', text: t })).join('\n') + '\n')
-  const r = (await fake.call('/memory/extract', {})).json()
-  assert.equal(r.ok, true, r.message)
-  assert.equal(existsSync(old), false, '往日的流水被清空')
-  const today = new Date()
-  const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  assert.equal(existsSync(join(dir, key + '.jsonl')), true, '今天的流水保留')
-  const mem = (await fake.call('/memories')).json()
-  assert.ok(mem.items.some((m) => m.source === 'diary' && m.text.includes('白米饭')), '空间日记进了记忆库')
+  const memoryUser = '10000099'
+  const content = Array.from({ length: 12 }, (_, i) => JSON.stringify({ t: i, chatId: 'private:' + memoryUser, who: i % 2 ? 'bot' : 'xiaoming', text: i % 2 ? '好呀' : 'e2e整理标记：小明周末喜欢打游戏' })).join('\n') + '\n'
+  writeFileSync(old, content)
+  const stream = fake.ctx.llm.stream
+  let factCalls = 0
+  fake.ctx.llm.stream = async function* (params) {
+    if (params.system.includes('整理长期记忆')) {
+      factCalls++
+      const transcript = params.messages[0].content[0].text
+      yield { type: 'text-delta', text: JSON.stringify(transcript.includes('e2e整理标记') ? [{ text: '小明周末喜欢打游戏', about_qq: memoryUser }] : []) }
+    } else if (params.system.includes('insights')) {
+      yield { type: 'text-delta', text: '{"insights":[],"style":[]}' }
+    } else {
+      yield* stream(params)
+    }
+  }
+  try {
+    const r = (await fake.call('/memory/extract', {})).json()
+    assert.equal(r.ok, true, r.message)
+    assert.ok(factCalls > 0, '确实执行了提炼模型')
+    assert.equal(readFileSync(old, 'utf8'), content, '往日的共享流水原文保留')
+    const today = new Date()
+    const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    assert.equal(existsSync(join(dir, key + '.jsonl')), true, '今天的流水保留')
+    const mem = (await fake.call('/memories')).json()
+    assert.ok(mem.items.some((m) => m.text === '小明周末喜欢打游戏' && m.scope === 'private:' + memoryUser), '提炼正文按私聊作用域保存')
+    assert.ok(mem.items.some((m) => m.source === 'diary' && m.text.includes('白米饭')), '空间日记进了记忆库')
+    const before = factCalls
+    const repeat = (await fake.call('/memory/extract', {})).json()
+    assert.equal(repeat.ok, true, repeat.message)
+    assert.equal(factCalls, before, '成功进度持久化后不重复消费同一流水')
+  } finally {
+    fake.ctx.llm.stream = stream
+  }
 })
 
 test('表情包她自己整理：改名、改标签（同步到 QQ 收藏备注）、删掉', async () => {

@@ -96,7 +96,11 @@ export default {
       ]
     })
 
-    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '').slice(0, 300), stats: memory.stats() }))
+    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '').slice(0, 300), stats: memory.stats(), health: memory.health() }))
+    api.route('/memory/reload', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请使用 POST 重新载入档案' }
+      return memory.reload()
+    })
     api.route('/memory/add', async (req) => {
       const b = await http.body(req)
       return memory.add({ text: b.text, aboutName: b.aboutName || '', about: b.about || '', importance: b.importance ?? 0.6, tags: b.tags || [], source: 'panel' })
@@ -125,7 +129,7 @@ export default {
       if (!b.gid) return { ok: false, message: '没给群号' }
       return refreshCard(b.gid)
     })
-    // 从会话历史蒸馏（1.3.63）：chatlog 每天删，DSH 会话记录留得久，翻它能立刻学
+    // 从会话历史蒸馏：不依赖共享流水的保留窗口。
     api.route('/distill/history', async (req) => {
       if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
       const q = http.query(req) || {}
@@ -197,7 +201,7 @@ export default {
     })
     api.route('/memory/extract', async (req) => {
       const b = await http.body(req)
-      // 立即整理一次：连今天的也提炼（今天的聊天流水不删，写日记还要用）
+      // 共享流水只读消费，整理进度由记忆模块独立记录。
       return memory.consolidate({ includeToday: b.includeToday !== false })
     })
 
