@@ -157,9 +157,9 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
     setConfig({ ...cfg, bridge: { ...cfg.bridge, token: '' } })
     return ensureToken()
   }
-  function authorized(req, allowDisabled = false) {
+  function authorized(req) {
     const cfg = getConfig()
-    if ((!allowDisabled && !cfg.bridge.http) || !cfg.bridge.token) return false
+    if (!cfg.bridge.http || !cfg.bridge.token) return false
     const h = req.headers || {}
     const auth = String(h.authorization || h.Authorization || '')
     let given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : String(h['x-qq-hub-token'] || '')
