@@ -57,8 +57,12 @@ export function createMemoryBus({ store, log } = {}) {
       tags: o.tags || [],
       importance: o.importance ?? 0.6,
       source: o.source || 'tool',
+      sourceId: o.sourceId || '',
       chatId: o.chatId || (o.chat && o.chat.chatId) || '',
       scope: o.scope || '',
+      ephemeral: Boolean(o.ephemeral),
+      pinned: Boolean(o.pinned),
+      evidence: o.evidence || '',
     })
   }
 
@@ -75,6 +79,9 @@ export function createMemoryBus({ store, log } = {}) {
       chat: o.chat || null,
       chatId: o.chatId || '',
       scope: o.scope || '',
+      ephemeral: Boolean(o.ephemeral),
+      sourceId: o.sourceId || '',
+      evidence: o.evidence || '',
     })
   }
 
