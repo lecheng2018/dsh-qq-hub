@@ -772,9 +772,25 @@ export function createModularCore({
         if (typeof off === 'function') offs.push(off)
       } catch (error) {
         const msg = String(error?.message || error)
-        // legacy hub.mount 可能已经挂过同一份工具（同一 agent 作用域）：这不是失败
-        if (msg.includes('already registered')) already++
-        else { failed++; debug(`工具 ${tool?.name} 挂载失败：${msg}`) }
+        if (msg.includes('already registered')) {
+          try {
+            // 热重载保护：若会话作用域内残留同名工具，从作用域层强制移除旧登记项并重挂新实例
+            const scope = agent.ctx?._scope || agent.ctx
+            const layer = agent.ctx?.tools?.layers?.peek?.(scope)
+            if (layer?.tools?.data?.has?.(tool.name)) {
+              layer.tools.data.delete(tool.name)
+              const offRetry = agent.ctx?.tools?.register?.(registration)
+              if (typeof offRetry === 'function') {
+                offs.push(offRetry)
+                continue
+              }
+            }
+          } catch {}
+          already++
+        } else {
+          failed++
+          debug(`工具 ${tool?.name} 挂载失败：${msg}`)
+        }
       }
     }
     mountedTools.set(sessionId, { agent, key, offs })
