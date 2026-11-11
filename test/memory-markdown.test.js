@@ -168,6 +168,17 @@ test('memory-markdown: 正文中包含类似 entry 标记的文本会被安全�
   assert.ok(parsed.entries[0].text.includes('<!-- qqhub:entry {"id":"fake"} -->'))
 })
 
+test('memory-markdown: 保留条目前、中、后的手写备注且结构标题不膨胀', () => {
+  const entry = (id) => `<!-- qqhub:entry {"id":"${id}"} -->\n正文\n<!-- /qqhub:entry -->`
+  let raw = `---\nformat: qqhub-memory-v1\nscope: global\n---\n前备注\n## 当前记忆\n${entry('a')}\n中备注\n${entry('b')}\n后备注\n`
+  for (let i = 0; i < 3; i++) {
+    const parsed = parseMarkdownArchive(raw)
+    for (const note of ['前备注', '中备注', '后备注']) assert.ok(parsed.prologue.includes(note), note)
+    raw = serializeMarkdownArchive(parsed)
+    assert.equal(raw.match(/^## 当前记忆$/gm)?.length, 1)
+  }
+})
+
 test('memory-markdown: 异常情况严格报错', () => {
   // 缺少 frontmatter
   assert.throws(() => parseMarkdownArchive('# 只有标题没有头'), /缺少合法 frontmatter/)
