@@ -31,6 +31,7 @@ export function createHostEffects({
   function installApprovalFlow() {
     ctx.effect(() => {
       let off = null
+      let unpatchApproval = null
       try {
         // 必须带 { global: true }：DSH 用 agent 作用域的 waterfall 派发审批
         // （dsh-user-approval: ctx.waterfall(scopeTarget(agent, agent), 'approval/request', …)），
@@ -72,9 +73,10 @@ export function createHostEffects({
       // 命中 QQ 会话就自己发卡等批复，不命中就原样交回（GUI 照旧）。
       try {
         const svc = ctx.get?.('approval')
-        if (svc && typeof svc.request === 'function' && !svc.__qqhubPatched) {
-          const orig = svc.request.bind(svc)
-          svc.request = async (req) => {
+        if (svc && typeof svc.request === 'function') {
+          const orig = svc.__qqhubOrigRequest || svc.request.bind(svc)
+          svc.__qqhubOrigRequest = orig
+          const wrapped = async (req) => {
             try {
               const raw = req?.agent?.session?.id || req?.agent?.id || ''
               const chatId = chatOfSession(sessionKey(raw))
@@ -88,15 +90,22 @@ export function createHostEffects({
             } catch (error) { log.warn('QQ 审批处理失败，回退 GUI：', error.message) }
             return orig(req)
           }
-          svc.__qqhubPatched = true
+          svc.request = wrapped
           log.info('已接管 approval 服务：QQ 会话的审批走 QQ 卡片')
-        } else if (svc && svc.__qqhubPatched) {
-          log.debug('approval 服务已由本插件接管（跳过重复包装）')
+          unpatchApproval = () => {
+            if (svc.request === wrapped) {
+              svc.request = orig
+              delete svc.__qqhubOrigRequest
+            }
+          }
         } else {
           log.debug('拿不到 approval 服务实例，审批只弹 GUI')
         }
       } catch (error) { log.debug('接管 approval 服务失败：', error.message) }
-      return () => { try { if (typeof off === 'function') off() } catch (error) {} }
+      return () => {
+        try { if (typeof off === 'function') off() } catch (error) {}
+        try { if (typeof unpatchApproval === 'function') unpatchApproval() } catch (error) {}
+      }
     }, 'qq-hub: 通用工具审批')
   }
 
