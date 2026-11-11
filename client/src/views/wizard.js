@@ -3,7 +3,7 @@ import { Card, Row, Btn, Switch, Choices } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { cx } from '../core/utils.js'
 import { get, post } from '../core/http.js'
-import { OneBotFields, SnowLumaAuth, Agreement } from './connect.js'
+import { GatewayChoice, OneBotFields, SnowLumaAuth, Agreement } from './connect.js'
 
 const WIZ_STEPS = ['你们的 QQ 号', '接 QQ 网关', '启动并同意协议', '连上机器人号', '完成']
 
