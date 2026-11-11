@@ -20,47 +20,91 @@ const DANGER_RULES = [
   { label: '格式化磁盘', re: /\bformat\s+[a-zA-Z]:/i },
   { label: '递归删除盘符', re: /\b(?:del|erase)\s+(?:\/[a-z]+\s+)*[a-zA-Z]:[\\/]?(\s|$|\*)/i },
   { label: '递归删除目录', re: /\b(?:rd|rmdir)\s+\/[a-z]*s[a-z]*\s+[a-zA-Z]:[\\/]/i },
-  { label: '关闭/重启电脑', re: /\b(?:shutdown|Stop-Computer|Restart-Computer|reboot|halt|poweroff)\b/i },
-  { label: '下载后直接执行', re: /(?:curl|wget)\b[^\n|]*\|\s*(?:ba|z|k|da)?sh\b/i },
-  { label: '下载后直接执行', re: /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^\n|]*(?:\||>)[^\n]*(?:iex|Invoke-Expression)\b/i },
+  { label: '关闭/重启电脑', re: /\b(?:shutdown|Stop-Computer|Restart-Computer|reboot|halt|poweroff)(?:\s|$)/i },
   { label: '删除卷影副本/引导配置', re: /\b(?:vssadmin\s+delete\s+shadows|bcdedit|wbadmin\s+delete)\b/i },
   { label: '改注册表关键项', re: /\breg\s+(?:add|delete)\s+(?:HKLM|HKEY_LOCAL_MACHINE)\b/i },
-  { label: '直接写磁盘', re: /\bdd\s+if=|>\s*\/dev\/(?:sd|nvme|disk)/i },
+  { label: '直接写磁盘', re: /\bdd\s+if=/i },
   { label: '提权/改管理员组', re: /\bnet\s+(?:user\s+\S+\s+\S+\s+\/add|localgroup\s+(?:administrators|admin)\b)/i },
   { label: '强制改系统目录权限', re: /\b(?:takeown|icacls)\s+[^\n]*(?:[a-zA-Z]:\\Windows|\/etc|\/usr|\/bin)\b/i },
   { label: 'chmod 根目录', re: /\bchmod\s+-R\s+777\s+\/(?:\s|$)/i },
-  { label: 'forkshell 炸弹', re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/ },
-  // pwsh 高频直接执行（1.3.49 补）：iex/iwr 一行流在原规则里要求「同条命令里下载+执行」，
-  // 变量中转（$d=iwr …; iex $d）或单独 iex 执行已编码命令漏网——这里直接盯 iex 本体。
-  { label: 'pwsh 直接执行下载内容', re: /\b(?:iex|Invoke-Expression)\b/i },
-  { label: 'pwsh 绕过执行策略', re: /(?:-ep\b|-ExecutionPolicy\s+(?:Bypass|Unrestricted))/i },
-  { label: 'pwsh 隐藏窗口执行', re: /(?:-w\s+(?:hidden|1)\b|-WindowStyle\s+Hidden)/i },
-  { label: 'bash 解码后执行', re: /(?:base64|openssl)\s+(?:-d|--decode|-D)[^\n|;]*\|\s*(?:ba|z|k|da)?sh\b/i },
-  { label: 'xxd/printf 解码执行', re: /\b(?:xxd\s+-[rp]|printf\s+(?:\\x|0x))[^\n|;]*\|\s*(?:ba|z|k|da)?sh\b/i },
+  { label: 'pwsh 直接执行下载内容', re: /\b(?:iex|Invoke-Expression)(?:\s|$)/i },
+  // 管道、重定向、解释器选项由结构检查处理，不能在拼接后的参数里扫描。
+
 ]
+
+// A bounded lexical view, not a complete shell parser. Keep argument data separate
+// from operators and expansions; never evaluate the supplied command.
+function substitutionAt (text, start, depth = 0) {
+  if (depth > 12) return null
+  const backtick = text[start] === '`'
+  if (!backtick && !text.startsWith('$(', start)) return null
+  const begin = start + (backtick ? 1 : 2)
+  let quote = ''
+  let nesting = 1
+  for (let i = begin; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\\' && quote !== "'") { i++; continue }
+    if (backtick) {
+      if (ch === '`') return { code: text.slice(begin, i), end: i }
+      continue
+    }
+    if (quote === "'") { if (ch === "'") quote = ''; continue }
+    if (ch === '`' || text.startsWith('$(', i)) {
+      const nested = substitutionAt(text, i, depth + 1)
+      if (nested) { i = nested.end; continue }
+    }
+    if (quote === '"') { if (ch === '"') quote = ''; continue }
+    if (ch === "'" || ch === '"') quote = ch
+    else if (ch === '(') nesting++
+    else if (ch === ')' && --nesting === 0) return { code: text.slice(begin, i), end: i }
+  }
+  return null
+}
 
 function shellCommands (text) {
   const commands = []
   let words = []
+  let substitutions = []
+  let redirects = []
+  let redirect = false
   let word = ''
   let started = false
   let quote = ''
+  let ansi = false
   const pushWord = () => {
-    if (started) words.push(word)
+    if (started) {
+      if (redirect) { redirects.push(word); redirect = false } else words.push(word)
+    }
     word = ''
     started = false
   }
-  const pushCommand = () => {
+  const pushCommand = (operator = '') => {
     pushWord()
-    if (words.length) commands.push(words)
+    if (words.length) commands.push({ words, substitutions, redirects, operator })
     words = []
+    substitutions = []
+    redirects = []
+    redirect = false
   }
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]
     if (quote === "'") {
-      if (ch === "'") quote = ''
-      else word += ch
+      if (ch === "'") { quote = ''; ansi = false }
+      else if (ansi && ch === '\\' && /^x[\da-f]{2}/i.test(text.slice(i + 1))) {
+        word += String.fromCharCode(parseInt(text.slice(i + 2, i + 4), 16)); i += 3
+      } else word += ch
       continue
+    }
+    if (ch === '`' || text.startsWith('$(', i)) {
+      const sub = substitutionAt(text, i)
+      if (sub) {
+        const token = `__QQ_SUB_${substitutions.length}__`
+        substitutions.push({ ...sub, token })
+        word += token
+        started = true
+        i = sub.end
+        continue
+      }
     }
     if (quote === '"') {
       if (ch === '"') quote = ''
@@ -69,16 +113,25 @@ function shellCommands (text) {
       } else word += ch
       continue
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === '$' && text[i + 1] === "'") {
+      ansi = true; quote = "'"; started = true; i++
+    } else if (ch === "'" || ch === '"') {
       quote = ch
       started = true
     } else if (ch === '\\' && i + 1 < text.length) {
       started = true
-      if (text[++i] !== '\n') word += text[i]
+      // Preserve Windows paths and printf escapes for their respective rules.
+      if (/^(?:[a-z]:|HKLM|HKEY_)/i.test(word) || text[i + 1] === 'x') word += ch
+      else if (text[++i] !== '\n') word += text[i]
     } else if (ch === '#' && !started) {
       while (i + 1 < text.length && text[i + 1] !== '\n') i++
+    } else if (ch === '>') {
+      pushWord(); redirect = true
+      if (text[i + 1] === '>') i++
     } else if (';|&()\n'.includes(ch)) {
-      pushCommand()
+      const double = (ch === '|' || ch === '&') && text[i + 1] === ch
+      pushCommand(double ? ch + ch : ch)
+      if (double) i++
     } else if (/\s/.test(ch)) {
       pushWord()
     } else {
@@ -94,6 +147,7 @@ function commandWords (words) {
   let i = 0
   while (i < words.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue }
+    if (['if', 'then', 'elif', 'else', 'do', 'while', 'until', '!', '{'].includes(words[i])) { i++; continue }
     const name = words[i].split('/').pop()
     if (!['sudo', 'env', 'command'].includes(name)) break
     i++
@@ -272,6 +326,14 @@ function inspectWords (input, depth) {
     const index = args.findIndex((arg) => arg === '--command' || /^-[^-]*c/.test(arg))
     if (index >= 0 && args[index + 1] !== undefined) return inspectShell(args[index + 1], depth + 1)
   }
+  if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(name)) {
+    if (args.some((arg, i) => /^-(?:ep|ExecutionPolicy)$/i.test(arg) && /^(?:Bypass|Unrestricted)$/i.test(args[i + 1] || ''))) return { label: 'pwsh 绕过执行策略' }
+    if (args.some((arg, i) => /^-(?:w|WindowStyle)$/i.test(arg) && /^(?:hidden|1)$/i.test(args[i + 1] || ''))) return { label: 'pwsh 隐藏窗口执行' }
+    const encoded = args.findIndex((arg) => /^-(?:enc|EncodedCommand)$/i.test(arg))
+    if (encoded >= 0 && args[encoded + 1]) return { label: 'pwsh 编码命令执行' }
+    const index = args.findIndex((arg) => /^-(?:c|command)$/i.test(arg))
+    if (index >= 0) return inspectShell(args.slice(index + 1).join(' '), depth + 1)
+  }
   if (/^python(?:\d+(?:\.\d+)*)?$/.test(name)) {
     const index = args.indexOf('-c')
     if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'python', depth + 1)
@@ -283,39 +345,72 @@ function inspectWords (input, depth) {
   return null
 }
 
-function inspectShell (text, depth = 0) {
+const SHELL_NAME = /^(?:ba|da|z|k|a)?sh$/i
+
+function producerRisk (input, depth) {
+  const [executable = '', ...args] = commandWords(input)
+  const name = executable.split('/').pop().toLowerCase()
+  if (['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod'].includes(name)) return { label: '下载后直接执行' }
+  if (['base64', 'openssl'].includes(name) && args.some((arg) => /^-(?:d|D|-[Dd]ecode)$/.test(arg))) return { label: 'bash 解码后执行' }
+  if ((name === 'xxd' && args.some((arg) => /^-[rp]/.test(arg))) ||
+      (name === 'printf' && args.some((arg) => /(?:\\x|0x)[\da-f]{2}|\\[0-7]{3}/i.test(arg)))) return { label: 'xxd/printf 解码执行' }
+  // Only inspect literal output when it is fed into execution, not ordinary echo.
+  if (name === 'echo') return inspectShell(args.filter((arg, i) => i !== 0 || !/^-[neE]+$/.test(arg)).join(' '), depth + 1)
+  if (name === 'printf' && args[0] === '%s') return inspectShell(args.slice(1).join(''), depth + 1)
+  if (name === 'printf' && args.length === 1) return inspectShell(args[0], depth + 1)
+  return null
+}
+
+function tokenIsCommand (script, token, depth) {
+  if (depth > 12) return false
+  return shellCommands(script).some(({ words }) => {
+    const command = commandWords(words)
+    if (command[0]?.includes(token)) return true
+    if (!SHELL_NAME.test((command[0] || '').split('/').pop())) return false
+    const index = command.findIndex((arg, i) => i > 0 && (arg === '--command' || /^-[^-]*c/.test(arg)))
+    return index >= 0 && tokenIsCommand(command[index + 1] || '', token, depth + 1)
+  })
+}
+
+function inspectShell (text, depth = 0, outputExecuted = false) {
   if (depth > 12) return null
-  for (const words of shellCommands(text)) {
+  // This operator pattern must ignore quoted examples and comments.
+  if (/:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/.test(maskStrings(text))) return { label: 'forkshell 炸弹' }
+  const commands = shellCommands(text)
+  for (let i = 0; i < commands.length; i++) {
+    const { words, substitutions, redirects, operator } = commands[i]
+    const command = commandWords(words)
+    const name = (command[0] || '').split('/').pop()
+    const shellIndex = SHELL_NAME.test(name) ? command.findIndex((arg, index) => index > 0 && (arg === '--command' || /^-[^-]*c/.test(arg))) : -1
+    for (const sub of substitutions) {
+      // Expansion code runs even inside echo/grep arguments. Its output is code
+      // only when used at an execution position, including inside shell -c.
+      const executed = command[0]?.includes(sub.token) || (shellIndex >= 0 && tokenIsCommand(command[shellIndex + 1] || '', sub.token, depth + 1))
+      const danger = inspectShell(sub.code, depth + 1, Boolean(executed))
+      if (danger) return danger
+    }
+    if (redirects.some((target) => /^\/dev\/(?:sd|nvme|disk)/.test(target))) return { label: '直接写磁盘' }
+    const nextName = (commandWords(commands[i + 1]?.words || [])[0] || '').split('/').pop()
+    if (outputExecuted || (operator === '|' && SHELL_NAME.test(nextName))) {
+      const danger = producerRisk(words, depth)
+      if (danger) return danger
+    }
     const danger = inspectWords(words, depth)
     if (danger) return danger
   }
   return null
 }
 
-/** 判断命令是否命中静态危险规则；返回中文标签，否则返回 null。
- *  同时探测部分 shell/解释器包装及编码变形；不能保证识别动态生成的全部命令。 */
+/** 静态启发式：检查执行位置及部分 shell/解释器包装，不执行或全局解码参数。
+ *  不能保证识别动态生成、外部脚本或所有 shell 方言；不是执行沙箱。 */
 export function isDangerousCommand (command) {
   const text = String(command || '')
-  if (!text.trim()) return null
-  for (const rule of DANGER_RULES) {
-    if (rule.re.test(text)) return { label: rule.label }
-  }
-  const parsed = inspectShell(text)
-  if (parsed) return parsed
-  // 解码探测：把命令里可还原的片段解出来再判一轮。命中同一条规则，标签标注「变形」。
-  for (const variant of decodeVariants(text)) {
-    for (const rule of DANGER_RULES) {
-      if (rule.re.test(variant)) return { label: rule.label, label2: `${rule.label}（编码/变形绕过）`, obfuscated: true }
-    }
-    const parsedVariant = inspectShell(variant)
-    if (parsedVariant) return { ...parsedVariant, label2: `${parsedVariant.label}（编码/变形绕过）`, obfuscated: true }
-  }
-  return null
+  return text.trim() ? inspectShell(text) : null
 }
 
 /**
  * 从命令里挖出可能的「隐藏载荷」并还原：base64 / hex / $'\x..' 拼接 / 反斜杠插空。
- * 只做探测用——解出来的文本不执行，只喂给同一套规则再判一遍。宁多勿漏（这里只影响是否要确认）。
+ * 保留的解码诊断工具，不参与审批判断：脱离执行位置的解码结果会误伤普通数据。
  */
 export function decodeVariants (command) {
   const text = String(command || '')
