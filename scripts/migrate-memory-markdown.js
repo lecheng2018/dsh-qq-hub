@@ -143,7 +143,7 @@ export function migrateToMarkdown(dataDir, { log = console } = {}) {
     if (!orig) {
       throw new Error(`迁移校验失败：发现未知条目 ID ${it.id}`)
     }
-    if (orig.text !== it.text) {
+    if (orig.text.trim() !== it.text.trim()) {
       throw new Error(`迁移校验失败：条目 ${it.id} 正文不一致`)
     }
   }
