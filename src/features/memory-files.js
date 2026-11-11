@@ -511,6 +511,8 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       scopeSnapshots.clear()
     },
 
+    reload: reloadAllScopes,
+
     stats: () => ({
       scopes: scopeSnapshots.size,
       items: assembleState().items.length,
