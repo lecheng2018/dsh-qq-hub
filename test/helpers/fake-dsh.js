@@ -2,7 +2,6 @@
 // 「模型」是个脚本：按用户消息内容决定回什么、调不调工具，用来验证插件的整条链路。
 
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export function createFakeDsh({ brain, admitImages = true } = {}) {
@@ -172,14 +171,7 @@ export function createFakeDsh({ brain, admitImages = true } = {}) {
   }
 
   async function call(path, body, headers = {}, opts = {}) {
-    // 默认模拟面板当前标签页已持有联动密钥；安全测试可显式 admin:false 模拟未授权调用。
     headers = { host: '127.0.0.1', ...headers }
-    let bridge = null
-    try {
-      bridge = JSON.parse(readFileSync(join(process.env.AURABOT_DATA_DIR || '', 'config.json'), 'utf8')).bridge
-    } catch {}
-    if (opts.admin !== false && bridge?.http && bridge?.token && !path.startsWith('/open/')
-      && !headers.authorization && !headers['x-qq-hub-token']) headers['x-qq-hub-token'] = bridge.token
     // P1 §4.9：副作用路径已拒绝 GET/HEAD（405）。与真实面板客户端（client/client.js）对齐：
     // 带 body → POST，不带 body → GET（只读路径）。有副作用的接口调用必须显式传 body（至少 {}），
     // 否则会得到 405——那是防护本意，不是脚手架缺陷。opts.method 可强制指定（测防护用）。

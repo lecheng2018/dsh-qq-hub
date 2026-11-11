@@ -45,7 +45,7 @@ async function fixture() {
   }
 }
 
-test('面板管理接口要求有效联动密钥；合法只读接口仍可匿名读取', async () => {
+test('面板管理接口无需联动密钥；开放接口仍要求密钥', async () => {
   const f = await fixture()
   try {
     const workspace = await f.fake.ctx.workspaceRegistry.create(join(f.dataDir, 'ws', 'delete-me'), 'delete-me')
@@ -55,83 +55,57 @@ test('面板管理接口要求有效联动密钥；合法只读接口仍可匿�
       if (index >= 0) f.fake.workspaces.splice(index, 1)
     }
     const moduleDir = join(f.dataDir, 'modules', 'admin-auth-regression')
-    const configBefore = f.api.getConfig()
 
-    for (const path of ['/save', '/modules/create', '/workspaces/delete']) {
-      const body = path === '/save'
-        ? { ownerName: 'unauthorized' }
-        : path === '/modules/create'
-          ? { id: 'admin-auth-regression', name: 'unauthorized' }
-          : { id: workspace.id }
-      const denied = await f.fake.call(path, body, {}, { admin: false })
-      assert.equal(denied.status, 401, `${path}: 缺少密钥必须返回真实 HTTP 401`)
-      const wrong = await f.fake.call(path, body, { 'x-qq-hub-token': 'wrong-secret' })
-      assert.equal(wrong.status, 401, `${path}: 错误密钥必须返回真实 HTTP 401`)
-    }
-    const moduleWrite = await f.fake.call('/ext/echo/write', {}, {}, { admin: false })
-    assert.equal(moduleWrite.status, 401, '模块前缀写路由同样要求管理密钥')
-    const moduleWriteAuthorized = await f.fake.call('/ext/echo/write', {}, { 'x-qq-hub-token': TOKEN })
-    assert.notEqual(moduleWriteAuthorized.status, 401)
+    const moduleWrite = await f.fake.call('/ext/echo/write', {})
+    assert.notEqual(moduleWrite.status, 401, '模块前缀写路由不再要求管理密钥')
 
-    assert.equal(f.api.getConfig().ownerName, configBefore.ownerName, '/save 不应产生未授权配置变更')
-    assert.equal(existsSync(moduleDir), false, '模块目录不应在未授权时创建')
-    assert.ok(f.fake.ctx.workspaceRegistry.list().some((w) => w.id === workspace.id), '工作区不应在未授权时删除')
+    const saved = await f.fake.call('/save', { ownerName: 'panel-user' })
+    assert.equal(saved.status, 200)
+    assert.equal(f.api.getConfig().ownerName, 'panel-user')
+
+    const created = await f.fake.call('/modules/create', { id: 'admin-auth-regression', name: 'panel-user' })
+    assert.equal(created.status, 200)
+    assert.equal(created.json().ok, true)
+    assert.equal(existsSync(moduleDir), true)
+
+    const deleted = await f.fake.call('/workspaces/delete', { id: workspace.id })
+    assert.equal(deleted.status, 200)
+    assert.equal(f.fake.ctx.workspaceRegistry.list().some((w) => w.id === workspace.id), false)
 
     const read = await f.fake.call('/state')
     assert.equal(read.status, 200)
     assert.equal(read.json().ok, true)
 
     const protectedRead = await f.fake.call('/open/info')
-    assert.equal(protectedRead.status, 401, '原有受保护的只读开放接口必须保留鉴权和真实 401')
+    assert.equal(protectedRead.status, 401, '开放只读接口仍要求密钥')
     const authorizedRead = await f.fake.call('/open/info', undefined, { 'x-qq-hub-token': TOKEN })
     assert.equal(authorizedRead.status, 200)
     assert.equal(authorizedRead.json().ok, true)
 
-    const resetDenied = await f.fake.call('/bridge/token/reset', {}, {}, { admin: false })
-    assert.equal(resetDenied.status, 401)
-    assert.equal(f.api.getConfig().bridge.token, TOKEN, '未授权时不得旋转或签发密钥')
-    const resetAuthorized = await f.fake.call('/bridge/token/reset', {}, { 'x-qq-hub-token': TOKEN })
-    assert.equal(resetAuthorized.status, 403, '有效密钥也不能通过 API 轮换')
+    const reset = await f.fake.call('/bridge/token/reset', {})
+    assert.equal(reset.status, 403, '面板仍不提供联动密钥轮换')
     assert.equal(f.api.getConfig().bridge.token, TOKEN)
 
-    const csrf = await f.fake.call('/save', { ownerName: 'cross-site' }, {
-      'x-qq-hub-token': TOKEN,
-      origin: 'http://evil.example',
-    })
-    assert.equal(csrf.status, 403, '有效密钥不能绕过 CSRF 防护')
-    assert.equal(f.api.getConfig().ownerName, configBefore.ownerName)
-
-    const saved = await f.fake.call('/save', { ownerName: 'authorized' }, { 'x-qq-hub-token': TOKEN })
-    assert.equal(saved.status, 200)
-    assert.equal(f.api.getConfig().ownerName, 'authorized')
-
-    const created = await f.fake.call('/modules/create', { id: 'admin-auth-regression', name: 'authorized' }, { 'x-qq-hub-token': TOKEN })
-    assert.equal(created.status, 200)
-    assert.equal(created.json().ok, true)
-    assert.equal(existsSync(moduleDir), true)
-
-    const deleted = await f.fake.call('/workspaces/delete', { id: workspace.id }, { 'x-qq-hub-token': TOKEN })
-    assert.equal(deleted.status, 200)
-    assert.equal(f.fake.ctx.workspaceRegistry.list().some((w) => w.id === workspace.id), false)
+    const csrf = await f.fake.call('/save', { ownerName: 'cross-site' }, { origin: 'http://evil.example' })
+    assert.equal(csrf.status, 403, '移除面板密钥不影响 CSRF 防护')
+    assert.equal(f.api.getConfig().ownerName, 'panel-user')
   } finally {
     await f.dispose()
   }
 })
 
-test('已有密钥可校验并管理面板，即使开放 HTTP 暂时关闭', async () => {
+test('关闭开放接口不影响面板写操作或密码强度校验', async () => {
   const f = await fixture()
   try {
     await f.api.setConfig({ ...f.api.getConfig(), bridge: { ...f.api.getConfig().bridge, http: false } })
-    assert.equal((await f.fake.call('/bridge/verify')).json().ok, false)
-    assert.equal((await f.fake.call('/bridge/verify', undefined, { 'x-qq-hub-token': TOKEN })).json().ok, true)
-    const enabled = await f.fake.call('/save', { bridge: { http: true } }, { 'x-qq-hub-token': TOKEN })
+    const enabled = await f.fake.call('/save', { bridge: { http: true } })
     assert.equal(enabled.status, 200)
     assert.equal(f.api.getConfig().bridge.http, true)
     await f.api.setConfig({ ...f.api.getConfig(), bridge: { ...f.api.getConfig().bridge, http: false } })
     for (const path of ['/snowluma/set-password', '/snowluma/reset-password', '/save']) {
       const body = path === '/save' ? { snowluma: { webuiPassword: 'weak' } } : { password: 'weak' }
-      const result = await f.fake.call(path, body, { 'x-qq-hub-token': TOKEN })
-      assert.notEqual(result.status, 401, `${path} 不应被开放接口开关误拦`)
+      const result = await f.fake.call(path, body)
+      assert.notEqual(result.status, 401, `${path} 不再要求联动密钥`)
     }
     const open = await f.fake.call('/open/info')
     assert.equal(open.status, 401)
