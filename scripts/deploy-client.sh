@@ -2,8 +2,8 @@
 # 把本仓库的改动部署到 DSH 线上运行目录。
 # 该目录属 Harness，普通账号不可写，必须 sudo 执行。
 set -euo pipefail
-SRC_ROOT="/home/user/repos/dsh-qq-hub"
-DST_ROOT="/home/user/harness/.dsh/profiles/web/node_modules/dsh-qq-hub"
+SRC_ROOT="${QQHUB_DEPLOY_SRC:-/path/to/dsh-qq-hub}"
+DST_ROOT="${QQHUB_DEPLOY_DST:-/path/to/.dsh/profiles/web/node_modules/dsh-qq-hub}"
 
 # 只同步真正会变、且改过的文件；不动 node_modules / 用户数据
 FILES=(
@@ -49,7 +49,7 @@ for f in "${FILES[@]}"; do
     chown --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
     chmod --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
   else
-    chown user:user "$DST_ROOT/$f" 2>/dev/null || true
+    chown --reference="$DST_ROOT" "$DST_ROOT/$f" 2>/dev/null || true
   fi
   cmp -s "$SRC_ROOT/$f" "$DST_ROOT/$f" || { echo "部署后校验不一致：$f"; exit 1; }
   echo "已部署并校验 $f"
