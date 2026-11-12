@@ -73,6 +73,17 @@
 
 验收：生产 import 扫描无旧实现；包清单无旧内核/SQLite；解包后 host 入口 smoke 通过。
 
+删除候选与边界（仅盘点，未执行删除）：
+
+- 后续删除：`src/chat/hub.js`、`src/host/pipeline.js`、`src/kernel/legacy-fallback.js`、`src/features/memory-sqlite.js`，以及仅被它们使用的 kernel 装配件。
+- 必须保留：`src/kernel/mw-ratelimit.js` 被当前核心直接引用；`mw-tracing.js` 是其共享依赖。工作区、群状态、回复、Outbox、会话、权限参与者和独立媒体服务均已迁出，不得随旧文件误删。
+- 直接旧实现行为测试：`recent-media`、`known-chats`、`selfcheck-regressions`、`group-deliver-order`、`modular-delivery-legacy` 等，需先逐项对照当前核心覆盖，再决定转换或退出。
+- 管道专项：`kernel-legacy-fallback`、`kernel-egress-cutover`、`kernel-tracing`、`kernel-context-mw`、`kernel-command-router`、`kernel-ingress-guard` 等随对应实现评审，不能冒充当前核心覆盖。
+- SQLite 专项：`memory-sqlite-store` 与 `memory-quality-round2` 中直接读取旧实现的断言随旧后端退出；迁移器及静态旧库夹具单独保留。
+- 仅引用旧路径的架构/纯函数断言（workspace、clockline、模型、面板、发送闸等）改为检查当前归属，不因文件删除而丢掉行为断言。
+- `scripts/deploy-client.sh` 仍列旧 hub/pipeline 并做旧文件 grep；正式删除时必须同步改为当前核心文件清单和 smoke 校验。
+- 当前生产 import 未发现上述旧实现入口；`src/host/pipeline.js` 仍 import `legacy-fallback.js`，所以只读扫描不能证明整个 kernel 目录都可删。
+
 ### K-03E：真实环境与发布门禁
 
 按顺序执行并回填 M5 runbook：
