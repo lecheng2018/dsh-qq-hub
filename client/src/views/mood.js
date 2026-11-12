@@ -21,8 +21,32 @@ function Mood({ st, draft, setDraft, toast }) {
   const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
   const times = draft.memory.consolidateTimes || []
   const setTime = (i, v) => { const t = times.slice(); t[i] = v; setDraft(setPath(draft, 'memory.consolidateTimes', t)) }
+  // 蒸馏用模型选择器（1.3.66）：蒸馏要纯 JSON 输出，思考型模型容易写成报告正文。
+  // 选项来自 /models（和模型页同一份清单），空值 = 跟随主模型。
+  const [modelList, setModelList] = useState(null)
+  const modelKey = (m) => m.provider + '::' + m.model
+  const distillModelValue = () => {
+    const dm = (draft.memory && draft.memory.distillModel) || {}
+    return dm.provider && dm.model ? dm.provider + '::' + dm.model : ''
+  }
+  const distillModelOptions = () => {
+    const base = [{ value: '', label: '跟随主模型', desc: '上面「聊天用的模型」' }]
+    const nameCount = {}
+    for (const m of (modelList || [])) nameCount[m.name] = (nameCount[m.name] || 0) + 1
+    const opts = base.concat((modelList || []).map((m) => ({
+      value: modelKey(m),
+      label: nameCount[m.name] > 1 ? m.name + '（' + m.model + '）' : m.name,
+      desc: m.provider,
+      group: m.provider,
+    })))
+    const cur = distillModelValue()
+    return cur && !opts.some((o) => o.value === cur)
+      ? opts.concat([{ value: cur, label: cur.split('::').slice(1).join('::'), desc: '（DSH 里没找到）' }])
+      : opts
+  }
   const memOn = modOn(st, 'memory')
   useEffect(() => { if (memOn) { load(''); loadIns() } }, [memOn])
+  useEffect(() => { if (!memOn) return; get('/models').then((r) => setModelList(r.list || [])).catch(() => setModelList([])) }, [memOn])
   useEffect(() => { if (!memOn) return; const t = setTimeout(() => load(q), 250); return () => clearTimeout(t) }, [q])
   const last = st.memory && st.memory.lastConsolidate
   const moodCard = !modOn(st, 'mood') ? h(ModOff, { name: '心情' }) : h(Card, { title: '心情', right: f.sw('mood.enabled'), desc: '被夸、被哄、被凶都会影响她的心情（对她说的话、主人的话影响更大），过一阵子慢慢回到平常。心情好时她话多、更爱发表情和语音、回得快、群里更爱插话；心情差时话少、回得慢、少发表情，还会带点小脾气。' },
@@ -43,7 +67,12 @@ function Mood({ st, draft, setDraft, toast }) {
       ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
         ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
     h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。加完可以点「从历史学」立刻从他**过去说过的话**里提炼（DSH 会话记录里存着群友原话，比聊天流水留得久），不用干等他再聊；以后每次整理记忆也会拿他最近的原话更新画像。**学成后自动生成一张该群专属的「语感人设卡」**＝她原来的人设底卡 + 借来的说话方式段（人设页可见；你的底卡一个字不动，那群你手动指定过别人设卡的话蒸馏不抢槽位）。借的是说话方式，不冒充人；他近期原话不足 15 句就不学。' },
-      h(DistillPanel, { toast, onChanged: () => { load() } })),
+      h(DistillPanel, { toast, onChanged: () => { load() } }),
+      h(Row, { label: '蒸馏用模型', hint: '留空跟随主模型。蒸馏要输出结构化 JSON：思考型模型（思考关不掉的那种）会把额度花在分析正文上，回包变成 Markdown 报告。主模型是这类、又老是学到空画像时，在这儿换一个非思考的模型。' },
+        h(Select, { value: distillModelValue(), width: 260, options: distillModelOptions(), onChange: (v) => {
+          const [p, ...m] = v.split('::')
+          setDraft(setPath(draft, 'memory.distillModel', v ? { provider: p, model: m.join('::') } : { provider: '', model: '' }))
+        } }))),
     h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang'), desc: '和上面不同：这个学的是**词**，不是人。从每个群的聊天里找这个群在用的黑话、梗、圈内称呼——词频统计挑候选（不花钱），模型判断哪些真是黑话、什么意思（每群每天一次调用）。她和这个群聊天时会看到黑话本，听懂了就用，不会硬套。' },
       (st.config.memory || {}).slang !== true ? h('div', { className: 'ab-muted ab-small' }, '开关关着：现在只统计、不判断也不写库。打开后下次整理记忆时开始学。') : null,
       h(SlangBook, { toast, onChanged: () => { load() } })),

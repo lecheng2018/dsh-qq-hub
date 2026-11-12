@@ -1,0 +1,17 @@
+# 统一换行：仓库里一律 LF。
+# 不这样规定的话，Windows 上编辑/构建会把 CRLF 写进 git，
+# 每次 diff 都变成「整文件重写」（几百行假改动，评审没法看）。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.tgz binary
+*.zip binary
+
+# 构建产物必须保持 LF（esbuild 在 Windows 上默认输出 CRLF）
+client/client.js text eol=lf
