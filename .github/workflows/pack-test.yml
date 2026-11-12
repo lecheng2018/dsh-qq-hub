@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '测试包版本号（形如 1.3.65-test.YYYYMMDD.N）'
+        description: '测试包版本号（1.3.x-test.YYYYMMDD.N 或 1.4.x-beta.N）'
         required: true
-        default: '1.3.65-test.20261109.8'
+        default: '1.4.0-beta.1'
       release_title:
         description: 'Release 标题（留空自动生成）'
         required: false
@@ -45,8 +45,8 @@ jobs:
           node - <<'NODE'
           const fs = require('node:fs')
           const v = process.env.VERSION || ''
-          if (!/^1\.3\.\d{2}-test\.\d{8}\.\d+$/.test(v)) {
-            console.error(`bad version: "${v}"（要求形如 1.3.65-test.20261109.8）`)
+          if (!/^1\.(?:3\.\d{2}-test\.\d{8}\.\d+|4\.\d+(?:-beta\.\d+)?)$/.test(v)) {
+            console.error(`bad version: "${v}"（要求形如 1.3.65-test.20261109.8 或 1.4.0-beta.1）`)
             process.exit(2)
           }
           const p = JSON.parse(fs.readFileSync('package.json', 'utf8'))
