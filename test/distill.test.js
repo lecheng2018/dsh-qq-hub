@@ -8,10 +8,64 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   collectMemberLines, enoughEvidence, evidenceFunnel, describeFunnel, buildDistillPrompt, dedupConvo,
-  parseDistillProfile, normalizeProfile, mergeProfile, renderDistillHint,
+  parseDistillProfile, normalizeProfile, mergeProfile, renderDistillHint, safeParseJson, recognizedFields,
 } from '../src/features/distill.js'
 
 const L = (uid, text, t = 0) => ({ uid, text, t, who: 'u' + uid })
+
+// 2026-11-12 真实事故：同一份充足证据（50 句可用）连续三次被判「空画像」。
+// 日志里模型回包的键名是「句子架构」「口头禅」，另一次自创 {"learned_style":{...}}，
+// 而解析只认 exchanges/syntax/... → 全落空 → 误报「原话不够代表说话风格」。
+// 下面三种形态都按真实日志构造。
+test('键名容错：中文键也能认出来（模型不按英文名回包是常态）', () => {
+  const zh = parseDistillProfile(JSON.stringify({
+    句子架构: ['先@对象，再接判断或动作', '“可能是…”先猜异常原因'],
+    口头禅: ['斩了一波（说服务被批量限制时）', '可能是…（判断异常原因时）'],
+    性格: ['遇登录问题先猜梯子或网络'],
+    他从不: ['不用纯图片代替答复'],
+  }))
+  assert.deepEqual(zh.syntax, ['先@对象，再接判断或动作', '“可能是…”先猜异常原因'], '句子架构 → syntax')
+  assert.equal(zh.catchphrases.length, 2, '口头禅 → catchphrases')
+  assert.deepEqual(zh.persona, ['遇登录问题先猜梯子或网络'], '性格 → persona')
+  assert.deepEqual(zh.never, ['不用纯图片代替答复'], '他从不 → never')
+})
+
+test('键名容错：自创外层命名空间也能拆开（learned_style 形态）', () => {
+  const nested = parseDistillProfile(JSON.stringify({
+    learned_style: {
+      tone: '简短犀利，带嘲讽和挑衅意味',
+      typical_phrases: ['活', '就这', '毫无水平', '闹麻了'],
+      sentence_structure: ['短句连发'],
+    },
+  }))
+  assert.equal(nested.tone[0], '简短犀利，带嘲讽和挑衅意味', 'tone 取到')
+  assert.equal(nested.catchphrases.length, 4, 'typical_phrases → catchphrases')
+  assert.deepEqual(nested.syntax, ['短句连发'], 'sentence_structure → syntax')
+})
+
+test('键名容错：英文原名优先于别名，不串字段', () => {
+  const both = parseDistillProfile(JSON.stringify({
+    syntax: ['英文原键'],
+    句子架构: ['中文别名'],
+    never: ['他不用客套话'],
+    avoid: ['旧字段避免项'],
+  }))
+  assert.deepEqual(both.syntax, ['英文原键'], '同名时英文键优先')
+  assert.deepEqual(both.never, ['他不用客套话'], 'never 不被 avoid 抢')
+  assert.deepEqual(both.avoid, ['旧字段避免项'], '旧 avoid 仍可读')
+})
+
+test('截断容错：回包被截断时仍能抠出内容并报出识别到的字段', () => {
+  // 真实日志形态：数组写到一半就断了
+  const truncated = '{"句子架构":["先@对象，再接判断或动作","“可能是…”先猜异常原因"],"口头禅":["斩了一波'
+  const obj = safeParseJson(truncated)
+  assert.ok(obj, '截断也能补括号解析出对象')
+  const fields = recognizedFields(obj)
+  assert.equal(fields.syntax, 2, '截断后仍认出 syntax')
+  // 完整回包时不要误判成截断
+  assert.ok(safeParseJson('{"syntax":["短句"]}'), '完整 JSON 正常解析')
+  assert.equal(safeParseJson('完全不是 JSON'), null)
+})
 
 test('证据清洗：复读转发只算一句，纯分享卡片/链接不算话', () => {
   const lines = [
@@ -133,9 +187,16 @@ test('提示词（新模板）：exchanges 首要、口头禅带「什么时候�
   assert.match(p.system, /exchanges（最重要）/, '对话对是首要产出')
   assert.match(p.system, /他的原话（逐字，别改写）/, '回答逐字')
   assert.match(p.system, /什么时候用/, '口头禅带语境')
-  assert.match(p.system, /never（从不用）/, '负向词表')
+  assert.match(p.system, /never：他从不用的词/, '负向词表')
   assert.match(p.system, /可观察行为/, '性格写行为不写标签')
   assert.match(p.system, /换成群里另一个人/, 'misreading 自检')
+  // 键名只能用英文：中英并置会诱导模型输出「句子架构」这类中文键，
+  // 而解析只认英文名 → 整份画像被判空（2026-11-12 真实事故）
+  assert.match(p.system, /键名硬要求/, '明确要求英文键名')
+  assert.match(p.system, /不要把键名翻译成中文/, '禁止中文键')
+  assert.match(p.system, /别写 "learned_style"/, '禁止自创外层命名空间')
+  assert.doesNotMatch(p.system, /syntax（句子架构）/, '不再中英并置')
+  assert.doesNotMatch(p.system, /catchphrases（口头禅）/, '不再中英并置')
   assert.match(p.text, /群聊原文（用来挑一问一答的对话对/, '交错原文进 prompt')
   assert.match(p.text, /小李：这游戏又崩了？\n他：草 这也能崩/, '按 uid 标「他：」')
   assert.match(p.text, /句子架构：旧架构/, '旧画像按新字段回填')
@@ -234,13 +295,15 @@ test('旧坏数据自愈：samples 是句数（如 44）的存量画像，渲染
 })
 
 test('接线：整理不再学（管线移交 distill 模块）、群聊时注入、面板与接口都在', () => {
-  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
+  // #78 之后 memory.js 只是门面：档案与注入在 memory-archive.js，模型学习在 memory-learning.js
+  const learn = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
   const archive = readFileSync(new URL('../src/features/memory-archive.js', import.meta.url), 'utf8')
   // 结构红线：consolidate 不再耦合蒸馏管线（避免两边各跑一遍重复花钱），学习调度移交 distill 模块自身 tick
   assert.doesNotMatch(mem, /learnDistill\(/, 'consolidate 不再调用 learnDistill')
-  assert.doesNotMatch(mem, /reasoningEffort: 'none'/, '蒸馏不再钉死关思考（推理模型会吃掉全部预算不回正文）')
-  assert.match(archive, /renderDistillHint\(t\.name \|\| t\.uid, distillOf/, '群聊注入画像')
-  assert.match(mem, /dedupConvo\(hist\.lines\)\.slice\(-80\)/, '历史学习传去重对话原文')
+  assert.doesNotMatch(learn, /reasoningEffort: 'none'/, '蒸馏不再钉死关思考（推理模型会吃掉全部预算不回正文）')
+  assert.match(archive, /renderDistillHint\(t\.name \|\| t\.uid, distillOf/, '群聊注入画像（档案侧）')
+  assert.match(learn, /dedupConvo\(hist\.lines\)\.slice\(-80\)/, '历史学习传去重对话原文')
   // distill 模块自持 L0/L1 调度（activity 计数 + 定时 tick）
   const dist = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(dist, /api\.on\('activity'/, '模块 L0 计数挂 activity')
