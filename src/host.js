@@ -34,6 +34,7 @@ import { createChatLog, createChatLogApi } from './chat/chat-log.js'
 import { createQuestionRegistry } from './chat/questions.js'
 import { createApprovalRegistry } from './chat/approvals.js'
 import { createRecentMedia } from './chat/recent-media.js'
+import { createInboundAudio } from './chat/inbound-audio.js'
 import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
@@ -257,6 +258,7 @@ export function apply(ctx) {
   }
 
   const recentMedia = createRecentMedia({ log: logger.child('recent-media') })
+  const inboundAudio = createInboundAudio({ onebot, dsh: ctx, localApi: local, log: logger.child('inbound-audio') })
   const interactions = {
     questions: createQuestionRegistry({
       deliver: (chatId, text) => hub.sendText(chatId, text, undefined, [], undefined),
@@ -276,6 +278,7 @@ export function apply(ctx) {
     chatLog,
     interactions,
     recentMedia,
+    inboundAudio,
     dsh: ctx,
     getConfig,
     egressRef,
@@ -353,6 +356,7 @@ export function apply(ctx) {
     ? createModularCore({
         dsh: ctx,
         onebot,
+        inboundAudio,
         mods: {
           // 惰性代理：mods 在下方才创建；每事件现取（模块热重载即时生效，与 legacy 同语义）
           contextFor: (args) => (mods ? mods.contextFor(args) : ''),
