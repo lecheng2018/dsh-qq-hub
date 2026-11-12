@@ -32,8 +32,12 @@ export default {
       personaText: () => currentPersonaText(api.config().persona.current),
       onDistillLearned: async (gid) => { refreshCard(gid) },
       reflectionContext: false,
+      styleContext: false,
       reflectImpl: (chat, transcript, genSignal) => {
         try { return api.use('reflection')?.reflect(chat, transcript, genSignal) || 0 } catch { return 0 }
+      },
+      styleImpl: (genSignal) => {
+        try { return api.use('style')?.learnSelfStyle(genSignal) } catch { return undefined }
       },
     })
 

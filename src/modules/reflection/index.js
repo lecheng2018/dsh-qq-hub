@@ -43,7 +43,7 @@ export const reflectionModule = {
       insightsOf: (key) => memory.insightsOf(key),
       setDerivedInsights: (...args) => memory.setDerivedInsights(...args),
       styleOf: (key) => memory.styleOf(key),
-      setStyle: (...args) => memory.setStyle(...args),
+      setStyle: (key, list, { sourceFingerprint }) => api.emit('style/observed', { key, list, sourceFingerprint }),
       createGenerationSignal,
       generationOf,
       isActive: () => active,
