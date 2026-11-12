@@ -20,7 +20,6 @@ import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillPro
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
-import { extractionBatchOf } from './memory-extraction.js'
 import { createMemoryExtractor } from './memory-extractor.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
@@ -1046,87 +1045,6 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     return arr.length
   }
 
-  // 每日整理只消费共享流水；完成后保留原文，由流水保留策略负责清理。
-  /** 从一段聊天里提炼长期记忆，并回顾相处经验。lines：[{who, text}] */
-  async function extractLines(chatId, lines, genSignal = null) {
-    if (status === 'closed') return { ok: false, message: '记忆模块已关闭', added: 0, insights: 0 }
-    if (batchRecoveryError) return { ok: false, message: batchRecoveryError, added: 0, insights: 0 }
-    if (genSignal && !genSignal.isValid()) return { ok: false, message: '任务已取消', added: 0, insights: 0 }
-    const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
-    const isQzone = chatId === 'qzone'
-    if (talk.filter((l) => l.who !== 'bot').length < (isQzone ? 1 : 6)) return { ok: true, skipped: true, message: '内容太少', added: 0, insights: 0 }
-    const nonBot = talk.filter((l) => l.who !== 'bot')
-    if (!isQzone && nonBot.length <= 12) {
-      const substantive = nonBot.filter((l) => {
-        const t = String(l.text).trim()
-        if (t.length >= 12) return true
-        return !/^(早|晚上好|中午好|早安|晚安|哈+|嘿+|嗯+|哦+|在吗|在|来了|吃了吗|睡了|哈哈+|呵呵|666+|好滴|好的|OK|ok|行|嗯嗯|诶|欸|？|\?|~|…|。)+[~！!。～\s]*$/.test(t)
-      })
-      if (substantive.length === 0) return { ok: true, skipped: true, message: '都是寒暄，没什么可记', added: 0, insights: 0 }
-    }
-    const line = (l) => (l.who === 'bot' ? '我' : l.uid ? `${l.who}(${l.uid})` : l.who) + '：' + l.text
-    let n = 0
-    try {
-      const chunks = []
-      for (let i = 0; i < talk.length; i += 80) chunks.push(talk.slice(i, i + 80))
-      for (const [index, part] of chunks.entries()) {
-        if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
-        const batch = extractionBatchOf(chatId, index, part)
-        const previous = load().extractionBatches?.[batch.id]
-        if (previous && previous.fingerprint !== batch.fingerprint) throw new Error(`提炼批次 ${batch.id} 的输入已变化，请核对后重试`)
-        if (previous?.status === 'done') { n += Number(previous.added) || 0; continue }
-        if (previous?.status === 'running' || previous?.status === 'pending') throw new Error(`提炼批次 ${batch.id} 已完成事实提交但状态未确认，请核对后恢复`)
-        const running = load()
-        running.extractionBatches = { ...(running.extractionBatches || {}) }
-        running.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope: scopeFromChatId(chatId), status: 'running', added: 0, at: Date.now() }
-        try { save(running) } catch (error) {
-          batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
-          throw error
-        }
-        let added = 0
-        try {
-          added = await extractFacts(chatId, part.map(line).join('\n'), genSignal)
-          if (status === 'closed') throw new Error('记忆模块已关闭')
-          if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
-        } catch (error) {
-          const failed = load()
-          failed.extractionBatches = { ...(failed.extractionBatches || {}) }
-          failed.extractionBatches[batch.id] = {
-            fingerprint: batch.fingerprint,
-            scope: scopeFromChatId(chatId),
-            status: error.factsCommitted ? 'pending' : 'failed',
-            added: Number(error.factsCommitted) || 0,
-            error: error.message,
-            at: Date.now(),
-          }
-          try { save(failed) } catch (saveError) {
-            batchRecoveryError = `提炼批次 ${batch.id} 无法记录失败状态，自动整理已暂停：${saveError.message}`
-            throw saveError
-          }
-          throw error
-        }
-        const done = load()
-        done.extractionBatches = { ...(done.extractionBatches || {}) }
-        done.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope: scopeFromChatId(chatId), status: 'done', added, at: Date.now() }
-        try { save(done) } catch (error) {
-          batchRecoveryError = `提炼批次 ${batch.id} 已提交事实但进度未确认，自动整理已暂停：${error.message}`
-          throw error
-        }
-        n += added
-      }
-      if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
-      log.info(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${n} 条新记忆`)
-      if (isQzone) return { ok: true, added: n, insights: 0 }
-      const [kind, id] = chatId.split(':')
-      const chat = kind === 'group' ? { kind, groupId: id, nickname: '' } : { kind: 'private', userId: id, nickname: talk.filter((l) => l.who !== 'bot').at(-1)?.who || '' }
-      const ins = await reflect(chat, talk.slice(-120).map((l) => `${l.who === 'bot' ? '我' : l.who}：${l.text}`).join('\n'), genSignal)
-      return { ok: true, added: n, insights: ins }
-    } catch (error) {
-      log.warn('提炼记忆失败：', error.message)
-      return { ok: false, message: error.message, added: n, insights: 0 }
-    }
-  }
-
   /** 这段聊天相关的旧记忆：关于在场的人的 + 和内容相关的，最多 15 条，给模型比对用。 */
   function relatedTo(chatId, transcript) {
     const ppl = new Set([...String(transcript).matchAll(/\((\d{5,})\)/g)].map((m) => m[1]))
@@ -1189,9 +1107,52 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     return result.ok && (result.id || result.updated)
   }
 
-  const extractor = createMemoryExtractor({ dsh, getConfig, relatedTo, commit: commitExtracted, isActive: () => status === 'active' })
+  const batchState = {
+    get: (id) => load().extractionBatches?.[id],
+    start: (batch, scope) => {
+      const state = load()
+      state.extractionBatches = { ...(state.extractionBatches || {}) }
+      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
+      try { save(state) } catch (error) {
+        batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
+        throw error
+      }
+    },
+    fail: (batch, scope, error) => {
+      const state = load()
+      state.extractionBatches = { ...(state.extractionBatches || {}) }
+      state.extractionBatches[batch.id] = {
+        fingerprint: batch.fingerprint,
+        scope,
+        status: error.factsCommitted ? 'pending' : 'failed',
+        added: Number(error.factsCommitted) || 0,
+        error: error.message,
+        at: Date.now(),
+      }
+      try { save(state) } catch (saveError) {
+        batchRecoveryError = `提炼批次 ${batch.id} 无法记录失败状态，自动整理已暂停：${saveError.message}`
+        throw saveError
+      }
+    },
+    done: (batch, scope, added) => {
+      const state = load()
+      state.extractionBatches = { ...(state.extractionBatches || {}) }
+      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'done', added, at: Date.now() }
+      try { save(state) } catch (error) {
+        batchRecoveryError = `提炼批次 ${batch.id} 已提交事实但进度未确认，自动整理已暂停：${error.message}`
+        throw error
+      }
+    },
+  }
+  const extractor = createMemoryExtractor({
+    dsh, getConfig, relatedTo, commit: commitExtracted, isActive: () => status === 'active',
+    reflect, batchState, scopeOf: scopeFromChatId, recoveryError: () => batchRecoveryError, log,
+  })
   function extractFacts(chatId, transcript, genSignal = null) {
     return extractor.extractFacts(chatId, transcript, genSignal)
+  }
+  function extractLines(chatId, lines, genSignal = null) {
+    return extractor.extractLines(chatId, lines, genSignal)
   }
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`

@@ -8,20 +8,21 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MEM = readFileSync(join(ROOT, 'src/features/memory.js'), 'utf8')
+const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const MOD = readFileSync(join(ROOT, 'src/modules/memory/index.js'), 'utf8')
 const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
 const SQL = readFileSync(join(ROOT, 'src/features/memory-sqlite.js'), 'utf8')
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 
 test('#2 提取门槛：3 行不再触发，纯寒暄不进模型', () => {
-  assert.match(MEM, /isQzone \? 1 : 6/, '行数阈值 3 → 6')
-  assert.match(MEM, /都是寒暄，没什么可记/, '纯寒暄快筛直接跳过')
-  assert.match(MEM, /substantive\.length === 0/, '快筛条件')
+  assert.match(EXTRACTOR, /isQzone \? 1 : 6/, '行数阈值 3 → 6')
+  assert.match(EXTRACTOR, /都是寒暄，没什么可记/, '纯寒暄快筛直接跳过')
+  assert.match(EXTRACTOR, /!substantive\.length/, '快筛条件')
 })
 
 test('#3 长对话全量分段提炼，不再把整日记为成功却只处理最后 640 行', () => {
-  assert.match(MEM, /for \(const part of chunks\)/, '所有批次都处理')
-  assert.doesNotMatch(MEM, /chunks\.slice\(-\d+\)/, '不再静默截去旧批次')
+  assert.match(EXTRACTOR, /for \(const \[index, part\] of chunks\.entries\(\)\)/, '所有批次都处理')
+  assert.doesNotMatch(EXTRACTOR, /chunks\.slice\(-\d+\)/, '不再静默截去旧批次')
 })
 
 test('#4 主人换号迁移：scope/about 一起搬，面板有入口', () => {

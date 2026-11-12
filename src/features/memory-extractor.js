@@ -1,7 +1,8 @@
 import { askModel } from '../core/llm.js'
 import { whenText } from './memory-core.js'
+import { extractionBatchOf } from './memory-extraction.js'
 
-export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive }) {
+export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, reflect, batchState, scopeOf, recoveryError, log }) {
   async function extractFacts(chatId, transcript, genSignal = null) {
     if (!isActive()) return 0
     if (genSignal && !genSignal.isValid()) return 0
@@ -63,5 +64,60 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
     return added
   }
 
-  return { extractFacts }
+  async function extractLines(chatId, lines, genSignal = null) {
+    if (!isActive()) return { ok: false, message: '记忆模块已关闭', added: 0, insights: 0 }
+    if (recoveryError()) return { ok: false, message: recoveryError(), added: 0, insights: 0 }
+    if (genSignal && !genSignal.isValid()) return { ok: false, message: '任务已取消', added: 0, insights: 0 }
+    const talk = lines.filter((line) => line.text && !String(line.text).startsWith('【系统'))
+    const isQzone = chatId === 'qzone'
+    if (talk.filter((line) => line.who !== 'bot').length < (isQzone ? 1 : 6)) return { ok: true, skipped: true, message: '内容太少', added: 0, insights: 0 }
+    const nonBot = talk.filter((line) => line.who !== 'bot')
+    if (!isQzone && nonBot.length <= 12) {
+      const substantive = nonBot.filter((line) => {
+        const text = String(line.text).trim()
+        if (text.length >= 12) return true
+        return !/^(早|晚上好|中午好|早安|晚安|哈+|嘿+|嗯+|哦+|在吗|在|来了|吃了吗|睡了|哈哈+|呵呵|666+|好滴|好的|OK|ok|行|嗯嗯|诶|欸|？|\?|~|…|。)+[~！!。～\s]*$/.test(text)
+      })
+      if (!substantive.length) return { ok: true, skipped: true, message: '都是寒暄，没什么可记', added: 0, insights: 0 }
+    }
+    const formatLine = (line) => (line.who === 'bot' ? '我' : line.uid ? `${line.who}(${line.uid})` : line.who) + '：' + line.text
+    let added = 0
+    try {
+      const chunks = []
+      for (let index = 0; index < talk.length; index += 80) chunks.push(talk.slice(index, index + 80))
+      for (const [index, part] of chunks.entries()) {
+        if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
+        const batch = extractionBatchOf(chatId, index, part)
+        const previous = batchState.get(batch.id)
+        if (previous && previous.fingerprint !== batch.fingerprint) throw new Error(`提炼批次 ${batch.id} 的输入已变化，请核对后重试`)
+        if (previous?.status === 'done') { added += Number(previous.added) || 0; continue }
+        if (previous?.status === 'running' || previous?.status === 'pending') throw new Error(`提炼批次 ${batch.id} 已完成事实提交但状态未确认，请核对后恢复`)
+        const scope = scopeOf(chatId)
+        batchState.start(batch, scope)
+        let count = 0
+        try {
+          count = await extractFacts(chatId, part.map(formatLine).join('\n'), genSignal)
+          if (!isActive()) throw new Error('记忆模块已关闭')
+          if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
+        } catch (error) {
+          batchState.fail(batch, scope, error)
+          throw error
+        }
+        batchState.done(batch, scope, count)
+        added += count
+      }
+      if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
+      log?.info?.(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${added} 条新记忆`)
+      if (isQzone) return { ok: true, added, insights: 0 }
+      const [kind, id] = chatId.split(':')
+      const chat = kind === 'group' ? { kind, groupId: id, nickname: '' } : { kind: 'private', userId: id, nickname: talk.filter((line) => line.who !== 'bot').at(-1)?.who || '' }
+      const insights = await reflect(chat, talk.slice(-120).map((line) => `${line.who === 'bot' ? '我' : line.who}：${line.text}`).join('\n'), genSignal)
+      return { ok: true, added, insights }
+    } catch (error) {
+      log?.warn?.('提炼记忆失败：', error.message)
+      return { ok: false, message: error.message, added, insights: 0 }
+    }
+  }
+
+  return { extractFacts, extractLines }
 }
