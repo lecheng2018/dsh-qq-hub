@@ -14,6 +14,13 @@
 //   - 台账 fail-closed：enqueue / sending 落盘失败 = 不发起物理发送。
 //   - dispose：真实卸载——之后拒绝新请求，并把还在排队的条目落 cancelled。
 //
+// 2026-11-12 轮原子性修正（reserve/ticket）：
+//   - 改前：轮内每条气泡 request 都把链写回 chains（把 reserve 建的闸覆盖掉），且都锚在
+//     reserve 时刻的 previous 快照上 —— 于是「第一个气泡之后入队的写者」既不排在闸上、
+//     也不排在气泡之后，实测同聊天两条物理发送同时在飞、别人的文字插进本轮两段气泡之间。
+//   - 改后：chains 本轮期间恒为闸；轮内气泡走 ticket.tail 严格串行；release 会等本轮
+//     最后一条气泡落地才开闸。语义仍是「轮原子性」：A1、A2 连续，B 排到本轮之后。
+//
 // 红线：本模块不做业务决策（不发主动发言、不改内容）；内容清洗/分条是适配层（M3-C）的事。
 
 import { parseChatKey } from './chat-key.js'
@@ -31,7 +38,7 @@ export { newDeliveryId }
  * @param {() => boolean} [o.enabled] 全局总开关注入（出队时动态读取；false = 不发）
  * @param {(delivery: object) => {ok: boolean, message?: string}} [o.guard] 身份泄露闸注入
  */
-export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard } = {}) {
+export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, currentTicket } = {}) {
   if (typeof send !== 'function') throw new TypeError('send 必须是函数')
   const book = ledger || createDeliveryLedger({})
   /** chatKey -> Promise（发送串行链，保证每聊天 FIFO） */
@@ -42,10 +49,24 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
   const passMap = new Map()
   let disposed = false
 
+  /**
+   * 预留一轮的「会话占用」：返回 ticket（本轮气泡串行用）+ release（本轮结束时放行）。
+   *
+   * 契约（2026-11-12 修正，语义仍是「轮原子性」）：
+   *   - `chains[chatKey]` 在本轮期间**始终是这道闸**：别的写者挂上来，等到 release 才发；
+   *   - 本轮自己的气泡走 `ticket.tail`（绕开闸），气泡之间严格串行；
+   *   - release 不只开闸，还要等本轮最后一条气泡落地——所以即便调用方提前 release，
+   *     其他写者也绝不会插进本轮气泡中间。
+   *
+   * 改前：气泡 request 会把自己的链写回 chains，把闸覆盖掉；且每条气泡都锚在 reserve
+   * 时刻的 `previous` 上（快照），于是轮内第 2 条之后的写者跟气泡互不排队 ——
+   * 实测出现「同聊天两条物理发送同时在飞、其他写者的文字插在两段回复中间」。
+   */
   function reserve(chatKey) {
     if (disposed) return null
     parseChatKey(chatKey)
-    const ticket = { previous: chains.get(chatKey) || Promise.resolve(), chain: null }
+    // tail：本轮已入队气泡的链尾（第一条从 previous 起算），轮内串行只认它
+    const ticket = { chatKey, previous: chains.get(chatKey) || Promise.resolve(), tail: null, chain: null }
     let releaseGate
     const gate = new Promise((resolve) => { releaseGate = resolve })
     const chain = ticket.previous.catch(() => {}).then(() => gate)
@@ -53,7 +74,13 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     chains.set(chatKey, chain)
     const cleanup = () => { if (chains.get(chatKey) === chain) chains.delete(chatKey) }
     chain.then(cleanup, cleanup)
-    return { ticket, release: releaseGate }
+    return {
+      ticket,
+      // 先等本轮气泡全部落地，再开闸：保证「别的写者排在本轮之后」而不只是「之后入队」
+      release: () => {
+        Promise.resolve(ticket.tail || ticket.previous).catch(() => {}).then(() => releaseGate())
+      },
+    }
   }
 
   /**
@@ -100,9 +127,17 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard }
     }
 
     // 每聊天 FIFO：链注册同步发生，慢授权不会被后入队的快授权超车。
-    const prev = req?._outboxTicket?.previous || chains.get(chatKey) || Promise.resolve()
+    // 带票（轮内气泡）时串到「本轮上一条」而不是 reserve 时的快照，且**不写回 chains**——
+    // 闸要一直留在 chains 里给别的写者排队，否则第一个气泡就会把闸覆盖掉（改前的 bug）。
+    // 票是「按聊天」的：轮内跨聊天发送不得误用别的聊天的票，所以校验 chatKey。
+    const inherited = currentTicket?.() || null
+    const ticket = req?._outboxTicket || (inherited && inherited.chatKey === chatKey ? inherited : null)
+    const prev = ticket
+      ? (ticket.tail || ticket.previous || Promise.resolve())
+      : (chains.get(chatKey) || Promise.resolve())
     const chain = prev.catch(() => {}).then(() => drainOne(rec, req))
-    chains.set(chatKey, chain)
+    if (ticket) ticket.tail = chain
+    else chains.set(chatKey, chain)
     pending.add(deliveryId)
     const cleanup = () => {
       pending.delete(deliveryId)
