@@ -21,7 +21,8 @@ export function createHubEgress({ outbox, log }) {
      * @param {'required'|'optional'} [req.receipt] 回执要求（msg 类 required；upload/poke/qzone optional）
      * @param {string} [req.note] 台账备注
      * @param {string} [req.sourceModuleId]
-     * @param {boolean} [req.force] legacy force：豁免全局闸（台账照记）
+     * @param {boolean} [req.force] 收窄后的 force：只豁免「总开关关闭」（/on 自救通道）；
+     *   不豁免 dryRun，也不豁免身份闸（台账照记）
      */
     async deliver(req) {
       // 安全网：egress 只承载发信类动作（set_/delete_/handle_ 等管理操作若混进来被
