@@ -8,7 +8,7 @@
 
 当前有效解耦与剩余职责：
 
-- `src/features/memory.js` 仍同时承担档案访问、检索、提炼、反思、画像、蒸馏兼容和定时整理；P1 只解决共享流水所有权与来源进度，不等于记忆系统重构完成。
+- `src/features/memory.js` 现在只负责组合并保持原公开 API；`memory-archive.js` 拥有档案访问、检索与派生数据持久化，不 import LLM/extractor；`memory-learning.js` 承担提炼、反思、画像、历史蒸馏和定时整理。P4 再将派生数据与学习消费者按子域自治。
 - `src/modules/memory/index.js` 仍拥有蒸馏目标、历史学习和派生卡接线，并向外暴露大 store。
 - 本批将 chatlog 唯一实现迁到 `src/chat/chat-log.js`，由 host 管理保留任务；模块接 `api.core.chatLog`，hub 的三个日志接口只作兼容转发。少数业务工厂保留旧形状注入兼容，尚不宣称全仓零 hub 日志引用。
 - `src/core/modules.js` 已有模块生命周期、`api.use/on/context/every/tool/route/dataDir`；`src/modules/index.js` 已装载同级可选模块。不要再造嵌套 loader。
@@ -96,10 +96,11 @@ host（唯一装配与生命周期）
 - P3c extractLines 与批次状态机独立：extractor 负责分块、状态转换、反思调用；memory 仅提供 load/save 状态适配和 reflect，成功/失败/待核对语义不变。consolidate 的日程、遗忘与人物档案调度仍在 memory，archive 契约和其他模型入口生命周期不在该子切片。
 - P3d consolidate 独立：extractor 负责整理日程、来源游标、部分失败、遗忘和人物档案调度；memory 提供健康检查、load/save、learnSelfStyle/buildProfile 等适配器，公开入口窄转发。archive 契约和其他模型入口生命周期不在该子切片。
 - P3e 模型生命周期统一：importCandidates、learnDistillFromHistory、buildProfile、reflect、learnSelfStyle 无外部信号时创建代际任务；askModel 竞争式超时退出且保留调用方原始 signal，忽略 abort 的流不阻塞 dispose。archive 契约和派生模块自治不在该子切片。
-- 范围：先收窄 archive 契约，再将 extractFacts/extractLines/consolidate 调度迁到独立 extractor。存储与召回不 import LLM，不依赖聊天 hub；scope 纯函数继续共用。
-- 必须同时解决：在 P1 的来源指纹和完整 80 行分批基础上，增加批次级幂等提交与事实/进度一致性；不能只搬动函数。批次 checkpoint 与 extractor 调度已落地，archive 契约仍待收窄。
+- P3f archive 契约收窄：memory-archive 独立拥有 CRUD、召回、作用域索引和派生数据持久化，不 import LLM/extractor；memory-learning 组合模型入口、提炼与整理；memory.js 保留原 createMemoryStore 和纯函数出口。模块热重载声明同步覆盖新文件。
+- 范围：extractFacts/extractLines/consolidate 调度、模型学习和 archive 已分别归属；存储与召回不 import LLM，scope 纯函数继续共用。派生模块自治不在 P3。
+- 必须同时解决：批次 checkpoint、幂等提交与事实/进度一致性均已落地，archive 可无学习层运行。
 - 生命周期：已识别模型入口均受代际任务与竞争式超时约束；reload/dispose 可中止在途任务，迟到结果不能写。派生模块自治与 fnOS 连续启停验收仍需后续完成。
-- 验收：不用 LLM 仍能 CRUD/召回；关闭 extractor 不影响手动记忆；批次中断/恢复、输入替换、重复请求、磁盘失败均不跳过未处理原文、不重复提交。
+- 验收：archive 在无 LLM/extractor 依赖时完成真实 CRUD/作用域召回；全量记忆回归覆盖批次中断/恢复、输入替换、重复请求和磁盘失败。
 - 回滚：关闭新消费者并保留 archive/游标；必须保证旧调度不同时开启。涉及状态格式升级时单独提供可逆步骤。
 
 ### P4：派生画像、反思、蒸馏彻底自治
@@ -120,9 +121,9 @@ host（唯一装配与生命周期）
 
 P0/P1 不等于原记忆重构任务书全量完成。以下仍是后续门禁，不应标成已交付：
 
-- 记忆 checkpoint 仍按日，而非跨作用域/跨提炼块事务；中途 I/O 或模型失败可能已有部分正文提交，恢复会重跑成功块。P3 需提交日志与批次幂等设计。
+- 记忆日进度与提炼批次 checkpoint 不是跨作用域大事务；部分正文已提交但状态未确认时进入待核对，成功块重试跳过，仍不能宣称任意故障下恰好执行一次。
 - distill/slang 的旧 readJson 状态损坏回退策略尚未改造成档案级 fail-closed；不把记忆 state.json 已有的保护泛化为所有消费者都已安全。
-- reload 已保护在途整理，distill/slang 也有 lifetime abort；但所有画像、导入、历史学习入口仍未统一取消、等待和回收。
+- archive、提炼与派生模型入口已统一取消和回收；fnOS 上连续启停与真实宿主资源基线仍需后续验收。
 - 派生画像对事实删除/外改的完整依赖失效机制未落地。
 - 档案保存是单文件原子写，不是跨作用域事务；来源提交前复核也不是对外部编辑的跨进程锁，保留期内手改流水须停消费者并人工恢复。
 - 迁移器按停写、单进程运行设计；已有新旧库冲突须人工核对，不能自动选“条目更多”的一边。生产迁移未授权、未执行；本批未更改运行中的 DSH。
