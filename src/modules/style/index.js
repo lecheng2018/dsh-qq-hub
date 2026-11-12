@@ -10,7 +10,7 @@ export const styleModule = {
   description: '保存并注入从聊天中学到的说话方式；关闭后停止自动学习与风格上下文，不影响事实记忆。',
   provides: ['memory-style'],
   requires: ['memory-store'],
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/memory-style.js'],
   setup(api) {
     const memory = api.use('memory')
