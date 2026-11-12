@@ -5,6 +5,14 @@
 
 export type ChatId = `private:${string}` | `group:${string}` | `system:${string}`
 
+export interface ChatLogEntry {
+  t: number
+  chatId: string
+  who: string
+  uid?: string
+  text: string
+}
+
 export interface Chat {
   chatId: ChatId
   kind: 'private' | 'group' | 'system'
@@ -190,6 +198,12 @@ export interface Api {
   has(id: string): boolean
   core: {
     hub: any
+    chatLog: {
+      append(chatId: string, who: string, text: string, uid?: string): ChatLogEntry
+      listDays(): string[]
+      readDay(day: string): ChatLogEntry[]
+      readDaySnapshot(day: string): { day: string; records: ChatLogEntry[]; fingerprint: string; prefixFingerprint(count: number): string }
+    }
     onebot: { call(action: string, params?: any, opts?: any): Promise<any>; state: string }
     snowluma: any
     local: any
