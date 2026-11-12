@@ -28,6 +28,16 @@ const FOOTER = `
 })
 `
 
+/**
+ * 统一成 LF。esbuild 在 Windows 上输出 CRLF，而仓库里的 client/client.js 是 LF；
+ * 不归一化的话每次 Windows 构建都会产生「整文件重写」的假 diff（几百行，评审没法看）。
+ * 注意要把**所有** \r 都去掉：CSS 是当字符串内联进 bundle 的，那些 \r 落在模板字符串
+ * 内部，只替换 \r\n 会漏掉它们（源码里是 \r\n，压缩后变成行内的单个 \r）。
+ */
+function normalizeEol(code) {
+  return String(code).replace(/\r\n/g, '\n').replace(/\r/g, '')
+}
+
 function postProcess(code) {
   // 1. 守住 client-api-base.test.js：apiBaseFrom 必须带 (href) 空格且以 4 空格缩进闭合
   code = code.replace(/function apiBaseFrom\s*\(href\) \{([\s\S]*?)\n\}/, (m, body) => {
@@ -102,7 +112,7 @@ async function build() {
           setup(build) {
             build.onEnd((result) => {
               if (result.errors.length === 0 && result.outputFiles?.[0]) {
-                const processed = postProcess(result.outputFiles[0].text)
+                const processed = normalizeEol(postProcess(result.outputFiles[0].text))
                 writeFileSync(OUTFILE, processed, 'utf8')
                 console.log(`[${new Date().toLocaleTimeString()}] ⚡ Client rebuilt successfully.`)
               }
@@ -116,7 +126,7 @@ async function build() {
   } else {
     const result = await esbuild.build(buildOptions)
     const code = result.outputFiles[0].text
-    const processed = postProcess(code)
+    const processed = normalizeEol(postProcess(code))
     writeFileSync(OUTFILE, processed, 'utf8')
     console.log(`✅ Built client/client.js successfully (${(processed.length / 1024).toFixed(1)} KB)`)
   }
