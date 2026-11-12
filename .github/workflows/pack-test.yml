@@ -57,7 +57,13 @@ jobs:
 
       - name: npm pack
         run: |
-          TGZ=$(npm pack)
+          # prepack 会先跑 build-client，其 stdout 会混进 npm pack 的 stdout，
+          # 直接 $(npm pack) 会把构建横幅当成文件名。只取最后一行并校验文件存在。
+          OUT=$(npm pack 2>/dev/null)
+          TGZ=$(echo "$OUT" | tail -n1)
+          if [ -z "$TGZ" ] || [ ! -f "$TGZ" ]; then
+            echo "npm pack 失败或未产出 tgz："; echo "$OUT"; exit 1
+          fi
           echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
           sha256sum "$TGZ" | tee sha256.txt
         id: pack
