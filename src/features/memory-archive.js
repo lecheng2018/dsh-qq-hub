@@ -20,7 +20,7 @@ import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf,
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, extend }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, extend }) {
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
@@ -586,7 +586,20 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   // ---------- 相处经验：按人（私聊按 QQ 号，群按群）归类的、概括性的「怎么和 TA 相处」，越聊越懂 ----------
   const personKey = (chat) => (chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : '')
   function insightsOf(key) {
-    return (load().insights || {})[key] || []
+    return ((load().insights || {})[key] || []).filter((item) => !item.stale)
+  }
+  function staleInsightsIn(s, key = '') {
+    let changed = 0
+    for (const [person, list] of Object.entries(s.insights || {})) {
+      if (key && person !== key) continue
+      for (const item of list) {
+        if (item.origin === 'manual' || item.stale) continue
+        item.stale = true
+        item.staleAt = Date.now()
+        changed++
+      }
+    }
+    return changed
   }
   // ---------------- 蒸馏群友（1.3.59）----------------
   // 指定某个群的某个人当数据源，学他的说话方式/性格/语气（不冒充他本人）。
@@ -657,7 +670,18 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    s.insights[key] = list.slice(0, 8)
+    s.insights[key] = list.slice(0, 8).map((item) => ({ ...item, origin: 'manual' }))
+    if (name) s.insightNames[key] = name
+    s.rev = (s.rev || 0) + 1
+    save(s)
+  }
+  function setDerivedInsights(key, list, name, { sourceFingerprint }) {
+    const s = load()
+    s.insights = s.insights || {}
+    s.insightNames = s.insightNames || {}
+    s.insights[key] = list.slice(0, 8).map((item) => ({
+      ...item, origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0,
+    }))
     if (name) s.insightNames[key] = name
     s.rev = (s.rev || 0) + 1
     save(s)
@@ -755,7 +779,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       })
       .filter(Boolean)
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
-    const ins = insightsOf(personKey(chat))
+    const ins = reflectionContext ? insightsOf(personKey(chat)) : []
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
     if (chat.kind === 'group') {
       // 蒸馏群友（1.3.59）：这个群指定了要学的人，就带上他的说话样子（含「不冒充」边界）
@@ -974,7 +998,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     load, save, health: () => store.health(), relatedTo,
     add, revise, supersede, scopeFromChatId,
     profileOf, setProfile, setDerivedProfile, profileKeyOf,
-    insightsOf, setInsights, styleOf, setStyle, personKey,
+    insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, personKey,
     distillOf, putDistill,
   })
 
@@ -1001,6 +1025,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const s = load()
       return Object.entries(s.insights || {}).map(([key, list]) => ({ key, name: (s.insightNames || {})[key] || '', list }))
     },
+    insightsOf, styleOf, setDerivedInsights,
     setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
     /** 群黑话本（面板用）：[{ gid, list: [{id, word, meaning, at}] }] */
     slang: () => Object.entries(load().slang || {})
@@ -1070,7 +1095,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const health = store.health()
       if (health.ok) {
         const state = load()
-        if (staleProfilesIn(state)) { state.rev = (state.rev || 0) + 1; save(state) }
+        if (staleProfilesIn(state) + staleInsightsIn(state)) { state.rev = (state.rev || 0) + 1; save(state) }
       }
       const message = health.ok ? '记忆档案已重新载入，索引已更新' : '部分档案或状态损坏，请修复后重新载入；自动整理已暂停'
       log?.info?.(message)
