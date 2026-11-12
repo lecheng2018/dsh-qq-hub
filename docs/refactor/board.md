@@ -51,7 +51,7 @@
 | M3 适配器+回放 | ✅（四适配器 9 用例 + 506 例确定性回放 d6dd808；合成分支链，非新旧用户可见对照——见 review §2） | 各工作流（单人体） | G2 | adapters 新文件 | 差异零未解释 | PR revert |
 | M4-0~6 垂直切片 | ✅（FLAG_MODULAR_CORE 默认关，10 用例 ec3aafe；2026-11-08 复核修复 R1-R3：入站 ACL/preset 等价、统一出站 enabled/dryRun/身份闸/真实台账 fail-closed、turn-end 成功语义、followup rejection 清理） | Integration | G3 | host/modular-core.js + host.js 分支（串行队列） | flag-off 逐字不变 | 关开关+重启 |
 | M5 | ◐ 内测进行中（2026-11-08 两轮：9 断言 8✅，#9 OneBot unknown 待 SnowLuma 可控环境；真机 10 缺陷全部修复进源码+回归；环境坑/遗留已登记 m5-runbook）| QA + Owner | G4 | — | — | — |
-| M6 | 📄 退出计划就绪（m6-exit-plan.md），切换/清理 blocked-on-G5+owner go | Integration+Release | G5 | — | — | — |
+| M6 | 📄 K-03 准备包就绪（k03-exit-readiness.md），删除/发布 blocked-on-代码阻塞+G5+owner go | Integration+Release | G5 | — | — | — |
 
 ## 4. Integration 串行队列（host/hub 独占窗口）
 
@@ -91,7 +91,7 @@
 | P2 入站媒体与上下文共享 | ✅ 对照完成（P2a–f） | Inbound + Integration | P1；ADR-0002 出站前置门禁 | inbound/context 服务及消费接线 | 新旧输入等价，取消不污染，无双发 | 旧 facade 调用同一实现 |
 | P3 记忆学习管线独立 | ✅ 已完成（P3a–f，archive 与学习组合拆分） | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；模型入口统一取消与超时，archive 不 import LLM/extractor | 关新消费者，防止双调度 |
 | P4 派生学习模块自治 | ✅ P4a–d 完成（画像、reflection、style、distill） | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 来源失效与独立停启；distill 目标/画像独立 store、只读迁移、历史学习零回写、唯一注入与路由；pipeline/slang 主备恢复与损坏拒写 | 关闭消费者，不把派生结果灌回事实名下 |
-| P5 兼容层退出 | 待 owner 门禁 | Integration + Release | ADR-0002 全等价验收 | facade 清理、矩阵与运维文档 | 真机对照、观察窗口和回滚演练 | 独立切换与恢复方案 |
+| P5 兼容层退出 | 📄 K-03 准备包就绪；执行待代码阻塞关闭与 owner 门禁 | Integration + Release | ADR-0002 全等价验收 | facade 清理、矩阵与运维文档 | 真机对照、观察窗口和回滚演练 | 固定旧包独立回滚，不保留隐藏旧入口 |
 
 P1 最终本地验证（Node 22.16.0，2026-11-12；基于含 #53 的 main）：
 
