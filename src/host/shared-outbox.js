@@ -41,7 +41,7 @@ function textForGuard(delivery) {
  * @param {object} o.log
  * @param {string} [o.ledgerFile] 台账文件（缺省内存，测试用）
  */
-export function createSharedOutbox({ onebot, getConfig, log, ledgerFile }) {
+export function createSharedOutbox({ onebot, getConfig, log, ledgerFile, currentTicket }) {
   const ledger = ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
   return createOutbox({
     send: createOnebotOutboxAdapter({ onebot }).send,
@@ -54,6 +54,8 @@ export function createSharedOutbox({ onebot, getConfig, log, ledgerFile }) {
     // truthy 语义与 legacy 一致（cfg.enabled 缺省按关处理？不——loadConfig 恒有默认值；保持 Boolean）
     enabled: () => Boolean(getConfig().enabled),
     dryRun: () => Boolean(getConfig().dryRun),
+    // 轮内（deliver 期间）的请求自动并入本轮链尾；不传就在轮内挂到本轮闸上 → 自锁
+    ...(currentTicket ? { currentTicket } : {}),
     guard: (delivery) => {
       const cfg = getConfig()
       const ig = cfg.security?.identityGuard || {}

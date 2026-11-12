@@ -13,14 +13,20 @@ export function createReplyDelivery({
 
   function deliver(chatId, text, opts = {}) {
     if (opts.simulate || isCaptured?.()) return deliverNow(chatId, text, opts)
-    const reservation = outbox?.()?.reserve?.(chatId) || null
+    // 嵌套调用（本轮气泡里又触发了一次 deliver，比如戳回去、语音退回文字）：
+    // 直接复用外层的票，**不再 reserve**。否则会新建一道闸，而外层的闸要等本轮气泡
+    // 结束才放行 → 外层等内层、内层等外层，死锁。
+    const outer = deliveryContext.getStore()
+    const reusing = outer && outer.chatId === chatId ? outer : null
+    const reservation = reusing ? null : (outbox?.()?.reserve?.(chatId) || null)
     const run = () => {
-      const context = { chatId, active: true, ticket: reservation?.ticket }
+      const context = { chatId, active: true, ticket: reusing ? reusing.ticket : reservation?.ticket }
       return deliveryContext.run(context, () => deliverNow(chatId, text, opts).finally(() => {
         context.active = false
         reservation?.release?.()
       }))
     }
+    // 复用外层票时，本次发送仍要排在外层已入队的气泡之后 —— 走外层同一条 deliveryChains 队
     const previous = deliveryChains.get(chatId)
     const current = previous ? previous.catch(() => {}).then(run) : run()
     deliveryChains.set(chatId, current)
