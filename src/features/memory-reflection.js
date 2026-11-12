@@ -42,7 +42,7 @@ export function createMemoryReflection({
       })
       if (!isActive() || (genSignal && !genSignal.isValid())) throw new Error('回顾任务已取消')
       const { insights: rawIns, style: rawStyle } = parseReflection(out)
-      if (rawStyle.length) setStyle(key, rawStyle)
+      if (rawStyle.length) setStyle(key, rawStyle, { sourceFingerprint })
       const arr = rawIns.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, 8)
       if (!arr.length) return 0
       const now = Date.now()
