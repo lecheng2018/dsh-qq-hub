@@ -331,7 +331,7 @@ export async function askModel (dsh, o) {
     try {
       const params = effort ? { ...base, reasoningEffort: effort } : { ...base }
       if (o.signal) params.signal = o.signal
-      const out = await runStream(llm, params)
+      const out = await withAbortTimeout((signal) => runStream(llm, { ...params, signal: o.signal || signal }), 120000, '模型请求', o.signal)
       // 推理模型偶发「只思考不答题」：流正常结束、usage 有输出 token，但正文 0 字
       //（思考把轮次吃满，正文一个字没写）。重试一次，并把「直接给结果」写进正文请求里压一压。
       if (!out && !retriedEmpty && !imgCount) {
