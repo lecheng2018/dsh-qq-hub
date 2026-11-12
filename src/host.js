@@ -400,10 +400,9 @@ export function apply(ctx) {
         onStats: (k) => { try { hub.bumpStats?.(k) } catch {} },
         // 宿主侧变量缺失兜底：热重载后根作用域的 variable 可能已失效，按会话补注册
         promptVars: promptVarText,
-        // 富媒体出站（真机审计：语音/表情/图片/引用/戳一戳）交给 legacy deliver——那条管线里
-        // 有 TTS 合成、表情库取图、图片上传、引用拼装、气泡节奏，全部现成且经过线上验证；
-        // 只在「这一轮回复里确实带富媒体标记」时才走它，纯文字仍走 outbox（台账/试运行/泄漏闸照旧）。
-        legacyDeliver: (chatId, text, opts) => hub.deliver(chatId, text, opts),
+        // 富媒体编排直接使用当前 reply-delivery 与 Shared Outbox，不再回退 legacy hub。
+        stickers,
+        tts,
         // 模块工具挂载（真机实测：新核心没挂，导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，
         // 只能拿 bash+curl 自己绕）。与 legacy mount() 同一份工具生成器与代际口径。
         buildTools: (where) => mods.buildTools(where),
@@ -437,9 +436,6 @@ export function apply(ctx) {
         toolsGeneration: () => mods.generation?.() || 0,
         moduleHooks: sharedHooks,
         sharedOutbox,
-        rememberPoker: (chatId, uid) => hub.rememberPoker?.(chatId, uid),
-        claimPoke: (chatId) => hub.claimPoke?.(chatId) ?? true,
-        rememberSpeaker: (chatId, uid) => hub.rememberSpeaker?.(chatId, uid),
         isSentMessage: (messageId) => hub.wasSent?.(messageId) ?? false,
         markTurnAt: (chatId) => hub.markTurnAt?.(chatId),
         noteMedia: (chatKey, segments, userId) => { try { recentMedia.rememberSegments(chatKey, segments, userId) } catch {} },
