@@ -21,6 +21,7 @@ import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './sessi
 import { workspaceDirOf } from '../chat/workspace.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
 import { extractionBatchOf } from './memory-extraction.js'
+import { createMemoryExtractor } from './memory-extractor.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
@@ -1152,105 +1153,45 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     return out
   }
 
-  async function extractFacts(chatId, transcript, genSignal = null) {
-    if (status === 'closed') return 0
-    if (genSignal && !genSignal.isValid()) return 0
-    const cfg = getConfig()
-    const source = chatId === 'qzone' ? '下面是 QQ 空间里的动态（好友发的说说、别人给你的评论、你的回复）' : '下面是一段聊天'
-    const related = relatedTo(chatId, transcript)
-    const known = new Map(related.map((m) => [m.id, m]))
-    let out = ''
-    try {
-      out = await askModel(dsh, {
-        cfg,
-        system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
-
-记什么（三类）：
-1. 人：别人的名字/称呼/身份/关系，喜好和讨厌的东西，雷区和禁忌，近况变化，你们之间的约定。
-2. 她自己攒下的经验教训：踩过的坑、验证过的方法、定下的规矩。
-3. 从看过的内容里学到的可复用知识：结论 + 适用条件 + 出处（哪个视频、哪篇文章、谁转述的）。这类要记，但要记成能直接用的结论，不是「看过某视频」。
-
-不记：寒暄、日常琐事、一次性问答、没人再提的闲聊；不记她自己的人设和喜好（她本来就知道）；不记「今天看了什么」这种浏览流水，只记从里面学到的东西。
-
-怎么写：
-- 一条 30 到 60 字，写成一句自然的话，带一个具体细节（数字、店名、原话片段、命令、路径）。
-- 句子本身要说清是谁说的、关于谁，不许用「有人」「群友」「他们」这种模糊主语。别人转述的写清转述关系。
-- 不要字段标签（gist=、detail=、why=）、不要小标题、不要分点，就是一句人话。
-- 正例：「小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他」
-- 正例：「NAS 选盘别碰杂牌混发，企业盘优先，这是 B 站那个搭 RAID 的视频里讲的」
-- 反例：「小明.饮食：gist=不吃香菜；detail=挑十分钟；why=点外卖注意」
-- 反例：「在B站看了《选硬盘搭RAID建Docker》这个视频」` +
-        (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
-        `只输出 JSON 数组，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。`,
-        text: (related.length ? `已经记得的事：\n${related.map((m) => `#${m.id} [${whenText(m.at)}] ${m.aboutName ? '[' + m.aboutName + '] ' : ''}${m.text}`).join('\n')}\n\n` : '') + transcript,
-        maxTokens: 1500,
-        temperature: 0.2,
-        signal: genSignal?.signal,
-      })
-    } catch (err) {
-      if (genSignal && !genSignal.isValid()) return 0
-      throw err
-    }
-    if (status === 'closed' || (genSignal && !genSignal.isValid())) return 0
-    const m = out.match(/\[[\s\S]*\]/)
-    if (!m) throw new Error('模型未返回有效的记忆 JSON 数组')
-    let arr
-    try { arr = JSON.parse(m[0]) } catch { throw new Error('模型返回的记忆 JSON 数组不合法') }
-    if (!Array.isArray(arr)) throw new Error('模型未返回记忆 JSON 数组')
-    let n = 0
-    try {
-      for (const x of arr.slice(0, 12)) {
-      if (!x || !x.text) continue
-      if (/^(我|大肥鱼)/.test(String(x.about || '')) || String(x.about || '') === '大肥鱼') continue
-      // 关于谁：模型给了 QQ 号就用（群聊、空间里也能记到人头上），私聊默认是对方
-      const qq = String(x.about_qq ?? '').replace(/\D/g, '')
-      const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
-      const op = String(x.op || 'add')
-      const target = known.get(String(x.id || '').replace(/^#/, ''))
-      // 补充旧的（你在面板里亲手写的不改写）
-      if (op === 'update' && target && target.source !== 'panel') {
-        if (revise(target.id, x.text, x.importance)) n++
-        continue
-      }
-      // 旧的过时了：调用原子 supersede 替代操作（C-01 规范）
-      if (op === 'outdated' && target) {
-        const r = supersede({
-          oldId: target.id,
-          text: x.text,
-          aboutName: x.about || target.aboutName || '',
-          about: about || target.about || '',
-          importance: x.importance ?? target.importance ?? 0.5,
-          source: 'auto',
-          chatId,
-          scope: scopeFromChatId(chatId),
-          evidence: x.evidence,
-          entity: x.entity,
-          topic: x.topic,
-        })
-        if (r.ok) n++
-        continue
-      }
-      const tags = Array.isArray(x.tags) ? x.tags.map((t) => String(t).slice(0, 8)).slice(0, 2) : []
-      const r = add({
+  function commitExtracted(x, { chatId, cfg, known, about }) {
+    const op = String(x.op || 'add')
+    const target = known.get(String(x.id || '').replace(/^#/, ''))
+    if (op === 'update' && target && target.source !== 'panel') return revise(target.id, x.text, x.importance)
+    if (op === 'outdated' && target) {
+      return supersede({
+        oldId: target.id,
         text: x.text,
-        aboutName: x.about || '',
-        about,
-        tags,
-        importance: x.importance ?? 0.5,
+        aboutName: x.about || target.aboutName || '',
+        about: about || target.about || '',
+        importance: x.importance ?? target.importance ?? 0.5,
         source: 'auto',
         chatId,
         scope: scopeFromChatId(chatId),
         evidence: x.evidence,
         entity: x.entity,
         topic: x.topic,
-      })
-      if (r.ok && (r.id || r.updated)) n++
-      }
-    } catch (error) {
-      error.factsCommitted = n
-      throw error
+      }).ok
     }
-    return n
+    const tags = Array.isArray(x.tags) ? x.tags.map((tag) => String(tag).slice(0, 8)).slice(0, 2) : []
+    const result = add({
+      text: x.text,
+      aboutName: x.about || '',
+      about,
+      tags,
+      importance: x.importance ?? 0.5,
+      source: 'auto',
+      chatId,
+      scope: scopeFromChatId(chatId),
+      evidence: x.evidence,
+      entity: x.entity,
+      topic: x.topic,
+    })
+    return result.ok && (result.id || result.updated)
+  }
+
+  const extractor = createMemoryExtractor({ dsh, getConfig, relatedTo, commit: commitExtracted, isActive: () => status === 'active' })
+  function extractFacts(chatId, transcript, genSignal = null) {
+    return extractor.extractFacts(chatId, transcript, genSignal)
   }
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
