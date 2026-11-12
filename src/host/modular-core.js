@@ -20,6 +20,7 @@ import { createOnebotOutboxAdapter, paramsFor } from '../chat/adapters/onebot-ou
 import { createLegacyContextAdapter } from '../chat/adapters/legacy-context.js'
 import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
+import { createSystemTurns } from '../chat/system-turns.js'
 import { createTurnController } from '../chat/turn-controller.js'
 import { createContextAssembly } from '../chat/context-assembly.js'
 import { createOutbox } from '../chat/outbox.js'
@@ -195,7 +196,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -344,10 +345,12 @@ export function createModularCore({
   }
 
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
+  const systemTitles = new Map()
   const sessionAdapter = createDshSessionAdapter({
     dsh,
     // 会话标题（legacy hub.js titleFor 同语义，含真实群名）：新核心建完不命名，面板里全是「未命名」
     titleOf: async (chatKey) => {
+      if (String(chatKey).startsWith('system:')) return systemTitles.get(String(chatKey)) || 'QQ · 后台'
       const cfg = getConfig()
       const owner = cfg.ownerName || '主人'
       if (String(chatKey).startsWith('group:')) return `QQ 群 · ${await groupNameOf(String(chatKey).slice(6))}`
@@ -369,6 +372,7 @@ export function createModularCore({
     },
     presetOf: (chatKey) => {
       const cfg = getConfig()
+      if (chatKey.startsWith('system:')) return { agentPreset: 'qq-hub-social' }
       if (chatKey.startsWith('group:')) return { agentPreset: 'qq-hub-social' } // 群永远 ≤ social
       // 私聊：按主人/档位映射 preset（非主人白名单 = social，绝不再冒完整能力档）
       const level = levelFor(cfg, { kind: 'private', userId: chatKey.slice(8) })
@@ -434,6 +438,20 @@ export function createModularCore({
   })
   backfillTitles(registry)
   refreshGroupTitles(registry)
+  const systemTurns = createSystemTurns({
+    createSession: ({ key, title, noTools }) => {
+      systemTitles.set(key, String(title || 'QQ · 后台'))
+      return sessionAdapter.createSession(key, { agentPreset: presetFor(noTools ? 'chat' : 'social', getConfig()) })
+    },
+    resolveAgent: (sessionId) => ctxGet('sessionController')?.resolveAgent?.(sessionId),
+    onEvent: (listener) => dsh.on?.('session/event', listener),
+    archiveSession: (sessionId) => ctxGet('workspaceRegistry')?.archiveSession?.(sessionId),
+    beforeTurn: async (agent, sessionId, { key, noTools }) => {
+      const target = await resolveTarget({ chatId: key, kind: 'system', noTools })
+      if (target) await applySessionModel(agent, sessionId, target)
+    },
+    log,
+  })
   const turnAt = (chatKey) => registry.markTurn(chatKey)
   const sessions = () => Object.fromEntries(Object.entries(registry.snapshot()).map(([chatKey, entry]) => {
     let persona = sessionPersonas.get(chatKey)
@@ -1053,6 +1071,15 @@ export function createModularCore({
     return routeInbound(inbound, ev, 'realtime')
   }
 
+  /** 兼容旧 hub.onMessage 的等待契约；网关实时分发仍使用上面的异步入口。 */
+  async function dispatchLegacyEventSettled(ev) {
+    const routed = await dispatchLegacyEvent(ev)
+    if (!routed?.turnId) return routed
+    const outcome = await controller.waitForTurn(routed.turnId)
+    if (outcome?.error) throw outcome.error
+    return { ...routed, result: outcome?.value }
+  }
+
   /**
    * 入站主链（realtime/backfill 共用），顺序逐项对齐 legacy hub.onMessage：
    * ACL → 旁路指令 → 总开关 → 静音 → 群缓冲 → activity 计数 → 群回复闸 → offer。
@@ -1106,6 +1133,8 @@ export function createModularCore({
         }
       } catch (error) { debug(`旁路指令判定出错（照常走回合）：${error.message}`) }
     }
+    // 白名单内的媒体先暂存；总开关只阻止回合，不影响「刚才那张图」的后续读取。
+    try { noteMedia?.(inbound.chatKey, inbound.segments, String(inbound?.sender?.userId || '')) } catch {}
     // 总开关 / 静音：入口拦（关了开关就不跑回合，不再只靠出站闸兜底）
     if (!cfg.enabled) {
       log.info(`总开关关着，收到 ${inbound.chatKey} 的消息但不处理：${textOfSegments(inbound.segments).slice(0, 30)}`)
@@ -1137,9 +1166,8 @@ export function createModularCore({
       try { interaction.rememberSpeaker(inbound.chatKey, userId) } catch {}
     }
     const fromOwner = isOwner(cfg, userId)
-    // 真机审计 1.11：面板统计与「最近发来的图/表情」（legacy 同一份内存状态）
+    // 真机审计 1.11：入站面板统计
     try { onStats?.('received') } catch {}
-    try { noteMedia?.(inbound.chatKey, inbound.segments, userId) } catch {}
     // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/蒸馏/黑话/日记都从它取料
     try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
     try {
@@ -1154,8 +1182,8 @@ export function createModularCore({
           return { handled: 'group-pass', reason: decision.reason }
         }
         if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
-        controller.offer(inbound)
-        return { handled: 'offered' }
+        const offered = controller.offer(inbound)
+        return { handled: 'offered', turnId: offered.turnId }
       }
       const applyHook = (decision) => {
         if (typeof moduleHooks?.groupDecide !== 'function') return offerWithDecision(decision)
@@ -1182,10 +1210,10 @@ export function createModularCore({
         debug(`私聊插话失败，转为下一轮：${error?.message || error}`)
         controller.offer(inbound)
       })
-      return { handled: 'steered' }
+      return { handled: 'steered', turnId: running }
     }
-    controller.offer(inbound)
-    return { handled: 'offered' }
+    const offered = controller.offer(inbound)
+    return { handled: 'offered', turnId: offered.turnId }
   }
 
   function safeAdapt(ev, source) {
@@ -1273,16 +1301,16 @@ export function createModularCore({
       for (const off of mounted.offs) { try { off?.() } catch {} }
     }
     mountedTools.clear()
+    await systemTurns.dispose()
     await registry.dispose()
     await controller.dispose()
     outbox.dispose()
   }
 
-  /** 重置某个聊天的会话（真机：token-guardian 压缩后要 resetChat 才能让摘要生效；
-   *  它读的是 legacy sessions.json，新核心会话不在里面 → 之前一直「无可重置的会话」）。
-   *  同步返回 bool（调用方同步判断），归档异步做、失败不影响「已重置」的语义（映射已忘掉，下条消息开新会话）。 */
+  /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
   function resetChat(chatKey) {
     const key = String(chatKey || '')
+    try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
     try {
@@ -1296,8 +1324,15 @@ export function createModularCore({
     return true
   }
 
-  /** 会话 id → chatKey 反查（审批/交互提问桥接用：新核心的会话不在 legacy sessions.json 里，
-   *  hub.chatOfSession 查不到 → 审批卡只能弹在 GUI，发不到 QQ。真机实测 2026-11-09）。 */
+  function knownChats() {
+    return Object.entries(registry.snapshot()).map(([chatId, entry]) => {
+      const kind = chatId.startsWith('group:') ? 'group' : 'private'
+      const id = chatId.slice(kind.length + 1)
+      return { chatId, kind, id, name: kind === 'group' ? `QQ 群 · ${groupNames.get(id) || id}` : chatId, lastAt: Number(entry.lastTurnAt || entry.createdAt || 0) }
+    }).sort((a, b) => b.lastAt - a.lastAt)
+  }
+
+  /** 当前 SessionRegistry 的会话 id → chatKey 反查，供审批、提问和模块工具使用。 */
   function chatKeyOfSession(sessionId) {
     const sid = String(sessionId || '')
     if (!sid) return ''
@@ -1354,9 +1389,13 @@ export function createModularCore({
 
   return {
     dispatchLegacyEvent,
+    dispatchLegacyEventSettled,
     runPromptTurn,
+    runSystemTurn: (name, title, prompt, opts) => systemTurns.run(name, title, prompt, opts),
     syncAllModels,
     sessions,
+    knownChats,
+    resetSessions: () => systemTurns.resetSessions(),
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,
