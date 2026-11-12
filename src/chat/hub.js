@@ -21,10 +21,10 @@ import { createGroupQuota } from './group-quota.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from './fish-guard.js'
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
-import { fetchImage, segmentBytes } from '../core/net.js'
+import { fetchImage } from '../core/net.js'
 import { createInboundAudio } from './inbound-audio.js'
 import { createQuotedMessages } from './quoted-messages.js'
-import { mimeOf } from './inbound.js'
+import { createInboundImages } from './inbound-images.js'
 import { redact } from '../core/redact.js'
 import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
 import { resolveChatModel } from './chat-model.js'
@@ -64,7 +64,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -98,6 +98,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   const inboundAudio = sharedInboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
+  const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
   // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
   // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
   const stickerStash = new Map() // chatId → { at, segs: [seg] }
@@ -1085,33 +1086,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
   const transcribe = (msg) => inboundAudio.transcribe(msg)
 
-  /**
-   * 把消息里的图 / 表情包取成可以交给模型的块。
-   * 返回 { images, failed }：failed 是「有图但没取成」的张数，调用方据此补一句文字说明。
-   * 原来认不出类型就 continue 静默丢掉，模型那边只看到一句「[表情包]」，
-   * 用户看到的就是「她看不懂表情包」——所以这里必须把失败也说出去。
-   */
-  async function imagesOf(msg) {
-    const out = []
-    let failed = 0
-    for (const seg of [...msg.stickers, ...msg.images].slice(0, 4)) {
-      try {
-        const buf = await segmentBytes(seg, onebot, { maxBytes: 8 * 1024 * 1024 })
-        const mime = mimeOf(buf)
-        if (!mime.startsWith('image/')) {
-          // 认不出是什么图：不猜，但记账，让它变成一句「收到了但打不开」
-          failed++
-          log.warn(`${msg.chatId} 有一张图认不出类型（${buf.length} 字节，头 ${buf.slice(0, 12).toString('hex')}），没交给模型`)
-          continue
-        }
-        out.push({ data: buf.toString('base64'), mediaType: mime })
-      } catch (error) {
-        failed++
-        log.warn(`${msg.chatId} 图片下载失败：${error.message}`)
-      }
-    }
-    return { images: out, failed }
-  }
+  function imagesOf(msg) { return inboundImages.load(msg) }
 
   /**
    * 把这一条消息里带的文件都取下来。
