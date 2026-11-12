@@ -259,6 +259,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       if (entity) dup.entity = String(entity).slice(0, 30)
       if (topic) dup.topic = String(topic).slice(0, 20)
       if (pinned) dup.pinned = 1
+      staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
       s.rev = (s.rev || 0) + 1
       save(s)
       return { ok: true, message: '✓', updated: dup.id }
@@ -290,6 +291,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     }
     s.items.push(item)
     evictIfNeeded(s, finalScope)
+    staleProfilesIn(s, String(about || ''), finalScope)
     s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
     save(s)
     return { ok: true, message: '✓', id: item.id }
@@ -340,6 +342,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     target.supersededBy = newId
     s.items.push(newItem)
     evictIfNeeded(s, finalScope)
+    staleProfilesIn(s, String(target.about || ''), finalScope)
     s.rev = (s.rev || 0) + 1
     save(s)
     log.info?.(`记忆替代（Supersede）：「${target.text}」已失效 → 「${t}」[ID: ${newId}]`)
@@ -416,6 +419,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const m = s.items.find((x) => x.id === id)
     if (!m) return { ok: false, message: '没有这条' }
     for (const k of ['text', 'about', 'aboutName', 'tags', 'importance']) if (patch[k] !== undefined) m[k] = patch[k]
+    staleProfilesIn(s, String(m.about || ''), String(m.scope || ''))
     s.rev = (s.rev || 0) + 1
     save(s)
     return { ok: true, item: m }
@@ -432,6 +436,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     m.text = t
     m.at = Date.now()
     m.importance = Math.max(Number(m.importance) || 0, Number(importance) || 0)
+    staleProfilesIn(s, String(m.about || ''), String(m.scope || ''))
     s.rev = (s.rev || 0) + 1
     save(s)
     return true
@@ -445,6 +450,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!m) return false
     m.invalidAt = Date.now()
     if (byId) m.supersededBy = byId
+    staleProfilesIn(s, String(m.about || ''), String(m.scope || ''))
     s.rev = (s.rev || 0) + 1
     save(s)
     return true
@@ -457,6 +463,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!m) return { ok: false, message: '没有这条' }
     delete m.invalidAt
     delete m.supersededBy
+    staleProfilesIn(s, String(m.about || ''), String(m.scope || ''))
     s.rev = (s.rev || 0) + 1
     save(s)
     return { ok: true }
@@ -465,7 +472,9 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function remove(id) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
+    const target = s.items.find((m) => m.id === id)
     s.items = s.items.filter((m) => m.id !== id)
+    if (target) staleProfilesIn(s, String(target.about || ''), String(target.scope || ''))
     s.rev = (s.rev || 0) + 1
     save(s)
     return { ok: true }
@@ -486,7 +495,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       if (String(m.aboutName || '') === from) { m.aboutName = to; hit = true }
       if (hit) moved++
     }
-    if (moved) { s.rev = (s.rev || 0) + 1; save(s) }
+    if (moved) { staleProfilesIn(s, from); staleProfilesIn(s, to); s.rev = (s.rev || 0) + 1; save(s) }
     log.info(`主人迁移：${from} → ${to}，搬了 ${moved} 条记忆`)
     return { ok: true, moved, message: `搬了 ${moved} 条记忆到 ${to}` }
   }
@@ -675,14 +684,27 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!q) return ''
     return `${q}@${scope || 'global'}`
   }
+  function staleProfilesIn(s, qq = '', scope = '') {
+    let changed = 0
+    for (const p of Object.values(s.profiles || {})) {
+      if (p.origin === 'manual' || p.stale) continue
+      if (qq && String(p.qq) !== String(qq)) continue
+      if (scope && String(p.scope || 'global') !== String(scope)) continue
+      p.stale = true
+      p.staleAt = Date.now()
+      changed++
+    }
+    return changed
+  }
   /** 取这个 QQ 在某个作用域下的档案；scope 为空时返回 global 那份（面板/兼容用）。 */
   function profileOf(qq, scope) {
     const all = load().profiles || {}
     const key = profileKeyOf(qq, scope)
-    if (key && all[key]) return all[key]
+    if (key && all[key] && !all[key].stale) return all[key]
     if (scope) return null
     // 没给作用域：退回老的按 QQ 号存的那份（兼容旧调用与旧数据）
-    return all[String(qq)] || null
+    const legacy = all[String(qq)]
+    return legacy && !legacy.stale ? legacy : null
   }
   function setProfile(qq, text, name = '', scope = '') {
     const s = load()
@@ -690,10 +712,24 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const key = profileKeyOf(qq, scope)
     const t = String(text || '').trim().slice(0, 200)
     const prev = s.profiles[key]
-    if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now() }
+    if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now(), origin: 'manual' }
     else delete s.profiles[key]
     s.rev = (s.rev || 0) + 1
     save(s)
+  }
+  function setDerivedProfile(qq, text, name, scope, facts, expectedRev) {
+    const s = load()
+    if (expectedRev !== undefined && (s.rev || 0) !== expectedRev) return false
+    s.profiles = s.profiles || {}
+    const key = profileKeyOf(qq, scope)
+    s.profiles[key] = {
+      qq: String(qq), scope: scope || 'global', text: String(text || '').trim().slice(0, 200),
+      name: name || s.profiles[key]?.name || '', at: Date.now(), origin: 'derived',
+      sourceFactIds: facts.map((item) => String(item.id)), sourceRev: s.rev || 0,
+    }
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return true
   }
 
   /** 给系统提示词上下文用：人物小档案 + 相处经验（常驻）+ 按这一轮对方说的话检索到的记忆。 */
@@ -937,7 +973,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     isActive: () => status === 'active', createGenerationSignal, generationOf,
     load, save, health: () => store.health(), relatedTo,
     add, revise, supersede, scopeFromChatId,
-    profileOf, setProfile, profileKeyOf,
+    profileOf, setProfile, setDerivedProfile, profileKeyOf,
     insightsOf, setInsights, styleOf, setStyle, personKey,
     distillOf, putDistill,
   })
@@ -1032,6 +1068,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       cache.clear()
       tokCache.clear()
       const health = store.health()
+      if (health.ok) {
+        const state = load()
+        if (staleProfilesIn(state)) { state.rev = (state.rev || 0) + 1; save(state) }
+      }
       const message = health.ok ? '记忆档案已重新载入，索引已更新' : '部分档案或状态损坏，请修复后重新载入；自动整理已暂停'
       log?.info?.(message)
       return { ok: health.ok, health, message }

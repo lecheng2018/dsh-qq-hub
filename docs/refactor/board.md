@@ -90,7 +90,7 @@
 | P1b 审批与提问共享 | 已在 main（PR #57 / 43f8781） | Integration | P1a + 当前 SessionRegistry | host/effects、hub 注入、注册表生命周期及专属测试 | 同一注册表服务新旧入口，非 QQ 会话交还原服务，卸载清理等待项 | 还原组合根接线，不启用第二套注册表 |
 | P2 入站媒体与上下文共享 | ✅ 对照完成（P2a–f） | Inbound + Integration | P1；ADR-0002 出站前置门禁 | inbound/context 服务及消费接线 | 新旧输入等价，取消不污染，无双发 | 旧 facade 调用同一实现 |
 | P3 记忆学习管线独立 | ✅ 已完成（P3a–f，archive 与学习组合拆分） | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；模型入口统一取消与超时，archive 不 import LLM/extractor | 关新消费者，防止双调度 |
-| P4 派生学习模块自治 | 待开始，按子域拆 PR | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 独立停启、来源失效、作用域安全 | 关闭消费者，不把派生结果灌回事实名下 |
+| P4 派生学习模块自治 | 🔵 P4a 画像来源与失效完成；独立停启及 reflection/style/distill 待做 | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 画像带来源事实与版本，事实变更/重载后停止旧画像注入；独立停启、其余来源失效、作用域安全 | 关闭消费者，不把派生结果灌回事实名下 |
 | P5 兼容层退出 | 待 owner 门禁 | Integration + Release | ADR-0002 全等价验收 | facade 清理、矩阵与运维文档 | 真机对照、观察窗口和回滚演练 | 独立切换与恢复方案 |
 
 P1 最终本地验证（Node 22.16.0，2026-11-12；基于含 #53 的 main）：
