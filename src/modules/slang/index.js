@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readJson, writeJson } from '../../core/store.js'
-import { askModel, withAbortTimeout } from '../../core/llm.js'
+import { askModel, withAbortTimeout, modelWithOverride } from '../../core/llm.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
 import { discoverSlangCandidates, buildSlangPrompt, parseSlangItems, renderSlangHint } from '../../features/slang-discover.js'
 
@@ -86,7 +86,7 @@ export function createSlangEngine ({
   }
 
   function withModel (cfg) {
-    return { ...cfg, model: { ...(cfg.model || {}), ...cfgOf().model } }
+    return { ...cfg, model: modelWithOverride(cfg.model, cfgOf().model) }
   }
 
   function learnDay (day) {

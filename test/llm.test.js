@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-const { askModel, modelReasoning, pickReasoningEffort, clearReasoningCache } = await import('../src/core/llm.js')
+const { askModel, modelReasoning, pickReasoningEffort, clearReasoningCache, modelWithOverride } = await import('../src/core/llm.js')
 
 const CFG = { model: { provider: 'p', model: 'm' } }
 
@@ -166,4 +166,47 @@ test('带图的请求不触发空正文重试（图片路径有自己的兜底�
   const out = await askModel(dsh, { cfg: CFG, text: '看图', images: [{ data: Buffer.from('x').toString('base64'), mediaType: 'image/png' }] })
   assert.equal(out, '')
   assert.equal(calls.length, 1)
+})
+
+// 后台任务指定模型时的合并规则（1.3.66 事故）：
+// 面板「跟随主模型」传的是 { provider: '', model: '' }，直接展开会把主模型覆盖成空，
+// defaultModel() 因此取不到值、静默回落到宿主默认模型 —— 看起来像「选了什么都跟着主模型」。
+test('modelWithOverride：指定模型两个字段都有才替换', () => {
+  const main = { provider: 'fan', model: 'main-model', reasoningEffort: 'low' }
+  const picked = modelWithOverride(main, { provider: 'mini', model: 'MiniMax-M3.1-Flash' })
+  assert.equal(picked.provider, 'mini', '选了就用选的')
+  assert.equal(picked.model, 'MiniMax-M3.1-Flash')
+  assert.equal(picked.reasoningEffort, 'low', '其它设置沿用主模型')
+  assert.equal(main.provider, 'fan', '不改原对象')
+})
+
+test('modelWithOverride：留空跟随主模型，绝不用空串覆盖', () => {
+  const main = { provider: 'fan', model: 'main-model', reasoningEffort: 'low', vision: 'auto' }
+  for (const empty of [{ provider: '', model: '' }, {}, null, undefined, { provider: 'fan', model: '' }]) {
+    const out = modelWithOverride(main, empty)
+    assert.equal(out.provider, 'fan', `${JSON.stringify(empty)} 时主模型 provider 必须保留`)
+    assert.equal(out.model, 'main-model', '主模型 model 必须保留')
+    assert.equal(out.vision, 'auto', '其它字段照旧')
+  }
+  // 只填一半也不能替换（半套模型名会让请求打空）
+  const half = modelWithOverride(main, { provider: 'mini', model: '' })
+  assert.equal(half.provider, 'fan', '只有 provider 时跟随主模型')
+})
+
+test('modelWithOverride 的产物能被 defaultModel 认出来（端到端：不会掉到宿主默认）', async () => {
+  const main = { provider: 'fan', model: 'main-model' }
+  const cfg = { model: modelWithOverride(main, { provider: '', model: '' }) }
+  const calls = []
+  const dsh = {
+    get: (n) => (n === 'agentDefaultModel'
+      ? { currentSelection: () => ({ provider: 'host', model: 'host-default' }) }
+      : n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo () { return { reasoning: null } },
+      async *stream (params) { calls.push(params) },
+    },
+  }
+  await askModel(dsh, { cfg, text: 'x', maxTokens: 10 }).catch(() => {})
+  assert.equal(calls[0].provider, 'fan', '留空时必须走主模型，不是宿主默认')
+  assert.equal(calls[0].model, 'main-model')
 })
