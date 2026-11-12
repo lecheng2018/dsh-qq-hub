@@ -83,14 +83,14 @@ test('sessionsDirFor：找不到返回空串，不抛', () => {
 })
 
 test('接线：面板和路由都在，且真读了历史', () => {
-  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory-distill-history.js', import.meta.url), 'utf8')
   assert.match(mem, /scanTranscripts\(dir, \{ group: groupName \}\)/, 'memory 里扫历史（会话记录作补充源）')
   // #74：chatlog 是主证据源 —— 会话记录会把主人发言脱敏成「主人：…」（无 QQ 号），
   // 解析正则认不出来，所以主人学自己会永远卡在旧数据。chatlog 有真实 uid。
   assert.match(mem, /chatLogSnapshot\(day\)\?\.records/, 'chatlog 快照取 records 数组')
   assert.match(mem, /chatId\) !== `group:\$\{group\}`/, 'chatlog 按群 id 精确过滤')
-  assert.match(mem, /learnDistillFromHistory/, '有「从历史学」入口')
-  const mod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
+  assert.match(mem, /learnFromHistory/, '有「从历史学」入口')
+  const mod = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.route\('\/distill\/history'/)
   assert.match(mod, /api\.route\('\/distill\/from-history'/)
   const client = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')

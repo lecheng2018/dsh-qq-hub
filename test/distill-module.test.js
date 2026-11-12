@@ -322,7 +322,7 @@ test('引擎：L2 累计 5 批聚合；L3 每日一次出增长段；事件回�
 test('memory 模块提供 memory-store 能力；蒸馏回退干净（memory.js 不再含管线）', () => {
   const memoryMod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
   assert.match(memoryMod, /provides: \['memory-store'\]/)
-  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory-distill-history.js', import.meta.url), 'utf8')
   assert.equal((mem.match(/distillPipe|noteGroupMessage|distill-pipeline/g) || []).length, 0, '管线已从记忆学习层移交独立模块')
   // 日常整理的学习已迁 distill 模块自身 tick（学成 emit('distill/growth-updated') → memory 模块刷卡）；
   // memory-learning.js 里只剩手动「从历史学」一处直挂 onDistillLearned。

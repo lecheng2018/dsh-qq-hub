@@ -6,9 +6,8 @@
 //   - 纯逻辑在 src/features/distill-pipeline.js（提示词/解析器/行为统计，独立可测）；
 //   - 本模块只做接线与状态：**状态存模块命名空间**（api.dataDir → modules-data/distill/），
 //     不写进 memory.json——共享状态有唯一 owner（本模块）；
-//   - 依赖走公开面：目标列表经 api.use('memory').distillList()（memory 模块声明
-//     provides: ['memory-store']，本模块 requires 它——SDK 装载计划强制顺序）；
-//     学成后 emit('distill/growth-updated', { gid })，memory 模块监听并刷新派生卡；
+//   - 目标与历史画像归本模块 store.json；memory.distillList 仅在首次启动时只读迁移；
+//     历史学习、注入、路由和派生卡刷新均由本模块负责，memory 不再承担业务写入；
 //   - 模型可配小成本：memory.distillModel（留空跟随主模型）；批阈值 memory.distillBatch。
 //
 // 边界（写进产物也写进提示词）：只借说话方式与行为节奏，不冒充对方；
@@ -17,7 +16,10 @@
 import { readJson, writeJson } from '../../core/store.js'
 import { askModel, withAbortTimeout, modelWithOverride } from '../../core/llm.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
-import { collectMemberLines, enoughEvidence, dedupConvo } from '../../features/distill.js'
+import { collectMemberLines, enoughEvidence, dedupConvo, renderDistillHint } from '../../features/distill.js'
+import { createDistillStore } from '../../features/distill-store.js'
+import { createMemoryDistillHistory } from '../../features/memory-distill-history.js'
+import { refreshDistillCard, styleEntries } from '../../persona/distill-card.js'
 import {
   behaviorStats, renderBehaviorDigest, buildL1Prompt, parseL1, buildL2Prompt, parseL2,
   buildL3Prompt, parseL3, shouldTriggerL1, shouldTriggerL2, renderGrowthSegment,
@@ -305,14 +307,15 @@ export const distillModule = {
   provides: ['persona-growth'],
   requires: ['memory-store'],
   tab: 'mood',
-  files: ['features/distill-pipeline.js', 'features/distill.js'],
+  files: ['features/distill-pipeline.js', 'features/distill.js', 'features/distill-store.js', 'features/memory-distill-history.js'],
   setup(api) {
     const stateFile = api.dataDir('pipeline.json')
+    let legacy = []
+    try { legacy = api.use('memory')?.distillList?.() || [] } catch {}
+    const store = createDistillStore({ file: api.dataDir('store.json'), legacy })
     const engine = createDistillEngine({
       config: api.config,
-      targetsOf: () => {
-        try { return api.use('memory')?.distillList?.() || [] } catch { return [] }
-      },
+      targetsOf: () => store.targets(),
       loadState: () => readJson(stateFile),
       saveState: (s) => writeJson(stateFile, s),
       chatLog: api.core.chatLog,
@@ -320,18 +323,92 @@ export const distillModule = {
       dsh: api.dsh,
       log: api.log,
     })
+    const refreshCard = (gid) => {
+      const entries = styleEntries(store.list().filter((target) => String(target.gid) === String(gid)))
+      const growth = engine.growthList(String(gid)) || []
+      const r = refreshDistillCard({ gid, entries, growth, cfg: api.config(), log: api.log })
+      if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
+      return r
+    }
+    let active = true
+    let generation = 1
+    const controllers = new Set()
+    function createGenerationSignal(timeoutMs = 120000) {
+      const controller = new AbortController()
+      const current = generation
+      controllers.add(controller)
+      const timer = setTimeout(() => controller.abort(new Error('历史蒸馏超时')), timeoutMs)
+      timer.unref?.()
+      return {
+        signal: controller.signal,
+        isValid: () => active && generation === current && !controller.signal.aborted,
+        cleanup: () => { clearTimeout(timer); controllers.delete(controller) },
+      }
+    }
+    function generationOf(external) {
+      const owned = external ? null : createGenerationSignal()
+      return { signal: external || owned, cleanup: () => owned?.cleanup() }
+    }
+    const history = createMemoryDistillHistory({
+      dsh: api.dsh,
+      getConfig: api.config,
+      hub: api.core.hub,
+      chatLog: api.core.chatLog,
+      log: api.log,
+      onDistillLearned: refreshCard,
+      distillOf: store.of,
+      putDistill: store.put,
+      createGenerationSignal,
+      generationOf,
+      isActive: () => active,
+    })
 
+    api.context(({ chat }) => {
+      if (chat.kind !== 'group') return ''
+      const hints = []
+      for (const target of store.targets()) {
+        if (String(target.gid) !== String(chat.groupId)) continue
+        const hint = renderDistillHint(target.name || target.uid, store.of(target.gid, target.uid) || {})
+        if (hint) hints.push(hint)
+      }
+      return hints.join('\n')
+    })
     api.on('activity', (a) => {
       try {
         if (!a || a.kind !== 'in') return
         if (a.chatId && a.userId) engine.noteMessage(a.chatId, a.userId)
       } catch (error) { api.log.debug?.('蒸馏消息计数失败：', error.message) }
     })
-
+    api.on('distill/growth-updated', (payload) => {
+      const gid = String(payload?.gid || '')
+      if (gid) refreshCard(gid)
+    })
     api.every(60_000, () => engine.dailyTick({
       onGrowth: async (gid) => { api.emit('distill/growth-updated', { gid }) },
     }), '蒸馏每日沉淀')
 
+    const { http } = api.core
+    api.route('/distill/list', async () => ({ ok: true, list: store.list() }))
+    api.route('/distill/add', async (req) => store.addTarget(await http.body(req)))
+    api.route('/distill/remove', async (req) => {
+      const body = await http.body(req)
+      return store.removeTarget(body.gid, body.uid)
+    })
+    api.route('/distill/history', async (req) => {
+      const query = http.query(req) || {}
+      const result = history.history({ gid: query.group || '' })
+      return {
+        ok: true, dir: result.dir, sessions: result.sessions, total: result.total,
+        chatlogDays: result.chatlogDays || 0, chatlogLines: result.chatlogLines || 0,
+        from: result.from, to: result.to, speakers: result.speakers,
+      }
+    })
+    api.route('/distill/from-history', async (req) => history.learnFromHistory(await http.body(req)))
+    api.route('/distill/card/refresh', async (req) => {
+      const body = await http.body(req)
+      if (!body.gid) return { ok: false, message: '没给群号' }
+      return refreshCard(body.gid)
+    })
     api.route('/distill/pipeline/status', async () => ({ ok: true, status: engine.status() }))
     api.route('/distill/pipeline/run-l3', async () => {
       const n = await engine.runL3Daily({
@@ -344,7 +421,17 @@ export const distillModule = {
       status: () => engine.status(),
       growthList: (gid) => engine.growthList(gid),
       runL3Daily: (opts) => engine.runL3Daily(opts),
-      dispose: () => engine.dispose(),
+      history: (options) => history.history(options),
+      learnFromHistory: (options) => history.learnFromHistory(options),
+      dispose: () => {
+        active = false
+        generation++
+        for (const controller of controllers) {
+          try { controller.abort(new Error('distill disposed')) } catch {}
+        }
+        controllers.clear()
+        engine.dispose()
+      },
     }
   },
 }
