@@ -87,6 +87,10 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     debug(`回合 ${turn.state}：${turn.chatKey} 成员 ${turn.memberEventIds.length} 条${error ? '（' + turn.error + '）' : ''}`)
   }
 
+  function completeTurn(turn, outcome) {
+    turn._completion?.resolve(outcome)
+  }
+
   /** 窗口到期 / 立即 flush：merging → 排队执行（经 scheduler 与在飞回合串行）。 */
   function flushTurn(turn) {
     const w = windowFor(turn.chatKey)
@@ -154,7 +158,12 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
         throw error
       }
     }
-    return scheduler.submit(turn.chatKey, job)
+    const pending = scheduler.submit(turn.chatKey, job)
+    pending.then(
+      (value) => completeTurn(turn, { state: turn.state, value }),
+      (error) => completeTurn(turn, { state: turn.state, error }),
+    )
+    return pending
   }
 
   /** 取消 merging 态回合：lead 消失，但 follower 不销毁——各自重新作为 lead 开新回合。 */
@@ -163,6 +172,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     if (w.mergingTurnId === turn.turnId) clearTimer(turn.chatKey, w)
     const followers = turn.members.slice(1)
     setTurnState(turn, 'cancelled')
+    completeTurn(turn, { state: turn.state })
     // 终态记录保留在 turns 里（可查证 cancelled），不删——getTurn 要能回答「它被取消了」
     for (const f of followers) {
       if (!f) continue
@@ -204,6 +214,8 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
 
     const turn = createTurn({ chatKey, memberEventId: inbound.eventId, createdAt: null })
     turn.members[0] = inbound
+    turn._completion = { promise: null, resolve: null }
+    turn._completion.promise = new Promise((resolve) => { turn._completion.resolve = resolve })
     turns.set(turn.turnId, turn)
     const { waitMs, maxMs } = windowParams(chatKey)
     w.mergingTurnId = turn.turnId
@@ -252,6 +264,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
       // 排队未跑：直接落终态（还没发生副作用，诚实可标 cancelled），follower 事件重开为新 lead。
       // 排队 job 出队时用 isTerminal 检查跳过执行——不再照跑 execute 甚至谎报 succeeded。
       setTurnState(turn, 'cancelled')
+      completeTurn(turn, { state: turn.state })
       const l = live.get(turn.turnId)
       if (l) l.closed = true
       const followers = turn.members.slice(1)
@@ -271,7 +284,12 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
   /** 只读回合视图（面板/诊断/测试）。 */
   function getTurn(turnId) {
     const t = turns.get(turnId)
-    return t ? { ...t, members: undefined, cancelSignal: undefined, _abort: undefined } : null
+    return t ? { ...t, members: undefined, cancelSignal: undefined, _abort: undefined, _completion: undefined } : null
+  }
+
+  /** 等待指定回合到终态；结果保留成功值或失败原因，不额外制造未处理拒绝。 */
+  function waitForTurn(turnId) {
+    return turns.get(turnId)?._completion?.promise || Promise.resolve(null)
   }
 
   /** 是否有窗口在收成员（测试视图）。 */
@@ -298,7 +316,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
       if (w.mergingTurnId) {
         const turn = turns.get(w.mergingTurnId)
         if (turn && turn.state === 'merging') {
-          try { setTurnState(turn, 'cancelled') } catch {}
+          try { setTurnState(turn, 'cancelled'); completeTurn(turn, { state: turn.state }) } catch {}
         }
       }
     }
@@ -311,7 +329,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
         // 被 dispose 清出队列的排队回合：scheduler.dispose 会 reject 它的 job，但 job 在
         // 到达 isTerminal 检查前就抛“已卸载”——回合记录会永久停在 pending（P2 复核）。
         // 这里直接落终态，保证 getTurn 可查证、不留 pending。
-        try { setTurnState(turn, 'cancelled') } catch {}
+        try { setTurnState(turn, 'cancelled'); completeTurn(turn, { state: turn.state }) } catch {}
       } else if (turn && turn.state === 'running') {
         turn.cancelRequestedAt = Date.now()
         turn._abort?.abort(new Error('controller 已卸载'))
@@ -321,5 +339,5 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     await scheduler.dispose()
   }
 
-  return { offer, steer, cancel, getTurn, mergingTurnOf, runningTurnOf, runExclusive, dispose }
+  return { offer, steer, cancel, getTurn, waitForTurn, mergingTurnOf, runningTurnOf, runExclusive, dispose }
 }
