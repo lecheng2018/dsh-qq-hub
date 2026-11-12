@@ -13,6 +13,23 @@ export function defaultModel(dsh, cfg) {
   return null
 }
 
+/**
+ * 后台任务「指定模型」的合并规则：两个字段都填了才替换，否则整条沿用主模型。
+ *
+ * 别写成 `{ ...main, ...override }`：override 里 provider/model 常是空串（面板默认
+ * 「跟随主模型」），展开会把主模型的这两个字段**覆盖成空**，随后 defaultModel()
+ * 两个条件都不满足，静默回落到宿主默认模型 —— 看起来就是「选了什么都跟着主模型」。
+ * @param {object} main 主模型配置（cfg.model）
+ * @param {{provider?:string, model?:string}} override 指定的模型
+ */
+export function modelWithOverride (main, override) {
+  const base = { ...(main || {}) }
+  const provider = String(override?.provider || '').trim()
+  const model = String(override?.model || '').trim()
+  if (!provider || !model) return base
+  return { ...base, provider, model }
+}
+
 // ---------- 视觉能力 ----------
 //
 // 模型能不能看图写在 DSH 的模型元数据里（inputModalities，DSH 自己的图片入口也靠它判断）。
