@@ -145,8 +145,13 @@ test('引擎：L1 回包不是 JSON 时当场带纠正提示重试一次，第�
     await new Promise((r) => setTimeout(r, 60))
     assert.equal(calls.length, 2, '首次解析失败必须当场重试一次')
     assert.ok(String(calls[1].text || '').includes('上一轮回包不是约定格式'), '重试请求要带纠正提示')
-    assert.equal(calls[0].reasoningEffort, 'off', '蒸馏是机械提取，不传推理档（推理模型会把答案写成报告正文）')
-    assert.equal(calls[1].reasoningEffort, 'off', '纠正重试同样关闭推理')
+    // 1.3.66: 不再传 reasoningEffort。MiniMax-M3.1-Flash 是 forceAdaptiveThinking，
+    // 服务端不接受 thinking.type=disabled（400），宿主也会把不支持的档收敛回默认，
+    // 传 off 等于没传还会在支持 off 的模型上踩 400。真正治「写成报告」的是 token 预算。
+    assert.equal(calls[0].reasoningEffort, undefined, '不指定推理档，交给宿主默认 low')
+    assert.equal(calls[1].reasoningEffort, undefined, '纠正重试同样不指定')
+    assert.ok(calls[0].maxTokens >= 4000, 'L1 预算要够思考段 + JSON（1200 实测必败）')
+    assert.ok(calls[1].maxTokens >= 4000, '重试同样预算')
     assert.equal(engine.status()[0].batches, 1, '重试成功后批次正常入账')
   } finally {
     try { rmSync(dir, { recursive: true, force: true }) } catch {}
@@ -176,6 +181,10 @@ test('引擎：两次都解析失败 → 批次不入账，不无限重试', asy
     await new Promise((r) => setTimeout(r, 60))
     assert.equal(calls.length, 2, '只重试一次，不得无限打模型')
     assert.equal(engine.status()[0].batches, 0, '两次都失败则批次不提交')
+    // 失败不推进消费游标：这批原话要能在下次重试时重读，否则证据永久丢失
+    const saved = JSON.parse(readFileSync(stateFile, 'utf8'))
+    const pipe = saved['777#555'] || {}
+    assert.ok(!pipe.sources || !pipe.sources.d1, '解析失败不写 cursor（下次重读同一窗口）')
   } finally {
     try { rmSync(dir, { recursive: true, force: true }) } catch {}
   }
