@@ -17,6 +17,28 @@ import { renderGrowthSegment } from '../features/distill-pipeline.js'
 /** 派生卡 id：稳定可推导，群号做后缀。 */
 export const distillCardId = (gid) => `persona-语感-${String(gid)}`
 
+// 派生卡里由蒸馏追加的两个段落头。刷新时必须先切掉，否则「底卡=派生卡」时
+// 每次刷新都会把上次的借用段再叠一遍（1.3.66 修：实测同一张卡里堆了 5 份互相矛盾的语感块）。
+const STYLE_SECTION_HEAD = '【从群友身上借来的说话方式】'
+const GROWTH_SECTION_HEAD = '【从群友身上蒸馏的人格增长段'
+
+/**
+ * 从一段人设正文里切掉蒸馏追加的段落，还原出真正的底卡正文。
+ * 底卡不是派生卡时（正文里没有这两个头）原样返回。
+ */
+export function stripDistillSections (body) {
+  let out = String(body || '')
+  for (const head of [STYLE_SECTION_HEAD, GROWTH_SECTION_HEAD]) {
+    const at = out.indexOf(head)
+    if (at >= 0) out = out.slice(0, at)
+  }
+  return out.trimEnd()
+}
+
+// 派生卡（persona-语感-<群号>）自己就是蒸馏产物，不能当底卡用：
+// 拿它当底卡会把别的群/上一次的语感带进来，还会越刷越厚。
+export const isDistillCardId = (id) => String(id || '').startsWith('persona-语感-')
+
 /** 画像 → 「【从群友身上借来的说话方式】」段落。多个目标就拼多块。 */
 export function renderStyleBlock (entries) {
   const parts = []
@@ -41,9 +63,9 @@ export function renderStyleBlock (entries) {
   return '\n\n' + '【从群友身上借来的说话方式】\n\n' + parts.join('\n\n') + '\n'
 }
 
-/** 派生卡正文 = 底卡正文 + 借用段 + 增长段（蒸馏流水线 L3，可选）。 */
+/** 派生卡正文 = 底卡正文（剥掉旧蒸馏段）+ 借用段 + 增长段（蒸馏流水线 L3，可选）。 */
 export function buildDerivedBody (baseBody, entries, growth) {
-  let body = String(baseBody || '').trimEnd() + renderStyleBlock(entries)
+  let body = stripDistillSections(baseBody) + renderStyleBlock(entries)
   for (const g of growth || []) {
     const block = renderGrowthSegment(g.uid || g.name, g.segment)
     if (block) body += '\n\n' + block
@@ -74,6 +96,24 @@ export function styleEntries (targets) {
 }
 
 /**
+ * 挑一张真正的底卡：跳过派生卡自己，按群默认 > 全局 current 往下找。
+ * 全都指向派生卡时才退到第一张非派生的卡（否则底卡=派生卡，语感会一层层叠上去）。
+ */
+export function pickBaseCard (cfg, gid) {
+  const p = (cfg && cfg.persona) || {}
+  const g = String(gid || '')
+  const candidates = [p.groups && p.groups[g], p.groupDefault, p.current, 'dafeiyu']
+  for (const id of candidates) {
+    const sid = String(id || '').trim()
+    if (!sid || isDistillCardId(sid)) continue
+    const card = readPersona(sid)
+    if (card) return card
+  }
+  const fallback = listPersonas().find((x) => x && x.id && !isDistillCardId(x.id))
+  return fallback || null
+}
+
+/**
  * 生成/刷新某群的派生人设卡。
  * @param {{gid:string, entries:{name,profile}[], growth?:{uid,segment}[], cfg:object, log?:object}} opts
  *   growth：蒸馏流水线 L3 的人格增长段（第二人称指令式），附在借用段之后。
@@ -84,7 +124,9 @@ export function refreshDistillCard ({ gid, entries, growth, cfg, log = console }
   const dec = takeoverDecision(cfg, gid, cardId)
   if (!dec.takeover) return { ok: false, message: dec.reason }
   if ((!entries || !entries.length) && (!growth || !growth.length)) return { ok: false, message: '这个群还没有学成的画像，先蒸馏一个群友再说' }
-  const base = readPersona(dec.baseId) || listPersonas()[0]
+  // 底卡绝不能是派生卡本身（那会把上次的语感再叠一遍）。takeoverDecision 允许
+  // groups[gid] == cardId，所以这里单独挑真正底卡。
+  const base = pickBaseCard(cfg, gid)
   if (!base) return { ok: false, message: '找不到底卡人设' }
   const body = buildDerivedBody(base.body, entries, growth)
   savePersona(cardId, {
@@ -92,6 +134,8 @@ export function refreshDistillCard ({ gid, entries, growth, cfg, log = console }
     tags: ['自动生成'],
     body,
   })
-  log.info?.(`蒸馏语感已写进群人设卡 ${cardId}（底卡 ${base.id || dec.baseId} + ${entries.length} 个借用对象${growth?.length ? ' + ' + growth.length + ' 个增长段' : ''}）`)
-  return { ok: true, message: '已生成群专属人设卡', cardId, baseId: base.id || dec.baseId }
+  const baseLabel = base.id || '(第一张非派生卡)'
+  const cleaned = body.length !== String(base.body || '').trimEnd().length
+  log.info?.(`蒸馏语感已写进群人设卡 ${cardId}（底卡 ${baseLabel} + ${entries.length} 个借用对象${growth?.length ? ' + ' + growth.length + ' 个增长段' : ''}${cleaned ? '；已清掉旧的蒸馏段' : ''}）`)
+  return { ok: true, message: '已生成群专属人设卡', cardId, baseId: base.id || '' }
 }
