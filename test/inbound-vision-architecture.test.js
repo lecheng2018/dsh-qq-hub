@@ -9,7 +9,7 @@ test('辅助视觉由组合根共享，modular 在附件登记前使用同一降
   const hub = source('src/chat/hub.js')
   const core = source('src/host/modular-core.js')
   assert.equal((host.match(/createInboundVision\(/g) || []).length, 1)
-  assert.match(host, /hub = createHub\(\{[\s\S]*?\binboundVision,/)
+  assert.match(host, /hub = createCurrentHub\(\{/)
   assert.match(host, /createModularCore\(\{[\s\S]*?\binboundVision,/)
   assert.doesNotMatch(hub, /async function imageTextFor/)
   assert.match(core, /inboundVision\.admit\(content,/)
