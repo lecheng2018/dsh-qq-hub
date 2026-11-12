@@ -85,15 +85,16 @@ test('流水接线：入站 (chatKey,昵称,文本,uid) + 出站成功 bot 行�
   } finally { await core.dispose(); await mock.close() }
 })
 
-// —— #17 turnState 说话人登记（新核心不经 pushToSession，之前恒空）——
-test('说话人登记：noteSpeakers 收到 sessionId 与 sender 列表（报告 C 组 #17）', async () => {
-  const noted = []
-  const { core, mock } = await fixture({ coreOver: { noteSpeakers: (sid, senders) => noted.push([sid, senders]) } })
+// —— #17 当前参与者服务：说话人列表与主人权限来自同一状态 ——
+test('说话人登记：当前 participants 服务记录 sessionId 对应的发送者（报告 C 组 #17）', async () => {
+  const { core, mock } = await fixture()
   try {
     await core.dispatchLegacyEvent(privEv())
     await sleep(600)
     const sid = Object.values(core.registry.snapshot())[0]?.sessionId
-    assert.ok(sid && noted.some(([s, list]) => s === String(sid) && list.includes(OWNER)), `未登记：${JSON.stringify(noted)}`)
+    assert.ok(sid, '未建立会话')
+    assert.deepEqual(core.services.speakersOf(sid), [OWNER])
+    assert.equal(core.services.turnHasOwner(sid), true)
   } finally { await core.dispose(); await mock.close() }
 })
 

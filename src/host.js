@@ -8,7 +8,7 @@
 //   src/host/http.js            面板 HTTP 小工具（send/readBody/route…）
 //   src/host/gateway.js         QQ 网关连接层（OneBot 客户端 + 登录核对 + 事件分发 + 补收）
 //   src/host/models.js          DSH 模型目录（listModels + 缓存）
-//   src/host/pipeline.js        RFC-0001 洋葱管道装配（FLAG_USE_PIPELINE 开启态）
+//   src/host/current-hub.js     当前核心的冻结窄 facade
 //   src/host/effects.js         DSH 旁路 seam（审批流/交互提问/会话监听/看门狗）
 //   src/host/panel/overview.js  面板聚合视图（overview/脱敏/连接诊断）
 //   src/host/panel/routes-*.js  72 条面板路由按域拆分
@@ -29,7 +29,6 @@ import { dataDir, readJson, writeJson } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
-import { createHub } from './chat/hub.js'
 import { createChatLog, createChatLogApi } from './chat/chat-log.js'
 import { createQuestionRegistry } from './chat/questions.js'
 import { createApprovalRegistry } from './chat/approvals.js'
@@ -49,21 +48,14 @@ import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { BUILTINS } from './modules/index.js'
-// RFC-0001 Phase 0（US-003）：遗留核心终端化 + FLAG_USE_PIPELINE 熔断开关
-import { isPipelineEnabled, isModularCoreEnabled, unwrapPipelineError } from './kernel/legacy-fallback.js'
 import { createSharedOutbox } from './host/shared-outbox.js'
 import { createHubEgress } from './host/hub-egress.js'
-import { isEgressShadowEnabled } from './kernel/ctx-store.js'
-// RFC-0001 Phase 1（US-007）：出口切换——pipeline 开启时 hub 的发送全部收口 ctx.reply → Dispatcher
-import { createEgressOnebot, createEgressSendHook } from './kernel/mw-egress-cutover.js'
-// RFC-0001 Phase 3（US-010）：记忆装配接管（NEW_MEMORY_PIPELINE 灰度位）
-import { createContextProviderTakeover, isNewMemoryPipelineEnabled } from './kernel/mw-memory.js'
 // 分层后的装配件
 import { createHttpKit } from './host/http.js'
 import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
-import { assemblePipeline } from './host/pipeline.js'
 import { createModularCore } from './host/modular-core.js'
+import { createCurrentHub } from './host/current-hub.js'
 import { createModuleSendBridge } from './host/module-send-bridge.js'
 import { createHostEffects } from './host/effects.js'
 import { createPanelOverview } from './host/panel/overview.js'
@@ -96,7 +88,7 @@ export function apply(ctx) {
   let cfg = loadConfig()
   let mods = null
   let bridge = null
-  let hub = null // 遗留核心：US-003 起作为管道终端（开关关闭时仍直调）
+  let hub = null // 当前核心的冻结 facade，在 modular core 成功后创建；失败时不存在旧实例可回退
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
   const getConfig = () => cfg
   const chatLogStore = createChatLog({ getConfig, log: logger.child('chat-log') })
@@ -159,19 +151,10 @@ export function apply(ctx) {
     }
   }
 
-  /** RFC-0001 熔断开关路由 + M4 模块化新核心总开关：
-   *  FLAG_MODULAR_CORE 默认开（2026-11-09 转正，现网 .5-local5+3 验证树）→ 实时事件走新核心（Registry→Turn→Assembly→Outbox）；
-   *  显式 false/0 逃生阀：否则 FLAG_USE_PIPELINE 开 → 洋葱管道；都关 → 直调遗留 hub（legacy 路径逐字不变）。 */
+  /** 唯一实时事件链：Registry → Turn → Assembly → Outbox。 */
   function dispatchEvent (ev, kind) {
-    const sink = (error) => log.error(kind === 'poke' ? '处理戳一戳出错：' : '处理消息出错：', (usePipeline ? unwrapPipelineError(error) : error).message)
-    if (useModularCore && modularCoreApi) {
-      const p = kind === 'poke' ? modularCoreApi.dispatchLegacyEvent(ev) : modularCoreApi.dispatchLegacyEvent(ev)
-      p.catch(sink)
-      return
-    }
-    if (usePipeline) pipelineApi.dispatchLegacyPipeline(ev).catch(sink)
-    else if (kind === 'poke') hub.onPoke(ev).catch(sink)
-    else hub.onMessage(ev).catch(sink)
+    const sink = (error) => log.error(kind === 'poke' ? '处理戳一戳出错：' : '处理消息出错：', error.message)
+    modularCoreApi.dispatchLegacyEvent(ev).catch(sink)
   }
   const gateway = createGateway({
     getConfig, snowluma, endpoint, logger, log,
@@ -204,48 +187,13 @@ export function apply(ctx) {
     },
   }
 
-  // ---------- RFC-0001 Phase 1（US-007）：出口切换装配件（pipeline 开启态才注入） ----------
-  // 关闭态（默认）：hub 拿到的还是原 onebot 客户端与原 hooks.send，旧路径逐字不动。
-  // 开启态：两个注入点都在装配层，hub.js 零改动——
-  //   hubOnebot   收口 send_group_msg / send_private_msg / upload_*_file
-  //               （live 吞包入队、shadow 旧通道真发并记 hash）；
-  //   hubSendHook 扩展模块改写语义不变，另记投递草稿（chatId/note/priority/delayMs）给出口认领。
-  // FLAG_EGRESS_SHADOW=true → shadow 双算比对（先比对后切权），缺省 live。
-  const usePipeline = isPipelineEnabled(process.env)
-  const egressMode = usePipeline && isEgressShadowEnabled(process.env) ? 'shadow' : 'live'
-  const hubOnebot = usePipeline
-    ? createEgressOnebot({ onebot, mode: egressMode, log: logger.child('egress') })
-    : onebot
-  const hubSendHook = usePipeline
-    ? createEgressSendHook({ legacySend: (message, info) => mods.filter('send', message, info), log: logger.child('egress') })
-    : (message, info) => mods.filter('send', message, info)
+  const hubSendHook = (message, info) => mods.filter('send', message, info)
 
-  // ---------- RFC-0001 Phase 3（US-010）：记忆装配接管（NEW_MEMORY_PIPELINE 灰度位） ----------
-  // 缺省关：contextProviders 仍是原函数本体的数组，与 US-009 逐字节等价（红线）。
-  // 开（且仅当管道也开）：注入面**外面**包一层 takeover——ALS 有本轮 ctx、
-  // mw-memory 已在 ctx.state 备好装配结果 → 直接供给 state 缓存，原 provider 零调用；
-  // 任一条件不满足（flag off / 无 ctx / 中间件没跑到）→ 原 mods.contextFor（legacy 回退）。
-  // hub.js 一行未动；接管面覆盖清单与已知边界（其余 api.context 模块 / 群 speakersOf 档案）
-  // 见 src/kernel/mw-memory.js 头注。
-  const baseContextProvider = (args) => mods.contextFor(args)
-  const memoryAssemblyOn = usePipeline && isNewMemoryPipelineEnabled(process.env)
-  const hubContextProviders = [
-    memoryAssemblyOn
-      ? createContextProviderTakeover({ provider: baseContextProvider, isNewPipeline: () => true, log: logger.child('memory-mw') })
-      : baseContextProvider,
-  ]
-
-  // ---------- PR-1（ADR-0002）：Outbox 收口接线 ----------
-  // 洋葱 pipeline 与共享 Outbox 可共存：Outbox 使用未包装的原 OneBot 客户端，不经过第二层包装。
-  const useModularCore = isModularCoreEnabled(process.env)
+  // ---------- 唯一物理发送出口 ----------
   const egressRef = { current: null }
-  const sharedOutbox = useModularCore
-    ? createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json'), currentTicket: () => hub?.currentTicket?.() })
-    : null
-  if (sharedOutbox) {
-    egressRef.current = createHubEgress({ outbox: sharedOutbox, log: logger.child('egress') })
-    log.info('PR-1 Outbox 收口：全仓主动发送接入统一出口（消息/文件/戳一戳/模块直调/说说；台账+试运行+泄露闸对全部出口生效）')
-  }
+  const sharedOutbox = createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json'), currentTicket: () => hub?.currentTicket?.() })
+  egressRef.current = createHubEgress({ outbox: sharedOutbox, log: logger.child('egress') })
+  log.info('Outbox 收口：消息、文件、戳一戳、模块直调与说说统一台账、试运行和身份闸')
 
   const sharedHooks = {
     message: (msg) => mods.claim('message', msg),
@@ -283,47 +231,6 @@ export function apply(ctx) {
     }),
   }
 
-  hub = createHub({
-    localApi: local,
-    chatLog,
-    interactions,
-    recentMedia,
-    inboundAudio,
-    quotedMessages,
-    inboundImages,
-    inboundVision,
-    dsh: ctx,
-    getConfig,
-    egressRef,
-    resolveChatOfSession: (sid) => modularCoreApi?.chatKeyOfSession?.(String(sid)) || '',
-    log: logger.child('chat'),
-    onebot: hubOnebot,
-    stickers,
-    tts,
-    buildTools: (where) => mods.buildTools(where),
-    // 会话上下文：只放模块给的（记忆、近况……）。
-    // 按聊天换人设不在这里做——那会变成「系统卡 + 追加块」两套人设；
-    // 现在由 hub 的 mount() 在 agent 作用域里遮蔽 {{qq_hub_persona}}，整份提示词只有一套人设。
-    contextProviders: hubContextProviders,
-    onActivity: (a) => mods.emit('activity', a),
-    // 群聊话题和她的记忆有多相关（插话判断用）
-    // 传 chat：话题相关度只在当前聊天可见的记忆里算，别处的记忆不该让她在群里「感兴趣」
-    memoryScore: (text, chat) => use('memory')?.topicScore?.(text, chat) ?? 0,
-    // QQ 里的主人命令（模块加的命令优先）
-    onCommand: async (msg) => {
-      const cmd = parseCommand(msg.text, mods.commands())
-      if (!cmd) return null
-      if (cmd.ext) return String((await cmd.ext.run(cmd.arg, msg)) ?? '')
-      return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods.commands() })
-    },
-    isMuted: (chatId) => mutes.muted(chatId),
-    moodEffects: () => use('mood')?.effects?.() ?? null,
-    availableModels: () => models.cache,
-    // 模块（重）启动代际：模块热重载后工具名没变、但实例换了，hub 要据此重挂工具（issue #73）
-    toolsGeneration: () => (mods ? mods.generation?.() || 0 : 0),
-    hooks: sharedHooks,
-  })
-
   const stickerStash = new Map()
   const stickerTtl = 30 * 60_000
   function loadStickerStash() {
@@ -342,31 +249,15 @@ export function apply(ctx) {
     try { writeJson(dataDir('sticker-stash.json'), stored) } catch (error) { log.debug('表情暂存落盘失败：', error.message) }
     return segs.length
   }
-  if (useModularCore) {
-    const legacyStickerOf = hub.stickerOf.bind(hub)
-    hub.stickerOf = (chatId, index) => {
-      loadStickerStash()
-      const entry = stickerStash.get(String(chatId))
-      if (!entry) return legacyStickerOf(chatId, index)
-      const i = Number(index) - 1
-      return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
-    }
+  function stickerOf(chatId, index) {
+    loadStickerStash()
+    const entry = stickerStash.get(String(chatId))
+    if (!entry) return null
+    const i = Number(index) - 1
+    return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
   }
 
-  // ---------- RFC-0001 Phase 0/1：FLAG_USE_PIPELINE 熔断开关（US-003 / US-007） ----------
-  // 开关关闭（默认）：dispatchEvent 直调 hub.onMessage/onPoke，与重构前完全一致，不装配管道。
-  // 开关打开：onebot 实时事件流走 compose([tracing → ratelimit → acl → dedup → 边界 flush → egress → 入口合流 → 遗留终端])。
-  // backfill 补收、deliver/pushToSession 等旁路入口不经管道（边界见 docs/rfc0001-mapping.md）。
-  const pipelineApi = assemblePipeline({
-    usePipeline, egressMode, memoryAssemblyOn,
-    ctx, getConfig, setConfig, logger, log,
-    hub, getMods: () => mods, use, mutes, onebot,
-    listModels: models.listModels,
-  })
-
-  // ---------- M4：模块化新核心组装根（FLAG_MODULAR_CORE，默认开；显式关闭态零装配） ----------
-  const modularCoreApi = useModularCore
-    ? createModularCore({
+  const modularCoreApi = createModularCore({
         dsh: ctx,
         onebot,
         inboundAudio,
@@ -396,8 +287,6 @@ export function apply(ctx) {
         moodEffects: () => (use('mood')?.effects?.() ?? null),
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
         isMuted: (chatId) => mutes.muted(chatId),
-        // 真机审计 1.11：面板统计与「最近发来的图/表情」登记（legacy 同一份内存状态）
-        onStats: (k) => { try { hub.bumpStats?.(k) } catch {} },
         // 宿主侧变量缺失兜底：热重载后根作用域的 variable 可能已失效，按会话补注册
         promptVars: promptVarText,
         // 富媒体编排直接使用当前 reply-delivery 与 Shared Outbox，不再回退 legacy hub。
@@ -413,8 +302,6 @@ export function apply(ctx) {
         localApi: local,
         // 入站聊天流水（记忆整理/蒸馏/黑话/日记的数据源）
         logChat: (chatId, who, text, uid) => { try { chatLog.append(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
-        // 回合说话人登记（hub.turnState；speakersOf 的数据源）
-        noteSpeakers: (sessionId, senders, opts) => { try { hub.noteTurnSenders?.(String(sessionId), senders, opts) } catch {} },
         onResetChat: (chatId) => interactions.questions.cancel(chatId, '会话重新开始'),
         collectInboundStickers: (chatKey, segments, userId) => {
           try {
@@ -451,37 +338,11 @@ export function apply(ctx) {
           } catch { return null }
         },
       })
-    : null
-  // 会话 facade 只转发当前核心；旧 sessions.json 不再作为运行时回退或第二份事实表。
-  if (useModularCore && modularCoreApi) {
-    hub.runPromptTurn = (chatKey, text) => modularCoreApi.runPromptTurn(chatKey, text)
-    hub.runSystemTurn = (name, title, prompt, opts) => modularCoreApi.runSystemTurn(name, title, prompt, opts)
-    hub.markTurnAt = (chatKey, now) => modularCoreApi.markTurnAt(chatKey, now)
-    hub.syncAllModels = () => modularCoreApi.syncAllModels()
-    hub.sessions = () => modularCoreApi.sessions()
-    hub.knownChats = () => modularCoreApi.knownChats()
-    hub.resetSessions = () => {
-      interactions.approvals.clear('会话重置')
-      const ids = Object.keys(modularCoreApi.registry.snapshot())
-      for (const chatId of ids) hub.resetChat(chatId)
-      return ids.length + modularCoreApi.resetSessions()
-    }
-    hub.chatOfSession = (sid) => modularCoreApi.chatKeyOfSession(String(sid))
-    hub.resetChat = (chatId) => modularCoreApi.resetChat(String(chatId))
-    hub.onMessage = (event) => modularCoreApi.dispatchLegacyEventSettled({ post_type: 'message', time: Math.floor(Date.now() / 1000), ...event })
-    hub.onPoke = (event) => modularCoreApi.dispatchLegacyEventSettled(event)
-    hub.onSessionEvent = (session, event) => {
-      const sid = String(session?.id || '')
-      if (!modularCoreApi.chatKeyOfSession(sid)) return
-      if (event?.type === 'user/message' && event?.data?.source?.kind === 'user') {
-        hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: true })
-      } else if (event?.type === 'turn/end') {
-        hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: false })
-      }
-    }
-    log.debug('会话查询、重置、事件与模型同步已收口到当前 SessionRegistry')
-  }
-  if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
+  hub = createCurrentHub({
+    modular: modularCoreApi, chatLog, recentMedia, inboundAudio, interactions,
+    stickerOf, stickers, getConfig, log: logger.child('chat'), egress: egressRef.current,
+  })
+  log.info('当前核心：实时事件/补收走 Registry→Turn→Assembly→Outbox；无 legacy 装配或回退')
 
   // ---------- 面板接口的小工具 + 模块前缀路由 ----------
   const http = createHttpKit({ ctx, prefix: PREFIX, getConfig, isAuthorized: (req) => bridge?.authorized(req) === true, log: logger.child('panel') })
@@ -530,8 +391,8 @@ export function apply(ctx) {
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }
-  // 真机审计 §2：开旗态把模块侧文本发送并入新核心 outbox 唯一出口（台账/dryRun/泄露闸从此对模块生效）
-  if (modularCoreApi) core.hub = createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), legacyUnified: true })
+  // 模块只获得当前服务的冻结发送桥，所有媒体共用 Shared Outbox。
+  core.hub = Object.freeze(createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), unified: true }))
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overviewApi.overview() })
   core.bridge = bridge
@@ -555,11 +416,8 @@ export function apply(ctx) {
   // ---------- 宿主旁路 seam（审批流/交互提问/会话监听/看门狗，见 host/effects.js） ----------
   const effects = createHostEffects({
     ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState, interactions,
-    // 只查询当前启用的核心；新核心未就绪时不回退旧会话表。
-    chatKeyOfSession: (sid) => useModularCore
-      ? (modularCoreApi?.chatKeyOfSession?.(String(sid)) || '')
-      : (hub.chatOfSession?.(sid) || ''),
-    onSessionEvent: useModularCore ? hub.onSessionEvent : undefined,
+    chatKeyOfSession: (sid) => modularCoreApi.chatKeyOfSession(String(sid)) || '',
+    onSessionEvent: hub.onSessionEvent,
   })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
@@ -571,8 +429,6 @@ export function apply(ctx) {
   effects.installWatchdog()
 
   ctx.effect(() => () => {
-    // US-008：管道里的合流中间件先卸（清窗口定时器 + 中止挂起 ctx），flag-off 时为 null
-    try { pipelineApi.aggregator?.dispose?.() } catch (error) { log.warn('入口合流卸载出错：', error.message) }
     interactions.questions.dispose('插件卸载')
     interactions.approvals.clear('插件卸载')
     hub.disposeRecentMedia()
@@ -613,16 +469,15 @@ export function apply(ctx) {
   })
   // /persona/use 的既有筛选匹配新 current；仅向该路由提供有效人设真正改变的会话视图。
   let personaSwitchSessions = null
-  const personaPanelHub = useModularCore ? Object.create(hub) : hub
-  if (useModularCore) {
-    personaPanelHub.sessions = () => {
-      if (personaSwitchSessions === null) return hub.sessions()
-      const sessions = personaSwitchSessions
-      personaSwitchSessions = null
-      return sessions
-    }
+  const personaDescriptors = Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(hub)).map(([key, descriptor]) => [key, 'value' in descriptor ? { ...descriptor, writable: true, configurable: true } : { ...descriptor, configurable: true }]))
+  const personaPanelHub = Object.defineProperties({}, personaDescriptors)
+  personaPanelHub.sessions = () => {
+    if (personaSwitchSessions === null) return hub.sessions()
+    const sessions = personaSwitchSessions
+    personaSwitchSessions = null
+    return sessions
   }
-  const setPersonaPanelConfig = useModularCore ? (next) => {
+  const setPersonaPanelConfig = (next) => {
     const before = hub.sessions()
     const current = setConfig(next)
     personaSwitchSessions = Object.fromEntries(Object.entries(before).filter(([chatId, entry]) => {
@@ -631,7 +486,7 @@ export function apply(ctx) {
       return entry?.personaId && entry.personaId !== personaIdFor(chat, current)
     }).map(([chatId, entry]) => [chatId, { ...entry, personaId: current.persona.current }]))
     return current
-  } : setConfig
+  }
   registerPersonaRoutes({
     route, readBody, query,
     ctx, getConfig, setConfig: setPersonaPanelConfig,

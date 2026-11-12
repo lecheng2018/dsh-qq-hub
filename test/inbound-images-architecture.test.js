@@ -9,7 +9,7 @@ test('入站图片与附件登记由组合根共享，新旧核心不再各自�
   const hub = source('src/chat/hub.js')
   const core = source('src/host/modular-core.js')
   assert.equal((host.match(/createInboundImages\(/g) || []).length, 1)
-  assert.match(host, /hub = createHub\(\{[\s\S]*?\binboundImages,/)
+  assert.match(host, /hub = createCurrentHub\(\{/)
   assert.match(host, /createModularCore\(\{[\s\S]*?\binboundImages,/)
   assert.doesNotMatch(hub, /async function imagesOf/)
   assert.doesNotMatch(core, /async function admitContent/)
