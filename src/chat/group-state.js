@@ -15,7 +15,7 @@ const WINDOW_MS = 3600_000 // 她说话/插话的时间序列只看最近 1 小�
 const ENGAGE_MS = 3 * 60_000 // 说了话算加入话题，持续 3 分钟
 
 export function createGroupState() {
-  const buf = new Map() // groupId → [{ t, uid, nick, text, at, mid, direct, replyId, quote?, fed?, ... }]
+  const buf = new Map() // groupId → [{ t, uid, nick, text, at, mid, direct, replyId, media?, quote?, fed?, ... }]
   const refs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
   const engaged = new Map() // groupId → 话题加入截止时间戳
   const said = new Map() // groupId → [t]  她每次说话的时间（刹车用）

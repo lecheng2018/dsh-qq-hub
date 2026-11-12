@@ -317,12 +317,17 @@ export function createQuestionRegistry({ deliver, timeoutMs = 300_000, log } = {
     }
   }
 
+  function dispose(reason = '提问服务已卸载') {
+    for (const chatId of [...pending.keys()]) cancel(chatId, reason)
+  }
+
   return {
     ask,
     has,
     handleReply,
     cancel,
     cancelBySession,
+    dispose,
     pendingCount: () => pending.size
   }
 }

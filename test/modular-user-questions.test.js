@@ -19,14 +19,15 @@ function setup() {
     effect(fn) { effects.push(fn) },
     get(name) { return name === 'userQuestions' ? service : null },
   }
-  const hub = {
-    async askUserQuestion(chatId, req) {
+  const questions = {
+    async ask(chatId, req) {
       calls.push(['qq', chatId, req])
       return { source: 'qq' }
     },
   }
   const effectsApi = createHostEffects({
-    ctx, logger: log, log, getConfig: () => ({}), hub,
+    ctx, logger: log, log, getConfig: () => ({}), hub: {},
+    interactions: { questions },
     mods: {}, use: () => null, snowluma: {}, onebot: {}, gatewayState: {},
     chatKeyOfSession: (sid) => sid === 'qq-session' ? 'private:10000001' : '',
   })
