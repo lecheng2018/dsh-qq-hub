@@ -27,6 +27,11 @@ import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
 import { createInteractionState } from '../chat/interaction-state.js'
 import { createOutbound } from '../chat/outbound.js'
+import { createOutboundFiles } from '../chat/outbound-files.js'
+import { createTurnParticipants } from '../chat/turn-participants.js'
+import { createPresence } from '../chat/presence.js'
+import { createCapture } from '../chat/capture.js'
+import { createFaces } from '../chat/faces.js'
 import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
@@ -36,7 +41,7 @@ import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
 import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
-import { defaultModel, pickReasoningEffort } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
@@ -175,8 +180,6 @@ function segmentsToContent(members) {
  *   专用卡 + 蒸馏语感卡按群生效；返回 null = 跟随全局人设）
  * @param {(chatId: string, who: string, text: string, uid?: string) => void} [o.logChat]
  *   聊天流水（真机审计：新核心不写 chatlog → 记忆整理/蒸馏/黑话/日记四条链无料；实测当天进站 5900、流水 12 行）
- * @param {(sessionId: string, senders: string[], opts?: object) => void} [o.noteSpeakers]
- *   回合说话人登记（hub.turnState 数据源；memory.contextFor 取「正在说话的几个人」靠它）
  * @param {(chatId: string, segments: Array, userId: string) => number|void} [o.collectInboundStickers]
  *   入站表情收集；返回暂存候选数供本轮提示
  * @param {(where: object) => Array<object>} [o.buildTools]
@@ -196,7 +199,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -239,6 +242,12 @@ export function createModularCore({
   // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
   const groups = createGroupState()
   const interaction = createInteractionState()
+  const participants = createTurnParticipants({ getConfig, chatOfSession: chatKeyOfSession })
+  const presence = createPresence()
+  const capture = createCapture()
+  const faces = createFaces({ onebot, log })
+  const sentIds = new Set()
+  let selfId = ''
   const reportTurns = new Map()
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
@@ -292,14 +301,18 @@ export function createModularCore({
 
   const selectedModels = new Map()
   const modelKey = (target) => target ? `${target.provider}::${target.model}::${target.reasoningEffort || ''}` : ''
-  async function resolveTarget(chat) {
+  function selectModel(chat) {
     const cfg = getConfig()
     const base = defaultModel(dsh, cfg)
     let sel = base ? { provider: base.provider, model: base.model, reasoningEffort: cfg.model?.reasoningEffort || '' } : null
     const specific = resolveChatModel(cfg, chat, typeof availableModels === 'function' ? availableModels() : null)
     if (specific) sel = { provider: specific.provider, model: specific.model, reasoningEffort: specific.reasoningEffort || cfg.model?.reasoningEffort || '' }
     if (typeof moduleHooks?.model === 'function') sel = moduleHooks.model(sel, chat) ?? sel
-    if (!sel?.provider || !sel?.model) return null
+    return sel?.provider && sel?.model ? sel : null
+  }
+  async function resolveTarget(chat) {
+    const sel = selectModel(chat)
+    if (!sel) return null
     const target = { provider: sel.provider, model: sel.model }
     const effort = await pickReasoningEffort(dsh, target.provider, target.model, sel.reasoningEffort || undefined)
     if (effort) target.reasoningEffort = effort
@@ -518,10 +531,20 @@ export function createModularCore({
   })
 
   const deliveryContext = new AsyncLocalStorage()
+  const bump = (kind) => { presence.bump(kind); try { onStats?.(kind) } catch {} }
   const outbound = createOutbound({
-    getConfig, log, onebot, outbox, groups, stickers, tts, interaction,
-    hooks: moduleHooks, onStats, deliveryContext,
+    getConfig, log, onebot, outbox, groups, stickers, tts, interaction, faces,
+    hooks: moduleHooks, onStats: bump, deliveryContext,
+    captureOnly: capture.captureOnly,
+    onMessageSent: (result) => {
+      const id = result?.message_id ?? result?.messageId
+      if (id != null) {
+        sentIds.add(String(id))
+        if (sentIds.size > 500) sentIds.delete(sentIds.values().next().value)
+      }
+    },
   })
+  const outboundFiles = createOutboundFiles({ getConfig, log, outbox, sendSegments: outbound.sendSegments, captureOnly: capture.captureOnly, onStats: bump, deliveryContext })
   const replyDelivery = createReplyDelivery({
     deliveryContext,
     getConfig, log, hooks: moduleHooks, reportTurns, groups, stickers,
@@ -530,7 +553,9 @@ export function createModularCore({
     ...outbound,
     logChat,
     onActivity: (event) => mods.emit?.('activity', event),
+    onDelivered: (event) => presence.noteDelivered(event),
     outbox: () => outbox,
+    isCaptured: capture.isCaptured,
   })
 
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
@@ -758,7 +783,7 @@ export function createModularCore({
       const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId, chat })
       const queryText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       // 回合说话人登记（speakersOf 的数据源；群聊记忆检索要用）
-      try { noteSpeakers?.(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean), { chatId: turn.chatKey, queryText }) } catch {}
+      try { participants.note(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean), { chatId: turn.chatKey, queryText }) } catch {}
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
       let turnMode = null
       let autoReply = null
@@ -780,7 +805,7 @@ export function createModularCore({
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
-        try { noteSpeakers?.(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
+        try { participants.note(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
       } else {
         content = segmentsToContent(members)
         const source = `【私聊】${chat.nickname || chat.userId}(${chat.userId})：`
@@ -838,7 +863,7 @@ export function createModularCore({
           const stickerPick = stickerPicks.get(inbound)
           if (stickerPick) steerContent.push({ type: 'text', text: stickerHint(stickerPick) })
           const steerQuery = textOfSegments(inbound.segments)
-          try { noteSpeakers?.(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
+          try { participants.note(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
           if (typeof moduleHooks?.prompt === 'function') {
             const next = await moduleHooks.prompt(steerContent, { chat, sessionId, senderId: chat.userId, prevText: '', queryText: steerQuery, steer: true })
             if (next == null) return
@@ -1048,6 +1073,7 @@ export function createModularCore({
 
   /** 聊天域消息入口（host dispatchEvent 的旗开分支）。 */
   async function dispatchLegacyEvent(ev) {
+    selfId = String(ev.self_id || selfId || getConfig().botQQ || '')
     const cfg = getConfig()
     // 命令闸（M4-2）：主人斜杠命令先截，回复经 outbox（同 legacy：命令不进合流，总开关关着也处理）
     if (runCommand && ev.post_type === 'message') {
@@ -1122,6 +1148,7 @@ export function createModularCore({
       debug(`入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
       return { handled: 'acl-denied', reason: acl.reason }
     }
+    presence.noteIncoming(inbound.chatKey, String(inbound?.sender?.userId || ''), cfg)
     // 旁路指令（审批批复 / 等待中的交互提问回答）：命中即消费，不进回合
     if (typeof interceptInteraction === 'function') {
       const text = textOfSegments(inbound.segments)
@@ -1318,6 +1345,7 @@ export function createModularCore({
       Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
     } catch { /* 归档失败不影响重置 */ }
     cleanupSession(entry.sessionId)
+    participants.clear(entry.sessionId)
     sessionPersonas.delete(key)
     try { registry.forget?.(key) } catch { /* ignore */ }
     debug(`会话已重置（新核心）：${key}`)
@@ -1387,7 +1415,48 @@ export function createModularCore({
     return { applied, skipped, failed, dropped, detail }
   }
 
+  const services = {
+    deliver: (chatId, text, opts) => replyDelivery.deliver(chatId, text, opts),
+    ...outbound,
+    ...outboundFiles,
+    pushToSession: (chat, content) => runPromptTurn(chat.chatId, (content || []).map((block) => block.text || '').join('\n')),
+    onSessionEvent: participants.onSessionEvent,
+    noteTurnSenders: participants.note,
+    turnHasOwner: participants.turnHasOwner,
+    turnSendersAllOwner: participants.turnSendersAllOwner,
+    turnHasUniqueImageGenOwnerRequester: participants.turnHasUniqueImageGenOwnerRequester,
+    lastTextOf: participants.lastTextOf,
+    prevTextOf: participants.prevTextOf,
+    speakersOf: participants.speakersOf,
+    simulateTurn: participants.simulateTurn,
+    capture: capture.capture,
+    captureOnly: capture.captureOnly,
+    faceName: faces.nameOf,
+    wasSent: (messageId) => sentIds.has(String(messageId || '')),
+    currentTicket: () => deliveryContext.getStore()?.ticket || null,
+    groupName: groupNameOf,
+    groupNames,
+    joinTopic: (gid) => groups.joinTopic(gid),
+    leaveTopic: (gid) => groups.leaveTopic(gid),
+    isBusy: (chatId) => Boolean(controller.runningTurnOf(chatId) || controller.mergingTurnOf(chatId) || activity.isBusy(chatId)),
+    canSeeImages: async (chat) => {
+      const cfg = getConfig()
+      if (cfg.model?.vision === 'on') return true
+      if (cfg.model?.vision === 'off') return false
+      const selected = await resolveTarget(chat)
+      return selected ? modelVision(dsh, selected.provider, selected.model) : null
+    },
+    modelFor: selectModel,
+    resolveTarget,
+    stats: presence.stats,
+    lastChatAt: () => presence.lastChatAt,
+    lastOwnerChatAt: () => presence.lastOwnerChatAt,
+    lastBotToOwner: () => presence.lastBotToOwner,
+    selfId: () => selfId,
+  }
+
   return {
+    services,
     dispatchLegacyEvent,
     dispatchLegacyEventSettled,
     runPromptTurn,

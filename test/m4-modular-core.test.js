@@ -1,6 +1,6 @@
-// M4 契约测试：FLAG_MODULAR_CORE 新核心全链（fake OneBot + fake DSH）
-// 任务书必测：flag-off 基线等价；私聊垂直切片；命令幂等；群/私隔离；真实 DeliveryResult；
-// 无 legacy 直发（唯一 outbox）；backfill 收口；开关重启生效；启动失败 fail-closed；dispose 顺序。
+// M4 契约测试：当前核心全链（fake OneBot + fake DSH）
+// 私聊垂直切片；命令幂等；群/私隔离；真实 DeliveryResult；唯一 Outbox；
+// backfill 收口；启动失败 fail-closed；dispose 顺序；旧开关不参与生产装配。
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -8,7 +8,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { isModularCoreEnabled } from '../src/kernel/legacy-fallback.js'
 import { createModularCore } from '../src/host/modular-core.js'
 import { createFakeDsh } from './helpers/fake-dsh.js'
 import { startMockOneBot } from './helpers/mock-onebot.js'
@@ -21,19 +20,6 @@ test.after(() => { setTimeout(() => process.exit(0), 200).unref() })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
-
-test('flag 解析：FLAG_MODULAR_CORE 缺省开（2026-11-09 转正），仅 false/0 显式关，乱值随默认开', () => {
-  assert.equal(isModularCoreEnabled({}), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: undefined }), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '' }), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'garbage' }), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'false' }), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '0' }), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: ' FALSE ' }), false)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'true' }), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: '1' }), true)
-  assert.equal(isModularCoreEnabled({ FLAG_MODULAR_CORE: 'TRUE ' }), true)
-})
 
 /** 标准夹具：fake DSH + mock OneBot + 新核心（注入 brain 可控回复）。 */
 async function fixture({ brain = async () => '好呀', cfgOver = {}, admitImages = true } = {}) {
@@ -233,12 +219,6 @@ test('M4-0 启动失败 fail-closed：DSH 无 sessionController 时回合执行�
     await core.dispose()
     await mock.close()
   }
-})
-
-test('M4-6 转正基线：默认 env 下 flag 开（legacy 等价改由 r3-flagoff-regression 显式 false 钉住）', async () => {
-  // 2026-11-09：现网 .5-local5+3 验证树合入 main，缺省姿态翻转 → 装配期读到 flag 开。
-  // 逃生阀（显式 false）下的 legacy 真实装配回归由 r3-flagoff-regression.test.js 持续背书。
-  assert.equal(isModularCoreEnabled(process.env), true, '缺省开')
 })
 
 test('M4-6 dispose 顺序：registry→controller 清干净，二次 dispose 安全', async () => {
