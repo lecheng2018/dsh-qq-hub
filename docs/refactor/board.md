@@ -86,7 +86,8 @@
 |---|---|---|---|---|---|---|
 | P0 记忆档案安全门 | 已在 main（9732714 / 7bd7bd1）；生产迁移未执行 | Context + QA | 前置存储重构已在主线 | memory 存储/整理、迁移 CLI、面板重载、专属测试与文档 | 损坏/外改/失败进度/重载回归已覆盖；真机/浏览器与生产迁移另验 | 按路线 P0 的数据恢复边界，不直接回退旧库 |
 | P1 共享流水服务 | 已在 main（PR #52 / c17c2ed） | Integration + Context | P0 + #53 夹具修复 | chat-log 服务、hub facade、host 装配、日志消费者及专属测试 | 独立游标、完整批次、失败续跑、取消与 host e2e 通过；全量结果见下 | 保留原日志与游标；旧版不识别指纹，降级前停学习核对 |
-| P1a 回复与富媒体编排迁出 | 🔵 进行中 | Integration + Outbox | P1 + 既有 Shared Outbox | reply-delivery、hub facade、投递顺序与回复回归 | 拆条/合并/引用/媒体行为不变，同会话票和失败释放由独立服务测试覆盖 | hub 恢复委托前实现；不改物理出口 |
+| P1a 回复与富媒体编排迁出 | 已在 main（PR #54 / 60bbbc5） | Integration + Outbox | P1 + 既有 Shared Outbox | reply-delivery、hub facade、投递顺序与回复回归 | 拆条/合并/引用/媒体行为不变，同会话票和失败释放由独立服务测试覆盖 | hub 恢复委托前实现；不改物理出口 |
+| P1b 审批与提问共享 | 🔵 进行中 | Integration | P1a + 当前 SessionRegistry | host/effects、hub 注入、注册表生命周期及专属测试 | 同一注册表服务新旧入口，非 QQ 会话交还原服务，卸载清理等待项 | 还原组合根接线，不启用第二套注册表 |
 | P2 入站媒体与上下文共享 | 待开始 | Inbound + Integration | P1；ADR-0002 出站前置门禁 | inbound/context 服务及消费接线 | 新旧输入等价，取消不污染，无双发 | 旧 facade 调用同一实现 |
 | P3 记忆学习管线独立 | 待开始 | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；记忆当前仍按日 checkpoint | 关新消费者，防止双调度 |
 | P4 派生学习模块自治 | 待开始，按子域拆 PR | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 独立停启、来源失效、作用域安全 | 关闭消费者，不把派生结果灌回事实名下 |
