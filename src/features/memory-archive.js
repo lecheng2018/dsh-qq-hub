@@ -20,7 +20,7 @@ import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf,
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, styleContext = true, extend }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, styleContext = true, distillContext = true, extend }) {
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
@@ -603,7 +603,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
   // ---------------- 蒸馏群友（1.3.59）----------------
   // 指定某个群的某个人当数据源，学他的说话方式/性格/语气（不冒充他本人）。
-  // 目标列表和学到的画像都存在记忆库里，跟着 memories.db 一起持久化。
+  // 旧目标与画像仅保留作 distill 模块首次启动的只读迁移来源；新写入归 distill/store.json。
   const distillKey = (gid, uid) => `group:${String(gid)}#${String(uid)}`
   /** 目标列表：[{ gid, uid, name }] */
   function distillTargets () {
@@ -803,7 +803,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
     const ins = reflectionContext ? insightsOf(personKey(chat)) : []
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
-    if (chat.kind === 'group') {
+    if (distillContext && chat.kind === 'group') {
       // 蒸馏群友（1.3.59）：这个群指定了要学的人，就带上他的说话样子（含「不冒充」边界）
       const gid = String(chat.groupId)
       for (const t of distillTargets()) {
