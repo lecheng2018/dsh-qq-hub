@@ -129,10 +129,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   // 读写锁与缓存
   const scopeSnapshots = new Map() // scope -> { rawText, entries, prologue, mtimeMs, file }
   const brokenScopes = new Map()
-  const emptyState = () => ({ version: 1, hits: {}, processed: {}, processedSources: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
+  const emptyState = () => ({ version: 1, hits: {}, processed: {}, processedSources: {}, extractionBatches: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
   const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
   const validState = (v) => isRecord(v)
-    && ['hits', 'processed', 'processedSources', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
+    && ['hits', 'processed', 'processedSources', 'extractionBatches', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
     && (v.distillTargets === undefined || Array.isArray(v.distillTargets))
     && Object.values(v.processed || {}).every((n) => Number.isSafeInteger(n) && n >= 0)
     && Object.values(v.processedSources || {}).every((source) => isRecord(source)
@@ -289,6 +289,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       slang: stateSnapshot.slang || {},
       processed: stateSnapshot.processed || {},
       processedSources: stateSnapshot.processedSources || {},
+      extractionBatches: stateSnapshot.extractionBatches || {},
       runs: stateSnapshot.runs || {},
       lastConsolidate: stateSnapshot.lastConsolidate || {},
       rev,
@@ -347,6 +348,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       if (s.slang) stateChanges.slang = s.slang
       if (s.processed) stateChanges.processed = s.processed
       if (s.processedSources) stateChanges.processedSources = s.processedSources
+      if (s.extractionBatches) stateChanges.extractionBatches = s.extractionBatches
       if (s.runs) stateChanges.runs = s.runs
       if (s.lastConsolidate) stateChanges.lastConsolidate = s.lastConsolidate
 

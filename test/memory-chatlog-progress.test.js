@@ -110,5 +110,7 @@ test('memory progress: replacement during extraction does not certify the change
   const result = await f.store.consolidate()
   assert.equal(result.ok, false)
   assert.match(result.message, /替换/)
-  assert.throws(() => f.state(), { code: 'ENOENT' }, '首次整理失败不应创建进度文件')
+  const state = f.state()
+  assert.equal(state.processed[yesterday()], undefined, '来源被替换时不得推进日消费进度')
+  assert.ok(Object.keys(state.extractionBatches || {}).length > 0, '可以记录提炼批次，但批次状态不能代替日进度')
 })
