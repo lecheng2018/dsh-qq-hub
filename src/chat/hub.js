@@ -63,7 +63,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -107,17 +107,16 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const stashFile = () => dataDir('sticker-stash.json')
   let stashLoaded = false
 
-  // 交互式提问（User Questions）与通用工具审批（Approvals）
-  const questions = createQuestionRegistry({
+  // 独立调用可缺省创建；生产由 host 注入唯一交互注册表。
+  const questions = interactions?.questions || createQuestionRegistry({
     deliver: (chatId, text) => sendText(chatId, text, undefined, [], undefined),
     timeoutMs: Number(getConfig().questions?.timeoutMs) || 300_000,
     log: log.child ? log.child('questions') : log
   })
 
-  const approvals = createApprovalRegistry({
+  const approvals = interactions?.approvals || createApprovalRegistry({
     deliver: (chatId, text) => sendText(chatId, text, undefined, [], undefined),
     ownerQQ: () => getConfig().ownerQQ,
-    // security-lock 模块已移除：不传锁，approvals 的锁分支自然不会触发
     timeoutMs: Number(getConfig().admin?.approvalTimeoutMs) || 60_000,
     log: log.child ? log.child('approvals') : log
   })
