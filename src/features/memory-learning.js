@@ -6,6 +6,7 @@ import { readChatLogSource } from '../chat/chat-log.js'
 import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
+import { createMemoryStyle } from './memory-style.js'
 
 export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned,
@@ -13,24 +14,13 @@ export function createMemoryLearning({
   load, save, health, relatedTo,
   add, revise, supersede, scopeFromChatId,
   profileOf, setDerivedProfile, profileKeyOf,
-  insightsOf, setDerivedInsights, styleOf, setStyle, personKey,
-  distillOf, putDistill, reflectImpl,
+  insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
+  distillOf, putDistill, reflectImpl, styleImpl,
 }) {
   const sourceLog = chatLog?.listDays ? chatLog : { listDays: () => hub?.chatLogDays?.() || [], readDay: (day) => hub?.chatLogOf?.(day) || [] }
   const chatLogDays = () => sourceLog.listDays()
   const chatLogSnapshot = (day) => readChatLogSource(sourceLog, day)
   let batchRecoveryError = ''
-
-  /** 从人设文本里抽「禁止」类硬规则行，给 style 学习当护栏（人设没写或没传 personaText 就返回空）。 */
-  const personaGuard = () => {
-    try {
-      const t = String(personaText?.() || '')
-      if (!t) return ''
-      const lines = t.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 80 && /禁止|不要|不许|不得|别成|别用|别刻意/.test(l))
-      if (!lines.length) return ''
-      return lines.slice(0, 12).join('\n')
-    } catch { return '' }
-  }
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
   async function importCandidates(text) {
@@ -272,9 +262,15 @@ export function createMemoryLearning({
   }
 
 
+  const defaultStyle = createMemoryStyle({
+    dsh, getConfig, personaText, log,
+    styles: () => load().styles || {}, styleOf, setDerivedStyle,
+    createGenerationSignal, generationOf, isActive,
+  })
   const defaultReflection = createMemoryReflection({
     dsh, getConfig, personaText, log,
-    insightsOf, setDerivedInsights, styleOf, setStyle,
+    insightsOf, setDerivedInsights, styleOf,
+    setStyle: (key, list, { sourceFingerprint }) => defaultStyle.noteStyle(key, list, sourceFingerprint),
     createGenerationSignal, generationOf, isActive,
   })
   function reflect(chat, transcript, genSignal = null) {
@@ -374,36 +370,8 @@ export function createMemoryLearning({
     return extractor.consolidate(o)
   }
 
-  /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
-  async function learnSelfStyle(genSignal = null) {
-    const task = generationOf(genSignal)
-    genSignal = task.signal
-    try {
-      if (!isActive()) return
-      if (genSignal && !genSignal.isValid()) return
-    const s = load()
-    const pool = Object.entries(s.styles || {}).filter(([k]) => k !== 'self').flatMap(([, v]) => v)
-    if (pool.length < 3) return
-    try {
-      const out = await askModel(dsh, {
-        cfg: getConfig(),
-        system: '你是「大肥鱼」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。' + (personaGuard() ? ' 注意：下面这些人设硬性规则优先级最高，学到的说法不得与它冲突：' + personaGuard() : ''),
-        text: `已经养成的：\n${styleOf('self').map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}`,
-        maxTokens: 800,
-        temperature: 0.3,
-        signal: genSignal?.signal,
-      })
-      if (!isActive() || (genSignal && !genSignal.isValid())) return
-      const m = out.match(/\[[\s\S]*\]/)
-      const arr = m ? JSON.parse(m[0]).map((t) => String(typeof t === 'string' ? t : t?.text || '')) : []
-      if (arr.length) setStyle('self', arr)
-    } catch (error) {
-      if (genSignal && !genSignal.isValid()) return
-      log.warn('沉淀说话方式失败：', error.message)
-    }
-    } finally {
-      task.cleanup()
-    }
+  function learnSelfStyle(genSignal = null) {
+    return styleImpl ? styleImpl(genSignal) : defaultStyle.learnSelfStyle(genSignal)
   }
 
   /** 每分钟调一次：一天几个整理时间点（默认 04:00 / 16:00），到点且这个点今天还没跑过就整理。 */

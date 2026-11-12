@@ -8,7 +8,7 @@
 
 当前有效解耦与剩余职责：
 
-- `src/features/memory.js` 只负责组合并保持原公开 API；`memory-archive.js` 拥有档案访问、检索与派生数据持久化，不 import LLM/extractor；`memory-learning.js` 承担提炼、画像、历史蒸馏和定时整理；`memory-reflection.js` 与同级 `modules/reflection` 已独立承担自动回顾和相处经验注入。style/distill 继续后续自治。
+- `src/features/memory.js` 只负责组合并保持原公开 API；`memory-archive.js` 拥有档案访问、检索与派生数据持久化，不 import LLM/extractor；`memory-learning.js` 承担提炼、画像、历史蒸馏和定时整理；同级 `modules/reflection`、`modules/style` 已分别独立承担相处经验与说话方式学习和注入。distill 继续后续自治。
 - `src/modules/memory/index.js` 仍拥有蒸馏目标、历史学习和派生卡接线，并向外暴露大 store。
 - 本批将 chatlog 唯一实现迁到 `src/chat/chat-log.js`，由 host 管理保留任务；模块接 `api.core.chatLog`，hub 的三个日志接口只作兼容转发。少数业务工厂保留旧形状注入兼容，尚不宣称全仓零 hub 日志引用。
 - `src/core/modules.js` 已有模块生命周期、`api.use/on/context/every/tool/route/dataDir`；`src/modules/index.js` 已装载同级可选模块。不要再造嵌套 loader。
@@ -107,8 +107,9 @@ host（唯一装配与生命周期）
 
 - P4a 画像来源与失效：自动画像记录 origin、scope、sourceFactIds、sourceRev；事实新增/修改/删除/替代和 reload 将非 manual 画像标为 stale 并停止注入，重建清除 stale。模型在途期间 rev 变化拒绝旧输入画像写入。手动画像明确标为 manual；无 origin 的旧画像在变更时按派生数据处理，人工重新保存后转为 manual。独立模块停启不在该子切片。
 - P4b reflection 独立模块：同级 `modules/reflection` 依赖 memory-store，负责模型回顾、独立 dispose 和唯一相处经验 context provider；memory 不再重复注入。自动经验保存 transcript SHA-256 与来源 rev，reload 后 stale 且停止注入，手工经验保留。关闭模块只停自动回顾与经验上下文，事实 CRUD/召回和手工经验管理不变。
+- P4c style 独立模块：reflection 通过 `style/observed` 事件交出同一次模型调用的风格观察，style 决定保存与注入，不重复请求模型；自我风格学习由 memory 运行时委托当前 style 实例。来源元数据与字符串数组分开保存，reload 失效，手工风格保留，独立 dispose 零回写。
 - 范围：profile/reflection/style 按各自输入、产物和调度拆 PR，不一次全拆。distill/slang 已是模块，下一步把残留在 memory 的目标、历史路由、派生卡责任逐一移交；兼容旧 URL，但只留一套数据所有者。
-- 派生数据记录依赖的 scope、事实 ID 与版本；正文修改、删除、重载后使画像/语感失效或重建，防止“正文已删、画像仍泄漏”。按作用域独立生成与读取。人物画像和 reflection 已落地，style/distill 的同等机制待各自切片完成。
+- 派生数据记录依赖的 scope、事实 ID 与版本；正文修改、删除、重载后使画像/语感失效或重建，防止“正文已删、画像仍泄漏”。按作用域独立生成与读取。人物画像、reflection 和 style 已落地，distill 的同等机制待后续切片完成。
 - 验收：停用派生模块后基础召回不变；停用 memory 后有明确降级；删除一条私聊事实不会在群画像中残留；重新启用不重复注册任务、路由或 context provider。
 - 回滚：停用相应消费者，保留有来源的产物和旧数据备份，不把派生结果重新灌为事实。
 
@@ -126,7 +127,7 @@ P0/P1 不等于原记忆重构任务书全量完成。以下仍是后续门禁�
 - 记忆日进度与提炼批次 checkpoint 不是跨作用域大事务；部分正文已提交但状态未确认时进入待核对，成功块重试跳过，仍不能宣称任意故障下恰好执行一次。
 - distill/slang 的旧 readJson 状态损坏回退策略尚未改造成档案级 fail-closed；不把记忆 state.json 已有的保护泛化为所有消费者都已安全。
 - archive、提炼与派生模型入口已统一取消和回收；fnOS 上连续启停与真实宿主资源基线仍需后续验收。
-- 人物画像与 reflection 的来源失效、独立停启和重载后重建已落地；style/distill 的同等机制仍未完成。
+- 人物画像、reflection 与 style 的来源失效、独立停启和重载后重建已落地；distill 的同等机制仍未完成。
 - 档案保存是单文件原子写，不是跨作用域事务；来源提交前复核也不是对外部编辑的跨进程锁，保留期内手改流水须停消费者并人工恢复。
 - 迁移器按停写、单进程运行设计；已有新旧库冲突须人工核对，不能自动选“条目更多”的一边。生产迁移未授权、未执行；本批未更改运行中的 DSH。
 - 旧 hub、pipeline/kernel 未删除。K-02 后续先继续富媒体唯一 outbox、当前会话审批/提问和模块 hub facade 收窄；K-03 仍受 G5、owner、真机和观察期门禁约束。
