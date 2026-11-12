@@ -79,11 +79,13 @@ test('时间里的冒号永远不是切点（两种情况都守住）', () => {
 
 test('带路径的技术说明按段落发，不挤成一条巨块（2026-11-05 实测）', () => {
   const NL = String.fromCharCode(10)
+  // 路径收成常量：断言的语义是「这条路径没被拆开」，不该绑定任何一台机器的目录
+  const PATH = '/home/user/harness/.dsh/profile-plugins/dsh-qq-hub/src/features/memory.js'
   const t = [
     '提示词整理好了 文档和补丁脚本都发你了',
     '',
     '先说要改哪儿',
-    '/home/user/harness/.dsh/profile-plugins/dsh-qq-hub/src/features/memory.js 第 1091 到 1093 行 那是自带的模板',
+    `${PATH} 第 1091 到 1093 行 那是自带的模板`,
     '',
     '这段插件是硬编码的 面板里没有输入框 人设卡也管不到它 它在插件内部另开一次模型调用 自己带 system',
     '',
@@ -92,7 +94,7 @@ test('带路径的技术说明按段落发，不挤成一条巨块（2026-11-05 
   const r = parseReply(t, replyRules({ reply: { privateMaxChars: 120 } }, false))
   assert.ok(r.items.length >= 3, '段落各是一条，实际 ' + r.items.length)
   for (const it of r.items) assert.ok(it.value.length <= 240, '每条都不许变成巨块：' + it.value.length)
-  assert.ok(r.items.some((it) => it.value.includes('/vol2/@appshare')), '路径必须完整留在同一条里')
+  assert.ok(r.items.some((it) => it.value.includes(PATH)), '路径必须完整留在同一条里')
 })
 
 test('真报表（两个以上小标题）仍然整段发', () => {

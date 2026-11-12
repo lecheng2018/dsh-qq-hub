@@ -42,7 +42,8 @@ test('占位 key 不能把「03」洗出来 —— 用户看到的那行 03 就�
 
 test('敲号码：只取数字，落成该群号', () => {
   const map = { '#newabc': '' }
-  const r = planPersonaRow({ map, id: '#newabc', raw: '61-56 93 464' })
+  // 输入带分隔符，断言只留数字：输入与期望必须指向同一个号码（以前两条对不上，这条测试从落地起就是红的）
+  const r = planPersonaRow({ map, id: '#newabc', raw: '22-23 33 444' })
   assert.deepEqual(r, { action: 'move', key: '222333444', value: '' })
 })
 
