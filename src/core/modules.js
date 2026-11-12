@@ -633,7 +633,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         settings: def.settings || [],
         defaults: def.defaults || {},
         panel: Boolean(def.panel && (rec?.source === 'user' || rec?.source === 'builtin')),
-        tab: def.tab || '',
+        tab: ({ mood: 'memory' })[def.tab] || def.tab || '',
         keepPanel: Boolean(def.keepPanel),
         startedAt: rec?.startedAt || 0,
       }

@@ -680,7 +680,7 @@ var TABS = [
   { id: "imagegen", label: "生图", flag: "imageGen.enabled" },
   { id: "diary", label: "空间日记", flag: "diary.enabled" },
   { id: "speakup", label: "主动搭话", flag: "speakUp.enabled" },
-  { id: "mood", label: "心情与记忆", flag: "mood.enabled" },
+  { id: "memory", label: "记忆" },
   { id: "bili", label: "B站", flag: "bili.enabled" },
   { id: "douyin", label: "抖音", flag: "douyin.enabled" },
   { id: "heybox", label: "小黑盒", flag: "heybox.enabled" },
@@ -690,11 +690,11 @@ var TABS = [
   { id: "modules", label: "扩展" },
   { id: "logs", label: "日志" }
 ];
-var TAB_MODS = { voice: ["voice"], stickers: ["stickers"], imagegen: ["imagegen"], diary: ["diary", "qzone-social"], speakup: ["speakup", "purpose"], mood: ["mood", "memory"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multi-parser"] };
+var TAB_MODS = { voice: ["voice"], stickers: ["stickers"], imagegen: ["imagegen"], diary: ["diary", "qzone-social"], speakup: ["speakup", "purpose"], memory: ["memory", "distill", "reflection", "style", "slang", "memory-privacy"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multi-parser"] };
 var modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running);
 var NAV_GROUPS = [
   { id: "home", label: "概览", icon: "M3 10.5 12 3l9 7.5M5.5 9v11.5h13V9M10 20.5v-6h4v6", tabs: ["overview"] },
-  { id: "self", label: "人设", icon: "M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5", tabs: ["persona", "group", "speakup", "mood"] },
+  { id: "self", label: "人设", icon: "M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5", tabs: ["persona", "group", "speakup", "memory"] },
   { id: "express", label: "表达", icon: "M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01", tabs: ["voice", "stickers", "imagegen"] },
   { id: "platform", label: "平台", icon: "M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z", tabs: ["diary", "bili", "douyin", "heybox", "multiParser"] },
   { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "model", "access", "local", "modules", "logs"] }
@@ -717,7 +717,7 @@ var NAV_ALIAS = {
   imagegen: "画图 图片",
   diary: "空间 说说 日记",
   speakup: "搭话 主动",
-  mood: "心情 记忆",
+  memory: "记忆 档案 相处经验 黑话 蒸馏",
   bili: "b站 bilibili 视频",
   douyin: "抖音 短视频 私信",
   heybox: "小黑盒 游戏 社区 资讯",
@@ -5129,7 +5129,9 @@ function QQHubPage() {
     return Boolean(m && m.running);
   };
   const hasUi = (m) => Boolean(m.running) && ((m.settings || []).length > 0 || m.panel)
-  const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === m.tab));
+  const TAB_ALIAS = { mood: "memory" };
+  const tabOf = (m) => TAB_ALIAS[m.tab] || m.tab;
+  const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === tabOf(m)));
   const extTabs = mods.filter((m) => hasUi(m) && !intoTab(m)).map((m) => ({ id: "ext:" + m.id, label: m.name, ext: m.id }));
   const tabs = TABS.filter((t) => !TAB_MODS[t.id] || TAB_MODS[t.id].some(running));
   tabs.splice(tabs.findIndex((t) => t.id === "logs"), 0, ...extTabs);
@@ -5146,7 +5148,7 @@ function QQHubPage() {
     imagegen: ImageGen,
     diary: Diary,
     speakup: SpeakUp,
-    mood: Mood,
+    memory: Mood,
     bili: Bili,
     douyin: Douyin,
     heybox: Heybox,
@@ -5156,7 +5158,7 @@ function QQHubPage() {
     modules: Modules,
     logs: Logs
   }[curTab.id] || Overview;
-  const TAB_KEYS2 = { connect: ["snowluma", "botQQ"], access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"], group: ["group", "merge", "reply"], model: ["model", "chatModels"], voice: ["voice"], stickers: ["stickers"], imagegen: ["imageGen"], diary: ["diary", "qzoneSocial"], speakup: ["speakUp"], mood: ["mood", "memory"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multiParser"], rss: ['rss'], local: ["local"] };
+  const TAB_KEYS2 = { connect: ["snowluma", "botQQ"], access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"], group: ["group", "merge", "reply"], model: ["model", "chatModels"], voice: ["voice"], stickers: ["stickers"], imagegen: ["imageGen"], diary: ["diary", "qzoneSocial"], speakup: ["speakUp"], memory: ["memory"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multiParser"], rss: ['rss'], local: ["local"] };
   const tabDirty = (id) => {
     if (!dirty) return false;
     if (id.startsWith("ext:")) {
@@ -5210,7 +5212,7 @@ function QQHubPage() {
         }
       }),
       showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })),
-      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && m.tab === curTab.id && m.id !== "multi-parser").map((m) => h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
+      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser").map((m) => h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
       dirty && !showWizard ? h(
         "div",
         { className: "ab-savebar" },

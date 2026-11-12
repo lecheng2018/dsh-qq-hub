@@ -306,7 +306,7 @@ export const distillModule = {
   description: '分层蒸馏流水线：把指定群友的说话方式与行为节奏蒸馏成人格增长段（L1 增量批 → L2 场景聚合 → L3 每日沉淀），写进群的派生人设卡。只借说话方式，不冒充对方。',
   provides: ['persona-growth'],
   requires: ['memory-store'],
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/distill-pipeline.js', 'features/distill.js', 'features/distill-store.js', 'features/memory-distill-history.js'],
   setup(api) {
     const stateFile = api.dataDir('pipeline.json')

@@ -198,7 +198,7 @@ export const slangModule = {
   api: 1,
   description: '每天从群聊流水里提炼这个群在用的黑话/梗/圈内称呼，写进黑话本并在群聊里听懂就用。只学词，不学人（学人请用「蒸馏群友」）。',
   provides: ['group-slang'],
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/slang-discover.js'],
   setup(api) {
     const stateFile = api.dataDir('book.json')
