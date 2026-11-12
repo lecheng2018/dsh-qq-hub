@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  collectMemberLines, enoughEvidence, buildDistillPrompt, dedupConvo,
+  collectMemberLines, enoughEvidence, evidenceFunnel, describeFunnel, buildDistillPrompt, dedupConvo,
   parseDistillProfile, normalizeProfile, mergeProfile, renderDistillHint,
 } from '../src/features/distill.js'
 
@@ -41,6 +41,33 @@ test('证据不足不学：门槛默认 20 句 / 120 字', () => {
   const twentyShort = Array.from({ length: 20 }, () => L('1', '嗯'))
   assert.equal(enoughEvidence(twentyShort), false, '20 句但都是「嗯」，字数不够')
   assert.equal(enoughEvidence(twentyShort.slice(0, 15), { minMessages: 15 }), false)
+})
+
+test('证据漏斗：命中→去重→滤转发→可用，每一步丢多少都算清楚', () => {
+  const lines = [
+    L('1', '[分享卡片：某个公告]', 1),
+    L('1', '[图片]', 2),
+    L('1', 'https://example.com/x', 3),
+    L('1', '就这', 4),
+    L('1', '就这', 5),
+    L('1', '就这', 6),
+    L('1', '闹麻了', 7),
+    L('1', '', 8),
+    L('2', '别人的话不算', 9),
+  ]
+  const f = evidenceFunnel(lines, '1')
+  assert.equal(f.hit, 8, '只算目标那个人的')
+  assert.equal(f.junk, 3, '卡片/图片/纯链接')
+  assert.equal(f.junk + f.duplicate + f.empty + f.usable, f.hit, '四项加起来等于命中')
+  assert.equal(f.duplicate, 2, '「就这」出现三次，后两次算重复')
+  assert.equal(f.usable, 2, '就这 + 闹麻了')
+  assert.equal(f.empty, 1)
+  const text = describeFunnel(f)
+  assert.match(text, /翻到 8 条/)
+  assert.match(text, /3 条是纯图片\/转发\/链接/)
+  assert.match(text, /可用的 2 句/)
+  assert.equal(describeFunnel({ hit: 0 }), '', '一条都没命中就不啰嗦')
+  assert.equal(describeFunnel(null), '')
 })
 
 test('对话上下文去重：同 (uid,text) 三次以上视为会话重复注入，只留两次', () => {
@@ -115,13 +142,56 @@ test('提示词（新模板）：exchanges 首要、口头禅带「什么时候�
 })
 
 // ---------------- 存储与接线 ----------------
-async function freshStore() {
+async function freshStore(opts = {}) {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'distill-'))
   const { createMemoryStore } = await import('../src/features/memory.js')
   const { normalize } = await import('../src/core/config.js')
   const cfg = normalize({ ownerQQ: '10000001', memory: { enabled: true } })
-  return createMemoryStore({ dsh: {}, getConfig: () => cfg, hub: { chatLogOf: () => [], chatLogDays: () => [] }, log: () => {}, personaText: () => '' })
+  const hub = {
+    chatLogOf: opts.chatLogOf || (() => []),
+    chatLogDays: opts.chatLogDays || (() => []),
+    groupNames: new Map(opts.groupNames || []),
+  }
+  return createMemoryStore({ dsh: {}, getConfig: () => cfg, hub, log: () => {}, personaText: () => '' })
 }
+
+// #74：主人自己的发言在会话记录里被渲染成「主人：…」（不带 QQ 号，防泄露），
+// 解析正则要求「名字(数字)：」，所以主人学自己永远只有老数据、句数不涨。
+// chatlog 存真实 uid，必须优先用它。
+test('#74 chatlog 是主证据源：主人自己的发言也能被收集（不受提示词脱敏影响）', async () => {
+  const uid = '10000001'
+  const chatlog = Array.from({ length: 18 }, (_, i) => ({
+    t: 1000 + i, chatId: 'group:249729644', who: '主人', uid, text: '今天群里第 ' + i + ' 句话',
+  }))
+  chatlog.push(
+    { t: 2000, chatId: 'group:249729644', who: '路人', uid: '555', text: '别人的话不算' },
+    { t: 2001, chatId: 'group:999', who: '主人', uid, text: '别的群的话不该进这个群' },
+    { t: 2002, chatId: 'group:249729644', who: '主人', uid, text: '[图片]' },
+  )
+  const mem = await freshStore({ chatLogDays: () => ['2026-11-12'], chatLogOf: () => chatlog })
+  const hist = mem.distillHistory({ gid: '249729644' })
+  assert.equal(hist.chatlogDays, 1, '报告 chatlog 覆盖天数')
+  assert.equal(hist.chatlogLines, 20, 'chatlog 里这个群的全部行（18 + 路人 1 + 图片 1；别的群不算）')
+  const mine = collectMemberLines(hist.lines.map((l) => ({ ...l, t: l.at })), uid)
+  assert.equal(mine.length, 18, '主人的 18 句都进来了（不是 0）')
+  assert.ok(!mine.some((x) => x.text.includes('别的群')), '按群 id 精确过滤：别的群的话不混进来')
+  assert.equal(hist.total, 20, '群级总行数不含别的群')
+})
+
+test('#75 证据不足时提示带漏斗：说清命中多少、滤掉多少', async () => {
+  const uid = '10000001'
+  const rows = []
+  for (let i = 0; i < 3; i++) rows.push({ t: i, chatId: 'group:123', who: '主人', uid, text: '就这' })
+  rows.push({ t: 10, chatId: 'group:123', who: '主人', uid, text: '[图片]' })
+  rows.push({ t: 11, chatId: 'group:123', who: '主人', uid, text: '咋不说话了' })
+  const mem = await freshStore({ chatLogDays: () => ['2026-11-12'], chatLogOf: () => rows })
+  const r = await mem.learnDistillFromHistory({ gid: '123', uid })
+  assert.equal(r.ok, false, '证据不够不学')
+  assert.match(r.message, /只有 2 句/, '去重后可用句数')
+  assert.match(r.message, /翻到 5 条/, '漏斗：命中数')
+  assert.match(r.message, /1 条是纯图片\/转发\/链接/, '漏斗：滤掉的图片')
+  assert.match(r.message, /2 条是重复转发的同一句/, '漏斗：重复')
+})
 
 test('目标管理：加/去重/删（删的时候连带清掉画像）', async () => {
   const mem = await freshStore()
