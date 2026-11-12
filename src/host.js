@@ -33,6 +33,7 @@ import { createHub } from './chat/hub.js'
 import { createChatLog, createChatLogApi } from './chat/chat-log.js'
 import { createQuestionRegistry } from './chat/questions.js'
 import { createApprovalRegistry } from './chat/approvals.js'
+import { createRecentMedia } from './chat/recent-media.js'
 import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
@@ -255,6 +256,7 @@ export function apply(ctx) {
     poke: (ev) => mods.claim('poke', ev),
   }
 
+  const recentMedia = createRecentMedia({ log: logger.child('recent-media') })
   const interactions = {
     questions: createQuestionRegistry({
       deliver: (chatId, text) => hub.sendText(chatId, text, undefined, [], undefined),
@@ -273,6 +275,7 @@ export function apply(ctx) {
     localApi: local,
     chatLog,
     interactions,
+    recentMedia,
     dsh: ctx,
     getConfig,
     egressRef,
@@ -419,7 +422,7 @@ export function apply(ctx) {
         rememberSpeaker: (chatId, uid) => hub.rememberSpeaker?.(chatId, uid),
         isSentMessage: (messageId) => hub.wasSent?.(messageId) ?? false,
         markTurnAt: (chatId) => hub.markTurnAt?.(chatId),
-        noteMedia: (chatKey, segments, userId) => { try { hub.noteRecentMedia?.(chatKey, segments, userId) } catch {} },
+        noteMedia: (chatKey, segments, userId) => { try { recentMedia.rememberSegments(chatKey, segments, userId) } catch {} },
         interceptInteraction: (m) => { try { return !!hub.interceptInteraction?.(m) } catch { return false } },
         personaTextFor: (chat) => {
           try {
