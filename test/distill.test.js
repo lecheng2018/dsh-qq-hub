@@ -234,11 +234,12 @@ test('旧坏数据自愈：samples 是句数（如 44）的存量画像，渲染
 })
 
 test('接线：整理不再学（管线移交 distill 模块）、群聊时注入、面板与接口都在', () => {
-  const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const archive = readFileSync(new URL('../src/features/memory-archive.js', import.meta.url), 'utf8')
   // 结构红线：consolidate 不再耦合蒸馏管线（避免两边各跑一遍重复花钱），学习调度移交 distill 模块自身 tick
   assert.doesNotMatch(mem, /learnDistill\(/, 'consolidate 不再调用 learnDistill')
   assert.doesNotMatch(mem, /reasoningEffort: 'none'/, '蒸馏不再钉死关思考（推理模型会吃掉全部预算不回正文）')
-  assert.match(mem, /renderDistillHint\(t\.name \|\| t\.uid, distillOf/, '群聊注入画像')
+  assert.match(archive, /renderDistillHint\(t\.name \|\| t\.uid, distillOf/, '群聊注入画像')
   assert.match(mem, /dedupConvo\(hist\.lines\)\.slice\(-80\)/, '历史学习传去重对话原文')
   // distill 模块自持 L0/L1 调度（activity 计数 + 定时 tick）
   const dist = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
