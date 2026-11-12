@@ -1,4 +1,4 @@
-// 内置模块：空间日记。每天挑几个时间，按当天的聊天和心情写一条 QQ 空间说说；主人私聊里也能让她发说说。
+// 内置模块：空间日记。每天挑几个时间，按当天的聊天写一条 QQ 空间说说；主人私聊里也能让她发说说。
 // 导出 createQzone 的返回值：writeDiary / post / remove / history / nextTime / tick。
 
 import { createQzone } from '../../features/qzone.js'

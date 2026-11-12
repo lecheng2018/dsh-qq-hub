@@ -31,7 +31,7 @@ const ALIASES = {
   多说: 'chatty', 话多: 'chatty',
   正常: 'normal',
   模型: 'model', 换模型: 'model',
-  状态: 'status', 心情: 'mood', 日记: 'diary', 记住: 'remember', 记一下: 'remember',
+  状态: 'status', 日记: 'diary', 记住: 'remember', 记一下: 'remember',
   重开: 'reset', 清空: 'new', 忘掉: 'new', 清记忆: 'new', 开机: 'on', 关机: 'off', 帮助: 'help', 命令: 'help', h: 'help',
 }
 
@@ -44,7 +44,6 @@ const COMMANDS = {
   normal: '这个群恢复默认的插话频率',
   model: '看或换她用的模型：/model 看列表，/model 2 或 /model 名字 换，/model 默认 跟随 DSH',
   status: '看她现在的状态',
-  mood: '看她现在的心情',
   diary: '马上写一篇空间日记',
   remember: '让她记住一件事，如 /remember 我不吃香菜',
   reset: '这个聊天重新开始（旧的对话在 DSH 侧栏里还能找回；记忆不动）',
@@ -92,10 +91,10 @@ export function createMutes() {
 
 /**
  * 执行命令，返回要回给主人的话。
- * @param {object} deps { getConfig, setConfig, mutes, hub, mood, memory, qzone, onebot }
+ * @param {object} deps { getConfig, setConfig, mutes, hub, memory, qzone, onebot }
  */
 export async function runCommand(cmd, msg, deps) {
-  const { getConfig, setConfig, mutes, hub, mood, memory, qzone } = deps
+  const { getConfig, setConfig, mutes, hub, memory, qzone } = deps
   const cfg = getConfig()
   const inGroup = msg.kind === 'group'
   const here = inGroup ? '这个群' : '这里'
@@ -111,13 +110,11 @@ export async function runCommand(cmd, msg, deps) {
     case 'silent': {
       const min = Math.max(0, Math.min(7 * 24 * 60, Number.parseInt(cmd.arg, 10) || 0))
       mutes.set(msg.chatId, min)
-      mood?.nudge?.(-6, '主人让她闭嘴') // 有点委屈
       if (inGroup) hub.leaveTopic?.(msg.groupId)
       return min ? `好，我在${here}安静 ${min} 分钟` : `好，我在${here}先不说话了，想我了发 /active`
     }
     case 'active':
       mutes.clear(msg.chatId)
-      mood?.nudge?.(4, '主人让她回来说话')
       if (inGroup) hub.joinTopic?.(msg.groupId)
       return inGroup ? '我回来啦' : '在呢'
     case 'quiet':
@@ -137,7 +134,6 @@ export async function runCommand(cmd, msg, deps) {
       const mu = mutes.until(msg.chatId)
       const lines = [
         `总开关：${cfg.enabled ? '开' : '关'}${cfg.dryRun ? '（试运行，不真发）' : ''}`,
-        ...(mood ? [`心情：${mood.label()}`] : []),
         `今天：收到 ${st.received} 条，发出 ${st.sent} 条`,
         `${here}：${mu === undefined ? '正常说话' : mu === 0 ? '闭嘴中' : '闭嘴到 ' + new Date(mu).toLocaleTimeString().slice(0, 5)}`,
       ]
@@ -169,8 +165,6 @@ export async function runCommand(cmd, msg, deps) {
       setConfig({ ...cfg, model: { ...cfg.model, provider: hit.provider, model: hit.model } })
       return `好，换成 ${label(hit)} 了，下一句起生效`
     }
-    case 'mood':
-      return mood ? `现在${mood.label()}` : '心情模块关着'
     case 'diary': {
       if (!qzone) return '空间日记没开'
       const r = await qzone.writeDiary()

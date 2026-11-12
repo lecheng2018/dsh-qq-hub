@@ -17,7 +17,7 @@
 //   装配未跑，三种情况都回旧路，默认关）。
 // 接管面覆盖清单（如实记录，交 verifier/controller）：
 //   - 覆盖：provider 链的**全部输出**在命中时被 state 装配替换。当前 state 只装 memory 的
-//     contextFor 文本——其余经 api.context 注册的模块（mood/token-guardian/group-admin/
+//     contextFor 文本——其余经 api.context 注册的模块（token-guardian/group-admin/
 //     multi-parser）贡献在命中路径不再执行（NEW_MEMORY_PIPELINE 默认关；开启前需把这几路
 //     并入装配或收窄接管面，Phase 4 议题）。hub.js 红线不动，旧核心挂载段（551 行 provider
 //     循环）照常执行、只是被包装层供给数据。

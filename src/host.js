@@ -278,13 +278,12 @@ export function apply(ctx) {
         personaText: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
         runCommand: async (cmd, msg) => {
           if (cmd.ext) return String((await cmd.ext.run(cmd.arg, msg)) ?? '')
-          return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] })
+          return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, memory: use('memory'), qzone: use('diary'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] })
         },
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
         sessionStoreFile: dataDir('modular-sessions.json'),
-        // 真机审计补齐：群闸的心情调制/话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
-        moodEffects: () => (use('mood')?.effects?.() ?? null),
+        // 真机审计补齐：群闸的话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
         isMuted: (chatId) => mutes.muted(chatId),
         // 宿主侧变量缺失兜底：热重载后根作用域的 variable 可能已失效，按会话补注册
@@ -512,7 +511,6 @@ export function apply(ctx) {
     hub, onebot, snowluma, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
     get stickers() { return use('stickers') },
     get qzone() { return use('diary') },
-    get mood() { return use('mood') },
     get memory() { return use('memory') },
   }
 }
