@@ -72,6 +72,11 @@
 
 回归：`test/m5-parity.test.js` 8 例（群闸/群上下文/静音/旁路/双层 context/人设/发送桥/maxChars）+ m4/m3 三例改钉新现实（入口 enabled 语义、身份闸配 @ 场景、adapter chat 形状）。
 
+## 本机生命周期补充证据（2026-11-12）
+
+- `test/memory-module-lifecycle-20.test.js`：真实 memory + reflection/style/distill，连续 20 轮创建在途模型任务并 dispose；8 类任务每轮均结束，process 的 SIGINT/SIGTERM/uncaughtException/unhandledRejection 监听器不增长，模型与代际计时器归零。
+- 该证据只覆盖源码生命周期与资源回收，不替代 fnOS 的真实宿主监听器基线、热重载、进程重启或生产数据验收；M5 各 blocked-on-fnOS/owner 项保持原状态。
+
 ## 全接入测试版验收补充（2026-11-10）
 
 代码侧已解除 e2e/modules 的 legacy 钉位；e2e 70/70、modules 22/22、扩展 46/46，打包检查通过。以下仍必须在目标环境执行，不得用 fake 结果替代：
