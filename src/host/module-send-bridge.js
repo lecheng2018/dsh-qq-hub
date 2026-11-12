@@ -1,11 +1,11 @@
 // 模块发送桥：文本/图片直入共享 Outbox；需要下载、转码或上传的媒体复用 hub 语义适配。
-// legacyUnified=true 时 hub 已接同一 Outbox，不再用 recordExternal 重复补账。
+// unified=true 时 hub 已接同一 Outbox，不再用 recordExternal 重复补账。
 // captureOnly 保证面板模拟测试只记录、不实发。
 //
 // 返回形状兼容：hub.sendText 返回网关回执对象（{message_id}）或 null；
 // 桥统一返回 { message_id, state }（state 取 outbox 三态；被拦时 message_id=null，与 legacy 关闸返回 null 的判truthy用法兼容）。
 
-export function createModuleSendBridge({ hub, outbox, log, legacyUnified = false }) {
+export function createModuleSendBridge({ hub, outbox, log, unified = false }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
 
   async function sendViaOutbox(chatId, segments, sourceModuleId) {
@@ -34,7 +34,7 @@ export function createModuleSendBridge({ hub, outbox, log, legacyUnified = false
     debug(`模块媒体复用 hub 上载/转码管线：${String(chatId)} ${note || ''}`)
     return Promise.resolve(hub.sendSegments(chatId, message, note, opts)).then((r) => {
       try {
-        if (!legacyUnified) outbox.recordExternal?.({
+        if (!unified) outbox.recordExternal?.({
           chatKey: String(chatId),
           sourceModuleId: opts.sourceModuleId || String(note || 'module'),
           segments: Array.isArray(message) ? message : [],
@@ -51,36 +51,30 @@ export function createModuleSendBridge({ hub, outbox, log, legacyUnified = false
   ], sourceModuleId || 'module')
 
   /** 媒体复用 hub；仅兼容未接 Outbox 的调用方时才补外部台账。 */
-  const wrapLegacy = (name, sourceModuleId) => async (...args) => {
+  const wrapOutbound = (name, sourceModuleId) => async (...args) => {
     const chatId = String(args[0] ?? '')
     const r = await hub[name](...args)
     try {
-      if (!legacyUnified) outbox.recordExternal?.({
+      if (!unified) outbox.recordExternal?.({
         chatKey: chatId,
         sourceModuleId,
         segments: [],
         gatewayMessageId: r?.message_id ?? r?.messageId ?? null,
-        reason: `${name} 走 legacy 上载管线`,
+        reason: `${name} 走当前媒体管线`,
       })
     } catch { /* 记账失败不影响已发出的消息 */ }
     return r
   }
 
-  // Proxy：文本/图片直入 Outbox；其余媒体经 hub 的同一物理出口。
-  const legacyWraps = {
-    sendImage: wrapLegacy('sendImage', 'imagegen'),
-    sendSticker: wrapLegacy('sendSticker', 'stickers'),
-    sendFile: wrapLegacy('sendFile', 'qq-tools'),
-    sendVoice: wrapLegacy('sendVoice', 'voice'),
-    sendVoiceFile: wrapLegacy('sendVoiceFile', 'song'),
+  const outboundWraps = {
+    sendImage: wrapOutbound('sendImage', 'imagegen'),
+    sendSticker: wrapOutbound('sendSticker', 'stickers'),
+    sendFile: wrapOutbound('sendFile', 'qq-tools'),
+    sendVoice: wrapOutbound('sendVoice', 'voice'),
+    sendVoiceFile: wrapOutbound('sendVoiceFile', 'song'),
   }
-  return new Proxy(hub, {
-    get(t, k) {
-      if (k === 'sendText') return sendText
-      if (k === 'sendSegments') return sendSegments
-      if (k === 'reply') return reply
-      if (Object.prototype.hasOwnProperty.call(legacyWraps, k)) return legacyWraps[k]
-      return t[k]
-    },
-  })
+  const descriptors = Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(hub)).map(([key, descriptor]) => [key, 'value' in descriptor ? { ...descriptor, writable: true, configurable: true } : { ...descriptor, configurable: true }]))
+  const facade = Object.defineProperties({}, descriptors)
+  Object.assign(facade, { sendText, sendSegments, reply, ...outboundWraps })
+  return Object.freeze(facade)
 }

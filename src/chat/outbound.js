@@ -4,8 +4,8 @@ import { expandMentions, hasMention } from './mentions.js'
 import { fetchImage } from '../core/net.js'
 
 // 回复发送所需的 OneBot 段编排；物理发送只经注入的 Shared Outbox。
-export function createOutbound({ getConfig, log, onebot, outbox, groups, stickers, tts, interaction, hooks, onStats, deliveryContext }) {
-  const faces = createFaces({ onebot, log })
+export function createOutbound({ getConfig, log, onebot, outbox, groups, stickers, tts, interaction, hooks, onStats, deliveryContext, faces: sharedFaces, captureOnly, onMessageSent }) {
+  const faces = sharedFaces || createFaces({ onebot, log })
   const quote = (replyId) => (replyId ? [{ type: 'reply', data: { id: String(replyId) } }] : [])
   const mention = (userId, segs = []) => (userId && !segs.some((s) => s.type === 'at' && String(s.data?.qq) === String(userId)) ? [{ type: 'at', data: { qq: String(userId) } }, { type: 'text', data: { text: ' ' } }] : [])
 
@@ -49,6 +49,8 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         log.warn('扩展模块改写发送内容出错：', error.message)
       }
     }
+    const captured = captureOnly?.(chatId, message, note)
+    if (captured) return captured
     try {
       const result = await outbox.request({ chatKey: chatId, sourceModuleId: 'core', segments: message, note, force, _outboxTicket: deliveryContext?.getStore()?.ticket })
       if (result?.state !== 'sent') {
@@ -56,6 +58,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         return null
       }
       onStats?.('sent')
+      onMessageSent?.(result.raw ?? result)
       onResult?.({ ok: true, result: result.raw ?? result })
       return result.raw ?? result
     } catch (error) {
@@ -167,5 +170,5 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     }
   }
 
-  return { sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack }
+  return { sendText, sendVoice, sendSticker, sendImage, sendMixed, sendSegments, pokeBack }
 }
