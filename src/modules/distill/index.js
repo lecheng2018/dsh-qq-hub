@@ -13,7 +13,7 @@
 // 边界（写进产物也写进提示词）：只借说话方式与行为节奏，不冒充对方；
 // 底卡正文与安全规则不可被蒸馏修改；数据全程本地。
 
-import { readJson, writeJson } from '../../core/store.js'
+import { readJsonRequired, writeJsonWithBackup } from '../../core/store.js'
 import { askModel, withAbortTimeout, modelWithOverride } from '../../core/llm.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
 import { collectMemberLines, enoughEvidence, dedupConvo, renderDistillHint } from '../../features/distill.js'
@@ -316,8 +316,14 @@ export const distillModule = {
     const engine = createDistillEngine({
       config: api.config,
       targetsOf: () => store.targets(),
-      loadState: () => readJson(stateFile),
-      saveState: (s) => writeJson(stateFile, s),
+      loadState: () => readJsonRequired(stateFile, {
+        fallback: () => ({}), validate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+        label: '蒸馏流水线状态', onError: (error) => api.log.warn(error.message),
+      }),
+      saveState: (state) => writeJsonWithBackup(stateFile, state, {
+        validate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+        label: '蒸馏流水线状态', onError: (error) => api.log.warn(error.message),
+      }),
       chatLog: api.core.chatLog,
       askModelImpl: askModel,
       dsh: api.dsh,
