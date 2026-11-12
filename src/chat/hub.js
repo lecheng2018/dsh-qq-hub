@@ -65,9 +65,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision }) {
-  // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
-  const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision }) {
   const mapFile = () => dataDir('sessions.json')
   const map = () => readJson(mapFile(), () => ({ chats: {} }))
   const saveMap = (m) => writeJson(mapFile(), m)
@@ -914,7 +912,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const deliveryContext = new AsyncLocalStorage()
   const { deliver, deliverNow } = createReplyDelivery({
     deliveryContext,
-    getConfig, log, hooks, reportTurns, groups, stickers, mood, interaction,
+    getConfig, log, hooks, reportTurns, groups, stickers, interaction,
     sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
     logChat, onActivity,
     onDelivered: ({ chatId, items, cfg }) => {
@@ -1190,8 +1188,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let mode = 'must'
     if (msg.kind === 'group') {
       const pol0 = policyFor(cfg.group, cfg.group.overrides, msg.groupId)
-      // 心情好更爱插话，心情差少插话
-      const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * mood().chatty) }
+// 插话概率按配置值直接用
+      const pol = pol0
       // 群里最近在聊的（窗口内最后几条）和她有多相关
       const recentTexts = groups.buffer(msg.groupId).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0

@@ -36,7 +36,6 @@ function deps() {
       setConfig: (next) => { cfg = normalize(next) },
       mutes: createMutes(),
       hub: { joinTopic: (g) => calls.push(['join', g]), leaveTopic: (g) => calls.push(['leave', g]), resetChat: (c) => calls.push(['reset', c]), stats: () => ({ received: 3, sent: 2 }) },
-      mood: { label: () => '开心' },
       memory: { add: (x) => { calls.push(['remember', x.text]); return { ok: true, id: 'm1' } } },
       qzone: null,
     },
@@ -76,7 +75,7 @@ test('/off /on /status /remember /reset /help', async () => {
   assert.equal(cfg().enabled, false)
   await runCommand(parseCommand('/开机'), priv, d)
   assert.equal(cfg().enabled, true)
-  assert.match(await runCommand(parseCommand('/status'), grp, d), /心情：开心[\s\S]*插话：默认/)
+  assert.match(await runCommand(parseCommand('/status'), grp, d), /插话：默认/)
   assert.equal(await runCommand(parseCommand('/记住 我不吃香菜'), priv, d), '记住了')
   await runCommand(parseCommand('/reset'), grp, d)
   assert.deepEqual(calls.filter((c) => c[0] !== 'join' && c[0] !== 'leave'), [['remember', '我不吃香菜'], ['reset', 'group:555']])

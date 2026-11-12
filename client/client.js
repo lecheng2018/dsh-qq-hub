@@ -269,8 +269,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-chip{border:1px dashed var(--ab-line-2);background:transparent;color:var(--ab-sub);border-radius:999px;padding:3px 12px;font:inherit;font-size:12px;cursor:pointer;transition:border-color .12s,color .12s,background .12s}
 .ab-chip:hover{border-color:var(--ab-sea);color:var(--ab-deep);background:var(--ab-foam)}
 .ab-chip.solid{border-style:solid}
-.ab-mood{height:10px;border-radius:999px;background:var(--ab-card-2);overflow:hidden;border:1px solid var(--ab-line)}
-.ab-mood > i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--ab-sky),var(--ab-sea))}
 .ab-savebar{position:sticky;bottom:12px;margin-top:16px;display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;background:var(--ab-card);border:1px solid var(--ab-sea);box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:6}
 .ab-savebar .msg{flex:1;color:var(--ab-deep);font-weight:560}
 .ab-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);padding:9px 16px;border-radius:10px;background:var(--dsw-alias-toast-bg,#1f2328);color:var(--dsw-alias-toast-label,#fff);font-size:13px;z-index:50;box-shadow:0 6px 24px rgba(0,0,0,.2);max-width:80vw}
@@ -367,8 +365,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 .ab-sticker{border-radius:14px;transition:transform .12s,box-shadow .12s}
 .ab-sticker:hover{transform:translateY(-2px);box-shadow:var(--ab-shadow)}
 .ab-pitem{border-radius:12px;transition:border-color .12s,box-shadow .12s}
-.ab-mood{height:12px}
-.ab-mood > i{background:linear-gradient(90deg,#9ad0ff,var(--ab-sea) 60%,#7a6cf0)}
 .ab-logs{border-radius:12px;border:1px solid var(--ab-line)}
 .ab-savebar{border-radius:14px;backdrop-filter:blur(8px)}
 .ab-table th{font-size:12px;letter-spacing:.02em}
@@ -1006,9 +1002,9 @@ function Overview({ st, toast, go }) {
       { className: "ab-grid ab-g2" },
       h(
         Card,
-        { title: "她现在", desc: "心情会随聊天起伏，过一阵子慢慢回到平常。" },
-        h("div", { className: "ab-flex", style: { marginBottom: 8 } }, h("b", null, st.mood.label), h("span", { className: "ab-muted" }, st.mood.value + " / 100")),
-        h("div", { className: "ab-mood" }, h("i", { style: { width: Math.max(4, st.mood.value) + "%" } })),
+        { title: "她现在", desc: "她的近况速览：表情库、日记、人格与 QQ 会话。" },
+        h("div", { className: "ab-flex", style: { marginBottom: 8 } }, h("b", null, "她现在")),
+        h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "记录她的表情、日记与人格状态，随时在对应标签页调整。"),
         h(
           "div",
           { className: "ab-kv", style: { marginTop: 14 } },
@@ -2687,29 +2683,10 @@ function Mood({ st, draft, setDraft, toast }) {
     return () => clearTimeout(t);
   }, [q]);
   const last = st.memory && st.memory.lastConsolidate;
-  const moodCard = !modOn(st, "mood") ? h(ModOff, { name: "心情" }) : h(
-    Card,
-    { title: "心情", right: f.sw("mood.enabled"), desc: "被夸、被哄、被凶都会影响她的心情（对她说的话、主人的话影响更大），过一阵子慢慢回到平常。心情好时她话多、更爱发表情和语音、回得快、群里更爱插话；心情差时话少、回得慢、少发表情，还会带点小脾气。" },
-    h("div", { className: "ab-flex", style: { marginBottom: 8 } }, h("b", null, st.mood.label), h("span", { className: "ab-muted" }, st.mood.value + " / 100"), st.mood.reason ? h("span", { className: "ab-muted ab-small" }, "· 因为" + st.mood.reason) : null),
-    h("div", { className: "ab-mood" }, h("i", { style: { width: Math.max(4, st.mood.value) + "%" } })),
-    h(
-      "div",
-      { style: { marginTop: 10 } },
-      h(Row, { label: "多久回到平常", hint: "半衰期" }, f.range("mood.halfLifeHours", 0.5, 24, 0.5, (v) => v + " 小时")),
-      h(Row, { label: "用模型判断心情", hint: "每轮聊完用模型判一次（能分清开玩笑和真骂、她主动找你时的心意），更准；每轮多一次很短的模型调用。关着就按关键词" }, f.sw("mood.judge"))
-    ),
-    (st.mood.history || []).length ? h("div", { className: "ab-list", style: { marginTop: 8 } }, st.mood.history.slice(0, 6).map((x, i) => h(
-      "div",
-      { key: i, className: "ab-li" },
-      h("div", { className: "meta" }, timeAgo(x.at)),
-      h("div", { className: "body" }, (x.to >= x.from ? "↑ " : "↓ ") + x.from + " → " + x.to, h("span", { className: "ab-muted ab-small" }, "  " + x.reason))
-    ))) : null
-  );
-  if (!memOn) return h("div", { className: "ab-grid" }, moodCard, h(ModOff, { name: "记忆" }));
+  if (!memOn) return h("div", { className: "ab-grid" }, h(ModOff, { name: "记忆" }));
   return h(
     "div",
     { className: "ab-grid" },
-    moodCard,
     h(ProfilesCard, { toast }),
     h(
       Card,
@@ -4913,7 +4890,7 @@ function QQHubPage() {
           "div",
           { className: "ab-hero-main" },
           h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"),
-          h("div", { className: "ab-sub" }, "QQ " + cfg.botQQ + " · " + (persona ? persona.name : "默认人格") + " · " + st.mood.label),
+          h("div", { className: "ab-sub" }, "QQ " + cfg.botQQ + " · " + (persona ? persona.name : "默认人格")),
           h(
             "div",
             { className: "ab-pills" },

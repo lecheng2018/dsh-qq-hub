@@ -22,7 +22,6 @@ function fixture(overrides = {}) {
     reportTurns: new Map(),
     groups,
     stickers: { match: () => null, pickForReply: () => null },
-    mood: () => ({ sticker: 1, voice: 1, delay: 0 }),
     interaction: { queueAside() {} },
     sendText: async (chatId, text, replyId, missedAt, userId) => { sent.push({ chatId, kind: 'text', text, replyId, userId }) },
     sendVoice: async (chatId, text) => { sent.push({ chatId, kind: 'voice', text }) },

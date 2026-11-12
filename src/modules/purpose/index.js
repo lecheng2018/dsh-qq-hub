@@ -40,7 +40,6 @@ export default {
       chatLog: api.core.chatLog,
       log: api.log,
       isMuted: (chatId) => { try { return api.core.mutes.muted(chatId) } catch { return false } },
-      mood: () => api.use('mood'),
       memory: () => api.use('memory'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },
     })
