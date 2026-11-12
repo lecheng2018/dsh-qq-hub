@@ -63,6 +63,10 @@ jobs:
       - name: Run Test Suite
         run: npm run test:all
 
+      # 显式构建，别只依赖 `npm test` 里串的 build-client（package.json 的 prepack 是同一道兜底）
+      - name: Build Client Bundle
+        run: npm run build:client
+
       - name: Check Package Contents
         run: npm run pack:check
 
