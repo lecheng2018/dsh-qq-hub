@@ -7,7 +7,7 @@ import { get } from '../core/http.js'
 function Access({ draft, setDraft }) {
   const f = useField(draft, setDraft)
   return h('div', { className: 'ab-grid' },
-    h(Card, { title: '主人', desc: '主人的 QQ 号。群管、点歌、电脑上的操作只听主人的。' },
+    h(Card, { title: '主人', desc: '主人的 QQ 号。群管、电脑上的操作只听主人的。' },
       h(Row, { label: '主人 QQ 号' }, f.text('ownerQQ')),
       h(Row, { label: '她怎么称呼你' }, f.text('ownerName', { placeholder: '主人' })),
       h(Row, { label: '主人私聊的权限', hint: '群聊永远没有电脑操作权限，这里管不到群。' },

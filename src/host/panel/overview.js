@@ -62,7 +62,6 @@ export function createPanelOverview({
       memory: { lastConsolidate: memory?.lastConsolidate?.() ?? 0 },
       avatar: avatarInfo(),
       voice: { edgeInstalled: use('voice')?.edgeInstalled?.() ?? false },
-      song: use('song')?.status?.() ?? null,
       sessions: hub.sessions(),
       workspaceDir: workspaceDirOf(cfg),
       personas: listPersonas(),
