@@ -39,15 +39,23 @@ export function createRecentMedia({ file = dataDir('recent-media.json'), log } =
   }
   if (prune(Date.now()) || invalid) save()
 
+  function remember(chatId, items) {
+    if (disposed || !items.length) return
+    const now = Date.now()
+    prune(now)
+    const fresh = items.map((item) => ({ ...item, at: now })).filter((item) => valid(item, now))
+    chats.set(String(chatId), [...(chats.get(String(chatId)) || []), ...fresh].slice(-LIMIT))
+    save()
+  }
+
+  function rememberSegments(chatId, segments, userId) {
+    const items = (Array.isArray(segments) ? segments : []).filter((seg) => ['image', 'mface'].includes(seg?.type))
+    remember(chatId, items.map((seg) => ({ seg, userId: String(userId || ''), sticker: seg.type !== 'image' })))
+  }
+
   return {
-    remember(chatId, items) {
-      if (disposed || !items.length) return
-      const now = Date.now()
-      prune(now)
-      const fresh = items.map((item) => ({ ...item, at: now })).filter((item) => valid(item, now))
-      chats.set(String(chatId), [...(chats.get(String(chatId)) || []), ...fresh].slice(-LIMIT))
-      save()
-    },
+    remember,
+    rememberSegments,
     get(chatId, userId) {
       if (disposed) return []
       if (prune(Date.now())) save()

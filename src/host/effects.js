@@ -6,8 +6,8 @@
 
 export function createHostEffects({
   ctx, logger, log, getConfig,
-  hub, mods, use, snowluma, onebot, gatewayState,
-  /** 会话 id → chatKey 反查（新核心会话不在 legacy sessions.json 里，真机实测审批卡发不到 QQ） */
+  hub, mods, use, snowluma, onebot, gatewayState, interactions,
+  /** 会话 id → 当前核心的 chatKey 反查，由组合根决定唯一来源 */
   chatKeyOfSession,
 }) {
   const sessionKey = (id) => {
@@ -15,13 +15,8 @@ export function createHostEffects({
     return s.startsWith('session-') ? s.slice(8) : s
   }
 
-  /** 会话 → chatKey：先问新核心（开旗时的会话都在这），再退回 legacy hub。 */
   const chatOfSession = (sid) => {
-    try {
-      const k = typeof chatKeyOfSession === 'function' ? chatKeyOfSession(sid) : ''
-      if (k) return k
-    } catch { /* 忽略 */ }
-    try { return hub.chatOfSession?.(sid) || '' } catch { return '' }
+    try { return (typeof chatKeyOfSession === 'function' ? chatKeyOfSession(sid) : '') || '' } catch { return '' }
   }
 
   const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
@@ -54,7 +49,7 @@ export function createHostEffects({
               args = req.arguments
               command = req.arguments.command || ''
             }
-            return await hub.requestApproval(req, {
+            return await interactions.approvals.request(req, {
               chatId,
               sessionId: sid,
               command,
@@ -83,7 +78,7 @@ export function createHostEffects({
               if (chatId) {
                 const args = req?.arguments || null
                 log.info(`审批请求：${String(req?.toolName || 'tool')} → ${chatId}`)
-                const out = await hub.requestApproval(req, { chatId, sessionId: raw, command: args?.command || '', args })
+                const out = await interactions.approvals.request(req, { chatId, sessionId: raw, command: args?.command || '', args })
                 log.info(`审批结果：${out}（${String(req?.toolName || 'tool')}）`)
                 return out
               }
@@ -122,7 +117,7 @@ export function createHostEffects({
       const wrapped = async (req) => {
         const sid = sessionKey(req?.agent?.session?.id || req?.agent?.id)
         const chatId = chatOfSession(sid)
-        if (chatId) return await hub.askUserQuestion(chatId, req)
+        if (chatId) return await interactions.questions.ask(chatId, req)
         return await original(req)
       }
       uq.ask = wrapped
