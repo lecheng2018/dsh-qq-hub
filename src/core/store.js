@@ -174,6 +174,12 @@ export function readJsonWithBackup(file, { fallback, validate, label = '状态�
   return { value: typeof fallback === 'function' ? fallback() : fallback, error }
 }
 
+export function readJsonRequired(file, options = {}) {
+  const result = readJsonWithBackup(file, options)
+  if (result.error) throw new Error(`${options.label || '状态文件'}不可用，对应自动任务已停止：${result.error.message}`)
+  return result.value
+}
+
 export function writeJsonWithBackup(file, value, { validate, label = '状态文件', onError = warnState, mode = 0o644 } = {}) {
   if (!validate(value)) throw new TypeError(`${label}结构不符合预期`)
   for (const candidateFile of [file, `${file}.bak`]) {

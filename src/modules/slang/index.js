@@ -15,7 +15,7 @@
 // 边界：只学「词」（群在用什么梗/称呼），与「蒸馏群友」学「人」互补；数据全程本地。
 
 import { randomUUID } from 'node:crypto'
-import { readJson, writeJson } from '../../core/store.js'
+import { readJsonRequired, writeJsonWithBackup } from '../../core/store.js'
 import { askModel, withAbortTimeout, modelWithOverride } from '../../core/llm.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
 import { discoverSlangCandidates, buildSlangPrompt, parseSlangItems, renderSlangHint } from '../../features/slang-discover.js'
@@ -202,15 +202,15 @@ export const slangModule = {
   files: ['features/slang-discover.js'],
   setup(api) {
     const stateFile = api.dataDir('book.json')
+    const existing = readJsonRequired(stateFile, { fallback: () => ({ groups: {}, learned: {} }), validate: (value) => value && typeof value === 'object' && !Array.isArray(value), label: '群黑话本状态', onError: (error) => api.log.warn(error.message) })
     // 遗留迁移：旧版黑话本存在 memory.json（memory.slang() 只读口），首启一次性搬进来
     try {
       const legacy = api.use('memory')?.slang?.() || []
-      const existing = readJson(stateFile) || { groups: {}, learned: {} }
       if (!existing.groups || !Object.keys(existing.groups).length) {
         const groups = {}
         for (const g of legacy) if (g?.gid && Array.isArray(g.list) && g.list.length) groups[String(g.gid)] = g.list
         if (Object.keys(groups).length) {
-          writeJson(stateFile, { groups, learned: existing.learned || {} })
+          writeJsonWithBackup(stateFile, { groups, learned: existing.learned || {} }, { validate: (value) => value && typeof value === 'object' && !Array.isArray(value), label: '群黑话本状态', onError: (error) => api.log.warn(error.message) })
           api.log.info?.(`群黑话本迁移完成：${Object.keys(groups).length} 个群（自 memory.json）`)
         }
       }
@@ -218,8 +218,15 @@ export const slangModule = {
 
     const engine = createSlangEngine({
       config: api.config,
-      loadState: () => { try { return readJson(stateFile) } catch { return null } },
-      saveState: (s) => writeJson(stateFile, s),
+      loadState: () => readJsonRequired(stateFile, {
+        fallback: () => ({ groups: {}, learned: {}, sources: {} }),
+        validate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+        label: '群黑话本状态', onError: (error) => api.log.warn(error.message),
+      }),
+      saveState: (state) => writeJsonWithBackup(stateFile, state, {
+        validate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+        label: '群黑话本状态', onError: (error) => api.log.warn(error.message),
+      }),
       chatLog: api.core.chatLog,
       groupNameOf: async (gid) => {
         const name = api.core.hub.groupNames?.get?.(String(gid))
