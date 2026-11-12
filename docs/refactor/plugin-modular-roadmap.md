@@ -54,7 +54,7 @@ host（唯一装配与生命周期）
 - 验收：损坏主备、坏 scope、外改、超限、失败重跑、迟到模型结果、真实 HTTP 重载与同源防护纳入回归。面板真实浏览器与生产迁移另列，不以源码测试冒充上线验收。
 - 回滚：未迁移实例可回退代码；迁移后不可直接启用旧库，否则可能复活已删内容。恢复需停写并核对完整备份，不能用删目录清状态来回滚。
 
-### P1：共享流水服务（本 PR 交付，合入以 PR/CI 状态为准）
+### P1：共享流水服务（已在 main，PR #52）
 
 - 范围：`src/chat/chat-log.js` 唯一读写实现，host 装配唯一实例；hub 保留 `logChat/chatLogDays/chatLogOf` 三个 facade。memory/distill/slang/diary/qzone/purpose/bili/token-guardian 接独立服务，不更换原 JSONL 文件格式和模型提示词，保留主线蒸馏 JSON 纠正逻辑。
 - 所有权：模块只拿冻结的 append/listDays/readDay/readDaySnapshot 窄口；没有 delete、prune 或定时器控制权。memory.tick 不再清日志。host 启动时及每小时清理过期流水，默认保留 30 天，最少 14 天；关闭记忆不停止宿主保留任务。流水写盘错误不得打断 B 站回复。
@@ -64,6 +64,12 @@ host（唯一装配与生命周期）
 - 失败与生命周期：distill 成功批次与游标同次持久化，失败保留计数并退避；L2 未成功时先重试，不挤掉待聚合批；L3 按目标成功后标记，同日可重试。slang 分群隔离失败并补学旧日期。两者 dispose 中止在途请求并拒绝迟到回写，流水定时器 stop/start 不泄漏。
 - 验收证据：`test/chat-log.test.js`、`chat-log-consumers.test.js`、`memory-chatlog-progress.test.js`、`chat-log-architecture.test.js` 和真实 host e2e；全量结果见本 PR 与看板。没有执行 fnOS 生产迁移或更改运行中 DSH。
 - 回滚：回退服务消费接线时保留原日志与新游标，不删除数据或改变保留配置掩盖差异。旧版不识别指纹，降级前须停学习并核对进度；不承诺降级后仍有新游标保护。
+
+### P1a：回复与富媒体业务编排迁出
+
+- `src/chat/reply-delivery.js` 负责回复 hook、拆条、群聊合并、引用、语音/表情/图片编排、同 chat 串行与 Outbox 票释放；`src/chat/hub.js` 只保留兼容委托及宿主状态回调。
+- 物理发送仍由既有 Shared Outbox 唯一执行；本切片不重写发送、不改模块 SDK，也不宣称 `legacyDeliver` 已从 host 退出。下一步由 host 直接装配该服务，再逐段迁移媒体准备函数。
+- 验收覆盖独立服务行为、真实 hub + fake DSH/OneBot 的回复顺序、群聊合并、unknown、防身份泄露、dryRun 和失败释放；不修改前端、记忆数据或运行中的 DSH。
 
 ### P2：共享入站媒体与上下文边界
 
