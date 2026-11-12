@@ -20,6 +20,7 @@ import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillPro
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
+import { extractionBatchOf } from './memory-extraction.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
@@ -73,6 +74,7 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
   }
   // 存储层与生命周期管理（B-01 规范）
   let status = 'active' // 'active' | 'closed'
+  let batchRecoveryError = ''
   let activeGeneration = 1
   const abortControllers = new Set()
 
@@ -1047,6 +1049,7 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
   /** 从一段聊天里提炼长期记忆，并回顾相处经验。lines：[{who, text}] */
   async function extractLines(chatId, lines, genSignal = null) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭', added: 0, insights: 0 }
+    if (batchRecoveryError) return { ok: false, message: batchRecoveryError, added: 0, insights: 0 }
     if (genSignal && !genSignal.isValid()) return { ok: false, message: '任务已取消', added: 0, insights: 0 }
     const talk = lines.filter((l) => l.text && !String(l.text).startsWith('【系统'))
     const isQzone = chatId === 'qzone'
@@ -1065,9 +1068,50 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     try {
       const chunks = []
       for (let i = 0; i < talk.length; i += 80) chunks.push(talk.slice(i, i + 80))
-      for (const part of chunks) {
+      for (const [index, part] of chunks.entries()) {
         if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
-        n += await extractFacts(chatId, part.map(line).join('\n'), genSignal)
+        const batch = extractionBatchOf(chatId, index, part)
+        const previous = load().extractionBatches?.[batch.id]
+        if (previous && previous.fingerprint !== batch.fingerprint) throw new Error(`提炼批次 ${batch.id} 的输入已变化，请核对后重试`)
+        if (previous?.status === 'done') { n += Number(previous.added) || 0; continue }
+        if (previous?.status === 'running' || previous?.status === 'pending') throw new Error(`提炼批次 ${batch.id} 已完成事实提交但状态未确认，请核对后恢复`)
+        const running = load()
+        running.extractionBatches = { ...(running.extractionBatches || {}) }
+        running.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope: scopeFromChatId(chatId), status: 'running', added: 0, at: Date.now() }
+        try { save(running) } catch (error) {
+          batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
+          throw error
+        }
+        let added = 0
+        try {
+          added = await extractFacts(chatId, part.map(line).join('\n'), genSignal)
+          if (status === 'closed') throw new Error('记忆模块已关闭')
+          if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
+        } catch (error) {
+          const failed = load()
+          failed.extractionBatches = { ...(failed.extractionBatches || {}) }
+          failed.extractionBatches[batch.id] = {
+            fingerprint: batch.fingerprint,
+            scope: scopeFromChatId(chatId),
+            status: error.factsCommitted ? 'pending' : 'failed',
+            added: Number(error.factsCommitted) || 0,
+            error: error.message,
+            at: Date.now(),
+          }
+          try { save(failed) } catch (saveError) {
+            batchRecoveryError = `提炼批次 ${batch.id} 无法记录失败状态，自动整理已暂停：${saveError.message}`
+            throw saveError
+          }
+          throw error
+        }
+        const done = load()
+        done.extractionBatches = { ...(done.extractionBatches || {}) }
+        done.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope: scopeFromChatId(chatId), status: 'done', added, at: Date.now() }
+        try { save(done) } catch (error) {
+          batchRecoveryError = `提炼批次 ${batch.id} 已提交事实但进度未确认，自动整理已暂停：${error.message}`
+          throw error
+        }
+        n += added
       }
       if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
       log.info(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${n} 条新记忆`)
@@ -1154,7 +1198,8 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     try { arr = JSON.parse(m[0]) } catch { throw new Error('模型返回的记忆 JSON 数组不合法') }
     if (!Array.isArray(arr)) throw new Error('模型未返回记忆 JSON 数组')
     let n = 0
-    for (const x of arr.slice(0, 12)) {
+    try {
+      for (const x of arr.slice(0, 12)) {
       if (!x || !x.text) continue
       if (/^(我|大肥鱼)/.test(String(x.about || '')) || String(x.about || '') === '大肥鱼') continue
       // 关于谁：模型给了 QQ 号就用（群聊、空间里也能记到人头上），私聊默认是对方
@@ -1200,6 +1245,10 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
         topic: x.topic,
       })
       if (r.ok && (r.id || r.updated)) n++
+      }
+    } catch (error) {
+      error.factsCommitted = n
+      throw error
     }
     return n
   }
@@ -1520,6 +1569,7 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
       abortControllers.clear()
       if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
       store.reload()
+      batchRecoveryError = ''
       cache.clear()
       tokCache.clear()
       const health = store.health()
