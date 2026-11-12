@@ -98,3 +98,51 @@ test('派生卡会出现在人设列表里（面板人设页能看到、可手�
   const card = listPersonas().find((p) => p.id === 'persona-语感-111222333')
   assert.ok(card.tags.includes('自动生成'))
 })
+
+// 1.3.66 事故：群槽位已经指向派生卡时，refresh 拿派生卡当底卡，每刷一次叠一份语感块。
+// NAS 实测一张卡里堆了 5 份互相矛盾的性格锚。这里锁住「重复刷新 = 幂等」。
+test('重复刷新不叠段：底卡是派生卡时回落到真底卡，正文幂等', () => {
+  const gid = '444555666'
+  const cfg = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: {} } }
+  const once = refreshDistillCard({ gid, entries: ENTRIES, cfg, log: { info: () => {} } })
+  assert.equal(once.ok, true)
+  assert.equal(once.baseId, 'dafeiyu', '第一次底卡是真底卡')
+
+  // 模拟 setConfig 之后的状态：群槽位指向派生卡本身
+  const cfg2 = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: { [gid]: distillCardId(gid) } } }
+  const twice = refreshDistillCard({ gid, entries: ENTRIES, cfg: cfg2, log: { info: () => {} } })
+  assert.equal(twice.ok, true)
+  assert.equal(twice.baseId, 'dafeiyu', '底卡不能是派生卡自己')
+
+  const raw = readFileSync(join(dir, 'personas', `persona-语感-${gid}.md`), 'utf8')
+  assert.equal((raw.match(/【从群友身上借来的说话方式】/g) || []).length, 1, '借用段只有一份')
+  assert.equal((raw.match(/【语感·借自「群友甲」】/g) || []).length, 1, '语感块只有一份')
+  assert.ok(raw.includes('短句对仗'), '真底卡正文还在')
+
+  // 再刷一次也不叠
+  refreshDistillCard({ gid, entries: ENTRIES, cfg: cfg2, log: { info: () => {} } })
+  const raw3 = readFileSync(join(dir, 'personas', `persona-语感-${gid}.md`), 'utf8')
+  assert.equal((raw3.match(/【语感·借自「群友甲」】/g) || []).length, 1, '第三次刷新仍只有一份')
+})
+
+test('自愈：已堆叠的存量派生卡在下次刷新时被削成一份', () => {
+  const gid = '777888999'
+  const cardId = distillCardId(gid)
+  // 手工造一张被叠了 3 遍的脏卡（模拟 1.3.66 之前的历史数据）
+  const dirty = '你是大肥鱼。\n\n【怎么说话：像人在打字】\n短句对仗。'
+    + '\n\n【从群友身上借来的说话方式】\n\n【语感·借自「旧甲」】\n口头禅：旧的（过期）\n（只借说话方式，不借身份。）'
+    + '\n\n【从群友身上借来的说话方式】\n\n【语感·借自「旧乙」】\n口头禅：更旧的\n（只借说话方式，不借身份。）'
+    + '\n\n【从群友身上借来的说话方式】\n\n【语感·借自「旧丙」】\n口头禅：最旧的\n（只借说话方式，不借身份。）'
+  writeFileSync(join(dir, 'personas', `${cardId}.md`), `---\nname: 脏卡\ntags: [自动生成]\n---\n\n${dirty}`)
+
+  const { stripDistillSections } = dc
+  assert.equal(stripDistillSections(dirty), '你是大肥鱼。\n\n【怎么说话：像人在打字】\n短句对仗。', '剥离后只剩底卡正文')
+
+  const cfg = { persona: { current: 'dafeiyu', groupDefault: 'dafeiyu', groups: { [gid]: cardId } } }
+  const r = refreshDistillCard({ gid, entries: ENTRIES, cfg, log: { info: () => {} } })
+  assert.equal(r.ok, true)
+  const raw = readFileSync(join(dir, 'personas', `${cardId}.md`), 'utf8')
+  assert.equal((raw.match(/【语感·借自「/g) || []).length, 1, '脏卡被削成一份')
+  assert.ok(raw.includes('群友甲'), '换成了最新画像')
+  assert.ok(!raw.includes('旧甲') && !raw.includes('旧乙'), '旧块清干净')
+})
