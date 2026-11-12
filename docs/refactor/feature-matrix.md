@@ -22,10 +22,8 @@
 | 模块 `enabled` | 未配置时**默认开**（`enabled !== false`） | `src/core/modules.js:174` | modules.test |
 | 群聊工具隔离 | social 预设无本地工具（cordis.patch.yml） | `cordis.patch.yml` | — |
 | `config.json` 落盘 | 0600 | `src/core/config.js:716` | — |
-| 洋葱管道 `FLAG_USE_PIPELINE` | **关**（默认直调 legacy hub） | `src/kernel/legacy-fallback.js` | kernel-* |
-| 入口合流 `FLAG_INGRESS_AGGREGATOR` | **关**（暂停版 aggregator 不启用） | `src/kernel/mw-aggregator.js` | kernel-aggregator |
-| 记忆接管 `NEW_MEMORY_PIPELINE` | **关**（且需管道先开） | `src/kernel/mw-memory.js` | — |
-| 出口影子 `FLAG_EGRESS_SHADOW` | 关（live 模式） | `src/kernel/ctx-store.js` | kernel-egress-cutover |
+| 当前核心唯一事件链 | **开**（无 legacy/pipeline 回退；旧 flag 不读取） | `src/host.js`、`src/host/modular-core.js` | k03c-assembly-exit、r3-flagoff-regression |
+| 旧灰度开关 | **已退出生产装配**（`FLAG_MODULAR_CORE`、`FLAG_USE_PIPELINE`、`NEW_MEMORY_PIPELINE`） | `src/host.js` 不再读取 | k03c-assembly-exit |
 
 ## 2. 内置模块矩阵（23 个，注册顺序 = 装载顺序）
 
