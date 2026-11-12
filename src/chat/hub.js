@@ -26,7 +26,8 @@ import { createInboundAudio } from './inbound-audio.js'
 import { createQuotedMessages } from './quoted-messages.js'
 import { createInboundImages } from './inbound-images.js'
 import { redact } from '../core/redact.js'
-import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
+import { defaultModel, pickReasoningEffort, canSeeImages, modelVision } from '../core/llm.js'
+import { createInboundVision } from './inbound-vision.js'
 import { resolveChatModel } from './chat-model.js'
 import { createFaces, textToSegments, stripFaceTags, speakableText, dedupeFaces } from './faces.js'
 import { expandMentions, hasMention } from './mentions.js'
@@ -64,7 +65,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -99,6 +100,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   const inboundAudio = sharedInboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
+  const inboundVision = sharedInboundVision || createInboundVision({ dsh, log, inboundImages })
   // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
   // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
   const stickerStash = new Map() // chatId → { at, segs: [seg] }
@@ -1099,21 +1101,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
    * 私聊和群聊共用一份，避免两处写法不一致（以前群聊直接丢掉，连提示都没有）。
    * @returns {Promise<string>} 要拼进提示词的文字（永不为空）
    */
-  async function imageTextFor (imgs, nickname, cfg, hint) {
-    const h = cfg && cfg.visionHelper
-    const usable = h && h.enabled && h.provider && h.model
-    if (usable && imgs.length) {
-      try {
-        const desc = await describeWithHelper(dsh, { images: imgs, cfg, hint, log })
-        if (desc) {
-          return `（${nickname} 发了 ${imgs.length} 张图片。你的模型看不了图，下面由另一个模型看过之后转述给你，别当成你亲眼见过：\n${desc}）`
-        }
-      } catch (error) {
-        log.debug('辅助看图失败：', error.message)
-      }
-    }
-    return `（${nickname} 发了 ${imgs.length} 张图片，你现在的模型看不了图，只能知道有这么回事）`
-  }
+  function imageTextFor(imgs, nickname, cfg, hint) { return inboundVision.textFor(imgs, nickname, cfg, hint) }
 
   async function filesOf(msg) {
     return readInboundFiles(msg, { onebot, workspaceDir: workspaceDirOf(getConfig()), log })

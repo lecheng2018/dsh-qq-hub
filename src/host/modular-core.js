@@ -29,6 +29,7 @@ import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent, cardText } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
+import { createInboundVision } from '../chat/inbound-vision.js'
 import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
@@ -191,11 +192,12 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
   const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
+  const inboundVision = sharedInboundVision || createInboundVision({ dsh, log, inboundImages })
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
   const activity = createActivityState({ onTypingPing: () => {} })
@@ -309,7 +311,7 @@ export function createModularCore({
     return true
   }
 
-  const admitContent = (content) => inboundImages.admit(content)
+  const admitContent = (content, context) => inboundVision.admit(content, context)
 
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
   const quotedInfo = (replyId, chatKey) => quotedMessages.get(replyId, chatKey)
@@ -803,7 +805,10 @@ export function createModularCore({
             if (next == null) return
             steerContent = next
           }
-          const admittedSteer = await admitContent(steerContent)
+          const admittedSteer = await admitContent(steerContent, {
+            nickname: inbound.sender?.nickname || inbound.sender?.userId,
+            hint: textOfSegments(inbound.segments), cfg: getConfig(),
+          })
           await agent.steer({ id: randomUUID(), role: 'user', content: admittedSteer, source: { kind: 'qq-hub' } })
         } finally {
           activeSteers--
@@ -908,7 +913,10 @@ export function createModularCore({
       })
       // 5.5 消息完整形状（真机报告 1：DSH agent-loop 的 isOwned(message) 读 message.source.kind，
       //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
-      const admitted = await admitContent(content)
+      const admitted = await admitContent(content, {
+        nickname: chat.nickname || chat.userId,
+        hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(),
+      })
       const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
       // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
       // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
