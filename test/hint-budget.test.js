@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = readFileSync(join(ROOT, 'src/features/memory.js'), 'utf8')
+const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const CFG = readFileSync(join(ROOT, 'src/core/config.js'), 'utf8')
 
 test('单条记忆超长的截法：在句读处收，不从半句中间断', async () => {
@@ -41,9 +42,9 @@ test('配置默认值与夹值', async () => {
 })
 
 test('提炼提示词：知识要记、要说清是谁说的、不要字段标签', () => {
-  assert.match(SRC, /从看过的内容里学到的可复用知识/, '学到的知识要记')
-  assert.match(SRC, /不记「今天看了什么」这种浏览流水/, '浏览流水不记')
-  assert.match(SRC, /要说清是谁说的、关于谁/, '记住是谁说的')
-  assert.doesNotMatch(SRC, /每条记忆必须写成一行，格式固定/, '不许再教它按字段格式写记忆')
-  assert.doesNotMatch(SRC, /对象\.方面：gist=/, '不许把 gist/detail/why 当正例')
+  assert.match(EXTRACTOR, /从看过的内容里学到的可复用知识/, '学到的知识要记')
+  assert.match(EXTRACTOR, /不记「今天看了什么」这种浏览流水/, '浏览流水不记')
+  assert.match(EXTRACTOR, /要说清是谁说的、关于谁/, '记住是谁说的')
+  assert.doesNotMatch(EXTRACTOR, /每条记忆必须写成一行，格式固定/, '不许再教它按字段格式写记忆')
+  assert.doesNotMatch(EXTRACTOR, /对象\.方面：gist=/, '不许把 gist/detail/why 当正例')
 })
