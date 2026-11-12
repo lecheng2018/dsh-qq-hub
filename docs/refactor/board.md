@@ -89,7 +89,7 @@
 | P1a 回复与富媒体编排迁出 | 已在 main（PR #54 / 60bbbc5） | Integration + Outbox | P1 + 既有 Shared Outbox | reply-delivery、hub facade、投递顺序与回复回归 | 拆条/合并/引用/媒体行为不变，同会话票和失败释放由独立服务测试覆盖 | hub 恢复委托前实现；不改物理出口 |
 | P1b 审批与提问共享 | 已在 main（PR #57 / 43f8781） | Integration | P1a + 当前 SessionRegistry | host/effects、hub 注入、注册表生命周期及专属测试 | 同一注册表服务新旧入口，非 QQ 会话交还原服务，卸载清理等待项 | 还原组合根接线，不启用第二套注册表 |
 | P2 入站媒体与上下文共享 | ✅ 对照完成（P2a–f） | Inbound + Integration | P1；ADR-0002 出站前置门禁 | inbound/context 服务及消费接线 | 新旧输入等价，取消不污染，无双发 | 旧 facade 调用同一实现 |
-| P3 记忆学习管线独立 | 🔵 进行中（提炼与 consolidate 已独立，archive/生命周期待收口） | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；extractor 已拆出，完整生命周期与其他派生学习未收口 | 关新消费者，防止双调度 |
+| P3 记忆学习管线独立 | 🔵 进行中（提炼、整理与模型生命周期已独立，archive 待收窄） | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；模型入口已统一取消与超时，archive 契约仍待收窄 | 关新消费者，防止双调度 |
 | P4 派生学习模块自治 | 待开始，按子域拆 PR | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 独立停启、来源失效、作用域安全 | 关闭消费者，不把派生结果灌回事实名下 |
 | P5 兼容层退出 | 待 owner 门禁 | Integration + Release | ADR-0002 全等价验收 | facade 清理、矩阵与运维文档 | 真机对照、观察窗口和回滚演练 | 独立切换与恢复方案 |
 

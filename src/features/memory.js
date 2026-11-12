@@ -96,6 +96,11 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     }
   }
 
+  function generationOf(genSignal, timeoutMs = 120000) {
+    const owned = genSignal ? null : createGenerationSignal(timeoutMs)
+    return { signal: genSignal || owned, cleanup: () => owned?.cleanup() }
+  }
+
   if (['memories.db', 'memories.json', 'memories.meta.json'].some((name) => existsSync(dataDir(name)))) {
     let migrated = false
     try {
@@ -364,27 +369,36 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
   async function importCandidates(text) {
-    const src = String(text || '').trim()
-    if (!src) return []
-    const chunks = []
-    for (let i = 0; i < src.length && chunks.length < 6; i += 5000) chunks.push(src.slice(i, i + 5000))
-    const out = []
-    for (const part of chunks) {
-      const r = await askModel(dsh, {
-        cfg: getConfig(),
-        system: '你帮一个叫「大肥鱼」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
-        text: part,
-        maxTokens: 2500,
-        temperature: 0.2,
-      })
-      const m = String(r).match(/\[[\s\S]*\]/)
-      try { for (const x of m ? JSON.parse(m[0]) : []) if (x && x.text) out.push({ text: String(x.text).slice(0, 200), aboutName: String(x.about || ''), importance: Math.max(0, Math.min(1, Number(x.importance) || 0.5)) }) } catch (error) {}
+    const task = generationOf(null)
+    const genSignal = task.signal
+    try {
+      const src = String(text || '').trim()
+      if (!src) return []
+      const chunks = []
+      for (let i = 0; i < src.length && chunks.length < 6; i += 5000) chunks.push(src.slice(i, i + 5000))
+      const out = []
+      for (const part of chunks) {
+        const r = await askModel(dsh, {
+          cfg: getConfig(),
+          system: '你帮一个叫「大肥鱼」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
+          text: part,
+          maxTokens: 2500,
+          temperature: 0.2,
+          signal: genSignal.signal,
+        })
+        const m = String(r).match(/\[[\s\S]*\]/)
+        try { for (const x of m ? JSON.parse(m[0]) : []) if (x && x.text) out.push({ text: String(x.text).slice(0, 200), aboutName: String(x.about || ''), importance: Math.max(0, Math.min(1, Number(x.importance) || 0.5)) }) } catch (error) {}
+      }
+      const have = load().items
+      const uniq = []
+      for (const c of out) if (!have.some((m) => similarity(m.text, c.text) >= 0.6) && !uniq.some((u) => similarity(u.text, c.text) >= 0.6)) uniq.push(c)
+      return uniq.slice(0, 80)
+    } catch (error) {
+      if (!genSignal.isValid()) return []
+      throw error
+    } finally {
+      task.cleanup()
     }
-    // 和已有记忆、彼此之间去重
-    const have = load().items
-    const uniq = []
-    for (const c of out) if (!have.some((m) => similarity(m.text, c.text) >= 0.6) && !uniq.some((u) => similarity(u.text, c.text) >= 0.6)) uniq.push(c)
-    return uniq.slice(0, 80)
   }
 
   /** 导入旧档案第二步：把勾选的候选存进记忆库。 */
@@ -710,7 +724,10 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
    * @returns {{ok:boolean, message:string, learned?:object}}
    */
   async function learnDistillFromHistory ({ gid, uid, name = '', minMessages } = {}) {
-    const cfg = getConfig()
+    const task = generationOf(null)
+    const genSignal = task.signal
+    try {
+      const cfg = getConfig()
     if (cfg.memory?.distill === false) return { ok: false, message: '蒸馏群友开关关着' }
     const g = String(gid || '').replace(/\D/g, '')
     const u = String(uid || '').replace(/\D/g, '')
@@ -743,7 +760,7 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
       // 8000：五段 JSON 会被截断（parse 就失败）；「自适应思考」模型的思考段也吃额度。
       // reasoningEffort 不钉死 'none'：MiniMax-M3.1-Flash 之类必须自适应思考，disabled 直接 400
       // → 蒸馏永远失败；交给 askModel 的 pickReasoningEffort 按模型能力挑。
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3 })
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3, signal: genSignal.signal })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -757,10 +774,14 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
       log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
       return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }
     }
-    const saved = putDistill(g, u, profile, mine.length)
-    log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
-    try { onDistillLearned && await onDistillLearned(g) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
-    return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
+      if (status === 'closed' || !genSignal.isValid()) return { ok: false, message: '历史学习任务已取消' }
+      const saved = putDistill(g, u, profile, mine.length)
+      log.info(`蒸馏群友（历史）：学到 ${name || u} 的说话样子（${mine.length} 句原话）`)
+      try { onDistillLearned && await onDistillLearned(g) } catch (error) { log.warn('刷新语感人设卡出错：', error.message) }
+      return { ok: true, message: `从历史里学到了（${mine.length} 句）`, learned: saved }
+    } finally {
+      task.cleanup()
+    }
   }
 
   function setInsights(key, list, name) {
@@ -817,8 +838,11 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
 
   /** 按这个人的记忆重写小档案（记忆少于 3 条的不写）。scope 限定只用哪个作用域的记忆来写。 */
   async function buildProfile(qq, scope = '', genSignal = null) {
-    if (status === 'closed') return false
-    if (genSignal && !genSignal.isValid()) return false
+    const task = generationOf(genSignal)
+    genSignal = task.signal
+    try {
+      if (status === 'closed') return false
+      if (genSignal && !genSignal.isValid()) return false
     const cfg = getConfig()
     // 只用「这个作用域自己的」记忆写档案。
     // 以前还会把 global 记忆也喂进来（`|| scope === 'global'`），后果是：
@@ -851,8 +875,11 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     if (status === 'closed' || (genSignal && !genSignal.isValid())) return false
     const text = String(out || '').trim().replace(/^[「"]|[」"]$/g, '')
     if (!text) throw new Error('模型没写出东西，等会儿再试')
-    setProfile(qq, text, name, scope)
-    return true
+      setProfile(qq, text, name, scope)
+      return true
+    } finally {
+      task.cleanup()
+    }
   }
 
   /** 给系统提示词上下文用：人物小档案 + 相处经验（常驻）+ 按这一轮对方说的话检索到的记忆。 */
@@ -1017,7 +1044,10 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
 
   /** 回顾：结合最近聊天和已有经验，更新这个人的相处经验（合并、提炼、最多 8 条，概括不琐碎）。 */
   async function reflect(chat, transcript, genSignal = null) {
-    const key = personKey(chat)
+    const task = generationOf(genSignal)
+    genSignal = task.signal
+    try {
+      const key = personKey(chat)
     if (!key) return 0
     const old = insightsOf(key)
     const oldStyle = styleOf(key)
@@ -1042,7 +1072,10 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     const now = Date.now()
     setInsights(key, arr.map((text) => old.find((x) => x.text === text) || { id: randomUUID().slice(0, 8), text, at: now }), chat.nickname || chat.groupId || '')
     log.info(`更新了和 ${key} 相处的经验（${arr.length} 条）`)
-    return arr.length
+      return arr.length
+    } finally {
+      task.cleanup()
+    }
   }
 
   /** 这段聊天相关的旧记忆：关于在场的人的 + 和内容相关的，最多 15 条，给模型比对用。 */
@@ -1166,8 +1199,11 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
   async function learnSelfStyle(genSignal = null) {
-    if (status === 'closed') return
-    if (genSignal && !genSignal.isValid()) return
+    const task = generationOf(genSignal)
+    genSignal = task.signal
+    try {
+      if (status === 'closed') return
+      if (genSignal && !genSignal.isValid()) return
     const s = load()
     const pool = Object.entries(s.styles || {}).filter(([k]) => k !== 'self').flatMap(([, v]) => v)
     if (pool.length < 3) return
@@ -1187,6 +1223,9 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     } catch (error) {
       if (genSignal && !genSignal.isValid()) return
       log.warn('沉淀说话方式失败：', error.message)
+    }
+    } finally {
+      task.cleanup()
     }
   }
 
