@@ -15,7 +15,7 @@
 // 底卡正文与安全规则不可被蒸馏修改；数据全程本地。
 
 import { readJson, writeJson } from '../../core/store.js'
-import { askModel, withAbortTimeout } from '../../core/llm.js'
+import { askModel, withAbortTimeout, modelWithOverride } from '../../core/llm.js'
 import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
 import { collectMemberLines, enoughEvidence, dedupConvo } from '../../features/distill.js'
 import {
@@ -66,19 +66,19 @@ export function createDistillEngine({
     }
   }
 
-  /** 各层 token 预算。蒸馏是「结构化 JSON 输出」，思考型模型（MiniMax-M3.1-Flash
+/** 各层 token 预算。蒸馏是「结构化 JSON 输出」，思考型模型（MiniMax-M3.1-Flash
  *  这类 forceAdaptiveThinking，思考关不掉）会先吃掉一大段预算写分析，正文 JSON
  *  才轮到。1.3.66 实测 L1 用 1200：7 次尝试 7 次解析失败，回包开头全是
  *  「## 用户画像 · xxx」「# 用户画像：xxx」这种 Markdown 报告，JSON 一个字没有。
  *  一键「从历史学」同样模型用 8000 就 3 次全成 —— 差别就在预算。 */
-const DISTILL_TOKENS = { l1: 4000, l2: 4000, l3: 4000 }
+  const DISTILL_TOKENS = { l1: 4000, l2: 4000, l3: 4000 }
 
-  /** 蒸馏用模型调用：distillModel 配了就走它（小成本），留空跟随主模型。 */
+  /** 蒸馏用模型：distillModel 两个字段都填了才替换，否则跟随主模型。
+ *  合并规则在 core/llm.js 的 modelWithOverride（空串覆盖主模型是个坑，见那里注释）。 */
   async function askDistillModel(prompt, maxTokens = DISTILL_TOKENS.l1) {
     const cfg = config() || {}
     const dc = distillCfg()
-    const model = dc.model || {}
-    const merged = { ...cfg, model: { ...(cfg.model || {}), ...model } }
+    const merged = { ...cfg, model: modelWithOverride(cfg.model, dc.model) }
     return withAbortTimeout(
       (signal) => askModelImpl(dsh, {
         cfg: merged, ...prompt, maxTokens, temperature: 0.3,
