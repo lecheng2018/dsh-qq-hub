@@ -4,6 +4,7 @@
 
 - 修复模块化新核心里群聊看不懂图片/表情包：先发一张图但群闸没触发回复，之后 @ 她追问时，触发轮只带后续消息的图片段，早先那张图在上下文里只剩「（图片/表情）」占位。现在群缓冲会暂存该段的图片地址，下一段触发时按地址去重、最多补 4 张，仍由 DSH 附件登记；私聊路径不变。
 - 新增回归测试：群闸放过的图片随下一段上下文登记成附件、触发轮自带图片时按地址去重并封顶 4 张。
+- **修复 CI 打包不构建前端产物**：`client/client.js` 是 esbuild 产物，正式发版能拿到新界面纯属"搭便车"——`release.yml` 靠 `npm test` 里串的 `node scripts/build-client.mjs` 顺带构建，工作流里没有任何显式的 `build:client`。而手动测试打包通道 `pack-test.yml` 连 `npm ci` 都没有，直接 `npm pack` 打仓库里提交的那份产物：`client/src` 改了、产物忘了提交时，`*-test.YYYYMMDD.N` 发出去的包就是旧界面，且 CI 全绿（测试会现场重建，只是不比对结果）。现在：`package.json` 加 `prepack`，任何 `npm pack`（含手动打包）都先构建产物；`pack-test.yml` 补 `npm ci` + 显式构建，并在 smoke 里断言 tarball 内的 `client/client.js` 存在且含 `__ModuleLoader__` / `QQHubPage`；`verify.yml` 加产物新鲜度门禁（构建后 `git diff --exit-code client/client.js`，不同步直接红）；`release.yml` 显式加 `build:client` 步骤，不再隐式依赖 test 脚本。
 
 ---
 
