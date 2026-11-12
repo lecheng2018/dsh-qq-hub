@@ -23,6 +23,7 @@ import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
 import { fetchImage, segmentBytes } from '../core/net.js'
 import { createInboundAudio } from './inbound-audio.js'
+import { createQuotedMessages } from './quoted-messages.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
 import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
@@ -63,7 +64,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -88,7 +89,6 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const groups = createGroupState()
   // 兼容：外部模块（features/memory.js）按 hub.groupNames.get?.() 取群名
   const groupNames = groups.names
-  const quoteCache = new Map() // replyId → { ok, who, uid, text, images, stickers, records, isBot }  引用消息解析缓存
   // chatId → 这一轮是否调过内容型工具（报告兜底用，turn/end 清掉）。见 CONTENT_TOOLS。
   const reportTurns = new Map()
   // 内容型工具清单（报告兜底第二层）：这些工具的产物是「给主人看的数据」，回复应该整段排版。
@@ -198,6 +198,9 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   let lastChatAt = 0
   let lastOwnerChatAt = 0
   let lastBotToOwner = { at: 0, text: '' } // 她在主人私聊里最后说的话
+  const quotedMessages = sharedQuotedMessages || createQuotedMessages({
+    onebot, getConfig, selfId, faceName: faces.nameOf, isSentMessage: (id) => sentIds.has(id), log,
+  })
 
   function bump(k) {
     const d = new Date().toDateString()
@@ -1039,76 +1042,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return groupNames.get(gid) || gid
   }
 
-  // ---------- 引用消息 ----------
-  // QQ 的引用段只有 message_id，正文要用 get_msg 再取一次。取到后把「谁、说了什么、几张图」带上；
-  // 取不到也记一笔，让她知道「这条引用没读到」，可以如实说没看到（别装作看见了）。
-  const QUOTE_CACHE_MAX = 200
-  /** 表情包/图片段里有没有能直接下载的地址（有些 get_msg 只回了空 url + 裸文件名）。 */
-  const quoteSegUsable = (seg) => {
-    const d = (seg && seg.data) || {}
-    return [d.url, d.file].some((x) => typeof x === 'string'
-      && (/^https?:\/\//i.test(x) || x.startsWith('base64://') || x.startsWith('file://') || /^[a-zA-Z]:[\\/]/.test(x)))
-  }
-  const quoteNeedsHistory = (parsed) => [...(parsed.images || []), ...(parsed.stickers || [])].some((seg) => !quoteSegUsable(seg))
-  /**
-   * get_msg 对「她发出的表情包/图片」可能只回空 url + 裸文件名（下载不了）。
-   * 这时退回消息历史（get_friend_msg_history / get_group_msg_history），里面带可用 url。
-   */
-  async function quoteFromHistory(id, ctx) {
-    if (!ctx || (!ctx.userId && !ctx.groupId)) return null
-    const group = Boolean(ctx.groupId)
-    const action = group ? 'get_group_msg_history' : 'get_friend_msg_history'
-    const base = group ? { group_id: Number(ctx.groupId) } : { user_id: Number(ctx.userId) }
-    // 先用引用 id 当锚点（能取到更早的消息），拿不到再退回「最近 30 条」
-    const anchor = /^-?\d+$/.test(id) ? Number(id) : 0
-    const attempts = anchor
-      ? [{ ...base, message_id: anchor, count: 5, reverse_order: false }, { ...base, count: 30 }]
-      : [{ ...base, count: 30 }]
-    for (const params of attempts) {
-      try {
-        const r = await onebot.call(action, params, { timeoutMs: 8000, retries: 0 })
-        const hit = (r?.messages || []).find((m) => String(m?.message_id ?? '') === id || String(m?.real_id ?? '') === id)
-        if (hit) return hit
-      } catch (error) {
-        log.debug(`引用消息历史也拉不到（${id}）：`, error.message)
-      }
-    }
-    return null
-  }
-  async function quotedInfo(replyId, ctx = null) {
-    const id = String(replyId || '')
-    if (!id) return null
-    if (quoteCache.has(id)) return quoteCache.get(id)
-    const out = { ok: false, who: '', uid: '', text: '', images: [], stickers: [], records: 0, isBot: false, at: 0 }
-    try {
-      const m = await onebot.call('get_msg', { message_id: Number(id) || id }, { timeoutMs: 5000, retries: 0 })
-      const sender = m?.sender || {}
-      out.uid = String(sender.user_id ?? m?.user_id ?? '')
-      out.who = String(sender.card || sender.nickname || out.uid || '某人')
-      const kind = ctx?.groupId ? 'group' : 'private'
-      let parsed = parseMessageEvent({ message_type: kind, group_id: ctx?.groupId, user_id: out.uid, sender, message: m?.message ?? m?.raw_message ?? '' }, selfId, { faceName: faces.nameOf })
-      if (quoteNeedsHistory(parsed)) {
-        const hit = await quoteFromHistory(id, ctx)
-        if (hit) {
-          const again = parseMessageEvent({ message_type: kind, group_id: ctx?.groupId, user_id: out.uid, sender: hit.sender || sender, message: hit.message ?? '' }, selfId, { faceName: faces.nameOf })
-          if (!quoteNeedsHistory(again)) parsed = again
-          else { parsed.images = [...(parsed.images || []), ...(again.images || [])]; parsed.stickers = [...(parsed.stickers || []), ...(again.stickers || [])] }
-        }
-      }
-      out.text = String(parsed.text || '').trim().slice(0, 300)
-      out.images = parsed.images || []
-      out.stickers = parsed.stickers || []
-      out.records = (parsed.records || []).length
-      out.isBot = out.uid === String(selfId || getConfig().botQQ)
-      out.ok = true
-      out.at = Date.now()
-    } catch (error) {
-      log.debug(`引用消息没拉到（${id}）：`, error.message)
-    }
-    if (quoteCache.size >= QUOTE_CACHE_MAX) quoteCache.delete(quoteCache.keys().next().value)
-    quoteCache.set(id, out)
-    return out
-  }
+  // ---------- 引用消息展示 ----------
+  const quotedInfo = (replyId, ctx = null) => quotedMessages.get(replyId, ctx)
 
   // 引用里是主人时也不带号码（和群聊标注一个口径）
   const quoteWho = (q) => (q.isBot ? '你' : (String(q.uid) === String(getConfig().ownerQQ || '') && getConfig().ownerQQ ? '主人' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`))
@@ -1550,7 +1485,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     const fresh = buf.filter((x) => !x.fed).slice(-20)
     const older = buf.filter((x) => x.fed).slice(-8)
     for (const x of buf) x.fed = true
-    // 引用内容只在这一段真要交给她时才取（缓存在 quoteCache 里，取失败也会记一笔）
+    // 引用内容只在这一段真要交给她时才取（共享引用服务缓存成功与失败结果）
     const need = fresh.filter((x) => x.replyId && !('quote' in x))
     if (need.length) {
       const infos = await Promise.all(need.map((x) => quotedInfo(x.replyId, chat)))
@@ -2031,6 +1966,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     syncAllModels,
     /** 这个聊天最近发来的图片 / 表情（新的在后面），可选只要某人发的 */
     recentMedia: (chatId, userId) => recentMedia.get(chatId, userId),
+    faceName: faces.nameOf,
     stickerOf,
     capture,
     captureOnly,

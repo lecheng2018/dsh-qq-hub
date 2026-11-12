@@ -41,6 +41,7 @@ import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
 import { readInboundFiles, inboundFileBlocks } from '../chat/inbound-files.js'
 import { createInboundAudio } from '../chat/inbound-audio.js'
+import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 
 /** 合并转发水合：展开真实消息正文，限制条数和总长度；失败保留原段，不伪称已读。 */
@@ -190,9 +191,10 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
+  const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
   const activity = createActivityState({ onTypingPing: () => {} })
@@ -347,65 +349,8 @@ export function createModularCore({
     return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
   }
 
-  const quoteCache = new Map()
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
-
-  const quoteSegUsable = (seg) => [seg?.data?.url, seg?.data?.file].some((value) => typeof value === 'string' && (/^https?:\/\//i.test(value) || value.startsWith('base64://') || value.startsWith('file://') || /^[a-zA-Z]:[\\/]/.test(value)))
-  async function quoteFromHistory(replyId, chatKey) {
-    const inGroup = chatKey.startsWith('group:')
-    const action = inGroup ? 'get_group_msg_history' : 'get_friend_msg_history'
-    const base = inGroup ? { group_id: Number(chatKey.slice(6)) } : { user_id: Number(chatKey.slice(8)) }
-    const anchor = /^-?\d+$/.test(replyId) ? Number(replyId) : 0
-    const attempts = anchor ? [{ ...base, message_id: anchor, count: 5, reverse_order: false }, { ...base, count: 30 }] : [{ ...base, count: 30 }]
-    for (const params of attempts) {
-      try {
-        const raw = await onebot.call(action, params, { timeoutMs: 8000, retries: 0 })
-        const hit = (raw?.messages || []).find((item) => String(item?.message_id ?? '') === replyId || String(item?.real_id ?? '') === replyId)
-        if (hit) return hit
-      } catch (error) { debug(`引用消息历史也拉不到（${replyId}）：${error?.message || error}`) }
-    }
-    return null
-  }
-
-  async function quotedInfo(replyId, chatKey) {
-    const key = `${chatKey}:${replyId}`
-    if (quoteCache.has(key)) return quoteCache.get(key)
-    let out = { ok: false, who: '', uid: '', text: '', media: [], isBot: false }
-    try {
-      const raw = await onebot.call('get_msg', { message_id: Number(replyId) || replyId }, { timeoutMs: 5000, retries: 0 })
-      const sender = raw?.sender || {}
-      const uid = String(sender.user_id ?? raw?.user_id ?? '')
-      const inGroup = chatKey.startsWith('group:')
-      const eventFor = (message, from = sender) => ({
-        message_type: inGroup ? 'group' : 'private',
-        group_id: inGroup ? chatKey.slice(6) : undefined,
-        user_id: uid,
-        sender: from,
-        message,
-      })
-      let parsed = parseMessageEvent(eventFor(raw?.message ?? raw?.raw_message ?? ''), getConfig().botQQ)
-      if ([...(parsed.images || []), ...(parsed.stickers || [])].some((seg) => !quoteSegUsable(seg))) {
-        const hit = await quoteFromHistory(String(replyId), chatKey)
-        if (hit) {
-          const again = parseMessageEvent(eventFor(hit.message ?? '', hit.sender || sender), getConfig().botQQ)
-          parsed = again
-        }
-      }
-      out = {
-        ok: true,
-        who: String(sender.card || sender.nickname || uid || '某人'),
-        uid,
-        text: String(parsed.text || '').trim().slice(0, 300),
-        media: [...(parsed.images || []), ...(parsed.stickers || [])],
-        isBot: uid === String(getConfig().botQQ || '') || Boolean(isSentMessage?.(replyId)),
-      }
-    } catch (error) {
-      debug(`引用消息没拉到（${replyId}）：${error?.message || error}`)
-    }
-    if (quoteCache.size >= 200) quoteCache.delete(quoteCache.keys().next().value)
-    quoteCache.set(key, out)
-    return out
-  }
+  const quotedInfo = (replyId, chatKey) => quotedMessages.get(replyId, chatKey)
 
   function quoteNote(q) {
     if (!q?.ok) return '（引用了某条消息，但内容没读到；如果影响理解，可以如实说没看到，让对方重发或说一下是哪条）'
