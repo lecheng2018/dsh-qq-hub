@@ -157,3 +157,13 @@ test('createQuestionRegistry: 超时自动回填空答案', async () => {
   assert.equal(registry.has(chatId), false)
   assert.match(sent[1].text, /提问已超时/)
 })
+
+
+test('createQuestionRegistry: 卸载立即取消所有提问，不留下可回复状态', async () => {
+  const registry = createQuestionRegistry({ timeoutMs: 60_000 })
+  const pending = registry.ask('private:1', { questions: [{ id: 'q', question: '继续吗？' }] })
+  registry.dispose('插件卸载')
+  await assert.rejects(() => pending, /插件卸载/)
+  assert.equal(registry.pendingCount(), 0)
+  assert.equal(registry.handleReply('private:1', '继续'), false)
+})

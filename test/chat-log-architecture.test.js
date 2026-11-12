@@ -14,7 +14,7 @@ test('host owns retention while modules receive the independent, narrow chatLog 
   assert.match(host, /chatLogStore\.startRetention\(\)/)
   assert.match(host, /const core = \{\s*hub, chatLog,/)
   assert.match(host, /logChat: .*chatLog\.append/)
-  assert.match(hub, /resolveChatOfSession, chatLog \}/)
+  assert.match(hub, /resolveChatOfSession, chatLog[,}]/)
   assert.match(hub, /chatLog\?\.append/)
   assert.doesNotMatch(hub, /deleteChatLog/)
 

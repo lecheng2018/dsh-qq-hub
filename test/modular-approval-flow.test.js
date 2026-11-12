@@ -5,7 +5,7 @@ import { createHostEffects } from '../src/host/effects.js'
 
 const log = { debug() {}, info() {}, warn() {}, error() {} }
 
-function setup({ initialService, hubOverride } = {}) {
+function setup({ initialService, approvalOverride } = {}) {
   const calls = []
   const effects = []
   const service = initialService || {
@@ -18,19 +18,20 @@ function setup({ initialService, hubOverride } = {}) {
     effect(fn) { effects.push(fn) },
     get(name) { return name === 'approval' ? service : null },
   }
-  const hub = hubOverride || {
-    async requestApproval(req, opts) {
+  const approvals = approvalOverride || {
+    async request(req, opts) {
       calls.push(['qq', req, opts])
       return 'qq-allowed'
     },
   }
   const effectsApi = createHostEffects({
-    ctx, logger: log, log, getConfig: () => ({}), hub,
+    ctx, logger: log, log, getConfig: () => ({}), hub: {},
+    interactions: { approvals },
     mods: {}, use: () => null, snowluma: {}, onebot: {}, gatewayState: {},
     chatKeyOfSession: (sid) => (sid === 'qq-session' ? 'private:10000001' : ''),
   })
   effectsApi.installApprovalFlow()
-  return { calls, effects, service, hub }
+  return { calls, effects, service }
 }
 
 test('approval: QQ 会话走 QQ 审批卡，其他会话走原服务', async () => {
@@ -73,7 +74,7 @@ test('approval: 卸载后恢复原服务，不保留旧闭包', async () => {
   assert.equal(calls[0][0], 'original')
 })
 
-test('approval: 插件热重载时正确重新接管新 hub 实例，不闭包悬挂旧实例', async () => {
+test('approval: 插件热重载时接管新注册表，不闭包悬挂旧实例', async () => {
   const service = {
     async request(req) {
       return 'root-original'
@@ -81,12 +82,12 @@ test('approval: 插件热重载时正确重新接管新 hub 实例，不闭包�
   }
 
   // 第一代加载
-  const gen1HubCalls = []
+  const gen1Calls = []
   const gen1 = setup({
     initialService: service,
-    hubOverride: {
-      async requestApproval(req, opts) {
-        gen1HubCalls.push(['gen1', req, opts])
+    approvalOverride: {
+      async request(req, opts) {
+        gen1Calls.push(['gen1', req, opts])
         return 'gen1-handled'
       },
     },
@@ -96,12 +97,12 @@ test('approval: 插件热重载时正确重新接管新 hub 实例，不闭包�
   // 第二代热重载（cleanup1 执行，或即便是覆盖式重新加载）
   cleanup1()
 
-  const gen2HubCalls = []
+  const gen2Calls = []
   const gen2 = setup({
     initialService: service,
-    hubOverride: {
-      async requestApproval(req, opts) {
-        gen2HubCalls.push(['gen2', req, opts])
+    approvalOverride: {
+      async request(req, opts) {
+        gen2Calls.push(['gen2', req, opts])
         return 'gen2-handled'
       },
     },
@@ -114,8 +115,8 @@ test('approval: 插件热重载时正确重新接管新 hub 实例，不闭包�
   })
 
   assert.equal(res, 'gen2-handled')
-  assert.equal(gen1HubCalls.length, 0, '旧 hub 实例不应被调用')
-  assert.equal(gen2HubCalls.length, 1, '新 hub 实例必须被正确调用')
+  assert.equal(gen1Calls.length, 0, '旧注册表不应被调用')
+  assert.equal(gen2Calls.length, 1, '新注册表必须被正确调用')
 
   cleanup2()
 })

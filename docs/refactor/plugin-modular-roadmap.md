@@ -65,11 +65,17 @@ host（唯一装配与生命周期）
 - 验收证据：`test/chat-log.test.js`、`chat-log-consumers.test.js`、`memory-chatlog-progress.test.js`、`chat-log-architecture.test.js` 和真实 host e2e；全量结果见本 PR 与看板。没有执行 fnOS 生产迁移或更改运行中 DSH。
 - 回滚：回退服务消费接线时保留原日志与新游标，不删除数据或改变保留配置掩盖差异。旧版不识别指纹，降级前须停学习并核对进度；不承诺降级后仍有新游标保护。
 
-### P1a：回复与富媒体业务编排迁出
+### P1a：回复与富媒体业务编排迁出（已在 main，PR #54）
 
 - `src/chat/reply-delivery.js` 负责回复 hook、拆条、群聊合并、引用、语音/表情/图片编排、同 chat 串行与 Outbox 票释放；`src/chat/hub.js` 只保留兼容委托及宿主状态回调。
 - 物理发送仍由既有 Shared Outbox 唯一执行；本切片不重写发送、不改模块 SDK，也不宣称 `legacyDeliver` 已从 host 退出。下一步由 host 直接装配该服务，再逐段迁移媒体准备函数。
 - 验收覆盖独立服务行为、真实 hub + fake DSH/OneBot 的回复顺序、群聊合并、unknown、防身份泄露、dryRun 和失败释放；不修改前端、记忆数据或运行中的 DSH。
+
+### P1b：审批与提问共享
+
+- host 创建唯一 questions/approvals 注册表，同时注入 hub 的回复拦截与 effects 的 DSH 服务桥；不再由 effects 调用 hub 的审批、提问或会话查询方法。
+- 会话反查由组合根按当前启用的核心选择：新核心启用但未就绪时明确无映射，不回退旧表；flag-off 仍使用 legacy 当前映射。卡片物理发送仍走 hub 的统一 Outbox 出口。
+- 卸载取消全部待答提问和审批；模块 SDK 不变。尚未迁移面板、压缩和主动任务的会话依赖，不能据此删除旧内核。
 
 ### P2：共享入站媒体与上下文边界
 
