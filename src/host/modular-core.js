@@ -40,72 +40,8 @@ import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
 import { readInboundFiles, inboundFileBlocks } from '../chat/inbound-files.js'
+import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
-
-/**
- * 语音段转文字：本地 ASR 优先，网关 fetch_ptt_text 兜底；
- * 两者都失败时保留 `[record]` 占位并记 debug，不伪称已听见，也不打断回合。
- */
-async function hydrateRecords(members, onebot, log, localApi) {
-  const list = Array.isArray(members) ? members : []
-  let budget = 3 // 一轮最多转写 3 条，避免长语音把回合拖死
-  const out = []
-  for (const m of list) {
-    const segs = Array.isArray(m?.segments) ? m.segments : []
-    if (!segs.some((x) => x && x.type === 'record') || budget <= 0) { out.push(m); continue }
-    budget--
-    let text = ''
-    // ① 本地 ASR 优先（真机：QQ 网关的 fetch_ptt_text 常年 error=9，本地 faster-whisper 才是可靠路径）
-    try {
-      if (localApi?.active?.('asr')) {
-        const rec = segs.find((x) => x && x.type === 'record')
-        const file = String(rec?.data?.file || '')
-        if (file) {
-          const got = await onebot?.call?.('get_record', { file, out_format: 'wav' }, { timeoutMs: 30000 })
-          const b64 = String(got?.base64 || '')
-          if (b64) {
-            const { writeFileSync, mkdirSync, unlinkSync } = await import('node:fs')
-            const { join } = await import('node:path')
-            const dir = join(String(localApi.dir?.() || '/tmp'), 'out')
-            mkdirSync(dir, { recursive: true })
-            const wav = join(dir, `asr-${Date.now()}.wav`)
-            writeFileSync(wav, Buffer.from(b64, 'base64'))
-            try {
-              const r = await localApi.call('asr', { file: wav })
-              text = String(typeof r === 'string' ? r : r?.text || '').trim()
-            } finally { try { unlinkSync(wav) } catch {} }
-            if (text) log?.debug?.(`本地 ASR 识别成功：${text.slice(0, 40)}`)
-          }
-        }
-      }
-    } catch (error) {
-      try { log?.debug?.(`本地 ASR 失败（继续试网关）：${error?.message || error}`) } catch {}
-    }
-    // ② 网关自带转写兜底
-    if (!text) {
-      try {
-        const mid = m?.messageId
-        if (mid != null) {
-          const r = await onebot?.call?.('fetch_ptt_text', { message_id: Number(mid) || mid }, { timeoutMs: 20000 })
-          text = String(r?.text || '').trim()
-        }
-      } catch (error) {
-        try { log?.debug?.(`语音转写失败（保留占位）：${error?.message || error}`) } catch {}
-      }
-    }
-    if (!text) { out.push(m); continue }
-    // 成员对象是冻结的：不能就地改 segments，换成新对象（真机事故：
-    // Cannot assign to read only property 'segments' → 整个回合 error）
-    const nextSegs = []
-    let replaced = false
-    for (const x of segs) {
-      if (!replaced && x && x.type === 'record') { nextSegs.push({ type: 'text', data: { text: `[语音] ${text}` } }); replaced = true }
-      else nextSegs.push(x)
-    }
-    out.push({ ...m, segments: nextSegs })
-  }
-  return out
-}
 
 /** 合并转发水合：展开真实消息正文，限制条数和总长度；失败保留原段，不伪称已读。 */
 async function hydrateForwards(members, onebot, log) {
@@ -254,8 +190,9 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio,
 }) {
+  const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
   const activity = createActivityState({ onTypingPing: () => {} })
@@ -880,7 +817,7 @@ export function createModularCore({
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
       const expanded = await hydrateForwards(io.members, onebot, log)
-      const heard = await hydrateRecords(expanded, onebot, log, localApi)
+      const heard = await audio.hydrateRecords(expanded)
       const heardWithFiles = await hydrateInboundFiles(heard, turn.chatKey)
       if (inGroup) {
         for (const member of heard) {
@@ -941,7 +878,7 @@ export function createModularCore({
         activeSteers++
         try {
           const expandedSteer = await hydrateForwards([inbound], onebot, log)
-          const heardSteer = await hydrateRecords(expandedSteer, onebot, log, localApi)
+          const heardSteer = await audio.hydrateRecords(expandedSteer)
           const filesSteer = await hydrateInboundFiles(heardSteer, turn.chatKey)
           const quotedSteer = await hydrateQuotes(filesSteer, turn.chatKey)
           let steerContent = segmentsToContent(quotedSteer)

@@ -22,7 +22,7 @@ import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, nor
 import { decideGroupReply, policyFor, topicRelevance } from './group-policy.js'
 import { checkAllowed, levelFor, presetFor, isOwner } from './access.js'
 import { fetchImage, segmentBytes } from '../core/net.js'
-import { toMono16k } from '../voice/wav.js'
+import { createInboundAudio } from './inbound-audio.js'
 import { mimeOf } from './inbound.js'
 import { redact } from '../core/redact.js'
 import { defaultModel, pickReasoningEffort, canSeeImages, modelVision, describeWithHelper } from '../core/llm.js'
@@ -63,7 +63,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -97,6 +97,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
 
   const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
+  const inboundAudio = sharedInboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
   // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
   const stickerStash = new Map() // chatId → { at, segs: [seg] }
@@ -1147,65 +1148,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     return Boolean(q && q.ok && q.isBot)
   }
 
-  async function transcribe(msg) {
-    for (const rec of msg.records) {
-      // 本地接口接管：用用户自己的识别服务（最先试）
-      if (localApi?.active('asr')) {
-        try {
-          const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
-          const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: true })
-          const { writeFileSync, mkdirSync } = await import('node:fs')
-          const { join } = await import('node:path')
-          const dir = localApi.dir() + '/out'
-          mkdirSync(dir, { recursive: true })
-          const file = join(dir, `asr-${Date.now()}.wav`)
-          writeFileSync(file, toMono16k(raw))
-          const r = await localApi.call('asr', { file })
-          const text = String(typeof r === 'string' ? r : r?.text || '').trim()
-          if (text) return `[语音] ${text}`
-        } catch (error) {
-          log.debug('本地接口语音识别失败：', error.message)
-        }
-      }
-      try {
-        const r = await onebot.call('fetch_ptt_text', { message_id: Number(msg.messageId) || msg.messageId }, { timeoutMs: 20000 })
-        if (r?.text) return `[语音] ${r.text}`
-      } catch (error) {
-        log.debug('QQ 语音转文字失败：', error.message)
-      }
-      try {
-        const text = await localTranscribe(rec)
-        if (text) return `[语音] ${text}`
-      } catch (error) {
-        log.debug('本地语音识别失败：', error.message)
-      }
-      return '[发来一条语音，没听清]'
-    }
-    return ''
-  }
-
-  /**
-   * DSH 自带识别（SenseVoice）：resolve({audio}) → transcribe(spec, signal)，音频必须是 16kHz 单声道 PCM16 WAV。
-   * QQ 语音是 silk：先让网关 get_record 转成 wav，再重采样。
-   */
-  async function localTranscribe(rec) {
-    const stt = dsh.get('speechToText')
-    if (!stt || typeof stt.resolve !== 'function' || typeof stt.transcribe !== 'function') throw new Error('DSH 没开启语音输入')
-    // 模型还没下载好：顺手开始准备（下载一次，之后常驻），这一条先算没听清
-    const snap = typeof stt.snapshot === 'function' ? stt.snapshot() : null
-    const pid = snap?.selection?.providerId
-    const prov = snap?.providers?.find((p) => p.id === pid)
-    if (prov && prov.preparation && !['ready', 'standby'].includes(prov.preparation.phase)) {
-      try { stt.prepare(pid) } catch (error) {}
-      throw new Error(`识别模型还在准备（${prov.preparation.phase}）`)
-    }
-    const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
-    const raw = info?.base64 ? Buffer.from(info.base64, 'base64') : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: true })
-    const spec = stt.resolve({ audio: new Uint8Array(toMono16k(raw)) })
-    const r = await stt.transcribe(spec, AbortSignal.timeout(60000))
-    const text = typeof r === 'string' ? r : r?.text || r?.transcript
-    return text ? String(text).trim() : ''
-  }
+  const transcribe = (msg) => inboundAudio.transcribe(msg)
 
   /**
    * 把消息里的图 / 表情包取成可以交给模型的块。
@@ -2160,7 +2103,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     },
     logChat,
     markTurnAt,
-    localTranscribe,
+    localTranscribe: (rec) => inboundAudio.transcribeLocally(rec),
     ensureWorkspace,
     chatLogOf,
     chatLogDays,
