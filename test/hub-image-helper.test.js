@@ -9,17 +9,19 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const src = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const vision = readFileSync(join(ROOT, 'src/chat/inbound-vision.js'), 'utf8')
 
-test('hub.js 导入了 describeWithHelper（不再自己造轮子）', () => {
-  const importLine = src.split('\n').find((x) => x.includes("from '../core/llm.js'")) || ''
+test('共享视觉服务直接使用 describeWithHelper，不在核心重复造轮子', () => {
+  const importLine = vision.split('\n').find((x) => x.includes("from '../core/llm.js'")) || ''
   assert.ok(importLine.includes('describeWithHelper'), '必须从 llm.js 导入 describeWithHelper，实际：' + importLine)
+  assert.match(vision, /describeWithHelper\(dsh,/)
 })
 
-test('有统一的 imageTextFor，且内部真的调了 describeWithHelper', () => {
-  const m = src.match(/async function imageTextFor[\s\S]*?\n  \}/)
+test('hub 的 imageTextFor 委托共享服务，转述仍带来源标注', () => {
+  const m = src.match(/function imageTextFor[\s\S]*?\n  \}/)
   assert.ok(m, '应该有 imageTextFor')
-  assert.match(m[0], /describeWithHelper\(/, 'imageTextFor 里必须调用转述')
-  assert.match(m[0], /别当成你亲眼见过/, '转述必须带来源标注')
+  assert.match(m[0], /inboundVision\.textFor\(/, 'imageTextFor 必须委托共享视觉服务')
+  assert.match(vision, /别当成你亲眼见过/, '转述必须带来源标注')
 })
 
 test('私聊主链路：看不了图时走 imageTextFor，不再只塞一句干提示', () => {

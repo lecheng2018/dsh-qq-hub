@@ -72,5 +72,11 @@ export function createInboundImages({ onebot, dsh, log } = {}) {
     return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
   }
 
-  return { load, admit }
+  return {
+    load,
+    admit,
+    read: (block) => block.data
+      ? { data: String(block.data), mediaType: String(block.mediaType || 'image/png') }
+      : admitBytes(String(block.url || '')),
+  }
 }
