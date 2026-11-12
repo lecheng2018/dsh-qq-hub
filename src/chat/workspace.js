@@ -13,3 +13,10 @@ export const WORKSPACE_DIR = process.env.QQ_HUB_WORKSPACE || process.env.AURABOT
 /** 现在用的工作区目录：面板里填了就用填的，否则默认。 */
 export const workspaceDirOf = (cfg) => String(cfg?.workspaceDir || '').trim() || WORKSPACE_DIR
 export const WORKSPACE_TITLE = 'QQ Hub'
+
+export function workspaceDirForChat(cfg, chatId) {
+  const root = workspaceDirOf(cfg)
+  if (!chatId || String(chatId).startsWith('system:') || cfg?.workspacePerChat !== true) return root
+  const safe = String(chatId).replace(/[^a-zA-Z0-9_-]/g, '_')
+  return join(root, `chat-${safe}`)
+}

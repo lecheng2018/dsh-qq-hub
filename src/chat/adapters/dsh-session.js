@@ -8,7 +8,7 @@
  * @param {object} o
  * @param {object} o.dsh DSH 插件上下文（含 services.sessionController）
  * @param {(chatKey: string) => { agentPreset: string }} o.presetOf 聊天 → preset
- * @param {() => {id:string}|undefined} [o.ensureWorkspace] 返回工作区对象（真机报告 5：建会话必须带
+ * @param {(chatKey: string) => {id:string}|undefined} [o.ensureWorkspace] 按聊天返回工作区对象（真机报告 5：建会话必须带
  *   workspaceId，否则落到宿主 defaultCwd，turn/start 立刻 error）。缺失/抛错则按 defaultCwd 建会话（如实降级）。
  * @param {(chatKey: string) => string|Promise<string>} [o.titleOf] 会话标题（真机报告 9：不命名则面板全是
  *   「未命名」；legacy hub.js:327 建会话后立刻 rename）。可以是 async（群名要查网关）。
@@ -60,7 +60,7 @@ export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleO
       const { agentPreset, workspaceId: presetWs } = { ...presetOf(chatKey), ...hint }
       let workspaceId = presetWs
       if (!workspaceId && typeof ensureWorkspace === 'function') {
-        try { workspaceId = (await ensureWorkspace())?.id } catch { workspaceId = undefined }
+        try { workspaceId = (await ensureWorkspace(chatKey))?.id } catch { workspaceId = undefined }
       }
       const created = await ctrl.create({ ...(workspaceId ? { workspaceId } : {}), agentPreset })
       if (!created?.sessionId) throw new Error('DSH 创建会话未返回 sessionId')
