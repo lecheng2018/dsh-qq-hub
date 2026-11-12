@@ -9,6 +9,8 @@ export function createHostEffects({
   hub, mods, use, snowluma, onebot, gatewayState, interactions,
   /** 会话 id → 当前核心的 chatKey 反查，由组合根决定唯一来源 */
   chatKeyOfSession,
+  /** 当前核心的会话事件入口；legacy 直调模式才回退 hub.onSessionEvent。 */
+  onSessionEvent,
 }) {
   const sessionKey = (id) => {
     const s = String(id ?? '')
@@ -133,7 +135,8 @@ export function createHostEffects({
     ctx.effect(() => {
       const off = ctx.on('session/event', (session, event) => {
         try {
-          hub.onSessionEvent(session, event)
+          if (typeof onSessionEvent === 'function') onSessionEvent(session, event)
+          else hub.onSessionEvent(session, event)
         } catch (error) {
           log.warn('会话事件处理出错：', error.message)
         }
