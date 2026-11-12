@@ -189,6 +189,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     const profiles = {}
     const insights = {}
     const styles = { self: [] }
+    const styleSources = {}
     const distill = {}
 
     const hitsMap = stateSnapshot.hits || {}
@@ -259,6 +260,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           })
         } else if (kind === 'style') {
           if (scope === 'global' && e.id === 'self') {
+            styleSources.self = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined }
             try {
               styles.self = JSON.parse(e.text || '[]')
             } catch {
@@ -266,6 +268,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             }
           } else {
             const styKey = scope.startsWith('private:') ? `qq:${scope.slice(8)}` : scope
+            styleSources[styKey] = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined }
             styles[styKey] = styles[styKey] || []
             try {
               const list = JSON.parse(e.text || '[]')
@@ -293,6 +296,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       profiles,
       insights,
       styles,
+      styleSources,
       distill,
       distillTargets: stateSnapshot.distillTargets || [],
       insightNames: stateSnapshot.insightNames || {},
@@ -454,6 +458,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             id: 'self',
             kind: 'style',
             text: JSON.stringify(s.styles.self),
+            origin: s.styleSources?.self?.origin || undefined,
+            sourceFingerprint: s.styleSources?.self?.sourceFingerprint || undefined,
+            sourceRev: s.styleSources?.self?.sourceRev || undefined,
+            stale: s.styleSources?.self?.stale || undefined,
+            staleAt: s.styleSources?.self?.staleAt || undefined,
           })
         }
         for (const [key, list] of Object.entries(s.styles)) {
@@ -464,6 +473,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             id: `style_${key.replace(/\D/g, '') || 'custom'}`,
             kind: 'style',
             text: JSON.stringify(list),
+            origin: s.styleSources?.[key]?.origin || undefined,
+            sourceFingerprint: s.styleSources?.[key]?.sourceFingerprint || undefined,
+            sourceRev: s.styleSources?.[key]?.sourceRev || undefined,
+            stale: s.styleSources?.[key]?.stale || undefined,
+            staleAt: s.styleSources?.[key]?.staleAt || undefined,
           })
         }
       }
