@@ -60,3 +60,48 @@ test('提交中途失败时报告已提交条数，供批次标记待核对', as
     return true
   })
 })
+
+
+test('extractLines 在独立状态适配器上跳过成功块并重试失败块', async () => {
+  const lines = Array.from({ length: 81 }, (_, index) => ({
+    chatId: 'private:10002', who: '小张', text: `第 ${index} 条需要长期保存的具体事实`,
+  }))
+  const states = new Map()
+  const prompts = []
+  let failSecond = true
+  let reflected = 0
+  const batchState = {
+    get: (id) => states.get(id),
+    start: (batch, scope) => states.set(batch.id, { fingerprint: batch.fingerprint, scope, status: 'running' }),
+    fail: (batch, scope, error) => states.set(batch.id, { fingerprint: batch.fingerprint, scope, status: error.factsCommitted ? 'pending' : 'failed' }),
+    done: (batch, scope, added) => states.set(batch.id, { fingerprint: batch.fingerprint, scope, status: 'done', added }),
+  }
+  const extractor = createMemoryExtractor({
+    dsh: { llm: { async *stream(params) {
+      if (params.system.includes('整理长期记忆')) {
+        prompts.push(params.messages[0].content[0].text)
+        if (failSecond && params.messages[0].content[0].text.includes('第 80 条')) throw new Error('第二块失败')
+      }
+      yield { type: 'text-delta', text: '[]' }
+    } } },
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: () => false,
+    isActive: () => true,
+    reflect: async () => { reflected++; return 0 },
+    batchState,
+    scopeOf: (chatId) => chatId,
+    recoveryError: () => '',
+    log: { info() {}, warn() {} },
+  })
+  const first = await extractor.extractLines('private:10002', lines)
+  assert.equal(first.ok, false)
+  assert.equal([...states.values()].filter((state) => state.status === 'done').length, 1)
+  assert.equal([...states.values()].filter((state) => state.status === 'failed').length, 1)
+  failSecond = false
+  const second = await extractor.extractLines('private:10002', lines)
+  assert.equal(second.ok, true)
+  assert.equal(prompts.filter((text) => text.includes('第 0 条')).length, 1)
+  assert.equal(prompts.filter((text) => text.includes('第 80 条')).length, 2)
+  assert.equal(reflected, 1)
+})
