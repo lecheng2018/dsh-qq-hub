@@ -53,6 +53,13 @@ test('回复编排可独立执行：保留群聊合并、引用和最终流水',
   assert.deepEqual(result, { missedAt: [] })
 })
 
+test('可选流水和活动回调缺省时仍完成投递', async () => {
+  const { delivery, sent } = fixture({ logChat: undefined, onActivity: undefined })
+  await delivery.deliverNow('private:1', '正常回复')
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].text, '正常回复')
+})
+
 test('扩展 hooks 可拦截正文和条目，拦截后不产生发送或流水', async () => {
   const { delivery, sent, logged } = fixture({ hooks: { reply: async () => null } })
   await delivery.deliverNow('private:1', '不应发送')
