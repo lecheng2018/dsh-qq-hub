@@ -205,10 +205,10 @@ test('router：ext 模块命令（如 /天气）不接管——handlers 未登�
 // =====================================================================
 // ⑤ 带参命令解析产物结构稳定（引用编号/多参数），真 parseCommand 钉口径
 // =====================================================================
-test('router：带参命令解析产物结构稳定（/model 2 引用编号、/sing 多参数、全角与中文别名连写）', async () => {
+test('router：带参命令解析产物结构稳定（/model 2 引用编号、/diary 多参数、全角与中文别名连写）', async () => {
   // 解析产物口径 = commands.js 契约：内置命令恰 { name, arg } 两键，arg 已 trim
   assert.deepStrictEqual(parseCommand('/model 2'), { name: 'model', arg: '2' })
-  assert.deepStrictEqual(parseCommand('/sing 小幸运 田馥甄 +12'), { name: 'sing', arg: '小幸运 田馥甄 +12' })
+  assert.deepStrictEqual(parseCommand('/diary 陪小满搭了三小时乐高'), { name: 'diary', arg: '陪小满搭了三小时乐高' })
   assert.deepStrictEqual(parseCommand('/remember 我不吃香菜'), { name: 'remember', arg: '我不吃香菜' })
   assert.deepStrictEqual(parseCommand('／闭嘴 30'), { name: 'silent', arg: '30' })
   assert.deepStrictEqual(parseCommand('/记住 明天拿快递'), { name: 'remember', arg: '明天拿快递' })
@@ -220,11 +220,11 @@ test('router：带参命令解析产物结构稳定（/model 2 引用编号、/s
       if (!cmd) return null
       return { cmd, msg: { chatId: 'private:777', kind: 'private', userId: '777', text: ctx.inbound.rawText } }
     },
-    handlers: { model: pingHandler(seen), sing: pingHandler(seen) },
+    handlers: { model: pingHandler(seen), diary: pingHandler(seen) },
   })
   await compose([router, async () => {}])(messageCtx({ text: '/model 2' }))
-  await compose([router, async () => {}])(messageCtx({ text: '/sing 小幸运 田馥甄 +12' }))
-  assert.deepEqual(seen.map((s) => s.cmd), [{ name: 'model', arg: '2' }, { name: 'sing', arg: '小幸运 田馥甄 +12' }])
+  await compose([router, async () => {}])(messageCtx({ text: '/diary 陪小满搭了三小时乐高' }))
+  assert.deepEqual(seen.map((s) => s.cmd), [{ name: 'model', arg: '2' }, { name: 'diary', arg: '陪小满搭了三小时乐高' }])
   assert.equal(router.stats().intercepted, 2)
 })
 

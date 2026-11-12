@@ -1,4 +1,4 @@
-// 本地接口：模板、开关、脚本改完立即生效、出错记录、生图返回值统一、翻唱报错翻译。
+// 本地接口：模板、开关、脚本改完立即生效、出错记录、生图返回值统一。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
@@ -19,7 +19,7 @@ before(async () => {
 })
 
 test('默认都关着；生成模板（带说明，不覆盖已有的）', () => {
-  assert.deepEqual(cfg.local, { tts: false, image: false, song: false, asr: false })
+  assert.deepEqual(cfg.local, { tts: false, image: false, asr: false })
   const local = L.createLocal({ getConfig: () => cfg, log })
   assert.equal(local.active('tts'), false)
   const r = local.template('tts')
@@ -74,24 +74,4 @@ test('生图：脚本返回 Buffer / base64 / 文件都认；接管后不需要�
   cfg.imageGen.stylePrompt = '水彩'
   assert.equal(String(await gen.generate('小鱼')), '水彩，小鱼|' + cfg.imageGen.size)
   cfg.local.image = false
-})
-
-test('翻唱报错翻译成人话；本地换声接管时不需要内置音色', async () => {
-  const studio = await import('../src/song/studio.js')
-  assert.match(studio.explainSongError('RuntimeError: Error(s) in loading state_dict for Synthesizer: size mismatch for enc_p'), /不兼容/)
-  assert.match(studio.explainSongError('torch.OutOfMemoryError: CUDA out of memory'), /显存/)
-  assert.equal(studio.explainSongError('网易云上没搜到「x」'), '网易云上没搜到「x」')
-  const denied = studio.explainSongError("RuntimeError: Failed to instantiate Roformer model: [Errno 13] Permission denied: 'E:\\\\Aurabot\\\\rvc\\\\separator-models\\\\model_bs_roformer_ep_317_sdr_12.9755.ckpt'.")
-  assert.ok(denied.includes('读不了「E:\\Aurabot\\rvc\\separator-models\\model_bs_roformer'), denied)
-  assert.match(denied, /杀毒/)
-})
-
-test('模型文件能读就放行，不存在的跳过', async () => {
-  const studio = await import('../src/song/studio.js')
-  const { mkdtempSync, writeFileSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const d = mkdtempSync(join(tmpdir(), 'ab-read-'))
-  writeFileSync(join(d, 'a.ckpt'), 'x'.repeat(32))
-  await studio.ensureReadable([join(d, 'a.ckpt'), join(d, 'missing.ckpt')], 1, 1)
 })

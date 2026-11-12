@@ -246,9 +246,8 @@ test('规则：画画、唱歌只在功能真的能用时告诉她', async () =>
   const { normalize } = await import('../src/core/config.js')
   const off = rulesText('social', normalize({ imageGen: { enabled: true } }))
   assert.doesNotMatch(off, /你会画画|你会唱歌/, '没配生图服务就不说会画')
-  const on = rulesText('social', normalize({ imageGen: { enabled: true, baseUrl: 'https://x/v1', model: 'm' }, song: { enabled: true } }))
+  const on = rulesText('social', normalize({ imageGen: { enabled: true, baseUrl: 'https://x/v1', model: 'm' } }))
   assert.match(on, /你会画画：只给主人画/)
-  assert.match(on, /你会唱歌/)
 })
 
 test('空间互动：评论清洗、好友动态筛选', async () => {

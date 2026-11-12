@@ -151,7 +151,7 @@ const DEFAULTS_RAW = {
     audienceQQs: '', // selected / excluded 时可见（或不可见）的好友 QQ 号，换行或逗号分隔
   },
   // 本地接口：数据目录 local/ 里的脚本接管这几项（文件要在、开关要开）
-  local: { tts: false, image: false, song: false, asr: false },
+  local: { tts: false, image: false, asr: false },
   bili: {
     enabled: false,
     sessdata: '', // B 站 Cookie 里的 SESSDATA（登录凭证）
@@ -237,21 +237,6 @@ const DEFAULTS_RAW = {
   },
   mood: { enabled: true, halfLifeHours: 3, judge: false }, // judge：每轮聊完用模型判一次心情（更准，每轮多一次很短的调用）；关着用关键词
   memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
-  song: {
-    enabled: false,
-    root: '', // 翻唱环境目录，留空 = 自动（老安装 C:\Aurabot\rvc，新安装在用户目录下）
-    voice: '', // 用哪个音色（models 目录里的 .pth 文件名），留空 = 第一个
-    pitch: 0, // 默认变调（半音）；她点歌时会按原唱是男声还是女声自己定
-    neteaseCookie: '', // 网易云 Cookie（MUSIC_U），下会员歌用
-    separatorModel: 'model_bs_roformer_ep_317_sdr_12.9755.ckpt', // 人声分离模型
-    maxVoiceSec: 120, // 语音条最长多少秒，歌更长就截一段
-    clipStart: 'auto', // auto = 从副歌附近截；head = 从头截
-    vocalVolume: 1,
-    instVolume: 0.8,
-    ownerOnly: true, // 只有主人能点歌
-    keepWork: false, // 留着中间文件（调试用）
-    pypiMirror: 'auto', // 安装时用的下载源：auto = 先测一下，官方源慢就用国内镜像；cn = 一直用国内镜像；off = 只用官方源
-  },
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
     enabled: false,              // 模块总开关，默认关
@@ -479,7 +464,7 @@ export function normalize(raw) {
   q.intervalMin = num(q.intervalMin, 30, 5, 1440)
   c.mood.halfLifeHours = num(c.mood.halfLifeHours, 3, 0.25, 72)
   c.mood.judge = bool(c.mood.judge, false)
-  for (const k of ['tts', 'image', 'song', 'asr']) c.local[k] = bool(c.local[k], false)
+  for (const k of ['tts', 'image', 'asr']) c.local[k] = bool(c.local[k], false)
   const b = c.bili
   Object.assign(b, splitBiliCookie(b))
   for (const k of ['enabled', 'autoBrowse', 'comment', 'reply', 'shareToOwner', 'like', 'vision']) b[k] = bool(b[k], DEFAULTS.bili[k])
@@ -590,17 +575,6 @@ export function normalize(raw) {
     .filter((p) => p.key)
     .slice(0, 30)
 
-  c.song.enabled = bool(c.song.enabled, false)
-  c.song.ownerOnly = bool(c.song.ownerOnly, true)
-  c.song.pitch = num(c.song.pitch, 0, -24, 24)
-  c.song.maxVoiceSec = num(c.song.maxVoiceSec, 120, 15, 600)
-  c.song.vocalVolume = num(c.song.vocalVolume, 1, 0.2, 2)
-  c.song.instVolume = num(c.song.instVolume, 0.8, 0.1, 2)
-  if (!['auto', 'head'].includes(c.song.clipStart)) c.song.clipStart = 'auto'
-  // 老配置：'' 是以前的默认（没开），改成自动；tuna 是以前的「用镜像」
-  c.song.pypiMirror = { '': 'auto', tuna: 'cn' }[c.song.pypiMirror] ?? c.song.pypiMirror
-  if (!['auto', 'cn', 'off'].includes(c.song.pypiMirror)) c.song.pypiMirror = 'auto'
-  c.song.root = String(c.song.root || '').trim()
   if (!isObj(c.modules)) c.modules = {}
   for (const [id, m] of Object.entries(c.modules)) {
     if (!isObj(m)) { delete c.modules[id]; continue }
@@ -636,13 +610,18 @@ export function normalize(raw) {
   c.bridge.http = bool(c.bridge.http, false)
   c.bridge.token = String(c.bridge.token || '')
   if (!['whitelist', 'owner'].includes(c.bridge.allowTargets)) c.bridge.allowTargets = 'whitelist'
+  // 1.4.0-beta.4：mood / song 功能整体移除。deepMerge 会把老配置里的键原样带进来，
+  // 只删 DEFAULTS 不够 —— 残留的 song.neteaseCookie 会绕过已删除的 SECRETS 脱敏条目
+  // 明文回传面板。这里显式丢掉。
+  delete c.song
+  delete c.local.song
   return c
 }
 
 // 面板里不回传原文的字段：路径（几层都行）
 const SECRETS = [
   ['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'],
-  ['imageGen', 'apiKey'], ['song', 'neteaseCookie'],
+  ['imageGen', 'apiKey'],
   ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'],
   ['heybox', 'cookie'], ['bridge', 'token'],
   ['multiParser', 'cookies', 'bilibili'],

@@ -3,7 +3,7 @@
 > 这个文件由插件维护，每次启动都会更新成当前版本，**别改它**（改了也会被覆盖）。
 > 你自己写的模块放在和它同一个文件夹（`modules/`）里，插件升级不会动。
 
-大肥鱼的每项本事都是一个**模块**：表情包、语音、心情、记忆、空间日记、B 站、翻唱、生图……
+大肥鱼的每项本事都是一个**模块**：表情包、语音、心情、记忆、空间日记、B 站、生图……
 你可以：
 
 - **加新模块**：给她新本事（查天气、接智能家居、关键词回复、对接自己的服务……）
@@ -81,7 +81,7 @@ export default {
     { key: 'city', label: '城市', type: 'text' },
   ],
   panel: 'panel.js',          // 可选：自己画面板（见「面板」）
-  tab: 'song',                // 可选：设置和面板放进哪个内置标签页（不写就单独一页，见「面板」）
+  tab: 'voice',                // 可选：设置和面板放进哪个内置标签页（不写就单独一页，见「面板」）
   setup(api) {                // 必填：启动时调用一次，可以是 async
     // 在这里注册事件、工具、命令、定时任务……
     return { /* 导出给别的模块用的东西 */ }
@@ -221,7 +221,6 @@ api.on('reply/items', (items) => [...items, { kind: 'text', value: '—— 大�
 | `onebot/state` | `'connected'` 等 | QQ 网关连上 / 断开 |
 | `config` | `新配置, 旧配置` | 配置改了 |
 | `module/start` / `module/stop` | 模块 id | 有模块启动 / 停下 |
-| `song/sung` | `{ title, chatId }` | 翻唱模块唱完一首 |
 | 你自己 `api.emit` 的 | 随你 | 模块之间互相通知 |
 
 `msg` 长这样（`text` 是纯文字：@ 她的那段去掉了，@ 别人的写成「@昵称」，图片 / 表情 / 文件写成「[图片]」这类占位；引用的那条消息的文字**不在**里面，要的话用 `replyId` 去 `api.onebot('get_msg', { message_id })` 拿）：
@@ -270,7 +269,7 @@ api.tool(({ chat, level, sessionId }) => {
 ## 面板
 
 **自动表单**：写了 `settings`，面板会多一个这个模块的标签页，自动生成设置表单，用户改完点保存。
-定义里写了 `tab: '内置标签页'`（`voice` `stickers` `imagegen` `diary` `speakup` `mood` `song` `bili` `douyin` `local` `group` `model` `persona` `access` `connect` `overview`），设置和面板就放进那一页的最下面，不单独占一页。比如给翻唱加功能的模块写 `tab: 'song'`。
+定义里写了 `tab: '内置标签页'`（`voice` `stickers` `imagegen` `diary` `speakup` `mood` `bili` `douyin` `local` `group` `model` `persona` `access` `connect` `overview`），设置和面板就放进那一页的最下面，不单独占一页。比如要放进「语音」页就写 `tab: 'voice'`。
 
 ```js
 settings: [
@@ -321,7 +320,6 @@ return function Panel({ settings, save, toast }) {
 | `speakup` | 主动搭话 | `fire(原因)` `state()` |
 | `bili` | B 站 | `watch(链接)` `comment(链接, 文字)` `run()` `checkReplies()` `account()` `state()` |
 | `douyin` | 刷抖音 | `run` `browse` `watch` `likeVideo` `commentVideo` `confirmOwner` `account` `loginStep` `showWindow` `state`；工具 `douyin_watch` / `douyin_browse` / `douyin_like` / `douyin_comment` |
-| `song` | 翻唱 | `request({ song, pitch, chatId })` `search(关键词)` `status()` `install()` |
 
 聊天中枢需要的时候会去找 `stickers`（发表情、偷表情）、`voice`（发语音）、`mood`（心情影响表情 / 语音频率）、`memory`（群聊插话判断）。
 这几个被关掉，对应的事就不做（想发语音时改发文字）；被替换，就用你的——所以替换时**导出的函数名要和上表一样**。
