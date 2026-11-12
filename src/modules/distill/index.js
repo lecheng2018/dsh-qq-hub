@@ -66,8 +66,15 @@ export function createDistillEngine({
     }
   }
 
+  /** 各层 token 预算。蒸馏是「结构化 JSON 输出」，思考型模型（MiniMax-M3.1-Flash
+ *  这类 forceAdaptiveThinking，思考关不掉）会先吃掉一大段预算写分析，正文 JSON
+ *  才轮到。1.3.66 实测 L1 用 1200：7 次尝试 7 次解析失败，回包开头全是
+ *  「## 用户画像 · xxx」「# 用户画像：xxx」这种 Markdown 报告，JSON 一个字没有。
+ *  一键「从历史学」同样模型用 8000 就 3 次全成 —— 差别就在预算。 */
+const DISTILL_TOKENS = { l1: 4000, l2: 4000, l3: 4000 }
+
   /** 蒸馏用模型调用：distillModel 配了就走它（小成本），留空跟随主模型。 */
-  async function askDistillModel(prompt, maxTokens = 1200) {
+  async function askDistillModel(prompt, maxTokens = DISTILL_TOKENS.l1) {
     const cfg = config() || {}
     const dc = distillCfg()
     const model = dc.model || {}
@@ -75,11 +82,11 @@ export function createDistillEngine({
     return withAbortTimeout(
       (signal) => askModelImpl(dsh, {
         cfg: merged, ...prompt, maxTokens, temperature: 0.3,
-        // 蒸馏是特征提取/聚合的机械任务，不需要推理：推理模型开着思考会把请求拉长，
-        // 还爱把答案写成画像报告而不是约定的 JSON（2026-11-12 排查：L1 上线首日两跑两败，
-        // 回包开头就是「用户画像与行为分析报告」正文，全程无 JSON，prompt 里「只输出标准
-        // JSON」被无视）。不支持 off 档的模型由 pickReasoningEffort 收敛回默认档，行为不变。
-        reasoningEffort: 'off',
+        // 这里**故意不指定 reasoningEffort**，交给 askModel 的默认档（low）。
+        // 不要写 'off'：MiniMax-M3.1-Flash 属于 forceAdaptiveThinking 模型，服务端
+        // 不接受 thinking.type=disabled（实测 400）；宿主侧 pickReasoningEffort 也会把
+        // 不支持的档收敛回默认档，等于没写。真正解决「回包写成报告」的是上面的 token
+        // 预算 + JSON_NUDGE 当场纠正。
         signal,
       }),
       dc.timeoutMs,
@@ -186,12 +193,16 @@ export function createDistillEngine({
           const context = dedupConvo(lines.map((l) => ({ uid: l.uid, name: l.name || l.who || l.uid || '', text: String(l.text || '') }))).slice(-40)
           const prompt = buildL1Prompt({ uid, batchId, messages: mine.map((x) => x.text), context, behaviorDigest: renderBehaviorDigest(stats) })
           const { rec, out, error } = await askJson((raw) => parseL1(raw, { uid, batchId }), prompt)
+          // 失败就**不推进 cursor**：这一窗口的证据留在原地，下次触发重读同一批。
+          // 1.3.66 之前的写法是无论成败都写 cursor，L1 又 7 次全败 —— 那 7 批原话
+          // 被永久跳过（samples 只存时间戳，原文无从重建）。throw 让上层进重试冷却。
           if (error) throw error
           if (!rec) throw new Error(`回包解析失败: ${String(out).slice(0, 120)}`)
           if (!distillCfg().enabled) return false
           const p = pipeOf(key)
           patch = { batches: [...(p.batches || []), { ...rec, batch_id: batchId }].slice(-8), batchesSinceL2: (p.batchesSinceL2 || 0) + 1, lastL1At: now(), behavior: stats }
         }
+        // 只有「这一窗口处理成功」或「证据本来就不够（跳过是正确结果）」才推进 cursor
         chatLogOffset(readChatLogSource(sourceLog, day), cursor)
         putPipe(key, { ...patch, sources: { ...pipeOf(key).sources, [day]: cursor } })
         offset = end
@@ -207,7 +218,7 @@ export function createDistillEngine({
     const p = pipeOf(key)
     if (!(p.batches || []).length) return true
     const prompt = buildL2Prompt({ uid, l1List: p.batches, behaviorDigest: renderBehaviorDigest(p.behavior) })
-    const { rec, out, error } = await askJson((raw) => parseL2(raw, { uid }), prompt, 1600)
+    const { rec, out, error } = await askJson((raw) => parseL2(raw, { uid }), prompt, DISTILL_TOKENS.l2)
     if (error || !rec) {
       log.warn?.(`蒸馏L2（${target?.name || uid}）失败：`, error?.message || String(out).slice(0, 120))
       return false
@@ -234,7 +245,7 @@ export function createDistillEngine({
       if (!p.l2 || (day && p.lastL3Day === day)) continue
       const prompt = buildL3Prompt({ uid: t.uid, oldSegment: p.l3?.persona_segment || null, sceneTemplates: p.l2.scene_templates, behaviorDigest: renderBehaviorDigest(p.behavior) })
       try {
-        const { rec: seg, out, error } = await askJson((raw) => parseL3(raw, { uid: t.uid }), prompt, 1600)
+        const { rec: seg, out, error } = await askJson((raw) => parseL3(raw, { uid: t.uid }), prompt, DISTILL_TOKENS.l3)
         if (error) throw error
         if (!seg) throw new Error(`回包解析失败: ${String(out).slice(0, 120)}`)
         if (!distillCfg().enabled) break
