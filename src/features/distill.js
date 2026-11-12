@@ -134,13 +134,16 @@ export function buildDistillPrompt ({ name = '这个人', uid = '', memberLines 
       'exchanges（最重要）：从群聊原文里挑 2~3 组**一问一答**——别人问/说什么、他怎么接。',
       '  格式一组一条字符串："问：\u201c对方的话（可截短）\u201d\n答：\u201c他的原话（逐字，别改写）\u201d"。',
       '  要能看出他的接话方式（先 @ 谁、语气词怎么带、答多长）。没有一问一答就退化成「他说：\u201c…\u201d」独立句。',
-      'syntax（句子架构）：句子长短怎么搭、用什么断句（逗号串/空格/换行）、开头习惯',
+      'syntax：句子长短怎么搭、用什么断句（逗号串/空格/换行）、开头习惯',
       '  （先 @ 人？先喊兄弟们？）、一条说完还是分几条。每条不超过 25 字。',
-      'catchphrases（口头禅）：格式 `词/句式（什么时候用）`，如「搞（随口催办时）」「我看看（答应看一眼时）」。',
-      'rhetoric（修辞招式）：他反复用的表达套路，3 条内，每条带一个真实例子的短引用。',
-      'never（从不用）：他从不用的词（如感谢/请问/抱歉）、从不做的行为（分点写教程、卖萌表情）。',
-      'persona（性格锚）：2~4 条**可观察行为**（如「出问题就自嘲」），不许写「他很友善」这种换成谁都成立的话。',
+      'catchphrases：格式 `词/句式（什么时候用）`，如「搞（随口催办时）」「我看看（答应看一眼时）」。',
+      'rhetoric：他反复用的表达套路，3 条内，每条带一个真实例子的短引用。',
+      'never：他从不用的词（如感谢/请问/抱歉）、从不做的行为（分点写教程、卖萌表情）。',
+      'persona：2~4 条**可观察行为**（如「出问题就自嘲」），不许写「他很友善」这种换成谁都成立的话。',
       '',
+      `【键名硬要求】JSON 的键必须逐字使用上面这六个英文名：exchanges / syntax / catchphrases / rhetoric / never / persona。`,
+      '不要把键名翻译成中文（别写「句子架构」「口头禅」「性格」），也不要把它们再包一层（别写 "learned_style"、"profile"、"result"）。',
+      '值的类型一律是字符串数组。',
       '三条硬规矩：1) 每条都要能在上面原话/原文里找到依据，找不到依据的不写；',
       '2) 自检：换成群里另一个人也成立的就删；3) 证据不足的字段给空数组，不要编。',
       '只输出 JSON 对象，正文别加分析。',
@@ -153,26 +156,72 @@ export function buildDistillPrompt ({ name = '这个人', uid = '', memberLines 
   }
 }
 
-/** 解析模型回包：容忍 ```json 围栏、外面带解释、思考模型残留的开场白。 */
+/** 解析模型回包：容忍 ```json 围栏、外面带解释、思考模型残留的开场白、键名漂移。 */
 export function parseDistillProfile (raw) {
-  let t = String(raw == null ? '' : raw).trim()
-  if (!t) return null
-  if (t.startsWith('```')) t = t.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim()
-  const start = t.indexOf('{')
-  const end = t.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    const obj = JSON.parse(t.slice(start, end + 1))
-    return normalizeProfile(obj)
-  } catch (error) {
-    return null
+  const obj = safeParseJson(raw)
+  return obj ? normalizeProfile(obj) : null
+}
+
+// 模型不总按约定的英文键名回包：实测会输出「句子架构」「口头禅」这类中文键，
+// 甚至自创 {"learned_style":{"tone":…,"typical_phrases":[…]}} 的整套 schema。
+// 只认英文键会让这些合法内容被当成「空画像」丢掉，而日志还误报成「证据不足」。
+// 这里给每个字段列可接受的别名（中英都收），英文键始终优先。
+const FIELD_ALIASES = {
+  exchanges: ['exchanges', 'dialogue', 'dialogues', 'conversations', '一问一答', '对话', '对话对', '沟通方式', '接话方式'],
+  syntax: ['syntax', 'sentence', 'sentence_structure', '句式', '句子架构', '句法', '断句习惯'],
+  catchphrases: ['catchphrases', 'catch_phrases', 'phrases', 'typical_phrases', 'speech_habits', '口头禅', '习惯用语', '常用语', '语气词'],
+  rhetoric: ['rhetoric', 'rhetorical', 'rhetoric_moves', '修辞', '修辞招式', '表达套路', '说话套路'],
+  never: ['never', 'never_use', 'avoid', 'taboo', '禁用', '他从不', '从不用', '从不使用的词'],
+  persona: ['persona', 'personality', 'character', 'traits', '性格', '性格锚', '人格', '个性'],
+  // 旧字段（存量画像兼容）。注意别和 never 抢键：never 收「他从不用」，avoid 收旧版「他不会」
+  style: ['style', 'speaking_style', 'language_style', '说话方式', '语言风格', '风格'],
+  tone: ['tone', '语气', '语调'],
+  samples: ['samples', 'quotes', 'original_quotes', '原话', '原话摘录'],
+  avoid: ['avoid', 'never_say', 'avoid_words'],
+}
+
+// 常见的「外面套一层」结构：模型爱把画像包在自己的命名空间里。
+const NESTED_KEYS = ['learned_style', 'profile', 'result', 'data', 'analysis', 'distill', 'portrait', '画像', '结果']
+
+/** 从对象里按别名表取一个字段（英文原名优先，其次别名，最后进嵌套对象里找一层）。 */
+function fieldOf (obj, field) {
+  if (!obj || typeof obj !== 'object') return undefined
+  const aliases = FIELD_ALIASES[field] || [field]
+  for (const k of aliases) {
+    if (obj[k] !== undefined && obj[k] !== null) return obj[k]
   }
+  for (const nest of NESTED_KEYS) {
+    const inner = obj[nest]
+    if (!inner || typeof inner !== 'object' || Array.isArray(inner)) continue
+    for (const k of aliases) {
+      if (inner[k] !== undefined && inner[k] !== null) return inner[k]
+    }
+  }
+  return undefined
+}
+
+/** 把任意形状的条目收成字符串数组：字符串 / 数组 / {text|答|value|quote} / 对象（拍平成「键：值」）。 */
+function toTextList (v) {
+  if (v === undefined || v === null) return []
+  if (Array.isArray(v)) return v.flatMap((x) => toTextList(x))
+  if (typeof v === 'string' || typeof v === 'number') return [String(v)]
+  if (typeof v === 'object') {
+    // 单个对象（如 {问:…,答:…}）拍平成一行；纯对象列表交给上层
+    const pairs = []
+    for (const [k, x] of Object.entries(v)) {
+      if (x === undefined || x === null || x === '') continue
+      if (Array.isArray(x)) pairs.push(...x.map((y) => `${k}：${String(y)}`))
+      else pairs.push(`${k}：${String(x)}`)
+    }
+    return pairs
+  }
+  return []
 }
 
 /** 收成固定字段，去空、去重、截长度和条数（纯数字条目丢弃：旧版曾把句数存进 samples）。 */
 export function normalizeProfile (obj) {
   const pick = (v, cap, maxLen = 90) => {
-    const list = Array.isArray(v) ? v : v ? [v] : []
+    const list = toTextList(v)
     const seen = new Set()
     const out = []
     for (const x of list) {
@@ -185,18 +234,70 @@ export function normalizeProfile (obj) {
     return out
   }
   return {
-    exchanges: pick(obj && obj.exchanges, FIELD_CAP.exchanges, 220),
-    syntax: pick(obj && obj.syntax, FIELD_CAP.syntax),
-    catchphrases: pick(obj && obj.catchphrases, FIELD_CAP.catchphrases),
-    rhetoric: pick(obj && obj.rhetoric, FIELD_CAP.rhetoric, 160),
-    never: pick(obj && obj.never, FIELD_CAP.never),
-    persona: pick(obj && obj.persona, FIELD_CAP.persona),
+    exchanges: pick(fieldOf(obj, 'exchanges'), FIELD_CAP.exchanges, 220),
+    syntax: pick(fieldOf(obj, 'syntax'), FIELD_CAP.syntax),
+    catchphrases: pick(fieldOf(obj, 'catchphrases'), FIELD_CAP.catchphrases),
+    rhetoric: pick(fieldOf(obj, 'rhetoric'), FIELD_CAP.rhetoric, 160),
+    never: pick(fieldOf(obj, 'never'), FIELD_CAP.never),
+    persona: pick(fieldOf(obj, 'persona'), FIELD_CAP.persona),
     // 旧字段兼容渲染（不再由新学习产出）
-    style: pick(obj && obj.style, FIELD_CAP.style),
-    tone: pick(obj && obj.tone, FIELD_CAP.tone),
-    samples: pick(obj && obj.samples, FIELD_CAP.samples),
-    avoid: pick(obj && obj.avoid, FIELD_CAP.avoid),
+    style: pick(fieldOf(obj, 'style'), FIELD_CAP.style),
+    tone: pick(fieldOf(obj, 'tone'), FIELD_CAP.tone),
+    samples: pick(fieldOf(obj, 'samples'), FIELD_CAP.samples),
+    avoid: pick(fieldOf(obj, 'avoid'), FIELD_CAP.avoid),
   }
+}
+
+/** 从回包里抠出 JSON 对象（容忍围栏/前后缀/截断）；拿不到返回 null。
+ *  截断场景：maxTokens 用完后 JSON 写到一半就断（字符串断在中途、括号缺闭合），
+ *  这时普通 JSON.parse 必失败。这里先判断是否停在字符串内，再补引号与括号重试，
+ *  只为「诊断能报出认到哪些字段」——修复后的正常回包不会走这条路径。 */
+export function safeParseJson (raw) {
+  let t = String(raw == null ? '' : raw).trim()
+  if (!t) return null
+  if (t.startsWith('```')) t = t.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim()
+  const start = t.indexOf('{')
+  if (start < 0) return null
+  const body = t.slice(start)
+  // 1) 原样试（完整回包走这里）
+  try { return JSON.parse(body) } catch (error) {}
+  // 2) 去掉最后一个不完整的 } 之后再试
+  const end = body.lastIndexOf('}')
+  if (end > 0) {
+    try { return JSON.parse(body.slice(0, end + 1)) } catch (error) {}
+  }
+  // 3) 截断修复：统计引号奇偶判断是否停在字符串内，补上收尾符号组合重试
+  let inString = false
+  let escaped = false
+  let depthCurly = 0
+  let depthSquare = 0
+  for (const ch of body) {
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\') { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === '{') depthCurly++
+    else if (ch === '}') depthCurly--
+    else if (ch === '[') depthSquare++
+    else if (ch === ']') depthSquare--
+  }
+  const closers = (inString ? '"' : '') + ']'.repeat(Math.max(0, depthSquare)) + '}'.repeat(Math.max(0, depthCurly))
+  for (let cut = 0; cut <= 3; cut++) {
+    const head = cut ? body.slice(0, body.length - cut) : body
+    try { return JSON.parse(head + closers) } catch (error) {}
+  }
+  return null
+}
+
+/** 诊断用：这个回包里到底认出了哪些字段（判空时告诉用户真实原因，别一律说「证据不足」）。 */
+export function recognizedFields (obj) {
+  const out = {}
+  for (const field of Object.keys(FIELD_ALIASES)) {
+    const v = fieldOf(obj, field)
+    const n = toTextList(v).filter((x) => String(x || '').trim() && !/^\d+$/.test(String(x).trim())).length
+    if (n) out[field] = n
+  }
+  return out
 }
 
 /** 合并新旧画像：新的在前，同一条（完全相同的文字）去重，超上限截断。 */
