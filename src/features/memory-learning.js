@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { askModel } from '../core/llm.js'
-import { collectMemberLines, enoughEvidence, evidenceFunnel, describeFunnel, buildDistillPrompt, parseDistillProfile, dedupConvo } from './distill.js'
+import { collectMemberLines, enoughEvidence, evidenceFunnel, describeFunnel, buildDistillPrompt, parseDistillProfile, dedupConvo, safeParseJson, recognizedFields } from './distill.js'
 import { sessionsDirFor, scanTranscripts, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
 import { readChatLogSource } from '../chat/chat-log.js'
@@ -181,10 +181,12 @@ export function createMemoryLearning({
     })
     let out = ''
     try {
-      // 8000：五段 JSON 会被截断（parse 就失败）；「自适应思考」模型的思考段也吃额度。
-      // reasoningEffort 不钉死 'none'：MiniMax-M3.1-Flash 之类必须自适应思考，disabled 直接 400
-      // → 蒸馏永远失败；交给 askModel 的 pickReasoningEffort 按模型能力挑。
-      out = await askModel(dsh, { cfg, system, text, maxTokens: 8000, temperature: 0.3, signal: genSignal.signal })
+      // 12000：五段 JSON 本身就长，思考型模型还要先花掉一大截在思考段上。
+      // 实测 8000 时回包被截断（数组写到一半就断），JSON 解析直接失败 —— 这是
+      // 「模型判空」的另一条暗线，和键名漂移叠加在一起。
+      // reasoningEffort 不钉死 'none'：自适应思考类模型 disabled 会 400，
+      // 交给 askModel 的 pickReasoningEffort 按模型能力挑。
+      out = await askModel(dsh, { cfg, system, text, maxTokens: 12000, temperature: 0.3, signal: genSignal.signal })
     } catch (error) {
       return { ok: false, message: '提炼失败：' + error.message }
     }
@@ -195,8 +197,22 @@ export function createMemoryLearning({
     }
     const hasProfile = Boolean(profile.exchanges?.length || profile.syntax?.length || profile.catchphrases?.length || profile.rhetoric?.length || profile.persona?.length || profile.samples?.length || profile.style?.length)
     if (!hasProfile) {
-      log.info(`蒸馏群友（历史）：${t0name} 模型判空画像（可能重复转发太多），原始前 120 字：`, String(out).slice(0, 120))
-      return { ok: false, message: '模型认为他的原话不够代表说话风格，暂时不学' }
+      // 判空有三种完全不同的原因，别一律说「证据不足」糊弄用户：
+      //   a) 模型没按约定键名回包（实测会写「句子架构」「口头禅」甚至自创 learned_style）
+      //   b) 回包被截断（maxTokens 不够，JSON 只写了一半）
+      //   c) 模型认真看完后认为没有可提炼的稳定特征
+      const fields = recognizedFields(safeParseJson(out))
+      const fieldText = Object.keys(fields).length ? Object.entries(fields).map(([k, n]) => `${k}×${n}`).join('、') : '无'
+      const rawLen = String(out || '').length
+      const looksTruncated = !/}\s*$/.test(String(out || '').trim())
+      log.info(`蒸馏群友（历史）：${t0name} 画像判空（识别到字段：${fieldText}；回包 ${rawLen} 字${looksTruncated ? '，结尾不完整疑似截断' : ''}），原始前 400 字：`, String(out).slice(0, 400))
+      if (!Object.keys(fields).length && looksTruncated) {
+        return { ok: false, message: `模型回包被截断了（写了 ${rawLen} 字还没收尾），没法学。可以再点一次重试，或把蒸馏用模型换成上下文更大的模型` }
+      }
+      if (!Object.keys(fields).length) {
+        return { ok: false, message: '模型没按约定的字段名回包（认不出 exchanges/syntax 等任何一个），所以没法入库。原文已记日志，可再点一次重试' }
+      }
+      return { ok: false, message: '模型看完认为他的原话里没有稳定可学的说话特征，暂时不学（不是句数不够，句数已经够了）' }
     }
       if (!isActive() || !genSignal.isValid()) return { ok: false, message: '历史学习任务已取消' }
       const saved = putDistill(g, u, profile, mine.length)
