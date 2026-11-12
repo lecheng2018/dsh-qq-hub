@@ -371,6 +371,33 @@ function DistillPanel({ toast, onChanged }) {
   const line = (label, arr) => (arr && arr.length)
     ? h('div', { style: { marginBottom: 3 } }, h('span', { className: 'ab-muted ab-small' }, label + '：'), h('span', { className: 'ab-small' }, arr.join('；')))
     : null
+  // 1.3.63 起画像字段换成 exchanges/syntax/catchphrases/rhetoric/never，
+  // 旧渲染只看 style/tone/avoid/samples，导致面板上「只剩性格一行」（1.3.66 修）。
+  // 这里新字段优先、旧字段兜底：老存量画像照旧能看，新学的一个都不漏。
+  const block = (label, arr) => (arr && arr.length)
+    ? h('div', { style: { marginBottom: 4 } },
+        h('div', { className: 'ab-muted ab-small', style: { marginBottom: 2 } }, label + '：'),
+        ...arr.map((x, i) => h('div', { key: i, className: 'ab-small', style: { whiteSpace: 'pre-wrap', marginLeft: 8 } }, '· ' + x)))
+    : null
+  // 原话：旧存量在 samples；新画像的逐字原话藏在 exchanges 的「答：」里，取出来顶上，
+  // 否则新学成的画像在面板上连一句原话都看不到（1.3.66 修）。用纯字符串切分，不做正则执行。
+  const ANSWER_MARK = '答：'
+  const rawQuotes = (p) => {
+    if (!p) return []
+    if (Array.isArray(p.samples) && p.samples.length) return p.samples
+    const out = []
+    for (const x of p.exchanges || []) {
+      const s = String(x || '')
+      const at = s.indexOf(ANSWER_MARK)
+      if (at < 0) continue
+      let q = s.slice(at + ANSWER_MARK.length).trim()
+      if (q.length > 1 && q[0] === '“') q = q.slice(1)
+      if (q.length && q[q.length - 1] === '”') q = q.slice(0, -1)
+      q = q.split(/\s+/).join(' ').trim().slice(0, 80)
+      if (q) out.push(q)
+    }
+    return out.slice(0, 3)
+  }
   return h('div', null,
     h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 6, flexWrap: 'wrap' } },
       h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '群号', value: form.gid, onChange: (e) => setForm({ ...form, gid: e.target.value.replace(/\D/g, '') }) }),
@@ -404,9 +431,20 @@ function DistillPanel({ toast, onChanged }) {
                     ? h('div', { style: { marginBottom: 3 } },
                         h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
                         h('span', { className: 'ab-small' }, t.profile.samples.map((x) => '「' + x + '」').join(' ')))
-                    : null,
+                    : rawQuotes(t.profile).length
+                      ? h('div', { style: { marginBottom: 3 } },
+                          h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
+                          h('span', { className: 'ab-small' }, rawQuotes(t.profile).map((x) => '「' + x + '」').join(' ')))
+                      : null,
+                  // 新画像（1.3.63+）：最强信号排在前面，顺序与注入/人设卡渲染一致
+                  block('他怎么接话', t.profile.exchanges),
+                  line('口头禅', t.profile.catchphrases),
+                  line('句子架构', t.profile.syntax),
+                  line('修辞招式', t.profile.rhetoric),
+                  block('性格', t.profile.persona),
+                  line('他从不', t.profile.never),
+                  // 旧画像兜底（老存量，新学习不再产出）
                   line('说话方式', t.profile.style),
-                  line('性格', t.profile.persona),
                   line('语气', t.profile.tone),
                   line('他不会', t.profile.avoid),
                   h('div', { className: 'ab-muted ab-small' }, '依据 ' + (t.profile.evidenceCount != null ? t.profile.evidenceCount : (typeof t.profile.samples === 'number' ? t.profile.samples : (t.profile.samples || []).length)) + ' 句原话 · ' + (t.profile.updatedAt ? new Date(t.profile.updatedAt).toLocaleString() : '')))
