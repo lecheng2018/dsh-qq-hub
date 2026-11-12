@@ -28,7 +28,7 @@ import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { parseMessageEvent, cardText } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
-import { mimeOf } from '../chat/inbound.js'
+import { createInboundImages } from '../chat/inbound-images.js'
 import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
@@ -191,10 +191,11 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
+  const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
   const activity = createActivityState({ onTypingPing: () => {} })
@@ -204,7 +205,6 @@ export function createModularCore({
   // getter（真机报告 3/4：`cannot get property "…" without inject`，可选链 `?.` 挡不住 getter 求值）。
   // 一律走 ctx.get(...)（宿主已 inject 的服务名），拿到就 try/catch 兜住。
   const ctxGet = (name) => { try { return dsh?.get?.(name) ?? null } catch { return null } }
-  const admitAttachments = () => { try { return dsh?.get?.('attachments') ?? null } catch { return null } }
 
   /** 群名缓存 + 按需查一次（legacy groupName 同语义：查不到就退群号，绝不为命名卡住主链）。 */
   const groupNames = new Map()
@@ -309,45 +309,7 @@ export function createModularCore({
     return true
   }
 
-  /** 图片段必须登记成 DSH 附件（attachmentId）。DSH 只认 base64 编码图片
-   *  （`{ type:'image', data, mediaType }`），QQ 给的是 URL——所以先下载，再登记。
-   *  下载/登记任一步失败就如实降级成一行文字（绝不把裸 url 图片块塞进历史，那会让整条会话永久失败）。 */
-  async function admitContent(content) {
-    if (!content.some((c) => c.type === 'image')) return content
-    // 1) 裸 URL 的图片块 → 下载 + base64
-    const hydrated = []
-    for (const block of content) {
-      if (block.type !== 'image' || block.data) { hydrated.push(block); continue }
-      const url = String(block.url || '')
-      try {
-        let buf
-        if (url.startsWith('base64://')) buf = Buffer.from(url.slice(9), 'base64')
-        else if (/^https?:\/\//i.test(url)) {
-          const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-          buf = Buffer.from(await res.arrayBuffer())
-        } else throw new Error('不是可下载的 http(s)/base64 地址')
-        if (!buf.length) throw new Error('下载到 0 字节')
-        if (buf.length > 10 * 1024 * 1024) throw new Error(`图片太大（${Math.round(buf.length / 1024)}KB）`)
-        hydrated.push({ type: 'image', data: buf.toString('base64'), mediaType: mimeOf(buf), name: 'qq-image' })
-      } catch (error) {
-        debug(`图片下载失败，本轮按看不了图处理：${error?.message || error}`)
-        hydrated.push({ type: 'text', text: '（对方发来一张图片，但本机没能把它下载下来，这轮看不到）' })
-      }
-    }
-    if (!hydrated.some((c) => c.type === 'image')) return hydrated
-    // 2) 交 DSH 登记成附件
-    const att = admitAttachments()
-    if (att && typeof att.admitPromptContent === 'function') {
-      try { return await att.admitPromptContent(hydrated) } catch (error) {
-        debug(`图片没登记成附件，本轮按看不了图处理：${error?.message || error}`)
-      }
-    }
-    // 3) 降级：剥掉 image 块，保留文本 + 一行说明
-    const text = hydrated.filter((c) => c.type !== 'image').map((c) => c.text ?? '').join('\n').trim()
-    const note = '（对方发来一张图片，但本机没能把它登记成附件，本轮按看不到图处理）'
-    return [{ type: 'text', text: `${text ? text + '\n' : ''}${note}` }]
-  }
+  const admitContent = (content) => inboundImages.admit(content)
 
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
   const quotedInfo = (replyId, chatKey) => quotedMessages.get(replyId, chatKey)

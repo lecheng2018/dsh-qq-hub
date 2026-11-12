@@ -82,6 +82,7 @@ host（唯一装配与生命周期）
 - P2a 近期媒体缓存：host 持有唯一 recentMedia 实例并注入 hub，新核心通过 `rememberSegments` 直接登记；模块读取仍走 hub 兼容口。30 分钟有效期、每聊天 6 张、重启恢复与卸载清理不变，ASR、vision、引用和上下文不在该子切片。
 - P2b 入站语音：host 持有唯一 inbound-audio，新旧核心共用本地 ASR → 网关转写 → DSH SenseVoice 降级链；模块化水合最多处理 3 条且不修改冻结输入。voice 模块的 DSH 识别保留 hub 窄转发；vision、引用和上下文不在该子切片。
 - P2c 引用读取：host 持有唯一 quoted-messages，统一 get_msg、历史补图与 200 条缓存，缓存键包含会话和消息 ID；新旧核心保留各自提示文案与附件装配。补图不丢原正文，读取失败返回可展示的失败结果；vision 与上下文不在该子切片。
+- P2d 入站图片：host 持有唯一 inbound-images，旧 hub 共用 segmentBytes 下载与严格类型校验，modular 共用 URL 转 base64 和 DSH 附件登记；保留两条现有下载及接受语义，不顺带改变网络策略。附件不可用时去掉裸图片块并明确降级；辅助视觉模型与上下文装配不在该子切片。
 - 范围：按 ADR-0002 的 Inbound/Context 路线，抽取既有 ASR、vision、引用和 recentMedia 行为，不在 modular-core 再实现一份。voice/sticker 的业务策略仍可选，物理发送仍走唯一 outbox。
 - 验收：同一事件经新旧调用路径，正文/附件块/转写/引用/人设/preset/workspace 一致；能力关闭时诚实降级，取消或超时不污染会话；副作用不双发。
 - 回滚：只回退调用接线，唯一实现与旧 facade 保留；不同时修改会话默认路径。
