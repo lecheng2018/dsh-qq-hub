@@ -20,7 +20,7 @@ import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf,
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, extend }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, styleContext = true, extend }) {
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
@@ -688,13 +688,35 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   // ---------- 说话方式：聊久了潜移默化学到的（对方的说话习惯 + 她自己慢慢养成的说法） ----------
+  function styleSourceOf(key) {
+    return (load().styleSources || {})[key] || null
+  }
   function styleOf(key) {
-    return (load().styles || {})[key] || []
+    return styleSourceOf(key)?.stale ? [] : (load().styles || {})[key] || []
+  }
+  function staleStylesIn(s, key = '') {
+    let changed = 0
+    for (const [name, meta] of Object.entries(s.styleSources || {})) {
+      if ((key && name !== key) || meta.origin === 'manual' || meta.stale) continue
+      meta.stale = true
+      meta.staleAt = Date.now()
+      changed++
+    }
+    return changed
   }
   function setStyle(key, list) {
     const s = load()
     s.styles = s.styles || {}
     s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
+    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'manual' } }
+    s.rev = (s.rev || 0) + 1
+    save(s)
+  }
+  function setDerivedStyle(key, list, { sourceFingerprint }) {
+    const s = load()
+    s.styles = s.styles || {}
+    s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
+    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0 } }
     s.rev = (s.rev || 0) + 1
     save(s)
   }
@@ -791,8 +813,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       }
       // 群黑话注入已移交独立模块 src/modules/slang/（自己的 context provider）
     }
-    const sty = styleOf(personKey(chat))
-    const self = styleOf('self')
+    const sty = styleContext ? styleOf(personKey(chat)) : []
+    const self = styleContext ? styleOf('self') : []
     if (sty.length || self.length) {
       parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
     }
@@ -985,7 +1007,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     let insights = 0
     let style = 0
     if (key && s.insights && s.insights[key]) { insights = s.insights[key].length; delete s.insights[key] }
-    if (key && s.styles && s.styles[key]) { style = (s.styles[key] || []).length; delete s.styles[key] }
+    if (key && s.styles && s.styles[key]) { style = (s.styles[key] || []).length; delete s.styles[key]; if (s.styleSources) delete s.styleSources[key] }
     s.rev = (s.rev || 0) + 1
     save(s)
     recallLog.length = 0 // 面板上「最近想起了什么」也一起清掉，免得还显示着删掉的条目
@@ -998,7 +1020,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     load, save, health: () => store.health(), relatedTo,
     add, revise, supersede, scopeFromChatId,
     profileOf, setProfile, setDerivedProfile, profileKeyOf,
-    insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, personKey,
+    insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, setDerivedStyle, personKey,
     distillOf, putDistill,
   })
 
@@ -1025,7 +1047,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const s = load()
       return Object.entries(s.insights || {}).map(([key, list]) => ({ key, name: (s.insightNames || {})[key] || '', list }))
     },
-    insightsOf, styleOf, setDerivedInsights,
+    insightsOf, styleOf, styleSourceOf, setDerivedInsights, setDerivedStyle,
     setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
     /** 群黑话本（面板用）：[{ gid, list: [{id, word, meaning, at}] }] */
     slang: () => Object.entries(load().slang || {})
@@ -1095,7 +1117,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const health = store.health()
       if (health.ok) {
         const state = load()
-        if (staleProfilesIn(state) + staleInsightsIn(state)) { state.rev = (state.rev || 0) + 1; save(state) }
+        if (staleProfilesIn(state) + staleInsightsIn(state) + staleStylesIn(state)) { state.rev = (state.rev || 0) + 1; save(state) }
       }
       const message = health.ok ? '记忆档案已重新载入，索引已更新' : '部分档案或状态损坏，请修复后重新载入；自动整理已暂停'
       log?.info?.(message)
