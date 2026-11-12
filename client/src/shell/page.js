@@ -115,17 +115,20 @@ function QQHubPage() {
   // 老条件 m.running === 'user' 把内置模块全挡掉了 —— 这正是「五个面板一片空白、配置项一个都不出现」的根因。
   const hasUi = (m) => Boolean(m.running) && ((m.settings || []).length > 0 || m.panel)
   // 写了 tab 的模块嵌进那个内置标签页；没写（或写的页不存在）的单独一页
-  const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === m.tab))
+  // 老扩展若还写着心情页的旧 tab 名，归一成 memory（别名兜底）
+  const TAB_ALIAS = { mood: 'memory' }
+  const tabOf = (m) => TAB_ALIAS[m.tab] || m.tab
+  const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === tabOf(m)))
   const extTabs = mods.filter((m) => hasUi(m) && !intoTab(m)).map((m) => ({ id: 'ext:' + m.id, label: m.name, ext: m.id }))
   const tabs = TABS.filter((t) => !TAB_MODS[t.id] || TAB_MODS[t.id].some(running))
   tabs.splice(tabs.findIndex((t) => t.id === 'logs'), 0, ...extTabs)
   const curTab = tabs.find((t) => t.id === tab) || tabs[0]
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, mood: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
+    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
-  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], mood: ['mood', 'memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
+  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], memory: ['memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
   const tabDirty = (id) => {
     if (!dirty) return false
     if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
@@ -156,7 +159,7 @@ function QQHubPage() {
         },
       }),
       showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
-      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && m.tab === curTab.id && m.id !== 'multi-parser').map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
+      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
       dirty && !showWizard ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
         h('span', { className: 'ab-muted ab-small' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
         h(Btn, { kind: 'ghost', onClick: () => setDraft(clone(st.config)) }, '撤销'),

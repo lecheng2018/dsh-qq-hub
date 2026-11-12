@@ -12,7 +12,7 @@ export default {
   name: '记忆',
   version: '1.0.0',
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/memory.js', 'features/memory-archive.js', 'features/memory-learning.js', 'features/memory-extractor.js'],
   provides: ['memory-store'], // 伴生模块经 api.use('memory') 读记忆（SDK 能力声明）
   setup(api) {
