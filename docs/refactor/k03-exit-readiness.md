@@ -24,7 +24,7 @@
 |---|---|---|
 | 无条件创建 legacy hub | `src/host.js:286`，新核心开启时也执行 `createHub` | 主链与共享服务不再创建旧实例；legacy-only 装配可以整体退场 |
 | 富媒体旧委托 | 本批已删除 `legacyDeliver`；当前实现位于 `src/chat/reply-delivery.js`、`src/chat/outbound.js` | 回复编排、TTS、表情、图片、引用、戳一戳归当前服务，物理发送只经 Shared Outbox；其余职责仍按 §3 对账 |
-| 会话双路与回退 | `src/host.js:467-505` 合并 sessions、双 `syncAllModels`、旧 `onSessionEvent/chatOfSession/resetChat` | 唯一 SessionRegistry；同步/重置/事件只执行一次；旧会话文件仅作一次性只读迁移输入 |
+| 会话双路与回退 | 本批已移除旧查询/重置/事件/模型同步回退；QQ 会话归当前 SessionRegistry，系统后台回合归 `src/chat/system-turns.js` | 同步/重置/事件只执行一次；旧 `sessions.json` 仅作一次性只读迁移输入，不在启动时自动合并 |
 | 模块持有整只 hub | `src/host.js:559` `createModuleSendBridge({ hub, ... })` | 模块只拿当前服务的窄 facade；无 hub 内部状态或旧方法旁路 |
 | 旧事件入口仍在 | `src/host.js:165-174`，legacy `onMessage/onPoke` 可接收实时事件 | 唯一 `dispatchEvent`；新核心初始化失败时停止相关 QQ 业务并告警，不回退旧入口 |
 | 管道与灰度位仍在 | `src/host/pipeline.js`、`src/kernel/legacy-fallback.js`、`FLAG_USE_PIPELINE` 等 | 删除旧装配和隐藏开启方式；`kernel/mw-*` 中当前仍在用的服务必须单独保留，不能按目录误删 |
@@ -50,6 +50,8 @@
 4. 移除双同步、合并 sessions 和 legacy 回退，不把旧表继续当灾备运行。
 
 验收：模型同步/重置/归档各一次；面板列表一致；旧实例不收到 session 事件。
+
+本批已完成：host 不再保存旧会话回退或执行双同步；QQ 主动回合复用当前 SessionRegistry，系统后台回合由当前核心的独立服务执行。旧 `sessions.json` 不自动迁移、不写回；冲突仍须按迁移流程人工确认。
 
 ### K-03C：hub facade 收窄与 legacy 装配退出
 

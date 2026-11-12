@@ -1973,7 +1973,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
           if (st.lastText) st.prevText = st.lastText
           st.lastText = String(opts.queryText).slice(-600)
         }
-        if (opts.directOwner) st.directOwner = true
+        if (opts.directOwner !== undefined) st.directOwner = Boolean(opts.directOwner)
         turnState.set(key, st)
       } catch {}
     },
