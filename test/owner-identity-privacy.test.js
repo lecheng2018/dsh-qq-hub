@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { rulesText } from '../src/persona/personas.js'
 
 const OWNER = '10000001'
-const cfg = { ownerQQ: OWNER, ownerName: '主人', stickers: {}, imageGen: {}, bili: {}, song: {} }
+const cfg = { ownerQQ: OWNER, ownerName: '主人', stickers: {}, imageGen: {}, bili: {} }
 
 test('群聊规则绝不包含主人 QQ 号', () => {
   const social = rulesText('social', cfg)
