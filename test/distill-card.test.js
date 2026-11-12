@@ -76,13 +76,13 @@ test('refresh 端到端：生成卡文件（front-matter 带自动生成标签�
 })
 
 test('接线：学习成功自动刷卡 + 路由 + setConfig 只在接管时发生', () => {
-  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory-distill-history.js', import.meta.url), 'utf8')
   // 日常整理管线已移交独立 distill 模块（自身 tick 学成后 emit('distill/growth-updated') → 刷卡）；
   // memory-learning.js 里只剩手动「从历史学」一处 onDistillLearned。
   assert.equal((mem.match(/onDistillLearned && await onDistillLearned/g) || []).length, 1, '仅历史学习一处挂（整理侧已移交模块）')
   const dist = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(dist, /emit\('distill\/growth-updated'/, '学成后模块发事件刷卡')
-  const mod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
+  const mod = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.setConfig\(\{ persona: \{ groups: \{ \[String\(gid\)\]: r\.cardId \} \} \}\)/, '只有 r.ok 才写槽位')
   assert.match(mod, /api\.route\('\/distill\/card\/refresh'/)
   assert.match(mod, /distill\/growth-updated/, '蒸馏模块学成事件 → 刷卡（模块总线协作）')
