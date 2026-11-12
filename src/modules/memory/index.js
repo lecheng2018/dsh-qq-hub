@@ -14,7 +14,7 @@ export default {
   version: '1.0.0',
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
   tab: 'mood',
-  files: ['features/memory.js'],
+  files: ['features/memory.js', 'features/memory-archive.js', 'features/memory-learning.js', 'features/memory-extractor.js'],
   provides: ['memory-store'], // 蒸馏等伴生模块经 api.use('memory') 读目标列表（SDK 能力声明）
   setup(api) {
     const { hub, http } = api.core

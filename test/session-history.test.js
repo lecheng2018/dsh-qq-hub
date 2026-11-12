@@ -83,7 +83,7 @@ test('sessionsDirFor：找不到返回空串，不抛', () => {
 })
 
 test('接线：面板和路由都在，且真读了历史', () => {
-  const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
+  const mem = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
   assert.match(mem, /scanTranscripts\(dir, \{ group: groupName \}\)/, 'memory 里扫历史（会话记录作补充源）')
   // #74：chatlog 是主证据源 —— 会话记录会把主人发言脱敏成「主人：…」（无 QQ 号），
   // 解析正则认不出来，所以主人学自己会永远卡在旧数据。chatlog 有真实 uid。

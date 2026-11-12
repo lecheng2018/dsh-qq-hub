@@ -6,7 +6,7 @@ const source = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'u
 
 test('模型提炼独立成 extractor，档案提交仍由 memory 主库执行', () => {
   const extractor = source('src/features/memory-extractor.js')
-  const memory = source('src/features/memory.js')
+  const memory = source('src/features/memory-learning.js')
   assert.doesNotMatch(extractor, /memory-files|memory-markdown|core\/store|dataDir/)
   assert.match(memory, /createMemoryExtractor\(\{[\s\S]*?commit: commitExtracted/)
   assert.match(memory, /function extractFacts\(chatId, transcript, genSignal = null\) \{\s*return extractor\.extractFacts/)

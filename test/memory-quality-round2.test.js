@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const MEM = readFileSync(join(ROOT, 'src/features/memory.js'), 'utf8')
+const MEM = readFileSync(join(ROOT, 'src/features/memory-archive.js'), 'utf8')
 const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const MOD = readFileSync(join(ROOT, 'src/modules/memory/index.js'), 'utf8')
 const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
