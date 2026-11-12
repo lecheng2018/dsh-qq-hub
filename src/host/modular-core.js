@@ -148,6 +148,16 @@ async function hydrateForwards(members, onebot, log) {
   return out
 }
 
+/** 群消息里的图片/表情段要跟着这段上下文走：群闸可能不触发回合，等下一条
+ *  文字才回，此时触发轮 members 里已经没有那张图了（真机：群里只剩「（图片/表情）」占位）。 */
+const MAX_GROUP_MEDIA = 4
+function mediaOfInbound(inbound) {
+  return (Array.isArray(inbound?.segments) ? inbound.segments : [])
+    .filter((s) => s?.type === 'image' || s?.type === 'mface')
+    .slice(0, MAX_GROUP_MEDIA)
+    .map((s) => ({ type: 'image', url: String(s.data?.url || s.data?.file || '') }))
+}
+
 /** 入站事件 → checkAllowed 需要的 msg 形状（从 ChatKey + sender 还原 kind/userId/groupId）。 */
 function aclMsgFromInbound(inbound) {
   const chatKey = String(inbound?.chatKey ?? '')
@@ -671,15 +681,34 @@ export function createModularCore({
       '大多数时候直接说就行。只有想专门接其中某一条时才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
     // 触发轮自身的图片与引用说明一并附上；reply 段已由 quoteNote 取代，不留下占位。
+    // 没触发回合的那几条群消息带的图也在这里补：群缓冲里挂着 image 块，否则她只看得到
+    // 「（图片/表情）」文字，而触发轮 members 已经没有原始段可拼（真机：群里看不懂表情包）。
     const extras = []
     const quotes = []
+    const seenMedia = new Set()
+    let mediaCount = 0
+    const addMedia = (block) => {
+      const url = String(block?.url || '')
+      if (!url || seenMedia.has(url) || mediaCount >= MAX_GROUP_MEDIA) return
+      seenMedia.add(url)
+      mediaCount++
+      extras.push(block)
+    }
     for (const m of members) for (const s of (m?.segments ?? [])) {
-      if (s?.type === 'image' || s?.type === 'mface') extras.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
+      if (s?.type === 'image' || s?.type === 'mface') addMedia({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
       else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: String(s.data.text || '') })
       else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
       else if (s?.type === 'json') extras.push({ type: 'text', text: cardText(s.data?.data) })
       else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
       else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
+    }
+    // 同一段群里、没单独触发回复的消息也带图：随缓冲条目一起交给模型，最多 4 张。
+    // 取完即清，下一段 older 背景里不会把同一张图反复投喂。
+    const triggerMemberIds = new Set(members.map((m) => String(m?.messageId || '')).filter(Boolean))
+    for (const x of fresh) {
+      // 触发轮自己的图已在上面从 members 拼过，别按 URL 再补一份。
+      if (!triggerMemberIds.has(String(x.mid || ''))) for (const block of x.media || []) addMedia(block)
+      delete x.media
     }
     if (quotes.length) extras.unshift({ type: 'text', text: quotes.join('\n') })
     const direct = fresh.filter((x) => x.direct)
@@ -1265,7 +1294,7 @@ export function createModularCore({
       const self = String(ev.self_id || getConfig().botQQ || '')
       mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
       const gid = inbound.chatKey.slice(6)
-      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound) })
+      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
       try { rememberSpeaker?.(inbound.chatKey, userId) } catch {}
     }
     const fromOwner = isOwner(cfg, userId)

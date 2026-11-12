@@ -10,7 +10,10 @@
 //   - FIFO：enqueue 与链注册之间**不引入任何 await**——授权挪到出队时执行，
 //     慢授权不再被后入队的快授权超车；撤权发生在排队期间也能拦住（出队重查台账 + 重跑 authorize）。
 //   - 全局闸：enabled/dryRun 在出队时刻动态复核（注入回调），不依赖入口或命令分支的一次性快照。
-//   - 身份泄露闸：guard 注入回调在唯一出站点生效（同 legacy sendSegments 语义：force 豁免）。
+//   - 身份泄露闸：guard 注入回调在唯一出站点生效，**force 不豁免**（命令回复同样可能带出别人的号）。
+//   - force 的边界（2026-11-12 收窄）：只豁免「总开关关闭」，让 /on 这类命令在关闸后仍能回话；
+//     它**不豁免 dryRun**（试运行就是不真发，与开闸是两件事），也不豁免身份闸。
+//     以前 force 三者全豁免，默认姿态（总开关关 + 试运行开）下主人发 /status 就会真的发到 QQ。
 //   - 台账 fail-closed：enqueue / sending 落盘失败 = 不发起物理发送。
 //   - dispose：真实卸载——之后拒绝新请求，并把还在排队的条目落 cancelled。
 //
@@ -158,15 +161,16 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
       return { state: current?.state ?? 'cancelled', deliveryId, reason: '排队期间台账已变更（取消 / 重复请求）' }
     }
 
-    if (!force) {
-      if (dryRun?.() === true) {
-        book.mark(deliveryId, 'cancelled', { reason: 'dryRun' })
-        return { state: 'cancelled', deliveryId, reason: 'dryRun' }
-      }
-      if (enabled && !enabled()) {
-        book.mark(deliveryId, 'cancelled', { reason: '总开关关闭' })
-        return { state: 'cancelled', deliveryId, reason: '总开关关闭' }
-      }
+    // 试运行永不豁免：force 只用来让命令在总开关关着时能回话，不代表可以真发。
+    // 顺序放在 enabled 之前，与 legacy sendSegments 同口径（先看「允不允许发」再看「发不发得出去」）。
+    if (dryRun?.() === true) {
+      book.mark(deliveryId, 'cancelled', { reason: 'dryRun' })
+      return { state: 'cancelled', deliveryId, reason: 'dryRun' }
+    }
+    // 总开关：force 可豁免——这是 /on 的自救通道，关闸后主人还能把闸重新打开
+    if (!force && enabled && !enabled()) {
+      book.mark(deliveryId, 'cancelled', { reason: '总开关关闭' })
+      return { state: 'cancelled', deliveryId, reason: '总开关关闭' }
     }
 
     const passInfo = passMap.get(deliveryId)
@@ -189,7 +193,8 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
       }
     }
 
-    if (guard && !force) {
+    // 身份泄露闸：force 不豁免——命令回复（/status 等）同样可能带出主人 QQ、别的群号
+    if (guard) {
       try {
         const g = guard(view())
         if (g && g.ok === false) {
