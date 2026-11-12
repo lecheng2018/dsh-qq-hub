@@ -5,7 +5,6 @@
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
 import { createMemoryBus } from '../../features/memory-bus.js'
 import { currentPersonaText } from '../../persona/personas.js'
-import { refreshDistillCard, styleEntries, distillCardId } from '../../persona/distill-card.js'
 import { defineTool, str } from '../../tools/tools.js'
 
 export default {
@@ -18,21 +17,20 @@ export default {
   provides: ['memory-store'], // 蒸馏等伴生模块经 api.use('memory') 读目标列表（SDK 能力声明）
   setup(api) {
     const { hub, http } = api.core
-    const refreshCard = (gid) => {
-      const entries = styleEntries((memory.distillList() || []).filter((t) => String(t.gid) === String(gid)))
-      // 增长段来自蒸馏模块（独立 optional 模块，经模块总线协作；没启用时就没有增长段）
-      let growth = []
-      try { growth = api.use('distill')?.growthList?.(String(gid)) || [] } catch {}
-      const r = refreshDistillCard({ gid, entries, growth, cfg: api.config(), log: api.log })
-      if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
-      return r
-    }
     const memory = createMemoryStore({
       dsh: api.dsh, getConfig: api.config, hub, chatLog: api.core.chatLog, log: api.log,
       personaText: () => currentPersonaText(api.config().persona.current),
-      onDistillLearned: async (gid) => { refreshCard(gid) },
       reflectionContext: false,
       styleContext: false,
+      distillContext: false,
+      distillImpl: {
+        history: (options) => {
+          try { return api.use('distill')?.history(options) || { dir: '', sessions: 0, total: 0, speakers: [], lines: [] } } catch { return { dir: '', sessions: 0, total: 0, speakers: [], lines: [] } }
+        },
+        learn: (options) => {
+          try { return api.use('distill')?.learnFromHistory(options) || { ok: false, message: '蒸馏模块已关闭' } } catch { return { ok: false, message: '蒸馏模块已关闭' } }
+        },
+      },
       reflectImpl: (chat, transcript, genSignal) => {
         try { return api.use('reflection')?.reflect(chat, transcript, genSignal) || 0 } catch { return 0 }
       },
@@ -59,14 +57,6 @@ export default {
         // 蒸馏计数已移交给独立 distill 模块（它自己挂 activity；这里只管召回负反馈）
       } catch (error) {}
     })
-    // 蒸馏模块 L3 学成 → 刷新这个群的派生人设卡（模块总线协作，不直接 import）
-    api.on('distill/growth-updated', (payload) => {
-      try {
-        const gid = String(payload?.gid || '')
-        if (gid) refreshCard(gid)
-      } catch (error) {}
-    })
-
     api.every(60_000, () => memory.tick(), '整理记忆')
 
     api.tool(({ chat }) => {
@@ -137,38 +127,7 @@ export default {
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
     // 群黑话本路由（/slang、/slang/save、/slang/delete）已迁到独立模块 src/modules/slang/
     //（存储/学习/注入都归它；URL 不变，面板无感）。memory.slang() 只读口保留供其迁移。
-    // 蒸馏群友（1.3.59）：指定群里的某个人当数据源，学他的说话方式/性格/语气
-    api.route('/distill/list', async () => ({ ok: true, list: memory.distillList ? memory.distillList() : [] }))
-    // 蒸馏→语感人设卡（1.3.65）：学成后自动刷新；也可面板手动点
-    api.route('/distill/card/refresh', async (req) => {
-      const b = await http.body(req)
-      if (!b.gid) return { ok: false, message: '没给群号' }
-      return refreshCard(b.gid)
-    })
-    // 从会话历史蒸馏：不依赖共享流水的保留窗口。
-    api.route('/distill/history', async (req) => {
-      if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
-      const q = http.query(req) || {}
-      const h = memory.distillHistory({ gid: q.group || '' })
-      return {
-        ok: true, dir: h.dir, sessions: h.sessions, total: h.total,
-        chatlogDays: h.chatlogDays || 0, chatlogLines: h.chatlogLines || 0,
-        from: h.from, to: h.to, speakers: h.speakers,
-      }
-    })
-    api.route('/distill/from-history', async (req) => {
-      if (!memory.learnDistillFromHistory) return { ok: false, message: '记忆库没在跑' }
-      const b = await http.body(req)
-      return memory.learnDistillFromHistory({ gid: b.gid, uid: b.uid, name: b.name })
-    })
-    api.route('/distill/add', async (req) => {
-      const b = await http.body(req)
-      return memory.addDistillTarget ? memory.addDistillTarget({ gid: b.gid, uid: b.uid, name: b.name }) : { ok: false, message: '记忆库没在跑' }
-    })
-    api.route('/distill/remove', async (req) => {
-      const b = await http.body(req)
-      return memory.removeDistillTarget ? memory.removeDistillTarget(b.gid, b.uid) : { ok: false, message: '记忆库没在跑' }
-    })
+    // 蒸馏目标、历史学习、派生卡与路由均归独立 distill 模块；distillList 仅供只读迁移。
     // /slang/save、/slang/delete 路由已迁到独立模块 src/modules/slang/（URL 不变）
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
