@@ -27,7 +27,15 @@ export default {
       if (r.ok) api.setConfig({ persona: { groups: { [String(gid)]: r.cardId } } })
       return r
     }
-    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, chatLog: api.core.chatLog, log: api.log, personaText: () => currentPersonaText(api.config().persona.current), onDistillLearned: async (gid) => { refreshCard(gid) } })
+    const memory = createMemoryStore({
+      dsh: api.dsh, getConfig: api.config, hub, chatLog: api.core.chatLog, log: api.log,
+      personaText: () => currentPersonaText(api.config().persona.current),
+      onDistillLearned: async (gid) => { refreshCard(gid) },
+      reflectionContext: false,
+      reflectImpl: (chat, transcript, genSignal) => {
+        try { return api.use('reflection')?.reflect(chat, transcript, genSignal) || 0 } catch { return 0 }
+      },
+    })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
     // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照
