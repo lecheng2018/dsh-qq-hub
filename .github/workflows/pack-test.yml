@@ -29,6 +29,15 @@ jobs:
         with:
           node-version: 22
 
+      # client/client.js 是 esbuild 产物：打包前必须现构建，否则 tgz 里带的是仓库里提交的那份，
+      # client/src 改了而产物没跟上时，发出去的包会是旧界面（package.json 的 prepack 同样会构建，
+      # 这里显式列出是为了在日志里看得见、失败得早）。
+      - name: Install Build Dependencies
+        run: npm ci
+
+      - name: Build Client Bundle
+        run: npm run build:client
+
       - name: Set version in package.json (build-only; repo copy not committed)
         env:
           VERSION: ${{ inputs.version }}
@@ -58,6 +67,16 @@ jobs:
           rm -rf /tmp/smoke && mkdir -p /tmp/smoke
           tar -xzf "${{ steps.pack.outputs.tgz }}" -C /tmp/smoke
           node --input-type=module -e "const h = await import('file:///tmp/smoke/package/src/host.js'); if (typeof h.apply !== 'function') { console.error('apply missing'); process.exit(1) }; console.log('SMOKE OK')"
+          node --input-type=module -e "
+          import { readFileSync } from 'node:fs'
+          const p = '/tmp/smoke/package/client/client.js'
+          const s = readFileSync(p, 'utf8')
+          if (s.length < 100000 || !s.includes('__ModuleLoader__') || !s.includes('QQHubPage')) {
+            console.error('client bundle missing or stale: ' + p)
+            process.exit(1)
+          }
+          console.log('CLIENT BUNDLE OK', (s.length / 1024).toFixed(1) + ' KB')
+          "
 
       - name: Release notes
         env:

@@ -36,5 +36,17 @@ jobs:
       - name: Run All Tests
         run: npm run test:all
 
+      # client/client.js 是 esbuild 构建产物，和 client/src 一起入库。
+      # 改了 src 却忘了 `npm run build:client` 时，测试仍会现场构建并通过，门禁必须比对产物本身。
+      - name: Verify Client Bundle Is Up To Date
+        run: |
+          npm run build:client
+          test -s client/client.js || { echo "::error::client/client.js 缺失"; exit 1; }
+          if ! git diff --quiet -- client/client.js; then
+            echo "::error::client/client.js 与 client/src 不同步：请在本地运行 npm run build:client 并提交产物"
+            git --no-pager diff --stat -- client/client.js
+            exit 1
+          fi
+
       - name: Check Package Contents
         run: npm run pack:check
