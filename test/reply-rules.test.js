@@ -92,7 +92,7 @@ test('带路径的技术说明按段落发，不挤成一条巨块（2026-11-05 
   const r = parseReply(t, replyRules({ reply: { privateMaxChars: 120 } }, false))
   assert.ok(r.items.length >= 3, '段落各是一条，实际 ' + r.items.length)
   for (const it of r.items) assert.ok(it.value.length <= 240, '每条都不许变成巨块：' + it.value.length)
-  assert.ok(r.items.some((it) => it.value.includes('/vol2/@appshare')), '路径必须完整留在同一条里')
+  assert.ok(r.items.some((it) => it.value.includes('/home/user/harness/.dsh/profile-plugins/dsh-qq-hub/src/features/memory.js')), '路径必须完整留在同一条里')
 })
 
 test('真报表（两个以上小标题）仍然整段发', () => {
