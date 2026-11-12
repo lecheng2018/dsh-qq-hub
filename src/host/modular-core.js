@@ -34,7 +34,7 @@ import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
-import { workspaceDirOf, WORKSPACE_TITLE } from '../chat/workspace.js'
+import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
@@ -350,11 +350,11 @@ export function createModularCore({
       return uid === String(cfg.ownerQQ || '') ? `QQ · ${owner}私聊` : `QQ 私聊 · ${uid}`
     },
     // 会话必须带工作区，否则落到宿主 defaultCwd 直接 turn error（真机报告 5）；对齐 legacy ensureWorkspace
-    ensureWorkspace: async () => {
+    ensureWorkspace: async (chatKey) => {
       try {
         const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
         if (!reg) return undefined
-        const dir = workspaceDirOf(getConfig())
+        const dir = workspaceDirForChat(getConfig(), chatKey)
         try { mkdirSync(dir, { recursive: true }) } catch {}
         const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
         let ws = (reg.list?.() || []).find((w) => norm(w.path) === norm(dir))
