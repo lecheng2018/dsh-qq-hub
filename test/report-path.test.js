@@ -46,7 +46,8 @@ test('第二层接线：hub 监听 tool/call，turn/end 清掉，记忆工具不
   assert.match(hub, /reportTurns\.delete\(chatId\)/, '只管一轮')
   assert.match(hub, /\/\^\(rss_read\|bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
   assert.ok(!/\|recall_memory\)/.test(hub), '记忆工具不在内容清单里')
-  assert.match(hub, /opts\.forceReport \|\| reportTurns\.get\(chatId\)/, '第三处：deliver 的规则注入')
+  const delivery = src('src/chat/reply-delivery.js')
+  assert.match(delivery, /opts\.forceReport \|\| reportTurns\.get\(chatId\)/, '第三处：deliver 的规则注入')
 })
 
 test('第三层保留：没标记没工具但输出像报表，structuredReport 照样整段发', () => {
