@@ -568,9 +568,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     // 身份泄露闸（移植自 surfcore 的 identity-guard）：出站前扫一遍「主人/别人的 QQ 号」。
     // 群聊里报自己这个群的群号是有用的（加白名单时就要说），所以把当前群号列为允许；
     // 主人的 QQ 号、别的群号、别人的号一律拦下——她在群里报过、在公开面报出去就收不回了。
+    // 注意：这里**不再看 force**。命令回复（/status 之类）同样会带出号码，豁免它等于给
+    // 「最高频的出站文本」开了一个不扫码的口子（2026-11-12 与 outbox 同步收窄）。
     try {
       const igCfg = cfg.security?.identityGuard || {}
-      if (igCfg.enabled !== false && !force) {
+      if (igCfg.enabled !== false) {
         const text = Array.isArray(message)
           ? message.filter((s) => s && s.type === 'text').map((s) => String(s.data?.text || '')).join('')
           : String(message || '')
@@ -639,8 +641,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
         return null
       }
     }
-    if (force) {}
-    else if (!cfg.enabled) {
+    // 全局闸：force 只豁免总开关（/on 自救通道），不豁免试运行——试运行就是不真发。
+    if (!force && !cfg.enabled) {
       log.info(`总开关关着，没发 → ${chatId}：${note}`)
       return null
     }
