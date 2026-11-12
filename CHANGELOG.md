@@ -8,6 +8,18 @@
 
 ---
 
+## 1.4.0-test.20261112.1
+
+- **记忆档案与模型学习分层**：`memory-archive` 独立承担作用域 CRUD、召回和持久化，不依赖 LLM/extractor；模型导入、人物画像、反思、提炼与定时整理统一生命周期，忽略 abort 的模型流也不会卡住 dispose。
+- **派生能力同级模块化**：新增独立 reflection/style 模块；自动经验与风格记录来源指纹和版本，reload 后旧派生内容停止注入，手工内容保留，关闭模块不影响事实记忆。
+- **人物画像来源失效**：自动画像记录来源事实 ID 与版本；事实增删改、替代或档案重载后旧画像失效，模型在途竞态不写回旧结果。
+- **蒸馏所有权归一**：目标、历史画像、历史学习、注入、全部旧路由和派生人设卡统一归 distill 模块；旧 memory 数据只读迁移，历史学习取消后零迟到回写。
+- **证据与状态可靠性**：chatlog 作为蒸馏主证据源，支持主人自身发言、群 ID 精确过滤和证据漏斗；pipeline/slang 状态支持有效备份恢复，主备不可恢复时停止自动任务并保留损坏原件。
+- **生命周期验收**：真实 memory + reflection/style/distill 连续 20 轮启停，在途任务全部退出、计时器归零、process 监听器不增长。
+- 本版不包含旧内核删除；fnOS 真机、owner 放行、回滚演练及 72 小时观察门禁继续有效。
+
+---
+
 ## 1.3.66-test.20261112.3
 
 - **回修 1.3.66-test.20261112.1 给压缩摘要请求加的 `reasoningEffort: 'off'`**：对同时声明 `compat.forceAdaptiveThinking: true` 和 `thinkingLevelMap.off: null` 的模型（如 MiniMax-M3.1-Flash），`off` 会被翻成 `thinking.type = "disabled"`，服务端直接拒绝 —— `400 invalid params, model "..." requires adaptive thinking; thinking.type="disabled" (including reasoning.effort=none) is not allowed (2013)`，压缩请求 100% 失败；而 `pickReasoningEffort` 只看 `thinkingLevelMap`、认为 `off` 可用，于是原样下发。改用**最低思考档 `low`**：实测该档 `thinking_tokens = 0`（等于不思考，又不触发 400），`low` / `medium` / 默认档实测思考 token 分别为 0 / 40 / 155，摘要质量一致。
