@@ -31,7 +31,7 @@ test('聊天流水：调用方漏昵称时按主人名或 uid 兜底，不再写
       dsh: {}, getConfig: () => cfg, log, onebot: {}, stickers: {}, tts: {},
       chatLog: createChatLogApi(createChatLog({ getConfig: () => cfg, log })),
       buildTools: () => [], contextProviders: [], onActivity: () => {}, memoryScore: () => 0,
-      onCommand: async () => null, isMuted: () => false, moodEffects: () => null,
+      onCommand: async () => null, isMuted: () => false,
       localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,
     })
     hub.logChat('private:10000001', '', '私回答案', '10000001')

@@ -33,7 +33,7 @@ export function buildPurposePrompt({
   lines.push(`现在是 ${localDateKey(now)} ${clockText(clock.getHours(), clock.getMinutes())}（周${week}）。没有人叫你，也不是在回复谁——这是你自己想找${owner}说话的一刻。`);
   lines.push('');
 
-  // 驱动状态不是「心情报告」，只是告诉她此刻更容易被什么打动。
+  // 驱动状态不是情绪播报，只是告诉她此刻更容易被什么打动。
   const driveQuery = normalizeDrives(drives);
   const topNeeds = PURPOSE_NEEDS
     .map((need) => ({ need, score: driveQuery[need] || 0 }))

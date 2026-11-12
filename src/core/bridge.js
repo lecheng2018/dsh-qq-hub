@@ -41,7 +41,7 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
       return {
         ok: true, version, apiVersion,
         online: o.onebot.state === 'connected', login: o.onebot.login,
-        enabled: o.config.enabled, dryRun: o.config.dryRun, mood: o.mood?.label || '',
+        enabled: o.config.enabled, dryRun: o.config.dryRun,
         modules: mods.status().map((m) => ({ id: m.id, name: m.name, running: m.running })),
       }
     },
@@ -106,7 +106,7 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
       }),
       defineTool({
         name: 'qq_hub_status',
-        description: '看看 QQ 上的「大肥鱼」现在的状态：在不在线、心情、开着哪些模块。',
+        description: '看看 QQ 上的「大肥鱼」现在的状态：在不在线、开着哪些模块。',
         execute: async () => ops.info(),
       }),
       defineTool({
