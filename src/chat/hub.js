@@ -827,8 +827,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       ? { group_id: Number(tgt.id), file: src, name: label }
       : { user_id: Number(tgt.id), file: src, name: label }
     // PR-1：开旗态文件上传转进统一 Outbox（receipt optional：upload 回执是 file_id 不是 message_id）
+    // 带上本轮的票：上传往往发生在 deliver() 内部（语音条、图片、发文件），必须并入本轮链尾。
+    // 不传票的话它会挂在「本轮闸」上，而本轮正 await 它 —— 自己等自己的死锁。
     const callFile = egressRef?.current
-      ? (p) => egressRef.current.deliver({ action, params: p, opts: { timeoutMs: FILE_TIMEOUT_MS }, chatKey: chatId, receipt: 'optional', note: `[文件] ${label}`, sourceModuleId: 'hub' })
+      ? (p) => egressRef.current.deliver({ action, params: p, opts: { timeoutMs: FILE_TIMEOUT_MS }, chatKey: chatId, receipt: 'optional', note: `[文件] ${label}`, sourceModuleId: 'hub', _outboxTicket: deliveryContext.getStore()?.ticket })
       : (p) => onebot.call(action, p, { timeoutMs: FILE_TIMEOUT_MS })
     const srcLabel = external ? (src.startsWith('base64://') ? 'base64' : '外部地址') : size < 1024 ? size + ' B' : Math.round(size / 1024) + ' KB'
     try {
@@ -2066,6 +2068,11 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
       return false
     },
     // PR-1（ADR-0002）：开旗态把非 hub 主链的发信转进 Outbox；关旗态透传 onebot.call。
+    /**
+     * 本轮（deliver 期间）的投递票。Outbox 拿它把轮内所有 request（气泡、上传、戳一戳…）
+     * 并到本轮链尾；不并就是「轮内请求等本轮闸」的自锁。轮外调用返回 null。
+     */
+    currentTicket: () => deliveryContext.getStore()?.ticket || null,
     deliverRaw: (args = {}) => {
       const eg = egressRef?.current
       const chatKey = args.chatKey || (args.params?.group_id ? `group:${args.params.group_id}` : args.params?.user_id ? `private:${args.params.user_id}` : '')
