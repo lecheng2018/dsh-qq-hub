@@ -137,9 +137,10 @@ export default {
     api.route('/distill/history', async (req) => {
       if (!memory.distillHistory) return { ok: false, message: '记忆库没在跑' }
       const q = http.query(req) || {}
-      const h = memory.distillHistory({ group: q.group || '' })
+      const h = memory.distillHistory({ gid: q.group || '' })
       return {
         ok: true, dir: h.dir, sessions: h.sessions, total: h.total,
+        chatlogDays: h.chatlogDays || 0, chatlogLines: h.chatlogLines || 0,
         from: h.from, to: h.to, speakers: h.speakers,
       }
     })
