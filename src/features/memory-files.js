@@ -237,6 +237,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             scope: scope,
             text: e.text || '',
             at: typeof e.at === 'number' ? e.at : Date.now(),
+            origin: e.origin || undefined,
+            sourceFactIds: e.sourceFactIds || undefined,
+            sourceRev: e.sourceRev || undefined,
+            stale: e.stale || undefined,
+            staleAt: e.staleAt || undefined,
           }
         } else if (kind === 'insight') {
           // 还原 memory.js 期望的键名：私聊对应 qq:<uid>，群聊对应 group:<gid>
@@ -409,6 +414,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           aboutName: p.name,
           text: p.text,
           at: p.at,
+          origin: p.origin || undefined,
+          sourceFactIds: p.sourceFactIds || undefined,
+          sourceRev: p.sourceRev || undefined,
+          stale: p.stale || undefined,
+          staleAt: p.staleAt || undefined,
         })
       }
 
