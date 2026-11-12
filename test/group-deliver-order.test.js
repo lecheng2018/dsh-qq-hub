@@ -68,7 +68,6 @@ function makeHub(cfg, { tts, egressRef, stickers, hooks } = {}) {
     onebot,
     stickers: stickers || { match: () => null, segmentFor: () => null, pickForReply: () => null },
     tts: tts || { speak: async () => ({ file: wavFile, engine: 'test' }) },
-    moodEffects: () => ({ sticker: 1, voice: 1, delay: 0, chatty: 1 }),
     buildTools: () => [],
     egressRef,
     hooks,

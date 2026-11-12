@@ -235,7 +235,6 @@ const DEFAULTS_RAW = {
     // 早安 / 晚安：到点必发一次（不参与随机间隔抽签），每天每种只发一次
     greeting: { enabled: true, morning: '08:00', night: '23:00' },
   },
-  mood: { enabled: true, halfLifeHours: 3, judge: false }, // judge：每轮聊完用模型判一次心情（更准，每轮多一次很短的调用）；关着用关键词
   memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
@@ -462,8 +461,6 @@ export function normalize(raw) {
   q.ownerChance = num(q.ownerChance, 0.7, 0, 1)
   q.maxPerDay = num(q.maxPerDay, 8, 0, 50)
   q.intervalMin = num(q.intervalMin, 30, 5, 1440)
-  c.mood.halfLifeHours = num(c.mood.halfLifeHours, 3, 0.25, 72)
-  c.mood.judge = bool(c.mood.judge, false)
   for (const k of ['tts', 'image', 'asr']) c.local[k] = bool(c.local[k], false)
   const b = c.bili
   Object.assign(b, splitBiliCookie(b))
@@ -507,7 +504,6 @@ export function normalize(raw) {
   // 1.3.63：按头衔过滤整条下线（很多 bot 根本不挂头衔/普通号查不到头衔，形同虚设）；
   // 防 bot 对聊改由鱼名单 + 乒乓规则负责。清掉旧配置里的死键。
   delete c.titleFilter
-  delete c.mood.maxInjectPerDay // 旧版的「每天最多提醒几次」，现在心情明显时每轮都会带上
   c.snowluma.webuiPort = num(c.snowluma.webuiPort, 5099, 1, 65535)
   // 老配置只有一个 consolidateAt：换成两个时间点（它 + 12 小时后）
   if (!Array.isArray(raw?.memory?.consolidateTimes) && raw?.memory?.consolidateAt) {
@@ -610,11 +606,12 @@ export function normalize(raw) {
   c.bridge.http = bool(c.bridge.http, false)
   c.bridge.token = String(c.bridge.token || '')
   if (!['whitelist', 'owner'].includes(c.bridge.allowTargets)) c.bridge.allowTargets = 'whitelist'
-  // 1.4.0-beta.4：mood / song 功能整体移除。deepMerge 会把老配置里的键原样带进来，
-  // 只删 DEFAULTS 不够 —— 残留的 song.neteaseCookie 会绕过已删除的 SECRETS 脱敏条目
+  // 1.4.0-beta.4 起部分功能整体移除。deepMerge 会把老配置里的键原样带进来，
+  // 只删 DEFAULTS 不够 —— 残留的 song / neteaseCookie 会绕过已删除的 SECRETS 脱敏条目
   // 明文回传面板。这里显式丢掉。
   delete c.song
   delete c.local.song
+  delete c.mood
   return c
 }
 

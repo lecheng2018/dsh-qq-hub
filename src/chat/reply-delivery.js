@@ -4,7 +4,7 @@ import { parseReply, bubbleDelay, replyRules } from './reply.js'
 // 一轮回复的业务编排：拆条、群聊合并、富媒体与同会话投递顺序。
 // 物理发送由注入的发送函数进入统一 Outbox，本模块不持有网关。
 export function createReplyDelivery({
-  getConfig, log, hooks, reportTurns, groups, stickers, mood, interaction,
+  getConfig, log, hooks, reportTurns, groups, stickers, interaction,
   sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
   logChat, onActivity, onDelivered, outbox, isCaptured, sleep, deliveryContext = new AsyncLocalStorage(),
 }) {
@@ -70,7 +70,7 @@ export function createReplyDelivery({
     const texts = items.filter((i) => i.kind === 'text')
     if (cfg.voice?.enabled && items.length === texts.length && texts.length > 0) {
       const all = texts.map((t) => t.value).join('，')
-      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance * mood().voice) items = [{ kind: 'voice', value: all }]
+      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
     }
     const groupLimit = Math.max(1, Math.min(3, Number(rules.maxBubbles) || 3))
     let needsGroupPacking = false
@@ -98,7 +98,7 @@ export function createReplyDelivery({
       log.info(`${chatId}：回复超过 ${groupLimit} 条，按原顺序合并相邻气泡`)
     }
     // 按概率补一张表情（群里已经有两条以上就不补了）
-    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
+    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
@@ -165,7 +165,7 @@ export function createReplyDelivery({
       else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
       else if (it.kind === 'image') await sendImage(chatId, it.value, replyId, userId)
       else if (it.kind === 'mixed') await sendMixed(chatId, it.parts, replyId, missedAt, userId)
-      if (i < items.length - 1 && !opts.simulate) await wait(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : '') * mood().delay)
+      if (i < items.length - 1 && !opts.simulate) await wait(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
     }
     if (opts.simulate) return items
     if (inGroup) {
