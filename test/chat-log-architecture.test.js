@@ -20,8 +20,6 @@ test('host owns retention while modules receive the independent, narrow chatLog 
 
   const modules = [
     'src/modules/memory/index.js',
-    'src/modules/distill/index.js',
-    'src/modules/slang/index.js',
     'src/modules/token-guardian/index.js',
     'src/modules/purpose/index.js',
     'src/modules/diary/index.js',

@@ -21,32 +21,8 @@ function Mood({ st, draft, setDraft, toast }) {
   const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
   const times = draft.memory.consolidateTimes || []
   const setTime = (i, v) => { const t = times.slice(); t[i] = v; setDraft(setPath(draft, 'memory.consolidateTimes', t)) }
-  // 蒸馏用模型选择器（1.3.66）：蒸馏要纯 JSON 输出，思考型模型容易写成报告正文。
-  // 选项来自 /models（和模型页同一份清单），空值 = 跟随主模型。
-  const [modelList, setModelList] = useState(null)
-  const modelKey = (m) => m.provider + '::' + m.model
-  const distillModelValue = () => {
-    const dm = (draft.memory && draft.memory.distillModel) || {}
-    return dm.provider && dm.model ? dm.provider + '::' + dm.model : ''
-  }
-  const distillModelOptions = () => {
-    const base = [{ value: '', label: '跟随主模型', desc: '上面「聊天用的模型」' }]
-    const nameCount = {}
-    for (const m of (modelList || [])) nameCount[m.name] = (nameCount[m.name] || 0) + 1
-    const opts = base.concat((modelList || []).map((m) => ({
-      value: modelKey(m),
-      label: nameCount[m.name] > 1 ? m.name + '（' + m.model + '）' : m.name,
-      desc: m.provider,
-      group: m.provider,
-    })))
-    const cur = distillModelValue()
-    return cur && !opts.some((o) => o.value === cur)
-      ? opts.concat([{ value: cur, label: cur.split('::').slice(1).join('::'), desc: '（DSH 里没找到）' }])
-      : opts
-  }
   const memOn = modOn(st, 'memory')
   useEffect(() => { if (memOn) { load(''); loadIns() } }, [memOn])
-  useEffect(() => { if (!memOn) return; get('/models').then((r) => setModelList(r.list || [])).catch(() => setModelList([])) }, [memOn])
   useEffect(() => { if (!memOn) return; const t = setTimeout(() => load(q), 250); return () => clearTimeout(t) }, [q])
   const last = st.memory && st.memory.lastConsolidate
   const moodCard = !modOn(st, 'mood') ? h(ModOff, { name: '心情' }) : h(Card, { title: '心情', right: f.sw('mood.enabled'), desc: '被夸、被哄、被凶都会影响她的心情（对她说的话、主人的话影响更大），过一阵子慢慢回到平常。心情好时她话多、更爱发表情和语音、回得快、群里更爱插话；心情差时话少、回得慢、少发表情，还会带点小脾气。' },
@@ -66,16 +42,6 @@ function Mood({ st, draft, setDraft, toast }) {
     h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
       ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
         ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
-    h(Card, { title: '蒸馏群友（学一个人的说话样子）', desc: '指定某个群里的某一个人当数据源，学他的说话方式、性格、语气。加完可以点「从历史学」立刻从他**过去说过的话**里提炼（DSH 会话记录里存着群友原话，比聊天流水留得久），不用干等他再聊；以后每次整理记忆也会拿他最近的原话更新画像。**学成后自动生成一张该群专属的「语感人设卡」**＝她原来的人设底卡 + 借来的说话方式段（人设页可见；你的底卡一个字不动，那群你手动指定过别人设卡的话蒸馏不抢槽位）。借的是说话方式，不冒充人；他近期原话不足 15 句就不学。' },
-      h(DistillPanel, { toast, onChanged: () => { load() } }),
-      h(Row, { label: '蒸馏用模型', hint: '留空跟随主模型。蒸馏要输出结构化 JSON：思考型模型（思考关不掉的那种）会把额度花在分析正文上，回包变成 Markdown 报告。主模型是这类、又老是学到空画像时，在这儿换一个非思考的模型。' },
-        h(Select, { value: distillModelValue(), width: 260, options: distillModelOptions(), onChange: (v) => {
-          const [p, ...m] = v.split('::')
-          setDraft(setPath(draft, 'memory.distillModel', v ? { provider: p, model: m.join('::') } : { provider: '', model: '' }))
-        } }))),
-    h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang'), desc: '和上面不同：这个学的是**词**，不是人。从每个群的聊天里找这个群在用的黑话、梗、圈内称呼——词频统计挑候选（不花钱），模型判断哪些真是黑话、什么意思（每群每天一次调用）。她和这个群聊天时会看到黑话本，听懂了就用，不会硬套。' },
-      (st.config.memory || {}).slang !== true ? h('div', { className: 'ab-muted ab-small' }, '开关关着：现在只统计、不判断也不写库。打开后下次整理记忆时开始学。') : null,
-      h(SlangBook, { toast, onChanged: () => { load() } })),
     h(Card, { title: '说话方式', desc: '聊久了潜移默化学到的：每个人的说话习惯（她会自然地贴近一点），和她自己慢慢养成的说法。不会变成另一个人，只是越来越像「你们的」大肥鱼。' },
       h(StyleEditor, { k: 'self', label: '她自己养成的说法', list: styles.self || [], toast, onSaved: loadIns }),
       Object.keys(styles).filter((k) => k !== 'self').length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没学到别人的说话习惯。整理记忆时会跟着相处经验一起总结（显示在上面每个人的相处经验下面）。') : null),
@@ -295,191 +261,6 @@ function InsightCard({ p, toast, onSaved, style }) {
     h(StyleEditor, { k: p.key, label: '说话方式', list: style || [], toast, onSaved }))
 }
 
-/** 群黑话本（1.3.58）：每个群一份，和相处经验分开存、分开管。
- *  一行一条「词＝意思」，可直接改、直接删；整理时自动学到的也落在这里。 */
-function SlangBook({ toast, onChanged }) {
-  const [groups, setGroups] = useState(null)   // 全部群（含没学到词的）
-  const [err, setErr] = useState('')           // 接口失败的原因（空态文案要分清是谁的锅）
-  const [sel, setSel] = useState('')           // 当前选中的群号
-  const [busy, setBusy] = useState('')
-  const [editing, setEditing] = useState({})   // gid → 编辑中的文本
-  const load = () => get('/slang').then((r) => {
-    setErr('')
-    setGroups(r.groups || [])
-    setSel((cur) => cur || (r.groups || []).find((g) => g.list.length)?.gid || (r.groups || [])[0]?.gid || '')
-  }).catch((e) => { setErr(e.message || String(e)); setGroups([]) })
-  useEffect(() => { load() }, [])
-  const cur = (groups || []).find((g) => String(g.gid) === String(sel))
-  const label = (g) => (g.name ? g.name + '（' + g.gid + '）' : '群 ' + g.gid)
-  const textOf = (gid, list) => editing[gid] !== undefined ? editing[gid] : list.map((x) => x.word + '＝' + x.meaning).join('\n')
-  const saveOne = async (gid, list) => {
-    setBusy('save')
-    try {
-      const r = await post('/slang/save', { gid, text: textOf(gid, list) })
-      toast(r.message || '保存好了', r.ok ? 'ok' : 'err')
-      setEditing({ ...editing, [gid]: undefined })
-      await load(); onChanged && onChanged()
-    } finally { setBusy('') }
-  }
-  const delOne = async (gid, item) => {
-    if (!window.confirm('删掉这条黑话？\n\n' + item.word + '＝' + item.meaning)) return
-    setBusy('del')
-    try {
-      const r = await post('/slang/delete', { gid, id: item.id })
-      toast(r.message || '删掉了', r.ok ? 'ok' : 'err')
-      await load(); onChanged && onChanged()
-    } finally { setBusy('') }
-  }
-  if (groups === null) return h('div', { className: 'ab-muted ab-small' }, '黑话本读着呢…')
-  if (err) return h('div', { className: 'ab-note err' }, '黑话本读不到：' + err + '。多半是插件代码刚更新但还没重启——重启 dsh web 后强刷本页。')
-  if (!groups.length) return h('div', { className: 'ab-muted ab-small' }, '群白名单是空的，先在「权限」页加群。')
-  return h('div', null,
-    // 群选择器：白名单 + 已学过词的群（去重）
-    h(Row, { label: '选群' },
-      h('select', { className: 'ab-input', style: { maxWidth: 260 }, value: sel, onChange: (e) => setSel(e.target.value) },
-        groups.map((g) => h('option', { key: g.gid, value: g.gid }, label(g) + (g.list.length ? '（' + g.list.length + ' 词）' : '（还没学词）'))))),
-    !cur ? null : h('div', { style: { marginTop: 4 } },
-      cur.list.length
-        ? h('div', { className: 'ab-list', style: { marginBottom: 6 } }, cur.list.map((x) => h('div', { key: x.id, className: 'ab-li', style: { padding: '3px 0' } },
-            h('div', { className: 'body ab-small' }, h('b', null, x.word), ' ＝ ', x.meaning),
-            h(Btn, { small: true, kind: 'ghost', disabled: busy === 'del', onClick: () => delOne(cur.gid, x) }, '删'))))
-        : h('div', { className: 'ab-muted ab-small', style: { marginBottom: 6 } }, '这个群还没学到词。打开开关后聊几天，整理时她会挑；也可以直接在下面手填。'),
-      h('div', { className: 'ab-flex', style: { alignItems: 'flex-start', gap: 8 } },
-        h('textarea', {
-          className: 'ab-textarea', style: { minHeight: 56, fontFamily: 'inherit', flex: 1 },
-          value: textOf(cur.gid, cur.list),
-          placeholder: '一行一个词，写成「词＝意思」，例如：面包片＝新出的平民配装',
-          onChange: (e) => setEditing({ ...editing, [cur.gid]: e.target.value }),
-        }),
-        h(Btn, { small: true, kind: 'primary', disabled: busy === 'save', onClick: () => saveOne(cur.gid, cur.list) }, busy === 'save' ? '…' : '保存'))))
-}
-
-/** 蒸馏群友（1.3.59）：指定某个群的某个人当数据源，学他的说话方式/性格/语气。
- *  和「群黑话本」不同——那个学词，这个学人。 */
-function DistillPanel({ toast, onChanged }) {
-  const [list, setList] = useState(null)
-  const [busy, setBusy] = useState('')
-  const [form, setForm] = useState({ gid: '', uid: '', name: '' })
-  const [hist, setHist] = useState(null)   // 会话历史扫描结果
-  const [histErr, setHistErr] = useState('')
-  const load = () => get('/distill/list').then((r) => setList(r.list || [])).catch(() => setList([]))
-  useEffect(() => { load() }, [])
-  const add = async () => {
-    setBusy('add')
-    try {
-      const r = await post('/distill/add', form)
-      toast(r.message || '加上了', r.ok ? 'ok' : 'err')
-      if (r.ok) { setForm({ gid: '', uid: '', name: '' }); await load(); onChanged && onChanged() }
-    } finally { setBusy('') }
-  }
-  const scanHist = async () => {
-    setBusy('scan')
-    try {
-      const r = await get('/distill/history' + (form.gid ? '?group=' : ''))
-      setHistErr(r.ok === false ? (r.message || '读不到') : '')
-      setHist(r.ok === false ? null : r)
-    } catch (e) { setHistErr(e.message || String(e)); setHist(null) } finally { setBusy('') }
-  }
-  const learnHist = async (t) => {
-    setBusy('hist:' + t.gid + t.uid)
-    try {
-      const r = await post('/distill/from-history', { gid: t.gid, uid: t.uid, name: t.name })
-      toast(r.message || '学完了', r.ok ? 'ok' : 'err')
-      if (r.ok) { await load(); onChanged && onChanged() }
-    } finally { setBusy('') }
-  }
-  const remove = async (t) => {
-    if (!window.confirm('不再学「' + (t.name || t.uid) + '」了？学到的画像也会一起清掉。')) return
-    setBusy('rm:' + t.gid + t.uid)
-    try {
-      const r = await post('/distill/remove', { gid: t.gid, uid: t.uid })
-      toast(r.message || '去掉了', r.ok ? 'ok' : 'err')
-      await load(); onChanged && onChanged()
-    } finally { setBusy('') }
-  }
-  const line = (label, arr) => (arr && arr.length)
-    ? h('div', { style: { marginBottom: 3 } }, h('span', { className: 'ab-muted ab-small' }, label + '：'), h('span', { className: 'ab-small' }, arr.join('；')))
-    : null
-  // 1.3.63 起画像字段换成 exchanges/syntax/catchphrases/rhetoric/never，
-  // 旧渲染只看 style/tone/avoid/samples，导致面板上「只剩性格一行」（1.3.66 修）。
-  // 这里新字段优先、旧字段兜底：老存量画像照旧能看，新学的一个都不漏。
-  const block = (label, arr) => (arr && arr.length)
-    ? h('div', { style: { marginBottom: 4 } },
-        h('div', { className: 'ab-muted ab-small', style: { marginBottom: 2 } }, label + '：'),
-        ...arr.map((x, i) => h('div', { key: i, className: 'ab-small', style: { whiteSpace: 'pre-wrap', marginLeft: 8 } }, '· ' + x)))
-    : null
-  // 原话：旧存量在 samples；新画像的逐字原话藏在 exchanges 的「答：」里，取出来顶上，
-  // 否则新学成的画像在面板上连一句原话都看不到（1.3.66 修）。用纯字符串切分，不做正则执行。
-  const ANSWER_MARK = '答：'
-  const rawQuotes = (p) => {
-    if (!p) return []
-    if (Array.isArray(p.samples) && p.samples.length) return p.samples
-    const out = []
-    for (const x of p.exchanges || []) {
-      const s = String(x || '')
-      const at = s.indexOf(ANSWER_MARK)
-      if (at < 0) continue
-      let q = s.slice(at + ANSWER_MARK.length).trim()
-      if (q.length > 1 && q[0] === '“') q = q.slice(1)
-      if (q.length && q[q.length - 1] === '”') q = q.slice(0, -1)
-      q = q.split(/\s+/).join(' ').trim().slice(0, 80)
-      if (q) out.push(q)
-    }
-    return out.slice(0, 3)
-  }
-  return h('div', null,
-    h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 6, flexWrap: 'wrap' } },
-      h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '群号', value: form.gid, onChange: (e) => setForm({ ...form, gid: e.target.value.replace(/\D/g, '') }) }),
-      h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '他的 QQ 号', value: form.uid, onChange: (e) => setForm({ ...form, uid: e.target.value.replace(/\D/g, '') }) }),
-      h('input', { className: 'ab-input sm', style: { width: 110 }, placeholder: '怎么称呼（可选）', value: form.name, onChange: (e) => setForm({ ...form, name: e.target.value }) }),
-      h(Btn, { small: true, kind: 'primary', disabled: busy === 'add' || !form.gid || !form.uid, onClick: add }, busy === 'add' ? '…' : '开始学'),
-      h(Btn, { small: true, kind: 'ghost', disabled: busy === 'card', onClick: async () => {
-        setBusy('card')
-        try { const r = await post('/distill/card/refresh', { gid: form.gid || (list || [])[0]?.gid }); toast(r.ok ? `已写成群人设卡（${r.cardId}），人设页可查；底卡没动` : (r.message || '没写成'), r.ok ? 'ok' : 'err') } finally { setBusy('') }
-      } }, busy === 'card' ? '…' : '写进群人设卡')),
-    h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-      h(Btn, { small: true, kind: 'ghost', disabled: busy === 'scan', onClick: scanHist }, busy === 'scan' ? '翻着呢…' : '翻一翻聊天历史'),
-      hist ? h('span', { className: 'ab-muted ab-small' },
-        '历史里 ' + hist.total + ' 条发言' +
-        (hist.chatlogDays ? '（' + hist.chatlogDays + ' 天聊天流水 ' + hist.chatlogLines + ' 条 + ' : '（') + hist.sessions + ' 个会话' +
-        (hist.from ? '，' + new Date(hist.from).toLocaleDateString() + ' → ' + new Date(hist.to).toLocaleDateString() : '') + '）' +
-        (hist.speakers && hist.speakers.length ? '；说得最多的：' + hist.speakers.slice(0, 3).map((x) => (x.name || x.uid) + ' ' + x.count + ' 句').join('、') : '')) : null,
-      histErr ? h('span', { className: 'ab-small', style: { color: '#e08a8a' } }, histErr) : null),
-    list === null ? h('div', { className: 'ab-muted ab-small' }, '读着呢…')
-      : list.length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没有指定要学的人。填群号和 QQ 号，下次整理记忆时开始学他说话的样子（他当天说得太少就不学）。')
-        : list.map((t) => h('div', { key: t.gid + t.uid, className: 'ab-li', style: { padding: '8px 0' } },
-            h('div', { className: 'ab-flex', style: { marginBottom: 4 } },
-              h('b', { className: 'ab-small' }, t.name || t.uid),
-              h('span', { className: 'ab-muted ab-small' }, ' 群 ' + t.gid + ' · QQ ' + t.uid),
-              h('div', { className: 'ab-spacer' }),
-              h(Btn, { small: true, kind: 'ghost', disabled: busy === 'hist:' + t.gid + t.uid, onClick: () => learnHist(t) },
-                busy === 'hist:' + t.gid + t.uid ? '学呢…' : '从历史学'),
-              h(Btn, { small: true, kind: 'ghost', disabled: busy === 'rm:' + t.gid + t.uid, onClick: () => remove(t) }, '不学了')),
-            t.profile
-              ? h('div', null,
-                  (t.profile.samples || []).length
-                    ? h('div', { style: { marginBottom: 3 } },
-                        h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
-                        h('span', { className: 'ab-small' }, t.profile.samples.map((x) => '「' + x + '」').join(' ')))
-                    : rawQuotes(t.profile).length
-                      ? h('div', { style: { marginBottom: 3 } },
-                          h('span', { className: 'ab-muted ab-small' }, '他的原话：'),
-                          h('span', { className: 'ab-small' }, rawQuotes(t.profile).map((x) => '「' + x + '」').join(' ')))
-                      : null,
-                  // 新画像（1.3.63+）：最强信号排在前面，顺序与注入/人设卡渲染一致
-                  block('他怎么接话', t.profile.exchanges),
-                  line('口头禅', t.profile.catchphrases),
-                  line('句子架构', t.profile.syntax),
-                  line('修辞招式', t.profile.rhetoric),
-                  block('性格', t.profile.persona),
-                  line('他从不', t.profile.never),
-                  // 旧画像兜底（老存量，新学习不再产出）
-                  line('说话方式', t.profile.style),
-                  line('语气', t.profile.tone),
-                  line('他不会', t.profile.avoid),
-                  h('div', { className: 'ab-muted ab-small' }, '依据 ' + (t.profile.evidenceCount != null ? t.profile.evidenceCount : (typeof t.profile.samples === 'number' ? t.profile.samples : (t.profile.samples || []).length)) + ' 句原话 · ' + (t.profile.updatedAt ? new Date(t.profile.updatedAt).toLocaleString() : '')))
-              : h('div', { className: 'ab-muted ab-small' }, '还没学到。等他这个群聊够一天，整理记忆时会自动学。'))))
-}
 
 function MemoryRow({ m, onChanged, toast }) {
   const [edit, setEdit] = useState(false)
@@ -503,5 +284,5 @@ function MemoryRow({ m, onChanged, toast }) {
 
 export {
   Mood, ProfilesCard, ProfileRow, RecallLog, OwnerMigrate, MemoryImport,
-  StyleEditor, InsightCard, SlangBook, DistillPanel, MemoryRow, SOURCE
+  StyleEditor, InsightCard, MemoryRow, SOURCE
 }
