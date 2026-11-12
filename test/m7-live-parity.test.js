@@ -64,9 +64,9 @@ const groupEv = (text = '在吗') => ({
 })
 
 /** 图片 URL 秒回 PNG 字节（同 m4 真机缺陷 10 的桩）；不桩的话新核的 15s 下载超时会拖死等待窗口。 */
-function stubPngFetch() {
+function stubPngFetch(urls = ['x/y.png']) {
   const orig = globalThis.fetch
-  globalThis.fetch = async (url, opt) => String(url).includes('x/y.png')
+  globalThis.fetch = async (url, opt) => urls.some((part) => String(url).includes(part))
     ? { ok: true, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer }
     : orig(url, opt)
   return () => { globalThis.fetch = orig }
@@ -711,4 +711,56 @@ test('会话 reset：旧 session 的上下文、人格和工具缓存被回收',
     assert.equal(core.resetChat(`private:${OWNER}`), true)
     assert.equal(core.stats().cacheEntries, 0, 'reset 后旧 session 缓存必须清理')
   } finally { await core.dispose(); await mock.close() }
+})
+
+// —— 群聊图片回归：没触发回复的那条表情，必须在下一段触发轮里作为图片块交给模型 ——
+// 真机 2026-11-12：群里先发图、再 @ 她问「没看到表情包吗」，新核只把缓冲里的
+// 「（图片/表情）」文字交给模型，触发轮 members 又没有图，于是她回复「具体啥样看不到」。
+test('群聊补图：群闸放过的图片随下一段上下文登记成附件', async () => {
+  const restore = stubPngFetch(['x/sticker.png'])
+  const { core, dsh, mock } = await fixture({ brain: async () => '看到表情了' })
+  try {
+    // 纯图没有 @/唤醒词，群闸不触发回合；图必须留在群缓冲里。
+    await core.dispatchLegacyEvent({
+      ...groupEv(''), message_id: 818101,
+      message: [{ type: 'image', data: { url: 'https://x/sticker.png', sub_type: 1, summary: '[动画表情]' } }],
+    })
+    await sleep(400)
+    assert.equal(dsh.turns.length, 0, '纯图表情不该单独触发群回合')
+    await core.dispatchLegacyEvent({
+      ...groupEv('没看到表情包吗'), message_id: 818102,
+    })
+    await sleep(700)
+    const turn = dsh.turns.at(-1)
+    assert.match(String(turn?.userText), /图片\/表情/, '群缓冲仍应保留媒体占位文字')
+    assert.ok(turn?.contentTypes.includes('image'), `图片块没进触发轮：${JSON.stringify(turn?.contentTypes)}`)
+    assert.equal(turn?.images, 1, '同一张图不重复投喂')
+    assert.doesNotMatch(String(turn?.userText), /没能把它下载下来|没能把它登记成附件/, '图片应下载并登记成功')
+  } finally { restore(); await core.dispose(); await mock.close() }
+})
+
+test('群聊补图：触发轮自带图片时按地址去重，最多 4 张', async () => {
+  const restore = stubPngFetch(['x/a.png', 'x/b.png', 'x/c.png', 'x/d.png', 'x/e.png'])
+  const { core, dsh, mock } = await fixture()
+  try {
+    for (let i = 0; i < 5; i++) {
+      await core.dispatchLegacyEvent({
+        ...groupEv(''), message_id: 819100 + i,
+        message: [{ type: 'image', data: { url: `https://x/${'abcde'[i]}.png`, sub_type: 1 } }],
+      })
+    }
+    await sleep(400)
+    // 第 6 条 @ 她，同时重复带上第一张图：members 与群缓冲都有它。
+    await core.dispatchLegacyEvent({
+      ...groupEv('看看这些'), message_id: 819200,
+      message: [
+        { type: 'at', data: { qq: Number(BOT) } },
+        { type: 'text', data: { text: ' 看看这些' } },
+        { type: 'image', data: { url: 'https://x/a.png', sub_type: 1 } },
+      ],
+    })
+    await sleep(700)
+    const turn = dsh.turns.at(-1)
+    assert.equal(turn?.images, 4, `应去重且封顶 4 张，实际 ${turn?.images}`)
+  } finally { restore(); await core.dispose(); await mock.close() }
 })
