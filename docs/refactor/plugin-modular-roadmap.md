@@ -94,6 +94,7 @@ host（唯一装配与生命周期）
 - P3a 提炼批次幂等：每个 80 行块以聊天、块位置和输入指纹确定批次 ID；`done` 跳过、`failed` 重试、`running/pending` 待核对，全部成功后才推进日进度。状态保存在既有 state.json，部分事实提交异常不得当普通模型失败盲重试。extractor 独立、完整生命周期与其他派生学习不在该子切片。
 - P3b extractor 独立：模型请求、JSON 解析和提交计数迁到 memory-extractor；新增、补充、过时替代仍通过 memory 的 commit 边界进入唯一档案。模块不接触档案文件，部分提交异常保留 factsCommitted。extractLines/consolidate 调度、archive 契约收窄和其他模型入口生命周期不在该子切片。
 - P3c extractLines 与批次状态机独立：extractor 负责分块、状态转换、反思调用；memory 仅提供 load/save 状态适配和 reflect，成功/失败/待核对语义不变。consolidate 的日程、遗忘与人物档案调度仍在 memory，archive 契约和其他模型入口生命周期不在该子切片。
+- P3d consolidate 独立：extractor 负责整理日程、来源游标、部分失败、遗忘和人物档案调度；memory 提供健康检查、load/save、learnSelfStyle/buildProfile 等适配器，公开入口窄转发。archive 契约和其他模型入口生命周期不在该子切片。
 - 范围：先收窄 archive 契约，再将 extractFacts/extractLines/consolidate 调度迁到独立 extractor。存储与召回不 import LLM，不依赖聊天 hub；scope 纯函数继续共用。
 - 必须同时解决：在 P1 的来源指纹和完整 80 行分批基础上，增加批次级幂等提交与事实/进度一致性；不能只搬动函数。批次 checkpoint 已落地，extractor 独立与全模型入口生命周期仍需后续完成。
 - 生命周期：所有模型入口受同一任务管理约束；reload/dispose 取消并等待在途任务终结，迟到结果不能写。当前代际拦截只是防线，不等于已覆盖全部画像/导入/历史学习入口。

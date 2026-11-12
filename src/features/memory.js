@@ -19,7 +19,7 @@ import { conceptsOf } from './memory-concepts.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
-import { readChatLogSource, chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
+import { readChatLogSource } from '../chat/chat-log.js'
 import { createMemoryExtractor } from './memory-extractor.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
@@ -1147,6 +1147,10 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
   const extractor = createMemoryExtractor({
     dsh, getConfig, relatedTo, commit: commitExtracted, isActive: () => status === 'active',
     reflect, batchState, scopeOf: scopeFromChatId, recoveryError: () => batchRecoveryError, log,
+    consolidation: {
+      health: () => store.health(), load, save, chatLogDays, chatLogSnapshot,
+      learnSelfStyle, buildProfile, profileKeyOf, createGenerationSignal,
+    },
   })
   function extractFacts(chatId, transcript, genSignal = null) {
     return extractor.extractFacts(chatId, transcript, genSignal)
@@ -1156,131 +1160,8 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
   }
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  let busy = false
-
-  /** 整理共享流水，仅在当天全部聊天成功或明确跳过后记录自己的消费进度。 */
-  async function consolidate(o = {}) {
-    if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
-    if (!store.health().ok) return { ok: false, message: '记忆档案或运行状态异常，请修复后重载档案', health: store.health() }
-    if (busy) return { ok: false, message: '正在整理中' }
-    busy = true
-    const genSignal = createGenerationSignal(120000)
-    const today = dayKey()
-    const startedAt = Date.now()
-    let added = 0
-    let insights = 0
-    let days = 0
-    let profiles = 0
-    const failedChats = []
-    try {
-      for (const day of chatLogDays()) {
-        if (!genSignal.isValid()) break
-        if (day > today || (day === today && !o.includeToday)) continue
-        const snapshot = chatLogSnapshot(day)
-        const all = snapshot.records
-        const progress = load()
-        const done = (progress.processed || {})[day] || 0
-        const previousSource = progress.processedSources?.[day]
-        if (done > all.length) throw new Error(`${day} 的共享流水已缩短，请核对消费进度`)
-        if (previousSource && previousSource.count !== done) throw new Error(`${day} 的共享流水消费进度不一致，请核对后恢复`)
-        const offset = chatLogOffset(snapshot, previousSource)
-        if (previousSource && done === all.length) continue
-        const byChat = new Map()
-        for (const l of all.slice(offset)) {
-          if (!l || !l.chatId || String(l.chatId).startsWith('system:')) continue
-          if (/^【更早聊天的摘要/.test(String(l.text || ''))) continue
-          if (!byChat.has(l.chatId)) byChat.set(l.chatId, [])
-          byChat.get(l.chatId).push(l)
-        }
-        const failuresBefore = failedChats.length
-        for (const [chatId, lines] of byChat) {
-          if (!genSignal.isValid()) break
-          try {
-            const r = await extractLines(chatId, lines, genSignal)
-            added += r.added || 0
-            insights += r.insights ? 1 : 0
-            if (!r.ok) throw new Error(r.message || '记忆提炼失败')
-          } catch (err) {
-            failedChats.push({ day, chatId, error: err.message })
-            log?.warn?.(`提炼 ${day} 聊天 ${chatId} 记忆失败:`, err.message)
-          }
-        }
-        if (genSignal.isValid() && failedChats.length === failuresBefore) {
-          const cursor = chatLogCursor(snapshot)
-          chatLogOffset(chatLogSnapshot(day), cursor)
-          const s = load()
-          s.processed = s.processed || {}
-          s.processed[day] = all.length
-          s.processedSources = s.processedSources || {}
-          s.processedSources[day] = cursor
-          save(s)
-          days++
-        }
-      }
-      if (days && genSignal.isValid()) {
-        await learnSelfStyle(genSignal)
-      }
-      // 这次记忆有变化的人，重写人物小档案（每次最多 8 个人）
-      const live = load()
-      const touched = [...new Set(live.items
-        .filter((m) => m.about && (m.at >= startedAt || (m.invalidAt || 0) >= startedAt))
-        .map((m) => profileKeyOf(m.about, String(m.scope || 'global'))))]
-      // 还没有小档案、但已经记了不少事的人也补上（刚升级时一次补几个，按记得的多少排）
-      // 关键：按「QQ + 作用域」分组重建，绝不能用全部记忆混写一份 ——
-      // 混写会把私聊里的私事写进一份所有聊天都能读的档案，群聊照样套得到。
-      const count = new Map()
-      for (const m of live.items) {
-        if (!m.about || m.invalidAt) continue
-        const sc = String(m.scope || 'global')
-        const key = profileKeyOf(m.about, sc)
-        count.set(key, (count.get(key) || 0) + 1)
-      }
-      const missing = [...count]
-        .filter(([key, n]) => n >= 3 && !(live.profiles || {})[key] && !touched.some((t) => t === key))
-        .sort((x, y) => y[1] - x[1])
-        .map(([key]) => key)
-      const targets = [...new Set([...touched, ...missing])].slice(0, 8)
-      for (const key of targets) {
-        if (!genSignal.isValid()) break
-        const at = key.lastIndexOf('@')
-        const qq = at > 0 ? key.slice(0, at) : key
-        const scope = at > 0 ? key.slice(at + 1) : 'global'
-        try { if (await buildProfile(qq, scope, genSignal)) profiles++ } catch (error) { log.warn('写人物小档案失败：', error.message) }
-      }
-      if (!genSignal.isValid()) {
-        return { ok: false, message: '整理任务已中止或已关闭', failed: failedChats }
-      }
-      const s = load()
-      // ① 模糊化（C-02 规范）：不再破坏性截断原文，仅调整 clarity 档位用于展示与遗忘决策
-      const nowC = Date.now()
-      let blurred = 0
-      for (const it of s.items) {
-        if (it.invalidAt || it.pinned) continue
-        if (it.source !== 'event' && it.source !== 'auto') continue
-        const item = { ...it, ownerQQ: getConfig()?.ownerQQ || '' }
-        const step = clarityOf(item, nowC)
-        if (it.clarity !== step) {
-          it.clarity = step
-          blurred++
-        }
-      }
-      // ② 遗忘：不重要、很久没被想起的清掉，记忆库不会越堆越乱
-      const before = s.items.length
-      s.items = s.items.filter((m) => !shouldForget({ ...m, ownerQQ: getConfig()?.ownerQQ || '' }))
-      const forgot = before - s.items.length
-      if (forgot || blurred) s.rev = (s.rev || 0) + 1 // 条目被遗忘/变模糊，索引缓存要失效
-      s.lastConsolidate = { day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles, failed: failedChats }
-      save(s)
-      const message = `${failedChats.length ? `部分整理失败（${failedChats.length} 个聊天），失败日期进度未推进` : '整理好了'}：新增或更新 ${added} 条记忆，更新 ${insights} 份相处经验、${profiles} 份人物小档案${blurred ? `，${blurred} 条变模糊` : ''}${forgot ? `，忘掉 ${forgot} 条旧的` : ''}`
-      log.info(message)
-      return { ok: failedChats.length === 0, added, insights, days, forgot, blurred, profiles, failed: failedChats, message }
-    } catch (error) {
-      log.warn('整理临时记忆失败：', error.message)
-      return { ok: false, message: error.message, failed: failedChats }
-    } finally {
-      genSignal.cleanup()
-      busy = false
-    }
+  function consolidate(o = {}) {
+    return extractor.consolidate(o)
   }
 
   /** 从各人的说话方式里，沉淀出几条她自己不知不觉学会的说法（很少、很淡）。 */
