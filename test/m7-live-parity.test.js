@@ -237,22 +237,42 @@ test('语音水合：record 段经网关转写拼进回合（冻结对象不炸�
   } finally { await core.dispose(); await mock.close() }
 })
 
-// —— #11/#12 富媒体 & 小黄脸整条委托 legacyDeliver ——
-test('富媒体出站：带 <sticker:> 或 <face:> 的回复整条交 legacyDeliver（报告 B #11/#12）', async () => {
-  const del = []
+// —— #11/#12 富媒体 & 小黄脸经当前 reply-delivery ——
+test('富媒体出站：reply-delivery 转换 <sticker:> 与 <face:> 并经 Shared Outbox 发送', async () => {
   const { core, mock } = await fixture({
     brain: async ({ text }) => text.includes('表情') ? '<face:呲牙> 就这个' : '看这个<sticker:测试>',
-    coreOver: { legacyDeliver: async (chatId, reply, opts) => { del.push([chatId, reply, opts?.own]); return { state: 'sent' } } },
+    cfgOver: { stickers: { enabled: true, faces: true } },
+    coreOver: {
+      stickers: {
+        match: () => ({ md5: 'sticker-md5', name: '测试', file: 'sticker.png' }),
+        segmentFor: () => ({ type: 'image', data: { file: 'base64://c3RpY2tlcg==' } }),
+        markUsed: () => {},
+      },
+      legacyDeliver: async () => { throw new Error('不得回退 legacyDeliver') },
+    },
   })
   try {
     await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '发个表情' } }] }))
-    await sleep(500)
-    assert.ok(del.some(([, r]) => /<face:呲牙>/.test(r)), `<face:> 未委托 legacy：${JSON.stringify(del)}`)
+    await sleep(1000)
     await core.dispatchLegacyEvent(privEv({ message_id: 333444, message: [{ type: 'text', data: { text: '发个贴纸' } }] }))
-    await sleep(500)
-    assert.ok(del.some(([, r]) => /<sticker:测试>/.test(r)), `<sticker:> 未委托 legacy：${JSON.stringify(del)}`)
-    const rawSends = JSON.stringify(mock.sent('send_private_msg'))
+    await sleep(1000)
+    const sends = mock.sent('send_private_msg')
+    const rawSends = JSON.stringify(sends)
+    assert.match(rawSends, /"type":"face"/, '系统表情未转成 face 段')
+    assert.match(rawSends, /"type":"image"/, '贴纸未转成 image 段')
     assert.doesNotMatch(rawSends, /face:|sticker:/, '原始标记漏发给 QQ')
+  } finally { await core.dispose(); await mock.close() }
+})
+
+test('群聊戳一戳：新核心记住戳人者并经 Shared Outbox 戳回去', async () => {
+  const { core, mock } = await fixture({ brain: async () => '<poke>' })
+  try {
+    await core.dispatchLegacyEvent({
+      post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
+      self_id: Number(BOT), group_id: 777, user_id: 555, sender_id: 555, target_id: Number(BOT),
+    })
+    await sleep(1000)
+    assert.deepEqual(mock.sent('send_poke').map((call) => call.params), [{ user_id: 555, group_id: 777 }])
   } finally { await core.dispose(); await mock.close() }
 })
 
@@ -322,20 +342,30 @@ test('引用入站：get_msg 还原被引用正文和发送者，拼入当前 DS
   } finally { await core.dispose(); await mock.close() }
 })
 
-test('<reply:n> 与 <at:> 出站整条委托 legacyDeliver，不再当纯文字丢标记', async () => {
-  const delivered = []
-  const { core, mock } = await fixture({
-    brain: async ({ text }) => text.includes('引用') ? '<reply:1>引用这条回复' : '<at:30003> 提醒一下',
-    coreOver: { legacyDeliver: async (chatId, text) => { delivered.push([chatId, text]); return { state: 'sent' } } },
+test('<reply:n> 与 <at:> 经 reply-delivery 处理，不再回退 legacyDeliver', async () => {
+  const first = await fixture({
+    brain: async () => '<reply:1>引用这条回复',
+    coreOver: { legacyDeliver: async () => { throw new Error('不得回退 legacyDeliver') } },
   })
   try {
-    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '测试引用' } }] }))
-    await sleep(500)
-    await core.dispatchLegacyEvent(privEv({ message_id: 987654, message: [{ type: 'text', data: { text: '测试提醒' } }] }))
-    await sleep(500)
-    assert.ok(delivered.some(([, text]) => /<reply:1>/.test(text)), `reply 未委托：${JSON.stringify(delivered)}`)
-    assert.ok(delivered.some(([, text]) => /<at:30003>/.test(text)), `at 未委托：${JSON.stringify(delivered)}`)
-  } finally { await core.dispose(); await mock.close() }
+    await first.core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '测试引用' } }] }))
+    await sleep(1000)
+    const rawSends = JSON.stringify(first.mock.sent('send_private_msg'))
+    assert.match(rawSends, /引用这条回复/, '回复正文缺失')
+    assert.doesNotMatch(rawSends, /<reply:1>/, 'reply 原始标记漏发给 QQ')
+  } finally { await first.core.dispose(); await first.mock.close() }
+
+  const second = await fixture({
+    brain: async () => '<at:30003> 提醒一下',
+    coreOver: { legacyDeliver: async () => { throw new Error('不得回退 legacyDeliver') } },
+  })
+  try {
+    await second.core.dispatchLegacyEvent(groupEv('测试提醒'))
+    await sleep(1000)
+    const rawSends = JSON.stringify(second.mock.sent('send_group_msg'))
+    assert.match(rawSends, /提醒一下/, '@ 正文缺失')
+    assert.doesNotMatch(rawSends, /<at:30003>/, 'at 原始标记漏发给 QQ')
+  } finally { await second.core.dispose(); await second.mock.close() }
 })
 
 test('群聊引用机器人消息：没有 @ 也按 repliedToBot 触发，并带被引用正文', async () => {

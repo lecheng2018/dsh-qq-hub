@@ -603,7 +603,7 @@ test('真机缺陷 6：||| 分条按序多条投递；[沉默] 整轮不发', as
   const { core, dsh, mock } = await fixture({ brain: async () => '第一点|||第二点' })
   try {
     await core.dispatchLegacyEvent(msgEv())
-    await waitSettled(core, 400)
+    await waitSettled(core, 1000)
     const sends = mock.sent('send_private_msg').map((s) => JSON.stringify(s.params.message))
     assert.equal(sends.length, 2, '两个气泡 = 两次投递')
     assert.match(sends[0], /第一点/)

@@ -11,6 +11,7 @@
 // 红线：物理发送只有 outbox 一个 owner；unknown 不自动重发；turn 执行尊重取消信号（诚实标记）。
 
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync } from 'node:fs'
 
 import { legacyEventToNormalized } from '../chat/adapters/legacy-inbound.js'
@@ -22,6 +23,9 @@ import { createSessionFileStore } from '../chat/session-store.js'
 import { createTurnController } from '../chat/turn-controller.js'
 import { createContextAssembly } from '../chat/context-assembly.js'
 import { createOutbox } from '../chat/outbox.js'
+import { createReplyDelivery } from '../chat/reply-delivery.js'
+import { createInteractionState } from '../chat/interaction-state.js'
+import { createOutbound } from '../chat/outbound.js'
 import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
@@ -178,9 +182,8 @@ function segmentsToContent(members) {
  *   模块工具生成器（与 legacy hub.mount 同一份）。新核心此前**完全没挂工具**，
  *   导致她连 qq_send_sticker / 记忆 / B站 / 群管都没有，只能拿 bash+curl 自己绕（真机实测）。
  * @param {() => number} [o.toolsGeneration] 模块代际（热重载后整套重挂，同 legacy issue #73）
- * @param {(chatId: string, text: string, opts?: object) => Promise<*>} [o.legacyDeliver]
- *   富媒体出站委托（真机审计：语音/表情/图片/引用/戳一戳）。带富媒体标记的回复整条交给它，
- *   纯文字仍走 outbox（台账/试运行/身份闸照旧）。
+ * @param {object} o.stickers 当前表情服务。
+ * @param {object} o.tts 当前语音合成服务；回复编排经 reply-delivery 进入 Shared Outbox。
  * @param {Record<string, () => string>} [o.promptVars]
  *   宿主侧提示词变量兜底（qq_hub_persona / qq_hub_rules_private / qq_hub_rules_social）：
  *   热重载后根作用域注册可能已失效，缺了就报 unknown prompt variable → 整轮 error（实测）
@@ -192,7 +195,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, legacyDeliver, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, rememberPoker, claimPoke, rememberSpeaker, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
+  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, noteSpeakers, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -234,6 +237,8 @@ export function createModularCore({
 
   // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
   const groups = createGroupState()
+  const interaction = createInteractionState()
+  const reportTurns = new Map()
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
@@ -494,10 +499,26 @@ export function createModularCore({
     },
   })
 
+  const deliveryContext = new AsyncLocalStorage()
+  const outbound = createOutbound({
+    getConfig, log, onebot, outbox, groups, stickers, tts, interaction,
+    hooks: moduleHooks, onStats, deliveryContext,
+  })
+  const replyDelivery = createReplyDelivery({
+    deliveryContext,
+    getConfig, log, hooks: moduleHooks, reportTurns, groups, stickers,
+    mood: () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 },
+    interaction,
+    ...outbound,
+    logChat,
+    onActivity: (event) => mods.emit?.('activity', event),
+    outbox: () => outbox,
+  })
+
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
    *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
-   *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一委托 legacyDeliver。 */
+   *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一经当前 reply-delivery。 */
   function groupPromptContent(chatKey, members, previousTurnAt) {
     const gid = chatKey.slice(6)
     const buf = groups.buffer(gid)
@@ -893,6 +914,10 @@ export function createModularCore({
         }
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
+          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/.test(String(ev?.data?.name || ''))) {
+            reportTurns.set(turn.chatKey, true)
+            return
+          }
           if (ev?.type === 'assistant/message') {
             const d = ev?.data || {}
             if (d.interrupted) return
@@ -901,6 +926,7 @@ export function createModularCore({
             return
           }
           if (ev?.type === 'turn/end') {
+            reportTurns.delete(turn.chatKey)
             const d = ev?.data || {}
             completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '' }
             if (followupDone) finishReply()
@@ -983,61 +1009,22 @@ export function createModularCore({
         if (next == null) return null
         replyItems = next
       }
-      const bubbles = replyItems.filter((i) => i.kind === 'text')
-      const skipped = replyItems.length - bubbles.length
-      // legacy deliver 只负责既有出站语义（语音/表情/图片/引用/@/概率/气泡），物理发送仍经共享 Outbox。
-      if (typeof legacyDeliver === 'function') {
-        try {
-          await legacyDeliver(turn.chatKey, reply, {
-            own: true,
-            userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
-            wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
-            autoReply,
-            refs: inGroup ? groups.refs(chat.groupId) : {},
-          })
-          if (inGroup) {
-            try { groups.noteSpeak(chat.groupId) } catch {}
-            try { groups.noteSpokeInGroup(chat.groupId) } catch {}
-            try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
-          }
-          return { state: 'sent', via: 'legacy-deliver' }
-        } catch (error) {
-          log.warn(`回复发送失败：${error?.message || error}`)
-          throw error
-        }
-      }
-      if (skipped > 0) debug(`未配置 legacyDeliver，本轮 ${skipped} 个富媒体/引用标记只能省略`)
-      // 7. 回复经 outbox 投递（唯一物理出口；多气泡按序多条 request，FIFO 保证顺序）
-      let result = null
-      for (const b of bubbles) {
-        let segments = [{ type: 'text', data: { text: b.value } }]
-        if (typeof moduleHooks?.send === 'function') {
-          const next = await moduleHooks.send(segments, { chatId: turn.chatKey, note: String(b.value).slice(0, 60), force: false })
-          if (next == null) continue
-          segments = next
-        }
-        result = await outbox.request({
-          chatKey: turn.chatKey,
-          turnId: turn.turnId,
-          sourceModuleId: 'core',
-          segments,
+      try {
+        await replyDelivery.deliver(turn.chatKey, reply, {
+          own: true,
+          userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
+          wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
+          autoReply,
+          refs: inGroup ? groups.refs(chat.groupId) : {},
         })
-        try { if (result?.state === 'sent') onStats?.('sent') } catch {}
-        try { if (result?.state === 'sent') logChat?.(turn.chatKey, 'bot', String(b.value)) } catch {}
+        if (inGroup) {
+          try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
+        }
+        return { state: 'sent', via: 'reply-delivery' }
+      } catch (error) {
+        log.warn(`回复发送失败：${error?.message || error}`)
+        throw error
       }
-      // 本轮没有任何文字气泡（纯富媒体/纯表情回复）：legacy 同样算「她说话了」——bot 行兜底，防流水/统计漏计
-      if (bubbles.length === 0 && result?.state === 'sent') {
-        try { onStats?.('sent') } catch {}
-        try { logChat?.(turn.chatKey, 'bot', String(reply)) } catch {}
-      }
-      // 8. 群说话记账（legacy noteSpeak/noteInterject 同款）：刹车（burst 上限）与冷却的数据源
-      if (inGroup && result && (result.state === 'sent' || result.state === 'unknown')) {
-        const gid = chat.groupId
-        try { groups.noteSpeak(gid) } catch {}
-        try { groups.noteSpokeInGroup(gid) } catch {}
-        try { if (turnMode === 'interject') groups.noteInterject(gid) } catch {}
-      }
-      return result
     },
   })
 
@@ -1082,8 +1069,8 @@ export function createModularCore({
     const hook = isPoke ? moduleHooks?.poke : moduleHooks?.message
     const continueInbound = () => {
       if (!isPoke) return routeInboundCore(inbound, ev, source)
-      try { rememberPoker?.(inbound.chatKey, String(inbound.sender?.userId || '')) } catch {}
-      try { if (claimPoke && !claimPoke(inbound.chatKey)) return { handled: 'poke-throttled' } } catch {}
+      try { interaction.rememberPoker(inbound.chatKey, String(inbound.sender?.userId || '')) } catch {}
+      try { if (!interaction.claimPoke(inbound.chatKey)) return { handled: 'poke-throttled' } } catch {}
       const poke = inbound.segments.find((s) => s?.type === 'poke')
       const action = String(poke?.data?.action || '')
       const suffix = String(poke?.data?.suffix || '')
@@ -1147,7 +1134,7 @@ export function createModularCore({
       mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
       const gid = inbound.chatKey.slice(6)
       buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
-      try { rememberSpeaker?.(inbound.chatKey, userId) } catch {}
+      try { interaction.rememberSpeaker(inbound.chatKey, userId) } catch {}
     }
     const fromOwner = isOwner(cfg, userId)
     // 真机审计 1.11：面板统计与「最近发来的图/表情」（legacy 同一份内存状态）
@@ -1238,12 +1225,17 @@ export function createModularCore({
         let lastText = ''
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
+          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/.test(String(ev?.data?.name || ''))) {
+            reportTurns.set(chatKey, true)
+            return
+          }
           if (ev?.type === 'assistant/message') {
             const d = ev.data || {}
             if (d.interrupted) return
             const value = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
             if (value) { lastTurn = d.turn; lastText = value }
           } else if (ev?.type === 'turn/end') {
+            reportTurns.delete(chatKey)
             const d = ev.data || {}
             cleanup()
             if (d.reason?.kind !== 'completed') { reject(new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`)); return }

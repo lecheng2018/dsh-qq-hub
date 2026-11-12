@@ -23,7 +23,7 @@
 | 阻塞 | 当前证据 | 退出前置条件 |
 |---|---|---|
 | 无条件创建 legacy hub | `src/host.js:286`，新核心开启时也执行 `createHub` | 主链与共享服务不再创建旧实例；legacy-only 装配可以整体退场 |
-| 富媒体仍回 legacy deliver | `src/host.js:406` → `hub.deliver` | 回复编排、TTS、表情、图片、文件、引用、戳一戳全部归当前服务，物理发送只经 Shared Outbox |
+| 富媒体旧委托 | 本批已删除 `legacyDeliver`；当前实现位于 `src/chat/reply-delivery.js`、`src/chat/outbound.js` | 回复编排、TTS、表情、图片、引用、戳一戳归当前服务，物理发送只经 Shared Outbox；其余职责仍按 §3 对账 |
 | 会话双路与回退 | `src/host.js:467-505` 合并 sessions、双 `syncAllModels`、旧 `onSessionEvent/chatOfSession/resetChat` | 唯一 SessionRegistry；同步/重置/事件只执行一次；旧会话文件仅作一次性只读迁移输入 |
 | 模块持有整只 hub | `src/host.js:559` `createModuleSendBridge({ hub, ... })` | 模块只拿当前服务的窄 facade；无 hub 内部状态或旧方法旁路 |
 | 旧事件入口仍在 | `src/host.js:165-174`，legacy `onMessage/onPoke` 可接收实时事件 | 唯一 `dispatchEvent`；新核心初始化失败时停止相关 QQ 业务并告警，不回退旧入口 |
@@ -38,7 +38,7 @@
 1. 以现有 `reply-delivery` 和 Shared Outbox 为唯一实现，收编 `hub.deliver` 依赖的媒体准备与发送函数。
 2. 对文本、图片、语音、表情、文件、引用/@、戳一戳、群聊合并建立输入/输出对照；检查顺序、幂等、取消与 unknown。
 3. 面板、命令、模块主动发送、QQ 空间动作和文件上传逐点对账，禁止旁路新物理出口。
-4. 删除 `legacyDeliver` 委托，不能把旧函数改名后继续调用。
+4. 本批已删除 `legacyDeliver` 委托：新核心直接使用当前 `reply-delivery` 和 Shared Outbox，不再调用 `hub.deliver`；其余退出步骤仍按门禁执行。
 
 验收：真实 host + fake OneBot 新旧对照；dryRun 零实发；`deliveries.json` 每次物理发送仅一笔。
 
