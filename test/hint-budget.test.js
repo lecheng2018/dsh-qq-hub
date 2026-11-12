@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SRC = readFileSync(join(ROOT, 'src/features/memory.js'), 'utf8')
+const SRC = readFileSync(join(ROOT, 'src/features/memory-archive.js'), 'utf8')
 const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const CFG = readFileSync(join(ROOT, 'src/core/config.js'), 'utf8')
 
