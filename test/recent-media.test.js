@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHub } from '../src/chat/hub.js'
+import { createRecentMedia } from '../src/chat/recent-media.js'
 import { normalize } from '../src/core/config.js'
 import stickersModule from '../src/modules/stickers/index.js'
 
@@ -150,6 +151,19 @@ test('媒体缓存关闭后旧实例不可取图，迟到消息不再改写暂�
   await send(hub, image('late.png'))
   assert.equal(readFileSync(s.file, 'utf8'), disk)
   assert.deepEqual(s.hub().recentMedia(CHAT).map((x) => x.seg.data.file), ['before-dispose.png'])
+})
+
+test('共享缓存统一登记消息段，过滤不可恢复的类型并保留发图人', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'aurabot-shared-media-')), 'recent-media.json')
+  const media = createRecentMedia({ file, log })
+  const photo = image('photo.png', false)
+  const sticker = { type: 'mface', data: { emoji_id: '123' } }
+  media.rememberSegments(CHAT, [photo, sticker, { type: 'text', data: { text: '正文' } }], OWNER)
+  assert.deepEqual(media.get(CHAT).map((item) => [item.seg, item.userId, item.sticker]), [
+    [photo, OWNER, false],
+    [sticker, OWNER, true],
+  ])
+  media.dispose()
 })
 
 function saveTool(hub, cfg, chat = { kind: 'private', chatId: CHAT, userId: OWNER }) {

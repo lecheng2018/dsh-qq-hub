@@ -63,7 +63,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions }) {
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia }) {
   // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
   const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
   const mapFile = () => dataDir('sessions.json')
@@ -96,7 +96,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // 新增内容型工具时在这里加一行；她写了 <report> 标记时第一层优先生效，这里只是兜底。
   const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
 
-  const recentMedia = createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
+  const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   // 「她挑 / 只听主人的」：这一轮收到的表情先按会话记着，她想收时凭编号来取。
   // 落盘存一份 —— 只在内存里的话，DSH 一重启就什么都没有了，她只好绕路（拷附件 + qq_add_sticker）。
   const stickerStash = new Map() // chatId → { at, segs: [seg] }
@@ -1318,7 +1318,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
 
     // 最近发来的图片 / 表情记几张（「把刚才那张存下来」时用）
     if (msg.stickers.length || msg.images.length) {
-      recentMedia.remember(msg.chatId, [...msg.stickers, ...msg.images].map((seg) => ({ seg, userId: msg.userId, sticker: msg.stickers.includes(seg) })))
+      recentMedia.rememberSegments(msg.chatId, [...msg.stickers, ...msg.images], msg.userId)
     }
     // 主人命令（/silent /active …）：总开关关着也处理，回复直接发
     if (onCommand && isOwner(cfg, msg.userId) && /^\s*[/／]/.test(msg.text)) {
@@ -2159,14 +2159,10 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     resolveTarget,
     groupName,
     stats: () => ({ ...stats }),
-    // 真机审计 1.11：开旗后进站/出站都不走本文件，面板统计以前全 0。把计数入口与
-    // 「最近发来的图/表情」登记入口公开给新核心（同一份内存状态，面板读的仍是 stats()）。
+    // 真机审计 1.11：开旗后进站/出站都不走本文件，面板统计以前全 0。
     bumpStats: (k) => { try { if (k in stats) bump(k) } catch {} },
     noteRecentMedia: (chatId, segs, userId) => {
-      try {
-        const items = (segs || []).filter((x) => x && ['image', 'mface', 'face'].includes(x.type))
-        if (items.length) recentMedia.remember(String(chatId), items.map((seg) => ({ seg, userId: String(userId || ''), sticker: seg.type !== 'image' })))
-      } catch {}
+      try { recentMedia.rememberSegments(String(chatId), segs, userId) } catch {}
     },
     get lastChatAt() { return lastChatAt },
     get lastOwnerChatAt() { return lastOwnerChatAt },
