@@ -16,7 +16,7 @@ import { dataDir } from '../core/store.js'
 import { askModel } from '../core/llm.js'
 import { openMemoryFiles } from './memory-files.js'
 import { conceptsOf } from './memory-concepts.js'
-import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
+import { collectMemberLines, enoughEvidence, evidenceFunnel, describeFunnel, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
 import { readChatLogSource } from '../chat/chat-log.js'
@@ -686,22 +686,73 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
   }
 
   // ---------------- 从会话历史蒸馏（1.3.63）----------------
-  // chatlog 每天整理完就删，所以「新加的学习目标」只能干等。DSH 的会话记录留得久、
-  // 而且存着群友原话「名字(QQ号)：内容」，翻它就能立刻学。
+  // chatlog 按保留天数滚动清理；会话记录留得更久。但**会话记录会脱敏主人**：
+  // 群聊上下文里主人发言被渲染成「主人：…」（不带 QQ 号，见 chat/hub.js 的 whoOf），
+  // 而解析正则要求「名字(数字)：」——所以主人自己的发言永远捞不到，句数卡死不变。
+  // chatlog 存的是真实 uid，不受这层脱敏影响，且能精确按群 id 过滤。
 
-  /** 扫一遍会话历史，给出「谁说了多少句」和覆盖的时间范围（面板用）。 */
-  function distillHistory ({ group = '' } = {}) {
+  /**
+   * 扫一遍历史，给出「谁说了多少句」和覆盖的时间范围（面板用）。
+   * 证据源优先 chatlog（真实 uid + 可精确按群 id 过滤），会话记录只作补充。
+   */
+  function distillHistory ({ gid = '' } = {}) {
     const cfg = getConfig()
     const dir = sessionsDirFor(workspaceDirOf(cfg), { dshHome: process.env.DSH_HOME || '' })
-    const scan = scanTranscripts(dir, { group })
+    const group = String(gid || '').replace(/\D/g, '')
+    // 群名只用于会话记录那边的粗过滤（它按【群聊 xxx】头匹配）
+    let groupName = ''
+    if (group && hub?.groupNames?.get) { try { groupName = hub.groupNames.get(group) || '' } catch {} }
+    const scan = scanTranscripts(dir, { group: groupName })
+
+    // chatlog：真实 uid，能按 chatId 精确过滤
+    const logLines = []
+    let logDays = []
+    try {
+      logDays = chatLogDays().slice().sort()
+      for (const day of logDays) {
+        // chatLogSnapshot 给的是 { day, records, ... } 快照对象，不是数组
+        for (const r of (chatLogSnapshot(day)?.records || [])) {
+          if (!r || !r.text) continue
+          if (group && String(r.chatId) !== `group:${group}`) continue
+          logLines.push({
+            name: String(r.who || r.uid || ''),
+            uid: String(r.uid || ''),
+            text: String(r.text || ''),
+            at: Number(r.t) || 0,
+          })
+        }
+      }
+    } catch (error) {
+      log?.warn?.('蒸馏：读 chatlog 失败，退回会话记录：', error.message)
+    }
+
+    // 合并：chatlog 优先（有真实 uid），会话记录补更早的历史
+    const merged = [...logLines]
+    const seenKey = new Set(logLines.map((l) => `${l.uid}|${String(l.text).trim().slice(0, 80)}`))
+    for (const l of scan.lines) {
+      const k = `${l.uid}|${String(l.text).trim().slice(0, 80)}`
+      if (seenKey.has(k)) continue
+      seenKey.add(k)
+      merged.push({ name: l.name, uid: l.uid, text: l.text, at: Number(l.at) || 0 })
+    }
+
+    let from = 0
+    let to = 0
+    for (const l of merged) {
+      if (!l.at) continue
+      if (!from || l.at < from) from = l.at
+      if (l.at > to) to = l.at
+    }
     return {
       dir,
       sessions: scan.sessions,
-      total: scan.lines.length,
-      from: scan.spans.from,
-      to: scan.spans.to,
-      speakers: speakerCounts(scan.lines, 20),
-      lines: scan.lines,
+      chatlogDays: logDays.length,
+      chatlogLines: logLines.length,
+      total: merged.length,
+      from,
+      to,
+      speakers: speakerCounts(merged, 20),
+      lines: merged,
     }
   }
 
@@ -715,18 +766,23 @@ export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, per
     const g = String(gid || '').replace(/\D/g, '')
     const u = String(uid || '').replace(/\D/g, '')
     if (!g || !u) return { ok: false, message: '群号和 QQ 号都要填' }
-    // 群名 → 只学这个群里的他；拿不到群名就按 QQ 号在全部群里找他
-    let groupName = ''
-    try { groupName = await hub.groupName(g) } catch {}
-    if (groupName === g) groupName = ''
-    const hist = distillHistory({ group: groupName })
-    if (!hist.total) return { ok: false, message: '没找到会话历史' + (hist.dir ? '' : '（会话目录不存在）') }
+    // 按群 id 精确过滤（chatlog 有 chatId；会话记录那边靠群名粗过滤兜底）
+    const hist = distillHistory({ gid: g })
+    if (!hist.total) {
+      const where = hist.chatlogDays ? `${hist.chatlogDays} 天聊天流水 + ` : ''
+      return { ok: false, message: `没找到历史记录（翻了 ${where}${hist.sessions} 个会话）` }
+    }
     // 历史学习先清洗（去重 + 滤纯转发），清洗后质量高，门槛相应降到 15 句
     const mine = collectMemberLines(hist.lines.map((l) => ({ ...l, t: l.at })), u)
     const t0name = name || (hist.lines.find((l) => String(l.uid) === u) || {}).name || u
     const minMsg = Number(minMessages) || 15
     if (!enoughEvidence(mine, { minMessages: minMsg })) {
-      return { ok: false, message: `历史里他的原话只有 ${mine.length} 句（去重滤转发后），不够 ${minMsg} 句，学出来也是瞎猜——等多聊几天再来` }
+      const funnel = evidenceFunnel(hist.lines, u)
+      return {
+        ok: false,
+        message: `历史里他的原话只有 ${mine.length} 句（去重滤转发后），不够 ${minMsg} 句，学出来也是瞎猜——等多聊几天再来${describeFunnel(funnel)}`,
+        funnel,
+      }
     }
     const others = hist.lines.filter((l) => String(l.uid) !== u && !/^\[分享卡片|^https?:/.test(String(l.text))).slice(-60).map((l) => `${l.name}：${String(l.text).slice(0, 100)}`)
     const old = distillOf(g, u)

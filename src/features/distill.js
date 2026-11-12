@@ -64,6 +64,45 @@ export function enoughEvidence (memberLines, { minMessages = 20, minChars = 120 
   return list.reduce((n, x) => n + x.text.length, 0) >= minChars
 }
 
+/**
+ * 证据漏斗：把「命中 → 去重 → 滤转发 → 可用」每一步丢了多少算清楚。
+ * 用户只看到「只有 14 句」时会以为卡死/有 bug，实际常常是命中 19 条、滤掉 5 条图片。
+ * @param {Array} lines 全部候选行（同一个人，可跨会话重复）
+ * @param {string} uid
+ * @returns {{hit:number, duplicate:number, junk:number, empty:number, usable:number}}
+ */
+export function evidenceFunnel (lines, uid) {
+  const want = String(uid || '').trim()
+  const rows = (lines || []).filter((l) => l && String(l.uid || '') === want)
+  const seen = new Set()
+  let duplicate = 0
+  let junk = 0
+  let empty = 0
+  let usable = 0
+  for (const l of rows) {
+    const text = String(l && l.text != null ? l.text : '').trim()
+    if (!text || text.startsWith('【系统')) { empty++; continue }
+    if (JUNK_RE.test(text)) { junk++; continue }
+    if (seen.has(text)) { duplicate++; continue }
+    seen.add(text)
+    usable++
+  }
+  return { hit: rows.length, duplicate, junk, empty, usable }
+}
+
+/** 把漏斗写成一句人话，附在「证据不足」的提示里（#75）。 */
+export function describeFunnel (funnel) {
+  const f = funnel || {}
+  const hit = Number(f.hit) || 0
+  if (!hit) return ''
+  const bits = []
+  if (f.empty) bits.push(`${f.empty} 条是空的/系统行`)
+  if (f.junk) bits.push(`${f.junk} 条是纯图片/转发/链接`)
+  if (f.duplicate) bits.push(`${f.duplicate} 条是重复转发的同一句`)
+  const kept = Number(f.usable) || 0
+  return `（翻到 ${hit} 条，${bits.length ? '其中 ' + bits.join('、') + '，' : ''}可用的 ${kept} 句）`
+}
+
 /** 拼提炼提示词：给他本人的原话（带上下文中的别人一句，帮助判断他在回应什么）。 */
 // dedupConvo 挪到了 chat/fish-guard.js（防刷屏工具归防刷屏模块），这里 re-export 保持既有调用方
 export { dedupConvo } from '../chat/fish-guard.js'

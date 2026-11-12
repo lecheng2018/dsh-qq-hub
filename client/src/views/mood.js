@@ -384,8 +384,9 @@ function DistillPanel({ toast, onChanged }) {
     h('div', { className: 'ab-flex', style: { marginBottom: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
       h(Btn, { small: true, kind: 'ghost', disabled: busy === 'scan', onClick: scanHist }, busy === 'scan' ? '翻着呢…' : '翻一翻聊天历史'),
       hist ? h('span', { className: 'ab-muted ab-small' },
-        '历史里 ' + hist.total + ' 条发言、' + hist.sessions + ' 个会话' +
-        (hist.from ? '（' + new Date(hist.from).toLocaleDateString() + ' → ' + new Date(hist.to).toLocaleDateString() + '）' : '') +
+        '历史里 ' + hist.total + ' 条发言' +
+        (hist.chatlogDays ? '（' + hist.chatlogDays + ' 天聊天流水 ' + hist.chatlogLines + ' 条 + ' : '（') + hist.sessions + ' 个会话' +
+        (hist.from ? '，' + new Date(hist.from).toLocaleDateString() + ' → ' + new Date(hist.to).toLocaleDateString() : '') + '）' +
         (hist.speakers && hist.speakers.length ? '；说得最多的：' + hist.speakers.slice(0, 3).map((x) => (x.name || x.uid) + ' ' + x.count + ' 句').join('、') : '')) : null,
       histErr ? h('span', { className: 'ab-small', style: { color: '#e08a8a' } }, histErr) : null),
     list === null ? h('div', { className: 'ab-muted ab-small' }, '读着呢…')
