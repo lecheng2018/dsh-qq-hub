@@ -338,6 +338,28 @@ test('会话创建中切换人设后不用旧人设会话运行', async () => {
   } finally { release(); ctrl.create = create }
 })
 
+test('K-03B 旧 sessions.json 只留作迁移输入，运行与重置不再回退或写回', async () => {
+  const legacy = { chats: { 'group:999': { sessionId: 'legacy-only', createdAt: 1 } } }
+  const legacyFile = join(f.dir, 'sessions.json')
+  writeFileSync(legacyFile, JSON.stringify(legacy))
+  const current = await send({ text: '当前会话' })
+  const systemId = f.fake.turns.at(-1).sessionId
+  assert.equal(systemId, current.sessionId)
+  await f.api.hub.runSystemTurn('k03-check', 'K03 后台', '后台回合')
+
+  assert.equal(f.api.hub.chatOfSession('legacy-only'), '')
+  assert.equal(f.api.hub.resetChat('group:999'), false)
+  assert.equal(f.api.hub.sessions()['group:999'], undefined)
+  assert.ok(!f.api.hub.knownChats().some((chat) => chat.chatId === 'group:999'))
+  assert.equal(readFileSync(legacyFile, 'utf8'), JSON.stringify(legacy), '后台回合不得写旧 sessions.json')
+  assert.ok(!f.fake.ctx.workspaceRegistry.archivedSessionIds.includes('legacy-only'))
+
+  assert.equal(f.api.hub.resetSessions(), 2, '只重置当前 QQ 会话与当前系统会话')
+  assert.ok(f.fake.ctx.workspaceRegistry.archivedSessionIds.includes(current.sessionId))
+  assert.ok(!f.fake.ctx.workspaceRegistry.archivedSessionIds.includes('legacy-only'))
+  assert.equal(readFileSync(legacyFile, 'utf8'), JSON.stringify(legacy))
+})
+
 test('模型同步支持 session.append 回退且跳过未变化模型', async () => {
   const turn = await send({ text: '准备模型同步' })
   const ctrl = f.fake.ctx.services.sessionController

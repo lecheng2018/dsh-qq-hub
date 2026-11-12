@@ -373,6 +373,20 @@ test('steer ChatKey 不变量：private 回合拒绝 group 转向输入（跨聊
   await ctl.dispose()
 })
 
+test('waitForTurn：等待合流后的执行结果，取消也如实落定', async () => {
+  const ctl = createTurnController({
+    merge: { waitMs: 5, maxMs: 20 },
+    execute: async () => '执行完成',
+  })
+  const offered = ctl.offer(inbound('wait-1'))
+  await sleep(15)
+  assert.deepEqual(await ctl.waitForTurn(offered.turnId), { state: 'succeeded', value: '执行完成' })
+  const cancelled = ctl.offer(inbound('wait-2'))
+  ctl.cancel(cancelled.turnId)
+  assert.deepEqual(await ctl.waitForTurn(cancelled.turnId), { state: 'cancelled' })
+  await ctl.dispose()
+})
+
 test('dispose：被清出队列的 pending 回合落 cancelled，绝不残留 pending', async () => {
   let releaseRunning
   const runningGate = new Promise((r) => { releaseRunning = r })

@@ -98,7 +98,8 @@ test('模型不支持看图：图片换成一行文字提示，这一轮照常�
   const t = fake.turns.at(-1)
   assert.ok(t, '应该跑了一轮')
   assert.equal(t.images, 0, '不该把图片塞给不支持看图的模型')
-  assert.match(String(t.ctxText || t.userText || ''), /看不了图|图片/, '要有文字提示: ' + (t.ctxText || t.userText))
+  const visibleText = `${t.ctxText || ''}\n${t.userText || ''}`
+  assert.match(visibleText, /看不了图|图片/, `旧核心提示在上下文、当前核心提示在用户正文，均必须可见：${visibleText}`)
 })
 
 test('模型支持看图：图片照常交给她', async () => {

@@ -415,6 +415,7 @@ export function apply(ctx) {
         logChat: (chatId, who, text, uid) => { try { chatLog.append(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
         // 回合说话人登记（hub.turnState；speakersOf 的数据源）
         noteSpeakers: (sessionId, senders, opts) => { try { hub.noteTurnSenders?.(String(sessionId), senders, opts) } catch {} },
+        onResetChat: (chatId) => interactions.questions.cancel(chatId, '会话重新开始'),
         collectInboundStickers: (chatKey, segments, userId) => {
           try {
             const cfg = getConfig()
@@ -451,56 +452,34 @@ export function apply(ctx) {
         },
       })
     : null
-  // 主动任务只生成回合复用当前 QQ 会话；投递仍由调用方走统一 Outbox。
+  // 会话 facade 只转发当前核心；旧 sessions.json 不再作为运行时回退或第二份事实表。
   if (useModularCore && modularCoreApi) {
     hub.runPromptTurn = (chatKey, text) => modularCoreApi.runPromptTurn(chatKey, text)
+    hub.runSystemTurn = (name, title, prompt, opts) => modularCoreApi.runSystemTurn(name, title, prompt, opts)
     hub.markTurnAt = (chatKey, now) => modularCoreApi.markTurnAt(chatKey, now)
-  }
-  // 开旗态：让 legacy hub 的会话查询/重置也能看到新核心的会话。
-  // token-guardian、审批桥、用量转发都走这两个函数，之前它们查 legacy sessions.json → 新核心会话永远查不到
-  // （真机：token-guardian 报「无可重置的会话」、审批卡发不到 QQ）。包一层即一次性修好所有调用方。
-  if (useModularCore && modularCoreApi) {
-    const legacyChatOfSession = hub.chatOfSession?.bind(hub)
-    const legacyResetChat = hub.resetChat?.bind(hub)
-    const legacySessions = hub.sessions?.bind(hub)
-    const legacyResetSessions = hub.resetSessions?.bind(hub)
-    const legacyOnSessionEvent = hub.onSessionEvent?.bind(hub)
-    const legacySyncAllModels = hub.syncAllModels.bind(hub)
-    hub.syncAllModels = async () => {
-      const results = await Promise.all([legacySyncAllModels(), modularCoreApi.syncAllModels()])
-      return {
-        applied: results.reduce((n, r) => n + r.applied, 0),
-        skipped: results.reduce((n, r) => n + r.skipped, 0),
-        failed: results.reduce((n, r) => n + r.failed, 0),
-        dropped: results.reduce((n, r) => n + (r.dropped || 0), 0),
-        detail: results.flatMap((r) => r.detail || []),
-      }
-    }
-    hub.sessions = () => ({ ...(legacySessions?.() || {}), ...modularCoreApi.sessions() })
+    hub.syncAllModels = () => modularCoreApi.syncAllModels()
+    hub.sessions = () => modularCoreApi.sessions()
+    hub.knownChats = () => modularCoreApi.knownChats()
     hub.resetSessions = () => {
+      interactions.approvals.clear('会话重置')
       const ids = Object.keys(modularCoreApi.registry.snapshot())
       for (const chatId of ids) hub.resetChat(chatId)
-      return ids.length + Number(legacyResetSessions?.() || 0)
+      return ids.length + modularCoreApi.resetSessions()
     }
+    hub.chatOfSession = (sid) => modularCoreApi.chatKeyOfSession(String(sid))
+    hub.resetChat = (chatId) => modularCoreApi.resetChat(String(chatId))
+    hub.onMessage = (event) => modularCoreApi.dispatchLegacyEventSettled({ post_type: 'message', time: Math.floor(Date.now() / 1000), ...event })
+    hub.onPoke = (event) => modularCoreApi.dispatchLegacyEventSettled(event)
     hub.onSessionEvent = (session, event) => {
+      const sid = String(session?.id || '')
+      if (!modularCoreApi.chatKeyOfSession(sid)) return
       if (event?.type === 'user/message' && event?.data?.source?.kind === 'user') {
-        const sid = String(session?.id || '')
-        if (modularCoreApi.chatKeyOfSession?.(sid)) hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: true })
+        hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: true })
+      } else if (event?.type === 'turn/end') {
+        hub.noteTurnSenders?.(sid, hub.speakersOf?.(sid) || [], { directOwner: false })
       }
-      return legacyOnSessionEvent?.(session, event)
     }
-    // 优先问**新核心**：开旗态下它才是真正在跑的会话；legacy 表里那份多为历史遗留
-    // （真机实测：先问 legacy 会「归档了 legacy 会话、却把新核心会话留着不动」，
-    //  token-guardian 以为压缩成功，实际上下文一点没变小）。
-    hub.chatOfSession = (sid) => {
-      try { const k = modularCoreApi.chatKeyOfSession?.(String(sid)); if (k) return k } catch {}
-      try { return legacyChatOfSession?.(sid) || '' } catch { return '' }
-    }
-    hub.resetChat = (chatId) => {
-      try { if (modularCoreApi.resetChat?.(String(chatId))) return true } catch {}
-      try { return Boolean(legacyResetChat?.(chatId)) } catch { return false }
-    }
-    log.debug('已把 hub.chatOfSession / hub.resetChat 接到新核心会话表')
+    log.debug('会话查询、重置、事件与模型同步已收口到当前 SessionRegistry')
   }
   if (useModularCore) log.info('M4 模块化新核心（FLAG_MODULAR_CORE）：开 — 实时事件/补收走 Registry→Turn→Assembly→Outbox；物理发送唯一出口 = outbox')
 
@@ -580,6 +559,7 @@ export function apply(ctx) {
     chatKeyOfSession: (sid) => useModularCore
       ? (modularCoreApi?.chatKeyOfSession?.(String(sid)) || '')
       : (hub.chatOfSession?.(sid) || ''),
+    onSessionEvent: useModularCore ? hub.onSessionEvent : undefined,
   })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
