@@ -12,4 +12,6 @@ test('模型提炼独立成 extractor，档案提交仍由 memory 主库执行',
   assert.match(memory, /function extractFacts\(chatId, transcript, genSignal = null\) \{\s*return extractor\.extractFacts/)
   assert.match(memory, /function extractLines\(chatId, lines, genSignal = null\) \{\s*return extractor\.extractLines/)
   assert.match(extractor, /async function extractLines\(chatId, lines, genSignal = null\)/)
+  assert.match(memory, /function consolidate\(o = \{\}\) \{\s*return extractor\.consolidate/)
+  assert.match(extractor, /async function consolidate\(o = \{\}\)/)
 })
