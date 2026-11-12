@@ -31,6 +31,8 @@ import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
 import { createHub } from './chat/hub.js'
 import { createChatLog, createChatLogApi } from './chat/chat-log.js'
+import { createQuestionRegistry } from './chat/questions.js'
+import { createApprovalRegistry } from './chat/approvals.js'
 import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
@@ -253,9 +255,24 @@ export function apply(ctx) {
     poke: (ev) => mods.claim('poke', ev),
   }
 
+  const interactions = {
+    questions: createQuestionRegistry({
+      deliver: (chatId, text) => hub.sendText(chatId, text, undefined, [], undefined),
+      timeoutMs: Number(getConfig().questions?.timeoutMs) || 300_000,
+      log: logger.child('questions'),
+    }),
+    approvals: createApprovalRegistry({
+      deliver: (chatId, text) => hub.sendText(chatId, text, undefined, [], undefined),
+      ownerQQ: () => getConfig().ownerQQ,
+      timeoutMs: Number(getConfig().admin?.approvalTimeoutMs) || 60_000,
+      log: logger.child('approvals'),
+    }),
+  }
+
   hub = createHub({
     localApi: local,
     chatLog,
+    interactions,
     dsh: ctx,
     getConfig,
     egressRef,
@@ -539,9 +556,11 @@ export function apply(ctx) {
 
   // ---------- 宿主旁路 seam（审批流/交互提问/会话监听/看门狗，见 host/effects.js） ----------
   const effects = createHostEffects({
-    ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState,
-    // 开旗后会话由新核心创建，legacy sessions.json 里没有 → 审批/提问桥接要能反查到 chatKey
-    chatKeyOfSession: (sid) => (modularCoreApi?.chatKeyOfSession?.(String(sid)) || ''),
+    ctx, logger, log, getConfig, hub, mods, use, snowluma, onebot, gatewayState, interactions,
+    // 只查询当前启用的核心；新核心未就绪时不回退旧会话表。
+    chatKeyOfSession: (sid) => useModularCore
+      ? (modularCoreApi?.chatKeyOfSession?.(String(sid)) || '')
+      : (hub.chatOfSession?.(sid) || ''),
   })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
@@ -555,6 +574,8 @@ export function apply(ctx) {
   ctx.effect(() => () => {
     // US-008：管道里的合流中间件先卸（清窗口定时器 + 中止挂起 ctx），flag-off 时为 null
     try { pipelineApi.aggregator?.dispose?.() } catch (error) { log.warn('入口合流卸载出错：', error.message) }
+    interactions.questions.dispose('插件卸载')
+    interactions.approvals.clear('插件卸载')
     hub.disposeRecentMedia()
     mods.dispose()
     try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
