@@ -19,9 +19,9 @@ test('#2 提取门槛：3 行不再触发，纯寒暄不进模型', () => {
   assert.match(MEM, /substantive\.length === 0/, '快筛条件')
 })
 
-test('#3 长对话全量分段提炼，不再只挖最后 240 行', () => {
-  assert.match(MEM, /chunks\.slice\(-8\)/, '挖到 8 块（640 行）')
-  assert.doesNotMatch(MEM, /chunks\.slice\(-3\)/, '旧的 3 块上限已移除')
+test('#3 长对话全量分段提炼，不再把整日记为成功却只处理最后 640 行', () => {
+  assert.match(MEM, /for \(const part of chunks\)/, '所有批次都处理')
+  assert.doesNotMatch(MEM, /chunks\.slice\(-\d+\)/, '不再静默截去旧批次')
 })
 
 test('#4 主人换号迁移：scope/about 一起搬，面板有入口', () => {

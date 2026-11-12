@@ -103,6 +103,33 @@ test('根因3修复：按群隔离——一个群模型炸，另一个群照常�
   assert.ok(state.learned['2026-11-07'].includes('888'))
 })
 
+test('每日任务模型失败后同日可重试，成功后才设置 lastRunDay', async () => {
+  let t = new Date('2026-11-08T15:00:00').getTime()
+  let fail = true
+  const dir = mkdtemp()
+  const stateFile = join(dir, 'book.json')
+  const rows = Array.from({ length: 12 }, (_, i) => ({ chatId: 'group:777', uid: String(i + 1), text: `石化流这个梗真好玩 ${i}` }))
+  const engine = createSlangEngine({
+    config: () => ({ enabled: true, memory: { slang: true } }),
+    loadState: () => { try { return JSON.parse(readFileSync(stateFile, 'utf8')) } catch { return null } },
+    saveState: (s) => writeFileSync(stateFile, JSON.stringify(s)),
+    chatLogDays: () => ['2026-11-07'],
+    chatLogOf: () => rows,
+    askModelImpl: async () => { if (fail) throw new Error('临时模型故障'); return SLANG_JSON },
+    now: () => t,
+    log: { info() {}, warn() {}, debug() {} },
+  })
+  engine.tick()
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(engine.status().lastRunDay, '', '失败不应写当日完成标记')
+  fail = false
+  engine.tick()
+  await new Promise((r) => setTimeout(r, 40))
+  assert.equal(engine.status().lastRunDay, new Date(t).toDateString())
+  assert.ok(engine.bookOf('777').length > 0, '同日重试后学到内容')
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('开关：memory.slang 默认关——tick 直接不跑（面板开关打开才启用）', async () => {
   let t = new Date('2026-11-08T15:00:00').getTime()
   const { engine, calls } = makeEngine({ now: () => t, slangOn: false })
