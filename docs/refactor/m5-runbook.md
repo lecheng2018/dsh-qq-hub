@@ -25,7 +25,15 @@
 ## M5-4/5/6 小流量实发 / 72 小时观察 / 回滚演练（blocked-on-owner 逐级批准）
 
 - 顺序与门禁见任务书 M5 §3/§4；每一步独立批准 + 证据回填本文件。
-- 回滚姿态：FLAG_MODULAR_CORE 关 + 重启 = 回 legacy 路径（代码回退用 backup/m0-m1-complete 分支工件）。
+- 回滚姿态：使用固定旧安装包；K-03C 起 `FLAG_MODULAR_CORE` 不再提供 legacy 回退，代码回滚不自动回滚数据。
+
+## K-03A～C 后实现复核（main `e1731d9`）
+
+- 本地源码验证：K-03A/B/C 的 PR 与 CI 均通过；当前全量 1964 通过 / 0 失败 / 4 跳过，扩展 46/46，lint 0 error，打包 307 文件。
+- 上述结果不覆盖本 runbook 的真实环境门禁：M5-1～M5-6 对当前提交仍全部未执行，旧版本实测记录不得直接结转。
+- OneBot unknown 挂账仍未关闭；真实 OneBot dryRun、小流量实发、72 小时观察和回滚演练均未开始。
+- owner 对旧实现和旧 SQLite 正式离开发布包的最终书面批准尚未记录，因此 K-03D 只做依赖盘点，不删除文件。
+- 当前冻结 facade 为 `src/host/current-hub.js`；生产不再创建旧 hub、pipeline 或读取旧灰度开关。
 
 ## 已知边界（诚实登记）
 
