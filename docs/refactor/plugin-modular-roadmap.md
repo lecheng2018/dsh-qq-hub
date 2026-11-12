@@ -84,15 +84,16 @@ host（唯一装配与生命周期）
 - P2c 引用读取：host 持有唯一 quoted-messages，统一 get_msg、历史补图与 200 条缓存，缓存键包含会话和消息 ID；新旧核心保留各自提示文案与附件装配。补图不丢原正文，读取失败返回可展示的失败结果；vision 与上下文不在该子切片。
 - P2d 入站图片：host 持有唯一 inbound-images，旧 hub 共用 segmentBytes 下载与严格类型校验，modular 共用 URL 转 base64 和 DSH 附件登记；保留两条现有下载及接受语义，不顺带改变网络策略。附件不可用时去掉裸图片块并明确降级；辅助视觉模型与上下文装配不在该子切片。
 - P2e 辅助视觉：host 持有唯一 inbound-vision，legacy 共用转述文案与调用，modular 在附件登记前补齐主模型明确不能看图时的辅助转述；未配置时诚实说明，视觉 auto/on 不走辅助路径。上下文装配与人设/preset/workspace 统一不在该子切片。
-- P2f 聊天工作区：workspaceDirForChat 统一默认共用、显式 workspacePerChat 隔离与 system 主目录规则；DSH 适配器传入 chatKey，modular 建会话不再忽略按聊天隔离配置。人设和模块上下文装配的最终对照仍需复核。
+- P2f 聊天工作区：workspaceDirForChat 统一默认共用、显式 workspacePerChat 隔离与 system 主目录规则；DSH 适配器传入 chatKey，modular 建会话不再忽略按聊天隔离配置。人设、preset 与模块上下文已按现有真实 host 回归完成对照。
 - 范围：按 ADR-0002 的 Inbound/Context 路线，抽取既有 ASR、vision、引用和 recentMedia 行为，不在 modular-core 再实现一份。voice/sticker 的业务策略仍可选，物理发送仍走唯一 outbox。
 - 验收：同一事件经新旧调用路径，正文/附件块/转写/引用/人设/preset/workspace 一致；能力关闭时诚实降级，取消或超时不污染会话；副作用不双发。
 - 回滚：只回退调用接线，唯一实现与旧 facade 保留；不同时修改会话默认路径。
 
 ### P3：拆出记忆学习管线
 
+- P3a 提炼批次幂等：每个 80 行块以聊天、块位置和输入指纹确定批次 ID；`done` 跳过、`failed` 重试、`running/pending` 待核对，全部成功后才推进日进度。状态保存在既有 state.json，部分事实提交异常不得当普通模型失败盲重试。extractor 独立、完整生命周期与其他派生学习不在该子切片。
 - 范围：先收窄 archive 契约，再将 extractFacts/extractLines/consolidate 调度迁到独立 extractor。存储与召回不 import LLM，不依赖聊天 hub；scope 纯函数继续共用。
-- 必须同时解决：在 P1 的来源指纹和完整 80 行分批基础上，增加批次级幂等提交与事实/进度一致性；不能只搬动函数。记忆当前按日 checkpoint，中途失败会重跑已成功块；P3 才能承诺成功块不重复计费或重复入档。
+- 必须同时解决：在 P1 的来源指纹和完整 80 行分批基础上，增加批次级幂等提交与事实/进度一致性；不能只搬动函数。批次 checkpoint 已落地，extractor 独立与全模型入口生命周期仍需后续完成。
 - 生命周期：所有模型入口受同一任务管理约束；reload/dispose 取消并等待在途任务终结，迟到结果不能写。当前代际拦截只是防线，不等于已覆盖全部画像/导入/历史学习入口。
 - 验收：不用 LLM 仍能 CRUD/召回；关闭 extractor 不影响手动记忆；批次中断/恢复、输入替换、重复请求、磁盘失败均不跳过未处理原文、不重复提交。
 - 回滚：关闭新消费者并保留 archive/游标；必须保证旧调度不同时开启。涉及状态格式升级时单独提供可逆步骤。
