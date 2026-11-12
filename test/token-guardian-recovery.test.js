@@ -45,11 +45,13 @@ async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false } =
     ask,
     core: {
       http: {},
+      chatLog: {
+        listDays: () => ['2026-11-10'],
+        readDay: () => [{ chatId, who: 'user', text: '需要压缩的聊天正文' }],
+        append() {},
+      },
       hub: {
-        chatLogDays: () => ['2026-11-10'],
-        chatLogOf: () => [{ chatId, who: 'user', text: '需要压缩的聊天正文' }],
         resetChat: () => { resetCalls++; return true },
-        logChat() {},
         isBusy: () => { busyChecks++; return busy },
       },
     },

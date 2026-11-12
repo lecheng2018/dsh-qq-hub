@@ -19,7 +19,7 @@ test('拒绝文案带 busy 标记（面板能区分「没压成」和「正在�
 })
 
 test('摘要写回 chatlog 前置条件：只在 resetChat 成功后（双保险路径不污染流水）', () => {
-  const logIdx = TG.indexOf('hub.logChat(chatId')
+  const logIdx = TG.indexOf('api.core.chatLog.append(chatId')
   const resetIdx = TG.indexOf('if (!resetOk) {')
-  assert.ok(logIdx > resetIdx > 0, 'logChat 在 no-reset 分支之后')
+  assert.ok(logIdx > resetIdx && resetIdx > 0, '共享流水追加在 no-reset 分支之后')
 })

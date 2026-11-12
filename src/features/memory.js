@@ -19,13 +19,18 @@ import { conceptsOf } from './memory-concepts.js'
 import { collectMemberLines, enoughEvidence, buildDistillPrompt, parseDistillProfile, mergeProfile, renderDistillHint, dedupConvo } from './distill.js'
 import { sessionsDirFor, scanTranscripts, linesOf, speakerCounts } from './session-history.js'
 import { workspaceDirOf } from '../chat/workspace.js'
+import { readChatLogSource, chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 export { CLARITY_STEPS, SCOPE_QUOTAS, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize }
 
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDistillLearned }) {
+export function createMemoryStore({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned }) {
+  const sourceLog = chatLog?.listDays ? chatLog : { listDays: () => hub?.chatLogDays?.() || [], readDay: (day) => hub?.chatLogOf?.(day) || [] }
+  const chatLogDays = () => sourceLog.listDays()
+  const chatLogSnapshot = (day) => readChatLogSource(sourceLog, day)
+
   /** 从人设文本里抽「禁止」类硬规则行，给 style 学习当护栏（人设没写或没传 personaText 就返回空）。 */
   const personaGuard = () => {
     try {
@@ -912,7 +917,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     let rows = []
     try {
       for (const dk of [dayKey(), dayKey(new Date(cutoff))]) {
-        for (const l of hub?.chatLogOf?.(dk) || []) {
+        for (const l of chatLog?.readDay?.(dk) || hub?.chatLogOf?.(dk) || []) {
           if (!l || !String(l.chatId).startsWith('group:') || !String(l.text || '').trim()) continue
           const t = Number(l.t) || 0
           if (t && t < cutoff) continue
@@ -1060,8 +1065,7 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     try {
       const chunks = []
       for (let i = 0; i < talk.length; i += 80) chunks.push(talk.slice(i, i + 80))
-      // 上限 8 块：一天超过 640 行时仅提炼最近的流水。
-      for (const part of chunks.slice(-8)) {
+      for (const part of chunks) {
         if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
         n += await extractFacts(chatId, part.map(line).join('\n'), genSignal)
       }
@@ -1218,15 +1222,20 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
     let profiles = 0
     const failedChats = []
     try {
-      for (const day of hub.chatLogDays()) {
+      for (const day of chatLogDays()) {
         if (!genSignal.isValid()) break
         if (day > today || (day === today && !o.includeToday)) continue
-        const done = (load().processed || {})[day] || 0
-        const all = hub.chatLogOf(day)
-        if (done === all.length) continue
+        const snapshot = chatLogSnapshot(day)
+        const all = snapshot.records
+        const progress = load()
+        const done = (progress.processed || {})[day] || 0
+        const previousSource = progress.processedSources?.[day]
         if (done > all.length) throw new Error(`${day} 的共享流水已缩短，请核对消费进度`)
+        if (previousSource && previousSource.count !== done) throw new Error(`${day} 的共享流水消费进度不一致，请核对后恢复`)
+        const offset = chatLogOffset(snapshot, previousSource)
+        if (previousSource && done === all.length) continue
         const byChat = new Map()
-        for (const l of all.slice(done)) {
+        for (const l of all.slice(offset)) {
           if (!l || !l.chatId || String(l.chatId).startsWith('system:')) continue
           if (/^【更早聊天的摘要/.test(String(l.text || ''))) continue
           if (!byChat.has(l.chatId)) byChat.set(l.chatId, [])
@@ -1246,9 +1255,13 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
           }
         }
         if (genSignal.isValid() && failedChats.length === failuresBefore) {
+          const cursor = chatLogCursor(snapshot)
+          chatLogOffset(chatLogSnapshot(day), cursor)
           const s = load()
           s.processed = s.processed || {}
           s.processed[day] = all.length
+          s.processedSources = s.processedSources || {}
+          s.processedSources[day] = cursor
           save(s)
           days++
         }
@@ -1349,14 +1362,6 @@ export function createMemoryStore({ dsh, getConfig, hub, log, personaText, onDis
   async function tick() {
     if (status === 'closed' || !store.health().ok) return
     const cfg = getConfig().memory
-    // 共享流水按保留窗口清理；调度所有权待迁至独立流水服务。
-    {
-      const keepDays = Math.max(14, Number(getConfig().chatlog?.keepDays) || 30)
-      const cutoff = dayKey(new Date(Date.now() - keepDays * 86400_000))
-      const stale = (hub.chatLogDays?.() || []).filter((day) => day < cutoff)
-      for (const day of stale) hub.deleteChatLog(day)
-      if (stale.length) log.info(`聊天流水：清理了 ${stale.length} 天前的旧文件（保留 ${keepDays} 天）`)
-    }
     if (!cfg.enabled || !cfg.dailyConsolidate) return
     const s = load()
     const today = dayKey()

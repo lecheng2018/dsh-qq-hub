@@ -39,7 +39,7 @@ export function digestOf(v, { subtitle = '', comments = [], vision = '' } = {}) 
   ].filter(Boolean).join('\n')
 }
 
-export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vision: see = lookWithVision }) {
+export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: injected, vision: see = lookWithVision }) {
   const cfg = () => getConfig().bili
   const api = injected || createBiliApi({ getCookie: () => cfg().cookie, log })
   const shots = createShotStore({ max: () => getConfig().bili.shotLibrary })
@@ -311,8 +311,12 @@ export function createBili({ getConfig, hub, memory, log, dsh, api: injected, vi
       const fresh = (await api.replyFeed()).filter((x) => !done.has(x.id) && Number(x.type || 1) === 1 && x.oid).slice(0, 5)
       for (const x of fresh) {
         done.add(x.id)
-        // 记下来：整理记忆时能知道 B 站上谁跟她聊过什么
-        hub.logChat?.('bili', x.name, `在 B 站《${x.title}》下回复你：${x.text}`, '')
+        try {
+          const append = chatLog?.append || hub.logChat
+          append?.('bili', x.name, `在 B 站《${x.title}》下回复你：${x.text}`, '')
+        } catch (error) {
+          log.warn('B 站回复流水写入失败：', error.message)
+        }
         if (s.replies >= c.maxRepliesPerDay || !canPost(s)) continue
         const out = await think(`你在 B 站视频《${x.title}》下发过评论：「${x.myText}」\n${x.name} 回复你：「${x.text}」\n想回就用你的口气回一句（像普通网友聊天，别太长），不想回就只输出 [沉默]。只输出回复正文。`)
         const reply = String(out || '').trim().split(/\n+/)[0]
