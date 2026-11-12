@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { askModel } from '../src/core/llm.js'
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 async function until(fn, timeout = 500) {
@@ -17,7 +20,7 @@ async function until(fn, timeout = 500) {
 }
 let seq = 0
 
-async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false } = {}) {
+async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false, logLines = null } = {}) {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'tg-recovery-'))
   const mod = (await import(`../src/modules/token-guardian/index.js?recovery=${seq++}`)).default
   const routes = {}
@@ -32,6 +35,10 @@ async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false } =
     }
   }
   const chatId = 'group:1'
+  // 线上流水是 12k 字级别的；审核兜底有 1500 字下限，测试也得用差不多量级才能看出丢尾效果
+  const defaultLogLines = logLines ?? Array.from({ length: 200 }, (_, i) => ({
+    chatId, who: i % 3 === 0 ? 'bot' : 'user', text: `第 ${i} 句话说了一堆事情，用来把流水撑到线上体量。`,
+  }))
   let busyChecks = 0
   let resetCalls = 0
   const api = {
@@ -47,7 +54,7 @@ async function boot({ ask, cfgOver = {}, withIntervals = false, busy = false } =
       http: {},
       chatLog: {
         listDays: () => ['2026-11-10'],
-        readDay: () => [{ chatId, who: 'user', text: '需要压缩的聊天正文' }],
+        readDay: () => defaultLogLines,
         append() {},
       },
       hub: {
@@ -114,7 +121,77 @@ test('自动压缩失败：指数退避，不再每 30 秒无效调用', async (
   assert.ok(second.nextAttemptAt - second.lastAttemptAt >= 60_000, '第二次失败至少退避一分钟')
 })
 
-test('压缩摘要不带推理：显式 reasoningEffort off，思考不吃 maxTokens 预算', async () => {
+test('内容审核拦截：砍掉最近流水重试，摘要头保留', async () => {
+  const tried = []
+  let n = 0
+  const { out, chatId } = await boot({
+    ask: async (opts) => {
+      tried.push(opts.text)
+      n++
+      if (n === 1) throw new Error('模型报错：500 {"type":"error","error":{"type":"api_error","message":"input new_sensitive (1026)"}}')
+      return '降级后的摘要'
+    },
+    cfgOver: { summaryMaxChars: 1200 },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.ok, true, '第二次应该成功，而不是直接放弃')
+  assert.equal(tried.length, 2, '被拦后要重试一次')
+  assert.ok(tried[1].length < tried[0].length, '重试要用更短的流水（丢掉最近被拦的部分）')
+  assert.ok(tried[1].length >= 800, '不能把整份流水砍光')
+  assert.ok(tried[1].endsWith(tried[0].slice(tried[0].length - 40)),
+    '保留的必须是「更早」那段，顺序不能乱')
+  assert.equal(out.summaries()[chatId].text, '降级后的摘要')
+})
+
+test('审核拦截且丢尾也过不了：报 moderation，不伪装成「调用失败」', async () => {
+  let n = 0
+  const { out, chatId } = await boot({
+    ask: async () => {
+      n++
+      throw new Error('模型报错：500 {"type":"error","error":{"type":"api_error","message":"input new_sensitive (1026)"}}')
+    },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'moderation', '要说清是内容审核，不是功能坏了')
+  assert.ok(n >= 2 && n <= 4, `丢尾重试次数要有上限，实际 ${n} 次`)
+  assert.match(result.message, /内容审核/, '面板提示要能看懂')
+})
+
+test('审核拦截有次数上限，不会无限重试', async () => {
+  let n = 0
+  const { out, chatId } = await boot({
+    ask: async () => { n++; throw new Error('input new_sensitive (1026)') },
+  })
+  await out.compact(chatId, { chatId })
+  assert.ok(n <= 4, `最多试 4 次（原始 + 3 次丢尾），实际 ${n}`)
+})
+
+test('限流不会被当成审核拦截：不浪费丢尾重试', async () => {
+  let n = 0
+  const { out, chatId } = await boot({
+    ask: async () => { n++; throw new Error('429 rate limit exceeded') },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.reason, 'rate-limited')
+  assert.equal(n, 1, '限流要直接报，不该丢尾重试')
+})
+
+test('审核拦截后冷却：冷却期内一次都不试，且不吃指数退避', () => {
+  const SRC3 = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
+  // 被拦之后要记住时间，并在 tickOnce 里跳过冷却期 —— 否则每个 tick 烧 4 次调用全失败
+  assert.ok(SRC3.includes('lastModerationAt.set(String(sessionKey), Date.now())'), '被拦时要记时间')
+  assert.ok(SRC3.includes('if (modAt && now - modAt < Number(cfg.moderationCooldownMinutes || 30) * 60_000) continue'),
+    '冷却期内 tickOnce 要跳过')
+  // 不能做成「来新消息就解锁」：活跃群每秒都在说话，那样等于没冷却
+  // （2026-11-12 实测：解锁版本在 11:29 仍然每 30 秒烧 4 次）
+  assert.ok(!SRC3.includes('lastModerationAt.delete(key)'), '新消息不该解锁冷却')
+  // 审核是内容问题不是调用失败：不该再叠一层指数退避，否则要等 30 分钟退避 + 30 分钟冷却
+  assert.ok(SRC3.includes('st2.nextAttemptAt = 0'), '审核拦截要清掉指数退避')
+  assert.ok(SRC3.includes('moderationCooldownMinutes: 30,'), '要有可配置的冷却时长')
+})
+
+test('压缩摘要用最低思考档 low，且绝不能发 off', async () => {
   const seen = []
   const { out, chatId } = await boot({
     ask: async (opts) => { seen.push(opts); return '摘要正文' },
@@ -122,7 +199,41 @@ test('压缩摘要不带推理：显式 reasoningEffort off，思考不吃 maxTo
   const result = await out.compact(chatId, { chatId })
   assert.equal(result.ok, true)
   assert.equal(seen.length, 1)
-  assert.equal(seen[0].reasoningEffort, 'off', '推理模型的思考会吃掉 maxTokens 预算：正文截断/为空 + 二次重试，合计超 90 秒（2026-11-11 排查）')
+  assert.equal(seen[0].reasoningEffort, 'low', '最低档：实测该档思考 token = 0，等于不思考')
+  assert.notEqual(seen[0].reasoningEffort, 'off',
+    'off 会被 forceAdaptiveThinking 模型翻成 thinking.type=disabled，服务端直接 400'
+    + '（MiniMax-M3.1-Flash：requires adaptive thinking ... is not allowed，2026-11-12 实测）')
+})
+
+test('摘要 maxTokens 给思考留余量：思考算进 output 预算，不能只按正文长度算', async () => {
+  const seen = []
+  const { out, chatId } = await boot({
+    ask: async (opts) => { seen.push(opts); return '摘要正文' },
+    cfgOver: { summaryMaxChars: 1200 },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.ok, true)
+  // 正文上限 1200 字 ≈ 1680 token，再加思考余量
+  assert.ok(seen[0].maxTokens >= 2000,
+    `maxTokens 要给思考留余量，实际 ${seen[0].maxTokens}`)
+})
+
+test('摘要字数上限写进 system，而不是事后 slice 截断', async () => {
+  const seen = []
+  const { out, chatId } = await boot({
+    ask: async (opts) => { seen.push(opts); return '摘要正文' },
+    cfgOver: { summaryMaxChars: 800 },
+  })
+  const result = await out.compact(chatId, { chatId })
+  assert.equal(result.ok, true)
+  assert.match(seen[0].system, /800 字以内/,
+    '模型实测会写 2400~3200 字，代码再 slice 就断在句中间：必须显式告诉它上限，让它自己收敛')
+})
+
+test('默认超时留足余量：实测 21~32 秒，卡 90 秒会被抖动掐断', () => {
+  const SRC2 = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
+  assert.match(SRC2, /askTimeoutSeconds: 150/, '默认值要留余量')
+  assert.doesNotMatch(SRC2, /askTimeoutSeconds: 90,/, '90 秒实测会被 API 抖动掐断（2026-11-12）')
 })
 
 test('压缩成功后 chars 仍保存真实字符数，不预先乘 token 系数', async () => {
