@@ -8,11 +8,12 @@ import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const WORKSPACE = readFileSync(join(ROOT, 'src/chat/workspace.js'), 'utf8')
 const CFG = readFileSync(join(ROOT, 'src/core/config.js'), 'utf8')
 
 test('默认共用工作区，只有显式打开才按聊天建', () => {
-  assert.match(HUB, /getConfig\(\)\.workspacePerChat === true/, '要用开关判断，不能无条件按 chatId 建目录')
-  assert.match(HUB, /perChat \? chatWorkspaceDir\(chat\.chatId\) : workspaceDirOf\(getConfig\(\)\)/)
+  assert.match(HUB, /workspaceDirForChat\(getConfig\(\), chat\?\.chatId\)/, 'legacy 必须使用共享目录选择')
+  assert.match(WORKSPACE, /cfg\?\.workspacePerChat !== true/, '共享纯函数必须显式判断开关')
 })
 
 test('配置里这个开关默认关', async () => {
@@ -23,5 +24,5 @@ test('配置里这个开关默认关', async () => {
 })
 
 test('系统会话（后台任务）永远走主工作区', () => {
-  assert.match(HUB, /!chat\.chatId\.startsWith\('system:'\)/, 'system 会话不建子目录')
+  assert.match(WORKSPACE, /startsWith\('system:'\)/, 'system 会话不建子目录')
 })
