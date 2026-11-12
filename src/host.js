@@ -36,6 +36,7 @@ import { createApprovalRegistry } from './chat/approvals.js'
 import { createRecentMedia } from './chat/recent-media.js'
 import { createInboundAudio } from './chat/inbound-audio.js'
 import { createQuotedMessages } from './chat/quoted-messages.js'
+import { createInboundImages } from './chat/inbound-images.js'
 import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
@@ -260,6 +261,7 @@ export function apply(ctx) {
 
   const recentMedia = createRecentMedia({ log: logger.child('recent-media') })
   const inboundAudio = createInboundAudio({ onebot, dsh: ctx, localApi: local, log: logger.child('inbound-audio') })
+  const inboundImages = createInboundImages({ onebot, dsh: ctx, log: logger.child('inbound-images') })
   const quotedMessages = createQuotedMessages({
     onebot, getConfig, log: logger.child('quoted-messages'),
     faceName: (...args) => hub.faceName?.(...args),
@@ -286,6 +288,7 @@ export function apply(ctx) {
     recentMedia,
     inboundAudio,
     quotedMessages,
+    inboundImages,
     dsh: ctx,
     getConfig,
     egressRef,
@@ -365,6 +368,7 @@ export function apply(ctx) {
         onebot,
         inboundAudio,
         quotedMessages,
+        inboundImages,
         mods: {
           // 惰性代理：mods 在下方才创建；每事件现取（模块热重载即时生效，与 legacy 同语义）
           contextFor: (args) => (mods ? mods.contextFor(args) : ''),
