@@ -14,6 +14,7 @@
   },
   "scripts": {
     "build:client": "node scripts/build-client.mjs",
+    "prepack": "node scripts/build-client.mjs",
     "test": "node scripts/build-client.mjs && node --test \"test/**/*.test.js\"",
     "test:extensions": "npm run --prefix extensions/tieba-reader test",
     "test:all": "npm test && npm run test:extensions",
