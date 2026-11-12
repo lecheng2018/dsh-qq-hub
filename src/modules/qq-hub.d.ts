@@ -137,7 +137,6 @@ export interface Events {
   config: (cfg: any, before: any) => void
   'module/start': (id: string) => void
   'module/stop': (id: string) => void
-  'song/sung': (info: { title: string; chatId: ChatId }) => void
   [custom: string]: (...args: any[]) => any
 }
 
@@ -250,7 +249,7 @@ export interface QQHubModule {
   settings?: Setting[]
   /** 自己画面板：模块文件夹里的文件名（默认 panel.js） */
   panel?: string | boolean
-  /** 设置和面板放进哪个内置标签页（比如 'song'），不写就单独一页 */
+  /** 设置和面板放进哪个内置标签页（比如 'voice'），不写就单独一页 */
   tab?: string
   setup(api: Api): any
 }

@@ -12,7 +12,7 @@ test('UV_SOURCES：长度 3，首条走阿里云镜像且带 sha256，前两条�
 
 test('tts.js 不再依赖 song 目录（防止解耦回退）', () => {
   const src = readFileSync(new URL('../src/voice/tts.js', import.meta.url), 'utf8')
-  assert.ok(!src.includes('song/'), 'tts.js 不应再引用 song/')
+  assert.ok(!src.includes('/song'), 'tts.js 不应再引用 song 模块')
 })
 
 test('UV_SOURCES 每条都有 https 开头的 url', () => {

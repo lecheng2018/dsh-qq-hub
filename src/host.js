@@ -12,7 +12,7 @@
 //   src/host/effects.js         DSH 旁路 seam（审批流/交互提问/会话监听/看门狗）
 //   src/host/panel/overview.js  面板聚合视图（overview/脱敏/连接诊断）
 //   src/host/panel/routes-*.js  72 条面板路由按域拆分
-// 业务能力本身都是模块（src/modules/）：表情、语音、记忆、空间、B 站、翻唱、生图……
+// 业务能力本身都是模块（src/modules/）：表情、语音、记忆、空间、B 站、生图……
 // 能单独关掉，也能用自己写的替换。
 //
 // ⚠ 安全默认：总开关关、试运行开。不手动打开，一句都不会真的发到 QQ。
@@ -278,7 +278,7 @@ export function apply(ctx) {
         personaText: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
         runCommand: async (cmd, msg) => {
           if (cmd.ext) return String((await cmd.ext.run(cmd.arg, msg)) ?? '')
-          return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] })
+          return runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), listModels: models.listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: mods ? mods.commands() : [] })
         },
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
