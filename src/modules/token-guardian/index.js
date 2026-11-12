@@ -34,8 +34,13 @@ export default {
     cooldownMinutes: 120,
     /** 摘要最多保留多少字 */
     summaryMaxChars: 1200,
-    /** 单次摘要模型请求上限；超时中止并释放压缩锁 */
-    askTimeoutSeconds: 90,
+    /** 被内容审核拦下后，多久之内不再试（纯时间制：活跃群每秒都在说话，按「来新消息」解锁等于没有冷却） */
+    moderationCooldownMinutes: 30,
+    /** 单次摘要模型请求上限；超时中止并释放压缩锁。
+     * 默认 150s：实测正常 21~32s（真实群流水 6k 字），但 API 会抖动到 90s 以上，
+     * 卡在 90s 就会把本来能成的压缩掐断（2026-11-12 线上实测连续踩）。
+     * 留足余量：宁可偶尔多等一会儿，也别让压缩反复失败、退避 30 分钟。 */
+    askTimeoutSeconds: 150,
   },
   settings: [
     { key: 'enabled', label: '启用提前压缩', type: 'switch', hint: '关着的时候完全不动，按 DSH 默认行为走' },
@@ -43,7 +48,8 @@ export default {
     { key: 'idleSeconds', label: '空闲多久后压缩（秒）', type: 'number', min: 5, max: 600, step: 5, hint: '正在聊天时不会打断' },
     { key: 'cooldownMinutes', label: '两次压缩最小间隔（分钟）', type: 'number', min: 10, max: 1440, step: 10 },
     { key: 'summaryMaxChars', label: '摘要最大字数', type: 'number', min: 200, max: 4000, step: 100 },
-    { key: 'askTimeoutSeconds', label: '摘要请求超时（秒）', type: 'number', min: 30, max: 300, step: 30, hint: '超时后取消请求并释放压缩锁；失败会指数退避，不会每 30 秒重试' },
+    { key: 'moderationCooldownMinutes', label: '审核拦截后暂停（分钟）', type: 'number', min: 5, max: 720, step: 5, hint: '内容被模型服务端判敏感后先不试，避免空烧调用；到期自动重试（那时窗口里的内容已往前滚，才有机会通过）' },
+    { key: 'askTimeoutSeconds', label: '摘要请求超时（秒）', type: 'number', min: 30, max: 300, step: 30, hint: '超时后取消请求并释放压缩锁；失败会指数退避，不会每 30 秒重试。正常 20~35 秒，别设太小' },
   ],
   setup(api) {
     const stateFile = () => api.dataDir('state.json')
@@ -105,27 +111,48 @@ export default {
 
     /** 把最近聊天流水拼成一段供压缩用的原文（有上限）。
      * 开头带上上一份摘要（若有）：连续压缩时，第一次压缩摘掉的那段聊天只存在于摘要里，
-     * chatlog 早就翻不到了 —— 不带它，第二次压缩就会把更早的对话彻底丢掉（2026-11-05 排查）。 */
-    function recentTranscript(chatLog, chatId, maxChars = 12000) {
+     * chatlog 早就翻不到了 —— 不带它，第二次压缩就会把更早的对话彻底丢掉（2026-11-05 排查）。
+     * recentChars 由调用方收窄：内容审核兜底会把预算调小，只留更早的内容（见 doCompact 里的重试）。 */
+    function recentTranscript(chatLog, chatId, maxChars = 12000, recentChars = null) {
       try {
         const prev = summaries[chatId]
         const head = prev && prev.text ? `【更早聊天的摘要（${new Date(prev.at).toLocaleString('zh-CN').slice(0, 16)}）】\n${prev.text}\n\n【以下是之后新说的】\n` : ''
         const days = chatLog?.listDays?.() || []
         if (!days.length) return head.trim() ? head : ''
         const rows = []
-        for (let i = days.length - 1; i >= 0 && rows.join('').length < maxChars * 2; i--) {
+        // 预算就是收集上限（原来靠 slice(-n) 兜底，现在必须在收集时就卡住，否则 input 会无界增长）
+        const collectCap = (recentChars == null ? Math.max(2000, maxChars - head.length) : Math.max(800, recentChars)) * 2
+        for (let i = days.length - 1; i >= 0 && rows.join('').length < collectCap; i--) {
           const list = chatLog.readDay(days[i]) || []
           // chatlog 里 bot 自己的 who 是 'bot'（不是 'self'）：判错了会让摘要里全是「对方」，
           // 分不清哪句是她说的，摘要质量直接废掉一半。
           for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${(r.who === 'bot' || r.who === 'self') ? '你' : '对方'}：${r.text}`)
         }
-        // 摘要头固定占预算，原文吃剩下的额度 —— 总输入仍然有上限，不会越压越大
-        const body = rows.join('\n').slice(-Math.max(2000, maxChars - head.length))
-        return head + body
+        // 摘要头固定占预算，原文吃剩下的额度 —— 总输入仍然有上限，不会越压越大。
+        // 注意是 slice(-n)（保留最近 n 字）但要 join 回原顺序：rows 是从最近一天往前收集的。
+        const budget = recentChars == null ? Math.max(2000, maxChars - head.length) : Math.max(800, recentChars)
+        const kept = []
+        let used = 0
+        for (let i = rows.length - 1; i >= 0 && used < budget; i--) {
+          kept.push(rows[i])
+          used += rows[i].length + 1
+        }
+        return head + kept.reverse().join('\n')
       } catch (error) {
         const prev = summaries[chatId]
         return prev && prev.text ? `【更早聊天的摘要】\n${prev.text}` : ''
       }
+    }
+
+    /**
+     * 服务端内容审核拦截：只要窗口里掺进被判定敏感的发言，整份流水都会被 500 拒掉
+     * （不是网络问题，重试同样的内容永远失败）。
+     * 识别方式：接口报错文案 + 常见错误码。
+     */
+    const isModerationBlock = (message) => {
+      const s = String(message || '')
+      if (/input.?new.?sensitive|content.?policy|内容.{0,4}(审核|合规|敏感)|敏感内容|risk.?control/i.test(s)) return true
+      return /"(?:1026|1027|2013)"|\(1026\)|\(1027\)/.test(s)
     }
 
     /** 真正做一次提前压缩。
@@ -137,6 +164,12 @@ export default {
     // 同一个聊天两个压缩同时跑就是双 resetChat + 双摘要。锁按 chatId 分开，不同聊天互不挡。
     const compactBusy = new Set()
     const compactControllers = new Map()
+    // chatId -> 上次被内容审核拦下的时间。拦住之后在冷却期内**一次都不试**：
+    // 内容没变的话结果不会变，每 30 秒烧 4 次调用纯属浪费。
+    // 注意不能做成「来新消息就解锁」——活跃的群每秒都在说话，那样等于没有冷却，
+    // 每个 tick 都会重新烧一轮（2026-11-12 实测就是这样：11:29 仍在每 30 秒 4 次）。
+    // 冷却到期后自然重试；那时窗口里的内容已经往前滚了，才有机会通过。
+    const lastModerationAt = new Map()
     let disposed = false
     async function compact(sessionKey, chat, meta = {}) {
       const cfg = api.settings()
@@ -177,7 +210,7 @@ export default {
       } catch (error) { api.log.debug(`${ID}：拿聊天模型失败，摘要用默认模型（${error.message}）`) }
       const controller = new AbortController()
       if (chatId) compactControllers.set(chatId, controller)
-      const timeoutSeconds = Math.max(0.01, Number(cfg.askTimeoutSeconds) || 90)
+      const timeoutSeconds = Math.max(0.01, Number(cfg.askTimeoutSeconds) || 150)
       let askTimer = null
       const timeout = new Promise((_, reject) => {
         askTimer = setTimeout(() => {
@@ -188,33 +221,89 @@ export default {
         }, timeoutSeconds * 1000)
         askTimer.unref?.()
       })
+      // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
+      // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
+      const systemPrompt = '你是「大肥鱼」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：'
+        + '如果开头带【更早聊天的摘要】，那是上一份检查点：保留仍然成立的事实、丢掉已经过时的、把新内容并进去，输出**一份**合并后的摘要，不要照抄也不要分两截。'
+        + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；最后一条用户发言按原意保留，别只写成「聊了某事」；'
+        + '每句话写清是谁说的（用「你」和「对方」），分不清的就标「有人」；'
+        + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题；'
+        // 必须显式给字数上限：模型实测会写 2400~3200 字，而代码在 summaryMaxChars 处硬裁
+        // （slice），裁出来正好断在句中间。让它自己收敛到限额内，而不是事后剪掉。
+        + `**全文控制在 ${cfg.summaryMaxChars} 字以内**，宁可只留仍然重要的事实，也不要写长被截断。`
+      // maxTokens 是「思考 + 正文」的总预算（pi-ai 把思考算进 output）。摘要正文
+      // 上限 summaryMaxChars 字（约 ×1.4 token），再给思考留一份余量，否则思考吃掉
+      // 预算后正文被截断甚至为空 —— 截断摘要照样算成功，空回包则再触发 askModel
+      // 整轮重试，合计超过看门狗（2026-11-11 实测群摘要 64 字断在句中）。
+      const maxTokens = Math.max(600, Math.min(2400, Math.round(cfg.summaryMaxChars * 1.4) + 320))
+      let attempt = 0
+      // 审核兜底：每次把「新说的部分」预算砍掉 40%（摘要头和更早的内容保留），最多 3 次。
+      // 两个数都是实测出来的（2026-11-12，7.4k 字的真实群流水）：
+      //  - 预算上限要按**实际 body 长度**取，不能写死 12000：没有摘要头时 body 可能远小于
+      //    12000，「砍到 x%」就砍不动，重试等于原样再发一遍（踩过）。
+      //  - 收缩后要能落到 1k 字上下：审核边界实测在 1.2k 字附近（1217 字被拦、600 字通过），
+      //    所以下限设 800、每次 ×0.6，三轮才够得着。
+      let recentChars = null
+      const headMark = '【以下是之后新说的】\n'
+      const headLen = transcript.indexOf(headMark) + headMark.length
+      const bodyLen = headLen > 0 ? transcript.length - headLen : transcript.length
+      const baseRecent = Math.min(Math.max(2000, 12000 - Math.max(0, headLen)), bodyLen)
+      let pending = transcript
+      let finalMsg = ''
       try {
-        text = await Promise.race([api.ask({
-          // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
-          // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
-          system: '你是「大肥鱼」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：'
-            + '如果开头带【更早聊天的摘要】，那是上一份检查点：保留仍然成立的事实、丢掉已经过时的、把新内容并进去，输出**一份**合并后的摘要，不要照抄也不要分两截。'
-            + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；最后一条用户发言按原意保留，别只写成「聊了某事」；'
-            + '每句话写清是谁说的（用「你」和「对方」），分不清的就标「有人」；'
-            + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题。',
-          text: transcript,
-          maxTokens: Math.max(400, Math.min(2000, Math.round(cfg.summaryMaxChars * 1.4))),
-          // 摘要是机械整理，不需要推理：推理模型（如 MiniMax-M3.1）默认 low 档会先思考，
-          // 思考把 maxTokens 预算吃掉后正文被截断甚至为空 —— 截断摘要照样算成功（2026-11-11 实测
-          // 群摘要只有 64 字且断在句中），空回包则再触发 askModel 的整轮重试，合计超过看门狗 90 秒，
-          // 压缩永远完不成（单日 25 次超时、两个群 failures 18/30）。不支持 off 的模型由
-          // pickReasoningEffort 收敛回默认档，行为和以前一样。
-          reasoningEffort: 'off',
-          signal: controller.signal,
-          ...askOpts,
-        }), timeout])
+        for (;;) {
+          try {
+            text = await Promise.race([api.ask({
+              system: systemPrompt,
+              text: pending,
+              maxTokens,
+              // 摘要是机械整理，越少思考越好。**不能用 'off'**：MiniMax-M3.1-Flash 这类
+              // forceAdaptiveThinking 的模型会把它翻成 thinking.type=disabled，服务端直接
+              // 400（"requires adaptive thinking; thinking.type=disabled ... is not allowed"，
+              // 2026-11-12 实测）。用最低档 'low' 最安全：实测该档思考 token ≈ 0，等于不思考
+              // 又不触发 400；只支持别的档位的模型由 pickReasoningEffort 收敛回它的默认档。
+              reasoningEffort: 'low',
+              signal: controller.signal,
+              ...askOpts,
+            }), timeout])
+            if (attempt > 0) {
+              api.log.info(`${ID}：${chatId} 原流水被内容审核拦下，改压更早的 ${pending.length} 字后成功（最近那段留到下次压）`)
+            }
+            break
+          } catch (error) {
+            if (disposed) throw error
+            finalMsg = String(error?.message || error)
+            // 审核拦截跟网络抖动不一样：同一份内容重试多少次都会被拒。降级处理 ——
+            // 丢掉**最近**那批被判定敏感的发言（保留更早的内容和摘要头）再试一次。
+            // 注意不能保留最近：被拦的正是最新那段（2026-11-12 线上实测）。
+            const next = Math.floor((recentChars == null ? baseRecent : recentChars) * 0.6)
+            if (!isModerationBlock(finalMsg) || next < 800 || attempt >= 3) throw error
+            attempt++
+            recentChars = next
+            api.log.warn(`${ID}：${chatId} 流水被内容审核拦下（${finalMsg.slice(0, 80)}），丢掉最近部分、改用更早的 ${next} 字重试第 ${attempt} 次`)
+            pending = recentTranscript(api.core.chatLog, chatId, 12000, recentChars)
+          }
+        }
       } catch (error) {
         if (disposed) return { ok: false, reason: 'disposed', message: '模块已停止' }
-        const msg = String(error?.message || error)
+        const msg = finalMsg || String(error?.message || error)
         noteFailure(sessionKey, msg)
         if (error?.turnTimedOut) {
           api.log.warn(`${ID}：${msg}，稍后按退避时间重试`)
           return { ok: false, reason: 'timeout', message: msg }
+        }
+        // 审核拦截要说清楚：不是功能坏了，也不是额度问题，是这段聊天内容被模型服务端拒了。
+        // 并且要停下来：内容没变的话，下次、下下次还是会被拒 —— 每 30 秒烧 4 次调用毫无意义。
+        // 所以记一个冷却，冷却到期前一次都不试（2026-11-12 实测线上每轮空烧 4 次）。
+        if (isModerationBlock(msg)) {
+          lastModerationAt.set(String(sessionKey), Date.now())
+          // 审核拦截不吃指数退避：它是「内容问题」不是「调用失败」，退避会把它推得更久。
+          // 重试节奏交给冷却单管。失败计数保留着，面板上还能看到她被拦过。
+          const st2 = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
+          st2.nextAttemptAt = 0
+          state[sessionKey] = st2
+          api.log.warn(`${ID}：${chatId} 压缩被内容审核拦下（${msg.slice(0, 120)}），暂停 ${cfg.moderationCooldownMinutes || 30} 分钟（期间不再试，避免空烧调用）`)
+          return { ok: false, reason: 'moderation', message: '这段聊天被模型内容审核拦了（不是功能坏了），等它滚出压缩窗口就会自动压上' }
         }
         // 限流最容易被误当成「功能坏了」：明确告诉她切模型或等重置，别让她以为是代码问题
         if (/429|rate.?limit|频率限制|quota|限额/i.test(msg)) {
@@ -280,6 +369,7 @@ export default {
       persist()
       api.log.info(`${ID}：${chatId} 提前压缩完成，摘要 ${body.length} 字（第 ${st.compacts} 次）${meta.measured ? `，触发时真实上下文 ${Math.round(meta.tokens / 1000)}k token` : `，按字符估算 ${estimate(meta.tokens ? meta.tokens / CHARS_TO_TOKEN : st.chars)} token`}`)
       latestByChat.delete(String(chatId || ''))
+      lastModerationAt.delete(String(chatId || ''))
       api.emit('token-guardian/compacted', { chatId, chars: body.length })
       return { ok: true, chars: body.length, compacts: st.compacts }
     }
@@ -304,6 +394,9 @@ export default {
         } catch (error) {}
         if (tokens < Number(cfg.threshold)) continue
         if (now < Number(st.nextAttemptAt || 0)) continue
+        // 审核冷却：刚被拦过就先别试，冷却期内一次都不试（内容没变，结果不会变）
+        const modAt = Number(lastModerationAt.get(String(key)) || 0)
+        if (modAt && now - modAt < Number(cfg.moderationCooldownMinutes || 30) * 60_000) continue
         if (now - Number(st.lastCompactAt || 0) < Number(cfg.cooldownMinutes) * 60_000) continue
         if (now - Number(st.lastAt || 0) < Number(cfg.idleSeconds) * 1000) continue
         // state 的 key 就是 chatId（'activity' 里直接拿 a.chatId 当 key），直接用，
