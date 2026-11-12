@@ -233,7 +233,7 @@ export function apply(ctx) {
   const useModularCore = isModularCoreEnabled(process.env)
   const egressRef = { current: null }
   const sharedOutbox = useModularCore
-    ? createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json') })
+    ? createSharedOutbox({ onebot, getConfig, log: logger.child('outbox'), ledgerFile: dataDir('deliveries.json'), currentTicket: () => hub?.currentTicket?.() })
     : null
   if (sharedOutbox) {
     egressRef.current = createHubEgress({ outbox: sharedOutbox, log: logger.child('egress') })
