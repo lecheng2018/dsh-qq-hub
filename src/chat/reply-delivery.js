@@ -62,13 +62,13 @@ export function createReplyDelivery({
     }
     let items = r.items
     // 对方明确要语音、她却只打了字：整段改成语音发（模型偶尔会忘，这里兜底）
-    if (opts.wantVoice && cfg.voice.enabled && !items.some((i) => i.kind === 'voice')) {
+    if (opts.wantVoice && cfg.voice?.enabled && !items.some((i) => i.kind === 'voice')) {
       const spoken = items.filter((i) => i.kind === 'text').map((i) => i.value).join('，')
       if (spoken && spoken.length <= 300) items = [{ kind: 'voice', value: spoken }, ...items.filter((i) => i.kind !== 'text')]
     }
     // 短回复按概率整条变语音
     const texts = items.filter((i) => i.kind === 'text')
-    if (cfg.voice.enabled && items.length === texts.length && texts.length > 0) {
+    if (cfg.voice?.enabled && items.length === texts.length && texts.length > 0) {
       const all = texts.map((t) => t.value).join('，')
       if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance * mood().voice) items = [{ kind: 'voice', value: all }]
     }
@@ -98,7 +98,7 @@ export function createReplyDelivery({
       log.info(`${chatId}：回复超过 ${groupLimit} 条，按原顺序合并相邻气泡`)
     }
     // 按概率补一张表情（群里已经有两条以上就不补了）
-    if (cfg.stickers.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
+    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance * mood().sticker) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
@@ -148,7 +148,7 @@ export function createReplyDelivery({
     // 模型明确选了引用编号时尊重它，不再自动引用另一条。
     const refs = inGroup ? (opts.refs || groups.refs(chatId.slice(6))) : {}
     const explicit = items.some((item) => item.replyTo)
-    const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
+    const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers?.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
     const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
     for (let i = 0; i < items.length; i++) {
@@ -159,7 +159,7 @@ export function createReplyDelivery({
       if (it.replyTo && !replyId) log.debug(`${chatId}：引用的编号 ${it.replyTo} 对不上，正常发`)
       if (it.kind === 'text') await sendText(chatId, it.value, replyId, missedAt, userId)
       else if (it.kind === 'voice') {
-        if (cfg.voice.enabled) await sendVoice(chatId, it.value, replyId, userId)
+        if (cfg.voice?.enabled) await sendVoice(chatId, it.value, replyId, userId)
         else await sendText(chatId, it.value, replyId, missedAt, userId)
       } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId, userId)
       else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
@@ -174,7 +174,7 @@ export function createReplyDelivery({
       groups.noteSpokeInGroup(gid) // 在群里说了话 = 加入了话题
     }
     const said = items.flatMap((item) => item.kind === 'mixed' ? item.parts : [item]).map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
-    logChat(chatId, 'bot', said)
+    logChat?.(chatId, 'bot', said)
     // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
     if (!opts.own) interaction.queueAside(chatId, said)
     onDelivered?.({ chatId, items, cfg })
