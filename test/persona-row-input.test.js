@@ -43,7 +43,7 @@ test('占位 key 不能把「03」洗出来 —— 用户看到的那行 03 就�
 test('敲号码：只取数字，落成该群号', () => {
   const map = { '#newabc': '' }
   const r = planPersonaRow({ map, id: '#newabc', raw: '61-56 93 464' })
-  assert.deepEqual(r, { action: 'move', key: '222333444', value: '' })
+  assert.deepEqual(r, { action: 'move', key: '615693464', value: '' })
 })
 
 test('选了一个群后，再选另一个不能把前面的顶掉', () => {
