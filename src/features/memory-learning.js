@@ -12,7 +12,7 @@ export function createMemoryLearning({
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
   add, revise, supersede, scopeFromChatId,
-  profileOf, setProfile, profileKeyOf,
+  profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setInsights, styleOf, setStyle, personKey,
   distillOf, putDistill,
 }) {
@@ -223,7 +223,9 @@ export function createMemoryLearning({
     // global 档案该由 global 自己那条线维护，不该由别的聊天代写。
     // scope 为空必须拒绝（fail-closed）：兜不住空 scope 就退化成全库，跨域污染重演。
     if (!String(scope || '').trim()) throw new Error('没说清用哪个作用域的记忆（private:/group:/global），拒绝重写')
-    const mine = load().items
+    const sourceState = load()
+    const sourceRev = sourceState.rev || 0
+    const mine = sourceState.items
       .filter((m) => !m.invalidAt && String(m.about) === String(qq))
       .filter((m) => String(m.scope || '') === String(scope))
       .sort((a, b) => a.at - b.at)
@@ -247,8 +249,7 @@ export function createMemoryLearning({
     if (!isActive() || (genSignal && !genSignal.isValid())) return false
     const text = String(out || '').trim().replace(/^[「"]|[」"]$/g, '')
     if (!text) throw new Error('模型没写出东西，等会儿再试')
-      setProfile(qq, text, name, scope)
-      return true
+      return setDerivedProfile(qq, text, name, scope, mine, sourceRev)
     } finally {
       task.cleanup()
     }
