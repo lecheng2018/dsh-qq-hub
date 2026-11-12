@@ -4,7 +4,6 @@ import { useField } from '../ui/form.js'
 import { setPath, pitchNum, pitchText, pitchLabel, cx } from '../core/utils.js'
 import { get, post, failed } from '../core/http.js'
 import { modOn } from '../domain/nav.js'
-import { VoiceSongModel } from './model.js'
 
 function Voice({ st, draft, setDraft, toast, reload }) {
   const f = useField(draft, setDraft)
@@ -58,7 +57,6 @@ function Voice({ st, draft, setDraft, toast, reload }) {
         h(Btn, { small: true, onClick: async () => { const r = await post('/voice/test', { text: txt }); if (r.ok) setSrc('data:' + r.mime + ';base64,' + r.data); else toast(r.message) } }, '生成'),
         src ? h('audio', { src, controls: true, autoPlay: true, style: { height: 32 } }) : null),
     ),
-    h(VoiceSongModel, { draft, setDraft }),
     h(Card, { title: '听语音（语音转文字）', right: f.sw('voice.asr'), desc: '别人发来的语音会先转成文字再交给她：优先用 QQ 自带的转文字，不行再用 DSH 自带的语音识别（要在 DSH「插件」里开启「语音输入」）。' },
       h(AsrStatus, { toast })),
   )
