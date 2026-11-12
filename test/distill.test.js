@@ -297,7 +297,7 @@ test('旧坏数据自愈：samples 是句数（如 44）的存量画像，渲染
 test('接线：整理不再学（管线移交 distill 模块）、群聊时注入、面板与接口都在', () => {
   const mem = readFileSync(new URL('../src/features/memory.js', import.meta.url), 'utf8')
   // #78 之后 memory.js 只是门面：档案与注入在 memory-archive.js，模型学习在 memory-learning.js
-  const learn = readFileSync(new URL('../src/features/memory-learning.js', import.meta.url), 'utf8')
+  const learn = readFileSync(new URL('../src/features/memory-distill-history.js', import.meta.url), 'utf8')
   const archive = readFileSync(new URL('../src/features/memory-archive.js', import.meta.url), 'utf8')
   // 结构红线：consolidate 不再耦合蒸馏管线（避免两边各跑一遍重复花钱），学习调度移交 distill 模块自身 tick
   assert.doesNotMatch(mem, /learnDistill\(/, 'consolidate 不再调用 learnDistill')
@@ -311,7 +311,7 @@ test('接线：整理不再学（管线移交 distill 模块）、群聊时注�
   // 新核心补 activity 发射（开旗后 hub 不被调用，否则模块永远收不到计数）
   const mc = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
   assert.match(mc, /emitActivity\(mods, inbound(?:,|\))/, '新核心 realtime 入口发 activity（含 direct/owner 参数）')
-  const mod = readFileSync(new URL('../src/modules/memory/index.js', import.meta.url), 'utf8')
+  const mod = readFileSync(new URL('../src/modules/distill/index.js', import.meta.url), 'utf8')
   assert.match(mod, /api\.route\('\/distill\/list'/)
   assert.match(mod, /api\.route\('\/distill\/card\/refresh'/)
   const client = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
