@@ -102,7 +102,7 @@ function assertFinite(name, v, min, max) {
  * @param {() => number} [options.jitter] 间隔抖动随机源 [0,1)，缺省 Math.random，系数 0.8 + r*0.5；
  *   返回值非法（非有限/越界）按 0.5 处理不炸批。
  * @param {'live' | 'shadow'} [options.mode] 'shadow' = dry-run，不调 sender、不真睡、**不消费队列**
- * @param {object} [options.shaping] 限流整形参数（语义对齐 hub 的 mood/bubbleDelay，参数注入不外引）
+ * @param {object} [options.shaping] 限流整形参数（语义对齐 hub 的 bubbleDelay，参数注入不外引）
  * @param {number} [options.shaping.baseMs=350] 打字基础耗时
  * @param {number} [options.shaping.perCharMs=110] 每字符耗时（约每秒 9 字）
  * @param {number} [options.shaping.minGapMs=700] 间隔下限（jitter 后仍 clamp 回此界，review A4#7）
