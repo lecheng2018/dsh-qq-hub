@@ -30,6 +30,7 @@ import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
 import { createHub } from './chat/hub.js'
+import { createChatLog, createChatLogApi } from './chat/chat-log.js'
 import { workspaceDirOf } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
@@ -91,6 +92,9 @@ export function apply(ctx) {
   let hub = null // 遗留核心：US-003 起作为管道终端（开关关闭时仍直调）
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
   const getConfig = () => cfg
+  const chatLogStore = createChatLog({ getConfig, log: logger.child('chat-log') })
+  const chatLog = createChatLogApi(chatLogStore)
+  ctx.effect(() => chatLogStore.startRetention(), 'qq-hub: 聊天流水保留清理')
   const secrets = () => { for (const k of ['webuiPassword', 'httpToken', 'wsToken']) registerSecret(cfg.snowluma[k]); registerSecret(cfg.imageGen.apiKey); registerSecret(cfg.bridge.token) }
   const setConfig = (next) => {
     const before = cfg
@@ -251,6 +255,7 @@ export function apply(ctx) {
 
   hub = createHub({
     localApi: local,
+    chatLog,
     dsh: ctx,
     getConfig,
     egressRef,
@@ -368,7 +373,7 @@ export function apply(ctx) {
         // 本地接口（语音识别等）：面板「本地」页的脚本槽，legacy transcribe 用的同一个 localApi
         localApi: local,
         // 入站聊天流水（记忆整理/蒸馏/黑话/日记的数据源）
-        logChat: (chatId, who, text, uid) => { try { hub.logChat?.(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
+        logChat: (chatId, who, text, uid) => { try { chatLog.append(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
         // 回合说话人登记（hub.turnState；speakersOf 的数据源）
         noteSpeakers: (sessionId, senders, opts) => { try { hub.noteTurnSenders?.(String(sessionId), senders, opts) } catch {} },
         collectInboundStickers: (chatKey, segments, userId) => {
@@ -501,7 +506,7 @@ export function apply(ctx) {
 
   // ---------- 模块 ----------
   const core = {
-    hub, onebot, snowluma, local, groupRoles, mutes, logger, bridge: null,
+    hub, chatLog, onebot, snowluma, local, groupRoles, mutes, logger, bridge: null,
     root: ROOT,
     ask: (opts) => askModel(ctx, { cfg: getConfig(), ...opts }),
     listModels: models.listModels,

@@ -16,6 +16,7 @@
 
 import { readJson, writeJson } from '../../core/store.js'
 import { askModel, withAbortTimeout } from '../../core/llm.js'
+import { readChatLogSource, chatLogCursor, chatLogOffset } from '../../chat/chat-log.js'
 import { collectMemberLines, enoughEvidence, dedupConvo } from '../../features/distill.js'
 import {
   behaviorStats, renderBehaviorDigest, buildL1Prompt, parseL1, buildL2Prompt, parseL2,
@@ -30,29 +31,34 @@ const EMPTY = Object.freeze({ newCount: 0, batches: [], batchesSinceL2: 0, sampl
  * @param {() => object} o.config 全局配置读取
  * @param {() => Array<{gid:string, uid:string, name?:string}>} o.targetsOf 蒸馏目标列表（memory 模块公开面）
  * @param {() => object} o.loadState / o.saveState(state) 模块命名空间持久化
- * @param {() => string[]} o.chatLogDays / o.chatLogOf(day) 群聊流水（hub 公开面）
+ * @param {{ listDays: () => string[], readDay: (day: string) => object[] }} o.chatLog 群聊流水只读服务
  * @param {(dsh: object, opts: object) => Promise<string>} [o.askModelImpl] 模型调用（测试注入）
  * @param {object} [o.dsh] DSH 上下文（askModel 需要）
  */
 export function createDistillEngine({
-  config, targetsOf, loadState, saveState, chatLogDays, chatLogOf,
+  config, targetsOf, loadState, saveState, chatLog, chatLogDays, chatLogOf,
   askModelImpl = askModel, dsh = null, log = console, now = Date.now,
 }) {
   let state = loadState() || {}
+  const lifetime = new AbortController()
   const pendingL1 = new Set()
+  const runningL1 = new Map()
   const retryL1After = new Map()
+  const sourceLog = chatLog || { listDays: () => chatLogDays?.() || [], readDay: (day) => chatLogOf?.(day) || [] }
 
   const pipeOf = (key) => state[key] || EMPTY
   function putPipe(key, patch) {
-    state = { ...state, [key]: { ...EMPTY, ...(state[key] || {}), ...patch } }
-    saveState(state)
+    lifetime.signal.throwIfAborted()
+    const next = { ...state, [key]: { ...EMPTY, ...(state[key] || {}), ...patch } }
+    saveState(next)
+    state = next
     return state[key]
   }
 
   const distillCfg = () => {
     const cfg = config() || {}
     return {
-      enabled: cfg.enabled !== false && cfg.memory?.distill !== false && cfg.memory?.distillPipeline !== false,
+      enabled: !lifetime.signal.aborted && cfg.enabled !== false && cfg.memory?.distill !== false && cfg.memory?.distillPipeline !== false,
       threshold: Math.max(5, Number(cfg.memory?.distillBatch) || 10),
       model: cfg.memory?.distillModel || { provider: '', model: '' },
       timeoutMs: Math.max(1, Number(cfg.memory?.distillTimeoutMs) || 120_000),
@@ -78,6 +84,7 @@ export function createDistillEngine({
       }),
       dc.timeoutMs,
       '蒸馏请求',
+      lifetime.signal,
     )
   }
 
@@ -104,147 +111,151 @@ export function createDistillEngine({
     return rec ? { rec } : { out }
   }
 
-  /** L0 计数入口：目标对象在群里说话才计数；攒够一批触发后台 L1（不阻塞）。 */
-  function noteMessage(chatId, uid, t = now()) {
+  function scheduleL1(target) {
     const dc = distillCfg()
-    if (!dc.enabled) return
-    const cid = String(chatId || '')
-    if (!cid.startsWith('group:')) return
-    const gid = cid.slice(6)
-    const u = String(uid || '')
-    if (!gid || !u) return
-    const target = targetsOf().find((x) => String(x.gid) === gid && String(x.uid) === u)
-    if (!target) return
-    const key = `${gid}#${u}`
+    const key = `${target.gid}#${target.uid}`
     const p = pipeOf(key)
-    const newCount = (p.newCount || 0) + 1
-    putPipe(key, { newCount, samples: [...(p.samples || []), Number(t) || now()].slice(-400) })
-    if (!shouldTriggerL1({ newCount, lastL1At: p.lastL1At }, { threshold: dc.threshold, now: now() })) return
-    if (now() < Number(retryL1After.get(key) || 0)) return
-    putPipe(key, { newCount: 0 })
-    if (pendingL1.has(key)) return
+    if (!dc.enabled || pendingL1.has(key) || now() < Number(retryL1After.get(key) || 0)) return
+    if (!shouldTriggerL1(p, { threshold: dc.threshold, now: now() }) && !shouldTriggerL2(p, { batches: 5 })) return
+    const consumedCount = Number(p.newCount || 0)
     pendingL1.add(key)
-    Promise.resolve()
-      .then(() => runL1(gid, u, target))
-      .then(() => retryL1After.delete(key))
+    return Promise.resolve()
+      .then(() => runL1(target.gid, target.uid, target))
+      .then((processed) => {
+        if (!distillCfg().enabled) return
+        if (!processed) {
+          retryL1After.set(key, now() + dc.retryMs)
+          return
+        }
+        putPipe(key, { newCount: Math.max(0, Number(pipeOf(key).newCount || 0) - consumedCount) })
+        retryL1After.delete(key)
+      })
       .catch((error) => {
         retryL1After.set(key, now() + dc.retryMs)
-        log.warn?.(`蒸馏L1（${target.name || u}）失败：`, error.message)
+        log.warn?.(`蒸馏L1（${target.name || target.uid}）失败：`, error.message)
       })
       .finally(() => pendingL1.delete(key))
   }
 
-  /** L1：最近群流水 → 语言/话题特征（LLM）+ 行为统计（代码）→ 一批原子特征。 */
-  async function runL1(gid, uid, target) {
-    const dc = distillCfg()
-    if (!dc.enabled) return
+  function noteMessage(chatId, uid, t = now()) {
+    if (!distillCfg().enabled || !String(chatId || '').startsWith('group:')) return
+    const gid = String(chatId).slice(6)
+    const u = String(uid || '')
+    const target = targetsOf().find((x) => String(x.gid) === gid && String(x.uid) === u)
+    if (!target) return
+    const key = `${gid}#${u}`
+    const p = pipeOf(key)
+    putPipe(key, { newCount: (p.newCount || 0) + 1, samples: [...(p.samples || []), Number(t) || now()].slice(-400) })
+    return scheduleL1(target)
+  }
+
+  function runL1(gid, uid, target) {
     const key = `${gid}#${uid}`
-    const name = target?.name || uid
-    let lines = []
-    for (const d of (chatLogDays?.() || []).slice(-2)) {
-      for (const l of (chatLogOf?.(d) || [])) {
-        if (String(l.chatId) === `group:${gid}`) lines.push(l)
+    if (runningL1.has(key)) return runningL1.get(key)
+    const task = consumeL1(gid, uid, target)
+      .catch((error) => { log.warn?.(`蒸馏L1（${target?.name || uid}）失败：`, error.message); return false })
+      .finally(() => runningL1.delete(key))
+    runningL1.set(key, task)
+    return task
+  }
+
+  async function consumeL1(gid, uid, target) {
+    if (!distillCfg().enabled) return false
+    const key = `${gid}#${uid}`
+    if (shouldTriggerL2(pipeOf(key), { batches: 5 }) && !await runL2(gid, uid, target)) return false
+    for (const day of sourceLog.listDays().slice().sort()) {
+      const snapshot = readChatLogSource(sourceLog, day)
+      const records = snapshot.records
+      let offset = chatLogOffset(snapshot, pipeOf(key).sources?.[day])
+      while (offset < records.length) {
+        if (!distillCfg().enabled) return false
+        let end = offset
+        let count = 0
+        while (end < records.length) {
+          const row = records[end++]
+          if (row.chatId === `group:${gid}` && String(row.uid || '') === String(uid)) count++
+          if (count >= 14) break
+        }
+        const lines = records.slice(offset, end).filter((l) => l.chatId === `group:${gid}`)
+        const mine = collectMemberLines(lines, uid)
+        const cursor = chatLogCursor(snapshot, end)
+        let patch = {}
+        if (enoughEvidence(mine, { minMessages: 5, minChars: 40 })) {
+          const batchId = `b-${day}-${cursor.fingerprint.slice(0, 16)}`
+          const stats = behaviorStats(lines, uid)
+          const context = dedupConvo(lines.map((l) => ({ uid: l.uid, name: l.name || l.who || l.uid || '', text: String(l.text || '') }))).slice(-40)
+          const prompt = buildL1Prompt({ uid, batchId, messages: mine.map((x) => x.text), context, behaviorDigest: renderBehaviorDigest(stats) })
+          const { rec, out, error } = await askJson((raw) => parseL1(raw, { uid, batchId }), prompt)
+          if (error) throw error
+          if (!rec) throw new Error(`回包解析失败: ${String(out).slice(0, 120)}`)
+          if (!distillCfg().enabled) return false
+          const p = pipeOf(key)
+          patch = { batches: [...(p.batches || []), { ...rec, batch_id: batchId }].slice(-8), batchesSinceL2: (p.batchesSinceL2 || 0) + 1, lastL1At: now(), behavior: stats }
+        }
+        chatLogOffset(readChatLogSource(sourceLog, day), cursor)
+        putPipe(key, { ...patch, sources: { ...pipeOf(key).sources, [day]: cursor } })
+        offset = end
+        if (shouldTriggerL2(pipeOf(key), { batches: 5 }) && !await runL2(gid, uid, target)) return false
       }
     }
-    if (!lines.length) return
-    const mine = collectMemberLines(lines, uid)
-    if (!enoughEvidence(mine, { minMessages: 5, minChars: 40 })) {
-      log.debug?.(`蒸馏L1（${name}）：本批原话只有 ${mine.length} 句，证据不足跳过`)
-      return
-    }
-    const batchId = `b-${now().toString(36)}`
-    const stats = behaviorStats(lines, uid)
-    const context = dedupConvo(lines.map((l) => ({ uid: l.uid, name: l.name || l.uid || '', text: String(l.text || '') }))).slice(-40)
-    const prompt = buildL1Prompt({
-      uid, batchId,
-      messages: mine.slice(-14).map((x) => x.text),
-      context,
-      behaviorDigest: renderBehaviorDigest(stats),
-    })
-    const { rec, out, error } = await askJson((raw) => parseL1(raw, { uid, batchId }), prompt)
-    if (error) {
-      log.warn?.(`蒸馏L1（${name}）模型调用失败：`, error.message)
-      return
-    }
-    if (!rec) {
-      log.warn?.(`蒸馏L1（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
-      return
-    }
-    const p = pipeOf(key)
-    const batches = [...(p.batches || []), rec].slice(-8)
-    const sinceL2 = (p.batchesSinceL2 || 0) + 1
-    const willL2 = shouldTriggerL2({ batches, batchesSinceL2: sinceL2 }, { batches: 5 })
-    putPipe(key, { batches, batchesSinceL2: willL2 ? 0 : sinceL2, lastL1At: now(), behavior: stats })
-    log.info?.(`蒸馏L1：${name} 第 ${batches.length} 批（语言 ${rec.language_features.length} 条、话题 ${rec.topic_features.length} 条）`)
-    if (willL2) await runL2(gid, uid, target)
+    return true
   }
 
-  /** L2：累计 5 批 → 三场景行为模板。 */
   async function runL2(gid, uid, target) {
-    const dc = distillCfg()
-    if (!dc.enabled) return
+    if (!distillCfg().enabled) return false
     const key = `${gid}#${uid}`
-    const name = target?.name || uid
     const p = pipeOf(key)
-    if (!(p.batches || []).length) return
+    if (!(p.batches || []).length) return true
     const prompt = buildL2Prompt({ uid, l1List: p.batches, behaviorDigest: renderBehaviorDigest(p.behavior) })
     const { rec, out, error } = await askJson((raw) => parseL2(raw, { uid }), prompt, 1600)
-    if (error) {
-      log.warn?.(`蒸馏L2（${name}）模型调用失败：`, error.message)
-      return
+    if (error || !rec) {
+      log.warn?.(`蒸馏L2（${target?.name || uid}）失败：`, error?.message || String(out).slice(0, 120))
+      return false
     }
-    if (!rec) {
-      log.warn?.(`蒸馏L2（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
-      return
-    }
-    putPipe(key, { l2: rec, batchesSinceL2: 0 })
-    log.info?.(`蒸馏L2：${name} 场景模板已聚合（闲聊/讨论/调侃）`)
+    if (!distillCfg().enabled) return false
+    putPipe(key, { l2: rec, batchesSinceL2: Math.max(0, Number(pipeOf(key).batchesSinceL2 || 0) - Number(p.batchesSinceL2 || 0)) })
+    return true
   }
 
-  /** L3 每日沉淀：有 L2 模板的目标 → 人格增长段 → emit 增长事件（memory 刷派生卡）。 */
-  async function runL3Daily({ onGrowth } = {}) {
-    const dc = distillCfg()
-    if (!dc.enabled) return 0
+  let runningL3 = null
+  function runL3Daily(opts = {}) {
+    if (runningL3) return runningL3
+    runningL3 = consumeL3(opts).finally(() => { runningL3 = null })
+    return runningL3
+  }
+
+  async function consumeL3({ onGrowth, day } = {}) {
+    if (!distillCfg().enabled) return 0
     let updated = 0
     for (const t of targetsOf()) {
+      if (!distillCfg().enabled) break
       const key = `${t.gid}#${t.uid}`
       const p = pipeOf(key)
-      if (!p?.l2) continue
-      const name = t.name || t.uid
-      const prompt = buildL3Prompt({
-        uid: t.uid,
-        oldSegment: p.l3?.persona_segment || null,
-        sceneTemplates: p.l2.scene_templates,
-        behaviorDigest: renderBehaviorDigest(p.behavior),
-      })
+      if (!p.l2 || (day && p.lastL3Day === day)) continue
+      const prompt = buildL3Prompt({ uid: t.uid, oldSegment: p.l3?.persona_segment || null, sceneTemplates: p.l2.scene_templates, behaviorDigest: renderBehaviorDigest(p.behavior) })
       try {
         const { rec: seg, out, error } = await askJson((raw) => parseL3(raw, { uid: t.uid }), prompt, 1600)
         if (error) throw error
-        if (!seg) {
-          log.warn?.(`蒸馏L3（${name}）回包解析失败，前 120 字：`, String(out).slice(0, 120))
-          continue
-        }
+        if (!seg) throw new Error(`回包解析失败: ${String(out).slice(0, 120)}`)
+        if (!distillCfg().enabled) break
         putPipe(key, { l3: seg })
-        updated++
-        log.info?.(`蒸馏L3：${name} 人格增长段已更新${seg.update_note ? '（' + seg.update_note + '）' : ''}`)
         if (onGrowth) await onGrowth(String(t.gid), t)
-      } catch (error) {
-        log.warn?.(`蒸馏L3（${name}）失败：`, error.message)
-      }
+        if (day && distillCfg().enabled) putPipe(key, { lastL3Day: day })
+        updated++
+      } catch (error) { log.warn?.(`蒸馏L3（${t.name || t.uid}）失败：`, error.message) }
     }
     return updated
   }
 
-  /** 每日一次判定（模块 tick 调用）：过了当日 04 点且今天没跑过就沉淀。 */
-  function dailyTick({ onGrowth } = {}) {
-    const t = now()
-    const day = new Date(t).toDateString()
-    if (state.lastL3Day === day) return
-    const hour = new Date(t).getHours()
-    if (hour < 4) return
-    state = { ...state, lastL3Day: day }
-    saveState(state)
-    return runL3Daily({ onGrowth })
+  async function dailyTick({ onGrowth } = {}) {
+    if (!distillCfg().enabled) return
+    await Promise.all(targetsOf().map(scheduleL1))
+    if (!distillCfg().enabled || new Date(now()).getHours() < 4) return
+    return runL3Daily({ onGrowth, day: new Date(now()).toDateString() })
+  }
+
+  function dispose() {
+    lifetime.abort(new Error('蒸馏模块已关闭'))
   }
 
   /** 面板/诊断：各目标流水线状态。 */
@@ -270,7 +281,7 @@ export function createDistillEngine({
       .filter((x) => x.segment)
   }
 
-  return { noteMessage, runL1, runL2, runL3Daily, dailyTick, status, growthList, renderGrowthSegment }
+  return { noteMessage, runL1, runL2, runL3Daily, dailyTick, status, growthList, renderGrowthSegment, dispose }
 }
 
 // 模块装载时的蒸馏目标读取：走 memory 模块公开面（api.use('memory')），不 import 它的内部文件。
@@ -286,28 +297,19 @@ export const distillModule = {
   files: ['features/distill-pipeline.js', 'features/distill.js'],
   setup(api) {
     const stateFile = api.dataDir('pipeline.json')
-    let mem = null
-    const memoryOf = () => {
-      if (mem) return mem
-      try { mem = api.use('memory') || null } catch { mem = null }
-      return mem
-    }
     const engine = createDistillEngine({
       config: api.config,
       targetsOf: () => {
-        const m = memoryOf()
-        try { return m?.distillList?.() || [] } catch { return [] }
+        try { return api.use('memory')?.distillList?.() || [] } catch { return [] }
       },
-      loadState: () => { try { return readJson(stateFile) } catch { return null } },
-      saveState: (s) => { try { writeJson(stateFile, s) } catch (e) { api.log.warn?.('蒸馏状态保存失败：', e.message) } },
-      chatLogDays: () => api.core.hub.chatLogDays?.() || [],
-      chatLogOf: (day) => api.core.hub.chatLogOf?.(day) || [],
+      loadState: () => readJson(stateFile),
+      saveState: (s) => writeJson(stateFile, s),
+      chatLog: api.core.chatLog,
       askModelImpl: askModel,
       dsh: api.dsh,
       log: api.log,
     })
 
-    // L0 计数：activity 事件（群消息进站即计，目标对象才有效）
     api.on('activity', (a) => {
       try {
         if (!a || a.kind !== 'in') return
@@ -315,14 +317,10 @@ export const distillModule = {
       } catch (error) { api.log.debug?.('蒸馏消息计数失败：', error.message) }
     })
 
-    // 每日 L3 沉淀 + 学成事件（memory 模块监听后刷新派生卡）
-    api.every(60_000, () => {
-      engine.dailyTick({
-        onGrowth: async (gid) => { api.emit('distill/growth-updated', { gid }) },
-      })
-    }, '蒸馏每日沉淀')
+    api.every(60_000, () => engine.dailyTick({
+      onGrowth: async (gid) => { api.emit('distill/growth-updated', { gid }) },
+    }), '蒸馏每日沉淀')
 
-    // 手动触发面板路由（与 memory 的 /distill/* 同域风格）
     api.route('/distill/pipeline/status', async () => ({ ok: true, status: engine.status() }))
     api.route('/distill/pipeline/run-l3', async () => {
       const n = await engine.runL3Daily({
@@ -331,11 +329,11 @@ export const distillModule = {
       return { ok: true, updated: n }
     })
 
-    // 面板卡片刷新需要增长段：memory 模块经 api.use('distill') 读取
     return {
       status: () => engine.status(),
       growthList: (gid) => engine.growthList(gid),
       runL3Daily: (opts) => engine.runL3Daily(opts),
+      dispose: () => engine.dispose(),
     }
   },
 }

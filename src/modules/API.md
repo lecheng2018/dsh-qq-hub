@@ -166,7 +166,8 @@ export default {
 
 | | |
 |---|---|
-| `hub` | 聊天中枢：`deliver(chatId, text)` `sendText` `sendVoice(chatId, 文字)` `sendVoiceFile(chatId, 音频文件)` `sendImage` `sendSticker(chatId, 名字)` `sendSegments` `runSystemTurn(名字, 标题, 提示词)` `pushToSession(...)` `resetChat(chatId)` `groupName(群号)` `turnHasOwner(sessionId)` `chatOfSession(sessionId)` `stats()` `sessions()` `chatLogOf(日期)` `lastChatAt` `lastOwnerChatAt` …… |
+| `hub` | 聊天中枢：`deliver(chatId, text)` `sendText` `sendVoice(chatId, 文字)` `sendVoiceFile(chatId, 音频文件)` `sendImage` `sendSticker(chatId, 名字)` `sendSegments` `runSystemTurn(名字, 标题, 提示词)` `pushToSession(...)` `resetChat(chatId)` `groupName(群号)` `turnHasOwner(sessionId)` `chatOfSession(sessionId)` `stats()` `sessions()` `lastChatAt` `lastOwnerChatAt` …… |
+| `chatLog` | 共享聊天流水：`append(chatId, who, text, uid?)` `listDays()` `readDay(day)` `readDaySnapshot(day)`；模块可追加/读取，但不能删除流水或控制定时器；过期清理由宿主统一管理。 |
 | `onebot` | QQ 网关：`call(action, params, { timeoutMs })`、`state` |
 | `snowluma` | SnowLuma 管理：`running()` `start()` `stop()` `detect()` …… |
 | `local` | 本地接口（「本地接口」页那四项）：`active(slot)` `call(slot, 参数)` |

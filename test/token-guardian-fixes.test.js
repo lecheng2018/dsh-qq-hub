@@ -17,8 +17,8 @@ test('P0-1 压缩输入带上上一份摘要，原文吃剩下的预算', () => 
 })
 
 test('P0-2 摘要写回 chatlog（who=bot），老摘要不会被二次提炼', () => {
-  assert.match(TG, /hub\.logChat\(chatId, 'bot', `【更早聊天的摘要/, '压缩成功后写回流水')
-  assert.ok(TG.indexOf('if (!resetOk)') < TG.indexOf('hub.logChat'), '只在会话真的换了之后才写')
+  assert.match(TG, /api\.core\.chatLog\.append\(chatId, 'bot', `【更早聊天的摘要/, '压缩成功后写回共享流水')
+  assert.ok(TG.indexOf('if (!resetOk)') < TG.indexOf('api.core.chatLog.append'), '只在会话真的换了之后才写')
   const mem = src('src/features/memory.js')
   assert.match(mem, /\/\^【更早聊天的摘要\/\.test\(String\(l\.text \|\| ''\)\)\) continue/, '每日整理跳过摘要行')
 })

@@ -144,6 +144,34 @@ test('回复别人：带上楼层、按格式回，回过的不再回', async ()
   assert.equal((await b.checkReplies()).replied, 0)
 })
 
+test('共享流水写入失败不打断 B 站回复', async () => {
+  const { rmSync } = await import('node:fs')
+  const previousDir = process.env.AURABOT_DATA_DIR
+  const isolatedDir = mkdtempSync(join(tmpdir(), 'aurabot-bili-chatlog-'))
+  process.env.AURABOT_DATA_DIR = isolatedDir
+  try {
+    const posted = []
+    const warnings = []
+    const b = duty.createBili({
+      getConfig: () => normalize({ enabled: true, dryRun: false, bili: { enabled: true, cookie: 'SESSDATA=x; bili_jct=y' } }),
+      hub: { runSystemTurn: async () => '谢谢你的回复' },
+      chatLog: { append() { throw new Error('disk full') } },
+      log: { info() {}, debug() {}, warn: (...args) => warnings.push(args.join(' ')) },
+      api: {
+        replyFeed: async () => [{ id: 'isolated-reply', name: '网友', text: '你好', myText: '原评论', oid: 1, root: 100, parent: 101, title: '视频', type: 1 }],
+        postComment: async (...args) => posted.push(args),
+      },
+    })
+    assert.equal((await b.checkReplies()).replied, 1)
+    assert.equal(posted.length, 1)
+    assert.ok(warnings.some((message) => message.includes('disk full')))
+  } finally {
+    if (previousDir === undefined) delete process.env.AURABOT_DATA_DIR
+    else process.env.AURABOT_DATA_DIR = previousDir
+    rmSync(isolatedDir, { recursive: true, force: true })
+  }
+})
+
 test('看你发来的视频（短链也行）；主人让她评论才发', async () => {
   const { b, posted } = fakes({ decisions: [] })
   const w = await b.watch('https://b23.tv/abc123')
