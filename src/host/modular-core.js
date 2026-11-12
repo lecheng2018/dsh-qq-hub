@@ -957,7 +957,7 @@ export function createModularCore({
         }
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/.test(String(ev?.data?.name || ''))) {
+          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/.test(String(ev?.data?.name || ''))) {
             reportTurns.set(turn.chatKey, true)
             return
           }
@@ -1280,7 +1280,7 @@ export function createModularCore({
         let lastText = ''
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/.test(String(ev?.data?.name || ''))) {
+          if (ev?.type === 'tool/call' && /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/.test(String(ev?.data?.name || ''))) {
             reportTurns.set(chatKey, true)
             return
           }

@@ -95,7 +95,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // 内容型工具清单（报告兜底第二层）：这些工具的产物是「给主人看的数据」，回复应该整段排版。
   // 记忆型（recall_memory、qq_chat_history）和管理型（qq_group_admin 等）刻意不在列。
   // 新增内容型工具时在这里加一行；她写了 <report> 标记时第一层优先生效，这里只是兜底。
-  const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
+  const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/
 
   const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   const inboundAudio = sharedInboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
@@ -439,7 +439,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     {
       for (const tool of tools) {
-        // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
+        // 慢工具（生图……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
         // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
         let reg = tool
         if (tool.slow) {
@@ -754,7 +754,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
-  /** 把一个音频文件当语音条发出去（翻唱用）。 */
+  /** 把一个音频文件当语音条发出去（模块 SDK 用）。 */
   async function sendVoiceFile(chatId, file, note) {
     const b64 = readFileSync(file).toString('base64')
     const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], note || '[语音]')

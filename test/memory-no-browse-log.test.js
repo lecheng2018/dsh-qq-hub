@@ -35,6 +35,5 @@ test('知识条目仍打知识/平台标签', () => {
 test('她自己的作品（发帖、画图、唱歌、签名、头像）照旧记', () => {
   assert.match(read('src/heybox/site.js'), /我在小黑盒发了一帖/)
   assert.match(read('src/modules/imagegen/index.js'), /按提示词画了一张图/)
-  assert.match(read('src/modules/song/index.js'), /唱了《\$\{title\}》/)
   assert.match(read('src/bili/duty.js'), /把B站签名改成了/)
 })
