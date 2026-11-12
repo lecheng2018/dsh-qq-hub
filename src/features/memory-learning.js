@@ -4,16 +4,15 @@ import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
 import { createMemoryStyle } from './memory-style.js'
-import { createMemoryDistillHistory } from './memory-distill-history.js'
 
 export function createMemoryLearning({
-  dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned,
+  dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
   add, revise, supersede, scopeFromChatId,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
-  distillOf, putDistill, reflectImpl, styleImpl, distillImpl,
+  reflectImpl, styleImpl,
 }) {
   const sourceLog = chatLog?.listDays ? chatLog : { listDays: () => hub?.chatLogDays?.() || [], readDay: (day) => hub?.chatLogOf?.(day) || [] }
   const chatLogDays = () => sourceLog.listDays()
@@ -103,16 +102,6 @@ export function createMemoryLearning({
   }
 
 
-  const defaultDistillHistory = createMemoryDistillHistory({
-    dsh, getConfig, hub, chatLog, log, onDistillLearned,
-    distillOf, putDistill, createGenerationSignal, generationOf, isActive,
-  })
-  function distillHistory(options) {
-    return distillImpl?.history ? distillImpl.history(options) : defaultDistillHistory.history(options)
-  }
-  function learnDistillFromHistory(options) {
-    return distillImpl?.learn ? distillImpl.learn(options) : defaultDistillHistory.learnFromHistory(options)
-  }
 
   const defaultStyle = createMemoryStyle({
     dsh, getConfig, personaText, log,
@@ -254,7 +243,7 @@ export function createMemoryLearning({
 
   return {
     api: {
-      importCandidates, distillHistory, learnDistillFromHistory,
+      importCandidates,
       buildProfile, reflect, learnSelfStyle, consolidate, tick,
     },
     reload: () => { batchRecoveryError = '' },

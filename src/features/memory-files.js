@@ -129,11 +129,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   // 读写锁与缓存
   const scopeSnapshots = new Map() // scope -> { rawText, entries, prologue, mtimeMs, file }
   const brokenScopes = new Map()
-  const emptyState = () => ({ version: 1, hits: {}, processed: {}, processedSources: {}, extractionBatches: {}, runs: {}, lastConsolidate: {}, distillTargets: [], insightNames: {}, slang: {} })
+  const emptyState = () => ({ version: 1, hits: {}, processed: {}, processedSources: {}, extractionBatches: {}, runs: {}, lastConsolidate: {}, insightNames: {} })
   const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
   const validState = (v) => isRecord(v)
-    && ['hits', 'processed', 'processedSources', 'extractionBatches', 'runs', 'lastConsolidate', 'insightNames', 'slang'].every((key) => v[key] === undefined || isRecord(v[key]))
-    && (v.distillTargets === undefined || Array.isArray(v.distillTargets))
+    && ['hits', 'processed', 'processedSources', 'extractionBatches', 'runs', 'lastConsolidate', 'insightNames'].every((key) => v[key] === undefined || isRecord(v[key]))
     && Object.values(v.processed || {}).every((n) => Number.isSafeInteger(n) && n >= 0)
     && Object.values(v.processedSources || {}).every((source) => isRecord(source)
       && Number.isSafeInteger(source.count) && source.count >= 0
@@ -190,7 +189,6 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     const insights = {}
     const styles = { self: [] }
     const styleSources = {}
-    const distill = {}
 
     const hitsMap = stateSnapshot.hits || {}
 
@@ -278,15 +276,6 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
               styles[styKey].push(e.text)
             }
           }
-        } else if (kind === 'distill-profile') {
-          const gid = e.about || ''
-          const uid = e.sourceId || ''
-          const key = `group:${gid}#${uid}`
-          try {
-            distill[key] = JSON.parse(e.text || '{}')
-          } catch {
-            distill[key] = { text: e.text }
-          }
         }
       }
     }
@@ -297,10 +286,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       insights,
       styles,
       styleSources,
-      distill,
-      distillTargets: stateSnapshot.distillTargets || [],
       insightNames: stateSnapshot.insightNames || {},
-      slang: stateSnapshot.slang || {},
       processed: stateSnapshot.processed || {},
       processedSources: stateSnapshot.processedSources || {},
       extractionBatches: stateSnapshot.extractionBatches || {},
@@ -357,9 +343,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       }
       s = structuredClone(s)
       const stateChanges = {}
-      if (s.distillTargets) stateChanges.distillTargets = s.distillTargets
       if (s.insightNames) stateChanges.insightNames = s.insightNames
-      if (s.slang) stateChanges.slang = s.slang
       if (s.processed) stateChanges.processed = s.processed
       if (s.processedSources) stateChanges.processedSources = s.processedSources
       if (s.extractionBatches) stateChanges.extractionBatches = s.extractionBatches
@@ -482,22 +466,6 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         }
       }
 
-      // 收集 distill
-      for (const [key, profile] of Object.entries(s.distill || {})) {
-        // key 形如 "group:111222333#666777888"
-        const m = key.match(/^group:(\d+)#(\d+)$/)
-        if (m) {
-          const sc = `group:${m[1]}`
-          if (!byScope.has(sc)) byScope.set(sc, [])
-          byScope.get(sc).push({
-            id: `distill_${m[2]}`,
-            kind: 'distill-profile',
-            about: m[1],
-            sourceId: m[2],
-            text: JSON.stringify(profile),
-          })
-        }
-      }
 
       const allScopes = new Set([...scopeSnapshots.keys(), ...byScope.keys()])
       const pending = []

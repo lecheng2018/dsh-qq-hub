@@ -6,14 +6,13 @@ import { join } from 'node:path'
 import { createMemoryStore } from '../src/features/memory.js'
 import { reflectionModule } from '../src/modules/reflection/index.js'
 import { styleModule } from '../src/modules/style/index.js'
-import { distillModule } from '../src/modules/distill/index.js'
 
 function moduleApi(memory, dir, records) {
   return {
     use: () => memory,
     dataDir: (name) => join(dir, name),
     dsh: { llm: { async *stream() { await new Promise(() => {}) } } },
-    config: () => ({ enabled: true, model: { provider: 'test', model: 'm' }, persona: { current: '', groups: {} }, memory: { enabled: true, distill: true, distillPipeline: true } }),
+    config: () => ({ enabled: true, model: { provider: 'test', model: 'm' }, persona: { current: '', groups: {} }, memory: { enabled: true } }),
     core: {
       hub: { groupNames: new Map() },
       chatLog: { listDays: () => ['2026-11-12'], readDay: () => records },
@@ -59,12 +58,11 @@ test('连续启停 20 次：在途任务结束、process 监听器和计时器�
     process.env.DSH_QQ_HUB_DATA_DIR = dir
     const memory = createMemoryStore({
       dsh: { llm: { async *stream() { await new Promise(() => {}) } } },
-      getConfig: () => ({ ownerQQ: '10001', model: { provider: 'test', model: 'm' }, memory: { enabled: true, recallCount: 4, distill: true } }),
+      getConfig: () => ({ ownerQQ: '10001', model: { provider: 'test', model: 'm' }, memory: { enabled: true, recallCount: 4 } }),
       log: { info() {}, warn() {} },
     })
     const reflection = reflectionModule.setup(moduleApi(memory, dir, records))
     const style = styleModule.setup(moduleApi(memory, dir, records))
-    const distill = distillModule.setup(moduleApi(memory, dir, records))
     for (const text of ['偏好一', '偏好二', '偏好三']) memory.add({ text, about: '456', scope: 'private:456' })
     memory.setStyle('qq:456', ['短句', '爱叠字', '少用标点'])
     const chat = { kind: 'private', userId: '456', chatId: 'private:456', nickname: '小张' }
@@ -73,15 +71,12 @@ test('连续启停 20 次：在途任务结束、process 监听器和计时器�
       memory.buildProfile('456', 'private:456'),
       memory.reflect(chat, '小张：今天有点累'),
       memory.learnSelfStyle(),
-      memory.learnDistillFromHistory({ gid: '123', uid: '456' }),
       reflection.reflect(chat, '小张：今天有点累'),
       style.learnSelfStyle(),
-      distill.learnFromHistory({ gid: '123', uid: '456' }),
     ]
     await new Promise((resolve) => setTimeout(resolve, 5))
     reflection.dispose()
     style.dispose()
-    distill.dispose()
     memory.dispose()
     let watchdog
     const settled = await Promise.race([
@@ -89,11 +84,10 @@ test('连续启停 20 次：在途任务结束、process 监听器和计时器�
       new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error(`第 ${cycle + 1} 轮任务未退出`)), 1000) }),
     ])
     clearTimeout(watchdog)
-    assert.equal(settled.length, 8)
+    assert.equal(settled.length, 6)
     memory.dispose()
     reflection.dispose()
     style.dispose()
-    distill.dispose()
     rmSync(dir, { recursive: true, force: true })
   }
   await new Promise((resolve) => setTimeout(resolve, 10))
