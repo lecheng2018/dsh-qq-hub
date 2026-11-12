@@ -99,10 +99,7 @@ export function migrateToMarkdown(dataDir, { log = console } = {}) {
       profiles: rawMeta.profiles || {},
       insights: rawMeta.insights || {},
       styles: rawMeta.styles || { self: [] },
-      distill: rawMeta.distill || {},
-      distillTargets: rawMeta.distillTargets || [],
       insightNames: rawMeta.insightNames || {},
-      slang: rawMeta.slang || {},
       processed: rawMeta.processed || {},
       runs: rawMeta.runs || {},
       lastConsolidate: rawMeta.lastConsolidate || {},
@@ -144,7 +141,6 @@ export function migrateToMarkdown(dataDir, { log = console } = {}) {
     totalItems: rawItems.length,
     quarantinedCount: quarantinedItems.length,
     profilesCount: Object.keys(rawMeta.profiles || {}).length,
-    distillCount: Object.keys(rawMeta.distill || {}).length,
   }
   writeFileSync(join(stagingDir, 'migration.json'), JSON.stringify(migrationRecord, null, 2), 'utf8')
   if (existsSync(memoryDir)) throw new Error('迁移期间目标目录已出现，存在并发写入或冲突；保留暂存目录，请人工核对。')
