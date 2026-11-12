@@ -251,6 +251,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             id: e.id,
             text: e.text || '',
             at: typeof e.at === 'number' ? e.at : Date.now(),
+            origin: e.origin || undefined,
+            sourceFingerprint: e.sourceFingerprint || undefined,
+            sourceRev: e.sourceRev || undefined,
+            stale: e.stale || undefined,
+            staleAt: e.staleAt || undefined,
           })
         } else if (kind === 'style') {
           if (scope === 'global' && e.id === 'self') {
@@ -432,6 +437,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             kind: 'insight',
             text: ins.text,
             at: ins.at,
+            origin: ins.origin || undefined,
+            sourceFingerprint: ins.sourceFingerprint || undefined,
+            sourceRev: ins.sourceRev || undefined,
+            stale: ins.stale || undefined,
+            staleAt: ins.staleAt || undefined,
           })
         }
       }
