@@ -300,7 +300,7 @@ export function apply(ctx) {
         availableModels: () => models.cache,
         // 本地接口（语音识别等）：面板「本地」页的脚本槽，legacy transcribe 用的同一个 localApi
         localApi: local,
-        // 入站聊天流水（记忆整理/蒸馏/黑话/日记的数据源）
+        // 入站聊天流水（记忆整理/日记的数据源）
         logChat: (chatId, who, text, uid) => { try { chatLog.append(String(chatId), String(who || ''), String(text || ''), uid ? String(uid) : '') } catch {} },
         onResetChat: (chatId) => interactions.questions.cancel(chatId, '会话重新开始'),
         collectInboundStickers: (chatKey, segments, userId) => {

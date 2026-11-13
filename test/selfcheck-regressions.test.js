@@ -43,19 +43,3 @@ test('聊天流水：调用方漏昵称时按主人名或 uid 兜底，不再写
     assert.equal(rows[1].who, '30003')
   })
 })
-
-test('蒸馏 status：已学习画像即使不在目标清单，也必须进入面板列表', async () => {
-  await withDataDir(() => {
-    const cfg = normalize({ ownerQQ: '10000001', memory: { enabled: true } })
-    const mem = createMemoryStore({
-      dsh: {}, getConfig: () => cfg,
-      hub: { chatLogOf: () => [], chatLogDays: () => [] },
-      log: () => {}, personaText: () => '',
-    })
-    mem.putDistill('123', '456', { persona: ['热心接话'], syntax: ['短句'] }, 12)
-    const rows = mem.distillList()
-    assert.equal(rows.length, 1)
-    assert.equal(rows[0].uid, '456')
-    assert.equal(rows[0].profile.evidenceCount, 12)
-  })
-})
