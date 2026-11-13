@@ -173,6 +173,16 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   let generation = 0
   let userSeen = new Map() // id → { dir, file, stamp }
   let watching = null
+  // 1.4.0-beta.4：mood / song 内置模块已移除。发现老 fork 目录只提醒，不自动删（用户资产）。
+  const retiredWarned = new Set()
+  const warnRetiredForks = (users) => {
+    for (const u of users) {
+      if ((u.id === 'mood' || u.id === 'song') && !retiredWarned.has(u.id)) {
+        retiredWarned.add(u.id)
+        log.warn(`模块「${u.id}」已随 1.4.0-beta.4 移除，请手动删除数据目录下 modules/${u.id}/，否则会加载失败`)
+      }
+    }
+  }
 
   const modCfg = (id) => getConfig().modules?.[id] || {}
   const isEnabled = (id) => modCfg(id).enabled !== false
@@ -432,6 +442,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   /** 插件加载时：内置模块同步启动（被替换 / 关掉的跳过），自己写的随后异步加载。 */
   function boot() {
     const users = isUserOn() ? scanUser() : []
+
+    warnRetiredForks(users)
     // M2-F：装载前先过一遍能力声明计划（requires/conflicts/provides/requiresGUI/apiVersion）。
     // enabledOf 仍以 wanted() 为唯一开关权威；当前内置模块都没有能力声明，计划零改变（行为红线）。
     const detector = new EnvironmentDetector()
@@ -463,6 +475,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     if (syncing) return syncing
     syncing = (async () => {
       const users = isUserOn() ? scanUser() : []
+
+      warnRetiredForks(users)
       const ids = new Set([...builtinDefs.keys(), ...users.map((u) => u.id), ...live.keys()])
       for (const id of ids) {
         const want = wanted(id, users)
@@ -599,6 +613,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   // ---------- 面板 ----------
   function status() {
     const users = isUserOn() ? scanUser() : scanUser().map((u) => ({ ...u, safe: true }))
+
+    warnRetiredForks(users)
     // 文件夹刚删掉、还没来得及停的模块也列出来（下一轮检查就停）
     const ids = [...builtinDefs.keys(), ...[...new Set([...users.map((u) => u.id), ...live.keys()])].filter((id) => !builtinDefs.has(id)).sort()]
     return ids.map((id) => {
