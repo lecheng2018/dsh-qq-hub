@@ -6,7 +6,7 @@ const source = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'u
 
 test('辅助视觉由组合根共享，modular 在附件登记前使用同一降级服务', () => {
   const host = source('src/host.js')
-  const hub = source('src/chat/hub.js')
+  const hub = source('src/host/current-hub.js')
   const core = source('src/host/modular-core.js')
   assert.equal((host.match(/createInboundVision\(/g) || []).length, 1)
   assert.match(host, /hub = createCurrentHub\(\{/)

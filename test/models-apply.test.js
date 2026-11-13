@@ -9,21 +9,21 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const CORE = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 // host.js 分层拆分后：/save 的模型联动在 panel/routes-config.js，/models/apply 路由在 panel/routes-misc.js
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
 const MODELS = readFileSync(join(ROOT, 'src/host/panel/routes-misc.js'), 'utf8')
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 
-test('hub 暴露 syncAllModels，能遍历所有已有会话切模型', () => {
-  assert.match(HUB, /async function syncAllModels\(\)/, '要有这个函数')
-  assert.match(HUB, /for \(const \[chatId, entry\] of Object\.entries\(m\.chats/, '要遍历 sessions.json')
-  assert.match(HUB, /syncAllModels,\s*\n/, '要导出给 host 用')
+test('当前核心暴露 syncAllModels，能遍历所有已有会话切模型', () => {
+  assert.match(CORE, /async function syncAllModels\(\)/, '要有这个函数')
+  assert.match(CORE, /Object\.entries\(registry\.snapshot\(\)\)/, '要遍历当前会话映射')
+  assert.match(CORE, /syncAllModels,\s*\n/, '要导出给 host 用')
 })
 
 test('切不动的会话要清映射（否则永远卡在那）', () => {
-  assert.match(HUB, /delete m\.chats\[chatId\]/, '失效会话要删掉，让下次按新配置重建')
-  assert.match(HUB, /dropped/, '要有 dropped 计数')
+  assert.match(CORE, /registry\.forget\(chatId\)/, '失效会话要删掉，让下次按新配置重建')
+  assert.match(CORE, /dropped/, '要有 dropped 计数')
 })
 
 test('保存模型配置后自动同步（不用主人手动点）', () => {

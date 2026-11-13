@@ -1,105 +1,55 @@
-# K-03D 旧实现删除执行清单（筹备，未执行删除）
+# K-03D 旧实现删除执行清单（源码删除已实施，发布验收未完成）
 
-> 基线：`1.4.1-test.20261113.1` 与 main `4fdabdf`。本文只固定未来删除边界和验证方法，不表示 M5 或 owner 已放行。
+> 当前基线：main `aeda91f` 之后的 K-03D 任务分支。owner 已于 2026-11-13 明确要求继续删除旧内核，覆盖源码、测试和未来安装包中的旧实现；不覆盖真机发布或现网升级。
 
-## 1. 放行前不可缺少的证据
+## 1. 发布门禁状态
 
-- [ ] M5-1～M5-6 对当前实现逐项完成并回填，OneBot unknown 不再挂账。
+- [ ] M5-1～M5-6 对删除后的固定提交逐项完成并回填，OneBot unknown 不再挂账。
 - [ ] 真实 OneBot dryRun 全矩阵零实发，唯一物理写者确认。
 - [ ] 小流量实发、至少 72 小时观察和固定旧包回滚演练完成。
-- [ ] 现网记忆/会话迁移及备份验收完成。
-- [ ] owner 单独书面批准旧实现和旧 SQLite 离开发布包。
+- [ ] 删除后安装包在隔离 DSH profile 重新安装并通过 host smoke。
+- [x] owner 明确批准旧实现和旧 SQLite 离开发布包。
 
-这些条件未满足前，不执行第 4 节的删除动作。
+源码删除可以先于上述真机验收进行；未完成项不得被源码测试或 CI 替代，也不得据此发布或升级现网。
 
-## 2. 删除候选（仅在放行后）
-
-生产实现：
+## 2. 已删除实现
 
 - `src/chat/hub.js`
 - `src/host/pipeline.js`
 - `src/kernel/legacy-fallback.js`
 - `src/features/memory-sqlite.js`
+- 旧管道专属装配件：`compose`、`context`、`ctx-store`、`dispatcher`、`mw-acl`、`mw-aggregator`、`mw-command-router`、`mw-dedup`、`mw-egress`、`mw-egress-cutover`、`mw-memory`、`mw-persona`。
 
-旧管道专属装配件：
+只测上述旧实现的专项测试同步退出；有效用户行为已改挂当前核心或独立当前服务，不以删除断言代替验证。
 
-- `src/kernel/compose.js`
-- `src/kernel/context.js`
-- `src/kernel/ctx-store.js`
-- `src/kernel/dispatcher.js`
-- `src/kernel/mw-acl.js`
-- `src/kernel/mw-aggregator.js`
-- `src/kernel/mw-command-router.js`
-- `src/kernel/mw-dedup.js`
-- `src/kernel/mw-egress.js`
-- `src/kernel/mw-egress-cutover.js`
-- `src/kernel/mw-memory.js`
-- `src/kernel/mw-persona.js`
+## 3. 保留的当前实现
 
-## 3. 禁止随旧文件误删
-
-- `src/kernel/mw-ratelimit.js`：当前核心入站限流直接依赖。
-- `src/kernel/mw-tracing.js`：上述限流实现的共享依赖。
+- `src/kernel/mw-ratelimit.js`：当前核心入站限流；`mw-tracing.js` 是其共享依赖，二者有独立当前测试。
 - `src/kernel/modular-contracts.js`：当前 ChatKey 与回合契约。
-- `src/host/current-hub.js`、`src/host/shared-outbox.js`、`src/host/hub-egress.js`：当前 facade 与唯一出口。
-- `src/chat/workspace.js`、`group-state.js`、`reply*.js`、`outbox*.js`、`session-*.js`、`system-turns.js`、`turn-*.js`：当前聊天、会话与投递服务。
-- `src/persona/personas.js`、`src/features/memory-*.js`（除明确删除的 `memory-sqlite.js`）：当前人格与记忆实现。
-- `scripts/migrate-memory-markdown.js` 及静态旧库迁移夹具：迁移入口独立使用 `node:sqlite`，不 import 旧后端。
+- `src/host/current-hub.js`、`shared-outbox.js`、`hub-egress.js`：当前冻结 facade 与唯一出口。
+- 当前聊天、会话、媒体、回复、Outbox、权限参与者和系统回合服务。
+- `scripts/migrate-memory-markdown.js` 及静态旧库迁移夹具：仅迁移入口使用 `node:sqlite`，不 import 旧后端。
 
-`test/k03d-delete-plan.test.js` 从 `src/host.js` 递归检查上述生产依赖边界，不能只靠全仓 import 次数为零判断安全性。
+`test/k03d-delete-plan.test.js` 同时检查生产依赖图和文件存在性，防止旧实现恢复或当前共享文件被误删。
 
-## 4. 测试处理清单
+## 4. 行为转换记录
 
-### 4.1 直接旧实现行为测试
+- 最近媒体、聊天列表、聊天流水改挂当前核心、当前 facade 和独立服务。
+- 富媒体顺序、文件与语音 fallback、unknown、dryRun、身份闸改挂 `createModularCore().services` 与 Shared Outbox。
+- 工作区、视觉、引用、人设、模型、时间、报告和权限架构断言改为检查当前归属。
+- 限流和 tracing 保留直接针对当前中间件的测试，不保留旧 compose/context 依赖。
+- 旧 hub 的鱼群密度、pair 对聊冷却、主人豁免和鱼叫人规则补入当前群回复闸，避免删除时丢失安全行为。
+- 旧 SQLite 直接测试退出；迁移器及 Markdown 主库测试继续运行。
 
-以下文件需先逐项核对当前核心已有覆盖，再转换有效断言或退出旧实现测试，不能仅为变绿删除行为：
+## 5. 部署与回滚
 
-- `recent-media.test.js`
-- `known-chats.test.js`
-- `selfcheck-regressions.test.js`
-- `group-deliver-order.test.js`
-- `modular-delivery-legacy.test.js`
+- `scripts/deploy-client.sh` 已改复制当前核心文件，并将目标目录旧实现精确移动为带时间戳的退役备份；不整目录删除 kernel。
+- 回滚只使用固定旧安装包，不设置旧 flag。代码回滚不自动回滚 Markdown 数据；恢复旧包前必须停写并核对升级前备份。
+- 真机安装、fnOS 功能矩阵、72 小时观察及发布批准仍属 K-03E/M5，不在本源码删除 PR 中冒充完成。
 
-重点保留：媒体恢复与卸载、聊天列表、回复顺序、主人权限、文件与富媒体、未知状态不重试。
+## 6. 验证要求
 
-### 4.2 旧管道专项
-
-以下测试随对应实现逐项评审退出；其中可复用的安全语义必须先迁移到当前核心测试：
-
-- `kernel-legacy-fallback.test.js`
-- `kernel-egress-cutover.test.js`
-- `kernel-tracing.test.js`
-- `kernel-context-mw.test.js`
-- `kernel-command-router.test.js`
-- `kernel-ingress-guard.test.js`
-
-### 4.3 旧 SQLite 专项
-
-- `memory-sqlite-store.test.js`：旧事实后端直接测试，随后端退出。
-- `memory-quality-round2.test.js`：只删除直接读取旧 SQLite 实现的断言，保留 Markdown 主库有效行为测试。
-- 迁移器测试与静态旧库夹具继续运行，验证迁移不会重新启用旧写者。
-
-### 4.4 仅引用旧路径的架构/行为断言
-
-以下文件应改为检查当前归属，而不是直接删除：
-
-- 工作区：`workspace-shared`、`workspace-per-chat-architecture`、`workspace-delete`、`pure`。
-- 入站与媒体：`inbound-audio-architecture`、`inbound-images-architecture`、`inbound-vision-architecture`、`quoted-messages-architecture`、`shared-recent-media-architecture`、`hub-image-helper`、`report-path`。
-- 会话与模型：`models-apply`、`compact-model`、`persona-switch-reset`、`persona-edit-reset`、`token-guardian-fixes`、`clockline`。
-- 出站与规则：`outbox-turn-atomicity`、`outbox-force-semantics`、`fish-pingpong`、`talk-rules`、`chat-log-architecture`、`m6-outbox-unification`。
-
-## 5. 放行后的执行顺序
-
-1. 按第 4 节完成测试转换，保留当前用户行为证据。
-2. 删除第 2 节候选实现及已确认只测旧实现的测试。
-3. 更新 `scripts/deploy-client.sh`：移除旧 hub/pipeline 文件，加入 `current-hub`、`outbound*`、`presence`、`turn-*`、`capture`、`system-turns` 等当前文件；部署后 grep 改为当前核心 smoke。
-4. 更新 README、`flags.md`、`feature-matrix.md`、回滚说明和模块 API 文档，明确固定旧包回滚而非 flag 回退。
-5. 运行全量、扩展、lint 和打包检查；包清单不得出现旧内核或旧 SQLite。
-6. 在隔离目录安装固定 tgz，执行真实 host smoke；确认生产 import 图无旧实现、无旧监听器或旧文件写入。
-7. 完成 fnOS/owner 验收后才允许发布与现网升级；失败时使用固定旧包恢复，代码回滚不自动回滚数据。
-
-## 6. 当前状态
-
-- 生产依赖图红线测试已加入，但尚未执行删除。
-- M5、72 小时观察、现网迁移和 owner 最终批准仍未完成。
-- `scripts/deploy-client.sh` 仍含旧文件，必须在正式删除的同一 PR 同步处理。
+1. 全量测试、扩展测试、lint 和打包检查通过。
+2. 安装包清单不含旧内核或旧 SQLite，包含当前 facade、Outbox 和迁移器。
+3. 在隔离目录解包后执行真实 host smoke；生产 import 图无旧实现。
+4. 真机验收完成前不发布、不升级现网。

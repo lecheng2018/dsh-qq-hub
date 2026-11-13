@@ -108,9 +108,8 @@ export async function traceStage(ctx, name, fn) {
 /**
  * 沿 PipelineError 的 originalCause 链一次走完，同时取到：
  *   - layer：最内层 index（真正出错的层级；链上每层 wrap 的 index 由外向内递减）；
- *   - message：根因错误文本（不是「Unhandled exception during pipeline execution…」这种
- *     包装文案——排障要看的那句在最里面，同 legacy-fallback.unwrapPipelineError 的取向）。
- * 用鸭子类型判定，与 compose.js 解耦，不引入 import 依赖。
+ *   - message：根因错误文本，排障直接看最内层原因。
+ * 用鸭子类型读取兼容错误链，不依赖具体管道实现。
  * @param {any} error
  * @returns {{ layer: number, message: string }}
  */

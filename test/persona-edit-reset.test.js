@@ -11,7 +11,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // host.js 分层拆分后：人格路由在 panel/routes-persona.js，/save 在 panel/routes-config.js
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-persona.js'), 'utf8')
 const SAVE = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const HUB = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 
 test('/persona/save 后重置所有正在用该人设的会话', () => {
   assert.match(HOST, /entry\.personaId === b\.id/, '按 personaId 找会话')
@@ -19,8 +19,8 @@ test('/persona/save 后重置所有正在用该人设的会话', () => {
   assert.match(HOST, /reset > 0 [^]*个正在用的会话已重置|个正在用的会话已重置/, '返回消息说明重置了几个')
 })
 
-test('hub 导出 sessions() 与 resetChat（host 能拿到）', () => {
-  assert.match(HUB, /sessions: \(\) => map\(\)\.chats/, 'sessions 导出')
+test('当前核心导出 sessions() 与 resetChat（host 能拿到）', () => {
+  assert.match(HUB, /const sessions = \(\) => Object\.fromEntries/, 'sessions 导出')
   assert.match(HUB, /    resetChat,/, 'resetChat 导出')
 })
 
@@ -37,7 +37,7 @@ test('/save 改人设配置（分流表/全局）后重置受影响会话', () =
   assert.match(seg, /hub\.resetChat\(chatId\)/, '变了就重置')
 })
 
-test('agentFor 对没记 personaId 的老会话补基线不误重置', () => {
-  assert.match(HUB, /entry && !entry\.personaId && wantPersona/, '空 personaId 补记')
-  assert.match(HUB, /entry\.personaId = wantPersona/, '补记当前值')
+test('当前会话恢复对没记 personaId 的老会话补基线不误重置', () => {
+  assert.match(HUB, /entry\.personaId \|\| currentPersona\(chatKey\)/, '空 personaId 使用当前人设作为恢复基线')
+  assert.match(HUB, /sessionPersonas\.set\(chatKey, \{ sessionId: String\(entry\.sessionId\), personaId: entry\.personaId \|\| currentPersona\(chatKey\) \}\)/)
 })

@@ -49,7 +49,7 @@ test('人设卡不许教排版：呼吸感 / 【加粗中文括号】那条必�
 
 test('分条不再问模型：代码里没有 llm-split，也没有第二个判断分条的地方', () => {
   assert.equal(existsSync(new URL('../src/chat/llm-split.js', import.meta.url)), false, 'llm-split 已删')
-  assert.ok(!/llmSplit|llm-split/.test(src('src/chat/hub.js')), '发送链路不许再调模型断句')
+  assert.ok(!/llmSplit|llm-split/.test(src('src/chat/reply-delivery.js')), '发送链路不许再调模型断句')
   const cfg = src('src/core/config.js')
   assert.ok(!/bool\(c\.reply\.llmSplit/.test(cfg), '配置不再读这个开关')
   assert.ok(!/reply\.llmSplit/.test(src('client/client.js')), '面板不再有这个开关')

@@ -1,10 +1,11 @@
-// 最近图片 / 表情应在重启后恢复，并在读取时检查原来的 30 分钟有效期。
+// 最近图片 / 表情应在当前核心重启后恢复，并在读取时检查原来的 30 分钟有效期。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHub } from '../src/chat/hub.js'
+import { createModularCore } from '../src/host/modular-core.js'
+import { createCurrentHub } from '../src/host/current-hub.js'
 import { createRecentMedia } from '../src/chat/recent-media.js'
 import { normalize } from '../src/core/config.js'
 import stickersModule from '../src/modules/stickers/index.js'
@@ -17,9 +18,32 @@ const image = (name, sticker = true) => ({ type: 'image', data: { file: name, su
 function setup() {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-media-'))
   const dir = process.env.AURABOT_DATA_DIR
+  const file = join(dir, 'recent-media.json')
   const cfg = normalize({ botQQ: BOT, ownerQQ: OWNER, enabled: false, dryRun: true, stickers: { collect: false, caption: false }, allow: { private: ['10000002'], groups: ['123'] } })
-  const hub = (logger = log) => createHub({ dsh: {}, getConfig: () => cfg, log: logger, onebot: {}, stickers: {} })
-  return { hub, cfg, dir, file: join(dir, 'recent-media.json') }
+  const hub = (logger = log) => {
+    const recentMedia = createRecentMedia({ file, log: logger })
+    const modular = createModularCore({
+      dsh: { get: () => null, on: () => () => {} },
+      onebot: { call: async () => ({}) },
+      mods: { contextFor: async () => '', commands: () => [], use: () => null },
+      getConfig: () => cfg,
+      logger,
+      log: logger,
+      noteMedia: (chatId, segs, userId) => recentMedia.rememberSegments(chatId, segs, userId),
+    })
+    return createCurrentHub({
+      modular,
+      recentMedia,
+      inboundAudio: { transcribeLocally: async () => '' },
+      interactions: { approvals: {}, questions: {} },
+      stickerOf: () => null,
+      stickers: {},
+      getConfig: () => cfg,
+      log: logger,
+      egress: { deliver: async () => null },
+    })
+  }
+  return { hub, cfg, dir, file }
 }
 const send = (hub, seg, user = OWNER, group = '') => hub.onMessage({
   message_type: group ? 'group' : 'private', self_id: Number(BOT), user_id: Number(user),

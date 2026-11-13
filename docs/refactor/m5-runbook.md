@@ -8,13 +8,13 @@
 
 - [ ] `git archive`/`npm pack` 固定 commit 的 tgz，记录 sha256 与内容清单
 - [ ] 隔离 DSH profile 安装（不动生产 profile）
-- [ ] 重启加载：模块清单与 feature-matrix §2 一致（23 内置模块）
-- [ ] 默认姿态验证：不设 FLAG_* 时走模块化新核心；显式 `FLAG_MODULAR_CORE=false` + 重启才回 legacy
+- [ ] 重启加载：模块清单与 feature-matrix §2 一致
+- [ ] 默认姿态验证：只装配当前核心；旧 flag 不再提供回退
 
 ## M5-2 真实 DSH + fake OneBot（blocked-on-fnOS）
 
-- [ ] FLAG_MODULAR_CORE=true + fake 网关：私聊/群聊会话创建、preset 路由（private/private-long/social）
-- [ ] 断线补收经新核心（gateway.getModularCore 分支）
+- [ ] fake 网关：私聊/群聊会话创建、preset 路由（private/private-long/social）
+- [ ] 断线补收经当前核心
 - [ ] 模块启停（mods.health 快照）
 
 ## M5-3 真实 OneBot dryRun（blocked-on-owner 维护窗口）
@@ -25,15 +25,14 @@
 ## M5-4/5/6 小流量实发 / 72 小时观察 / 回滚演练（blocked-on-owner 逐级批准）
 
 - 顺序与门禁见任务书 M5 §3/§4；每一步独立批准 + 证据回填本文件。
-- 回滚姿态：使用固定旧安装包；K-03C 起 `FLAG_MODULAR_CORE` 不再提供 legacy 回退，代码回滚不自动回滚数据。
+- 回滚姿态：使用固定旧安装包；旧 flag 实现已删除，代码回滚不自动回滚数据。
 
-## K-03A～C 后实现复核（main `e1731d9`）
+## K-03D 后实现复核
 
-- 本地源码验证：K-03A/B/C 的 PR 与 CI 均通过；当前全量 1964 通过 / 0 失败 / 4 跳过，扩展 46/46，lint 0 error，打包 307 文件。
-- 上述结果不覆盖本 runbook 的真实环境门禁：M5-1～M5-6 对当前提交仍全部未执行，旧版本实测记录不得直接结转。
-- OneBot unknown 挂账仍未关闭；真实 OneBot dryRun、小流量实发、72 小时观察和回滚演练均未开始。
-- owner 对旧实现和旧 SQLite 正式离开发布包的最终书面批准尚未记录，因此 K-03D 只做依赖盘点，不删除文件。
+- K-03A～C 的 PR 与 CI 已通过；K-03D 源码删除由 owner 于 2026-11-13 明确放行，旧 hub、pipeline、fallback 和旧 SQLite 已退出。
 - 当前冻结 facade 为 `src/host/current-hub.js`；生产不再创建旧 hub、pipeline 或读取旧灰度开关。
+- 删除后全量测试、扩展、lint、打包和隔离安装结果以本 PR 最新验证为准；历史测试数不结转。
+- 上述源码结果不覆盖真实环境门禁：M5-1～M5-6 对删除后提交仍未执行，OneBot unknown、真实 dryRun、小流量实发、72 小时观察和回滚演练均未关闭。
 
 ## 已知边界（诚实登记）
 
