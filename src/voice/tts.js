@@ -110,7 +110,7 @@ export async function installEdge(log) {
   return { ok: true, message: '语音组件装好了' }
 }
 
-/** 找 uv：电脑上有就用，翻唱装过的也能用，都没有就下一个（走系统代理）。 */
+/** 找 uv：电脑上有就用，都没有就下一个（走系统代理）。 */
 async function findOrFetchUv(log) {
   if (process.env.AURABOT_UV) return process.env.AURABOT_UV
   if ((await run('uv', ['--version'], { timeoutMs: 15000 })).code === 0) return 'uv'
@@ -212,7 +212,7 @@ async function httpSynth(text, c) {
   return saveAudio(await fetchAudio(tpl.split('{text}').join(encodeURIComponent(text)), { method: 'GET' }), 24000)
 }
 
-/** 说话语音的后处理：目前原样返回（RVC 换音色只用在翻唱上，语音条直接用 TTS 的声音）。 */
+/** 说话语音的后处理：目前原样返回（语音条直接用 TTS 的声音）。 */
 export const voiceConverters = []
 
 /**

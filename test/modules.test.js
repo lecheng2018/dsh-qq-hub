@@ -172,11 +172,10 @@ test('改了模块文件：几秒内自动重新加载', async () => {
 })
 
 test('替换版写坏了：先用回内置的，面板看得到报错', async () => {
-  writeMod('mood', 'export default { id: "mood", setup( {')
-  const m = await until(async () => { const x = await mod('mood'); return x.error ? x : null }, 15000)
+  writeMod('memory', 'export default { id: "memory", setup( {')
+  const m = await until(async () => { const x = await mod('memory'); return x.error ? x : null }, 15000)
   assert.equal(m.running, 'builtin')
   assert.equal(m.fallback, true)
-  assert.ok(api.mood.label(), '内置的心情照常能用')
 })
 
 test('安全模式：自己写的一个都不加载，内置的回来', async () => {
@@ -188,8 +187,8 @@ test('安全模式：自己写的一个都不加载，内置的回来', async ()
   assert.equal((await mod('diary')).running, 'user')
 })
 
-test('复制内置模块来改：复制出来的能直接跑（连翻唱这种带数据文件的）', async () => {
-  for (const id of ['speakup', 'song']) {
+test('复制内置模块来改：复制出来的能直接跑', async () => {
+  for (const id of ['speakup', 'voice']) {
     const r = (await fake.call('/modules/fork', { id })).json()
     assert.equal(r.ok, true, r.message)
     const code = readdirSync(modDir(id), { withFileTypes: true }).filter((e) => e.isFile()).map((e) => readFileSync(join(modDir(id), e.name), 'utf8')).join('\n')
@@ -197,9 +196,6 @@ test('复制内置模块来改：复制出来的能直接跑（连翻唱这种�
     assert.doesNotMatch(code, /from '\.\.\//, '没有指回插件目录的相对路径')
     assert.equal((await mod(id)).running, 'user', (await mod(id)).error)
   }
-  assert.ok(existsSync(join(modDir('song'), 'studio.js')))
-  assert.match(readFileSync(join(modDir('song'), 'studio.js'), 'utf8'), /new URL\('song\/fetch_file\.py', globalThis\.qqHub\.src\)/)
-  assert.equal((await fake.call('/song/status')).json().ok, true)
   // 说明文档放进了 modules/
   assert.match(readFileSync(join(dataDir, 'modules', 'API.md'), 'utf8'), /api\.on\('message'/)
 })

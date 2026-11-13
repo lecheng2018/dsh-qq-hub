@@ -1,4 +1,4 @@
-// 本地接口：数据目录 local/ 里放脚本，接管语音合成、生图、翻唱换声、语音识别，换成用户自己电脑上的模型或服务。
+// 本地接口：数据目录 local/ 里放脚本，接管语音合成、生图、语音识别，换成用户自己电脑上的模型或服务。
 // 插件升级不会动这个文件夹；脚本改完保存就生效（按修改时间重新加载），不用重启。
 // 面板里每项单独开关；文件不存在、开关关着或者出错，调用方退回内置方式。
 
@@ -13,7 +13,6 @@ const README = 'README-本地接口.md'
 export const SLOTS = {
   tts: { file: 'tts.mjs', title: '语音合成', timeoutMs: 60_000, example: 'GPT-SoVITS（http://127.0.0.1:9880，参考音频在 D:/voices/ref.wav）' },
   image: { file: 'image.mjs', title: '生图', timeoutMs: 300_000, example: 'SD WebUI（http://127.0.0.1:7860）或 ComfyUI（http://127.0.0.1:8188）' },
-  song: { file: 'song-convert.mjs', title: '翻唱换声', timeoutMs: 20 * 60_000, example: '我自己训练的 so-vits-svc 模型（项目在 D:/so-vits-svc，模型 logs/44k/G_10000.pth）' },
   asr: { file: 'asr.mjs', title: '语音识别', timeoutMs: 60_000, example: 'FunASR / faster-whisper 的本地服务（http://127.0.0.1:8000）' },
 }
 
@@ -32,7 +31,7 @@ export async function toImageBuffer(r) {
   throw new Error('生图脚本没返回图片（要返回 Buffer，或 {buffer|file|base64|url}）')
 }
 
-/** 返回值里取文件路径（tts / 翻唱）。 */
+/** 返回值里取文件路径（tts）。 */
 export const fileOf = (r) => (typeof r === 'string' ? r : r?.file || r?.output || '')
 
 export function createLocal({ getConfig, log }) {

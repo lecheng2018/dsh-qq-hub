@@ -38,7 +38,7 @@ export function presetFor(level, cfg) {
   return cfg && cfg.longTasks ? 'qq-hub-private-long' : 'qq-hub-private'
 }
 
-/** 只有主人能做的事（群管、点歌、写文件……）。 */
+/** 只有主人能做的事（群管、写文件……）。 */
 export function isOwner(cfg, userId) {
   return String(userId || '') !== '' && String(userId) === String(cfg.ownerQQ || '')
 }

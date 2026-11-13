@@ -1,4 +1,4 @@
-// 直接问一次宿主模型（不进会话）：给表情起备注、心情判断、记忆提炼等后台小任务用。
+// 直接问一次宿主模型（不进会话）：给表情起备注、记忆提炼等后台小任务用。
 
 import { randomUUID } from 'node:crypto'
 import { DESCRIBE_SYSTEM, describePrompt, describeText, wrapForMain } from './vision-helper.js'
