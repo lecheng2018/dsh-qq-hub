@@ -4,6 +4,7 @@ import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
 import { createMemoryStyle } from './memory-style.js'
+import { characterName } from '../persona/identity-context.js'
 
 export const CONSOLIDATION_MAX_ATTEMPTS = 3
 export const CONSOLIDATION_RETRY_DELAYS_MS = Object.freeze([5 * 60_000, 15 * 60_000, 30 * 60_000])
@@ -52,7 +53,7 @@ export function createMemoryLearning({
       for (const part of chunks) {
         const r = await askModel(dsh, {
           cfg: getConfig(),
-          system: '你帮一个叫「大肥鱼」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。',
+          system: `你帮一个叫「${characterName('', getConfig())}」的聊天角色从旧档案（设定、聊天笔记、以前的记忆文件）里挑出值得长期记住的事：别人的名字/称呼、喜好、身份、约定、重要经历、和她的关系。不要记她自己的人设和外貌（那些在人格里），不要记无关的说明文字。每条一句话、主语写清楚。只输出 JSON 数组，例如 [{"text":"小明喜欢吃辣","about":"小明","importance":0.6}]。`, 
           text: part,
           maxTokens: 2500,
           temperature: 0.2,
@@ -102,7 +103,7 @@ export function createMemoryLearning({
     try {
       out = await askModel(dsh, {
         cfg,
-        system: '你是「大肥鱼」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。',
+        system: `你是「${characterName('', cfg)}」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。`, 
         text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}`,
         maxTokens: 1500,
         temperature: 0.3,

@@ -2,6 +2,7 @@ import { askModel } from '../core/llm.js'
 import { whenText, clarityOf, shouldForget } from './memory-core.js'
 import { chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
 import { extractionBatchOf } from './memory-extraction.js'
+import { resolveCharacterIdentity } from '../persona/identity-context.js'
 
 export const MEMORY_EXTRACTION_CHUNK_LINES = 40
 export const MEMORY_EXTRACTION_ENTRY_TARGET = 8
@@ -72,6 +73,8 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
     if (!isActive()) return 0
     if (genSignal && !genSignal.isValid()) return 0
     const cfg = getConfig()
+    // 角色名走身份中枢：面板换卡后提炼也得跟着换，否则记下来的事全是旧名字的口吻。
+    const identity = resolveCharacterIdentity(chatId, cfg)
     const source = chatId === 'qzone' ? '下面是 QQ 空间里的动态（好友发的说说、别人给你的评论、你的回复）' : '下面是一段聊天'
     const related = relatedTo(chatId, transcript)
     const known = new Map(related.map((item) => [item.id, item]))
@@ -82,7 +85,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       try {
       out = await askModel(dsh, {
         cfg,
-        system: `你帮一个叫「大肥鱼」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
+        system: `你帮一个叫「${identity.name}」的聊天角色整理长期记忆。${source}，说话人后面括号里是 QQ 号。QQ 号是 ${cfg.ownerQQ} 的人是她的${cfg.ownerName || '主人'}。
 
 记什么（三类）：
 1. 人：别人的名字/称呼/身份/关系，喜好和讨厌的东西，雷区和禁忌，近况变化，你们之间的约定。
@@ -126,7 +129,9 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       // 8 条是提示词软目标；模型若完整多返，沿用原来的 12 条硬上限，不能因调低目标静默截尾。
       for (const item of entries.slice(0, 12)) {
         if (!item || !item.text) continue
-        if (/^(我|大肥鱼)/.test(String(item.about || '')) || String(item.about || '') === '大肥鱼') continue
+        // 「关于她自己」的条目不该落成关于别人的事实：自称正则和唤醒词都由身份中枢给。
+        const aboutText = String(item.about || '')
+        if (identity.selfRefRegex.test(aboutText) || identity.wakeWords.includes(aboutText.trim())) continue
         const qq = String(item.about_qq ?? '').replace(/\D/g, '')
         const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
         if (await commit(item, { chatId, cfg, known, about })) added++

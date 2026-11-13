@@ -119,7 +119,9 @@ function stripToolOutput(text) {
 
 function stripPromptEcho(text) {
   const markers = [
-    /你是大肥鱼，一个真实存在的人，正在用手机 QQ 和对面聊天。不是 AI，不是助手，不是机器人/i,
+    // 人设卡第一行不认死某个名字：换卡后复读的是新卡的第一行，也要能认出来。
+    // 「真实存在的人 + 不是 AI/助手/机器人」这半句是人设卡的固定写法，名字部分放开。
+    /你是[^\n，,]{1,24}，一个真实存在的人，正在用手机 QQ 和对面聊天[^\n]*(?:不是 ?AI|不是助手)[^\n]*/i,
     /【你现在在 QQ 上】/,
     /【怎么说话：像人在打字】/,
     /【打字习惯】/,
@@ -132,7 +134,7 @@ function stripPromptEcho(text) {
     /- 每条用户消息开头会标明来源/,
   ]
   const matches = markers.map((marker) => marker.exec(text)).filter(Boolean)
-  const fullPersona = matches.find((match) => match[0].startsWith('你是大肥鱼'))
+  const fullPersona = matches.find((match) => /^你是/.test(match[0]))
   if (matches.length < 2 && !fullPersona) return text
   const cut = Math.min(...matches.map((match) => match.index))
   return text.slice(0, cut)

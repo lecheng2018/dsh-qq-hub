@@ -13,9 +13,11 @@
 
 import { personaIdFor, readPersona } from './personas.js'
 import { chatViewFromKey } from '../chat/adapters/legacy-context.js'
+import { DEFAULT_CHARACTER_NAME } from './identity-defaults.js'
 
-/** 读不到人设卡时的兜底名字（提示词里统一用「该聊天角色」指代）。 */
-export const DEFAULT_CHARACTER_NAME = 'AI伴侣'
+// 默认名住在 identity-defaults.js（personas.js 也要用，放这里会和它成环）。
+// 这里继续 re-export，老代码 import { DEFAULT_CHARACTER_NAME } from 'identity-context' 不受影响。
+export { DEFAULT_CHARACTER_NAME }
 
 /** 正则转义：人设名里的 . * + ? ( ) [ ] { } ^ $ | \ / 都要当字面量看待。 */
 export function escapeRegExp(string) {
@@ -29,27 +31,47 @@ export function escapeRegExp(string) {
  * 「AXBXC 家的猫」会被当成她的自称——英文名必须整词才算。
  * 中文名、含符号的名字（`A.B*C+`）没有词边界概念，转义后按字面量前缀匹配即可。
  */
-function selfRefPattern(names) {
-  const alts = names
+export function selfRefPattern(names) {
+  const alts = (Array.isArray(names) ? names : [names])
     .filter((n) => typeof n === 'string' && n.trim())
     .map((n) => {
       const lit = escapeRegExp(n.trim())
       return /^[A-Za-z0-9_]+$/.test(n.trim()) ? `${lit}(?![A-Za-z0-9_])` : lit
     })
+  // 没有名字时只能认「我」。绝不能退化成 `^(?:我|)`——空分支会匹配任何开头，
+  // 后台的记忆去重就变成「所有条目都是她自己」，等于把事实全丢掉。
+  if (!alts.length) return /^(?:我)/i
   return new RegExp(`^(?:我|${alts.join('|')})`, 'i')
+}
+
+/** 去掉已经带着的前缀，只留裸 id（`group:123` → `123`）。 */
+function bareId(value, prefix) {
+  const s = String(value ?? '').trim()
+  return prefix && s.startsWith(prefix) ? s.slice(prefix.length) : s
 }
 
 /**
  * 把「chatKey 字符串 或 已解析的 chat 视图对象」收敛成 chatKey 字符串。
  * chatViewFromKey 只吃字符串，遇上对象会 String() 成 "[object Object]" 而误判 system；
  * 这里先把对象写回 key 形态，再交给它解析，保证只有一条解析路径。
+ *
+ * 剥前缀是必须的：调用方可能拿 chatViewFromKey 的输出（chatId 是完整 key、groupId 是裸号）
+ * 回喂进来，也可能自己拼了带前缀的 groupId。不剥就会拼出 `group:group:123`，
+ * chatViewFromKey 认成「群 group:123」，personaIdFor 查不到按群人设、静默回落全局卡——
+ * 症状恰好是「群里换的卡不生效」。
  */
 function chatKeyOf(chat) {
   if (chat && typeof chat === 'object') {
     const kind = String(chat.kind || '')
-    if (kind === 'group') return `group:${chat.groupId || chat.chatId?.toString().slice(6) || ''}`
-    if (kind === 'private') return `private:${chat.userId || chat.chatId?.toString().slice(8) || ''}`
-    return String(chat.chatId || '')
+    if (kind === 'group') {
+      const id = bareId(chat.groupId, 'group:') || bareId(chat.chatId, 'group:')
+      return `group:${id}`
+    }
+    if (kind === 'private') {
+      const id = bareId(chat.userId, 'private:') || bareId(chat.chatId, 'private:')
+      return `private:${id}`
+    }
+    return String(chat.chatId ?? '')
   }
   return String(chat ?? '')
 }
@@ -67,7 +89,7 @@ function customWakeWords(cfg) {
  * @param {object} cfg QQ Hub 配置（可以缺省，缺省时走全局人设）
  * @param {{personaIdFor?:Function, readPersona?:Function, chatViewFromKey?:Function}} [deps]
  *   测试注入点（读卡失败路径 / 视图派生失败路径）
- * @returns {{id:string, name:string, wakeWords:string[], rolePrompt:string,
+ * @returns {{id:string, name:string, hasCard:boolean, wakeWords:string[], rolePrompt:string,
  *   selfRefRegex:RegExp, shortBio:string}}
  */
 export function resolveCharacterIdentity(chatKey, cfg = {}, deps = {}) {
@@ -83,16 +105,24 @@ export function resolveCharacterIdentity(chatKey, cfg = {}, deps = {}) {
   } catch (error) {
     card = null // 卡片读取失败（目录不存在、文件损坏）：当成没有卡
   }
-  const name = String(card?.name || '').trim() || DEFAULT_CHARACTER_NAME
+  const hasCard = Boolean(String(card?.name || '').trim())
+  const name = hasCard ? String(card.name).trim() : DEFAULT_CHARACTER_NAME
   const wakeWords = Array.from(new Set([name, ...customWakeWords(cfg)])).filter(Boolean)
   // 自称判定：以「我」或她自己（角色名 + 唤醒词）开头，大小写不敏感。
   const selfRefRegex = selfRefPattern(wakeWords)
   return {
     id,
     name,
+    hasCard,
     wakeWords,
     rolePrompt: String(card?.body || ''),
     selfRefRegex,
-    shortBio: card?.name ? `「${name}」` : '该聊天角色',
+    // 名字和指代必须是同一份真相：没卡时两处都说「AI伴侣」，不再一处「AI伴侣」一处「该聊天角色」。
+    shortBio: `「${name}」`,
   }
+}
+
+/** 只要名字时的快捷方式（提示词里插一句「你是谁」的大多数场景够用）。 */
+export function characterName(chatKey, cfg = {}, deps = {}) {
+  return resolveCharacterIdentity(chatKey, cfg, deps).name
 }
