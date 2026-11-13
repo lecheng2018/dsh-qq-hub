@@ -62,69 +62,51 @@ test('提交中途失败时报告已提交条数，供批次标记待核对', as
 })
 
 
-test('截断数组只提交完整对象，且输出预算提高到 3000', async () => {
-  let params
+test('截断数组只改答一次，合法后提交完整结果且不静默截尾', async () => {
+  const params = []
   const commits = []
+  const outputs = [
+    '[{"text":"不应提交的半截事实"',
+    `[${Array.from({ length: 5 }, (_, index) => JSON.stringify({ text: `完整事实 ${index}`, about: '甲' })).join(',')}]`,
+  ]
   const extractor = createMemoryExtractor({
-    dsh: { llm: { async *stream(input) { params = input; yield { type: 'text-delta', text: '[{"text":"完整事实","about":"甲"},{"text":"不应写入的截断事实","about":"乙' } } } },
+    dsh: { llm: { async *stream(input) { params.push(input); yield { type: 'text-delta', text: outputs[params.length - 1] } } } },
     getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
     relatedTo: () => [],
     commit: (item) => { commits.push(item); return true },
     isActive: () => true,
   })
-  await assert.rejects(extractor.extractFacts('private:10002', '长输入'), (error) => {
-    assert.equal(error.partial, true)
-    assert.equal(error.factsCommitted, 1)
-    return true
-  })
-  assert.deepEqual(commits.map((item) => item.text), ['完整事实'])
-  assert.equal(params.maxTokens, 3000)
+  const added = await extractor.extractFacts('private:10002', '长输入')
+  assert.equal(added, 5)
+  assert.equal(params.length, 2)
+  assert.match(params[0].system, /最多输出 8 条/)
+  assert.match(params[1].system, /最多输出 4 条/)
+  assert.match(params[1].system, /重新作答/)
+  assert.equal(params[0].maxTokens, 3000)
+  assert.equal(params[1].maxTokens, 3000)
+  assert.equal(commits.some((item) => item.text.includes('半截')), false)
 })
 
-test('失败批次在冷却期内不调用模型，到期后才重试', async () => {
+test('连续两次无效 JSON 不提交任何部分结果', async () => {
   let calls = 0
-  const previous = { status: 'failed', attempts: 2, at: Date.now(), error: '截断' }
+  const commits = []
   const extractor = createMemoryExtractor({
-    dsh: { llm: { async *stream() { calls++; yield { type: 'text-delta', text: '[]' } } } },
+    dsh: {
+      llm: {
+        async *stream() {
+          calls++
+          yield { type: 'text-delta', text: '[{"text":"半截"' }
+        },
+      },
+    },
     getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
     relatedTo: () => [],
-    commit: () => false,
+    commit: (item) => { commits.push(item); return true },
     isActive: () => true,
-    reflect: async () => 0,
-    batchState: { get: () => previous, start() {}, fail() {}, done() {} },
-    scopeOf: (chatId) => chatId,
-    recoveryError: () => '',
   })
-  const lines = Array.from({ length: 6 }, (_, index) => ({ who: '甲', text: `具体事实 ${index}` }))
-  const waiting = await extractor.extractLines('private:10002', lines)
-  assert.equal(waiting.ok, false)
-  assert.equal(waiting.retryAfter, previous.at + 120_000)
-  assert.equal(calls, 0)
-  previous.at = 0
-  previous.nextRetryAt = 0
-  const retried = await extractor.extractLines('private:10002', lines)
-  assert.equal(retried.ok, true)
-  assert.equal(calls, 1)
-})
-
-test('达到重试上限后熔断，不再调用模型', async () => {
-  let calls = 0
-  const previous = { status: 'partial', attempts: 4, nextRetryAt: null }
-  const extractor = createMemoryExtractor({
-    dsh: { llm: { async *stream() { calls++; yield { type: 'text-delta', text: '[]' } } } },
-    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
-    relatedTo: () => [],
-    commit: () => false,
-    isActive: () => true,
-    batchState: { get: () => previous, start() {}, fail() {}, done() {} },
-    scopeOf: (chatId) => chatId,
-    recoveryError: () => '',
-  })
-  const lines = Array.from({ length: 6 }, (_, index) => ({ who: '甲', text: `具体事实 ${index}` }))
-  const result = await extractor.extractLines('private:10002', lines)
-  assert.equal(result.ok, false)
-  assert.equal(result.blocked, true)
-  assert.equal(calls, 0)
+  await assert.rejects(extractor.extractFacts('private:10002', '长输入'), /JSON/)
+  assert.equal(calls, 2)
+  assert.deepEqual(commits, [])
 })
 
 test('extractLines 在独立状态适配器上跳过成功块并重试失败块', async () => {
@@ -145,7 +127,7 @@ test('extractLines 在独立状态适配器上跳过成功块并重试失败块'
     dsh: { llm: { async *stream(params) {
       if (params.system.includes('整理长期记忆')) {
         prompts.push(params.messages[0].content[0].text)
-        if (failSecond && params.messages[0].content[0].text.includes('第 80 条')) throw new Error('第二块失败')
+        if (failSecond && params.messages[0].content[0].text.includes('第 40 条')) throw new Error('第二块失败')
       }
       yield { type: 'text-delta', text: '[]' }
     } } },
@@ -167,6 +149,7 @@ test('extractLines 在独立状态适配器上跳过成功块并重试失败块'
   const second = await extractor.extractLines('private:10002', lines)
   assert.equal(second.ok, true)
   assert.equal(prompts.filter((text) => text.includes('第 0 条')).length, 1)
-  assert.equal(prompts.filter((text) => text.includes('第 80 条')).length, 2)
+  assert.equal(prompts.filter((text) => text.includes('第 40 条')).length, 2)
+  assert.equal(prompts.filter((text) => text.includes('第 80 条')).length, 1)
   assert.equal(reflected, 1)
 })

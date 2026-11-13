@@ -88,7 +88,7 @@ test('memory progress: a shortened source is rejected instead of treating the da
   assert.equal(f.state().processed[day], 6)
 })
 
-test('memory consolidation: every 80-row batch is processed, including rows before the old 640-row cap', async (t) => {
+test('memory consolidation: every 40-row batch is processed, including rows before the old 640-row cap', async (t) => {
   const prompts = []
   const f = fixture(t, recordsOf(641), ({ system, messages }) => {
     const text = messages[0].content[0].text
@@ -96,7 +96,7 @@ test('memory consolidation: every 80-row batch is processed, including rows befo
     return system.includes('{"insights"') ? '{"insights":[],"style":[]}' : '[]'
   })
   assert.equal((await f.store.consolidate()).ok, true)
-  assert.equal(prompts.length, 9)
+  assert.equal(prompts.length, 17)
   assert.match(prompts[0], /第 0 条记录/)
   assert.match(prompts.at(-1), /第 640 条记录/)
 })
