@@ -62,6 +62,71 @@ test('提交中途失败时报告已提交条数，供批次标记待核对', as
 })
 
 
+test('截断数组只提交完整对象，且输出预算提高到 3000', async () => {
+  let params
+  const commits = []
+  const extractor = createMemoryExtractor({
+    dsh: { llm: { async *stream(input) { params = input; yield { type: 'text-delta', text: '[{"text":"完整事实","about":"甲"},{"text":"不应写入的截断事实","about":"乙' } } } },
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: (item) => { commits.push(item); return true },
+    isActive: () => true,
+  })
+  await assert.rejects(extractor.extractFacts('private:10002', '长输入'), (error) => {
+    assert.equal(error.partial, true)
+    assert.equal(error.factsCommitted, 1)
+    return true
+  })
+  assert.deepEqual(commits.map((item) => item.text), ['完整事实'])
+  assert.equal(params.maxTokens, 3000)
+})
+
+test('失败批次在冷却期内不调用模型，到期后才重试', async () => {
+  let calls = 0
+  const previous = { status: 'failed', attempts: 2, at: Date.now(), error: '截断' }
+  const extractor = createMemoryExtractor({
+    dsh: { llm: { async *stream() { calls++; yield { type: 'text-delta', text: '[]' } } } },
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: () => false,
+    isActive: () => true,
+    reflect: async () => 0,
+    batchState: { get: () => previous, start() {}, fail() {}, done() {} },
+    scopeOf: (chatId) => chatId,
+    recoveryError: () => '',
+  })
+  const lines = Array.from({ length: 6 }, (_, index) => ({ who: '甲', text: `具体事实 ${index}` }))
+  const waiting = await extractor.extractLines('private:10002', lines)
+  assert.equal(waiting.ok, false)
+  assert.equal(waiting.retryAfter, previous.at + 120_000)
+  assert.equal(calls, 0)
+  previous.at = 0
+  previous.nextRetryAt = 0
+  const retried = await extractor.extractLines('private:10002', lines)
+  assert.equal(retried.ok, true)
+  assert.equal(calls, 1)
+})
+
+test('达到重试上限后熔断，不再调用模型', async () => {
+  let calls = 0
+  const previous = { status: 'partial', attempts: 4, nextRetryAt: null }
+  const extractor = createMemoryExtractor({
+    dsh: { llm: { async *stream() { calls++; yield { type: 'text-delta', text: '[]' } } } },
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: () => false,
+    isActive: () => true,
+    batchState: { get: () => previous, start() {}, fail() {}, done() {} },
+    scopeOf: (chatId) => chatId,
+    recoveryError: () => '',
+  })
+  const lines = Array.from({ length: 6 }, (_, index) => ({ who: '甲', text: `具体事实 ${index}` }))
+  const result = await extractor.extractLines('private:10002', lines)
+  assert.equal(result.ok, false)
+  assert.equal(result.blocked, true)
+  assert.equal(calls, 0)
+})
+
 test('extractLines 在独立状态适配器上跳过成功块并重试失败块', async () => {
   const lines = Array.from({ length: 81 }, (_, index) => ({
     chatId: 'private:10002', who: '小张', text: `第 ${index} 条需要长期保存的具体事实`,

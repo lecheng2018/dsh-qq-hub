@@ -2,6 +2,14 @@ import { askModel } from '../core/llm.js'
 import { whenText, clarityOf, shouldForget } from './memory-core.js'
 import { chatLogCursor, chatLogOffset } from '../chat/chat-log.js'
 import { extractionBatchOf } from './memory-extraction.js'
+import { parseJsonArray } from './json-array.js'
+
+export const RETRY_BASE_MS = 60_000
+export const MAX_ATTEMPTS = 4
+
+function nextRetryAt(previous) {
+  return previous?.nextRetryAt ?? (Number(previous?.at || 0) + RETRY_BASE_MS * 2 ** Math.max(0, Number(previous?.attempts || 1) - 1))
+}
 
 export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
   let consolidationBusy = false
@@ -37,7 +45,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
         `只输出 JSON 数组，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。`,
         text: (related.length ? `已经记得的事：\n${related.map((item) => `#${item.id} [${whenText(item.at)}] ${item.aboutName ? '[' + item.aboutName + '] ' : ''}${item.text}`).join('\n')}\n\n` : '') + transcript,
-        maxTokens: 1500,
+        maxTokens: 3000,
         temperature: 0.2,
         signal: genSignal?.signal,
       })
@@ -46,11 +54,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       throw error
     }
     if (!isActive() || (genSignal && !genSignal.isValid())) return 0
-    const match = out.match(/\[[\s\S]*\]/)
-    if (!match) throw new Error('模型未返回有效的记忆 JSON 数组')
-    let entries
-    try { entries = JSON.parse(match[0]) } catch { throw new Error('模型返回的记忆 JSON 数组不合法') }
-    if (!Array.isArray(entries)) throw new Error('模型未返回记忆 JSON 数组')
+    const { entries, truncated } = parseJsonArray(out)
     let added = 0
     try {
       for (const item of entries.slice(0, 12)) {
@@ -61,6 +65,12 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         if (await commit(item, { chatId, cfg, known, about })) added++
       }
     } catch (error) {
+      error.factsCommitted = added
+      throw error
+    }
+    if (truncated) {
+      const error = new Error('模型输出截断，已保留完整条目，批次仍需重试')
+      error.partial = true
       error.factsCommitted = added
       throw error
     }
@@ -92,8 +102,15 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
         const batch = extractionBatchOf(chatId, index, part)
         const previous = batchState.get(batch.id)
-        if (previous && previous.fingerprint !== batch.fingerprint) throw new Error(`提炼批次 ${batch.id} 的输入已变化，请核对后重试`)
+        if (previous?.fingerprint && previous.fingerprint !== batch.fingerprint) throw new Error(`提炼批次 ${batch.id} 的输入已变化，请核对后重试`)
         if (previous?.status === 'done') { added += Number(previous.added) || 0; continue }
+        if (previous?.status === 'failed' || previous?.status === 'partial') {
+          if (previous.blocked || (Number(previous.attempts || 1) >= MAX_ATTEMPTS && !previous.nextRetryAt)) {
+            return { ok: false, blocked: true, added: 0, insights: 0, message: `提炼批次 ${batch.id} 已达重试上限，请人工处理` }
+          }
+          const retryAfter = nextRetryAt(previous)
+          if (Date.now() < retryAfter) return { ok: false, retryAfter, added: 0, insights: 0, message: `提炼批次 ${batch.id} 将在冷却后重试` }
+        }
         if (previous?.status === 'running' || previous?.status === 'pending') throw new Error(`提炼批次 ${batch.id} 已完成事实提交但状态未确认，请核对后恢复`)
         const scope = scopeOf(chatId)
         batchState.start(batch, scope)
@@ -161,6 +178,10 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
           if (!genSignal.isValid()) break
           try {
             const result = await extractLines(chatId, lines, genSignal)
+            if (result.blocked || result.retryAfter) {
+              failedChats.push({ day, chatId, error: result.message, ...(result.blocked ? { blocked: true } : { retryAfter: result.retryAfter }) })
+              continue
+            }
             added += result.added || 0
             insights += result.insights ? 1 : 0
             if (!result.ok) throw new Error(result.message || '记忆提炼失败')
