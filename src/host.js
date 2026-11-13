@@ -20,8 +20,9 @@
 import { patchFnosFsync } from './core/fnos-fsync-patch.js'
 patchFnosFsync() // 自动应用 fnOS 祖先目录耐久性同步容错，避免图片登记附件抛 EACCES
 
-import { readFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync, existsSync, renameSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { loadConfig, saveConfig } from './core/config.js'
@@ -420,6 +421,23 @@ export function apply(ctx) {
   })
   effects.installApprovalFlow()
   effects.setupUserQuestions()
+
+  // 1.4.0-beta.4：心情、翻唱功能已移除。老数据/老环境只改名留档或提示，不静默删除。
+  function retireMoodState() {
+    const file = dataDir('mood.json')
+    if (!existsSync(file)) return
+    try {
+      renameSync(file, file + '.removed')
+      log.info('心情功能已移除，mood.json 已改名留档：mood.json.removed')
+    } catch (error) { log.warn('mood.json 改名失败：', error?.message) }
+  }
+  function hintRetiredKaraoke() {
+    const spots = ['C:\\Aurabot\\rvc', join(homedir(), 'Aurabot', 'rvc'), dataDir('songs'), dataDir('voice-rvc')]
+    const found = spots.filter((p) => existsSync(p))
+    if (found.length) log.info('翻唱功能已移除。检测到旧翻唱环境（约 8 GB）：' + found.join('、') + '。确认不需要后可自行删除。')
+  }
+  retireMoodState()
+  hintRetiredKaraoke()
 
   const booted = mods.boot()
   booted.then(() => bridge.refresh())
