@@ -49,10 +49,8 @@
 
 9 维 0~1：`play 玩 / learn 学 / install 装 / connect 陪 / care 关心 / share 分享 / identity 自我 / create 创作 / consume 体验`。
 - 随时间向默认值衰减（半衰 8h）；`connect` 随主人沉默时长上升；素材亲和推高；`sent` 后对应维 ×0.45。
-- **mood 对接**：`sent` 后按情绪 nudge `api.use('mood').nudge(delta, '主动搭话：<目的前20字>')`——
-  `affectionate/excited +5、proud/amused +4、lonely -3、bored/worried/envious -2、content 0`；silent 不推。
-- **心情判定兼容**：投递走 `hub.runSystemTurn` + `hub.deliver(text, { own:true, userText:'【系统提醒，…】' })`，
-  userText 带前缀所以 mood.judge 的 `origin='speak-up'` 判定照常生效。
+- **投递标记**：投递走 `hub.runSystemTurn` + `hub.deliver(text, { own:true, userText:'【系统提醒，…】' })`，
+  userText 前缀让系统轮次和真人发言区分开（曾是给心情判定传 origin 的占位，心情随 1.4.0-beta.4 移除后保留为标记）。
 - top2 驱动（≥0.35）经 `api.rule` 写进每轮上下文：「你最近心里比较想要：玩、陪」。
 
 ## 5. 配置
@@ -73,4 +71,4 @@ ext.purpose 同名键可覆写。`maxPerDay` 的覆写只在**填了大于 0 的
 - 闸门：`evaluatePurposeTick`（enabled/quiet/dailyMax/nextFireAt/ownerIdleMs）；`nextFireAt` 落盘 tick 重算，重启时在途 `pending` 改判 `interrupted` 不补发。
 - 归属/回执/pending 语义与 surfcore 一致（群友目标重复≥3 或被点名才升 self；主人回复正/负/中性 → confirmed/rejected/微调；备忘【状态】待续/完成驱动 pending）。
 - 投递一律走 QQ 私聊（`hub.deliver('private:'+ownerQQ)`），没有其他载体；旧配置里残留的 `ext.purpose.carrier` 键会被忽略、无害。
-- 旧 `createSpeakUp` 仍在 `src/features/companion.js`，是「主动搭话」的现行实现（mood 模块 files 与旧测试依赖，勿删）。
+- 旧 `createSpeakUp` 仍在 `src/features/companion.js`，是「主动搭话」的现行实现。
