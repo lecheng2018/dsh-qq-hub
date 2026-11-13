@@ -88,4 +88,24 @@ test('第二块模型失败后，重试跳过已成功块且只在全部成功�
   assert.equal(pending.ok, false)
   assert.match(pending.failed[0]?.error || pending.message, /状态未确认|待核对/)
   assert.equal(prompts.length, beforePending, '中断批次未经核对不得自动重跑模型')
+
+  assert.equal(store.resolveExtractionBatch(interruptedId, 'done').ok, false, 'running 不能未经核对直接完成')
+  assert.equal(store.resolveExtractionBatch(interruptedId, 'retry').ok, true)
+  const recovered = await store.consolidate()
+  assert.equal(recovered.ok, true, recovered.message)
+
+  const pendingState = JSON.parse(readFileSync(stateFile, 'utf8'))
+  pendingState.extractionBatches[interruptedId].status = 'pending'
+  pendingState.extractionBatches[interruptedId].added = 2
+  delete pendingState.processed[yesterday()]
+  delete pendingState.processedSources[yesterday()]
+  writeFileSync(stateFile, JSON.stringify(pendingState))
+  store.reload()
+  const confirmedRecovery = store.resolveExtractionBatch(interruptedId, 'done')
+  assert.equal(confirmedRecovery.ok, true)
+  assert.equal(confirmedRecovery.batch.added, 2)
+  const beforeConfirmed = prompts.length
+  const confirmed = await store.consolidate()
+  assert.equal(confirmed.ok, true, confirmed.message)
+  assert.equal(prompts.length, beforeConfirmed, '人工确认完成后不得重复调用模型')
 })
