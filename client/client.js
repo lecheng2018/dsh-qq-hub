@@ -269,6 +269,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-chip{border:1px dashed var(--ab-line-2);background:transparent;color:var(--ab-sub);border-radius:999px;padding:3px 12px;font:inherit;font-size:12px;cursor:pointer;transition:border-color .12s,color .12s,background .12s}
 .ab-chip:hover{border-color:var(--ab-sea);color:var(--ab-deep);background:var(--ab-foam)}
 .ab-chip.solid{border-style:solid}
+.ab-mood{height:10px;border-radius:999px;background:var(--ab-card-2);overflow:hidden;border:1px solid var(--ab-line)}
+.ab-mood > i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--ab-sky),var(--ab-sea))}
 .ab-savebar{position:sticky;bottom:12px;margin-top:16px;display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;background:var(--ab-card);border:1px solid var(--ab-sea);box-shadow:0 6px 24px rgba(0,0,0,.12);z-index:6}
 .ab-savebar .msg{flex:1;color:var(--ab-deep);font-weight:560}
 .ab-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);padding:9px 16px;border-radius:10px;background:var(--dsw-alias-toast-bg,#1f2328);color:var(--dsw-alias-toast-label,#fff);font-size:13px;z-index:50;box-shadow:0 6px 24px rgba(0,0,0,.2);max-width:80vw}
@@ -365,6 +367,8 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 .ab-sticker{border-radius:14px;transition:transform .12s,box-shadow .12s}
 .ab-sticker:hover{transform:translateY(-2px);box-shadow:var(--ab-shadow)}
 .ab-pitem{border-radius:12px;transition:border-color .12s,box-shadow .12s}
+.ab-mood{height:12px}
+.ab-mood > i{background:linear-gradient(90deg,#9ad0ff,var(--ab-sea) 60%,#7a6cf0)}
 .ab-logs{border-radius:12px;border:1px solid var(--ab-line)}
 .ab-savebar{border-radius:14px;backdrop-filter:blur(8px)}
 .ab-table th{font-size:12px;letter-spacing:.02em}
@@ -690,7 +694,7 @@ var TABS = [
   { id: "modules", label: "扩展" },
   { id: "logs", label: "日志" }
 ];
-var TAB_MODS = { voice: ["voice"], stickers: ["stickers"], imagegen: ["imagegen"], diary: ["diary", "qzone-social"], speakup: ["speakup", "purpose"], memory: ["memory", "distill", "reflection", "style", "slang", "memory-privacy"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multi-parser"] };
+var TAB_MODS = { voice: ["voice"], stickers: ["stickers"], imagegen: ["imagegen"], diary: ["diary", "qzone-social"], speakup: ["speakup", "purpose"], memory: ["memory", "reflection", "style", "memory-privacy"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multi-parser"] };
 var modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running);
 var NAV_GROUPS = [
   { id: "home", label: "概览", icon: "M3 10.5 12 3l9 7.5M5.5 9v11.5h13V9M10 20.5v-6h4v6", tabs: ["overview"] },
