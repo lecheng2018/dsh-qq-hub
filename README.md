@@ -254,6 +254,8 @@ node scripts/migrate-memory-markdown.js "/实际的数据目录/dsh-qq-hub"
 
 手工编辑 `memory.md` 后，在面板「记忆库」点击「重新载入档案」。坏档案会显示文件和错误，自动整理暂停；修复后可再次载入。重载会取消在途整理并刷新索引；它不是旧库迁移入口。
 
+整理批次出现「状态未确认」时，`GET /memory/batches` 可查看 running/pending 批次，`POST /memory/batches/resolve` 提交 `{ "id": "extract_…", "action": "retry" }` 可标记重试。pending 在人工核对已提交事实后也可提交 `action: "done"`；running 不能直接完成。未经恢复不会推进对应日期进度，也不要直接删除 `extractionBatches` 来绕过核对。
+
 当前生产核心固定为 `SessionRegistry → TurnController → ContextAssembly → Shared Outbox`。旧 hub、pipeline、fallback、旧 SQLite 后端及其灰度开关已退出源码；设置旧环境变量不会恢复旧实现。需要回滚时必须停写并使用固定旧安装包，同时核对升级前数据备份，代码回滚不会自动回滚 Markdown 档案。
 
 模块化演进边界与后续 PR 队列见 [插件模块化路线](docs/refactor/plugin-modular-roadmap.md)。

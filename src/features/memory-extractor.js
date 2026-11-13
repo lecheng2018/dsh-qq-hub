@@ -5,17 +5,64 @@ import { extractionBatchOf } from './memory-extraction.js'
 
 export const MEMORY_EXTRACTION_CHUNK_LINES = 40
 export const MEMORY_EXTRACTION_ENTRY_TARGET = 8
-export const MEMORY_EXTRACTION_MAX_TOKENS = 3000
 export const CONSOLIDATION_TIMEOUT_MS = 300000
 
+export function memoryExtractionMaxTokens(transcript, attempt = 0) {
+  const target = attempt === 0 ? MEMORY_EXTRACTION_ENTRY_TARGET : 4
+  return Math.min(6000, Math.max(3000, target * 350, Math.ceil(String(transcript || '').length * 0.75)))
+}
+
+function memoryOutputPreview(out) {
+  const text = String(out || '')
+  const clip = (value) => String(value).replace(/\s+/g, ' ').slice(0, 160)
+  return `长度 ${text.length}，开头：${clip(text)}；末尾：${clip(text.slice(-160))}`
+}
+
+function memoryArrayCandidate(input, start) {
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let index = start; index < input.length; index++) {
+    const char = input[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') { inString = true; continue }
+    if (char === '[') depth++
+    else if (char === ']' && --depth === 0) return input.slice(start, index + 1)
+  }
+  return null
+}
+
 export function parseMemoryJsonArray(out) {
-  // 不给半截数组补括号后直接标记完成：尾部事实可能仍缺失，宁可失败退避也不静默丢数据。
-  const match = String(out || '').match(/\[[\s\S]*\]/)
-  if (!match) throw new Error('模型未返回有效的记忆 JSON 数组')
-  let entries
-  try { entries = JSON.parse(match[0]) } catch { throw new Error('模型返回的记忆 JSON 数组不合法') }
-  if (!Array.isArray(entries)) throw new Error('模型未返回记忆 JSON 数组')
-  return entries
+  let input = String(out || '').trim()
+  const fence = input.match(/^```(?:json)?\s*\n?/i)
+  if (fence) {
+    input = input.slice(fence[0].length)
+    const end = input.lastIndexOf('```')
+    input = (end >= 0 ? input.slice(0, end) : input).trim()
+  }
+  if (!input) throw new Error('模型未返回有效的记忆 JSON 数组')
+  try {
+    const entries = JSON.parse(input)
+    if (Array.isArray(entries)) return entries
+  } catch {}
+  let sawArray = false
+  for (let index = 0; index < input.length; index++) {
+    if (input[index] !== '[') continue
+    sawArray = true
+    const candidate = memoryArrayCandidate(input, index)
+    if (!candidate) continue
+    try {
+      const entries = JSON.parse(candidate)
+      if (Array.isArray(entries)) return entries
+    } catch {}
+  }
+  if (sawArray) throw new Error('模型返回的记忆 JSON 数组不合法')
+  throw new Error('模型未返回有效的记忆 JSON 数组')
 }
 
 export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
@@ -55,7 +102,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
         `只输出 JSON 数组，最多输出 ${attempt === 0 ? MEMORY_EXTRACTION_ENTRY_TARGET : 4} 条最重要的新事实，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。` + (attempt === 0 ? '' : '\n上一次输出被截断或不是合法 JSON。请根据同一段聊天重新作答，只输出闭合的 JSON 数组，最多 4 条，不要解释。'),
         text: (related.length ? `已经记得的事：\n${related.map((item) => `#${item.id} [${whenText(item.at)}] ${item.aboutName ? '[' + item.aboutName + '] ' : ''}${item.text}`).join('\n')}\n\n` : '') + transcript,
-        maxTokens: MEMORY_EXTRACTION_MAX_TOKENS,
+        maxTokens: memoryExtractionMaxTokens(transcript, attempt),
         temperature: 0.2,
         signal: genSignal?.signal,
       })
@@ -69,6 +116,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         break
       } catch (error) {
         parseError = error
+        log?.debug?.(`记忆 JSON 第 ${attempt + 1} 次解析失败：${error.message}；${memoryOutputPreview(out)}`)
         if (attempt === 0) log?.info?.('记忆 JSON 数组不完整，要求模型改答一次（最多 4 条）')
       }
     }
