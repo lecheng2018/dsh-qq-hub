@@ -65,9 +65,7 @@ const sessionKey = (id) => {
  */
 // 模拟测试：这里面发出去的消息只记下来，不真发
 const captureStore = new AsyncLocalStorage()
-export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, moodEffects, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision }) {
-  // 心情对行为的影响（表情 / 语音概率、回复快慢、插话积极程度），没接就是 1
-  const mood = () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 }
+export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildTools, contextProviders, onActivity, memoryScore, onCommand, isMuted, localApi, hooks, availableModels, toolsGeneration, egressRef, resolveChatOfSession, chatLog, interactions, recentMedia: sharedRecentMedia, inboundAudio: sharedInboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision }) {
   const mapFile = () => dataDir('sessions.json')
   const map = () => readJson(mapFile(), () => ({ chats: {} }))
   const saveMap = (m) => writeJson(mapFile(), m)
@@ -95,7 +93,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   // 内容型工具清单（报告兜底第二层）：这些工具的产物是「给主人看的数据」，回复应该整段排版。
   // 记忆型（recall_memory、qq_chat_history）和管理型（qq_group_admin 等）刻意不在列。
   // 新增内容型工具时在这里加一行；她写了 <report> 标记时第一层优先生效，这里只是兜底。
-  const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image|qq_song_cover)$/
+  const CONTENT_TOOLS = /^(rss_read|bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/
 
   const recentMedia = sharedRecentMedia || createRecentMedia({ log }) // 最近发来的图片和表情，短期落盘恢复
   const inboundAudio = sharedInboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
@@ -439,7 +437,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
     {
       for (const tool of tools) {
-        // 慢工具（生图 / 翻唱……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
+        // 慢工具（生图……）卡超过 1.5 秒就先发一条提示：不让主人以为她没收到（issue #74）。
         // 包装只加在挂给 agent 的这份工具上；面板里直接调工具（host 路由）照旧。
         let reg = tool
         if (tool.slow) {
@@ -754,7 +752,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     }
   }
 
-  /** 把一个音频文件当语音条发出去（翻唱用）。 */
+  /** 把一个音频文件当语音条发出去（模块 SDK 用）。 */
   async function sendVoiceFile(chatId, file, note) {
     const b64 = readFileSync(file).toString('base64')
     const r = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], note || '[语音]')
@@ -914,7 +912,7 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
   const deliveryContext = new AsyncLocalStorage()
   const { deliver, deliverNow } = createReplyDelivery({
     deliveryContext,
-    getConfig, log, hooks, reportTurns, groups, stickers, mood, interaction,
+    getConfig, log, hooks, reportTurns, groups, stickers, interaction,
     sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
     logChat, onActivity,
     onDelivered: ({ chatId, items, cfg }) => {
@@ -1190,8 +1188,8 @@ export function createHub({ dsh, getConfig, log, onebot, stickers, tts, buildToo
     let mode = 'must'
     if (msg.kind === 'group') {
       const pol0 = policyFor(cfg.group, cfg.group.overrides, msg.groupId)
-      // 心情好更爱插话，心情差少插话
-      const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * mood().chatty) }
+// 插话概率按配置值直接用
+      const pol = pol0
       // 群里最近在聊的（窗口内最后几条）和她有多相关
       const recentTexts = groups.buffer(msg.groupId).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
       let memScore = 0

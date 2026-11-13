@@ -10,7 +10,7 @@ export function defineTool({ name, description, properties = {}, required = [], 
   return {
     name,
     description,
-    // 慢工具（生图、翻唱……）：卡住超过 1.5 秒就先往 QQ 发一条「正在做」的提示（issue #74），
+    // 慢工具（生图……）：卡住超过 1.5 秒就先往 QQ 发一条「正在做」的提示（issue #74），
     // 不让主人干等一整轮；具体提示语就写在这里。快工具不用标。
     ...(slow ? { slow } : {}),
     parameters,

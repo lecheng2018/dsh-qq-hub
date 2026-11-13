@@ -2,7 +2,6 @@
 
 import stickers from './stickers/index.js'
 import voice from './voice/index.js'
-import mood from './mood/index.js'
 import memory from './memory/index.js'
 import { reflectionModule } from './reflection/index.js'
 import { styleModule } from './style/index.js'
@@ -14,7 +13,6 @@ import qzoneSocial from './qzone-social/index.js'
 import speakup from './speakup/index.js'
 import purpose from './purpose/index.js'
 import bili from './bili/index.js'
-import song from './song/index.js'
 import profile from './profile/index.js'
 import contacts from './contacts/index.js'
 import douyin from './douyin/index.js'
@@ -26,7 +24,7 @@ import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
 import rss from './rss/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, song, profile, contacts, douyin, heybox,
+export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
   tokenGuardian, completeGuard, memoryPrivacy, scheduler,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器

@@ -35,7 +35,7 @@ test('knownChats 从 sessions.json 读出群和私聊，排除 system 会话', a
     onebot: null, stickers: null, tts: null,
     buildTools: () => [], contextProviders: [], onActivity: () => {},
     memoryScore: () => 0, onCommand: () => {}, isMuted: () => false,
-    moodEffects: () => null, localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,
+    localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,
   })
   assert.equal(typeof hub.knownChats, 'function', 'hub 必须暴露 knownChats')
   const list = hub.knownChats()
@@ -69,7 +69,7 @@ test('sessions.json 不存在时返回空数组，不抛', async () => {
       onebot: null, stickers: null, tts: null,
       buildTools: () => [], contextProviders: [], onActivity: () => {},
       memoryScore: () => 0, onCommand: () => {}, isMuted: () => false,
-      moodEffects: () => null, localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,
+      localApi: null, hooks: {}, availableModels: () => [], toolsGeneration: () => 0,
     })
     const list = hub.knownChats()
     assert.deepEqual(list, [], '没有数据时返回空数组')
