@@ -3,9 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHub } from '../src/chat/hub.js'
+import { createModularCore } from '../src/host/modular-core.js'
 import { createSharedOutbox } from '../src/host/shared-outbox.js'
-import { createHubEgress } from '../src/host/hub-egress.js'
 import { createFakeDsh } from './helpers/fake-dsh.js'
 
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
@@ -25,11 +24,12 @@ beforeEach(() => {
   fixtures = []
 })
 
-afterEach(() => {
+afterEach(async () => {
   if (previousDataDir === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
   else process.env.DSH_QQ_HUB_DATA_DIR = previousDataDir
   for (const fixture of fixtures || []) {
-    fixture.outbox?.dispose()
+    if (fixture.core) await fixture.core.dispose()
+    else fixture.outbox?.dispose()
     fixture.fake.dispose()
   }
   if (dataDir) rmSync(dataDir, { recursive: true, force: true })
@@ -61,18 +61,20 @@ function makeHub(cfg, { tts, egressRef, stickers, hooks } = {}) {
       return { message_id: physicalCalls.length }
     },
   }
-  const hub = createHub({
+  const core = createModularCore({
     dsh: fake.ctx,
-    getConfig: () => cfg,
-    log: noopLog,
     onebot,
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    getConfig: () => cfg,
+    logger: noopLog,
+    log: noopLog,
     stickers: stickers || { match: () => null, segmentFor: () => null, pickForReply: () => null },
     tts: tts || { speak: async () => ({ file: wavFile, engine: 'test' }) },
     buildTools: () => [],
-    egressRef,
-    hooks,
+    sharedOutbox: egressRef?.outbox,
+    moduleHooks: hooks,
   })
-  const fixture = { fake, hub, physicalCalls, outbox: egressRef?.outbox }
+  const fixture = { fake, core, hub: core.services, physicalCalls, outbox: core.outbox }
   fixtures.push(fixture)
   return fixture
 }
@@ -87,7 +89,7 @@ function makeSharedHub(cfg, { send, ...options } = {}) {
     getConfig: () => cfg,
     log: noopLog,
   })
-  const fixture = makeHub(cfg, { ...options, egressRef: { current: createHubEgress({ outbox, log: noopLog }), outbox } })
+  const fixture = makeHub(cfg, { ...options, egressRef: { outbox } })
   return { ...fixture, sharedCalls }
 }
 
@@ -115,7 +117,7 @@ test('群聊同 chatKey 的富媒体投递按调用顺序进入 Shared Outbox', 
     log: noopLog,
   })
   const physicalCalls = []
-  const egressRef = { current: createHubEgress({ outbox, log: noopLog }), outbox }
+  const egressRef = { outbox }
   const { hub } = makeHub(cfg, {
     egressRef,
     tts: {
@@ -200,7 +202,7 @@ test('慢语音准备期间，同会话的独立 Shared Outbox 投递不能抢�
     log: noopLog,
   })
   const { hub } = makeHub(cfg, {
-    egressRef: { current: createHubEgress({ outbox, log: noopLog }), outbox },
+    egressRef: { outbox },
     tts: { speak: async () => { ttsStarted.resolve(); await ttsGate.promise; return { file: wavFile, engine: 'test' } } },
   })
 

@@ -37,8 +37,8 @@ test('P2 no-reset 用短冷却（约 10 分钟），成功与打满模型的失�
 
 test('P2 空闲判定感知 in-flight：她正忙时不压', () => {
   assert.match(TG, /hub\.isBusy\?\.\(chatId\)/)
-  // 1.3.57 状态重构后 isBusy 委托给 activity-state（卡住保护只有一处实现）
-  assert.match(src('src/chat/hub.js'), /isBusy: \(chatId\) => activity\.isBusy\(chatId\)/, 'hub 要把 isBusy 导出给模块')
+  // 当前核心组合回合状态与 activity-state，模块仍通过窄 facade 查询。
+  assert.match(src('src/host/modular-core.js'), /isBusy: \(chatId\).*activity\.isBusy\(chatId\)/, '当前核心要把 isBusy 导出给模块')
   assert.match(src('src/chat/activity-state.js'), /BUSY_MAX_MS/, '卡住保护在 activity-state')
 })
 

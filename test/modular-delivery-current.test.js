@@ -11,7 +11,7 @@
 // 区别于旧假设：本文件所有重试断言都要求有状态依据（transport+preSend / 业务明确拒绝），
 // 「请求失败即可安全重发」的旧假设在发送类动作上已被 client.js 禁止。
 
-import { test, before, after } from 'node:test'
+import { test, before, after, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
@@ -19,8 +19,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createOneBotClient } from '../src/onebot/client.js'
-import { createHub } from '../src/chat/hub.js'
+import { createModularCore } from '../src/host/modular-core.js'
 import { createFakeDsh } from './helpers/fake-dsh.js'
+
+const cores = []
+afterEach(async () => { while (cores.length) await cores.pop().dispose() })
 
 // ---------- 第一部分：OneBot 客户端的失败分类与重试边界 ----------
 
@@ -172,23 +175,25 @@ async function buildHub() {
     snowluma: { autoStart: false, autoAttach: false },
   }
   const dsh = createFakeDsh({ brain: async () => '嗯' })
-  const localHub = createHub({
-    dsh: dsh.ctx,
-    getConfig: () => cfg,
-    log: noopLog,
-    onebot: { call: (action, params, opts) => gwClient.call(action, params, opts) },
-    stickers: {},
-    tts: { speak: async () => ({ file: wavFile, engine: 'fake' }) },
-    buildTools: () => [],
-    contextProviders: [],
-  })
   // 直接用真实 OneBot 客户端包住 mock 网关，重试节奏用测试值
   const gwClient = createOneBotClient({
     endpoint: () => ({ httpUrl: gw.httpUrl, wsUrl: '', httpToken: gw.token, wsToken: '' }),
     log: noopLog,
     retryDelays: [10, 10, 10],
   })
-  return { hub: localHub, gw, cfg }
+  const core = createModularCore({
+    dsh: dsh.ctx,
+    onebot: gwClient,
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    getConfig: () => cfg,
+    logger: noopLog,
+    log: noopLog,
+    stickers: {},
+    tts: { speak: async () => ({ file: wavFile, engine: 'fake' }) },
+    buildTools: () => [],
+  })
+  cores.push(core)
+  return { hub: core.services, gw, cfg }
 }
 
 test('发文件：网关明确拒绝路径上传 → 允许约定内 base64 重试（第二发成功）', async () => {

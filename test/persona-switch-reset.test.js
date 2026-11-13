@@ -10,23 +10,23 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const CORE = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
 const PERSONAS = readFileSync(join(ROOT, 'src/persona/personas.js'), 'utf8')
 
-test('createSession 记下建会话时生效的人设', () => {
-  assert.match(HUB, /personaId: personaIdFor\(chat, getConfig\(\)\)/, 'sessions.json 里要有 personaId 字段')
+test('当前会话注册表记下建会话时生效的人设', () => {
+  assert.match(CORE, /sessionPersonas\.set\(chatKey, \{ sessionId: String\(created\.sessionId\), personaId \}\)/)
 })
 
 test('人设变了就 resetChat 开新会话（老会话没记 personaId 不触发）', () => {
-  assert.match(HUB, /entry\.personaId && entry\.personaId !== wantPersona/, '要比较人设')
-  assert.match(HUB, /resetChat\(chat\.chatId\)/, '不一致要清场')
-  assert.match(HUB, /!entry\.personaId \|\| entry\.personaId === wantPersona/, '老会话没记 personaId 时沿用，不误清')
+  assert.match(CORE, /persona\.personaId === currentPersona\(chatKey\)/, '要比较当前人设')
+  assert.match(CORE, /resetChat\(chatKey\)/, '不一致要清场')
+  assert.match(CORE, /entry\.personaId \|\| currentPersona\(chatKey\)/, '老会话没记 personaId 时使用当前基线，不误清')
 })
 
 test('不再往提示词里追加「专用人设」覆盖块，改成同作用域遮蔽变量', () => {
   assert.ok(!HOST.includes('那是换人设之前的旧人设，全部作废'), '覆盖块文案不需要了（块本身已经不生成）')
   assert.ok(!HOST.includes('【本聊天专用人设：'), 'host 不再注入那块')
-  assert.match(HUB, /systemPrompt\.variable\('qq_hub_persona'/, '改成在 agent 作用域里遮蔽人设变量')
+  assert.match(CORE, /sp\.variable\('qq_hub_persona'/, '改成在 agent 作用域里遮蔽人设变量')
   assert.doesNotMatch(HOST, /前面若出现别的性格描述，一律以这里为准/, '旧的软仲裁文案同样不要回来')
 })
