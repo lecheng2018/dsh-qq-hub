@@ -11,7 +11,6 @@ const MEM = readFileSync(join(ROOT, 'src/features/memory-archive.js'), 'utf8')
 const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const MOD = readFileSync(join(ROOT, 'src/modules/memory/index.js'), 'utf8')
 const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
-const SQL = readFileSync(join(ROOT, 'src/features/memory-sqlite.js'), 'utf8')
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 
 test('#2 提取门槛：3 行不再触发，纯寒暄不进模型', () => {
@@ -30,9 +29,6 @@ test('#4 主人换号迁移：scope/about 一起搬，面板有入口', () => {
   assert.match(MEM, /reassignOwner,/, '导出')
   assert.match(MOD, /\/memory\/reassign-owner/, '路由')
   assert.match(CLIENT, /主人换号迁移/, '面板入口')
-  // P1-12 后不再有 hash 快跳过：save() 走 eqCols 全字段比较，scope/chatId/about 变化必然落库
-  assert.match(SQL, /eqCols\(old, it\)\) continue/, 'save 走全字段比较')
-  assert.doesNotMatch(SQL, /savedHash\.get\(it\.id\) === h/, '不允许 hash 快跳过（会漏冷字段）')
 })
 
 test('#5 召回负反馈：说「记错了」降权最近注入的记忆', () => {
@@ -46,10 +42,11 @@ test('#6 估算系数：中文 1 字 ≈ 1.4 token，不再 chars/1.2 低估三�
   assert.doesNotMatch(TG, /\/ 1\.2/, '旧的 chars/1.2 已清除')
 })
 
-test('迁移真实落库（SQLite 往返）', async () => {
+test('主人换号迁移真实落入 Markdown 主库', async (t) => {
   process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'mem-mig-'))
   const { createMemoryStore } = await import('../src/features/memory.js')
   const store = createMemoryStore({ dsh: {}, getConfig: () => ({ memory: { enabled: true, recallCount: 4 } }), log: console, personaText: () => '' })
+  t.after(() => store.dispose())
   store.add({ text: '主人不吃香菜', about: '100011', aboutName: '老号', importance: 0.7, source: 'panel', chatId: 'private:100011', scope: 'private:100011' })
   store.add({ text: '小明喜欢养鱼', about: '200022', importance: 0.5, source: 'auto', chatId: 'group:1', scope: 'group:1' })
   const r = store.reassignOwner('100011', '999999')

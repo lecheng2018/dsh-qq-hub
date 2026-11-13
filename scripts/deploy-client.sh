@@ -5,20 +5,23 @@ set -euo pipefail
 SRC_ROOT="${QQHUB_DEPLOY_SRC:-/path/to/dsh-qq-hub}"
 DST_ROOT="${QQHUB_DEPLOY_DST:-/path/to/.dsh/profiles/web/node_modules/dsh-qq-hub}"
 
-# 只同步真正会变、且改过的文件；不动 node_modules / 用户数据
 FILES=(
   "client/client.js"
   "src/host.js"
   "src/host/http.js"
   "src/host/models.js"
   "src/host/gateway.js"
-  "src/host/pipeline.js"
+  "src/host/modular-core.js"
+  "src/host/current-hub.js"
+  "src/host/shared-outbox.js"
+  "src/host/hub-egress.js"
+  "src/host/module-send-bridge.js"
   "src/host/effects.js"
   "src/host/panel/overview.js"
   "src/host/panel/routes-config.js"
   "src/host/panel/routes-gateway.js"
   "src/host/panel/routes-persona.js"
-  "src/host/panel/routes-purpose-pet.js"
+  "src/host/panel/routes-purpose.js"
   "src/host/panel/routes-modules.js"
   "src/host/panel/routes-misc.js"
   "src/core/config.js"
@@ -26,16 +29,55 @@ FILES=(
   "src/core/llm.js"
   "src/core/models.js"
   "src/core/vision-helper.js"
+  "src/chat/reply-delivery.js"
+  "src/chat/reply.js"
+  "src/chat/outbound.js"
+  "src/chat/outbound-files.js"
+  "src/chat/outbox.js"
+  "src/chat/presence.js"
+  "src/chat/capture.js"
+  "src/chat/system-turns.js"
+  "src/chat/turn-controller.js"
+  "src/chat/turn-participants.js"
+  "src/chat/turn-scheduler.js"
+  "src/chat/session-registry.js"
+  "src/chat/session-store.js"
+  "src/chat/recent-media.js"
+  "src/chat/inbound-vision.js"
+)
+
+OBSOLETE_FILES=(
   "src/chat/hub.js"
+  "src/host/pipeline.js"
+  "src/kernel/legacy-fallback.js"
+  "src/features/memory-sqlite.js"
+  "src/kernel/compose.js"
+  "src/kernel/context.js"
+  "src/kernel/ctx-store.js"
+  "src/kernel/dispatcher.js"
+  "src/kernel/mw-acl.js"
+  "src/kernel/mw-aggregator.js"
+  "src/kernel/mw-command-router.js"
+  "src/kernel/mw-dedup.js"
+  "src/kernel/mw-egress.js"
+  "src/kernel/mw-egress-cutover.js"
+  "src/kernel/mw-memory.js"
+  "src/kernel/mw-persona.js"
 )
 
 [ -d "$DST_ROOT" ] || { echo "找不到目标目录：$DST_ROOT"; exit 1; }
-
 STAMP=$(date +%Y%m%d-%H%M%S)
+
+for f in "${OBSOLETE_FILES[@]}"; do
+  if [ -f "$DST_ROOT/$f" ]; then
+    mv "$DST_ROOT/$f" "$DST_ROOT/$f.retired-$STAMP"
+    echo "已退役旧实现并保留备份 $f"
+  fi
+done
+
 for f in "${FILES[@]}"; do
-  [ -f "$SRC_ROOT/$f" ] || { echo "跳过（源不存在）：$f"; continue; }
+  [ -f "$SRC_ROOT/$f" ] || { echo "缺少当前实现文件：$f"; exit 1; }
   mkdir -p "$DST_ROOT/$(dirname "$f")"
-  # 已经一致就不备份、不覆盖，避免重复跑脚本留下一堆相同的 bak 文件。
   if [ -f "$DST_ROOT/$f" ] && cmp -s "$SRC_ROOT/$f" "$DST_ROOT/$f"; then
     echo "无需变更 $f"
     continue
@@ -44,7 +86,6 @@ for f in "${FILES[@]}"; do
     cp -p "$DST_ROOT/$f" "$DST_ROOT/$f.bak-$STAMP"
   fi
   cp "$SRC_ROOT/$f" "$DST_ROOT/$f"
-  # 保持原来的属主/权限，避免 Harness 读不了
   if [ -f "$DST_ROOT/$f.bak-$STAMP" ]; then
     chown --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
     chmod --reference="$DST_ROOT/$f.bak-$STAMP" "$DST_ROOT/$f" 2>/dev/null || true
@@ -56,13 +97,9 @@ for f in "${FILES[@]}"; do
 done
 
 echo
-echo "校验："
-grep -n 'const pm = '        "$DST_ROOT/client/client.js" || true
-grep -n 'onClick: () => setDraft((prev) =>' "$DST_ROOT/client/client.js" || true
-grep -n 'next.persona.groups' "$DST_ROOT/src/core/config.js" || true
-grep -n 'dedupeModelList'    "$DST_ROOT/src/host/models.js" || true
-grep -n 'fnos-fsync-patch'    "$DST_ROOT/src/host.js"      || true
-grep -n '绝不把裸 base64'     "$DST_ROOT/src/core/llm.js"  || true
-grep -n '按看不了图处理'      "$DST_ROOT/src/chat/hub.js"  || true
+echo "当前核心校验："
+grep -n 'createCurrentHub' "$DST_ROOT/src/host.js"
+grep -n 'createReplyDelivery' "$DST_ROOT/src/host/modular-core.js"
+grep -n 'createOutboundFiles' "$DST_ROOT/src/host/modular-core.js"
 echo
 echo "接下来：重启 DSH，然后浏览器 Ctrl+Shift+R 强制刷新面板。"
