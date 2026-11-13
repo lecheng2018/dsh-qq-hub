@@ -128,7 +128,7 @@ export function assemblePipeline({
     // 每事件现取，热重载跟上）；回复经 hub.sendSegments 在 ALS 里落出口切换包装器
     // → ctx.reply.enqueue，总开关 force 豁免 / 试运行 / 身份闸三道安全闸一字不动。
     const runOwnerCommand = async (cmd, msg) => {
-      const reply = await runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, mood: use('mood'), memory: use('memory'), qzone: use('diary'), song: use('song'), listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: getMods().commands() })
+      const reply = await runCommand(cmd, msg, { getConfig, setConfig, mutes, hub, memory: use('memory'), qzone: use('diary'), listModels, defaultModel: () => defaultModel(ctx, { model: {} }), extraCommands: getMods().commands() })
       if (!reply) return // 空回复：mw 以零入队增量透传下游，复刻 legacy「命令没答话就继续当聊天」
       log.info(`主人命令 ${String(msg.text).trim().slice(0, 30)} → ${String(reply).split('\n')[0]}`)
       await hub.sendSegments(msg.chatId, [{ type: 'text', data: { text: String(reply) } }], String(reply).slice(0, 60), { force: true })
@@ -154,7 +154,7 @@ export function assemblePipeline({
       handlers: {
         help: runOwnerCommand, silent: runOwnerCommand, active: runOwnerCommand, quiet: runOwnerCommand,
         chatty: runOwnerCommand, normal: runOwnerCommand, model: runOwnerCommand, sing: runOwnerCommand,
-        status: runOwnerCommand, mood: runOwnerCommand, diary: runOwnerCommand, remember: runOwnerCommand,
+        status: runOwnerCommand, diary: runOwnerCommand, remember: runOwnerCommand,
         reset: runOwnerCommand, new: runOwnerCommand, on: runOwnerCommand, off: runOwnerCommand,
       },
       log: logger.child('router'),

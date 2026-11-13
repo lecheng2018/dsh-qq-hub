@@ -71,7 +71,7 @@
 | 1.4 语音转写 | ⏸ | 需抽取 hub 转写管线，独立轮 |
 | 1.5 引用解析 | ⏸ | quotedInfo/quoteCache 在 hub 内部；群闸 repliedToBot 暂 false（不猜） |
 | 1.6 偷表情 | ⏸ | collectMode 三分支在 hub 内部 |
-| 1.7 出站装饰+心情调制 | ◐ | 群闸 interjectChance 已乘 mood().chatty；语音/表情概率装饰未接 |
+| 1.7 出站装饰+心情调制 | ✕ | 心情调制已随 1.4.0-beta.4 整体移除；插话/语音/表情按配置固定概率 |
 | 1.8 maxChars | ✅ 澄清 | parseReply(replyRules) 内部 segmentBubbles 已按 maxChars 封顶（审计该项为误报）；m5-parity 已钉住行为 |
 | 1.9 旁路指令三件 | ✅ 审批/提问 | hub 新增 `interceptInteraction`，新核心入口消费；hooks.message 模块接管未接（挂账） |
 | 1.10 总开关/静音不拦执行 | ✅ | dispatch 入口 enabled→disabled、isMuted→muted，不跑回合不烧 token；出站动态闸保留兜底 |
@@ -89,7 +89,7 @@
 
 代码侧已解除 e2e/modules 的 legacy 钉位；e2e 70/70、modules 22/22、扩展 46/46，打包检查通过。以下仍必须在目标环境执行，不得用 fake 结果替代：
 
-1. 安装后先开 dryRun，分别触发文本、图片、语音、表情、文件、戳、引用/@、RSS、定时、生图、翻唱和说说；确认 QQ 零实发且台账有 cancelled 记录。
+1. 安装后先开 dryRun，分别触发文本、图片、语音、表情、文件、戳、引用/@、RSS、定时、生图和说说；确认 QQ 零实发且台账有 cancelled 记录。
 2. 恢复正常发送后逐项执行同一矩阵；文件必须实际出现在私聊/群文件中，不能只看到 `[file]` 或工具成功文本。
 3. 私聊连续输入验证 steer；在上一回复正在发送时再输入，验证它进入下一轮而不是覆盖旧回复。
 4. 引用带图/表情、合并转发、语音输入、主人权限、群刹车、命令和模块热重载各做一次。

@@ -71,7 +71,6 @@ export function createModuleSendBridge({ hub, outbox, log, unified = false }) {
     sendSticker: wrapOutbound('sendSticker', 'stickers'),
     sendFile: wrapOutbound('sendFile', 'qq-tools'),
     sendVoice: wrapOutbound('sendVoice', 'voice'),
-    sendVoiceFile: wrapOutbound('sendVoiceFile', 'song'),
   }
   const descriptors = Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(hub)).map(([key, descriptor]) => [key, 'value' in descriptor ? { ...descriptor, writable: true, configurable: true } : { ...descriptor, configurable: true }]))
   const facade = Object.defineProperties({}, descriptors)

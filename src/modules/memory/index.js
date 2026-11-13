@@ -1,6 +1,6 @@
 // 内置模块：记忆。她自己记下值得记的事、聊天时想起相关的、每天把聊天流水整理进长期记忆，还有每个人的小档案、相处经验、说话方式。
 // 导出 createMemoryStore 的返回值：add / addEvent / recall / list / contextFor / topicScore / consolidate ……
-// 别的模块（空间日记、B 站、翻唱）会往这里记她的经历；记忆模块关着时它们自己跳过。
+// 别的模块（空间日记、B 站）会往这里记她的经历；记忆模块关着时它们自己跳过。
 
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
 import { createMemoryBus } from '../../features/memory-bus.js'
@@ -12,7 +12,7 @@ export default {
   name: '记忆',
   version: '1.0.0',
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/memory.js', 'features/memory-archive.js', 'features/memory-learning.js', 'features/memory-extractor.js'],
   provides: ['memory-store'], // 伴生模块经 api.use('memory') 读记忆（SDK 能力声明）
   setup(api) {

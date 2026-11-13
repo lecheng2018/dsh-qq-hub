@@ -5,7 +5,7 @@
 //   · 回执反馈（主人回复正/负 → confirmed / rejected）
 //   · pending 待续（备忘【状态】待续 → 惦记账本 → 下次优先）
 //   · silent（模型跳过不硬发）
-// 引擎是纯函数，归属/回执/待续直接测 engine.js；接线用假 hub/memory/mood（同 fake-dsh 模式）。
+// 引擎是纯函数，归属/回执/待续直接测 engine.js；接线用假 hub/memory（同 fake-dsh 模式）。
 // 落盘测试必须 AURABOT_DATA_DIR 隔离。
 import { test, before, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,13 +60,11 @@ function makePurpose(hub, overrides = {}) {
     ext: { purpose: { enabled: true, initialDelayMinutes: 1, minMaterials: 0 } },
     ...overrides,
   }
-  const nudges = []
   const p = createPurpose({
     getConfig: () => cfg,
     hub,
     log: { info() {}, warn() {}, debug() {} },
     isMuted: () => false,
-    mood: () => ({ nudge: (d, r) => nudges.push({ d, r }) }),
     // P1-1 后 purpose 走 recall（scopes fail-closed）拿素材，不再用 list —— mock 同步，recall 返回 hits 结构 { it }
     memory: () => {
       const items = (overrides.memories ?? DEFAULT_MEMORIES).map((m) => ({ id: m.id || 'm1', text: m.text, importance: m.importance ?? 0.8, at: Date.now() }))
@@ -77,7 +75,7 @@ function makePurpose(hub, overrides = {}) {
     },
     personaText: () => overrides.persona || '',
   })
-  return { p, cfg, nudges }
+  return { p, cfg }
 }
 
 // 把状态文件的 nextFireAt 拨到过去，下一次 tick 就到点
@@ -338,24 +336,6 @@ test('记忆适配：aurabot 0~1 重要度 ×100 后能过引擎阈值，成为�
   assert.ok(s.lastMaterialCount >= 1, `记忆素材应被计入（实际 ${s.lastMaterialCount}）`)
 })
 
-// ---------- 心情打通 ----------
-
-test('心情：sent 后按情绪 nudge mood；silent 不 nudge', async () => {
-  const hub = makeHub()
-  const { p, nudges } = makePurpose(hub)
-  await setupTick(p, hub)
-  const s = JSON.parse(readFileSync(stateFile(), 'utf8'))
-  if (s.lastOutcome === 'sent') {
-    assert.ok(nudges.length === 1 || (s.history.at(-1)?.emotion ?? '') === '', 'sent 时推了心情')
-  }
-})
-
-test('心情：记忆素材带亲近情绪时，sent 会正向 nudge', async () => {
-  const now = Date.now()
-  // 直接验引擎侧的情绪映射来源：connect+正面 → affectionate → +5
-  const emo = engine.appraiseMaterial({ material: { text: '主人说喜欢你', kind: 'memory', selfRef: true }, need: 'connect', now, lastMasterAt: now - 3600_000 })
-  assert.equal(emo, 'affectionate')
-})
 
 // ---------- 生成提示词（模型直接输出那句话，无 QQ 发送工具指令） ----------
 

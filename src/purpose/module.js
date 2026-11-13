@@ -3,7 +3,7 @@
 // 引擎本体在 ./engine.js（逻辑移植自 Mieksido/surfcore 的 purpose-engine，MIT，
 // 署名见 THIRD-PARTY-NOTICES.md；零 import 零 I/O 的纯函数）。
 // 本文件负责副作用：状态文件、素材采集（记忆 + 聊天流水适配）、生成（hub.runSystemTurn）、
-// 投递（hub.deliver）、心情 nudge、追问、路由。
+// 投递（hub.deliver）、追问、路由。
 //
 // 使用方式：独立的 purpose 内置模块（src/modules/purpose/index.js），默认关闭；
 // 现有的「主动搭话」模块（speakup，src/features/companion.js）保持默认实现不变，
@@ -24,9 +24,6 @@ import {
 const MINUTE = 60_000
 // 她的自称：用于聊天流水标注与「名字：」前缀清洗。
 const ROLE = '大肥鱼'
-// mood 模块靠 userText 的「【系统提醒」前缀把主动回合判成 origin='speak-up'（mood/index.js 的判定），
-// deliver 路径本身没有 userText，这里补一个同款前缀，保住心情判定链路。
-const MOOD_PREFIX = '【系统提醒，不是主人说的话】（她主动找你）'
 const SILENCE = '[沉默]'
 
 const pad2 = (n) => String(n).padStart(2, '0')
@@ -80,8 +77,7 @@ export function cleanReply(raw) {
   return s
 }
 
-export function createPurpose({ getConfig, hub, chatLog, log, isMuted, mood, memory, personaText }) {
-  const moodOf = () => { try { return mood?.() || null } catch { return null } }
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText }) {
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
   const lastPrivateAt = (cfg) => Math.max(hub?.lastOwnerChatAt || 0, hub?.lastBotToOwner?.at || 0)
@@ -268,7 +264,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, mood, mem
       outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 不硬发
     } else {
       try {
-        const r = await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
+        const r = await hub.deliver(chatIdOf(cfg), text, { own: true })
         outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
       } catch (error) {
         outcome = 'delivery-failed'
@@ -276,22 +272,11 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, mood, mem
       }
     }
     applyPurposeOutcome(state, { now: Date.now(), config, outcome, text, memo, planned: picked.purpose })
-    nudgeMood(picked.purpose, outcome)
     saveState(state)
     log.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
     return { outcome, text, memo }
   }
 
-  // 9 维驱动 → mood 单标量。mood 关闭时 nudge 自静默。
-  function nudgeMood(purpose, outcome) {
-    if (outcome !== 'sent') return
-    const m = moodOf()
-    if (!m?.nudge) return
-    const table = { affectionate: 5, excited: 5, proud: 4, amused: 4, lonely: -3, bored: -2, worried: -2, envious: -2, content: 0 }
-    const delta = table[purpose?.emotion]
-    if (!delta) return
-    try { m.nudge(delta, `主动搭话：${String(purpose?.text || '').slice(0, 20)}`) } catch {}
-  }
 
   // ---------- 追问（沿用旧 speakup 的「轻轻追一句」，不占今日次数） ----------
   async function maybeNudge(cfg, state, now = Date.now()) {
@@ -314,7 +299,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, mood, mem
         ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
         : await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
       const text = cleanReply(raw)
-      if (text) await hub.deliver(chatIdOf(cfg), text, { own: true, userText: MOOD_PREFIX })
+      if (text) await hub.deliver(chatIdOf(cfg), text, { own: true })
     } catch (error) {
       log.warn?.('目的：追问出错：', error?.message)
     }

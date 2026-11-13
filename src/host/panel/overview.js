@@ -52,8 +52,6 @@ export function createPanelOverview({
       onebot: { state: gatewayState.onebotState, login, endpoint: { httpUrl: endpoint().httpUrl, wsUrl: endpoint().wsUrl }, problem: gatewayState.onebotState === 'connected' && gatewayState.loginOk ? '' : await connectionProblem() },
       snowluma: { ...inst, running, consented: await consented(running), owns: snowluma.ownsProcess, lastAttach: snowluma.lastAttach, downloadPage: DOWNLOAD_PAGE, webui: snowluma.webuiUrl() },
       stats: hub.stats(),
-      // 模块关着时给个空壳，面板照常显示
-      mood: use('mood')?.state?.() ?? { value: 0, label: '心情模块关着', reason: '', history: [] },
       stickers: { count: stickers.library().items.length },
       diary: diary ? { next: diary.nextTime(), last: diary.history()[0] || null } : { next: 0, last: null },
       qzoneSocial: use('qzone-social')?.state?.() ?? null,
@@ -62,7 +60,6 @@ export function createPanelOverview({
       memory: { lastConsolidate: memory?.lastConsolidate?.() ?? 0 },
       avatar: avatarInfo(),
       voice: { edgeInstalled: use('voice')?.edgeInstalled?.() ?? false },
-      song: use('song')?.status?.() ?? null,
       sessions: hub.sessions(),
       workspaceDir: workspaceDirOf(cfg),
       personas: listPersonas(),
