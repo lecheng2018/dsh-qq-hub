@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { parseReply, bubbleDelay, replyRules } from './reply.js'
+import { calculateTypingCadence, typingWaitAfter, typingCadenceEnabled } from './reply-cadence.js'
+
+// AC-2 的字面要求：律动计算从投递模块表面也能直接取到。
+// 真身仍然只有一份，定义在 reply-cadence.js（纯函数，便于单测与复用），这里只是 re-export。
+export { calculateTypingCadence }
 
 // 一轮回复的业务编排：拆条、群聊合并、富媒体与同会话投递顺序。
 // 物理发送由注入的发送函数进入统一 Outbox，本模块不持有网关。
@@ -149,6 +154,14 @@ export function createReplyDelivery({
     const refs = inGroup ? (opts.refs || groups.refs(chatId.slice(6))) : {}
     const explicit = items.some((item) => item.replyTo)
     const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers?.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
+    // 仿真打字律动：多条气泡时按「思考 + 逐字击键 + 呼吸间隙」拉长间隔。
+    // 关闭开关或算不出来（条目非法）时退回既有的固定公式，行为与旧版一致。
+    const cadence = typingCadenceEnabled(cfg) ? calculateTypingCadence(items.map((item) => ({ kind: item.kind, value: item.kind === 'text' || item.kind === 'voice' ? item.value : '' }))) : null
+    const cadenceUsable = Boolean(cadence?.valid)
+    const waitBefore = (index) => {
+      if (!cadenceUsable) return bubbleDelay(items[index].kind === 'text' ? items[index].value : '')
+      return typingWaitAfter(cadence, index - 1)
+    }
     const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
     for (let i = 0; i < items.length; i++) {
@@ -165,7 +178,7 @@ export function createReplyDelivery({
       else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
       else if (it.kind === 'image') await sendImage(chatId, it.value, replyId, userId)
       else if (it.kind === 'mixed') await sendMixed(chatId, it.parts, replyId, missedAt, userId)
-      if (i < items.length - 1 && !opts.simulate) await wait(bubbleDelay(items[i + 1].kind === 'text' ? items[i + 1].value : ''))
+      if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
     }
     if (opts.simulate) return items
     if (inGroup) {
