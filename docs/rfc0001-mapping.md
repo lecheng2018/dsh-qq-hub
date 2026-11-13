@@ -46,7 +46,7 @@ host.js 行号为装配现状，会随后续 Phase 漂移，以符号名检索�
 | `res = await callLLM(sys, buffer[uid])` | `agent.followup(message)`（新轮）/ `agent.steer(message)`（插话） | src/chat/hub.js:1890 / 1887（上下文 pushToSession:1837；准入 admit:1813；后台轮 runSystemTurn 内 followup:1920） | LLM 由 DSH agent 会话承载（`agentFor` hub.js:350），无直接 HTTP 调用点；超时/取消语义目前确实缺（RFC 痛点属实，终局 executor 化的正题） |
 | `for (part of split(res))` ← 分条 | `deliver(chatId, text, opts)` + `replyRules`/`parseReply` | src/chat/hub.js:833（deliver）、845-850（分条规则，src/chat/reply.js）、912-926（逐条发送循环） | 分条权威只有一处：规则（她写 `\|\|\|` 断句优先，字数兜底），1.3.43 起不再二次问模型。**管道开启态另有第二道**：mw-egress 语义分条（4000 字硬线），两条叠加语义见 US-006/007 留档 |
 | `await send(part)` | `sendText/sendVoice/sendSticker/sendImage` → `sendSegments` | src/chat/hub.js:572/604/657/687/816/825 → 572 | 发送唯一收口 `sendSegments`（hub.js:572），`hooks.send` 拦截点在 :604；导出面 hub.js:2105。**已被收口**：flag-on 时 `hubOnebot` 包装在 `onebot.call` 层（三道安全闸之后）吞包入队 ctx.reply → Dispatcher 下发 |
-| `await sleep(rand)` ← 副作用内联 | `bubbleDelay(下一条) * mood().delay` | src/chat/hub.js:925（import 于 :13） | 不是纯随机，是按下一条内容长度算的拟人间隔 × 心情系数。bubbleDelay→delayMs 的换算在装配层 `createEgressSendHook`（hooks.send 包装）记投递草稿，flag-on 投递缺省 `delayMs=0`（US-007 拍板，防双限速叠加） |
+| `await sleep(rand)` ← 副作用内联 | `bubbleDelay(下一条)` | src/chat/hub.js:925（import 于 :13） | 不是纯随机，是按下一条内容长度算的拟人间隔（心情系数已随 1.4.0-beta.4 移除）。bubbleDelay→delayMs 的换算在装配层 `createEgressSendHook`（hooks.send 包装）记投递草稿，flag-on 投递缺省 `delayMs=0`（US-007 拍板，防双限速叠加） |
 | `saveMemory(uid, ...)` ← 记忆写 | `logChat(chatId,'bot',said)` + `dsh.sessions.flush(agent.session)` | src/chat/hub.js:934（bot 发言写回，定义 :210）、1893（会话持久化） | 长期记忆蒸馏/遗忘归 features/memory.js（`use('memory')`）；hub 只写聊天日志与会话。仍存活于 legacy 终端内（§7） |
 | `buffer[uid] = []` ← 竞态窗口 | `pending.delete(chatId)` | src/chat/hub.js:1750/1768（flush 各分支摘除） | 竞态确实存在：busy/running 两套状态（1711-1715）靠约定衔接；管道侧对位收编 = mw-aggregator（FLAG_INGRESS_AGGREGATOR 灰度中） |
 
@@ -161,7 +161,7 @@ flag-on 时 legacy hub 是管道**终端**，以下职责全部仍在 hub.js 闭
 | 1 | LLM 推理调用（followup/steer/admit + 会话轮状态机） | hub.js:1887/1890/1813 | 管道无取消通道：aggregator 的 steer **打断不了进行中的推理**（G2 诚实边界）；超时语义缺失仍在 | **executor 化**（终局核心命题：ModelInferenceExecutor 替换整个 legacy 终端） |
 | 2 | 提示词组装主体（systemPrompt 变量挂载 + hooks.prompt 改写 + mount 遮蔽） | hub.js:529-559/1843-1851 | 人设/上下文**数据面**已被 persona/memory 预取接管，**文本面**仍由 hub 直读拼装；接管命中时挂载循环照跑、数据换供 | **继续注入面接管**（装配层吃下 prompt 文本面属终局；缺口 §8-A/B 先行） |
 | 3 | DSH 会话持有与 steer（agentFor/sessions/pushToSession，sessionId 生成于 hub 闭包） | hub.js:350/1837/1893 | 中间件拿不到 DSH 会话 id → 接管态 speakersOf 档案子块为空（缺口 B） | **executor 化**（会话管理成为执行器一等公民，sid 由装配层自持） |
-| 4 | 群策略/群配额（decideGroupReply + groupQuota 计数 + mood/插话概率） | hub.js:1415 起 + group-policy.js | 入口 ACL 只承载 cfg.allow 白名单粗筛；回复策略刻意不前置（双判定会消耗两次随机数，US-009 移交）；限流双闸保守叠加（delayMs=0 让位） | 短期**保留**；终局若 dispatcher 单点限速拍板，配额计数迁 dispatcher 侧 |
+| 4 | 群策略/群配额（decideGroupReply + groupQuota 计数 + 插话概率） | hub.js:1415 起 + group-policy.js | 入口 ACL 只承载 cfg.allow 白名单粗筛；回复策略刻意不前置（双判定会消耗两次随机数，US-009 移交）；限流双闸保守叠加（delayMs=0 让位） | 短期**保留**；终局若 dispatcher 单点限速拍板，配额计数迁 dispatcher 侧 |
 | 5 | bubbleDelay 打字估时计算 | hub.js:925 + reply.js | flag-on 投递草稿换算已在 hooks.send 包装层（createEgressSendHook 记 delayMs），**换算消费**在 Dispatcher shaping；缺省 delayMs=0 = 整轮齐发（US-007 行为变化） | **executor 化**（节奏策略归 Dispatcher 单点后 hub 侧让位） |
 | 6 | 记忆写回（logChat 聊天日志 + sessions.flush 会话持久化）+ memoryScore 打分入口 | hub.js:934/210/1893/1413 | 读侧已有接管面（检索装配写 state），写侧完全在 legacy 终端内 | **executor 化**（Sink 侧写归 Dispatcher/executor，US-007 预留评估） |
 | 7 | 主人命令闸门（hub.js:1350-1376：recentMedia/questions 前置消费 + onCommand 复检） | hub.js | router 已直答 16 内置；闸门保留为**第二权威**：透传形态复检 + handler 半途抛错的兜底复检执行（已知副作用重复窗口 §8-C） | **继续注入面接管**（ext 命令矩阵列 + 复检去重化，终局前不动） |
@@ -171,13 +171,13 @@ flag-on 时 legacy hub 是管道**终端**，以下职责全部仍在 hub.js 闭
 
 ## 8. 已知缺口清单（灰度位默认关的实因，终局验收项）
 
-- **A（NEW_MEMORY_PIPELINE）**：`mods.contextFor` 聚合**多模块** api.context（memory/mood/token-guardian/
+- **A（NEW_MEMORY_PIPELINE）**：`mods.contextFor` 聚合**多模块** api.context（memory/token-guardian/
   group-admin/multi-parser），mw-memory 只装 memory——接管命中时其余模块贡献一并被缓存替换。
   全量装配接管（或收窄接管面）前该开关不该默认开。（host/mw-memory 头注同记）
 - **B（同上）**：接管缓存由中间件产出、拿不到 hub 的 DSH 会话 sessionId → 群聊 speakersOf「正在说话的
   人」档案子块在命中路径为空（legacy 回退分支不受影响，sid 由 hub 真传）。
 - **C（US-011）**：router handler 半途抛错 → 回滚入队增量并透传 legacy **复检执行**，副作用类命令
-  （/remember、/sing）在异常窗口理论有重复风险；零重复需复检前幂等化，终局评估。
+  （/remember）在异常窗口理论有重复风险；零重复需复检前幂等化，终局评估。
 - **D（US-007）**：无 ctx 的后台发送与晚到气泡**回落旧通道直发**——"出口收敛到 Dispatcher"并非 100%；
   对账 grep `egress: 收口待发` 与 `[egress-shadow]` 两条 debug。
 - **E（G2 边界）**：管道层中断≠推理中断；steer 后新回合要等旧轮 release 才被旧核心受理（#1 取消通道）。
