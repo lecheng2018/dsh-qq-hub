@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 // host.js 分层拆分后：工作区路由在 panel/routes-config.js（断言逐字保留）
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const HUB = readFileSync(join(ROOT, 'src/host/current-hub.js'), 'utf8')
 
 function blockOf(src, marker, size = 2200) {
   const i = src.indexOf(marker)
@@ -35,6 +35,6 @@ test('没给 id 时不乱删，返回人话', () => {
   assert.match(b, /没说要删哪个工作区/)
 })
 
-test('resetChat 仍然从 hub 导出（删工作区接口依赖它）', () => {
-  assert.match(HUB, /\n\s+resetChat,/)
+test('resetChat 仍然从当前 facade 导出（删工作区接口依赖它）', () => {
+  assert.match(HUB, /resetChat: modular\.resetChat/)
 })

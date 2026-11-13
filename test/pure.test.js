@@ -377,7 +377,7 @@ test('#28 QQ 网关：默认 SnowLuma；接自己的 OneBot 机器人时用 oneb
 
 test('#32 工作区位置：面板填的绝对路径优先，相对路径 / 乱填的当没填', async () => {
   const { normalize } = await import('../src/core/config.js')
-  const { workspaceDirOf, WORKSPACE_DIR } = await import('../src/chat/hub.js')
+  const { workspaceDirOf, WORKSPACE_DIR } = await import('../src/chat/workspace.js')
   assert.equal(normalize({}).workspaceDir, '')
   assert.equal(workspaceDirOf(normalize({})), WORKSPACE_DIR)
   assert.equal(workspaceDirOf(normalize({ workspaceDir: ' D:\\Aurabot\\qq-chats ' })), 'D:\\Aurabot\\qq-chats')

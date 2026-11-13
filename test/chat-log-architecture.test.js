@@ -9,12 +9,12 @@ const source = (path) => readFileSync(join(root, path), 'utf8')
 
 test('host owns retention while modules receive the independent, narrow chatLog API', () => {
   const host = source('src/host.js')
-  const hub = source('src/chat/hub.js')
+  const hub = source('src/host/current-hub.js')
   assert.match(host, /createChatLogApi\(chatLogStore\)/)
   assert.match(host, /chatLogStore\.startRetention\(\)/)
   assert.match(host, /const core = \{\s*hub, chatLog,/)
   assert.match(host, /logChat: .*chatLog\.append/)
-  assert.match(hub, /resolveChatOfSession, chatLog[,}]/)
+  assert.match(hub, /function logChat\(/)
   assert.match(hub, /chatLog\?\.append/)
   assert.doesNotMatch(hub, /deleteChatLog/)
 

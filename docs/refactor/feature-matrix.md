@@ -22,8 +22,8 @@
 | 模块 `enabled` | 未配置时**默认开**（`enabled !== false`） | `src/core/modules.js:174` | modules.test |
 | 群聊工具隔离 | social 预设无本地工具（cordis.patch.yml） | `cordis.patch.yml` | — |
 | `config.json` 落盘 | 0600 | `src/core/config.js:716` | — |
-| 当前核心唯一事件链 | **开**（无 legacy/pipeline 回退；旧 flag 不读取） | `src/host.js`、`src/host/modular-core.js` | k03c-assembly-exit、r3-flagoff-regression |
-| 旧灰度开关 | **已退出生产装配**（`FLAG_MODULAR_CORE`、`FLAG_USE_PIPELINE`、`NEW_MEMORY_PIPELINE`） | `src/host.js` 不再读取 | k03c-assembly-exit |
+| 当前核心唯一事件链 | **开**（旧 hub/pipeline 已删除，无回退） | `src/host.js`、`src/host/modular-core.js` | k03c-assembly-exit、k03d-delete-plan、r3-flagoff-regression |
+| 旧灰度开关 | **已删除实现**（`FLAG_MODULAR_CORE`、`FLAG_USE_PIPELINE`、`NEW_MEMORY_PIPELINE` 及旧 shadow flag） | 设置后不改变装配 | k03c-assembly-exit、k03d-delete-plan |
 
 ## 2. 内置模块矩阵（21 个，注册顺序 = 装载顺序）
 
@@ -74,7 +74,7 @@
 | /new | 新开会话 | |
 | /on /off | 总开关 | |
 
-测试：commands.test.js。管道侧 US-011 命令路由与 legacy 闸门同口径（pipeline.js:130-159 有对照清单）。
+测试：commands.test.js。当前核心直接复用同一命令表与权限闸，旧管道命令路由已删除。
 
 模块扩展命令：模块经 `commands()` 注册（如 scheduler /remind），优先于内置表。
 
@@ -107,24 +107,17 @@
 
 ## 6. 主动发送来源清单（物理发送点对账）
 
-**统一收口**（经 hub.sendText/sendSegments → send_group_msg/send_private_msg）：
+**统一收口**（当前 `reply-delivery` / `outbound*` / 模块发送桥 → Shared Outbox）：
 
-- 回复链：reply.js 分条投递（气泡延迟/分条）
-- 命令回复（hub.js:1371/1376，force）
-- 群配额器兜底（group-quota，限流等待后重试）
-- 模块主动：speakup、purpose、scheduler、rss（查询结果由模型转述）、bili 巡查分享（duty.js:261/282）、douyin 分享（duty.js:222）、multi-parser 卡片、imagegen、profile、contacts 好友申请通知
-- 面板动作：/test-send（routes-gateway.js:84）、/modules/simulate（routes-modules.js:61）
-- backfill 迟到命令警告（gateway.js:80）
-- 危险命令确认 deliver（host.js:315、hub.js:113/119 审批/提问 deliver）
-- 慢工具提示（hub.js:489）
+- 回复链：`reply.js` 分条，`reply-delivery.js` 编排并投递。
+- 命令回复、群配额兜底、戳一戳、图片、语音、文件和 QQ 空间发送均进入同一台账与发送闸。
+- 模块主动：speakup、purpose、scheduler、bili/douyin 分享、multi-parser 卡片、imagegen、profile、contacts 通知。
+- 面板动作：/test-send、/modules/simulate；backfill 迟到命令警告和审批/提问卡片同样经当前出口。
 
-**旁路（不经 sendSegments/sendText）**：
+**非消息管理动作（不属于消息 Outbox）**：
 
-- `hub.js:706` send_poke（戳回去）
-- `features/qzone.js:74` send_qzone_msg（QQ 空间说说，外部服务动作）
-- `modules/group-admin` set_group_ban / set_group_kick / set_group_special_title（群管理动作）
-- `hub.js:773` upload_group_file / upload_private_file（发文件）
-- onebot HTTP 层：SnowLuma 进程管理（网关自身操作，非 QQ 消息）
+- `modules/group-admin` 的禁言、踢人和头衔管理。
+- onebot HTTP 层的 SnowLuma 进程管理（网关自身操作，非 QQ 消息）。
 
 > M4-4 收口时按本清单逐一对账；当前 none 未经登记的新增发送点。
 
@@ -133,7 +126,7 @@
 | 行为 | 基线描述 | 现有测试 |
 |---|---|---|
 | 私聊 | 主人私聊全工具（full），陌生人按白名单/access 判定 | e2e、features |
-| 群聊 | 白名单 + 插话档位 + 合流（merge 2.5s/8s，群 5s/15s）+ @判定 | group-*、mentions、kernel-aggregator |
+| 群聊 | 白名单 + 插话档位 + 合流 + @判定 + 鱼群/pair 安全闸 | group-*、mentions、m4-modular-core、fish-pingpong |
 | 媒体 | 图片转块（不支持看图时文字转述）、语音条、文件（30MB base64 上限、目录白名单、默认关） | vision*、voice-rvc、file-segment、hub-image-helper |
 | 引用/转发 | 引用上下文注入、合并转发展开（≤40 条） | e2e、hub-image-helper |
 | 审批 | tools/pre-execute 高危审批两阶段流 | approvals、danger-* |
@@ -154,7 +147,7 @@
 | `<dataDir>/modules/` | 用户自写模块 |
 | `<workspaceDir>/` | DSH 工作区（会话/文件） |
 | `<dataDir>/upstream-seen.json` | backfill 断档游标 |
-| `<dataDir>/sessions.json`（chat 层） | 每聊天最近交互时间 |
+| `<dataDir>/modular-sessions.json` | 当前 SessionRegistry 的聊天会话映射与最近回合时间；旧 `sessions.json` 不再创建 |
 
 ## 9. Owner 指派与缺口
 

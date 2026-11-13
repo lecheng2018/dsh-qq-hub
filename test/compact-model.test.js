@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const HUB = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 const LLM = readFileSync(join(ROOT, 'src/core/llm.js'), 'utf8')
 
 test('compact 先 resolveTarget(chat) 拿聊天当前模型', () => {
