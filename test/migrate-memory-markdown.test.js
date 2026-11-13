@@ -42,7 +42,6 @@ test('migrate-memory-markdown: 旧 SQLite + meta.json 完整迁移至 Markdown �
     insights: {
       'group:20001': [{ id: 'ins_1', text: '群里技术交流多' }],
     },
-    distillTargets: [{ gid: '20001', uid: '10001', name: '阿强' }],
   }
   writeFileSync(metaPath, JSON.stringify(meta), 'utf8')
 
@@ -70,8 +69,6 @@ test('migrate-memory-markdown: 旧 SQLite + meta.json 完整迁移至 Markdown �
   const qRaw = readFileSync(join(memoryDir, 'quarantine', 'memory.md'), 'utf8')
   assert.ok(qRaw.includes('无作用域老数据'))
 
-  assert.equal(loaded.distillTargets.length, 1)
-  assert.equal(loaded.distillTargets[0].name, '阿强')
   store.close()
 
   // 验证幂等：再次执行直接跳过

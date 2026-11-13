@@ -14,7 +14,7 @@ export default {
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
   tab: 'mood',
   files: ['features/memory.js', 'features/memory-archive.js', 'features/memory-learning.js', 'features/memory-extractor.js'],
-  provides: ['memory-store'], // 蒸馏等伴生模块经 api.use('memory') 读目标列表（SDK 能力声明）
+  provides: ['memory-store'], // 伴生模块经 api.use('memory') 读记忆（SDK 能力声明）
   setup(api) {
     const { hub, http } = api.core
     const memory = createMemoryStore({
@@ -22,15 +22,6 @@ export default {
       personaText: () => currentPersonaText(api.config().persona.current),
       reflectionContext: false,
       styleContext: false,
-      distillContext: false,
-      distillImpl: {
-        history: (options) => {
-          try { return api.use('distill')?.history(options) || { dir: '', sessions: 0, total: 0, speakers: [], lines: [] } } catch { return { dir: '', sessions: 0, total: 0, speakers: [], lines: [] } }
-        },
-        learn: (options) => {
-          try { return api.use('distill')?.learnFromHistory(options) || { ok: false, message: '蒸馏模块已关闭' } } catch { return { ok: false, message: '蒸馏模块已关闭' } }
-        },
-      },
       reflectImpl: (chat, transcript, genSignal) => {
         try { return api.use('reflection')?.reflect(chat, transcript, genSignal) || 0 } catch { return 0 }
       },
@@ -54,7 +45,6 @@ export default {
       try {
         if (!a || a.kind !== 'in' || !a.text) return
         memory.reportMiss(a.chatId, a.text)
-        // 蒸馏计数已移交给独立 distill 模块（它自己挂 activity；这里只管召回负反馈）
       } catch (error) {}
     })
     api.every(60_000, () => memory.tick(), '整理记忆')
@@ -125,10 +115,6 @@ export default {
       return memory.reassignOwner(b.from, b.to)
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
-    // 群黑话本路由（/slang、/slang/save、/slang/delete）已迁到独立模块 src/modules/slang/
-    //（存储/学习/注入都归它；URL 不变，面板无感）。memory.slang() 只读口保留供其迁移。
-    // 蒸馏目标、历史学习、派生卡与路由均归独立 distill 模块；distillList 仅供只读迁移。
-    // /slang/save、/slang/delete 路由已迁到独立模块 src/modules/slang/（URL 不变）
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
     api.route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
