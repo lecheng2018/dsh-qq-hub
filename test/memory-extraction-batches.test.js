@@ -66,6 +66,11 @@ test('第二块模型失败后，重试跳过已成功块且只在全部成功�
   assert.equal(failedState.processed[yesterday()], undefined)
 
   failSecond = false
+  for (const batch of Object.values(failedState.extractionBatches)) {
+    if (batch.status === 'failed') batch.nextRetryAt = 0
+  }
+  writeFileSync(stateFile, JSON.stringify(failedState))
+  store.reload()
   const second = await store.consolidate()
   assert.equal(second.ok, true, second.message)
   assert.equal(prompts.filter((text) => text.includes('第 0 条记录')).length, 1, '成功块不得重复请求模型')

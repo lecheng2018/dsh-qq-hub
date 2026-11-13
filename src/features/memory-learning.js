@@ -1,6 +1,6 @@
 import { askModel } from '../core/llm.js'
 import { readChatLogSource } from '../chat/chat-log.js'
-import { createMemoryExtractor } from './memory-extractor.js'
+import { createMemoryExtractor, MAX_ATTEMPTS, RETRY_BASE_MS } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
 import { createMemoryStyle } from './memory-style.js'
@@ -159,7 +159,8 @@ export function createMemoryLearning({
     start: (batch, scope) => {
       const state = load()
       state.extractionBatches = { ...(state.extractionBatches || {}) }
-      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
+      const previous = state.extractionBatches[batch.id]
+      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, attempts: Number(previous?.attempts || 0) + 1, at: Date.now() }
       try { save(state) } catch (error) {
         batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
         throw error
@@ -168,12 +169,17 @@ export function createMemoryLearning({
     fail: (batch, scope, error) => {
       const state = load()
       state.extractionBatches = { ...(state.extractionBatches || {}) }
+      const attempts = Number(state.extractionBatches[batch.id]?.attempts || 1)
+      const blocked = attempts >= MAX_ATTEMPTS
       state.extractionBatches[batch.id] = {
         fingerprint: batch.fingerprint,
         scope,
-        status: error.factsCommitted ? 'pending' : 'failed',
+        status: error.partial ? 'partial' : error.factsCommitted ? 'pending' : 'failed',
         added: Number(error.factsCommitted) || 0,
         error: error.message,
+        attempts,
+        blocked,
+        nextRetryAt: error.factsCommitted && !error.partial ? null : blocked ? null : Date.now() + RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1),
         at: Date.now(),
       }
       try { save(state) } catch (saveError) {
