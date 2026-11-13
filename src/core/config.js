@@ -616,10 +616,14 @@ export function normalize(raw) {
   if (!['whitelist', 'owner'].includes(c.bridge.allowTargets)) c.bridge.allowTargets = 'whitelist'
   // 1.4.0-beta.4 起部分功能整体移除。deepMerge 会把老配置里的键原样带进来，
   // 只删 DEFAULTS 不够 —— 残留的 song / neteaseCookie 会绕过已删除的 SECRETS 脱敏条目
-  // 明文回传面板。这里显式丢掉。
+  // 明文回传面板。这里显式丢掉（含 modules 下的设置块与 voice 的翻唱参数）。
   delete c.song
   delete c.local.song
   delete c.mood
+  delete c.modules.song
+  delete c.modules.mood
+  delete c.voice.songVoice
+  delete c.voice.songPitch
   return c
 }
 
