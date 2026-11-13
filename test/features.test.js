@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { planDiaryTimes } from '../src/features/qzone.js'
-import { moodLabel, scoreText, decayed } from '../src/features/companion.js'
 import { matchSticker, pickForReply } from '../src/features/stickers.js'
 import { pickBotProcess, readOneBotEndpoint } from '../src/snowluma/manager.js'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -18,15 +17,6 @@ test('日记排期：窗口内、间隔够、按时间排序', () => {
     assert.ok(t[1] - t[0] >= 180)
   }
   assert.deepEqual(planDiaryTimes({ timesPerDay: 0, windowStart: '10:00', windowEnd: '23:30', minGapMinutes: 180 }), [])
-})
-
-test('心情：关键词推动、半衰期回落', () => {
-  assert.ok(scoreText('你好可爱 爱你') > 0)
-  assert.ok(scoreText('滚 烦死了') < 0)
-  assert.equal(scoreText('今天下雨'), 0)
-  assert.equal(Math.round(decayed(100, 0, 3, 3 * 3600_000)), 80)
-  assert.equal(moodLabel(90), '超开心')
-  assert.equal(moodLabel(20), '不太开心')
 })
 
 test('表情匹配：按名字和标签', () => {
@@ -108,42 +98,6 @@ test('记忆检索：切词、相关度、去重', async () => {
   assert.ok(similarity('主人最爱吃白米饭', '主人最爱吃白米饭了') > 0.6)
 })
 
-test('心情：对她说的话、主人的话影响更大；心情明显时每轮都带上说话方式；影响表情和插话', async () => {
-  const { mkdtempSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const prev = process.env.AURABOT_DATA_DIR
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-mood-'))
-  try {
-    const { createMood, moodEffects } = await import('../src/features/companion.js')
-    const { normalize } = await import('../src/core/config.js')
-    const m = createMood({ getConfig: () => normalize({}) })
-    const v0 = m.current()
-    m.observe('你好可爱', '路人', { direct: false })
-    const vIndirect = m.current() - v0
-    m.observe('你好可爱', '主人', { direct: true, owner: true })
-    const vOwner = m.current() - v0 - vIndirect
-    assert.ok(vOwner > vIndirect * 3, '主人对她说的比群里顺带的影响大得多')
-    for (let i = 0; i < 4; i++) m.observe('好可爱 爱你 抱抱', '主人', { direct: true, owner: true })
-    assert.equal(m.label(), '超开心')
-    const line = m.contextLine()
-    assert.match(line, /超开心/)
-    assert.match(line, /话多/)
-    assert.equal(m.contextLine(), line, '不是只提醒一次，每轮都在')
-    assert.ok(m.effects().sticker > 1 && m.effects().chatty > 1)
-    assert.equal(m.state().history.length, 6)
-    m.nudge(-80, '被凶了')
-    assert.match(m.contextLine(), /小脾气/)
-    assert.ok(m.effects().sticker < 1 && m.effects().delay > 1)
-    // 平平常常时什么都不说
-    assert.equal(moodEffects(60).sticker, 1)
-    const m2 = createMood({ getConfig: () => normalize({ mood: { enabled: false } }) })
-    assert.equal(m2.contextLine(), '')
-  } finally {
-    process.env.AURABOT_DATA_DIR = prev
-  }
-})
-
 test('表情库上限：只清偷来的、最少用的、最老的', async () => {
   const { pickEvict } = await import('../src/features/stickers.js')
   const items = [
@@ -154,36 +108,6 @@ test('表情库上限：只清偷来的、最少用的、最老的', async () =>
   ]
   assert.equal(pickEvict(items).md5, 'c')
   assert.equal(pickEvict([{ md5: 'd', from: 'manual' }]), null, '你自己加的不清')
-})
-
-test('模型判心情：解析结果，没把握的不算，开了就不再按关键词', async () => {
-  const { mkdtempSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os')
-  const { join } = await import('node:path')
-  const prev = process.env.AURABOT_DATA_DIR
-  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'aurabot-judge-'))
-  try {
-    const { createMood, parseMoodJudge } = await import('../src/features/companion.js')
-    const { normalize } = await import('../src/core/config.js')
-    assert.deepEqual(parseMoodJudge('好的 {"delta": 30, "reason": "被夸了", "confidence": 0.9}'), { delta: 15, reason: '被夸了', confidence: 0.9 })
-    assert.equal(parseMoodJudge('不是 JSON'), null)
-    let answer = '{"delta": 8, "reason": "主人惦记她", "confidence": 0.9}'
-    const asked = []
-    const dsh = { get: () => null, llm: { async *stream({ system }) { asked.push(system); yield { type: 'text-delta', text: answer }; yield { type: 'finish', reason: { kind: 'completed' } } } } }
-    const cfg = normalize({ mood: { judge: true }, model: { provider: 'p', model: 'm' } })
-    const m = createMood({ getConfig: () => cfg, dsh })
-    const v0 = m.current()
-    m.observe('讨厌 滚', '路人', { direct: true })
-    assert.equal(m.current(), v0, '开了模型判断，关键词不再起作用')
-    await m.judge({ userText: '想你了', reply: '我也想你', who: '主人', origin: 'speak-up' })
-    assert.equal(m.current(), v0 + 8)
-    assert.match(asked[0], /主动去找/)
-    answer = '{"delta": -10, "reason": "猜的", "confidence": 0.3}'
-    await m.judge({ userText: '嗯', reply: '哦' })
-    assert.equal(m.current(), v0 + 8, '没把握的不算')
-  } finally {
-    process.env.AURABOT_DATA_DIR = prev
-  }
 })
 
 test('语音：语速 / 音调只认 ±N% 和 ±NHz，写着玩的和超范围的都回落/夹回来', async () => {

@@ -1,5 +1,5 @@
 // M2-E 契约测试：Context Assembly
-// 任务书必测：memory/mood/token-guardian/group-admin/multi-parser 等贡献均保留；
+// 多 provider 贡献：memory/style/token-guardian/group-admin/multi-parser 等贡献均保留；
 // 无 scope fail-closed；群聊无私聊记忆；speaker 档案获得真实 sessionId；单模块异常按声明策略降级。
 
 import test from 'node:test'
@@ -7,11 +7,11 @@ import assert from 'node:assert/strict'
 
 import { createContextAssembly } from '../src/chat/context-assembly.js'
 
-test('全 provider 贡献保留：memory/mood/token-guardian/group-admin/multi-parser 一次装配全拿到', async () => {
+test('全 provider 贡献保留：memory/style/token-guardian/group-admin/multi-parser 一次装配全拿到', async () => {
   const assembly = createContextAssembly({
     providers: [
       { moduleId: 'memory', priority: 100, provide: () => '长期记忆：主人爱吃白米饭' },
-      { moduleId: 'mood', priority: 10, provide: () => '当前心情：开心' },
+        { moduleId: 'style', priority: 10, provide: () => '说话风格：口语化' },
       { moduleId: 'token-guardian', priority: -5, provide: () => '' }, // 空贡献不产出
       { moduleId: 'group-admin', scope: 'group:777', priority: 20, provide: () => '机器人是群主' },
       { moduleId: 'multi-parser', priority: 0, provide: () => '最近解析过一条 B 站链接' },
@@ -20,10 +20,10 @@ test('全 provider 贡献保留：memory/mood/token-guardian/group-admin/multi-p
   const { fragments, errors } = await assembly.assemble({ chatKey: 'group:777', sessionId: 'sess-9' })
   assert.deepEqual(errors, [])
   const ids = fragments.map((f) => f.moduleId)
-  assert.ok(ids.includes('memory') && ids.includes('mood') && ids.includes('group-admin') && ids.includes('multi-parser'), '贡献都在')
+  assert.ok(ids.includes('memory') && ids.includes('style') && ids.includes('group-admin') && ids.includes('multi-parser'), '贡献都在')
   assert.ok(!ids.includes('token-guardian'), '空贡献不占装配位')
-  // 顺序稳定：priority 降序（memory 100 > group-admin 20 > mood 10 > multi-parser 0）
-  assert.deepEqual(ids, ['memory', 'group-admin', 'mood', 'multi-parser'])
+  // 顺序稳定：priority 降序（memory 100 > group-admin 20 > style 10 > multi-parser 0）
+  assert.deepEqual(ids, ['memory', 'group-admin', 'style', 'multi-parser'])
   // 契约字段齐全
   const mem = fragments.find((f) => f.moduleId === 'memory')
   assert.equal(mem.scope, 'global', 'global provider 如实保留 global 出处（可见域 = 全局）')

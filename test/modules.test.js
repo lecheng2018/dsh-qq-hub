@@ -172,11 +172,10 @@ test('改了模块文件：几秒内自动重新加载', async () => {
 })
 
 test('替换版写坏了：先用回内置的，面板看得到报错', async () => {
-  writeMod('mood', 'export default { id: "mood", setup( {')
-  const m = await until(async () => { const x = await mod('mood'); return x.error ? x : null }, 15000)
+  writeMod('memory', 'export default { id: "memory", setup( {')
+  const m = await until(async () => { const x = await mod('memory'); return x.error ? x : null }, 15000)
   assert.equal(m.running, 'builtin')
   assert.equal(m.fallback, true)
-  assert.ok(api.mood.label(), '内置的心情照常能用')
 })
 
 test('安全模式：自己写的一个都不加载，内置的回来', async () => {

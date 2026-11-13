@@ -125,7 +125,7 @@ function textOfSegments(segments) {
 }
 
 /** 入站 → 模块中枢 activity 事件（等价 legacy hub.js:1583 那一发）。
- *  蒸馏/心情/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
+ *  蒸馏/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
  *  不补这一发它们永远收不到计数（验收报告「额外缺口」，真机实测 L0 batches 恒 0）。 */
 function emitActivity(mods, inbound, { direct = false, owner = false } = {}) {
   try {
@@ -171,7 +171,6 @@ function segmentsToContent(members) {
  * @param {(inbound: object, view: object) => Promise<string|null>} [o.runCommand] owner 命令闸（返回回复文本或 null）
  * @param {string} [o.ledgerFile] 投递台账文件（提供则真实持久化；缺省 = 内存，测试用）
  * @param {string} [o.sessionStoreFile] 会话映射文件（提供则持久化 + 启动恢复；缺省 = 内存，测试用）
- * @param {() => object|null} [o.moodEffects] 心情效果注入（群插话概率调制；同 hub 的 mood().chatty 乘法，缺省 1）
  * @param {(text: string, chat: object) => number} [o.memoryScore] 话题相关度（同 hub memoryScore，缺省 0）
  * @param {(chatId: string) => boolean} [o.isMuted] 静音判定（真机审计 1.10：入口就要拦，关了嘴不等于停脑）
  * @param {(msg: {text: string, userId: string, chatId: string}) => boolean} [o.interceptInteraction]
@@ -199,7 +198,7 @@ function segmentsToContent(members) {
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
-  moodEffects, memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
+  memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -255,19 +254,13 @@ export function createModularCore({
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
-  const moodChatty = () => {
-    try {
-      const m = typeof moodEffects === 'function' ? moodEffects() : null
-      return m && typeof m.chatty === 'number' ? m.chatty : 1
-    } catch { return 1 }
-  }
   /** 群消息要不要回：与 legacy 同一 decideGroupReply 调用形状。 */
   function decideGroupReplyFor({ chatKey, text, mentioned, userId, repliedToBot = false }) {
     const cfg = getConfig()
     const now = Date.now()
     const gid = chatKey.slice(6)
     const pol0 = policyFor(cfg.group, cfg.group?.overrides, gid)
-    const pol = { ...pol0, interjectChance: Math.min(1, pol0.interjectChance * moodChatty()) }
+    const pol = pol0
     const recentTexts = groups.buffer(gid).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
     let memScore = 0
     try {
@@ -548,7 +541,6 @@ export function createModularCore({
   const replyDelivery = createReplyDelivery({
     deliveryContext,
     getConfig, log, hooks: moduleHooks, reportTurns, groups, stickers,
-    mood: () => (typeof moodEffects === 'function' ? moodEffects() : null) || { sticker: 1, voice: 1, delay: 1, chatty: 1 },
     interaction,
     ...outbound,
     logChat,
