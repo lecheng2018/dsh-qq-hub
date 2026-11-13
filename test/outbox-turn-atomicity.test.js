@@ -112,11 +112,11 @@ test('无票请求之间仍然严格 FIFO（原有语义不回退）', async () 
 // 轮内上传必须并入本轮链尾：hub 的文件/图片/语音上传走的是 egress.deliver，
 // 若不带票就会挂在「本轮闸」上，而本轮正 await 它 —— 自己等自己的死锁
 // （2026-11-12 实测：带上票之前，发文件/换头像/生图等 e2e 全部 30 秒超时）。
-test('legacy 上传路径带上本轮的票（防轮内自锁）', () => {
-  const hub = readFileSync(new URL('../src/chat/hub.js', import.meta.url), 'utf8')
-  const at = hub.indexOf('const callFile = egressRef?.current')
+test('当前上传路径带上本轮的票（防轮内自锁）', () => {
+  const outbound = readFileSync(new URL('../src/chat/outbound-files.js', import.meta.url), 'utf8')
+  const at = outbound.indexOf('const callFile = async')
   assert.ok(at > 0, '找不到上传出口')
-  assert.match(hub.slice(at, at + 420), /_outboxTicket: deliveryContext\.getStore\(\)\?\.ticket/,
+  assert.match(outbound.slice(at, at + 600), /_outboxTicket: deliveryContext\?\.getStore\(\)\?\.ticket/,
     '上传请求必须带票；否则轮内上传会等本轮闸 → 死锁')
 })
 

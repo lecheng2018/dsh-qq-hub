@@ -7,12 +7,12 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const HUB = readFileSync(join(ROOT, 'src/chat/hub.js'), 'utf8')
+const CORE = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 const WORKSPACE = readFileSync(join(ROOT, 'src/chat/workspace.js'), 'utf8')
 const CFG = readFileSync(join(ROOT, 'src/core/config.js'), 'utf8')
 
 test('默认共用工作区，只有显式打开才按聊天建', () => {
-  assert.match(HUB, /workspaceDirForChat\(getConfig\(\), chat\?\.chatId\)/, 'legacy 必须使用共享目录选择')
+  assert.match(CORE, /workspaceDirForChat\(getConfig\(\), chatKey\)/, '当前核心必须使用共享目录选择')
   assert.match(WORKSPACE, /cfg\?\.workspacePerChat !== true/, '共享纯函数必须显式判断开关')
 })
 

@@ -58,3 +58,8 @@ test('K-03D 删除候选不在生产依赖图中，当前共享依赖不得误�
   for (const file of legacyOnly) assert.equal(graph.has(file), false, `${file} 仍被生产入口引用，不能直接删除`)
   for (const file of currentRequired) assert.equal(graph.has(file), true, `${file} 是当前生产依赖，禁止随旧实现误删`)
 })
+
+test('K-03D 旧实现文件退出源码，当前共享文件保留', () => {
+  for (const file of legacyOnly) assert.throws(() => readFileSync(resolve(ROOT, file)), { code: 'ENOENT' }, `${file} 尚未删除`)
+  for (const file of currentRequired) assert.doesNotThrow(() => readFileSync(resolve(ROOT, file)), `${file} 被误删`)
+})

@@ -4,8 +4,8 @@
 // 成为 legacy 与新核心**共享**的基础设施（唯一实现，双方都只是调用方）：
 //   - hub 的 sendText/sendSegments/sendFile/poke 经 hub-egress 转进来；
 //   - 模块 api.onebot 的发信动作、qzone 说说、multi-parser 转发送经 hub.deliverRaw 转进来；
-//   - 后续 PR 里模块化新核心的回复同样走这里（同一台账、同一闸）。
-// 开关：FLAG_MODULAR_CORE=true 时接线（复用现有 flag 的「新链路开」语义，默认关=legacy 原样）。
+//   - 当前核心的回复同样走这里（同一台账、同一闸）。
+// 装配：生产唯一物理发送出口，不提供旧核心回退。
 //
 // 闸与红线（与 legacy hub/reply/access 同一份实现，不另起口径）：
 //   - ACL 出站复核（checkAllowed）：撤权在排队期间也能拦；

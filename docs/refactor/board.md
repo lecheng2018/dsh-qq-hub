@@ -17,7 +17,7 @@
 
 | 文件范围 | 负责人 | 并行规则 |
 |---|---|---|
-| `src/host.js`、`src/host/**`、`src/chat/hub.js`、`src/kernel/legacy-fallback.js` | Integration | 同一时刻只一个接线 PR；管道装配在 `src/host/pipeline.js` |
+| `src/host.js`、`src/host/**`、当前 `src/chat/**`、`src/kernel/mw-ratelimit.js`、`mw-tracing.js` | Integration | 同一时刻只一个接线 PR；旧 hub/pipeline 已删除 |
 | 公共契约与 ADR（`docs/refactor/adr/`、`src/kernel/modular-contracts.*`、`src/core/module-contract.*`） | Controller | 冻结后才能并行开发 |
 | `src/onebot/**`、`src/chat/inbound.js`、`src/chat/backfill.js` | Inbound | 不改 host 接线 |
 | session/turn 新文件 | Session/Turn | 分文件开发 |
@@ -91,13 +91,13 @@
 | P2 入站媒体与上下文共享 | ✅ 对照完成（P2a–f） | Inbound + Integration | P1；ADR-0002 出站前置门禁 | inbound/context 服务及消费接线 | 新旧输入等价，取消不污染，无双发 | 旧 facade 调用同一实现 |
 | P3 记忆学习管线独立 | ✅ 已完成（P3a–f，archive 与学习组合拆分） | Context + Module SDK | P1、档案契约冻结 | archive 契约、extractor、生命周期与分批测试 | 无模型可 CRUD/召回，批次幂等、正文与进度一致；模型入口统一取消与超时，archive 不 import LLM/extractor | 关新消费者，防止双调度 |
 | P4 派生学习模块自治 | ✅ P4a–d 完成（画像、reflection、style、distill） | 各 Module owner | P3 | profile/reflection/style/distill/slang 各自目录及兼容路由 | 来源失效与独立停启；distill 目标/画像独立 store、只读迁移、历史学习零回写、唯一注入与路由；pipeline/slang 主备恢复与损坏拒写 | 关闭消费者，不把派生结果灌回事实名下 |
-| P5 兼容层退出 | 📄 K-03 准备包就绪；执行待代码阻塞关闭与 owner 门禁 | Integration + Release | ADR-0002 全等价验收 | facade 清理、矩阵与运维文档 | 真机对照、观察窗口和回滚演练 | 固定旧包独立回滚，不保留隐藏旧入口 |
+| P5 兼容层退出 | 🔵 K-03D 源码删除已实施，待 PR/CI 与真机门禁 | Integration + Release | owner 已批准源码删除；发布仍需 M5 | 当前 facade、矩阵、部署与运维文档 | 全量/打包/隔离 smoke；真机对照、观察窗口和回滚演练另验 | 固定旧包独立回滚，不保留隐藏旧入口 |
 
 P1 最终本地验证（Node 22.16.0，2026-11-12；基于含 #53 的 main）：
 
 - `npm test`：1864 项，1860 通过、4 跳过、0 失败。真实 host 的每日整理保留流水与重跑不重复提炼用例通过。
 - 原主线两项夹具断言失配由独立 PR #53 修复；未改变前端或回复业务行为。
 - `npm run test:extensions`：46/46 通过；`npm run lint`：0 error、285 warning；`npm run pack:check`：285 文件，含共享流水服务及迁移脚本，dry-run 成功。
-- 未改版本、集中 changelog、前端、生产记忆数据或运行中的 DSH。K-03 删除旧内核继续受 G5/owner/真机/观察期约束。
+- 未改版本、集中 changelog、前端、生产记忆数据或运行中的 DSH。K-03D 源码删除已获 owner 放行并实施；发布与现网升级继续受真机、观察期和回滚演练约束。
 
 详细每项范围、失败条件和未完成边界以路线文档为准；功能 PR 不改版本和集中 changelog。
