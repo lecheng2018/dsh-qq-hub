@@ -39,13 +39,13 @@ test('第二层：forceReport 规则下，报告段内部不再被句读拆碎',
   assert.match(out[1], /一共五条资讯.*整段走/s, '长段整条保留')
 })
 
-test('第二层接线：hub 监听 tool/call，turn/end 清掉，记忆工具不算', () => {
-  const hub = src('src/chat/hub.js')
-  assert.match(hub, /event\.type === 'tool\/call'/)
-  assert.match(hub, /CONTENT_TOOLS\.test\(name\)/)
-  assert.match(hub, /reportTurns\.delete\(chatId\)/, '只管一轮')
-  assert.match(hub, /\/\^\(rss_read\|bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
-  assert.ok(!/\|recall_memory\)/.test(hub), '记忆工具不在内容清单里')
+test('第二层接线：当前核心监听 tool/call，turn/end 清掉，记忆工具不算', () => {
+  const core = src('src/host/modular-core.js')
+  assert.match(core, /ev\?\.type === 'tool\/call'/)
+  assert.match(core, /reportTurns\.set\(/)
+  assert.match(core, /reportTurns\.delete\(/, '只管一轮')
+  assert.match(core, /\/\^\(rss_read\|bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
+  assert.ok(!/\|recall_memory\)/.test(core), '记忆工具不在内容清单里')
   const delivery = src('src/chat/reply-delivery.js')
   assert.match(delivery, /opts\.forceReport \|\| reportTurns\.get\(chatId\)/, '第三处：deliver 的规则注入')
 })

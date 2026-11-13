@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { stamp, formatGap, nowLine, agoLabel } from '../src/chat/clockline.js'
 
-const HUB = readFileSync(new URL('../src/chat/hub.js', import.meta.url), 'utf8')
+const CORE = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
 
 // 用一个固定时刻，免得测试跑在跨天/跨周时抖动（2026-11-05 是周四）
 const AT = new Date(2026, 10, 5, 22, 3, 0).getTime()
@@ -43,14 +43,15 @@ test('每条消息的相对时间：一分钟以内不标，久了才标', () =>
   assert.equal(agoLabel(AT + 1000, AT), '', '时间在将来也不标')
 })
 
-test('接在发送链路上：私聊放消息最前，群聊每条消息带相对时间', () => {
-  assert.match(HUB, /const head = nowLine\(Date\.now\(\), markTurnAt\(chatId\)\)/, '私聊每轮算一次时间行')
-  assert.match(HUB, /replace\(\/\^\(【私聊】\[\^：\]\*：\)\/, `\$1\\n\$\{head\}\\n`\)/, '时间行插在来源行下面')
-  assert.match(HUB, /nowLine\(nowAt, markTurnAt\(chat\.chatId\), \{ what: '上一段消息' \}\)/, '群聊那行在 groupPrompt 里')
-  assert.match(HUB, /agoLabel\(x\.t, nowAt\)/, '群聊每条消息带相对时间')
+test('接在当前发送链路上：私聊放消息最前，群聊每条消息带相对时间', () => {
+  assert.match(CORE, /const previousTurnAt = turnAt\(turn\.chatKey\)/, '每轮先取上次回合时间')
+  assert.match(CORE, /const timeHead = nowLine\(Date\.now\(\), previousTurnAt\)/, '私聊每轮算一次时间行')
+  assert.match(CORE, /text: `\$\{source\}\\n\$\{timeHead\}\\n/, '时间行插在来源行下面')
+  assert.match(CORE, /nowLine\(nowAt, previousTurnAt, \{ what: '上一段消息' \}\)/, '群聊那行在 groupPrompt 里')
+  assert.match(CORE, /agoLabel\(x\.t, nowAt\)/, '群聊每条消息带相对时间')
 })
 
-test('上一次交给她是什么时候：存进 sessions.json，重启也算得出来', () => {
-  assert.match(HUB, /e\.lastTurnAt = now; saveMap\(m\)/, '要落盘')
-  assert.match(HUB, /lastTurnAt\.get\(chatId\) \|\| 0/, '内存里也留一份，会话刚建、entry 还没落盘时不丢')
+test('上一次交给她是什么时候：写入当前会话映射，重启也算得出来', () => {
+  assert.match(CORE, /registry\.markTurn\(chatKey\)/, '当前注册表负责持久化回合时间')
+  assert.match(CORE, /entry\.lastTurnAt \|\| entry\.createdAt/, '会话列表读取持久化时间')
 })

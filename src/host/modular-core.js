@@ -1,4 +1,4 @@
-// M4 · 模块化新核心组装根（FLAG_MODULAR_CORE 开启态；关闭态本工厂不被装配）
+// 当前唯一生产核心组装根。
 //
 // 全链：NormalizedInbound → SessionRegistry → TurnController → ContextAssembly → Outbox。
 // 每一件都是 M2/M3 的独立模块，这里只做装配与接线（host 不承载业务规则——总览 §4）。
@@ -47,6 +47,7 @@ import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance } from '../chat/group-policy.js'
+import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
@@ -248,6 +249,11 @@ export function createModularCore({
   const sentIds = new Set()
   let selfId = ''
   const reportTurns = new Map()
+  const pairCalmUntil = new Map()
+  const pairCalmSweep = (now) => {
+    if (pairCalmUntil.size < 50) return
+    for (const [key, until] of pairCalmUntil) if (until < now - 3 * 3600_000) pairCalmUntil.delete(key)
+  }
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
@@ -1181,7 +1187,7 @@ export function createModularCore({
       const self = String(ev.self_id || getConfig().botQQ || '')
       mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
       const gid = inbound.chatKey.slice(6)
-      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
+      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, self: userId === self, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
       try { interaction.rememberSpeaker(inbound.chatKey, userId) } catch {}
     }
     const fromOwner = isOwner(cfg, userId)
@@ -1200,6 +1206,42 @@ export function createModularCore({
           debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
           return { handled: 'group-pass', reason: decision.reason }
         }
+        try {
+          const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
+          if (fg.enabled) {
+            const now = Date.now()
+            const gid = inbound.chatKey.slice(6)
+            const pairKey = `${gid}:${userId}`
+            if (userId !== String(getConfig().ownerQQ || '')) {
+              const calmUntil = pairCalmUntil.get(pairKey) || 0
+              if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
+              const pairMsgs = dedupConvo(groups.buffer(gid).filter((x) => x.uid && (x.self === true || String(x.uid) === userId)).map((x) => ({
+                sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
+              })))
+              const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
+              if (loop.blocked) {
+                pairCalmSweep(now)
+                pairCalmUntil.set(pairKey, now + fg.pairCooldownMs)
+                const reason = `与 ${inbound.sender?.nickname || userId} 已互来回 ${loop.rounds} 轮，进入对聊冷却`
+                log.info(`群 ${gid}：${reason}`)
+                return { handled: 'group-pass', reason }
+              }
+            }
+            const direct = decision.mode === 'must'
+            const density = assessFishDensity(groups.buffer(gid).map((x) => ({
+              sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
+            })), { now, guard: fg, groupId: gid })
+            if (density.blocked) {
+              const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
+              if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
+                const reason = fishGuardReasonText(density)
+                log.info(`群 ${gid}：${reason}${direct && callerIsFish ? '，叫她的也在鱼名单里，豁免不适用' : ''}，本轮不参与`)
+                return { handled: 'group-pass', reason }
+              }
+              debug(`群 ${gid}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
+            }
+          }
+        } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
         if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
         const offered = controller.offer(inbound)
         return { handled: 'offered', turnId: offered.turnId }
