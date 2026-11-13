@@ -25,7 +25,7 @@ export default {
   api: 1,
   description: '移植自 dsh-qq：私聊里说的事只在私聊可见，群里怎么套也拿不到',
   panel: 'panel.js',
-  tab: 'mood',
+  tab: 'memory',
   defaults: {
     enabled: true,
     /** 每次最多带上几条作用域记忆 */

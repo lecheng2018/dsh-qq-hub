@@ -25,7 +25,7 @@ function BiliCookie({ draft, setDraft }) {
         h('span', { className: 'ab-muted ab-small' }, '「显示」看的是正在填的内容；保存过的出于安全不回传，只显示结尾几位'))))
 }
 
-/** 本地接口：数据目录 local/ 里的脚本接管语音合成、生图、翻唱换声、语音识别。 */
+/** 本地接口：数据目录 local/ 里的脚本接管语音合成、生图、语音识别。 */
 
 
 const BILI_KIND = { watch: '看了', comment: '评论', reply: '回复', share: '分享给你', shot: '发你截图', error: '没成功' }

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### 破坏性变更（1.4.0-beta.4：移除心情与翻唱）
+
+- **心情功能整体移除**：`/mood`（「心情」）命令、面板心情卡与心情判定全部下线；群插话、语音、表情的出现概率**不再随心情浮动，恒为配置值**——想让她更活跃，直接调「主动搭话」「语音」「表情包」页的概率。数据文件 `mood.json` 启动时自动改名留档为 `mood.json.removed`，不会丢。
+- **翻唱功能整体移除**：`/sing` 命令与「翻唱」页下线；**RVC 变声一并移除**（语音条不再用翻唱音色变声），换声音请走 CosyVoice / GPT-SoVITS / HTTP 等原有替代路径（「语音」「本地接口」页）。旧翻唱环境约 8 GB **不会自动删除**，确认不需要后自行清理（启动日志会提示位置）。
+- **面板「心情与记忆」页更名「记忆」**：tab 标识 `mood` → `memory`；老扩展配置里写的 `tab: 'mood'` 仍可用，加载时自动归一到记忆页。
+- **老配置自动清理**：旧配置里的 `mood`、`song`（含网易云 Cookie）、`voice.songVoice / songPitch`、`local.song` 等残留键加载时自动丢弃；网易云 Cookie 不再回传面板。
+- **fork 过 mood / song 模块的请自行删除**数据目录下的 `modules/mood/`、`modules/song/`，否则加载失败（启动日志有提醒，插件不会替你删）。
+
+
 - 修复模块化新核心里群聊看不懂图片/表情包：先发一张图但群闸没触发回复，之后 @ 她追问时，触发轮只带后续消息的图片段，早先那张图在上下文里只剩「（图片/表情）」占位。现在群缓冲会暂存该段的图片地址，下一段触发时按地址去重、最多补 4 张，仍由 DSH 附件登记；私聊路径不变。
 - 新增回归测试：群闸放过的图片随下一段上下文登记成附件、触发轮自带图片时按地址去重并封顶 4 张。
 - **修复 CI 打包不构建前端产物**：`client/client.js` 是 esbuild 产物，正式发版能拿到新界面纯属"搭便车"——`release.yml` 靠 `npm test` 里串的 `node scripts/build-client.mjs` 顺带构建，工作流里没有任何显式的 `build:client`。而手动测试打包通道 `pack-test.yml` 连 `npm ci` 都没有，直接 `npm pack` 打仓库里提交的那份产物：`client/src` 改了、产物忘了提交时，`*-test.YYYYMMDD.N` 发出去的包就是旧界面，且 CI 全绿（测试会现场重建，只是不比对结果）。现在：`package.json` 加 `prepack`，任何 `npm pack`（含手动打包）都先构建产物；`pack-test.yml` 补 `npm ci` + 显式构建，并在 smoke 里断言 tarball 内的 `client/client.js` 存在且含 `__ModuleLoader__` / `QQHubPage`；`verify.yml` 加产物新鲜度门禁（构建后 `git diff --exit-code client/client.js`，不同步直接红）；`release.yml` 显式加 `build:client` 步骤，不再隐式依赖 test 脚本。

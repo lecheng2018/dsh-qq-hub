@@ -410,7 +410,7 @@ export default {
           try { const c = hub.chatOfSession?.(key); if (typeof c === 'string' && c) chatId = c } catch (error) {}
         }
         if (!chatId) continue
-        // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/翻唱/跑工具
+        // 空闲判定要感知她是不是正忙着：QQ 层没新消息 ≠ 会话闲着 —— 她可能在生图/跑工具
         //（一跑就是几十秒到几分钟），这时候压缩会把正在工作的会话拦腰 reset 掉。
         try { if (hub.isBusy?.(chatId)) continue } catch (error) { api.log.debug(`${ID}：忙时状态读取失败：${error.message}`) }
         const r = await compact(key, { chatId }, { tokens, measured })

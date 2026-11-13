@@ -10,7 +10,7 @@ export const reflectionModule = {
   description: '从近期聊天回顾相处经验；关闭后停止自动回顾与经验注入，不影响事实记忆和手工经验。',
   provides: ['memory-reflection'],
   requires: ['memory-store'],
-  tab: 'mood',
+  tab: 'memory',
   files: ['features/memory-reflection.js'],
   setup(api) {
     const memory = api.use('memory')
