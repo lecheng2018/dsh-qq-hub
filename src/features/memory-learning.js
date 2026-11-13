@@ -271,10 +271,35 @@ export function createMemoryLearning({
   }
 
 
+  function extractionBatches() {
+    return structuredClone(load().extractionBatches || {})
+  }
+
+  function resolveExtractionBatch(id, action) {
+    const state = load()
+    const batch = state.extractionBatches?.[String(id || '')]
+    if (!batch) return { ok: false, message: '找不到这个提炼批次' }
+    if (!['running', 'pending'].includes(batch.status)) return { ok: false, message: `批次当前是 ${batch.status}，不需要恢复` }
+    if (!['done', 'retry'].includes(action)) return { ok: false, message: '恢复动作只支持 done 或 retry' }
+    if (action === 'done' && batch.status !== 'pending') return { ok: false, message: 'running 的事实提交情况未知，只能标记重试' }
+    const recoveredAt = Date.now()
+    const next = {
+      ...batch,
+      status: action === 'done' ? 'done' : 'failed',
+      recoveredAt,
+      recovery: action === 'done' ? 'manual-confirmed' : 'manual-retry',
+    }
+    if (action === 'retry') next.error = `人工标记重试：${batch.error || '事实提交状态未确认'}`
+    state.extractionBatches = { ...(state.extractionBatches || {}), [String(id)]: next }
+    save(state)
+    return { ok: true, batch: structuredClone(next) }
+  }
+
   return {
     api: {
       importCandidates,
       buildProfile, reflect, learnSelfStyle, consolidate, tick,
+      extractionBatches, resolveExtractionBatch,
     },
     reload: () => { batchRecoveryError = '' },
   }

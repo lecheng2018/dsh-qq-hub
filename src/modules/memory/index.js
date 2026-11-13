@@ -97,6 +97,12 @@ export default {
       if (req.method !== 'POST') return { ok: false, message: '请使用 POST 重新载入档案' }
       return memory.reload()
     })
+    api.route('/memory/batches', async () => ({ ok: true, batches: memory.extractionBatches() }))
+    api.route('/memory/batches/resolve', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请使用 POST 恢复提炼批次' }
+      const b = await http.body(req)
+      return memory.resolveExtractionBatch(String(b.id || ''), String(b.action || ''))
+    })
     api.route('/memory/add', async (req) => {
       const b = await http.body(req)
       return memory.add({ text: b.text, aboutName: b.aboutName || '', about: b.about || '', importance: b.importance ?? 0.6, tags: b.tags || [], source: 'panel' })

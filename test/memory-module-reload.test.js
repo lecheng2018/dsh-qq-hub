@@ -52,4 +52,16 @@ test('记忆模块 HTTP：外改→安全重载→召回；损坏可诊断且修
   writeFileSync(file, raw)
   assert.equal((await request('/memory/reload', 'POST', {})).data.health.ok, true)
   assert.equal((await request('/memory/add', 'POST', { text: '恢复后新增' })).data.ok, true)
+
+  const stateFile = join(dir, 'memory/state.json')
+  const state = JSON.parse(readFileSync(stateFile, 'utf8'))
+  state.extractionBatches.extract_test = { fingerprint: 'x', scope: 'global', status: 'pending', added: 1, error: '提交中断' }
+  writeFileSync(stateFile, JSON.stringify(state))
+  memory.reload()
+  assert.equal((await request('/memory/batches')).data.batches.extract_test.status, 'pending')
+  assert.equal((await request('/memory/batches/resolve')).data.ok, false, 'GET 不得执行恢复操作')
+  const recovered = await request('/memory/batches/resolve', 'POST', { id: 'extract_test', action: 'done' })
+  assert.equal(recovered.data.ok, true)
+  assert.equal(recovered.data.batch.recovery, 'manual-confirmed')
+  assert.equal((await request('/memory/batches')).data.batches.extract_test.status, 'done')
 })
