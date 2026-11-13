@@ -37,7 +37,7 @@ test('第二块模型失败后，重试跳过已成功块且只在全部成功�
         if (params.system.includes('整理长期记忆')) {
           const text = params.messages[0].content[0].text
           prompts.push(text)
-          if (failSecond && text.includes('第 80 条记录')) throw new Error('第二块模型失败')
+          if (failSecond && text.includes('第 40 条记录')) throw new Error('第二块模型失败')
         }
         yield { type: 'text-delta', text: params.system.includes('{"insights"') ? '{"insights":[],"style":[]}' : '[]' }
       } },
@@ -66,18 +66,15 @@ test('第二块模型失败后，重试跳过已成功块且只在全部成功�
   assert.equal(failedState.processed[yesterday()], undefined)
 
   failSecond = false
-  for (const batch of Object.values(failedState.extractionBatches)) {
-    if (batch.status === 'failed') batch.nextRetryAt = 0
-  }
-  writeFileSync(stateFile, JSON.stringify(failedState))
-  store.reload()
   const second = await store.consolidate()
   assert.equal(second.ok, true, second.message)
   assert.equal(prompts.filter((text) => text.includes('第 0 条记录')).length, 1, '成功块不得重复请求模型')
-  assert.equal(prompts.filter((text) => text.includes('第 80 条记录')).length, 2, '失败块可以重试')
-  assert.equal(prompts.filter((text) => text.includes('第 160 条记录')).length, 1, '后续块继续执行')
+  assert.equal(prompts.filter((text) => text.includes('第 40 条记录')).length, 2, '失败块可以重试')
+  assert.equal(prompts.filter((text) => text.includes('第 80 条记录')).length, 1, '第三块继续执行')
+  assert.equal(prompts.filter((text) => text.includes('第 120 条记录')).length, 1, '第四块继续执行')
+  assert.equal(prompts.filter((text) => text.includes('第 160 条记录')).length, 1, '末尾块继续执行')
   const doneState = JSON.parse(readFileSync(stateFile, 'utf8'))
-  assert.equal(Object.values(doneState.extractionBatches).filter((batch) => batch.status === 'done').length, 3)
+  assert.equal(Object.values(doneState.extractionBatches).filter((batch) => batch.status === 'done').length, 5)
   assert.equal(doneState.processed[yesterday()], 161)
 
   const [interruptedId] = Object.keys(doneState.extractionBatches)
