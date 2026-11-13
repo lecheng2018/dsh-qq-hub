@@ -14,13 +14,12 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
 import { openMemoryFiles } from './memory-files.js'
-import { mergeProfile, renderDistillHint } from './distill.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, onDistillLearned, reflectionContext = true, styleContext = true, distillContext = true, extend }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend }) {
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
@@ -601,70 +600,6 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     }
     return changed
   }
-  // ---------------- 蒸馏群友（1.3.59）----------------
-  // 指定某个群的某个人当数据源，学他的说话方式/性格/语气（不冒充他本人）。
-  // 旧目标与画像仅保留作 distill 模块首次启动的只读迁移来源；新写入归 distill/store.json。
-  const distillKey = (gid, uid) => `group:${String(gid)}#${String(uid)}`
-  /** 目标列表：[{ gid, uid, name }] */
-  function distillTargets () {
-    return (load().distillTargets || []).map((t) => ({ gid: String(t.gid), uid: String(t.uid), name: String(t.name || '') }))
-  }
-  function addDistillTarget ({ gid, uid, name }) {
-    const g = String(gid || '').replace(/\D/g, '')
-    const u = String(uid || '').replace(/\D/g, '')
-    if (!g || !u) return { ok: false, message: '群号和 QQ 号都要填' }
-    const s = load()
-    s.distillTargets = s.distillTargets || []
-    if (s.distillTargets.some((t) => String(t.gid) === g && String(t.uid) === u)) {
-      return { ok: false, message: '这个群里的这个人已经在学了' }
-    }
-    s.distillTargets.push({ gid: g, uid: u, name: String(name || '').slice(0, 20) })
-    s.rev = (s.rev || 0) + 1
-    save(s)
-    return { ok: true, message: '加上了，下次整理记忆时开始学他的说话样子' }
-  }
-  function removeDistillTarget (gid, uid) {
-    const g = String(gid || ''), u = String(uid || '')
-    const s = load()
-    const before = (s.distillTargets || []).length
-    s.distillTargets = (s.distillTargets || []).filter((t) => !(String(t.gid) === g && String(t.uid) === u))
-    if (s.distillTargets.length === before) return { ok: false, message: '没找到这个目标' }
-    s.distill = s.distill || {}
-    delete s.distill[distillKey(g, u)]
-    s.rev = (s.rev || 0) + 1
-    save(s)
-    return { ok: true, message: '不学了，学到的东西也一起清掉了' }
-  }
-  /** 某个目标的画像 { style, persona, tone, samples, updatedAt } */
-  function distillOf (gid, uid) {
-    return (load().distill || {})[distillKey(gid, uid)] || null
-  }
-  function putDistill (gid, uid, profile, evidenceCount) {
-    const s = load()
-    s.distill = s.distill || {}
-    const key = distillKey(gid, uid)
-    const old = s.distill[key] || null
-    const merged = mergeProfile(old || {}, profile)
-    // 兼容旧调用/旧存量把证据条数塞在 samples 里的形态（数字），认作条数而不是原话
-    const incomingCount = Math.max(Number(evidenceCount) || 0, (profile && typeof profile.samples === 'number') ? profile.samples : 0)
-    // 证据条数单独放 evidenceCount —— 以前叫 samples，把画像里的逐字原话数组（few-shot
-    // 主信号）覆盖成了数字，注入时渲染出「- 「44」」这种鬼东西（1.3.64 修）
-    s.distill[key] = { ...merged, evidenceCount: Math.max(Number(old && (old.evidenceCount != null ? old.evidenceCount : (typeof old.samples === 'number' ? old.samples : 0))) || 0, incomingCount), updatedAt: Date.now() }
-    s.rev = (s.rev || 0) + 1
-    save(s)
-    return s.distill[key]
-  }
-  /** 面板用：显式目标与已学习画像的并集；历史学习即使没建目标也不能从面板消失。 */
-  function distillList () {
-    const rows = distillTargets().map((t) => ({ ...t, profile: distillOf(t.gid, t.uid) }))
-    const seen = new Set(rows.map((t) => `${t.gid}#${t.uid}`))
-    for (const [key, profile] of Object.entries(load().distill || {})) {
-      const match = /^group:(\d+)#(\d+)$/.exec(key)
-      if (!match || seen.has(`${match[1]}#${match[2]}`)) continue
-      rows.push({ gid: match[1], uid: match[2], name: String(profile?.name || match[2]), profile })
-    }
-    return rows
-  }
 
   function setInsights(key, list, name) {
     const s = load()
@@ -803,16 +738,6 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
     const ins = reflectionContext ? insightsOf(personKey(chat)) : []
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
-    if (distillContext && chat.kind === 'group') {
-      // 蒸馏群友（1.3.59）：这个群指定了要学的人，就带上他的说话样子（含「不冒充」边界）
-      const gid = String(chat.groupId)
-      for (const t of distillTargets()) {
-        if (t.gid !== gid) continue
-        const hint = renderDistillHint(t.name || t.uid, distillOf(t.gid, t.uid) || {})
-        if (hint) parts.push(hint)
-      }
-      // 群黑话注入已移交独立模块 src/modules/slang/（自己的 context provider）
-    }
     const sty = styleContext ? styleOf(personKey(chat)) : []
     const self = styleContext ? styleOf('self') : []
     if (sty.length || self.length) {
@@ -1015,13 +940,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   const learning = extend?.({
-    dsh, getConfig, hub, chatLog, log, personaText, onDistillLearned,
+    dsh, getConfig, hub, chatLog, log, personaText,
     isActive: () => status === 'active', createGenerationSignal, generationOf,
     load, save, health: () => store.health(), relatedTo,
     add, revise, supersede, scopeFromChatId,
     profileOf, setProfile, setDerivedProfile, profileKeyOf,
     insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, setDerivedStyle, personKey,
-    distillOf, putDistill,
   })
 
   return {
@@ -1049,19 +973,6 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     },
     insightsOf, styleOf, styleSourceOf, setDerivedInsights, setDerivedStyle,
     setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
-    /** 群黑话本（面板用）：[{ gid, list: [{id, word, meaning, at}] }] */
-    slang: () => Object.entries(load().slang || {})
-      .map(([gid, list]) => ({ gid, list: list || [] }))
-      .filter((x) => x.list.length)
-      .sort((a, b) => b.list.length - a.list.length),
-    // 黑话本存储已移交独立模块 src/modules/slang/（memory.slang() 只读口保留供迁移）
-    /** 蒸馏群友（1.3.59）：目标管理 + 画像读取（面板用） */
-    distillList,
-    distillTargets,
-    distillOf,
-    putDistill,
-    addDistillTarget,
-    removeDistillTarget,
     /** 删一条相处经验：insights[key] 是 {id,text,at} 数组，按 id 摘掉一条。 */
     removeInsight: (key, id) => {
       const s = load()
@@ -1125,4 +1036,3 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     },
   }
 }
-  // 群黑话本已重构为独立模块 src/modules/slang/（存储/学习/注入迁走；slang() 只读口保留供迁移）。

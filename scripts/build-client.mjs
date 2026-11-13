@@ -56,31 +56,23 @@ function postProcess(code) {
   code = code.replace(/\bvar\s+PSEC_SUGGEST\s*=/g, 'const PSEC_SUGGEST =')
   code = code.replace(/\bvar\s+PSEC_COLORS\s*=/g, 'const PSEC_COLORS =')
 
-  // 5. 守住 slang-book.test.js: assert.match(client, /post\('\/slang\/save'/)
-  code = code.replace(/post\("\/slang\/save"/g, "post('/slang/save'")
 
-  // 6. 守住 slang-book.test.js: Card title 格式与单引号
-  code = code.replace(/h\(\s*Card,\s*\{\s*title:\s*"群黑话本（学一个群在用什么词）",\s*right:\s*f\.sw\("memory\.slang"\)/g,
-    "h(Card, { title: '群黑话本（学一个群在用什么词）', right: f.sw('memory.slang')")
-  code = code.replace(/h\(\s*Card,\s*\{\s*title:\s*"蒸馏群友（学一个人的说话样子）"/g,
-    "h(Card, { title: '蒸馏群友（学一个人的说话样子）'")
-
-  // 7. 守住 rss-panel.test.js: assert.match(CLIENT, /rss: \['rss'\]/)
+  // 5. 守住 rss-panel.test.js: assert.match(CLIENT, /rss: \['rss'\]/)
   code = code.replace(/rss:\s*\["rss"\]/g, "rss: ['rss']")
 
-  // 8. 守住 purpose-daily-limit.test.js: assert.match(client, /s\.key === 'maxPerDay'/)
+  // 6. 守住 purpose-daily-limit.test.js: assert.match(client, /s\.key === 'maxPerDay'/)
   code = code.replace(/s\.key === "maxPerDay"/g, "s.key === 'maxPerDay'")
 
-  // 9. 守住 batch-expand-and-privacy.test.js: assert.match(seg, /onChange: \(e\) => \{ setText\(e\.target\.value\)/)
+  // 7. 守住 batch-expand-and-privacy.test.js: assert.match(seg, /onChange: \(e\) => \{ setText\(e\.target\.value\)/)
   code = code.replace(/onChange:\s*\(e\)\s*=>\s*\{\s*setText\(e\.target\.value\);/g, 'onChange: (e) => { setText(e.target.value);')
 
-  // 10. 守住 batch-expand-and-privacy.test.js: indexOf("(browseOpen ? '▾' : '▸')")
+  // 8. 守住 batch-expand-and-privacy.test.js: indexOf("(browseOpen ? '▾' : '▸')")
   code = code.replace(/\(browseOpen \? "▾" : "▸"\)/g, "(browseOpen ? '▾' : '▸')")
 
-  // 11. 守住 panel-persona-render.test.js: placeholder 单引号匹配
+  // 9. 守住 panel-persona-render.test.js: placeholder 单引号匹配
   code = code.replace(/placeholder:\s*wantKind === "group" \? "填群号" : "填 QQ 号"/g, "placeholder: wantKind === 'group' ? '填群号' : '填 QQ 号'")
 
-  // 12. 守住 memory-panel.test.js：esbuild 会丢掉源码注释，补回 Mood 函数结束锚点
+  // 10. 守住 memory-panel.test.js：esbuild 会丢掉源码注释，补回 Mood 函数结束锚点
   code = code.replace(/\nfunction ProfilesCard\(/, "\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesCard(")
 
   return code

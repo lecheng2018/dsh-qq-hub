@@ -45,10 +45,6 @@ test('memory-files: 保存不同 scope 的条目，落盘至不同子目录的 m
       self: ['说话短'],
       'group:20001': ['逗号断句'],
     },
-    distill: {
-      'group:20001#10001': { syntax: ['短句'] },
-    },
-    distillTargets: [{ gid: '20001', uid: '10001', name: '主人' }],
     processed: { '2026-11-11': 10 },
   }
 
@@ -89,7 +85,6 @@ test('memory-files: 写→关→重开，所有数据完整保留并组装一致
       { id: 'it_1', text: '喜欢白米饭', scope: 'global', hits: 5, lastHit: 1794350000000 },
       { id: 'it_2', text: '旧喜好', scope: 'global', invalidAt: 1794350000000, supersededBy: 'it_1' },
     ],
-    distillTargets: [{ gid: '123', uid: '456', name: '测试' }],
   })
   s1.close()
 
@@ -107,7 +102,6 @@ test('memory-files: 写→关→重开，所有数据完整保留并组装一致
   assert.equal(it2.invalidAt, 1794350000000)
   assert.equal(it2.supersededBy, 'it_1')
 
-  assert.deepEqual(loaded.distillTargets, [{ gid: '123', uid: '456', name: '测试' }])
   s2.close()
 })
 

@@ -125,7 +125,7 @@ function textOfSegments(segments) {
 }
 
 /** 入站 → 模块中枢 activity 事件（等价 legacy hub.js:1583 那一发）。
- *  蒸馏/心情/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
+ *  心情/token-guardian 等模块的 activity 计数全挂在这个事件上；开旗后消息不走 hub，
  *  不补这一发它们永远收不到计数（验收报告「额外缺口」，真机实测 L0 batches 恒 0）。 */
 function emitActivity(mods, inbound, { direct = false, owner = false } = {}) {
   try {
@@ -177,9 +177,9 @@ function segmentsToContent(members) {
  * @param {(msg: {text: string, userId: string, chatId: string}) => boolean} [o.interceptInteraction]
  *   旁路指令桥接（真机审计 1.9：主人「通过 #1」批复审批 / 等待中的交互提问回答优先消费；命中即不进回合）
  * @param {(chat: object) => string|null} [o.personaTextFor] 按聊天人设（真机审计 1.2：persona.privates/groups
- *   专用卡 + 蒸馏语感卡按群生效；返回 null = 跟随全局人设）
+ *   专用卡按群生效；返回 null = 跟随全局人设）
  * @param {(chatId: string, who: string, text: string, uid?: string) => void} [o.logChat]
- *   聊天流水（真机审计：新核心不写 chatlog → 记忆整理/蒸馏/黑话/日记四条链无料；实测当天进站 5900、流水 12 行）
+ *   聊天流水（真机审计：新核心不写 chatlog → 记忆整理/日记两条链无料；实测当天进站 5900、流水 12 行）
  * @param {(chatId: string, segments: Array, userId: string) => number|void} [o.collectInboundStickers]
  *   入站表情收集；返回暂存候选数供本轮提示
  * @param {(where: object) => Array<object>} [o.buildTools]
@@ -1110,7 +1110,7 @@ export function createModularCore({
    * 入站主链（realtime/backfill 共用），顺序逐项对齐 legacy hub.onMessage：
    * ACL → 旁路指令 → 总开关 → 静音 → 群缓冲 → activity 计数 → 群回复闸 → offer。
    * （真机审计 1.9/1.10/§1：enabled=false 和静音必须**入口就拦**——不进回合不烧 token；
-   *  activity 在闸之前发：蒸馏等模块的计数不受「要不要回」影响。）
+   *  activity 在闸之前发：相关模块的计数不受「要不要回」影响。）
    */
   function routeInbound(inbound, ev, source) {
     const isPoke = (inbound?.segments || []).some((s) => s?.type === 'poke')
@@ -1195,7 +1195,7 @@ export function createModularCore({
     const fromOwner = isOwner(cfg, userId)
     // 真机审计 1.11：入站面板统计
     try { onStats?.('received') } catch {}
-    // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/蒸馏/黑话/日记都从它取料
+    // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/日记都从它取料
     try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
     try {
       const count = collectInboundStickers?.(inbound.chatKey, inbound.segments, userId)

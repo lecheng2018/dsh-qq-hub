@@ -10,7 +10,7 @@ function render({ health = null, reloading = false, post = async () => ({ ok: tr
   const updates = [], toasts = [], requests = []
   let slot = 0
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((x) => x != null && x !== false) })
-  const names = ['Card', 'Btn', 'Row', 'Select', 'Empty', 'ProfilesCard', 'InsightCard', 'DistillPanel', 'SlangBook', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff']
+  const names = ['Card', 'Btn', 'Row', 'Select', 'Empty', 'ProfilesCard', 'InsightCard', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff']
   const factory = new Function('h', 'useState', 'useEffect', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Mood`)
   const Mood = factory(h, (initial) => {
     const i = slot++
