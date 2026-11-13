@@ -25,7 +25,7 @@
 | 当前核心唯一事件链 | **开**（无 legacy/pipeline 回退；旧 flag 不读取） | `src/host.js`、`src/host/modular-core.js` | k03c-assembly-exit、r3-flagoff-regression |
 | 旧灰度开关 | **已退出生产装配**（`FLAG_MODULAR_CORE`、`FLAG_USE_PIPELINE`、`NEW_MEMORY_PIPELINE`） | `src/host.js` 不再读取 | k03c-assembly-exit |
 
-## 2. 内置模块矩阵（23 个，注册顺序 = 装载顺序）
+## 2. 内置模块矩阵（21 个，注册顺序 = 装载顺序）
 
 > 数据位置统一为 `<dataDir>/modules-data/<id>/`（`src/core/modules.js:211`，模块间隔离）。  
 > `api` 字段缺省 = 1（`module-contract.js` 归一化）；旧模块未声明 `provides/requires/conflicts/defaultEnabled/requiresGUI`。
@@ -33,28 +33,26 @@
 | # | id | 版本 | 分类 | QQ 副作用（发送/管理动作） | 数据要点 | 现有测试 | owner 工作流 |
 |---|---|---|---|---|---|---|---|
 | 1 | stickers | 1.0.0 | optional | 发图片段（表情包）；收集表情 | 表情库 md5 索引 | stickers.test.js、sticker-pick、sticker-owner、group-merge-sticker、faces* | Module owner: stickers |
-| 2 | voice | 1.0.0 | optional | 发语音条（record）；失败改发文字 | TTS 模型/引擎配置 | voice-rvc.test.js | Module owner: voice |
-| 3 | mood | 1.0.0 | optional | 无直接发送；影响表情/语音频率 | 心情状态 | mood 相关（hub-state-modules） | Module owner: mood |
-| 4 | memory | 1.0.0 | core（记忆主库） | 无直接发送；注入上下文 | memories.json、小档案、speakers | memory*.test.js（15+ 文件） | Context |
-| 5 | qq-tools | 1.0.0 | core（工具面） | **主动发消息/发文件**（qq_send_message、qq_send_file，仅主人私聊）+ qq_chat_history | 白名单外禁发 | features.test.js、file-segment | Turn/Outbox |
-| 6 | group-admin | 1.0.0 | optional | **禁言/解禁/踢人/改头衔**（set_group_*） | 无持久数据 | guard-modules | Module owner: group-admin |
-| 7 | imagegen | 1.0.0 | optional | 发图片（base64） | 生图配置/缓存 | imagegen*.test.js | Module owner: imagegen |
-| 8 | diary | 1.0.0 | external-service | 发说说（send_qzone_msg，经 features/qzone） | 说说记录 | diary-image、qzone* | Module owner: diary |
-| 9 | qzone-social | 1.0.0 | external-service | 点赞/评论（外部 QQ 空间动作） | Cookie/记录 | qzone* | Module owner: qzone-social |
-| 10 | speakup | 1.0.0 | optional | **主动私聊主人**（长时间未理时） | 触发状态 | speakup.test.js | Module owner: speakup |
-| 11 | purpose | 1.0.0 | optional | **主动找主人搭话**（有日上限） | 素材/观察/目标 | purpose*.test.js、panel-purpose* | Module owner: purpose |
-| 12 | bili | 1.1.0 | external-service | 发截图/分享到私聊；**B 站评论/点赞/头像/签名** | Cookie、投喂偏好、巡查状态 | bili*.test.js | Module owner: bili |
-| 13 | song | 1.0.0 | optional | 发语音条（翻唱） | 翻唱缓存、临时目录 | song.test.js | Module owner: song |
-| 14 | profile | 1.2.0 | optional | 发头像图；**改 QQ 资料**（昵称/签名/头像，按权限） | 权限配置 | profile*.test.js | Module owner: profile |
-| 15 | contacts | 1.0.0 | core（权限面） | **改私聊/群白名单**；好友申请通知主人并执行通过/拒绝 | 白名单 | contacts.test.js、known-chats | Module owner: contacts |
-| 16 | douyin | 2.0.0 | external-service | 私信/分享到 QQ；**抖音点赞/评论（可 @主人）** | 受控浏览器、Cookie | douyin*.test.js | Module owner: douyin |
-| 17 | heybox | 1.0.0 | external-service | 小黑盒点赞/评论/发帖（外部社区） | Cookie | heybox 相关（batch-expand-and-privacy 等） | Module owner: heybox |
-| 18 | token-guardian | 1.0.0 | optional | 无直接发送；压缩会话历史 | 统计/持久化 | token-guardian-*.test.js（5 文件） | Module owner: token-guardian |
-| 19 | complete-guard | 1.0.0 | optional | 无直接发送；截断检测提醒 | 无 | （含于 kernel 链路测试） | Module owner: complete-guard |
-| 20 | memory-privacy | 1.0.0 | core（隔离治理） | 无直接发送；三层作用域隔离 | scope override | memory-privacy-scope、memory-scope、profile-scope | Context |
-| 21 | scheduler | 1.0.0 | optional | **定时提醒发送**（/remind + AI 登记） | 任务持久化 | scheduler.test.js | Module owner: scheduler |
-| 22 | multi-parser | 1.0.0 | optional | 发图/视频/文件卡片（链接解析） | 缓存/配额 | multi-parser*.test.js | Module owner: multi-parser |
-| 23 | rss | 1.0.0 | optional | 无主动推送（她来查池子） | 订阅池 | rss.test.js、rss-panel | Module owner: rss |
+| 2 | voice | 1.0.0 | optional | 发语音条（record）；失败改发文字 | TTS 模型/引擎配置 | voice*.test.js | Module owner: voice |
+| 3 | memory | 1.0.0 | core（记忆主库） | 无直接发送；注入上下文 | memories.json、小档案、speakers | memory*.test.js（15+ 文件） | Context |
+| 4 | qq-tools | 1.0.0 | core（工具面） | **主动发消息/发文件**（qq_send_message、qq_send_file，仅主人私聊）+ qq_chat_history | 白名单外禁发 | features.test.js、file-segment | Turn/Outbox |
+| 5 | group-admin | 1.0.0 | optional | **禁言/解禁/踢人/改头衔**（set_group_*） | 无持久数据 | guard-modules | Module owner: group-admin |
+| 6 | imagegen | 1.0.0 | optional | 发图片（base64） | 生图配置/缓存 | imagegen*.test.js | Module owner: imagegen |
+| 7 | diary | 1.0.0 | external-service | 发说说（send_qzone_msg，经 features/qzone） | 说说记录 | diary-image、qzone* | Module owner: diary |
+| 8 | qzone-social | 1.0.0 | external-service | 点赞/评论（外部 QQ 空间动作） | Cookie/记录 | qzone* | Module owner: qzone-social |
+| 9 | speakup | 1.0.0 | optional | **主动私聊主人**（长时间未理时） | 触发状态 | speakup.test.js | Module owner: speakup |
+| 10 | purpose | 1.0.0 | optional | **主动找主人搭话**（有日上限） | 素材/观察/目标 | purpose*.test.js、panel-purpose* | Module owner: purpose |
+| 11 | bili | 1.1.0 | external-service | 发截图/分享到私聊；**B 站评论/点赞/头像/签名** | Cookie、投喂偏好、巡查状态 | bili*.test.js | Module owner: bili |
+| 12 | profile | 1.2.0 | optional | 发头像图；**改 QQ 资料**（昵称/签名/头像，按权限） | 权限配置 | profile*.test.js | Module owner: profile |
+| 13 | contacts | 1.0.0 | core（权限面） | **改私聊/群白名单**；好友申请通知主人并执行通过/拒绝 | 白名单 | contacts.test.js、known-chats | Module owner: contacts |
+| 14 | douyin | 2.0.0 | external-service | 私信/分享到 QQ；**抖音点赞/评论（可 @主人）** | 受控浏览器、Cookie | douyin*.test.js | Module owner: douyin |
+| 15 | heybox | 1.0.0 | external-service | 小黑盒点赞/评论/发帖（外部社区） | Cookie | heybox 相关（batch-expand-and-privacy 等） | Module owner: heybox |
+| 16 | token-guardian | 1.0.0 | optional | 无直接发送；压缩会话历史 | 统计/持久化 | token-guardian-*.test.js（5 文件） | Module owner: token-guardian |
+| 17 | complete-guard | 1.0.0 | optional | 无直接发送；截断检测提醒 | 无 | （含于 kernel 链路测试） | Module owner: complete-guard |
+| 18 | memory-privacy | 1.0.0 | core（隔离治理） | 无直接发送；三层作用域隔离 | scope override | memory-privacy-scope、memory-scope、profile-scope | Context |
+| 19 | scheduler | 1.0.0 | optional | **定时提醒发送**（/remind + AI 登记） | 任务持久化 | scheduler.test.js | Module owner: scheduler |
+| 20 | multi-parser | 1.0.0 | optional | 发图/视频/文件卡片（链接解析） | 缓存/配额 | multi-parser*.test.js | Module owner: multi-parser |
+| 21 | rss | 1.0.0 | optional | 无主动推送（她来查池子） | 订阅池 | rss.test.js、rss-panel | Module owner: rss |
 
 **特殊说明**
 
@@ -70,8 +68,6 @@
 | /silent /active /quiet /chatty /normal | 群插话档位 | 5 档 |
 | /status | 健康面板 | |
 | /model | 查/切模型 | 面板 models-apply 联动 |
-| /sing | 点歌翻唱 | 走 song 模块 |
-| /mood | 查心情 | mood 模块 |
 | /diary | 说说我 | diary 模块 |
 | /remember | 记事 | memory 模块 |
 | /reset | 重置当前聊天会话 | |
@@ -104,7 +100,6 @@
 | token-guardian:287/290 | tick + 30s | token 统计与压缩 | token-guardian-* |
 | onebot/client.js:142 | 30s | 半开连接探测（90s 无包强制重连） | gateway-resilience |
 | activity-state.js:49 | 内部节拍 | 活跃状态衰减 | — |
-| song/studio.js:612 | 队列内 | 翻唱队列 | song |
 | purpose 面板轮询 | 15s | 面板 UI（客户端） | — |
 | scheduler 模块 | 到期触发 | 提醒任务 | scheduler.test |
 | backfill gapTracker | 事件驱动 + 60s 落盘 | 断线补收 | backfill.test |

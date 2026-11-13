@@ -18,20 +18,20 @@ OneBot 事件 → InboundService(解析/ASR/引用/群缓冲/表情收集/recent
   → NormalizedInbound → SessionService(ChatKey→session 唯一映射/workspace/preset/标题/模型)
   → ContextService(按聊天人设/蒸馏卡/记忆/黑话/群前情)
   → TurnController(合流/取消/turn/end/异常/dispose)
-  → ReplyService(分条/maxChars/心情/语音表情/引用/富媒体)
+  → ReplyService(分条/maxChars/语音表情/引用/富媒体)
   → 唯一 Outbox(ACL/enabled/dryRun/身份闸/台账/真实回执)
 ```
 
 ## 实施顺序（各自独立可合并）
 
 - **PR-1 Outbox 收口**：hub.sendText/sendSegments/sendFile/sendVoice 及模块 api.send*、生图、RSS、
-  翻唱、头像、面板自测、purpose/speakup deliver、multi-parser 转发全部转进 Outbox；默认关闭保持 legacy。
+  头像、面板自测、purpose/speakup deliver、multi-parser 转发全部转进 Outbox；默认关闭保持 legacy。
   验收：所有主动发送有 deliveryId+台账；dryRun/身份闸覆盖全部出口；不存在第二个物理 OneBot 写者。
   **PR-1 完成前不进行新核心聊天测试。**
 - **PR-2 入站与上下文共享服务**：从 hub.js 提取 buildInbound/buildContext（不是新核心重写）；
   contexts 不可用必须明确失败不静默。验收：同一事件跑新旧路径，内容块/提示词/persona/preset/workspace/群前情/引用/转写一致。
 - **PR-3 会话与回复等价**：一个 ChatKey 一个 session（新旧共享映射）；/reset /new 同 registry；
-  ReplyService 复用 parseReply/replyRules（maxChars/maxBubbles/心情概率/voice/sticker/引用/图片；
+  ReplyService 复用 parseReply/replyRules（maxChars/maxBubbles/voice/sticker/引用/图片；
   超时/取消不留「模型以为已发」假历史）。验收：同一模型输出→新旧等价出站序列。
 - **PR-4 交互与群策略等价**：提问/审批/扩展命令统一入站路由；群策略复用 legacy decideGroupReply 全套；
   purpose/speakup 同 registry 同 outbox；真实 turn/end 成功才发送；失败/aborted/热重载有可观测终态。
