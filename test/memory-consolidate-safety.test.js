@@ -83,6 +83,69 @@ test('consolidate safety: 同日部分聊天失败不得推进整日进度', asy
   assert.deepEqual(f.deleted, [])
 })
 
+test('consolidate safety: 失败冷却不重复烧模型，冷却后重试成功且保留流水', async (t) => {
+  let valid = false
+  const f = fixture(t, ({ system }) => system.includes('整理长期记忆') && !valid ? '[{"text":"截断"' : system.includes('{"insights"') ? '{"insights":[],"style":[]}' : '[]')
+  const first = await f.store.consolidate()
+  assert.equal(first.ok, false)
+  const failedBatch = Object.values(f.state().extractionBatches)[0]
+  assert.equal(failedBatch.attempts, 1)
+  assert.ok(failedBatch.nextRetryAt > failedBatch.at)
+  const before = f.calls()
+  const waiting = await f.store.consolidate()
+  assert.equal(waiting.ok, false)
+  assert.ok(waiting.failed[0].retryAfter > Date.now())
+  assert.equal(f.calls(), before, '冷却期不得再次调用模型')
+  assert.equal(f.state().processed[yesterday()], undefined)
+
+  const state = f.state()
+  for (const batch of Object.values(state.extractionBatches)) batch.nextRetryAt = 0
+  writeFileSync(join(f.dir, 'memory/state.json'), JSON.stringify(state))
+  valid = true
+  f.store.reload()
+  const retried = await f.store.consolidate()
+  assert.equal(retried.ok, true, retried.message)
+  assert.ok(f.calls() > before, '冷却结束后允许重试')
+  assert.equal(f.state().processed[yesterday()], 6)
+  assert.deepEqual(f.deleted, [])
+})
+
+test('consolidate safety: 重试次数持久化并按指数退避', async (t) => {
+  const f = fixture(t, ({ system }) => system.includes('整理长期记忆') ? '[{"text":"截断"' : system.includes('{"insights"') ? '{"insights":[],"style":[]}' : '[]')
+  await f.store.consolidate()
+  const state = f.state()
+  const first = Object.values(state.extractionBatches)[0]
+  const firstDelay = first.nextRetryAt - first.at
+  assert.equal(first.attempts, 1)
+  assert.equal(firstDelay, 60_000)
+
+  first.nextRetryAt = 0
+  writeFileSync(join(f.dir, 'memory/state.json'), JSON.stringify(state))
+  f.store.reload()
+  await f.store.consolidate()
+  const second = Object.values(f.state().extractionBatches)[0]
+  assert.equal(second.attempts, 2)
+  assert.equal(second.nextRetryAt - second.at, 120_000)
+})
+
+test('consolidate safety: 达到重试上限后熔断，不推进进度也不再调用模型', async (t) => {
+  const f = fixture(t, ({ system }) => system.includes('整理长期记忆') ? '[{"text":"截断"' : system.includes('{"insights"') ? '{"insights":[],"style":[]}' : '[]')
+  await f.store.consolidate()
+  const state = f.state()
+  for (const batch of Object.values(state.extractionBatches)) {
+    batch.attempts = 4
+    batch.nextRetryAt = null
+  }
+  writeFileSync(join(f.dir, 'memory/state.json'), JSON.stringify(state))
+  f.store.reload()
+  const before = f.calls()
+  const result = await f.store.consolidate()
+  assert.equal(result.ok, false)
+  assert.equal(result.failed[0].blocked, true)
+  assert.equal(f.calls(), before)
+  assert.equal(f.state().processed[yesterday()], undefined)
+})
+
 test('consolidate safety: 状态损坏时不调用模型、不自动重跑', async (t) => {
   const f = fixture(t, () => '[]')
   mkdirSync(join(f.dir, 'memory'), { recursive: true })
