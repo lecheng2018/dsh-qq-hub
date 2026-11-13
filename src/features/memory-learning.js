@@ -1,9 +1,29 @@
 import { askModel } from '../core/llm.js'
 import { readChatLogSource } from '../chat/chat-log.js'
-import { createMemoryExtractor, MAX_ATTEMPTS, RETRY_BASE_MS } from './memory-extractor.js'
+import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
 import { createMemoryStyle } from './memory-style.js'
+
+export const CONSOLIDATION_MAX_ATTEMPTS = 3
+export const CONSOLIDATION_RETRY_DELAYS_MS = Object.freeze([5 * 60_000, 15 * 60_000, 30 * 60_000])
+
+export function nextConsolidationRetry(previous, now, lastError) {
+  const attempts = Math.max(0, Math.floor(Number(previous?.attempts) || 0)) + 1
+  const capped = attempts >= CONSOLIDATION_MAX_ATTEMPTS
+  const delay = CONSOLIDATION_RETRY_DELAYS_MS[Math.min(attempts - 1, CONSOLIDATION_RETRY_DELAYS_MS.length - 1)]
+  return {
+    attempts,
+    nextRetryAt: capped ? 0 : now + delay,
+    failedAt: now,
+    lastError: String(lastError || '整理失败').slice(0, 300),
+  }
+}
+
+export function consolidationRetryBlocked(retry, now = Date.now()) {
+  const attempts = Math.max(0, Math.floor(Number(retry?.attempts) || 0))
+  return attempts >= CONSOLIDATION_MAX_ATTEMPTS || Number(retry?.nextRetryAt || 0) > now
+}
 
 export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
@@ -159,8 +179,7 @@ export function createMemoryLearning({
     start: (batch, scope) => {
       const state = load()
       state.extractionBatches = { ...(state.extractionBatches || {}) }
-      const previous = state.extractionBatches[batch.id]
-      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, attempts: Number(previous?.attempts || 0) + 1, at: Date.now() }
+      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
       try { save(state) } catch (error) {
         batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
         throw error
@@ -169,17 +188,12 @@ export function createMemoryLearning({
     fail: (batch, scope, error) => {
       const state = load()
       state.extractionBatches = { ...(state.extractionBatches || {}) }
-      const attempts = Number(state.extractionBatches[batch.id]?.attempts || 1)
-      const blocked = attempts >= MAX_ATTEMPTS
       state.extractionBatches[batch.id] = {
         fingerprint: batch.fingerprint,
         scope,
-        status: error.partial ? 'partial' : error.factsCommitted ? 'pending' : 'failed',
+        status: error.factsCommitted ? 'pending' : 'failed',
         added: Number(error.factsCommitted) || 0,
         error: error.message,
-        attempts,
-        blocked,
-        nextRetryAt: error.factsCommitted && !error.partial ? null : blocked ? null : Date.now() + RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1),
         at: Date.now(),
       }
       try { save(state) } catch (saveError) {
@@ -236,13 +250,23 @@ export function createMemoryLearning({
       return mins >= hh * 60 + mm && runs[t] !== today
     })
     if (!due.length) return
+    if (consolidationRetryBlocked(s.lastConsolidate?.retry, now.getTime())) return
     // 连今天到目前为止的聊天一起提炼；记着整理到第几行，下一次只处理新的
     const r = await consolidate({ includeToday: true })
+    if (!isActive()) return
     if (r.ok) {
       const s2 = load()
       s2.runs = { ...(s2.runs || {}) }
       for (const t of due) s2.runs[t] = today
       save(s2)
+    } else if (r.message !== '正在整理中') {
+      const s2 = load()
+      const retry = nextConsolidationRetry(s2.lastConsolidate?.retry, Date.now(), r.message)
+      s2.lastConsolidate = { ...(s2.lastConsolidate || {}), retry }
+      save(s2)
+      if (retry.attempts >= CONSOLIDATION_MAX_ATTEMPTS) {
+        log?.warn?.(`每日整理连续失败 ${retry.attempts} 次，自动重试已暂停；请修复后手动整理一次以解除`)
+      }
     }
   }
 
