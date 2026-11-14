@@ -78,3 +78,12 @@ test('初始池可由构造器注入（重启恢复路径）', () => {
   const c = createCrucible([{ source: 'group', title: '恢复的条目', fingerprint: 'fp-r', capturedAt: NOW, tags: [] }])
   assert.equal(c.entries().length, 1, '应从既有池恢复')
 })
+
+test('降级兴趣匹配：通过 topic 关键词成功命中潜伏素材', () => {
+  const c = createCrucible([{ source: 'group', title: '露营装备选购心得', summary: '推荐几款实用的帐篷和睡袋', fingerprint: 'fp-camp', capturedAt: NOW, tags: ['露营'] }])
+  // 当未配置兴趣时，从聊天提取出的 topic（如「露营」）能准确命中标题/摘要，而不是长句整句脱靶
+  const topicTerms = ['露营', '周末']
+  const hits = c.match('private:10001', topicTerms, { now: NOW, limit: 5 })
+  assert.equal(hits.length, 1)
+  assert.equal(hits[0].fingerprint, 'fp-camp')
+})
