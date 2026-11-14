@@ -224,13 +224,17 @@ async function runWithTimeout(run, timeoutMs) {
   const ms = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS)
   const controller = new AbortController()
   let timer = null
+  // 超时定时器**绝不能 unref**：它存在的意义就是「保证进程活到它触发为止」。
+  // unref 之后若此刻没有别的 ref 定时器托住事件循环（CI 上单文件跑、本地恰好被别的测试托住），
+  // Node 会直接判定「事件循环已排空 → 有未结算的 top-level await」，
+  // Promise.race 永远等不到结果，表现为 ERR_TEST_FAILURE: Promise resolution is still pending。
+  // （被 race 的另一半——模型请求——可以是 unref，它只是被动等待者，不负责撑住事件循环。）
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => {
       const error = new Error(`线索判定超过 ${Math.ceil(ms / 1000)} 秒，已中止`)
       controller.abort(error)
       reject(error)
     }, ms)
-    timer.unref?.()
   })
   try {
     return await Promise.race([
