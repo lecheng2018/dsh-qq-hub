@@ -32,10 +32,14 @@ export default {
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
     // #79：随消息变化的相关记忆放在「交给她的内容」里，不放进每轮都会追加的运行时上下文快照
-    api.on('prompt', (content, info) => {
+    api.on('prompt', async (content, info) => {
       try {
         if (!info || !info.chat || info.chat.kind === 'system' || !Array.isArray(content)) return content
-        const hint = memory.recallHint(info.chat, info.queryText || '', info.prevText || '', { sessionId: info.sessionId })
+        // 向量通道（1.4.4）开着走融合召回（modules 层 filter 会 await 异步 handler）；
+        // 没开或半路挂了都退回同步 recallHint —— 与 1.4.3 行为一致。融合只重排、不扩可见性。
+        const hint = typeof memory.recallHintFused === 'function' && memory.vectorEnabled?.()
+          ? await memory.recallHintFused(info.chat, info.queryText || '', info.prevText || '', { sessionId: info.sessionId })
+          : memory.recallHint(info.chat, info.queryText || '', info.prevText || '', { sessionId: info.sessionId })
         if (!hint) return content
         return [{ type: 'text', text: hint }, ...content]
       } catch (error) { return content }
@@ -122,6 +126,13 @@ export default {
     })
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
+    // 向量通道（1.4.4）：状态 + 手动补全。补全只 embed 缺失/文本变更的条目；要全量重建先删各作用域的 vectors.bin。
+    api.route('/memory/vector', async () => ({ ok: true, status: (typeof memory.vectorStatus === 'function' ? memory.vectorStatus() : { enabled: false }) }))
+    api.route('/memory/vector/backfill', async (req) => {
+      if (req.method !== 'POST') return { ok: false, message: '请使用 POST 补全向量' }
+      if (!memory.vectorEnabled?.()) return { ok: false, message: '向量通道未启用（配置 memory.embeddings）' }
+      return memory.vectorBackfill(memory.list(''))
+    })
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
     api.route('/profiles', async () => ({ ok: true, list: memory.profiles() }))
     api.route('/profiles/save', async (req) => {

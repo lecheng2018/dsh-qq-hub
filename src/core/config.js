@@ -229,7 +229,7 @@ const DEFAULTS_RAW = {
     // 早安 / 晚安：到点必发一次（不参与随机间隔抽签），每天每种只发一次
     greeting: { enabled: true, morning: '08:00', night: '23:00' },
   },
-  memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
+  memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'], embeddings: { enabled: false, url: '', apiKey: '', model: 'BAAI/bge-m3', dim: 1024, timeoutMs: 8000, batch: 16, maxChars: 200 } }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空。embeddings：向量通道（1.4.4），默认关 —— 填一个 OpenAI 兼容的 /embeddings 端点（如 SiliconFlow BAAI/bge-m3）并 enabled: true 才启用语义召回
   // 挂起线索（US-019）：S1 规则层永远跑（零成本）；S2 慢思考每轮多一次小模型调用，
   // 所以默认只在私聊跑，群里关掉（群里每人一句就一次模型调用，成本压不住）。
   threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 15000, pruneIntervalMs: 60000 },
@@ -495,6 +495,17 @@ export function normalize(raw) {
   c.chatlog.keepDays = Math.round(num(c.chatlog.keepDays, 30, 14, 365))
   c.memory.hintCount = Math.round(num(c.memory.hintCount, 8, 1, 20)) // 每轮最多带几条记忆进提示词
   c.memory.hintMaxChars = Math.round(num(c.memory.hintMaxChars, 600, 120, 2000)) // 这些记忆合起来最多多少字
+  // 向量通道（1.4.4）：默认全关。url 填了且 enabled 才启用（memory-vector 的 normalizeEmbeddingConfig 会再判一次）。
+  if (!isObj(c.memory.embeddings)) c.memory.embeddings = {}
+  const embCfg = c.memory.embeddings
+  embCfg.enabled = bool(embCfg.enabled, false)
+  embCfg.url = String(embCfg.url ?? '').trim()
+  embCfg.apiKey = String(embCfg.apiKey ?? '').trim()
+  embCfg.model = String(embCfg.model ?? '').trim()
+  embCfg.dim = Math.round(num(embCfg.dim, 1024, 64, 4096))
+  embCfg.timeoutMs = Math.round(num(embCfg.timeoutMs, 8000, 1000, 60000))
+  embCfg.batch = Math.round(num(embCfg.batch, 16, 1, 64))
+  embCfg.maxChars = Math.round(num(embCfg.maxChars, 200, 60, 400))
   // 挂起线索（US-019）：开关 + S2 判定范围与预算。judge 关掉就只剩 S1 规则层（零成本）。
   if (!isObj(c.threads)) c.threads = {}
   c.threads.enabled = bool(c.threads.enabled, true)
