@@ -592,6 +592,8 @@ export function createModularCore({
     deliveryContext,
     getConfig, log, hooks: moduleHooks, reportTurns, groups, stickers,
     interaction,
+    // US-019：线索账本注入回复链路，用来处理 <inner> 里的【顺承前情】与闭环信号
+    ...(threadLedger ? { threadLedger } : {}),
     ...outbound,
     logChat,
     onActivity: (event) => mods.emit?.('activity', event),
