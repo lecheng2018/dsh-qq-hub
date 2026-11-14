@@ -1068,8 +1068,34 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
    */
   function topicScore(text, chat = null) {
     if (!chat) return 0 // fail-closed：不知道在哪个聊天，就当不相关
-    const hits = search(indexFor(chat), text, { limit: 1, minScore: 0.01 })
-    return hits.length ? Math.min(1, hits[0].score / 3) : 0
+    const idx = indexFor(chat)
+    if (!idx) return 0
+    const hits = search(idx, text, { limit: 1, minScore: 0.01 })
+    if (!hits.length) return 0
+    // —— 相关度不能是「查询有多长」的函数 ——
+    // 旧算法 `score/3`：BM25 总分随查询变长而虚高，而群闸传进来的查询是
+    // **最近 6 条消息的拼接**（上百个字组）。随便蹭到几个常用字就 >3 分，
+    // score/3 恒饱和成 1.0 —— 实测刷屏群里相关度恒 0.50、engaged 入场券形同虚设。
+    // 换成罕见度加权的双向覆盖率（与查询长度无关）：
+    //   W/Q 当前话题有多大比例落在这条记忆上（长闲聊天然摊薄）；
+    //   W/D 这条记忆有多大比例真在话题里（偶然蹭一两个常用字撑不起 W/D）。
+    // 常用字组按 df 降权：只有「整段话题就是它」才给高分。
+    const q = new Set(tokenize(text))
+    const d = new Set(tokenize(hits[0].it?.text || ''))
+    if (!q.size || !d.size) return 0
+    const N = Math.max(1, Number(idx.N) || 1)
+    const rarity = (t) => Math.max(0.05, 1 - (idx.df?.get?.(t) || 0) / N)
+    let Q = 0
+    let D = 0
+    let W = 0
+    for (const t of q) Q += rarity(t)
+    for (const t of d) {
+      const r = rarity(t)
+      D += r
+      if (q.has(t)) W += r
+    }
+    if (!W || !Q || !D) return 0
+    return Math.max(0, Math.min(1, W / Q + W / D))
   }
 
   /**
