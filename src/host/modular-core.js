@@ -23,7 +23,7 @@ import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
 import { createSystemTurns } from '../chat/system-turns.js'
 import { createTurnController } from '../chat/turn-controller.js'
-import { createContextAssembly } from '../chat/context-assembly.js'
+import { createContextAssembly, createThreadProvider, createTimeScaleProvider, TIME_SCALE_PROVIDER_ID, THREAD_PROVIDER_ID } from '../chat/context-assembly.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
 import { createInteractionState } from '../chat/interaction-state.js'
@@ -37,7 +37,7 @@ import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
-import { parseMessageEvent, cardText } from '../chat/inbound.js'
+import { parseMessageEvent, cardText, neutralizeInboundDsl } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
@@ -48,6 +48,7 @@ import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance, withRoleWakeWords } from '../chat/group-policy.js'
+import { decideGroupReplyWithAtmosphere, gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
@@ -145,16 +146,20 @@ function emitActivity(mods, inbound, { direct = false, owner = false } = {}) {
   } catch { /* 计数是旁路，绝不打断主链 */ }
 }
 
-/** 入站成员段 → DSH content 块（legacy 视图语义：文本段原样、图片段带 url/file、其余如实降级）。 */
+/** 入站 → DSH content 块（legacy 视图语义：文本段原样、图片段带 url/file、其余如实降级）。
+ *  文本段一律先过 neutralizeInboundDsl（§4.3）：用户伪造的 <inner>/<voice>/<poke>/… 标签族
+ *  在进模型上下文之前就中和成实体，不能冒充系统元数据。 */
 function segmentsToContent(members) {
   const content = []
   for (const m of members) {
     for (const s of (m?.segments ?? [])) {
-      if (s?.type === 'text') { const t = String(s.data?.text ?? ''); if (t) content.push({ type: 'text', text: t }) }
+      if (s?.type === 'text') { const t = neutralizeInboundDsl(String(s.data?.text ?? '')); if (t) content.push({ type: 'text', text: t }) }
       else if (s?.type === 'image' || s?.type === 'mface') content.push({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
       else if (s?.type === 'reply' || s?.type === 'at') continue
       else if (s?.type === 'forward') content.push({ type: 'text', text: '\n[合并转发（内容没拉到）]\n' })
-      else if (s?.type === 'json') content.push({ type: 'text', text: `\n${cardText(s.data?.data)}\n` })
+      // 卡片文字也是用户可控的入站正文（攻击者发一张标题带 <inner>… 的卡片就能绕过去）：
+      // 必须和中 Prose 一样走中和，让模型看到字面内容而不是可执行标签。
+      else if (s?.type === 'json') content.push({ type: 'text', text: `\n${neutralizeInboundDsl(cardText(s.data?.data))}\n` })
       else if (s?.type === 'xml') content.push({ type: 'text', text: '\n[卡片消息]\n' })
       else if (s?.type) content.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
@@ -201,6 +206,10 @@ export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile,
   memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
+  // 挂起线索账本（US-004 产出）。线索 provider 只认 peek(chatKey, o) 这一个契约，
+  // 所以这里按依赖注入接：宿主把账本传进来，core 不 import 账本实现（零业务耦合）。
+  // 未传 = 不注册这两个 provider（优雅降级），不会因缺账本而启动失败。
+  threadLedger,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -261,7 +270,17 @@ export function createModularCore({
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
-  /** 群消息要不要回：与 legacy 同一 decideGroupReply 调用形状。 */
+  // 群聊张力门禁（US-011）：装配期读一次 env（改完需重启，与其它旋钮同款口径）。
+  // 默认关闭；非法/空值 fail-closed 回退 legacy（reason 带出来便于排障）。
+  const atmosphereGate = gateFromEnv(process.env)
+  if (atmosphereGate.enabled) log.info(`群聊张力门禁已开启（tensionLimit=${atmosphereGate.tensionLimit}）：高张力且未被叫到时不插嘴`)
+  else debug(`群聊张力门禁关闭：${atmosphereGate.reason}`)
+
+  /**
+   * 群消息要不要回：与 legacy 同一 decideGroupReply 调用形状。
+   * 门禁只在这一处接：第 1/2/4 步仍是 decideGroupReply 本身，
+   * 开关关时返回值与改造前逐字段一致。
+   */
   function decideGroupReplyFor({ chatKey, text, mentioned, userId, repliedToBot = false }) {
     const cfg = getConfig()
     const now = Date.now()
@@ -276,7 +295,8 @@ export function createModularCore({
       const memChat = { chatId: chatKey, kind: 'group', groupId: gid }
       memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0
     } catch { memScore = 0 }
-    return decideGroupReply({
+    const decision = decideGroupReplyWithAtmosphere({
+      messages: groups.buffer(gid),
       policy: pol,
       relevance: topicRelevance(recentTexts, pol.interests, memScore),
       engagedUntil: groups.engagedUntil(gid),
@@ -289,7 +309,10 @@ export function createModularCore({
       recentTimes: groups.buffer(gid).map((x) => x.t),
       interjectTimes: groups.interjectTimes(gid),
       botReplyTimes: groups.speakTimes(gid),
-    })
+    }, { gate: atmosphereGate })
+    // 氛围快照只在门禁开启时存在：进日志，排障时能直接看到「为什么没插嘴」。
+    if (decision.atmosphere) debug(`群 ${gid} 氛围：张力 ${decision.atmosphere.tension.toFixed(2)}、热度 ${decision.atmosphere.energy.toFixed(2)}（${decision.atmosphere.advice}）`)
+    return decision
   }
   /** ChatKey + 首发言者 → legacy 兼容的 chat 视图（provider / 人设 / 模型判定共用）。 */
   function chatViewFor(chatKey, members) {
@@ -491,10 +514,31 @@ export function createModularCore({
     throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
   }
 
-  // ---------- Context Assembly（模块上下文 + 人格） ----------
+  // ---------- Context Assembly（模块上下文 + 人格 + 挂起线索 + 时空标尺） ----------
+  // 线索/标尺 provider 声明 scope='global' 但内部 perChat：宿主只建一个全局实例，
+  // 真正的聊天域由每次 assemble({ chatKey }) 带进来，并过 parseChatKey 校验。
+  // 优先级：persona(1000) > 线索(800) > 时空标尺(790) > legacy(100)。
+  const threadProviders = threadLedger
+    ? [
+      createThreadProvider({ ledger: threadLedger, perChat: true, includeDormant: true }),
+      createTimeScaleProvider({
+        perChat: true,
+        // 上次互动时间戳：优先用会话登记表的 markTurn 记录，缺失就不注入（不编造时间）
+        // registry 没有 .get()，只读视图是 peek()；lastTurnAt 由 markTurn() 维护。
+        // 注意时序：assemble（:781）早于 turnAt（:823），所以这里读到的确是**上一轮**的时间戳。
+        resolveLastAt: (chatKey) => {
+          try {
+            const at = registry.peek(chatKey)?.lastTurnAt
+            return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : undefined
+          } catch { return undefined }
+        },
+      }),
+    ]
+    : []
   const assembly = createContextAssembly({
     providers: [
       ...(personaText ? [{ moduleId: 'persona', priority: 1000, scope: 'global', cacheStable: true, provide: () => personaText() || '' }] : []),
+      ...threadProviders,
       createLegacyContextAdapter({ mods, priority: 100 }),
     ],
   })
@@ -573,8 +617,12 @@ export function createModularCore({
     pendingMode.delete(chatKey)
     const nowAt = Date.now()
     const ownerQQ = String(getConfig().ownerQQ || '')
-    const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${x.nick || x.uid}(${x.uid})`)
-    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${x.text || '（图片/表情）'}`
+    // 昵称也是不可信原文：群昵称可被改成 `<inner>…</inner>`，它会拼进 `昵称(uid)：正文`
+  // 前缀里，绕过「只中和 segments[].data.text」的全部 4 层。所以这里过一遍中和。
+  const safeNick = (v) => neutralizeInboundDsl(String(v ?? ''))
+  const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${safeNick(x.nick || x.uid)}(${x.uid})`)
+    // 群缓冲里的 x.text 是入站原文，同样必须中和（同 §4.3 防线；否则伪造标签从群聊路径进上下文）。
+    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${neutralizeInboundDsl(x.text) || '（图片/表情）'}`
     const name = groupNames.get(gid) || gid
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
@@ -607,9 +655,14 @@ export function createModularCore({
     }
     for (const m of members) for (const s of (m?.segments ?? [])) {
       if (s?.type === 'image' || s?.type === 'mface') addMedia({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
-      else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: String(s.data.text || '') })
+      // 收进来的文件正文/文件名同属入站原文，同样要中和（§4.3 第四落点在 groupPromptContent）。
+      // 注：这一层是**深度防御里的冗余层**——实测摘掉它测试全红不了，因为同一段文本
+      // 已在 :759（源头整块中和）中和过、且 neutralizeInboundDsl 幂等，此处的二次调用
+      // 结果完全相同。保留它是为了「extras 这一路将来若接入别处原文时仍有兜底」，
+      // 不是为了让某项测试变红。真正被断言锁住的是 :759（见 P1-d4/P1-d5）。
+      else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: neutralizeInboundDsl(String(s.data.text || '')) })
       else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
-      else if (s?.type === 'json') extras.push({ type: 'text', text: cardText(s.data?.data) })
+      else if (s?.type === 'json') extras.push({ type: 'text', text: neutralizeInboundDsl(cardText(s.data?.data)) })
       else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
       else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
     }
@@ -750,7 +803,10 @@ export function createModularCore({
         ...member,
         segments: [
           ...(member.segments || []).filter((segment) => segment?.type !== 'file'),
-          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: block.text, inboundFile: true } })),
+          // 文件块是「抬头 + 正文」一整段，正文是纯入站原文：必须在源头就整块中和，
+          // 否则换个下游渲染点（如私聊 steer）就漏出裸 DSL。此处与 groupPromptContent 的
+          // inboundFile 落点构成双保险（neutralizeInboundDsl 幂等，不会二次转义）。
+          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: neutralizeInboundDsl(block.text), inboundFile: true } })),
         ],
       })
     }
@@ -809,7 +865,7 @@ export function createModularCore({
         try { participants.note(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
       } else {
         content = segmentsToContent(members)
-        const source = `【私聊】${chat.nickname || chat.userId}(${chat.userId})：`
+        const source = `【私聊】${neutralizeInboundDsl(String(chat.nickname || chat.userId || ''))}(${chat.userId})：`
         const timeHead = nowLine(Date.now(), previousTurnAt)
         const index = content.findIndex((block) => block.type === 'text')
         if (index >= 0) content[index] = { ...content[index], text: `${source}\n${timeHead}\n${content[index].text || ''}` }
@@ -856,7 +912,7 @@ export function createModularCore({
           const filesSteer = await hydrateInboundFiles(heardSteer, turn.chatKey)
           const quotedSteer = await hydrateQuotes(filesSteer, turn.chatKey)
           let steerContent = segmentsToContent(quotedSteer)
-          const source = `【私聊】${inbound.sender?.nickname || inbound.sender?.userId}(${inbound.sender?.userId})：`
+          const source = `【私聊】${neutralizeInboundDsl(String(inbound.sender?.nickname || inbound.sender?.userId || ''))}(${inbound.sender?.userId})：`
           const timeHead = nowLine(Date.now(), previousTurnAt)
           const index = steerContent.findIndex((block) => block.type === 'text')
           if (index >= 0) steerContent[index] = { ...steerContent[index], text: `${source}\n${timeHead}\n${steerContent[index].text || ''}` }
@@ -1494,6 +1550,10 @@ export function createModularCore({
 
   return {
     services,
+    // 测试出口：装配主链本身。wiring 测试必须走**这里**而不是自己 new 一个
+    // createContextAssembly({providers:[...]})——后者绕过了 `threadLedger ? [...threadProviders] : []`
+    // 这个真实注册点，导致「摘掉 threadProviders 注册」的变异全绿（US-010 第二轮验收实测漏检）。
+    assemblyForTest: assembly,
     dispatchLegacyEvent,
     dispatchLegacyEventSettled,
     runPromptTurn,
@@ -1510,6 +1570,10 @@ export function createModularCore({
     registry,
     controller,
     dispose,
+    // 测试出口：入站文件补水后的 segments 是否已中和，必须能**绕过**下游
+    // segmentsToContent / groupPromptContent 单独验证。否则这一层永远被下游挡住，
+    // 摘掉它测试照样全绿——「深度防御」不该变成「测不出来的防御」。
+    hydrateInboundFilesForTest: hydrateInboundFiles,
     stats: () => ({
       sessions: Object.keys(registry.snapshot()).length,
       cacheEntries: ctxBoxes.size + ctxBound.size + personaBound.size + ctxFallback.size + ctxFallbackDone.size + mountedTools.size,
