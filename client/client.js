@@ -607,8 +607,7 @@ function PercentRow({ label, value, fallback, write, remove }) {
   const parsePct = (t) => {
     const n = Number(String(t).trim());
     if (!Number.isFinite(n) || n < 0) return 0;
-    const v = n > 1 ? n / 100 : n;
-    return Math.round(Math.min(v, 1) * 100);
+    return Math.round(Math.min(n, 100));
   };
   const commit = () => {
     const p = parsePct(text);
