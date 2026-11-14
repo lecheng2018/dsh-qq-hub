@@ -232,7 +232,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return false
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '', personaId = '' }) {
+  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '', personaId = '', kind = '', selfView = false, perspective = '' }) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
@@ -273,6 +273,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
+    const isSubjective = Boolean(
+      (kind && kind !== 'fact') ||
+      selfView ||
+      perspective === 'self' ||
+      personaId
+    )
     const item = {
       id: randomUUID().slice(0, 8),
       text: t,
@@ -293,6 +299,9 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       topic: String(topic || '').slice(0, 20),
       evidence: String(evidence || '').slice(0, 200),
       title: String(title || '').slice(0, 50),
+      kind: kind ? String(kind) : isSubjective ? 'insight' : 'fact',
+      selfView: Boolean(selfView || isSubjective),
+      perspective: String(perspective || ''),
     }
     // US-017 · 双轨记忆：主观条目（insight/style/profile）打上当前人设，客观事实剥除。
     // 未标注的历史条目按默认人设处理（只读共享不丢弃）。
