@@ -11,6 +11,7 @@
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { stripInternalMemo } from '../chat/reply.js'
+import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from './engine/crucible.js'
 import { characterName, escapeRegExp } from '../persona/identity-context.js'
 import {
   DEFAULT_PURPOSE_CONFIG, PURPOSE_NEEDS, NEED_LABELS,
@@ -116,6 +117,28 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   }
   const saveState = (state) => writeJson(stateFile(), state)
 
+  // US-012 · 潜伏素材熔炉：素材先沉淀，到期发酵，按会话兴趣打分取用。
+  // 池子随 purpose state 一起落盘（同目录同生命周期），重启不丢。
+  // 此举补上了计划书 §八「潜伏素材熔炉」的空缺：crucible.js 原本零引用，
+  // 而 materials.js 的 collectMaterials 只做「最近素材」，没有潜伏/发酵/兴趣匹配。
+  const loadCrucible = () => {
+    try {
+      const raw = readJson(dataDir('purpose', 'crucible-pool.json'), null)
+      return createCrucible(Array.isArray(raw?.entries) ? raw.entries : [])
+    } catch {
+      return createCrucible([])
+    }
+  }
+  let crucible = loadCrucible()
+  const saveCrucible = () => {
+    try {
+      const entries = crucible.entries().slice(-CRUCIBLE_MAX_ENTRIES)
+      writeJson(dataDir('purpose', 'crucible-pool.json'), { version: 1, entries })
+    } catch (error) {
+      log?.warn?.('素材熔炉落盘失败：', error?.message || error)
+    }
+  }
+
   // ---------- 素材（记忆 importance 0~1 → 引擎 0~100） ----------
   function memoryRecords() {
     try {
@@ -188,6 +211,31 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       biliEntries: [], // 首期不接 B站/Qzone 素材，字段留扩展
       memoryRecords: memoryRecords(),
     })
+    // US-012：把熔炉里「发酵到位的潜伏素材」按当前会话兴趣匹配进来。
+    // 与 collectMaterials 的「最近素材」互补：前者是沉下来的旧线索，后者是刚发生的。
+    // 匹配不到就返回空数组（模块明确不做随机兜底），不会污染素材池。
+    try {
+      // 优先读扩展配置 ext.purpose.interests；降级时使用素材提取出的主题词 topic（而不是整句聊天长句），
+      // 保证 crucible.match() 的子串包含检索能够精准命中。
+      const ext = (cfg.ext && cfg.ext.purpose) || {}
+      const interests = Array.isArray(ext.interests) && ext.interests.length
+        ? ext.interests
+        : (materials.items || []).map((m) => m.topic).filter(Boolean).slice(0, 8)
+      const chatKey = `private:${String(cfg.ownerQQ || '')}`
+      if (chatKey !== 'private:' && interests.length) {
+        const hits = crucible.match(chatKey, interests, { now, limit: 5 })
+        for (const hit of (Array.isArray(hits) ? hits : [])) {
+          materials.items.push({
+            kind: 'crucible',
+            fingerprint: hit.fingerprint,
+            text: String(hit.title || hit.summary || ''),
+            at: Number(hit.capturedAt) || 0,
+          })
+        }
+      }
+    } catch (error) {
+      log?.warn?.('素材熔炉匹配失败（跳过）：', error?.message || error)
+    }
     const persona = personaOf(cfg)
     const lastMasterAt = lastPrivateAt(cfg)
     const { drives } = deriveDrives({
@@ -320,10 +368,45 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   }
 
   // ---------- 对外 ----------
+  /**
+   * US-012 · 熔炉循环：把最近素材沉淀进池子、到期发酵、超限淘汰，然后落盘。
+   * 仅在目的引擎开启时运行，保证 match() 看到的是新鲜池子。
+   */
+  function crucibleCycle(cfg, now) {
+    try {
+      const fresh = collectMaterials({
+        now, config: getConfig(),
+        ownerUin: cfg.ownerQQ, roleName: roleOf(cfg),
+        conversations: conversations(cfg, now),
+        biliEntries: [], memoryRecords: memoryRecords(),
+      })
+      const incoming = (fresh.items || [])
+        .filter((m) => m && m.text)
+        .map((m) => ({
+          source: CRUCIBLE_SOURCES.includes(m.source) ? m.source : 'group',
+          title: String(m.text || '').slice(0, 160),
+          fingerprint: m.fingerprint,
+          capturedAt: Number(m.at) || now,
+        }))
+      let dirty = false
+      if (incoming.length) {
+        const res = crucible.ingest(incoming, { now })
+        if (res && res.ingested > 0) dirty = true
+      }
+      const pruned = crucible.prune({ now })
+      if (pruned && pruned.pruned > 0) dirty = true
+      // 只有发生新增、续期或淘汰时才刷盘，避免无人聊天时每 60 秒无意义刷盘
+      if (dirty) saveCrucible()
+    } catch (error) {
+      log?.warn?.('素材熔炉循环失败（跳过本轮）：', error?.message || error)
+    }
+  }
+
   async function tick() {
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled || !cfg.ownerQQ) return
+    try { crucibleCycle(cfg, Date.now()) } catch { /* 已在内部兜住 */ }
     const chatId = chatIdOf(cfg)
     if (isMuted?.(chatId)) return
     const now = Date.now()
