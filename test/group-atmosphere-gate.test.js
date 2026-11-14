@@ -256,3 +256,18 @@ test('阈值可调：把 tensionLimit 调到 0 时，任何氛围都不插话', 
   assert.equal(typeof r.reply, 'boolean')
   if (r.atmosphere && r.atmosphere.tension > 0) assert.equal(r.reply, false)
 })
+
+// —— 启动日志噪音（真机 2026-11-14）：未设置是永久默认态，modular-core 不再每次重启
+//    刷「群聊张力门禁关闭：未设置，按 legacy 处理」；显式关闭/坏值才留一行。
+//    gateFromEnv 因此必须把 raw 透出来供调用方区分这两种「都是关」。
+test('gateFromEnv 透出 raw：默认态与显式关可区分（决定要不要打启动日志）', () => {
+  const unset = gateFromEnv({})
+  assert.equal(unset.raw, null, '从未设置 → raw 必须是 null（调用方据此闭嘴）')
+  assert.equal(unset.enabled, false)
+  const off = gateFromEnv({ QQHUB_GROUP_ATMOSPHERE_GATE: '0' })
+  assert.equal(off.raw, '0', '显式关闭要留痕')
+  assert.equal(off.enabled, false)
+  const bad = gateFromEnv({ QQHUB_GROUP_ATMOSPHERE_GATE: '  ' })
+  assert.ok(bad.raw !== null, '坏值同样要留痕（fail-closed 得让人知道）')
+  assert.equal(bad.enabled, false)
+})
