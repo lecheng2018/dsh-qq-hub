@@ -88,7 +88,7 @@ export function cleanReply(raw, role = '') {
   return s
 }
 
-export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText }) {
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, crucible: injectedCrucible }) {
   // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
   const roleOf = (cfg = getConfig()) => characterName('', cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
@@ -129,10 +129,10 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       return createCrucible([])
     }
   }
-  let crucible = loadCrucible()
-  const saveCrucible = () => {
+  let crucible = injectedCrucible || loadCrucible()
+  const saveCrucible = (pool) => {
     try {
-      const entries = crucible.entries().slice(-CRUCIBLE_MAX_ENTRIES)
+      const entries = (Array.isArray(pool) ? pool : crucible.entries()).slice(-CRUCIBLE_MAX_ENTRIES)
       writeJson(dataDir('purpose', 'crucible-pool.json'), { version: 1, entries })
     } catch (error) {
       log?.warn?.('素材熔炉落盘失败：', error?.message || error)
@@ -375,7 +375,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   function crucibleCycle(cfg, now) {
     try {
       const fresh = collectMaterials({
-        now, config: getConfig(),
+        now, config: purposeConfig(cfg),
         ownerUin: cfg.ownerQQ, roleName: roleOf(cfg),
         conversations: conversations(cfg, now),
         biliEntries: [], memoryRecords: memoryRecords(),
@@ -389,14 +389,31 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
           capturedAt: Number(m.at) || now,
         }))
       let dirty = false
+      let pool
       if (incoming.length) {
+        const prevEntries = crucible.entries()
+        const prevMap = new Map(prevEntries.map((e) => [e.fingerprint, e]))
         const res = crucible.ingest(incoming, { now })
-        if (res && res.ingested > 0) dirty = true
+        pool = res.pool
+        if (res.added.length > 0 || res.evicted.length > 0) {
+          dirty = true
+        } else if (res.refreshed.length > 0) {
+          const currentMap = new Map((res.pool || []).map((e) => [e.fingerprint, e]))
+          for (const fp of res.refreshed) {
+            const before = prevMap.get(fp)
+            const after = currentMap.get(fp)
+            if (before && after && (before.capturedAt !== after.capturedAt || before.ttlMs !== after.ttlMs || (before.tags && after.tags && before.tags.length !== after.tags.length))) {
+              dirty = true
+              break
+            }
+          }
+        }
       }
       const pruned = crucible.prune({ now })
-      if (pruned && pruned.pruned > 0) dirty = true
-      // 只有发生新增、续期或淘汰时才刷盘，避免无人聊天时每 60 秒无意义刷盘
-      if (dirty) saveCrucible()
+      pool = pruned.pool
+      if (pruned.removed.length > 0) dirty = true
+      // 只有数据变动时才调用 saveCrucible(pool)，避免每 60 秒无变化空刷盘！
+      if (dirty) saveCrucible(pool)
     } catch (error) {
       log?.warn?.('素材熔炉循环失败（跳过本轮）：', error?.message || error)
     }
@@ -476,7 +493,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     const prompt = picked.purpose ? promptFor(cfg, config, picked.purpose, { ...ctx, candidates: picked.candidates }, state, now) : ''
     return {
       stats: ctx.materials.stats,
-      materials: ctx.materials.items.map((m) => ({ kind: m.kind, source: m.source, who: m.who, text: m.text })),
+      materials: ctx.materials.items.map((m) => ({ kind: m.kind, source: m.source, who: m.who, text: m.text, fingerprint: m.fingerprint })),
       drives: ctx.drives,
       goals: ctx.goals.slice(0, 5).map((g) => ({ owner: g.owner, domain: g.domain, intent: g.intent, confidence: g.confidence, risk: g.risk, status: g.status })),
       candidates: picked.candidates.map((c) => ({ owner: c.goalOwner, need: c.need, action: c.action, text: c.text, confidence: c.confidence, risk: c.risk })),
