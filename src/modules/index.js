@@ -25,6 +25,7 @@ import memoryPrivacy from './memory-privacy/index.js'
 import scheduler from './scheduler/index.js'
 import multiParser from './multi-parser/index.js'
 import rss from './rss/index.js'
+import deliveryInbox from './delivery-inbox/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
@@ -32,4 +33,6 @@ export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器
   multiParser,
   // 资讯池：RSS/Atom 订阅拉进池子，她自己按需查（不主动推送）
-  rss]
+  rss,
+  // 投递异常收件箱：只读查看没送出去/不确定送达的消息（不提供重发）
+  deliveryInbox]
