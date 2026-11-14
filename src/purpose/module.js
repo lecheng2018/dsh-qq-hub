@@ -215,9 +215,12 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     // 与 collectMaterials 的「最近素材」互补：前者是沉下来的旧线索，后者是刚发生的。
     // 匹配不到就返回空数组（模块明确不做随机兜底），不会污染素材池。
     try {
-      const interests = Array.isArray(cfg?.purpose?.interests) && cfg.purpose.interests.length
-        ? cfg.purpose.interests
-        : (materials.items || []).map((m) => String(m.text || m.title || '')).filter(Boolean).slice(0, 8)
+      // 优先读扩展配置 ext.purpose.interests；降级时使用素材提取出的主题词 topic（而不是整句聊天长句），
+      // 保证 crucible.match() 的子串包含检索能够精准命中。
+      const ext = (cfg.ext && cfg.ext.purpose) || {}
+      const interests = Array.isArray(ext.interests) && ext.interests.length
+        ? ext.interests
+        : (materials.items || []).map((m) => m.topic).filter(Boolean).slice(0, 8)
       const chatKey = `private:${String(cfg.ownerQQ || '')}`
       if (chatKey !== 'private:' && interests.length) {
         const hits = crucible.match(chatKey, interests, { now, limit: 5 })
@@ -367,37 +370,43 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   // ---------- 对外 ----------
   /**
    * US-012 · 熔炉循环：把最近素材沉淀进池子、到期发酵、超限淘汰，然后落盘。
-   * 每轮 tick 前跑一次，保证 match() 看到的是新鲜池子。
+   * 仅在目的引擎开启时运行，保证 match() 看到的是新鲜池子。
    */
   function crucibleCycle(cfg, now) {
     try {
       const fresh = collectMaterials({
         now, config: getConfig(),
-        ownerUin: cfg.ownerQQ, roleName: ROLE,
+        ownerUin: cfg.ownerQQ, roleName: roleOf(cfg),
         conversations: conversations(cfg, now),
         biliEntries: [], memoryRecords: memoryRecords(),
       })
       const incoming = (fresh.items || [])
         .filter((m) => m && m.text)
         .map((m) => ({
-          source: CRUCIBLE_SOURCES.includes(m.kind) ? m.kind : 'group',
+          source: CRUCIBLE_SOURCES.includes(m.source) ? m.source : 'group',
           title: String(m.text || '').slice(0, 160),
           fingerprint: m.fingerprint,
           capturedAt: Number(m.at) || now,
         }))
-      if (incoming.length) crucible.ingest(incoming, { now })
-      crucible.prune({ now })
-      saveCrucible()
+      let dirty = false
+      if (incoming.length) {
+        const res = crucible.ingest(incoming, { now })
+        if (res && res.ingested > 0) dirty = true
+      }
+      const pruned = crucible.prune({ now })
+      if (pruned && pruned.pruned > 0) dirty = true
+      // 只有发生新增、续期或淘汰时才刷盘，避免无人聊天时每 60 秒无意义刷盘
+      if (dirty) saveCrucible()
     } catch (error) {
       log?.warn?.('素材熔炉循环失败（跳过本轮）：', error?.message || error)
     }
   }
 
   async function tick() {
-    try { crucibleCycle(getConfig(), Date.now()) } catch { /* 已在内部兜住 */ }
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled || !cfg.ownerQQ) return
+    try { crucibleCycle(cfg, Date.now()) } catch { /* 已在内部兜住 */ }
     const chatId = chatIdOf(cfg)
     if (isMuted?.(chatId)) return
     const now = Date.now()
