@@ -162,7 +162,5 @@ function Heybox({ draft, setDraft, toast }) {
 }
 
 /** 「内容解析」页（移植自 astrbot_plugin_multi_parser）：B站/微博/小红书/知乎/微信/贴吧等链接自动解析，支持发图文视频与AI会话注入 */
-/** 资讯池：主体内容由 rss 模块的 panel.js 自动 embed 到本 tab 下面，
- *  这里只放总开关（不开这个 tab 也要能进来打开它）。 */
 
 export { Heybox, HEYBOX_KIND }
