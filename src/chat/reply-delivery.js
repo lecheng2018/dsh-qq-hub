@@ -247,20 +247,38 @@ export function createReplyDelivery({
     }
     const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
+    // 逐条气泡如实记账（缺陷：轮次级谎报）。
+    // outbound 的发送方法成功时返回 OneBot 的原始回执、失败时返回 null（它自己已经把
+    // unknown/failed 写进台账了）。过去这里把返回值直接丢掉，于是「3 条里挂了 2 条」
+    // 和「3 条全成功」在调用方看来一模一样，turn 一律报 state:'sent' —— 这就是谎报。
+    // 现在统计 attempted / delivered，把差额作为 failedCount 交给调用方。
+    // 注意 pokeBack 没有回执（戳一戳接口不返回消息 id），只计入 attempted，不算失败。
+    let attempted = 0
+    let delivered = 0
+    let unconfirmed = 0
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       const selected = it.replyTo ? refs[it.replyTo] : (!explicit && i === firstSendable ? opts.autoReply : null)
       const replyId = selected?.mid
       const userId = selected && opts.autoReply?.uid === selected.uid ? selected.uid : undefined
       if (it.replyTo && !replyId) log.debug(`${chatId}：引用的编号 ${it.replyTo} 对不上，正常发`)
-      if (it.kind === 'text') await sendText(chatId, it.value, replyId, missedAt, userId)
+      // 每个分支都拿到返回值：真对象 = 网关确认；null = 没发出去（含「无内容可发」的空跳过，
+      // 那种情况本来就极少，按「未确认」计也更诚实）。
+      let receipt = null
+      let counted = true
+      if (it.kind === 'text') receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
       else if (it.kind === 'voice') {
-        if (cfg.voice?.enabled) await sendVoice(chatId, it.value, replyId, userId)
-        else await sendText(chatId, it.value, replyId, missedAt, userId)
-      } else if (it.kind === 'sticker') await sendSticker(chatId, it.value, replyId, userId)
-      else if (it.kind === 'poke') { if (!opts.simulate) await pokeBack(chatId) }
-      else if (it.kind === 'image') await sendImage(chatId, it.value, replyId, userId)
-      else if (it.kind === 'mixed') await sendMixed(chatId, it.parts, replyId, missedAt, userId)
+        if (cfg.voice?.enabled) receipt = await sendVoice(chatId, it.value, replyId, userId)
+        else receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
+      } else if (it.kind === 'sticker') receipt = await sendSticker(chatId, it.value, replyId, userId)
+      else if (it.kind === 'poke') { counted = false; if (!opts.simulate) await pokeBack(chatId) }
+      else if (it.kind === 'image') receipt = await sendImage(chatId, it.value, replyId, userId)
+      else if (it.kind === 'mixed') receipt = await sendMixed(chatId, it.parts, replyId, missedAt, userId)
+      if (counted && !opts.simulate) {
+        attempted += 1
+        if (receipt) delivered += 1
+        else unconfirmed += 1
+      }
       if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
     }
     if (opts.simulate) return items
@@ -273,9 +291,14 @@ export function createReplyDelivery({
     logChat?.(chatId, 'bot', said)
     // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
     if (!opts.own) interaction.queueAside(chatId, said)
+    // 有气泡没拿到回执就必须让调用方知道（不是致命错误：剩下的已经发出去了，
+    // 也不该重发——那会重复说话）。调用方据此把 turn 记成部分送达而不是 sent。
+    if (unconfirmed > 0) {
+      log.warn(`${chatId}：本轮 ${attempted} 条气泡里有 ${unconfirmed} 条没拿到网关回执（已发出的不回滚、不重发）`)
+    }
     onDelivered?.({ chatId, items, cfg })
     onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
-    return { missedAt }
+    return { missedAt, attempted, delivered, failedCount: unconfirmed }
   }
 
   return { deliver, deliverNow }
