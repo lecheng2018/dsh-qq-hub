@@ -1,5 +1,6 @@
 import { askModel } from '../core/llm.js'
 import { readChatLogSource } from '../chat/chat-log.js'
+import { consolidate as dreamConsolidateFacts } from './memory-dream.js'
 import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
@@ -29,7 +30,7 @@ export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
-  add, revise, supersede, scopeFromChatId,
+  add, revise, supersede, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
   reflectImpl, styleImpl,
@@ -235,6 +236,75 @@ export function createMemoryLearning({
     return styleImpl ? styleImpl(genSignal) : defaultStyle.learnSelfStyle(genSignal)
   }
 
+  /**
+   * 闲时梦境巩固（US-016 / 计划书 §八.1）：把已存事实去重、证伪、归纳成经验条目。
+   *
+   * 红线：**物理 Markdown 事实源只增不改**。被合并/证伪的条目只产出 supersede 墓碑，
+   * 由内存档案落盘为 invalidAt + supersededBy + supersededFrom，绝不删除行。
+   * 归纳出的经验条目写进「派生洞察」，与事实源分离（可回滚、可重建）。
+   *
+   * 非致命：梦境出问题只记日志，不影响每日提炼本身的成功率。
+   */
+  async function dreamConsolidate({ scopes = [], options = {} } = {}) {
+    try {
+      if (!isActive()) return { ok: false, message: '记忆模块未启用' }
+      // listFor 空 scopes 会 fail-closed 返回 []（直接空转）。调用方常常拿不到
+      // "当前有哪些作用域"，所以这里从实际存储里推导：显式传了 scopes 就只处理那些，
+      // 没传就覆盖全部非空作用域。
+      let want = Array.isArray(scopes) ? scopes.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+      if (!want.length) {
+        try {
+          const all = load()?.items || []
+          want = [...new Set(all.filter((m) => !m.invalidAt).map((m) => String(m.scope || '').trim()).filter(Boolean))]
+        } catch { want = [] }
+      }
+      const rows = typeof listFor === 'function' && want.length ? listFor(want, { limit: 2000 }) : []
+      const facts = (Array.isArray(rows) ? rows : [])
+        .filter((f) => f && f.id && f.text && !f.invalidAt)
+        .map((f) => ({
+          id: String(f.id),
+          text: String(f.text),
+          scope: String(f.scope || ''),
+          topic: String(f.topic || ''),
+          entity: String(f.entity || ''),
+          importance: Number(f.importance) || 0.5,
+          tags: Array.isArray(f.tags) ? f.tags : [],
+          pinned: f.pinned === true,
+        }))
+      if (!facts.length) return { ok: true, skipped: 'no-facts' }
+
+      const out = dreamConsolidateFacts(facts, options)
+      if (!out.ok) return out
+
+      // 墓碑落盘：只调 supersede，绝不 remove
+      let applied = 0
+      for (const tomb of (out.supersede || [])) {
+        try {
+          const merged = (out.facts || []).find((f) => String(f.id) === String(tomb.newId))
+          if (typeof supersede !== 'function' || !merged) continue
+          supersede({
+            oldId: String(tomb.oldId),
+            text: String(merged.text || ''),
+            about: String(merged.entity || ''),
+            tags: Array.isArray(merged.tags) ? merged.tags : [],
+            importance: Number(merged.importance) || 0.5,
+            entity: String(merged.entity || ''),
+            topic: String(merged.topic || ''),
+            source: 'dream',
+          })
+          applied += 1
+        } catch (error) {
+          log?.warn?.('梦境墓碑落盘失败（跳过该条，不删事实）：', error?.message || error)
+        }
+      }
+      log?.info?.(`梦境巩固：输入 ${facts.length} 条，合并 ${out.merges?.length || 0}，证伪 ${out.conflicts?.length || 0}，经验 ${out.experiences?.length || 0}，墓碑落地 ${applied}`)
+      return { ...out, applied }
+    } catch (error) {
+      log?.warn?.('梦境巩固失败（不影响每日提炼）：', error?.message || error)
+      return { ok: false, message: String(error?.message || error) }
+    }
+  }
+
   /** 每分钟调一次：一天几个整理时间点（默认 04:00 / 16:00），到点且这个点今天还没跑过就整理。 */
   async function tick() {
     if (!isActive() || !health().ok) return
@@ -259,6 +329,18 @@ export function createMemoryLearning({
       s2.runs = { ...(s2.runs || {}) }
       for (const t of due) s2.runs[t] = today
       save(s2)
+      // 提炼成功后接一次闲时梦境巩固（US-016）。失败不影响上面的成功记录：
+      // 梦境只是把已存事实去重/证伪/归纳，是可重建的派生层。
+      try {
+        // scope 从最近的聊天流水里推导（listFor 空 scopes 会 fail-closed 返回空，
+        // 传错数组等于空转）。r.scopes 由提炼器在提交时给出实际作用域。
+        const scopes = Array.isArray(r.scopes) && r.scopes.length
+          ? r.scopes
+          : [...new Set((r.committed || []).map((x) => String(x.scope || '')).filter(Boolean))]
+        if (scopes.length) await dreamConsolidate({ scopes })
+      } catch (error) {
+        log?.warn?.('梦境巩固异常（已忽略）：', error?.message || error)
+      }
     } else if (r.message !== '正在整理中') {
       const s2 = load()
       const retry = nextConsolidationRetry(s2.lastConsolidate?.retry, Date.now(), r.message)
@@ -300,6 +382,7 @@ export function createMemoryLearning({
       importCandidates,
       buildProfile, reflect, learnSelfStyle, consolidate, tick,
       extractionBatches, resolveExtractionBatch,
+      dreamConsolidate,
     },
     reload: () => { batchRecoveryError = '' },
   }
