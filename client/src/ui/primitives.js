@@ -22,19 +22,42 @@ function Row({ label, hint, children }) {
   )
 }
 
-function Card({ title, desc, icon, right, more, children, className }) {
+function Card({ title, desc, icon, right, more, collapse, children, className }) {
+  // collapse：默认收起的长卡片（标题行可点展开）。描述保留在收起态，帮助决定要不要展开。
+  const [open, setOpen] = useState(!collapse)
+  if (!collapse) {
+    return (
+      <div className={cx('ab-card', className)}>
+        {title ? (
+          <div className="ab-flex" style={{ marginBottom: desc || more ? 0 : 10 }}>
+            <h3>{icon || null}{title}</h3>
+            <div className="ab-spacer" />
+            {right || null}
+          </div>
+        ) : null}
+        {desc ? <p className="ab-desc">{desc}</p> : null}
+        {more ? <More>{more}</More> : null}
+        {children}
+      </div>
+    )
+  }
   return (
-    <div className={cx('ab-card', className)}>
-      {title ? (
-        <div className="ab-flex" style={{ marginBottom: desc || more ? 0 : 10 }}>
-          <h3>{icon || null}{title}</h3>
-          <div className="ab-spacer" />
-          {right || null}
-        </div>
-      ) : null}
+    <div className={cx('ab-card ab-fold', !open && 'closed', className)}>
+      <div
+        className="ab-fold-head" role="button" tabIndex={0} aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
+      >
+        <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
+        </span>
+        <h3>{icon || null}{title}</h3>
+        <div className="ab-spacer" />
+        {right || null}
+      </div>
       {desc ? <p className="ab-desc">{desc}</p> : null}
-      {more ? <More>{more}</More> : null}
-      {children}
+      {open ? children : null}
+      {open && more ? <More>{more}</More> : null}
     </div>
   )
 }
