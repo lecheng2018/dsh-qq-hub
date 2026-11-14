@@ -45,7 +45,7 @@ export const NEED_WORDS = Object.freeze({
   connect: ['主人', '陪', '寂寞', '孤独', '抱', '亲', '喜欢', '爱', '关系', '一起', '聊天', '晚安', '早安', '想你'],
   care: ['面试', '考试', '加班', '累', '生病', '医院', '压力', '难过', '开心', '吃饭', '睡觉', '工作', '休息'],
   share: ['好笑', '离谱', '可爱', '好看', '梗', '笑死', '分享', '给你看', '有趣', '震撼', '绝了'],
-  identity: ['ai', '机器人', '人机', '意识', '记忆', '自我', '是谁', '大肥鱼', '模型', '人格', '灵魂'],
+  identity: ['ai', '机器人', '人机', '意识', '记忆', '自我', '是谁', '模型', '人格', '灵魂'],
   create: ['写文', '画画', '二创', '剪辑', '编曲', '做视频', '手工', '创作', '拍'],
   consume: ['想吃', '想喝', '想买', '想去', '展览', '店', '旅行', '门票', '礼物', '好吃', '好喝'],
 });
@@ -69,7 +69,9 @@ export const POSITIVE_RE = /开心|喜欢|爱|可爱|好笑|笑死|厉害|治愈
 export const NEGATIVE_RE = /难过|累|焦虑|害怕|孤独|寂寞|羡慕|嫉妒|生气|烦|压力|遗憾|哭|担心|崩溃/;
 export const AROUSAL_RE = /笑死|炸|疯|激动|震撼|刺激|太|超|绝了|!!!|！！/;
 export const RELATION_RE = /爱|关系|人机|机器人|ai|寂寞|孤独|陪|想你|主人/;
-export const SELF_REF_RE = /大肥鱼|肥鱼|ai|人工智能|机器人|模型|人格|插件|harness|dsh/;
+// 只放「任何角色都通用」的自指词。具体角色名/唤醒词由调用方通过 roleName 传进来
+// （身份中枢解析，见 src/persona/identity-context.js）：引擎本体零 I/O，不查配置也不猜名字。
+export const SELF_REF_RE = /ai|人工智能|机器人|模型|人格|插件|harness|dsh/;
 
 /** 0~1 的驱动向量；坏值回默认，不抛。 */
 export function normalizeDrives(input) {
@@ -150,9 +152,16 @@ export function extractTopic(text, title = '') {
   return cleanTopic(clip(raw, 18));
 }
 
+/** 这段文本有没有提到她自己。roleName 可以是单个名字或名字数组（卡名 + 唤醒词）。 */
+export function mentionsRole(text, roleName = '') {
+  const raw = String(text ?? '');
+  const names = (Array.isArray(roleName) ? roleName : [roleName]).map((n) => String(n ?? '').trim()).filter(Boolean);
+  return names.some((n) => raw.includes(n));
+}
+
 export function isSelfReference(text, roleName = '') {
   const raw = String(text ?? '');
-  if (roleName && raw.includes(roleName)) return true;
+  if (mentionsRole(raw, roleName)) return true;
   return SELF_REF_RE.test(raw.toLowerCase());
 }
 
