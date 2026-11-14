@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { parseFeed } from '../../rss/feed.js'
 import { mergeIntoPool, poolStats, queryPool, readPool, writePool } from '../../rss/pool.js'
 import { fetchAll, checkFeedUrl } from '../../rss/fetch.js'
+import { characterName } from '../../persona/identity-context.js'
 
 const ID = 'rss'
 
@@ -96,7 +97,8 @@ export default {
       let picked = []
       try {
         const out = await api.ask({
-          system: `你是「大肥鱼」，一个混在 QQ 群里的 DeepSeek 猫娘（小鲸鱼）。现在帮自己从这批资讯里挑出今天最值得聊的 ${want} 条。\n`
+          // 名字和「混在 QQ 群里」的定位都由卡决定，别在这里写死某一张卡的设定。
+          system: `你是「${characterName('', api.config())}」，一个混在 QQ 群里、会跟群友随口聊天的角色。现在帮自己从这批资讯里挑出今天最值得聊的 ${want} 条。\n`
             + '标准：有信息量、不平淡、群友会想接话；纯广告/软文/标题党不要。\n'
             + `每条用你自己的口气写一句「她会在群里说的那种话」（15~30 字）：像群友随口一提，不要播报腔、不要「首先」「值得关注」「强烈推荐」、不要复述摘要、不复述数字。\n`
             + '只输出 JSON 数组，形如 [{"i":序号,"say":"那句话"}]，不要别的字。',
