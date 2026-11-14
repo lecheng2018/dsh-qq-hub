@@ -106,7 +106,10 @@ export function apply(ctx) {
       if (gatewayState.onebotState === 'connected') onebot.restart()
     }
     secrets()
-    if (bridge && before.bridge.dshTools !== cfg.bridge.dshTools) bridge.refresh()
+    // 联动工具的描述里带着角色名（bridge.builtinTools 走身份中枢 resolveCharacterIdentity），
+    // 换人设卡也得重新注册一次，否则别的 AI 看到的工具说明会一直停在启动时那张卡上。
+    const personaChanged = JSON.stringify(before.persona || null) !== JSON.stringify(cfg.persona || null)
+    if (bridge && (before.bridge.dshTools !== cfg.bridge.dshTools || personaChanged)) bridge.refresh()
     if (mods && (JSON.stringify(before.modules) !== JSON.stringify(cfg.modules) || before.safeMode !== cfg.safeMode)) mods.sync().catch(() => {})
     mods?.emit('config', cfg, before)
     return cfg
