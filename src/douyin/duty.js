@@ -311,7 +311,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       try {
         out = await think(`你在抖音刷到了这几个视频：\n\n${looked.map((x, i) => `【${i + 1}】${digestOf(x.v, x.comments)}`).join('\n\n')}\n\n` +
         `看完说说你的想法。对每个视频给一个对象：{"i":序号, "feeling":"一句你的真实感受", "like":true/false, "comment":"想在视频下发的评论（像普通观众，一两句、别打广告，不想评就空字符串）", ${atLeft ? '"at":true/false, ' : ''}"share":"想分享给${owner()}时说的话（不想分享就空字符串）", "remember":"值得记住的一件事（没有就空字符串）"}。` +
-        `remember 是写给你将来自己的：主人问起「你最近看啥了」、或聊到相关话题时会靠它想起。写「真正让我停下来注意的东西」——具体细节、戳到我的原话、以前不知道的事实、或和我已知事情的连接；别写成视频内容简介，也别只有情绪。没有就空字符串。` +
+        `remember 是写给你将来自己的：主人问起「你最近看啥了」、或聊到相关话题时会靠它想起。写「真正让我停下来注意的东西」——具体细节、戳到我的原话、以前不知道的事实、或和我已知事情的连接；别写成视频内容简介（那是摘要不是记忆），也别只有情绪（「太戳我了」戳的是什么？）。没有就空字符串，别硬凑。` +
         `这次最多点赞 ${likeLeft} 个、评论 ${commentLeft} 个、分享 ${shareLeft} 个。${atRule}${shareLeft ? (ownerAsked ? `${owner()}刚才专门让你找视频给他，这轮至少挑一个最合适的写 share，别全空着。` : shareHint()) : ''}只输出 JSON 数组。`)
       } catch (error) {
         if (!ownerAsked || !shareLeft) throw error
