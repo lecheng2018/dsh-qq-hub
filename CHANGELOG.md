@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### US-015 · 情感图谱补齐「信号喂料」与「温度消费」两端
+
+- **修复「图永远是空的」**：`src/chat/affective-graph.js` 497 行信任图谱此前全仓零调用方——`tone()` 没人调、`/affective/bump` 没有内部调用方，`/affective/state` 恒返回 `size:0 / tone:null`，等级永远停在「陌生人 cool」。现在两端都接上了。
+- **新增信号喂料（`src/chat/affective-signals.js`，纯函数零 I/O）**：从一轮对话里识别 `SIGNAL_WEIGHTS` 的六种信号（shared-joke / deep-talk / mutual-help / conflict / boundary-violation / explicit-confirmed），输出 `{kind, note, confidence}`；无命中返回 `[]`。
+- **保守策略（宁可漏判不可误判）**：每条信号有置信度下限（负面更严：conflict 0.75 / boundary-violation 0.8）；冲突/越界在场的这一轮**压制全部正向信号**（吵架里的一句"谢谢"不抵消损伤）；boundary-violation 必须同时具备"她已明确划界"与"对方继续推进"两条证据；打闹语境（"你有病吧开玩笑的"）不记冲突。
+- **自动喂料接线**：`modular-core.js` 在**回复投递之后**才结算信号（回复没发出去不记分），同 `chatKey` 同 `kind` 有 **10 分钟冷却**，刷屏不会把等级吹虚；模块关着 / bump 抛错 / 非法 chatKey 一律只记 debug，绝不影响回复投递。
+- **温度消费**：新增 `createAffectiveProvider`（priority 780，isolate）——等级 0 **不注入任何内容**（不打扰），等级 ≥1 注入一段简短姿态（形如「（你和这个人：熟络好友。说话温度可以暖一点，玩笑尺度 0.6。）」）；作用域只来自本轮 `chatKey`，群聊与私聊各自独立。
+- **面板可观测性**：`/affective/state` 新增 `levels`（0/1/2 各等级人数）、`signals`（按 kind 计数）、`recent`（最近 N 条信号，含 `note` 引用的原话）与 `explain`（为什么是这个等级）。
+- **验证**：全量 1976 通过 / 0 失败 / 2 跳过（基线 1912），lint 0 errors（197 warnings 与基线持平，均为既有问题）。
+
 ### 破坏性变更（1.4.0-beta.4：移除心情与翻唱）
 
 - **心情功能整体移除**：`/mood`（「心情」）命令、面板心情卡与心情判定全部下线；群插话、语音、表情的出现概率**不再随心情浮动，恒为配置值**——想让她更活跃，直接调「主动搭话」「语音」「表情包」页的概率。数据文件 `mood.json` 启动时自动改名留档为 `mood.json.removed`，不会丢。
