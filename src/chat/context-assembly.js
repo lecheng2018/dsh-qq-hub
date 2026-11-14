@@ -326,3 +326,98 @@ export function createTimeScaleProvider({ scope, resolveLastAt, now = Date.now, 
     provide,
   }
 }
+
+// ---------------------------------------------------------------------------
+// US-015 · 关系温度 provider（affective-graph → 上下文）
+//
+// 信任图谱算得出「这个人是熟络好友 / 挚友」，但此前 tone() 全仓零调用方：
+// 等级再高也不会影响一句话。本 provider 把 tone 变成一段**简短**的姿态提示，让
+// temperature / jokeScale 真的落到回复里。
+//
+// 硬规则（同线索 provider 的口径）：
+//   1. **等级 0（陌生人）不注入任何内容**——不打扰，也不给每条消息塞一句「你是陌生人」；
+//   2. 作用域只来自本次请求的 chatKey（perChat）：群聊读群、私聊读私聊，绝不跨域读；
+//      非法 ChatKey 一律不注入（fail-closed，不猜"就是本会话"）；
+//   3. 错误策略 isolate：toneFor 缺失 / 抛错 / 返回怪形状 → 跳过本 provider，其余上下文照常；
+//   4. 文案有长度上限，且不暴露原始分数（面板看解释，模型只看姿态）。
+// ---------------------------------------------------------------------------
+
+/** 关系温度 provider 的模块 ID。 */
+export const AFFECTIVE_PROVIDER_ID = 'affective-graph'
+
+/** 关系温度优先级：低于线索(800)/标尺(790)，高于普通记忆(100)——姿态是"语气"，不是"事实"。 */
+export const AFFECTIVE_PROVIDER_PRIORITY = 780
+
+/** temperature → 「说话可以多暖」的白话（未收录的取值不猜，一律按中性不注入）。 */
+const TEMPERATURE_HINTS = Object.freeze({
+  cool: '说话收敛一点，不必刻意热络',
+  warm: '说话温度可以暖一点',
+  intimate: '说话可以更放松更亲近',
+})
+
+/**
+ * tone → 一行注入文案。纯函数，便于单测与回放。
+ * 陌生人（level 0）/ 形状非法 / 温度不在词表 → 返回 ''（不注入）。
+ */
+export function formatAffectiveLine(tone) {
+  if (!tone || typeof tone !== 'object') return ''
+  const level = Number(tone.level)
+  if (!Number.isInteger(level) || level <= 0) return '' // 等级 0 = 陌生人：不打扰
+  const label = typeof tone.label === 'string' && tone.label.trim() ? tone.label.trim().slice(0, 12) : '熟人'
+  const hint = TEMPERATURE_HINTS[String(tone.temperature || '')]
+  if (!hint) return ''
+  const scale = Number(tone.jokeScale)
+  const joke = Number.isFinite(scale) && scale >= 0
+    ? `玩笑尺度 ${Math.round(Math.min(1, scale) * 10) / 10}`
+    : ''
+  const tail = joke ? `${hint}，${joke}。` : `${hint}。`
+  return `（你和这个人：${label}。${tail}）`
+}
+
+/**
+ * 建一个关系温度 provider（priority 780，isolate）。
+ *
+ * @param {object} o
+ * @param {(chatKey: string) => ({level?: number, label?: string, temperature?: string, jokeScale?: number}|null)} [o.resolveTone]
+ *   从**当前运行中**的图谱取姿态（注入而非 import：模块被关掉/替换时必须现取并优雅降级）。
+ *   缺省或返回 null → 不注入。
+ * @param {string} [o.scope] 绑定的 ChatKey；缺省 = 跟随每次请求（perChat 语义）。
+ * @param {boolean} [o.perChat] 按每次请求的 chatKey 现算作用域（宿主只有一个全局实例，必须开）。
+ */
+export function createAffectiveProvider({ resolveTone, scope, perChat = true } = {}) {
+  if (resolveTone !== undefined && typeof resolveTone !== 'function') {
+    throw new TypeError('createAffectiveProvider 的 resolveTone 必须是函数或留空')
+  }
+  if (scope !== undefined && scope !== 'global') parseChatKey(scope)
+
+  const scopeOf = (reqChatKey) => {
+    if (!perChat) return scope
+    if (!reqChatKey) return undefined
+    try {
+      const { kind, id } = parseChatKey(String(reqChatKey))
+      return `${kind}:${id}`
+    } catch { return undefined }
+  }
+
+  const provide = ({ chatKey } = {}) => {
+    const resolved = scopeOf(chatKey)
+    if (!resolved || resolved === 'global') return '' // 无 scope = 不注入
+    if (resolved !== chatKey) return '' // 装配层已按 scope 过滤，这里再校一遍
+    if (typeof resolveTone !== 'function') return ''
+    // 这里不 try/catch：抛错交给装配层的 isolate 记进 errors（可审计），
+    // 但绝不让它影响别的 provider —— 那正是 onError: 'isolate' 的契约。
+    const tone = resolveTone(resolved)
+    // toneFor 的失败形状（{ok:false}）也不注入：拿不到可信等级就别装熟。
+    if (tone && tone.ok === false) return ''
+    return formatAffectiveLine(tone)
+  }
+
+  return {
+    moduleId: AFFECTIVE_PROVIDER_ID,
+    priority: AFFECTIVE_PROVIDER_PRIORITY,
+    scope: scope ?? 'global',
+    cacheStable: false, // 等级会变，不能进稳定缓存段
+    onError: 'isolate',
+    provide,
+  }
+}

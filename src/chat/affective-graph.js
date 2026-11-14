@@ -8,11 +8,14 @@
 // 隐私铁律：scope 由 ChatKey 决定（`private:<uid>` / `group:<gid>`），
 // 私聊里攒下的等级与梗**绝对不可**被群 scope 读到——越界直接抛 AffectiveScopeError。
 //
-// ⚠️ 本模块尚未接主链（US-015 只交付纯算法层，避免跨故事混改）。
-// 生产接线点：`src/host/modular-core.js` 的回复姿态组装处（与 `group-atmosphere-gate` 同层，
-// 由 US-021 集成验证时统一核对）——那一处必须把**当前会话的 ChatKey** 作为 `viewer` 显式传入
-// （或在 createAffectiveGraph({ viewer }) 里声明图级 viewer），并消费 tone() 的
-// temperature / jokeScale 去调回复温度与玩笑尺度。接线完成前 tone() 没有任何调用方。
+// 生产接线（US-015 已完成，两端都在 `src/host/modular-core.js`）：
+// - **喂料**：一轮回复投递之后，`feedAffectiveSignals()` 把这一轮对话交给
+//   `src/chat/affective-signals.js`（纯函数）挖成六种可解释信号，再经模块导出的
+//   `feed()` 调 bump()——同 chatKey 同 kind 有 10 分钟冷却，失败只记 debug 不影响投递；
+// - **消费**：`createAffectiveProvider()`（`src/chat/context-assembly.js`，priority 780，isolate）
+//   在每轮装配时调模块的 `toneFor(chatKey)`，把 temperature / jokeScale 变成一段简短姿态提示
+//   注入上下文；等级 0（陌生人）**不注入任何内容**。
+// 两处都以**当前会话的 ChatKey** 作为 `viewer`/作用域显式传入，群聊与私聊各自独立。
 
 import { parseChatKey } from './chat-key.js'
 
