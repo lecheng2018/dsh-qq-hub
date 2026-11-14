@@ -1,7 +1,11 @@
 // US-012 接线验收：素材熔炉真的被构造、沉淀、匹配、落盘。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, statSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from '../src/purpose/engine/crucible.js'
+import { createPurpose } from '../src/purpose/module.js'
 
 const NOW = 1_700_000_000_000
 
@@ -86,4 +90,205 @@ test('降级兴趣匹配：通过 topic 关键词成功命中潜伏素材', () =
   const hits = c.match('private:10001', topicTerms, { now: NOW, limit: 5 })
   assert.equal(hits.length, 1)
   assert.equal(hits[0].fingerprint, 'fp-camp')
+})
+
+test('接线验证：未配置 interests 时，通过 materials 的 m.topic 降级成功匹配熔炉素材', () => {
+  const now = Date.now()
+  const c = createCrucible([
+    { source: 'group', title: '露营装备选购心得与避坑', summary: '推荐几款实用的帐篷和睡袋', fingerprint: 'fp-camp', capturedAt: now, tags: ['露营'] },
+    { source: 'group', title: '无人机高空拍摄技巧', summary: '飞行动作与构图', fingerprint: 'fp-drone', capturedAt: now, tags: ['无人机'] },
+  ])
+  const cfg = {
+    enabled: true,
+    ownerQQ: '10001',
+    speakUp: { enabled: false },
+    // ext.purpose.interests 未设置，触发降级到 materials.items 的 topic
+    ext: { purpose: { enabled: true } },
+  }
+  const hub = {
+    lastOwnerChatAt: 0,
+    lastBotToOwner: { at: 0, text: '' },
+    chatLogDays: () => [],
+    chatLogOf: () => [],
+  }
+  const p = createPurpose({
+    getConfig: () => cfg,
+    hub,
+    crucible: c,
+    memory: () => ({
+      recall: () => [
+        {
+          id: 'mem-1',
+          importance: 0.8,
+          at: now,
+          it: {
+            id: 'mem-1',
+            text: '主人周末打算去郊外露营',
+            topic: '露营',
+          },
+        },
+      ],
+    }),
+  })
+  const prev = p.preview()
+  const crucibleMaterials = prev.materials.filter((m) => m.kind === 'crucible')
+  assert.equal(crucibleMaterials.length, 1, '降级使用 m.topic 应该命中 1 条素材')
+  assert.equal(crucibleMaterials[0].fingerprint, 'fp-camp')
+  assert.ok(crucibleMaterials[0].text.includes('露营'), '命中的素材应包含露营')
+})
+
+test('接线验证：配置了 ext.purpose.interests 时，优先按配置的兴趣词匹配熔炉素材', () => {
+  const now = Date.now()
+  const c = createCrucible([
+    { source: 'group', title: '露营装备选购心得与避坑', summary: '推荐几款实用的帐篷和睡袋', fingerprint: 'fp-camp', capturedAt: now, tags: ['露营'] },
+    { source: 'group', title: '无人机高空拍摄技巧', summary: '飞行动作与构图', fingerprint: 'fp-drone', capturedAt: now, tags: ['无人机'] },
+  ])
+  const cfg = {
+    enabled: true,
+    ownerQQ: '10001',
+    speakUp: { enabled: false },
+    ext: { purpose: { enabled: true, interests: ['无人机'] } },
+  }
+  const hub = {
+    lastOwnerChatAt: 0,
+    lastBotToOwner: { at: 0, text: '' },
+    chatLogDays: () => [],
+    chatLogOf: () => [],
+  }
+  const p = createPurpose({
+    getConfig: () => cfg,
+    hub,
+    crucible: c,
+    memory: () => ({
+      recall: () => [
+        {
+          id: 'mem-1',
+          importance: 0.8,
+          at: now,
+          it: {
+            id: 'mem-1',
+            text: '主人周末打算去郊外露营',
+            topic: '露营',
+          },
+        },
+      ],
+    }),
+  })
+  const prev = p.preview()
+  const crucibleMaterials = prev.materials.filter((m) => m.kind === 'crucible')
+  assert.equal(crucibleMaterials.length, 1)
+  assert.equal(crucibleMaterials[0].fingerprint, 'fp-drone', '应优先使用配置的兴趣词命中无人机')
+})
+
+test('接线验证：关停（enabled: false）时 tick 不会触发 crucibleCycle 采集', async () => {
+  const cfg = {
+    enabled: false,
+    ownerQQ: '10001',
+    ext: { purpose: { enabled: false } },
+  }
+  const hub = {
+    lastOwnerChatAt: 0,
+    lastBotToOwner: { at: 0, text: '' },
+    chatLogDays: () => [],
+    chatLogOf: () => [],
+  }
+  const c = createCrucible([])
+  const p = createPurpose({
+    getConfig: () => cfg,
+    hub,
+    crucible: c,
+    log: { warn() {} },
+  })
+  await p.tick()
+  assert.equal(c.entries().length, 0, '关停时不应采集入池')
+})
+
+test('接线验证：素材来源映射基于 m.source，非 CRUCIBLE_SOURCES 降级为 group', async () => {
+  const now = Date.now()
+  const c = createCrucible([])
+  const cfg = {
+    enabled: true,
+    ownerQQ: '10001',
+    ext: { purpose: { enabled: true, minMaterials: 0 } },
+  }
+  const hub = {
+    lastOwnerChatAt: 0,
+    lastBotToOwner: { at: 0, text: '' },
+    chatLogDays: () => [],
+    chatLogOf: () => [],
+  }
+  const p = createPurpose({
+    getConfig: () => cfg,
+    hub,
+    crucible: c,
+    memory: () => ({
+      recall: () => [
+        {
+          id: 'mem-1',
+          importance: 0.8,
+          at: now,
+          it: {
+            id: 'mem-1',
+            text: '来自记忆的素材内容测试',
+            topic: '记忆',
+            source: 'memory', // 非 CRUCIBLE_SOURCES (rss/bili/group)
+          },
+        },
+      ],
+    }),
+  })
+  await p.tick()
+  const entries = c.entries()
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].source, 'group', 'memory 来源应降级为 group')
+})
+
+test('接线验证：crucibleCycle 脏检查生效，无数据变动时不刷盘', async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), 'crucible-dirty-'))
+  const origDir = process.env.AURABOT_DATA_DIR
+  process.env.AURABOT_DATA_DIR = tempDir
+  try {
+    const poolFile = join(tempDir, 'purpose', 'crucible-pool.json')
+    const now = Date.now()
+    const cfg = {
+      enabled: true,
+      ownerQQ: '10001',
+      ext: { purpose: { enabled: true, minMaterials: 0 } },
+    }
+    const hub = {
+      lastOwnerChatAt: 0,
+      lastBotToOwner: { at: 0, text: '' },
+      chatLogDays: () => [],
+      chatLogOf: () => [],
+    }
+    const p = createPurpose({
+      getConfig: () => cfg,
+      hub,
+      memory: () => ({
+        recall: () => [
+          {
+            id: 'mem-1',
+            importance: 0.8,
+            at: now,
+            it: { id: 'mem-1', text: '稳定测试记忆内容', topic: '测试' },
+          },
+        ],
+      }),
+    })
+    // 第一次 tick：有新素材写入，应触发刷盘
+    await p.tick()
+    assert.ok(existsSync(poolFile), '首次应刷盘生成 crucible-pool.json')
+    const firstStat = statSync(poolFile)
+    const firstMtime = firstStat.mtimeMs
+
+    // 等待 20ms 确保如果再次写入 mtime 会变
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    // 第二次 tick：素材未改变，dirty 为 false，不应刷盘
+    await p.tick()
+    const secondStat = statSync(poolFile)
+    assert.equal(secondStat.mtimeMs, firstMtime, '素材无变动时不应重复写盘')
+  } finally {
+    process.env.AURABOT_DATA_DIR = origDir
+  }
 })
