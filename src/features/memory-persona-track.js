@@ -41,11 +41,11 @@ export function normalizePersonaId(value) {
  */
 export function isSubjectiveEntry(entry) {
   if (!isRecord(entry)) return false
-  if (entry.personaId) return true
   const kind = String(entry.kind || '').trim()
+  if (kind === 'fact') return false // 客观事实轨永不加 personaId（即使标了 selfView 亦强制为客观事实）
   if (SUBJECTIVE_KIND_SET.has(kind)) return true
   if (entry.selfView === true || entry.selfView === 1 || entry.perspective === 'self') return true
-  if (!kind || kind === 'fact') return false
+  if (entry.personaId) return true
   return false
 }
 
