@@ -195,6 +195,10 @@ export function adaptThreadLedger(ledger) {
         return Array.isArray(rows) ? rows.slice() : []
       }
       const one = ledger.peek(chatKey, { includeExtended: true, includeDormant })
+      // 真账本（thread-ledger）的 peek 返回**数组**，早期注入的 fake 返回单条对象。
+      // 之前只按「单条」处理，会把数组再包一层变成 [[...]]，导致下游 threadIdOf 全部拿不到 id
+      // —— 表现就是 markers 解析出来了但 resolved 恒为空（接线等于没接）。
+      if (Array.isArray(one)) return one.slice()
       return one ? [one] : []
     },
     resolve(chatKey, id, meta) {
