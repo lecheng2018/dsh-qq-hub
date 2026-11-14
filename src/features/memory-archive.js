@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
 import { openMemoryFiles } from './memory-files.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
+import { visibleScopes } from './memory-scope.js'
+import { createVectorChannel, fuseRrf } from './memory-vector.js'
 
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
@@ -94,6 +96,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!migrated) throw new Error(`旧记忆库尚未确认迁移，请停写并执行 node scripts/migrate-memory-markdown.js "${dataDir()}"；若 memory/ 已存在，须先人工核对冲突，禁止自动覆盖。`)
   }
   const store = openMemoryFiles(dataDir('memory'), { log })
+  // 向量通道（1.4.4）：配置门控（memory.embeddings），默认关 —— 关着时 enabled() 恒 false，
+  // 一切调用短路，行为与 1.4.3 一致。挂了只影响语义召回的加成，绝不影响 BM25 主路径。
+  const vec = createVectorChannel({ memoryDir: dataDir('memory'), getConfig, log })
+  const vecStatusSafe = () => { try { return vec.status() } catch { return { enabled: false } } }
   const load = () => {
     if (status === 'closed') throw new Error('主记忆库已关闭')
     return store.load()
@@ -126,6 +132,21 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       }
     }
     store.save(s)
+    // 向量通道：整作用域对账入队（防抖 15s，只 embed 缺失/文本变更的条目）。失败只告警，不影响主路径。
+    try {
+      if (vec.enabled()) {
+        const byScope = new Map()
+        for (const m of s.items) {
+          if (m.invalidAt) continue
+          const sc = String(m.scope || '').trim()
+          if (!sc) continue
+          const list = byScope.get(sc) || []
+          list.push(m)
+          byScope.set(sc, list)
+        }
+        for (const [sc, list] of byScope) vec.queueScope(sc, list)
+      }
+    } catch (error) { log?.debug?.('向量入队失败：' + (error && error.message)) }
     pendingHitUpdates.clear()
     if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
     cache.clear()
@@ -1005,6 +1026,11 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const maxItems = Math.max(1, Math.min(20, Math.round(Number(memCfg.hintCount) || 8)))
     const maxChars = Math.max(120, Math.min(2000, Math.round(Number(memCfg.hintMaxChars) || 600)))
     const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
+    return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars })
+  }
+
+  /** 兜底 + 渲染（recallHint / recallHintFused 共用）。 */
+  function hintBody(hits, { chat, shown, backdrop, maxItems, maxChars }) {
     // 泛问兜底（P2-1）：「他最近怎么样」和记忆没有任何字词/概念重叠，recall 严格按相关性返回空，
     // 模型会完全失忆。注入场景退而求其次给这个作用域最近的重要记忆（明确检索/清空契约不受影响）。
     if (!hits.length) {
@@ -1030,6 +1056,61 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     }
     const body = lines.join('\n')
     return ['（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + body + '）', backdrop].filter(Boolean).join('\n')
+  }
+
+  /**
+   * recallHint 的向量融合版（1.4.4，异步）：BM25 主通道不变，语义通道加成；任何失败退回同步 recallHint。
+   * 只给 prompt 钩子（modules 层 filter 会 await 异步 handler）用 —— recall / recallHint 的同步契约
+   * 不动，测试和工具全兼容。铁律：融合只重排、不扩可见性 —— 向量候选取自 indexFor(scope) 的
+   * 活文档做白名单，再过 personaVisible；向量文件里的陈旧 id 一律不采纳。
+   */
+  async function recallHintFused(chat, queryText, prevText = '', { sessionId } = {}) {
+    const cfg = getConfig().memory
+    if (!cfg.enabled) return ''
+    const q = String(queryText || '').trim()
+    if (!q) return ''
+    if (!vec.enabled()) return recallHint(chat, queryText, prevText, { sessionId })
+    try {
+      const backdrop = groupBackdrop(chat, q)
+      const recent = recentEvents(24, 4, chat)
+      const shown = new Set(recent.map((m) => m.id))
+      // 说话人消解（P2-2），与 recallHint 同口径。
+      const about = chat && chat.kind === 'private' ? chat.userId
+        : chat && chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3)
+        : undefined
+      const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
+      const maxItems = Math.max(1, Math.min(20, Math.round(Number(cfg.hintCount) || 8)))
+      const maxChars = Math.max(120, Math.min(2000, Math.round(Number(cfg.hintMaxChars) || 600)))
+      const bm25 = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
+      const bm25Ids = new Set(bm25.map((h) => String(h.it.id)))
+      // 语义通道：每个可见作用域各自取候选，乘上与 BM25 同款的重要度×遗忘曲线权重后进 RRF。
+      const vecSeen = new Set()
+      const vecHits = []
+      const now = Date.now()
+      for (const scope of visibleScopes(chat)) {
+        const idx = indexFor(scope)
+        if (!idx || !idx.docs || !idx.docs.length) continue
+        const byId = new Map(idx.docs.map((d) => [String(d.it.id), d.it]))
+        let raw = []
+        try {
+          raw = await vec.searchScopes(q, [scope], { whitelistOf: () => new Set(byId.keys()), topK: maxItems * 2, timeoutMs: 2500 })
+        } catch { continue }
+        for (const c of raw) {
+          const id = String(c.id)
+          if (shown.has(id) || bm25Ids.has(id) || vecSeen.has(id)) continue
+          const it = byId.get(id)
+          if (!it || it.invalidAt || !personaVisible(it)) continue
+          vecSeen.add(id)
+          const w = (0.6 + 0.8 * (Number(it.importance) || 0.5)) * (0.55 + 0.45 * retention(it, now))
+          vecHits.push({ it, score: c.cos * w, why: ['（语义召回）'] })
+        }
+      }
+      vecHits.sort((a, b) => b.score - a.score)
+      const hits = fuseRrf(bm25, vecHits, { limit: maxItems })
+      return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars })
+    } catch (error) {
+      return recallHint(chat, queryText, prevText, { sessionId }) // 任何意外：退回同步主路径
+    }
   }
 
   /** 这段聊天相关的旧记忆：关于在场的人的 + 和内容相关的，最多 15 条，给模型比对用。 */
@@ -1145,6 +1226,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
   return {
     recallHint,
+    recallHintFused,
+    vectorEnabled: () => vec.enabled(),
+    vectorStatus: vecStatusSafe,
+    vectorBackfill: (items) => vec.backfill(items),
     scopeOfChat, scopeVisible, registerScopeOverride,
     add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
@@ -1194,13 +1279,14 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     stats: () => {
       const items = load().items
       const live = items.filter((m) => !m.invalidAt)
-      return { count: live.length, auto: live.filter((m) => m.source === 'auto').length, events: live.filter((m) => m.source === 'event').length, outdated: items.length - live.length }
+      return { count: live.length, auto: live.filter((m) => m.source === 'auto').length, events: live.filter((m) => m.source === 'event').length, outdated: items.length - live.length, vector: vecStatusSafe() }
     },
     /** 关闭存储层与生命周期管理（B-01 规范，同步且幂等）。 */
     dispose: () => {
       if (status === 'closed') return
       try { flushHits() } catch (error) {}
       if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
+      try { vec.dispose() } catch {}
       status = 'closed'
       activeGeneration++
       for (const ac of abortControllers) {
