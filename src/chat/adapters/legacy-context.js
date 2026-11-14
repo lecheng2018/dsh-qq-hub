@@ -37,8 +37,12 @@ export function createLegacyContextAdapter({ mods, priority = 100 } = {}) {
   }
 }
 
-/** 从 ChatKey 派生 legacy 兼容的 chat 视图（kind/chatId/userId/groupId）。 */
-function chatViewFromKey(chatKey) {
+/**
+ * 从 ChatKey 派生 legacy 兼容的 chat 视图（kind/chatId/userId/groupId）。
+ * 导出给 persona/identity-context.js 复用（Phase 0a）：身份解析必须和 legacy 上下文看到同一份视图，
+ * 否则「模块认为这是私聊、身份中枢认为是 system」这种劈叉会让后台换成全局人设。
+ */
+export function chatViewFromKey(chatKey) {
   const key = String(chatKey || '')
   if (key.startsWith('group:')) return { kind: 'group', chatId: key, groupId: key.slice(6), userId: '' }
   if (key.startsWith('private:')) return { kind: 'private', chatId: key, groupId: '', userId: key.slice(8) }

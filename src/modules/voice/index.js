@@ -3,6 +3,7 @@
 // 导出 speak(text) → { file, engine }：聊天中枢发语音时找它。替换这个模块就能换成任何你想要的念法。
 
 import { existsSync, readFileSync } from 'node:fs'
+import { characterName } from '../../persona/identity-context.js'
 import { textToSpeech, edgeInstalled, installEdge } from '../../voice/tts.js'
 import { toMono16k } from '../../voice/wav.js'
 import { fileOf } from '../../local/local.js'
@@ -30,7 +31,7 @@ export default {
 
     api.route('/voice/test', async (req) => {
       const b = await http.body(req)
-      const { file, engine } = await speak(String(b.text || '你好呀，我是大肥鱼'))
+      const { file, engine } = await speak(String(b.text || `你好呀，我是${characterName('', api.config())}`))
       const buf = readFileSync(file)
       return { ok: true, engine, mime: file.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg', data: buf.toString('base64') }
     })
