@@ -17,12 +17,18 @@ import {
   closeSync,
   fsyncSync,
   unlinkSync,
+  chmodSync,
 } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { renameWithRetry, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { parseMarkdownArchive, serializeMarkdownArchive, MEMORY_FORMAT } from './memory-markdown.js'
 
 export const MAX_SCOPE_FILE_BYTES = 2 * 1024 * 1024 // 2 MiB 单文件硬守卫
+
+/** 作用域对应的向量文件路径（1.4.4 向量通道）：与该作用域的 memory.md 同目录。 */
+export function scopeToVecFilePath(scope) {
+  return join(dirname(scopeToFilePath(scope)), 'vectors.bin')
+}
 
 /**
  * 将作用域映射为合法安全的相对文件路径
@@ -75,6 +81,9 @@ export function writeTextAtomic(filePath, text) {
   mkdirSync(dirname(filePath), { recursive: true })
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
   const fd = openSync(tmp, 'w', 0o644)
+  // 同 store.js writeJson：fnOS 部署环境 umask 077 会把 mode 参数砍成 0o600，open 的 mode
+  // 只是上限。没有这一步，memory.md 每次落盘都重新变成 Harness 私有，面板授权第二天失效。
+  try { chmodSync(tmp, 0o644) } catch {}
   try {
     writeFileSync(fd, text, 'utf8')
     fsyncSync(fd)
