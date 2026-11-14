@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { commandList } from '../../chat/commands.js'
+import { characterName } from '../../persona/identity-context.js'
 import { createUpdateChecker, changelogSection } from '../../core/update.js'
 
 export function registerGatewayRoutes({
@@ -53,7 +54,7 @@ export function registerGatewayRoutes({
     if (body.existingConnection && !(cfg.enabled && gatewayState.onebotState === 'connected' && gatewayState.loginOk)) return { ok: false, message: 'QQ 网关还没通过机器人号核对，请先连接并核对后再进入面板' }
     setConfig({ ...getConfig(), setupDone: true })
     log.info('首次使用向导完成')
-    return { ...(await overview()), message: '设置完成，大肥鱼可以上线啦' }
+    return { ...(await overview()), message: `设置完成，${characterName('', cfg)}可以上线啦` }
   })
   route('/snowluma/processes', async () => {
     try { return { ok: true, list: await snowluma.processes() } } catch (error) { return { ok: false, message: error.message, list: [] } }

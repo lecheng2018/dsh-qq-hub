@@ -32,6 +32,22 @@ export function topicRelevance(recentTexts, interests, memoryScore = 0) {
   return Math.min(1, hits * 0.3 + Math.max(0, Math.min(1, memoryScore)) * 0.5)
 }
 
+/**
+ * 把「她自己卡上的名字」并进唤醒词。
+ *
+ * 换卡后群里喊新名字也该叫得动，否则会出现「身份中枢认小鲸、群策略只认大肥鱼」的劈叉：
+ * 她听了也不会应。只在真的读到卡时才加——没卡时 name 是兜底名，加进去会误触发插话。
+ * @param {object} policy 已经合并过单群覆盖的策略
+ * @param {{name?:string, hasCard?:boolean}} identity 身份中枢的解析结果
+ */
+export function withRoleWakeWords(policy, identity) {
+  const pol = policy || DEFAULT_GROUP_POLICY
+  const name = String(identity?.name || '').trim()
+  const base = Array.isArray(pol.wakeWords) ? pol.wakeWords : []
+  if (!identity?.hasCard || !name || base.includes(name)) return pol
+  return { ...pol, wakeWords: [name, ...base] }
+}
+
 /** 合并全局策略和单群覆盖。 */
 export function policyFor(global, overrides, groupId) {
   const g = { ...DEFAULT_GROUP_POLICY, ...(global || {}) }
