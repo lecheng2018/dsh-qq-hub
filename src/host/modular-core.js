@@ -304,6 +304,9 @@ export function createModularCore({
       policy: pol,
       relevance: topicRelevance(recentTexts, pol.interests, memScore),
       engagedUntil: groups.engagedUntil(gid),
+      // engaged 连聊预算的两路输入：已接条数 + 入场时刻（group-policy 封顶）
+      engagedReplies: groups.engagedReplies(gid),
+      engagedSince: groups.engagedSince(gid),
       mentioned: !!mentioned,
       repliedToBot: !!repliedToBot,
       fromOwner: isOwner(cfg, userId),
@@ -1201,6 +1204,7 @@ export function createModularCore({
       try {
         const delivered = await replyDelivery.deliver(turn.chatKey, reply, {
           own: true,
+          topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
           userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
           wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
           autoReply,
