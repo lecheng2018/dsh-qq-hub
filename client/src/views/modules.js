@@ -176,7 +176,7 @@ class PanelBoundary extends React.Component {
   static getDerivedStateFromError(error) { return { error } }
   render() { return this.state.error ? h('div', { className: 'ab-note err' }, '这个模块的面板出错了：' + String((this.state.error && this.state.error.message) || this.state.error)) : this.props.children }
 }
-// draft / setDraft：模块 panel 想直接改整份配置草稿时用（比如资讯池的订阅列表）。
+// draft / setDraft：模块 panel 想直接改整份配置草稿时用（比如订阅类模块的源列表）。
 // 只加 props 不改行为：原来只用 settings/draftSettings 的模块完全不受影响。
 function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload, draft, setDraft }) {
   const [Comp, setComp] = useState(null)

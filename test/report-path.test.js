@@ -1,7 +1,7 @@
 // 报告路径（2026-11-05，1.3.48）：「日常聊天活人感、查数据整条排版」是两种输出，
 // 判定锚「这一轮在干什么」，不再锚「输出长什么样」。三层信号：
 //   第一层 <report> 标记（主信号）：模型显式声明，parseReply 识别后只洗 Markdown 不切段；
-//   第二层 工具事件兜底：这一轮调过内容型工具（rss_read、bili_watch…）也按报告处理；
+//   第二层 工具事件兜底：这一轮调过内容型工具（bili_watch…）也按报告处理；
 //   第三层 structuredReport 保留：没标记没工具、但输出确实长得像报表，照样整段发。
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -44,7 +44,7 @@ test('第二层接线：当前核心监听 tool/call，turn/end 清掉，记忆�
   assert.match(core, /ev\?\.type === 'tool\/call'/)
   assert.match(core, /reportTurns\.set\(/)
   assert.match(core, /reportTurns\.delete\(/, '只管一轮')
-  assert.match(core, /\/\^\(rss_read\|bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
+  assert.match(core, /\/\^\(bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
   assert.ok(!/\|recall_memory\)/.test(core), '记忆工具不在内容清单里')
   const delivery = src('src/chat/reply-delivery.js')
   assert.match(delivery, /opts\.forceReport \|\| reportTurns\.get\(chatId\)/, '第三处：deliver 的规则注入')
