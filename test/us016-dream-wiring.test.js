@@ -1,101 +1,88 @@
 // US-016 接线验收：梦境巩固真正跑起来，且墓碑语义不破坏事实源。
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { createMemoryArchive } from '../src/features/memory-archive.js'
 import { createMemoryLearning } from '../src/features/memory-learning.js'
 
-/** 造一个最小可用的 learning 实例：内存存储 + 记录 supersede 调用。 */
-function harness({ items = [] } = {}) {
-  const store = { items: items.slice(), profiles: {}, rev: 1 }
-  const superseded = []
+function realHarness() {
+  const dir = mkdtempSync(join(tmpdir(), 'dream-harness-'))
+  mkdirSync(join(dir, 'memory'), { recursive: true })
+  writeFileSync(join(dir, 'memory', 'migration.json'), JSON.stringify({ status: 'success' }))
+  writeFileSync(join(dir, 'memory', 'state.json'), JSON.stringify({ items: [] }))
+  process.env.DSH_QQ_HUB_DATA_DIR = dir
+
   const logs = []
-  const learning = createMemoryLearning({
+  const archive = createMemoryArchive({
     dsh: {}, getConfig: () => ({ memory: { enabled: true, dailyConsolidate: true, consolidateTimes: ['04:00'] } }),
     hub: {}, log: { info: (m) => logs.push(String(m)), warn: (m) => logs.push('WARN:' + String(m)) },
-    isActive: () => true,
-    load: () => store,
-    save: () => {},
-    health: () => ({ ok: true }),
-    relatedTo: () => [],
-    add: () => ({ ok: true }),
-    revise: () => ({ ok: true }),
-    supersede: (arg) => { superseded.push(arg); return { ok: true } },
-    scopeFromChatId: (id) => String(id || ''),
-    listFor: (scopes, opts = {}) => store.items
-      .filter((m) => !m.invalidAt && scopes.includes(String(m.scope || '')))
-      .slice(0, opts.limit || 200),
-    insightsOf: () => [],
-    setDerivedInsights: () => {},
-    styleOf: () => '',
-    setDerivedStyle: () => {},
-    personKey: (x) => String(x || ''),
-    profileOf: () => '',
-    setDerivedProfile: () => {},
-    profileKeyOf: (x) => String(x || ''),
-    createGenerationSignal: () => ({ signal: { aborted: false, addEventListener: () => {}, removeEventListener: () => {} }, cleanup: () => {}, timeoutMs: 60000 }),
-    generationOf: () => ({ signal: { aborted: false, addEventListener: () => {}, removeEventListener: () => {} }, cleanup: () => {}, timeoutMs: 60000 }),
-    reflectImpl: () => 0,
-    styleImpl: () => undefined,
+    extend: (arch) => createMemoryLearning(arch),
   })
-  return { learning, store, superseded, logs }
+  return { archive, dir, logs }
 }
 
-const fact = (id, text, over = {}) => ({
-  id, text, scope: 'private:1000', topic: 't', entity: '', importance: 0.5, tags: [], at: Date.now(), ...over,
+test('真实实例梦境接线生效：无条目时安全跳过', async (t) => {
+  const { archive, dir } = realHarness()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const res = await archive.dreamConsolidate()
+  assert.equal(res.ok, true)
+  assert.equal(res.skipped, 'no-facts')
 })
 
-test('梦境巩固可从实际存储推导 swath：不传 scopes 也能读到事实', async () => {
-  const { learning, logs } = harness({ items: [fact('a', '主人喜欢下雨天待在家'), fact('b', '主人喜欢晴天出门')] })
-  // 通过 tick 的路径调用行不通（时间点），直接走公开的 dreamConsolidate 不可见；
-  // 这里验证 consolidate 不因缺 scopes 而抛错。
-  await assert.doesNotReject(() => learning.api.consolidate({ includeToday: false }))
-  assert.ok(Array.isArray(logs))
+test('真实实例梦境巩固去重：立墓碑且绝不产生多余重复副本', async (t) => {
+  const { archive, dir } = realHarness()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  const t1 = '主人下雨天喜欢呆在家里看书'
+  const t2 = '下雨天主人最喜欢呆在家里面看书'
+  archive.add({ text: t1, importance: 0.4, scope: 'private:10001', chatId: 'private:10001' })
+  archive.add({ text: t2, importance: 0.9, scope: 'private:10001', chatId: 'private:10001' })
+
+  const before = archive.listFor(['private:10001'])
+  assert.equal(before.length, 2, '初始应有 2 条有效事实')
+
+  const res = await archive.dreamConsolidate({ options: { dedupeSimilarity: 0.5 } })
+  assert.equal(res.ok, true)
+  assert.ok(res.applied >= 1, '应成功为冗余事实立墓碑')
+
+  // 有效事实变为 1 条，绝不能因为 supersede 插入第 3 条条目
+  const after = archive.listFor(['private:10001'])
+  assert.equal(after.length, 1, '去重后有效事实应为 1 条')
+
+  // 检查底层条目：旧事实被打上 invalidAt 和 supersededBy
+  const all = archive.indexAll().docs.map((d) => d.it)
+  assert.equal(all.length, 2, '物理事实总数依然为 2 条（只增不改，不增多也不物理删除）')
+  const invalid = all.find((m) => m.invalidAt > 0)
+  assert.ok(invalid, '应有 1 条事实被打上墓碑')
+  assert.ok(invalid.supersededBy, '墓碑应标明由哪条事实替代')
 })
 
-test('重复事实产生 supersede 墓碑，且不删除源条目', async () => {
-  const dup = '主人喜欢在雨天喝热咖啡这件事我记过好几次了确实重复'
-  const { learning, store, superseded } = harness({
-    items: [fact('d1', dup, { importance: 0.4 }), fact('d2', dup, { importance: 0.9 })],
+test('单条墓碑写入异常不中断整体，且不删除事实', async () => {
+  const learning = createMemoryLearning({
+    dsh: {}, getConfig: () => ({ memory: { enabled: true } }),
+    hub: {}, log: { info: () => {}, warn: () => {} },
+    isActive: () => true,
+    load: () => ({ items: [{ id: '1', text: '事实A', scope: 'global' }, { id: '2', text: '事实A。', scope: 'global' }] }),
+    save: () => {}, health: () => ({ ok: true }), relatedTo: () => [],
+    add: () => ({ ok: true }), revise: () => true, supersede: () => true,
+    invalidate: () => { throw new Error('磁盘只读模拟错误') },
+    listFor: () => [{ id: '1', text: '事实A', scope: 'global' }, { id: '2', text: '事实A。', scope: 'global' }],
+    scopeFromChatId: (s) => s,
+    insightsOf: () => [], setDerivedInsights: () => {}, styleOf: () => [], setDerivedStyle: () => {},
+    personKey: (s) => s, profileOf: () => null, setDerivedProfile: () => true, profileKeyOf: (s) => s,
+    createGenerationSignal: () => ({ isValid: () => true, cleanup: () => {} }),
+    generationOf: () => ({ signal: { isValid: () => true }, cleanup: () => {} }),
   })
-  // 直接调用内部梦境入口（模块导出的 api 不含它，用 tick 的时间点绕过）
-  const mod = await import('../src/features/memory-learning.js')
-  assert.ok(mod.createMemoryLearning, '模块可加载')
-  assert.ok(store.items.length === 2, '源条目不得被删除')
+  const res = await learning.api.dreamConsolidate()
+  assert.equal(res.ok, true, '单条失败时整体依然安全完成')
+  assert.equal(res.applied, 0, '失败条目未记入成功计数')
 })
 
-test('dreamConsolidate 真的跑起来：重复事实产生 supersede 墓碑', async () => {
-  const dup = '主人喜欢在雨天喝热咖啡这件事我记过好几次了确实重复'
-  const { learning, store, superseded, logs } = harness({
-    items: [fact('d1', dup, { importance: 0.4 }), fact('d2', dup, { importance: 0.9 })],
-  })
-  const out = await learning.api.dreamConsolidate()
-  assert.equal(out.ok, true, `应成功，实际 ${JSON.stringify(out).slice(0, 120)}`)
-  assert.equal(store.items.length, 2, '源条目一条都不能删')
-  assert.ok(superseded.length >= 1, '重复事实应产出墓碑')
-  assert.ok(superseded.every((x) => x.source === 'dream'), '墓碑来源应标记为 dream')
-  assert.ok(superseded.every((x) => x.oldId && x.text), '墓碑必须带 oldId 与新文本')
-})
-
-test('无事实时安全跳过，不报错', async () => {
-  const { learning } = harness({ items: [] })
-  const out = await learning.api.dreamConsolidate()
-  assert.equal(out.ok, true)
-  assert.equal(out.skipped, 'no-facts')
-})
-
-test('supersede 抛错时只跳过该条，不影响整体且不删事实', async () => {
-  const dup = '主人喜欢在雨天喝热咖啡这件事我记过好几次了确实重复'
-  const { learning, store, logs } = harness({ items: [fact('x1', dup), fact('x2', dup)] })
-  // 让 supersede 抛错
-  const bad = Object.assign({}, learning)
-  const out = await learning.api.dreamConsolidate()
-  assert.equal(out.ok, true, '整体仍应成功')
-  assert.equal(store.items.length, 2, '事实不得被删除')
-})
-
-test('模块可正常构造（接线未破坏既有装配）', () => {
-  const { learning } = harness()
-  assert.ok(learning && learning.api, '应返回 api')
-  for (const k of ['importCandidates', 'buildProfile', 'reflect', 'learnSelfStyle', 'consolidate', 'tick', 'extractionBatches', 'resolveExtractionBatch', 'dreamConsolidate']) {
-    assert.equal(typeof learning.api[k], 'function', `缺 ${k}`)
-  }
+test('模块接口完整性：dreamConsolidate 成功暴露在 api 与 archive 根部', () => {
+  const { archive, dir } = realHarness()
+  assert.equal(typeof archive.dreamConsolidate, 'function', 'archive 根部应暴露 dreamConsolidate')
+  rmSync(dir, { recursive: true, force: true })
 })

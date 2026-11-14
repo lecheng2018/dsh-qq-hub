@@ -963,7 +963,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     dsh, getConfig, hub, chatLog, log, personaText,
     isActive: () => status === 'active', createGenerationSignal, generationOf,
     load, save, health: () => store.health(), relatedTo,
-    add, revise, supersede, scopeFromChatId,
+    add, revise, supersede, invalidate, listFor, scopeFromChatId,
     profileOf, setProfile, setDerivedProfile, profileKeyOf,
     insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, setDerivedStyle, personKey,
   })
@@ -971,7 +971,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   return {
     recallHint,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, supersede, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
     profiles: () => {
       const s = load()
       return Object.entries(s.profiles || {}).map(([key, p]) => {
