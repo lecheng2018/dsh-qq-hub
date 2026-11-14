@@ -1647,6 +1647,10 @@ export function createModularCore({
 
   const services = {
     deliver: (chatId, text, opts) => replyDelivery.deliver(chatId, text, opts),
+    // 道别后的主动开口静默期（conversation-closure 的 CLOSED + muteLockMs）。
+    // 只锁主动搭话，不锁入站回复 —— speakup / purpose 据此少打扰一次。
+    proactiveMuteState: (chatId, now) => replyDelivery.proactiveMuteState(chatId, now),
+    isProactivelyMuted: (chatId, now) => replyDelivery.isProactivelyMuted(chatId, now),
     ...outbound,
     ...outboundFiles,
     pushToSession: (chat, content) => runPromptTurn(chat.chatId, (content || []).map((block) => block.text || '').join('\n')),
