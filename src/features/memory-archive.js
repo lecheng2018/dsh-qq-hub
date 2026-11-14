@@ -10,6 +10,7 @@
 // - 过时不删（Graphiti）：旧记忆标成「已过时」，不再被想起，但留着历史、面板里能恢复。
 // - 常驻的人物小档案（Letta 的 memory block）：每个人一小段印象，聊天时一直带着，不靠关键词碰运气。
 
+import { withPersonaId, isEntryVisibleToPersona, DEFAULT_PERSONA_ID } from './memory-persona-track.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
@@ -20,6 +21,11 @@ import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf,
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
 export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend }) {
+  /** 当前激活的人设 id（主观条目只对同人设可见；客观事实恒可见）。 */
+  const activePersonaId = () => String(getConfig()?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
+  /** 读取侧隔离：主观自传按人设过滤，客观事实跨人设共享。 */
+  const personaVisible = (item) => isEntryVisibleToPersona(item, activePersonaId())
+
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
   /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
@@ -226,7 +232,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return false
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '' }) {
+  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '', personaId = '', kind = '', selfView = false, perspective = '' }) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
@@ -267,6 +273,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
+    const isSubjective = Boolean(
+      (kind && kind !== 'fact') ||
+      selfView ||
+      perspective === 'self' ||
+      personaId
+    )
     const item = {
       id: randomUUID().slice(0, 8),
       text: t,
@@ -287,8 +299,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       topic: String(topic || '').slice(0, 20),
       evidence: String(evidence || '').slice(0, 200),
       title: String(title || '').slice(0, 50),
+      kind: kind ? String(kind) : isSubjective ? 'insight' : 'fact',
+      selfView: Boolean(selfView || isSubjective),
+      perspective: String(perspective || ''),
     }
-    s.items.push(item)
+    // US-017 · 双轨记忆：主观条目（insight/style/profile）打上当前人设，客观事实剥除。
+    // 未标注的历史条目按默认人设处理（只读共享不丢弃）。
+    const activePersona = String(personaId || '').trim()
+      || String(getConfig()?.persona?.current || '').trim()
+      || DEFAULT_PERSONA_ID
+    s.items.push(withPersonaId(item, activePersona))
     evictIfNeeded(s, finalScope)
     staleProfilesIn(s, String(about || ''), finalScope)
     s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
@@ -387,7 +407,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!chat) return []
     return load().items
       .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since)
-      .filter((m) => scopeVisible(m.scope, chat))
+      .filter((m) => scopeVisible(m.scope, chat) && personaVisible(m))
       .sort((a, b) => b.at - a.at)
       .slice(0, limit)
   }
@@ -397,7 +417,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function listFor(scopes, { limit = 200 } = {}) {
     const want = [...(Array.isArray(scopes) ? scopes : scopes ? [scopes] : [])].map((x) => String(x ?? '').trim()).filter(Boolean)
     if (!want.length) return []
-    const items = load().items.filter((m) => !m.invalidAt && want.includes(String(m.scope || '')))
+    const items = load().items.filter((m) => !m.invalidAt && want.includes(String(m.scope || '')) && personaVisible(m))
     return items.sort((a, b) => (Number(b.importance) || 0) - (Number(a.importance) || 0) || b.at - a.at).slice(0, limit)
   }
 
@@ -534,8 +554,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     // 后台任务（没有 chat 概念）必须显式传 scopes 数组声明可见域（如 ['global','private:10000001']），
     // 否则一律拒绝（fail-closed）——防止后台路径拿到全库。
     const inScopes = (scope) => Array.isArray(scopes) && scopes.includes(String(scope))
-    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat))
-      : Array.isArray(scopes) ? list.filter((h) => inScopes(h.it.scope))
+    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat) && personaVisible(h.it))
+      : Array.isArray(scopes) ? list.filter((h) => inScopes(h.it.scope) && personaVisible(h.it))
       : [])
     // 索引本身就按作用域建：传了 chat 只检索它看得见的条目（双保险，scoped 再滤一次）
     // scopes 数组模式：逐个作用域取索引合并检索（候选仍然只有声明过的域，不会碰到别的私聊）
