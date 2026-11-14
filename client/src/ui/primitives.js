@@ -116,12 +116,14 @@ function ListInput({ value, onChange, placeholder, numbers, style }) {
 /** 百分数行：输入过程保留原始字符串（打 0、0.、065 都不会被强行回写），
  * 失焦时才解析写回。原来的受控 number input 每敲一键就 Number() 一次：
  * 敲「0.」被归一成 0、光标跳到末尾，再敲就变成 065；清空时 Number('')=0
- * 和残留的旧值打架，保存出来是 100。清空 + 失焦 = 稳定写 0。 */
+ * 和残留的旧值打架，保存出来是 100。清空 + 失焦 = 稳定写 0。
+ * 框里就是百分数（0~100），别把 ≤1 的输入当 0~1 小数：旧写法里「1」既像
+ * 1% 又像 1.0=100%，一律按小数解释后敲 1 直接变 100。按 0.01 设概率请敲 1。 */
 function PercentRow({ label, value, fallback, write, remove }) {
   const shown = () => Math.round((Number(value !== undefined && value !== null && value !== '' ? value : (fallback ?? 0)) || 0) * 100)
   const [text, setText] = useState(String(shown()))
   useEffect(() => { const s = String(shown()); if (parsePct(text) !== shown()) setText(s) }, [shown()])
-  const parsePct = (t) => { const n = Number(String(t).trim()); if (!Number.isFinite(n) || n < 0) return 0; const v = n > 1 ? n / 100 : n; return Math.round(Math.min(v, 1) * 100) }
+  const parsePct = (t) => { const n = Number(String(t).trim()); if (!Number.isFinite(n) || n < 0) return 0; return Math.round(Math.min(n, 100)) }
   const commit = () => {
     const p = parsePct(text)
     setText(String(p))
