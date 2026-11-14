@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-success)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-当前版本：**v1.3.65**。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：**v1.4.3-test.20261115.1**（预发布）。版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 能做什么
 
@@ -15,6 +15,7 @@
 - **人格与记忆**：可更换人格；按聊天隔离记忆，支持长期记忆和主动搭话。
 - **远程协助**：主人可在 QQ 私聊中使用 DSH 的模型和已授权工具，接收提问卡片并审批高风险操作。
 - **定时与主动任务**：支持提醒、定时分享、QQ 空间日记和动态互动。
+- **网页管理面板**：桌面与手机自适应——设置向导、连接诊断、权限白名单、人格、模型、群聊策略、扩展管理与日志；移动端用底部导航，触屏操作全面适配。
 - **可选内容模块**：B 站、抖音、小黑盒、RSS、贴吧阅读、生图等可按需启停。
 - **自行扩展**：可在数据目录添加模块，无需修改插件源码；支持热重载和面板模拟测试。
 
