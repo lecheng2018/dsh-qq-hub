@@ -87,3 +87,21 @@ test('未提供 userText 时不影响投递（不崩）', async () => {
   await assert.doesNotReject(() => d.deliver('private:1000', '随便说点什么'))
   assert.ok(sent.length >= 1)
 })
+
+test('群聊问句豁免：yielding/closed 且 allowQuestion 为 false 时末尾问号保持原样', async () => {
+  const { d, sent } = harness({ chatId: 'group:558' })
+  // 1. 道别触发 CLOSED 状态（allowQuestion: false）
+  await d.deliver('group:558', '今晚还玩吗？', { userText: '晚安' })
+  // 2. 连续短附和累积触发 YIELDING 状态（allowQuestion: false）
+  for (const t of ['嗯', '嗯', '嗯', '嗯']) {
+    await d.deliver('group:558', '你觉得呢?', { userText: t })
+  }
+  const texts = sent.flat().filter((i) => i.kind === 'text')
+  assert.ok(texts.length >= 5, '群聊回复应完整投递')
+  assert.ok(texts.some((i) => i.value === '今晚还玩吗？'), '群聊 closed 下末尾全角问号？不应被改写为句号')
+  assert.ok(texts.some((i) => i.value === '你觉得呢?'), '群聊 yielding 下末尾半角问号? 不应被改写为句号')
+  for (const it of texts) {
+    assert.doesNotMatch(it.value, /[。]$/, `群聊回复末尾问号绝不被改写为句号: ${it.value}`)
+  }
+})
+
