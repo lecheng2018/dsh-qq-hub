@@ -5,13 +5,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const src = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
+// 直接读面板源码（client/src/shell/page.js）：hasUi 是纯函数，从源码提取比从 bundle
+// 提取更稳——bundle 的语句格式随 esbuild 版本变化（var/const、行宽换行），源码不会。
+const src = readFileSync(join(ROOT, 'client/src/shell/page.js'), 'utf8')
 
-// 把 client.js 里的 hasUi 抽出来实例化，防止「内置模块的配置项不渲染」这个 bug 回归。
+// 把 hasUi 抽出来实例化，防止「内置模块的配置项不渲染」这个 bug 回归。
 function loadHasUi() {
   const m = src.match(/const hasUi = \(m\) => [^\n]+/)
-  assert.ok(m, 'client.js 里应该还有 hasUi 定义')
-  const expr = m[0].replace('const hasUi = ', '')
+  assert.ok(m, 'page.js 里应该还有 hasUi 定义')
+  const expr = m[0].replace('const hasUi = ', '').replace(/;$/, '')
   return new Function('m', 'return (' + expr + ')(m)')
 }
 
