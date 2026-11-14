@@ -10,7 +10,7 @@
 // - 过时不删（Graphiti）：旧记忆标成「已过时」，不再被想起，但留着历史、面板里能恢复。
 // - 常驻的人物小档案（Letta 的 memory block）：每个人一小段印象，聊天时一直带着，不靠关键词碰运气。
 
-import { withPersonaId, isEntryVisibleToPersona, DEFAULT_PERSONA_ID } from './memory-persona-track.js'
+import { withPersonaId, isEntryVisibleToPersona, DEFAULT_PERSONA_ID, isSubjectiveEntry, normalizePersonaId, effectivePersonaId } from './memory-persona-track.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
@@ -232,56 +232,37 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return false
   }
 
-  function add({ text, about = '', aboutName = '', tags = [], importance = 0.5, source = 'tool', sourceId = '', chatId = '', scope = '', ephemeral = false, pinned = false, entity = '', topic = '', evidence = '', title = '', personaId = '', kind = '', selfView = false, perspective = '' }) {
+  function add(entry = {}) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
+    const {
+      text, about = '', aboutName = '', tags = [], importance = 0.5,
+      source = 'tool', sourceId = '', chatId = '', scope = '',
+      ephemeral = false, pinned = false, entity = '', topic = '',
+      evidence = '', title = '', personaId = '',
+      kind: rawKind, selfView, perspective,
+    } = entry
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
     const s = load()
-    // 去重：很像的就更新旧的（时间、重要程度取新），不重复存。
-    // 但否定词/反义状态不一致（养猫 vs 养狗、喜欢 vs 不喜欢）不算重复 —— 语义反转不能合并（P1-3）。
-    const ownerQQ0 = String(getConfig()?.ownerQQ || '')
-    const scopeGuess = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ0 ? `private:${ownerQQ0}` : 'global')
-    // dup 只可能出现在同一作用域里（跨 scope 条目互相看不见，合并了也是泄漏）
-    const scopeItems = s.items.filter((m) => String(m.scope || '') === scopeGuess)
-    const tToks = new Set(tokenize(t))
-    const maybe = (m) => {
-      if (m.invalidAt) return false
-      if (!about || !m.about || m.about === String(about)) {
-        for (const w of tokOf(m)) if (tToks.has(w)) return true
-      }
-      return false
-    }
-    // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增
-    const biliLike = t.includes('B站') || tags.includes('B站') || scopeItems.some((m) => (m.tags || '').includes('B站'))
-    const dupAt = biliLike ? 0.5 : 0.6
-    const dup = scopeItems.find((m) => maybe(m) && similarity(m.text, t) >= dupAt
-      && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || '')))
-    if (dup) {
-      dup.text = t.length >= dup.text.length ? t : dup.text
-      dup.at = Date.now()
-      dup.importance = Math.max(Number(dup.importance) || 0, Number(importance) || 0)
-      if (evidence) dup.evidence = String(evidence).slice(0, 200)
-      if (entity) dup.entity = String(entity).slice(0, 30)
-      if (topic) dup.topic = String(topic).slice(0, 20)
-      if (pinned) dup.pinned = 1
-      staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
-      s.rev = (s.rev || 0) + 1
-      save(s)
-      return { ok: true, message: '✓', updated: dup.id }
-    }
-    // 落库作用域：显式给了就用；否则按 chatId 推断（private:xxx / group:xxx）；
-    // 都推断不出来时落到主人私聊（不落 global —— 无主的记忆一旦公开，就是跨群泄漏）
+
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
+
+    // 判定主观自传轨：明确声明主观 kind，或 selfView/perspective，或显式传了 personaId
     const isSubjective = Boolean(
-      (kind && kind !== 'fact') ||
+      (rawKind && rawKind !== 'fact') ||
       selfView ||
       perspective === 'self' ||
       personaId
     )
+    const kind = rawKind || (isSubjective ? 'insight' : 'fact')
+
     const item = {
       id: randomUUID().slice(0, 8),
       text: t,
+      kind,
+      selfView: Boolean(selfView || (isSubjective && rawKind !== 'style' && rawKind !== 'profile')),
+      perspective: perspective ? String(perspective) : (isSubjective ? 'self' : ''),
       about: String(about || ''),
       aboutName: String(aboutName || ''),
       tags: (tags || []).slice(0, 5),
@@ -299,21 +280,60 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       topic: String(topic || '').slice(0, 20),
       evidence: String(evidence || '').slice(0, 200),
       title: String(title || '').slice(0, 50),
-      kind: kind ? String(kind) : isSubjective ? 'insight' : 'fact',
-      selfView: Boolean(selfView || isSubjective),
-      perspective: String(perspective || ''),
+      ...(personaId ? { personaId: String(personaId).trim() } : {}),
     }
+
     // US-017 · 双轨记忆：主观条目（insight/style/profile）打上当前人设，客观事实剥除。
     // 未标注的历史条目按默认人设处理（只读共享不丢弃）。
-    const activePersona = String(personaId || '').trim()
-      || String(getConfig()?.persona?.current || '').trim()
-      || DEFAULT_PERSONA_ID
-    s.items.push(withPersonaId(item, activePersona))
+    const activePersona = String(getConfig()?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
+    const normalizedItem = withPersonaId(item, activePersona)
+
+    // 去重：很像的就更新旧的（同人设主观或客观事实才合并，不同人设主观不可合并）
+    const scopeGuess = finalScope
+    const scopeItems = s.items.filter((m) => String(m.scope || '') === scopeGuess)
+    const tToks = new Set(tokenize(t))
+    const maybe = (m) => {
+      if (m.invalidAt) return false
+      if (!about || !m.about || m.about === String(about)) {
+        for (const w of tokOf(m)) if (tToks.has(w)) return true
+      }
+      return false
+    }
+
+    const itemIsSub = isSubjectiveEntry(normalizedItem)
+    const itemPid = effectivePersonaId(normalizedItem, activePersona)
+    const samePersonaTrack = (m) => {
+      const mSub = isSubjectiveEntry(m)
+      if (!itemIsSub && !mSub) return true // 客观事实互相同轨
+      if (itemIsSub !== mSub) return false // 主观与客观不同轨
+      return effectivePersonaId(m, activePersona) === itemPid
+    }
+
+    // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增
+    const biliLike = t.includes('B站') || tags.includes('B站') || scopeItems.some((m) => (m.tags || '').includes('B站'))
+    const dupAt = biliLike ? 0.5 : 0.6
+    const dup = scopeItems.find((m) => maybe(m) && samePersonaTrack(m) && similarity(m.text, t) >= dupAt
+      && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || '')))
+    if (dup) {
+      dup.text = t.length >= dup.text.length ? t : dup.text
+      dup.at = Date.now()
+      dup.importance = Math.max(Number(dup.importance) || 0, Number(importance) || 0)
+      if (evidence) dup.evidence = String(evidence).slice(0, 200)
+      if (entity) dup.entity = String(entity).slice(0, 30)
+      if (topic) dup.topic = String(topic).slice(0, 20)
+      if (pinned) dup.pinned = 1
+      staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
+      s.rev = (s.rev || 0) + 1
+      save(s)
+      return { ok: true, message: '✓', updated: dup.id }
+    }
+
+    s.items.push(normalizedItem)
     evictIfNeeded(s, finalScope)
     staleProfilesIn(s, String(about || ''), finalScope)
     s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
     save(s)
-    return { ok: true, message: '✓', id: item.id }
+    return { ok: true, message: '✓', id: normalizedItem.id }
   }
 
   /**
@@ -604,8 +624,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
   // ---------- 相处经验：按人（私聊按 QQ 号，群按群）归类的、概括性的「怎么和 TA 相处」，越聊越懂 ----------
   const personKey = (chat) => (chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : '')
-  function insightsOf(key) {
-    return ((load().insights || {})[key] || []).filter((item) => !item.stale)
+  function insightsOf(key, persona = activePersonaId()) {
+    const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
+    return ((load().insights || {})[key] || [])
+      .filter((item) => !item.stale)
+      .filter((item) => {
+        const pid = normalizePersonaId(item.personaId || item.persona)
+        if (pid) return pid === active
+        if (item.personaScope) return normalizePersonaId(item.personaScope) === active
+        return true
+      })
   }
   function staleInsightsIn(s, key = '') {
     let changed = 0
@@ -621,22 +649,32 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return changed
   }
 
-  function setInsights(key, list, name) {
+  function setInsights(key, list, name = '', opts = {}) {
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    s.insights[key] = list.slice(0, 8).map((item) => ({ ...item, origin: 'manual' }))
-    if (name) s.insightNames[key] = name
+    const defaultPid = normalizePersonaId((typeof opts === 'object' && opts?.personaId) || (typeof name === 'object' && name?.personaId) || '')
+    s.insights[key] = list.slice(0, 8).map((item) => {
+      const pid = normalizePersonaId(item.personaId || defaultPid)
+      return { ...item, origin: 'manual', ...(pid ? { personaId: pid } : {}) }
+    })
+    const realName = typeof name === 'string' ? name : ''
+    if (realName) s.insightNames[key] = realName
     s.rev = (s.rev || 0) + 1
     save(s)
   }
-  function setDerivedInsights(key, list, name, { sourceFingerprint }) {
+  function setDerivedInsights(key, list, name, { sourceFingerprint, personaId } = {}) {
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    s.insights[key] = list.slice(0, 8).map((item) => ({
-      ...item, origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0,
-    }))
+    const pid = normalizePersonaId(personaId)
+    s.insights[key] = list.slice(0, 8).map((item) => {
+      const itemPid = normalizePersonaId(item.personaId || pid)
+      return {
+        ...item, origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0,
+        ...(itemPid ? { personaId: itemPid } : {}),
+      }
+    })
     if (name) s.insightNames[key] = name
     s.rev = (s.rev || 0) + 1
     save(s)
@@ -646,8 +684,23 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function styleSourceOf(key) {
     return (load().styleSources || {})[key] || null
   }
-  function styleOf(key) {
-    return styleSourceOf(key)?.stale ? [] : (load().styles || {})[key] || []
+  function styleOf(key, persona = activePersonaId()) {
+    const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
+    const src = styleSourceOf(key)
+    if (src?.stale) return []
+    const srcPid = normalizePersonaId(src?.personaId || src?.persona)
+    if (srcPid && srcPid !== active) return []
+    if (src?.personaScope && normalizePersonaId(src.personaScope) !== active) return []
+
+    const list = (load().styles || {})[key] || []
+    return list.filter((item) => {
+      if (typeof item === 'object' && item !== null) {
+        const pid = normalizePersonaId(item.personaId || item.persona)
+        if (pid) return pid === active
+        if (item.personaScope) return normalizePersonaId(item.personaScope) === active
+      }
+      return true
+    }).map((item) => (typeof item === 'object' && item !== null ? item.text || item.content || String(item) : String(item)))
   }
   function staleStylesIn(s, key = '') {
     let changed = 0
@@ -659,19 +712,21 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     }
     return changed
   }
-  function setStyle(key, list) {
+  function setStyle(key, list, { personaId } = {}) {
     const s = load()
     s.styles = s.styles || {}
     s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
-    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'manual' } }
+    const pid = normalizePersonaId(personaId)
+    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'manual', ...(pid ? { personaId: pid } : {}) } }
     s.rev = (s.rev || 0) + 1
     save(s)
   }
-  function setDerivedStyle(key, list, { sourceFingerprint }) {
+  function setDerivedStyle(key, list, { sourceFingerprint, personaId } = {}) {
     const s = load()
     s.styles = s.styles || {}
     s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
-    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0 } }
+    const pid = normalizePersonaId(personaId)
+    s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0, ...(pid ? { personaId: pid } : {}) } }
     s.rev = (s.rev || 0) + 1
     save(s)
   }
@@ -698,35 +753,40 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return changed
   }
   /** 取这个 QQ 在某个作用域下的档案；scope 为空时返回 global 那份（面板/兼容用）。 */
-  function profileOf(qq, scope) {
+  function profileOf(qq, scope, persona = activePersonaId()) {
+    const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
     const all = load().profiles || {}
     const key = profileKeyOf(qq, scope)
-    if (key && all[key] && !all[key].stale) return all[key]
-    if (scope) return null
-    // 没给作用域：退回老的按 QQ 号存的那份（兼容旧调用与旧数据）
-    const legacy = all[String(qq)]
-    return legacy && !legacy.stale ? legacy : null
+    const prof = key && all[key] && !all[key].stale ? all[key] : (!scope ? (all[String(qq)] && !all[String(qq)].stale ? all[String(qq)] : null) : null)
+    if (!prof) return null
+    const pid = normalizePersonaId(prof.personaId || prof.persona)
+    if (pid && pid !== active) return null
+    if (prof.personaScope && normalizePersonaId(prof.personaScope) !== active) return null
+    return prof
   }
-  function setProfile(qq, text, name = '', scope = '') {
+  function setProfile(qq, text, name = '', scope = '', personaId = '') {
     const s = load()
     s.profiles = s.profiles || {}
     const key = profileKeyOf(qq, scope)
     const t = String(text || '').trim().slice(0, 200)
     const prev = s.profiles[key]
-    if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now(), origin: 'manual' }
+    const pid = normalizePersonaId(personaId || prev?.personaId)
+    if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now(), origin: 'manual', ...(pid ? { personaId: pid } : {}) }
     else delete s.profiles[key]
     s.rev = (s.rev || 0) + 1
     save(s)
   }
-  function setDerivedProfile(qq, text, name, scope, facts, expectedRev) {
+  function setDerivedProfile(qq, text, name, scope, facts, expectedRev, personaId = '') {
     const s = load()
     if (expectedRev !== undefined && (s.rev || 0) !== expectedRev) return false
     s.profiles = s.profiles || {}
     const key = profileKeyOf(qq, scope)
+    const pid = normalizePersonaId(personaId || s.profiles[key]?.personaId)
     s.profiles[key] = {
       qq: String(qq), scope: scope || 'global', text: String(text || '').trim().slice(0, 200),
       name: name || s.profiles[key]?.name || '', at: Date.now(), origin: 'derived',
       sourceFactIds: facts.map((item) => String(item.id)), sourceRev: s.rev || 0,
+      ...(pid ? { personaId: pid } : {}),
     }
     s.rev = (s.rev || 0) + 1
     save(s)
@@ -738,6 +798,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const cfg = getConfig().memory
     if (!cfg.enabled) return ''
     const parts = []
+    const currentPersona = activePersonaId()
     // 对这个人（群里是正在说话的几个人）的印象，不用等关键词碰上
     const people = chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3) : chat.userId ? [chat.userId] : []
     // 档案按当前聊天作用域取：群聊只拿本群里认识的印象，私聊只拿这个私聊的，
@@ -747,19 +808,28 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     // global 档案是**显式标注为公开的那部分**（她自己是谁、大家都该知道的），哪里都能读。
     // 真正要防的是「私事被自动提炼成 global」——那在 buildProfile 里堵，
     // 而不是把 global 整个禁掉（禁掉会让所有正常的人设也读不到）。
+    const isProfileMatch = (p) => {
+      if (!p) return false
+      const pid = normalizePersonaId(p.personaId || p.persona)
+      if (pid && pid !== currentPersona) return false
+      if (p.personaScope && normalizePersonaId(p.personaScope) !== currentPersona) return false
+      return true
+    }
     const profs = people
       .map((qq) => {
-        const local = profileOf(qq, pScope)
-        const glob = pScope === 'global' ? null : profileOf(qq, 'global')
-        if (local && glob && local.text !== glob.text) return { ...local, text: `${local.text}；${glob.text}` }
-        return local || glob
+        const local = profileOf(qq, pScope, currentPersona)
+        const glob = pScope === 'global' ? null : profileOf(qq, 'global', currentPersona)
+        const validLocal = isProfileMatch(local) ? local : null
+        const validGlob = isProfileMatch(glob) ? glob : null
+        if (validLocal && validGlob && validLocal.text !== validGlob.text) return { ...validLocal, text: `${validLocal.text}；${validGlob.text}` }
+        return validLocal || validGlob
       })
       .filter(Boolean)
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
-    const ins = reflectionContext ? insightsOf(personKey(chat)) : []
+    const ins = reflectionContext ? insightsOf(personKey(chat), currentPersona) : []
     if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
-    const sty = styleContext ? styleOf(personKey(chat)) : []
-    const self = styleContext ? styleOf('self') : []
+    const sty = styleContext ? styleOf(personKey(chat), currentPersona) : []
+    const self = styleContext ? styleOf('self', currentPersona) : []
     if (sty.length || self.length) {
       parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
     }
@@ -986,14 +1056,14 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     profileOf, profileKeyOf, setProfile,
     recalls: () => recallLog.slice(),
     styles: () => load().styles || {},
-    setStyle: (key, list) => setStyle(key, (list || []).map(String)),
+    setStyle: (key, list, opts) => setStyle(key, (list || []).map(String), opts),
     lastConsolidate: () => load().lastConsolidate || null,
     insights: () => {
       const s = load()
       return Object.entries(s.insights || {}).map(([key, list]) => ({ key, name: (s.insightNames || {})[key] || '', list }))
     },
     insightsOf, styleOf, styleSourceOf, setDerivedInsights, setDerivedStyle,
-    setInsights: (key, list) => setInsights(key, list.map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x))),
+    setInsights: (key, list, name, opts) => setInsights(key, (list || []).map((x) => (typeof x === 'string' ? { id: randomUUID().slice(0, 8), text: x, at: Date.now() } : x)), name, opts),
     /** 删一条相处经验：insights[key] 是 {id,text,at} 数组，按 id 摘掉一条。 */
     removeInsight: (key, id) => {
       const s = load()

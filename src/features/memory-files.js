@@ -195,13 +195,17 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     for (const [scope, snap] of scopeSnapshots) {
       for (const e of snap.entries) {
         const kind = e.kind || 'fact'
+        const isArchiveItem = kind === 'fact' || e.importance !== undefined || e.source !== undefined
 
-        if (kind === 'fact') {
+        if (isArchiveItem) {
           const hitInfo = hitsMap[e.id] || {}
           items.push({
             id: e.id,
             text: e.text || '',
+            kind: e.kind || 'fact',
             personaId: e.personaId || undefined,
+            selfView: e.selfView || undefined,
+            perspective: e.perspective || undefined,
             about: e.about || '',
             aboutName: e.aboutName || '',
             tags: e.tags || [],
@@ -242,6 +246,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: e.sourceRev || undefined,
             stale: e.stale || undefined,
             staleAt: e.staleAt || undefined,
+            personaId: e.personaId || undefined,
           }
         } else if (kind === 'insight') {
           // 还原 memory.js 期望的键名：私聊对应 qq:<uid>，群聊对应 group:<gid>
@@ -256,10 +261,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: e.sourceRev || undefined,
             stale: e.stale || undefined,
             staleAt: e.staleAt || undefined,
+            personaId: e.personaId || undefined,
           })
         } else if (kind === 'style') {
           if (scope === 'global' && e.id === 'self') {
-            styleSources.self = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined }
+            styleSources.self = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined, personaId: e.personaId || undefined }
             try {
               styles.self = JSON.parse(e.text || '[]')
             } catch {
@@ -267,7 +273,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             }
           } else {
             const styKey = scope.startsWith('private:') ? `qq:${scope.slice(8)}` : scope
-            styleSources[styKey] = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined }
+            styleSources[styKey] = { origin: e.origin || undefined, sourceFingerprint: e.sourceFingerprint || undefined, sourceRev: e.sourceRev || undefined, stale: e.stale || undefined, staleAt: e.staleAt || undefined, personaId: e.personaId || undefined }
             styles[styKey] = styles[styKey] || []
             try {
               const list = JSON.parse(e.text || '[]')
@@ -373,8 +379,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         if (!byScope.has(sc)) byScope.set(sc, [])
         byScope.get(sc).push({
           id: it.id,
-          kind: 'fact',
+          kind: it.kind || 'fact',
           personaId: it.personaId || undefined,
+          selfView: it.selfView ? true : undefined,
+          perspective: it.perspective || undefined,
           about: it.about,
           aboutName: it.aboutName,
           title: it.title,
@@ -414,6 +422,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           sourceRev: p.sourceRev || undefined,
           stale: p.stale || undefined,
           staleAt: p.staleAt || undefined,
+          personaId: p.personaId || undefined,
         })
       }
 
@@ -432,6 +441,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: ins.sourceRev || undefined,
             stale: ins.stale || undefined,
             staleAt: ins.staleAt || undefined,
+            personaId: ins.personaId || undefined,
           })
         }
       }
@@ -449,6 +459,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: s.styleSources?.self?.sourceRev || undefined,
             stale: s.styleSources?.self?.stale || undefined,
             staleAt: s.styleSources?.self?.staleAt || undefined,
+            personaId: s.styleSources?.self?.personaId || undefined,
           })
         }
         for (const [key, list] of Object.entries(s.styles)) {
@@ -464,6 +475,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: s.styleSources?.[key]?.sourceRev || undefined,
             stale: s.styleSources?.[key]?.stale || undefined,
             staleAt: s.styleSources?.[key]?.staleAt || undefined,
+            personaId: s.styleSources?.[key]?.personaId || undefined,
           })
         }
       }
