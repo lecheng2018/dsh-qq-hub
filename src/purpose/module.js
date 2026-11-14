@@ -11,6 +11,8 @@
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { stripInternalMemo } from '../chat/reply.js'
+import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from './engine/crucible.js'
+import { characterName, escapeRegExp } from '../persona/identity-context.js'
 import {
   DEFAULT_PURPOSE_CONFIG, PURPOSE_NEEDS, NEED_LABELS,
   normalizePurposeConfig, createPurposeState, normalizePurposeState,
@@ -22,8 +24,6 @@ import {
 } from './engine.js'
 
 const MINUTE = 60_000
-// 她的自称：用于聊天流水标注与「名字：」前缀清洗。
-const ROLE = '大肥鱼'
 const SILENCE = '[沉默]'
 
 const pad2 = (n) => String(n).padStart(2, '0')
@@ -67,17 +67,30 @@ export function purposeConfig(cfg = {}) {
   })
 }
 
-/** 模型回包清洗：去掉备忘段、引号、「大肥鱼：」前缀；空/沉默返回 ''。 */
-export function cleanReply(raw) {
+/**
+ * 模型回包清洗：去掉备忘段、引号、「角色名：」前缀；空/沉默返回 ''。
+ *
+ * 名字必须由调用方给（身份中枢解析出来的那份），这里不再写死某张卡：
+ * 换卡后模型会以新名字开头，「名字：」前缀仍要洗掉。
+ * @param {string} raw 模型原始回包
+ * @param {string|string[]} [role] 当前角色名 / 她自己会用的称呼
+ */
+export function cleanReply(raw, role = '') {
   let s = stripInternalMemo(raw)
   s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
-  s = s.replace(new RegExp(`^${ROLE}\\s*[:：]\\s*`), '')
+  const names = (Array.isArray(role) ? role : [role]).map((n) => String(n ?? '').trim()).filter(Boolean)
+  if (names.length) {
+    const alts = names.map((n) => escapeRegExp(n)).join('|')
+    s = s.replace(new RegExp(`^(?:${alts})\\s*[:：]\\s*`), '')
+  }
   s = s.trim()
   if (!s || s.replace(/\s/g, '').startsWith(SILENCE)) return ''
   return s
 }
 
 export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText }) {
+  // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
+  const roleOf = (cfg = getConfig()) => characterName('', cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
   const lastPrivateAt = (cfg) => Math.max(hub?.lastOwnerChatAt || 0, hub?.lastBotToOwner?.at || 0)
@@ -103,6 +116,28 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     return state
   }
   const saveState = (state) => writeJson(stateFile(), state)
+
+  // US-012 · 潜伏素材熔炉：素材先沉淀，到期发酵，按会话兴趣打分取用。
+  // 池子随 purpose state 一起落盘（同目录同生命周期），重启不丢。
+  // 此举补上了计划书 §八「潜伏素材熔炉」的空缺：crucible.js 原本零引用，
+  // 而 materials.js 的 collectMaterials 只做「最近素材」，没有潜伏/发酵/兴趣匹配。
+  const loadCrucible = () => {
+    try {
+      const raw = readJson(dataDir('purpose', 'crucible-pool.json'), null)
+      return createCrucible(Array.isArray(raw?.entries) ? raw.entries : [])
+    } catch {
+      return createCrucible([])
+    }
+  }
+  let crucible = loadCrucible()
+  const saveCrucible = () => {
+    try {
+      const entries = crucible.entries().slice(-CRUCIBLE_MAX_ENTRIES)
+      writeJson(dataDir('purpose', 'crucible-pool.json'), { version: 1, entries })
+    } catch (error) {
+      log?.warn?.('素材熔炉落盘失败：', error?.message || error)
+    }
+  }
 
   // ---------- 素材（记忆 importance 0~1 → 引擎 0~100） ----------
   function memoryRecords() {
@@ -151,7 +186,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
             time: Number(e.t) || 0,
             isSelf: e.who === 'bot',
             isOwner: e.chatId === ownerKey && e.who !== 'bot',
-            sender: e.who === 'bot' ? ROLE : String(e.uid || '群友'),
+            sender: e.who === 'bot' ? roleOf(cfg) : String(e.uid || '群友'),
           })
         }
       }
@@ -167,14 +202,40 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
 
   // ①~④ 收素材 → 驱动 → 目标假设 → 候选（只读，不落盘）
   function prepare(cfg, config, state, now = Date.now()) {
+    const role = roleOf(cfg)
     const materials = collectMaterials({
       now, config,
       ownerUin: cfg.ownerQQ,
-      roleName: ROLE,
+      roleName: role,
       conversations: conversations(cfg, now),
       biliEntries: [], // 首期不接 B站/Qzone 素材，字段留扩展
       memoryRecords: memoryRecords(),
     })
+    // US-012：把熔炉里「发酵到位的潜伏素材」按当前会话兴趣匹配进来。
+    // 与 collectMaterials 的「最近素材」互补：前者是沉下来的旧线索，后者是刚发生的。
+    // 匹配不到就返回空数组（模块明确不做随机兜底），不会污染素材池。
+    try {
+      // 优先读扩展配置 ext.purpose.interests；降级时使用素材提取出的主题词 topic（而不是整句聊天长句），
+      // 保证 crucible.match() 的子串包含检索能够精准命中。
+      const ext = (cfg.ext && cfg.ext.purpose) || {}
+      const interests = Array.isArray(ext.interests) && ext.interests.length
+        ? ext.interests
+        : (materials.items || []).map((m) => m.topic).filter(Boolean).slice(0, 8)
+      const chatKey = `private:${String(cfg.ownerQQ || '')}`
+      if (chatKey !== 'private:' && interests.length) {
+        const hits = crucible.match(chatKey, interests, { now, limit: 5 })
+        for (const hit of (Array.isArray(hits) ? hits : [])) {
+          materials.items.push({
+            kind: 'crucible',
+            fingerprint: hit.fingerprint,
+            text: String(hit.title || hit.summary || ''),
+            at: Number(hit.capturedAt) || 0,
+          })
+        }
+      }
+    } catch (error) {
+      log?.warn?.('素材熔炉匹配失败（跳过）：', error?.message || error)
+    }
     const persona = personaOf(cfg)
     const lastMasterAt = lastPrivateAt(cfg)
     const { drives } = deriveDrives({
@@ -183,10 +244,10 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     })
     const { goals, observations } = formGoalHypotheses({
       materials: materials.items, goals: state.goals, observations: state.observations,
-      drives, now, lastMasterAt, config, roleName: ROLE, persona,
+      drives, now, lastMasterAt, config, roleName: role, persona,
     })
     const seeds = minePurposeSeeds({
-      materials: materials.items, now, roleName: ROLE, config,
+      materials: materials.items, now, roleName: role, config,
       drives, history: state.history, lastMasterAt,
     })
     return { materials, persona, lastMasterAt, drives, goals, observations, seeds }
@@ -258,7 +319,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       log.warn?.('目的：生成出错：', error?.message)
     }
     const memo = parsePurposeMemo(raw)
-    const text = cleanReply(raw)
+    const text = cleanReply(raw, roleOf(cfg))
     let outcome
     if (!text) {
       outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 不硬发
@@ -298,7 +359,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       const raw = typeof hub.runPromptTurn === 'function'
         ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
         : await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
-      const text = cleanReply(raw)
+      const text = cleanReply(raw, roleOf(cfg))
       if (text) await hub.deliver(chatIdOf(cfg), text, { own: true })
     } catch (error) {
       log.warn?.('目的：追问出错：', error?.message)
@@ -307,10 +368,45 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   }
 
   // ---------- 对外 ----------
+  /**
+   * US-012 · 熔炉循环：把最近素材沉淀进池子、到期发酵、超限淘汰，然后落盘。
+   * 仅在目的引擎开启时运行，保证 match() 看到的是新鲜池子。
+   */
+  function crucibleCycle(cfg, now) {
+    try {
+      const fresh = collectMaterials({
+        now, config: getConfig(),
+        ownerUin: cfg.ownerQQ, roleName: roleOf(cfg),
+        conversations: conversations(cfg, now),
+        biliEntries: [], memoryRecords: memoryRecords(),
+      })
+      const incoming = (fresh.items || [])
+        .filter((m) => m && m.text)
+        .map((m) => ({
+          source: CRUCIBLE_SOURCES.includes(m.source) ? m.source : 'group',
+          title: String(m.text || '').slice(0, 160),
+          fingerprint: m.fingerprint,
+          capturedAt: Number(m.at) || now,
+        }))
+      let dirty = false
+      if (incoming.length) {
+        const res = crucible.ingest(incoming, { now })
+        if (res && res.ingested > 0) dirty = true
+      }
+      const pruned = crucible.prune({ now })
+      if (pruned && pruned.pruned > 0) dirty = true
+      // 只有发生新增、续期或淘汰时才刷盘，避免无人聊天时每 60 秒无意义刷盘
+      if (dirty) saveCrucible()
+    } catch (error) {
+      log?.warn?.('素材熔炉循环失败（跳过本轮）：', error?.message || error)
+    }
+  }
+
   async function tick() {
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled || !cfg.ownerQQ) return
+    try { crucibleCycle(cfg, Date.now()) } catch { /* 已在内部兜住 */ }
     const chatId = chatIdOf(cfg)
     if (isMuted?.(chatId)) return
     const now = Date.now()

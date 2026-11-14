@@ -9,6 +9,7 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '../tools/tools.js'
+import { resolveCharacterIdentity } from '../persona/identity-context.js'
 
 const RING = 300
 
@@ -96,22 +97,24 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
   // ---------- 2. 给 DSH 别的会话的全局工具 ----------
   const str = (description) => ({ type: 'string', description })
   function builtinTools() {
+    // 工具说明里的角色名跟着人设卡走（这段文本会出现在别的 AI 的工具列表里）。
+    const who = resolveCharacterIdentity('', getConfig()).name
     return [
       defineTool({
         name: 'qq_hub_qq_send',
-        description: '让 QQ 上的「大肥鱼」（QQ Hub 插件里的 AI 伙伴）替你发一条 QQ 消息。target 写 private:QQ号 或 group:群号，不填就发给主人。text 是要发的话，可以用 ||| 分多条、<voice>…</voice> 发语音。',
+        description: `让 QQ 上的「${who}」（QQ Hub 插件里的 AI 伙伴）替你发一条 QQ 消息。target 写 private:QQ号 或 group:群号，不填就发给主人。text 是要发的话，可以用 ||| 分多条、<voice>…</voice> 发语音。`,
         properties: { target: str('private:QQ号 / group:群号，可不填（发给主人）'), text: str('要发的话') },
         required: ['text'],
         execute: async (args) => ops.send(args),
       }),
       defineTool({
         name: 'qq_hub_status',
-        description: '看看 QQ 上的「大肥鱼」现在的状态：在不在线、开着哪些模块。',
+        description: `看看 QQ 上的「${who}」现在的状态：在不在线、开着哪些模块。`,
         execute: async () => ops.info(),
       }),
       defineTool({
         name: 'qq_hub_call',
-        description: '调用大肥鱼某个模块导出的函数（高级）。比如 module=memory, method=recall, args=["香菜"] 查她的记忆；module=memory, method=add, args=[{"text":"…"}] 让她记住一件事。模块和函数列表用 qq_hub_status 看，说明在她的数据目录 modules/API.md。',
+        description: `调用${who}某个模块导出的函数（高级）。比如 module=memory, method=recall, args=["香菜"] 查她的记忆；module=memory, method=add, args=[{"text":"…"}] 让她记住一件事。模块和函数列表用 qq_hub_status 看，说明在她的数据目录 modules/API.md。`,
         properties: { module: str('模块 id'), method: str('函数名'), args: { type: 'array', items: {}, description: '参数列表' } },
         required: ['module', 'method'],
         execute: async (args) => ops.call(args),

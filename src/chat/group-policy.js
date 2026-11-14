@@ -1,6 +1,9 @@
 // 群聊回复策略：什么时候必回、什么时候插话、什么时候闭嘴。纯函数，便于测试。
 
 export const DEFAULT_GROUP_POLICY = {
+  // 群聊「叫醒词」的出厂默认值，面板可改（cfg.group.wakeWords 覆盖它）。
+  // 与 persona/identity-context.js 的 wakeWords 是两套：那边判「她在说她自己」，
+  // 这边判「群友在叫醒她」。故意分开——叫醒词是运维配置，不该随人设卡漂移。
   wakeWords: ['大肥鱼', '肥鱼'],
   interjectChance: 0.15, // 普通消息的基础插话概率（话题越相关越高，最高 80%）
   cooldownSec: 90, // 两次插话至少间隔
@@ -32,11 +35,40 @@ export function topicRelevance(recentTexts, interests, memoryScore = 0) {
   return Math.min(1, hits * 0.3 + Math.max(0, Math.min(1, memoryScore)) * 0.5)
 }
 
+/**
+ * 把「她自己卡上的名字」并进唤醒词。
+ *
+ * 换卡后群里喊新名字也该叫得动，否则会出现「身份中枢认小鲸、群策略只认大肥鱼」的劈叉：
+ * 她听了也不会应。只在真的读到卡时才加——没卡时 name 是兜底名，加进去会误触发插话。
+ * @param {object} policy 已经合并过单群覆盖的策略
+ * @param {{name?:string, hasCard?:boolean}} identity 身份中枢的解析结果
+ */
+export function withRoleWakeWords(policy, identity) {
+  const pol = policy || DEFAULT_GROUP_POLICY
+  const name = String(identity?.name || '').trim()
+  const base = Array.isArray(pol.wakeWords) ? pol.wakeWords : []
+  if (!identity?.hasCard || !name || base.includes(name)) return pol
+  return { ...pol, wakeWords: [name, ...base] }
+}
+
 /** 合并全局策略和单群覆盖。 */
 export function policyFor(global, overrides, groupId) {
   const g = { ...DEFAULT_GROUP_POLICY, ...(global || {}) }
   const o = overrides && overrides[String(groupId)]
   return o ? { ...g, ...o } : g
+}
+
+/**
+ * 短时间里她说了多少次（burst 刹车的计数）。纯函数，门禁与 decideGroupReply 共用同一口径。
+ * @param {number[]} [botReplyTimes] 她最近每次说话的时间戳（毫秒）
+ * @param {number} now 现在（毫秒）
+ * @param {number} [burstWindowSec] 统计窗口（秒），缺省 120
+ */
+export function burstCount(botReplyTimes, now, burstWindowSec) {
+  const win = (Number(burstWindowSec) || 120) * 1000
+  return (Array.isArray(botReplyTimes) ? botReplyTimes : [])
+    .filter((t) => Number.isFinite(t) && now - t < win)
+    .length
 }
 
 export function inQuietHours(hour, quiet) {
@@ -68,7 +100,7 @@ export function decideGroupReply(p) {
   const rand = p.rand || Math.random
   const said = p.botReplyTimes || []
   // 刹车：短时间里说太多了就歇一会儿，只有主人 @ 能叫动
-  const burst = said.filter((t) => p.now - t < (pol.burstWindowSec ?? 120) * 1000).length
+  const burst = burstCount(said, p.now, pol.burstWindowSec ?? 120)
   if (burst >= (pol.burstMax ?? 8) && !(p.fromOwner && (p.mentioned || p.repliedToBot))) {
     return { reply: false, mode: 'none', reason: `刚说了太多（${burst} 次），歇一会儿` }
   }
