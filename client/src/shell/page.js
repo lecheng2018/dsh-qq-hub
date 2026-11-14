@@ -152,10 +152,10 @@ function QQHubPage() {
     return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
   }
   const mark = (t) => {
-    if (tabDirty(t.id)) return <i className="dirty" title="有没保存的改动" />
+    if (tabDirty(t.id)) return <i className="dirty" title="有没保存的改动" aria-hidden="true" />
     if (!t.flag) return null
     const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
-    return <i className={cx('ab-dot', flag && 'ok')} title={flag ? '开着' : '关着'} />
+    return <i className={cx('ab-dot', flag && 'ok')} title={flag ? '开着' : '关着'} aria-hidden="true" />
   }
   return (
     <div className="ab-root">
