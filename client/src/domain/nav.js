@@ -17,7 +17,6 @@ const TABS = [
   { id: 'douyin', label: '抖音', flag: 'douyin.enabled' },
   { id: 'heybox', label: '小黑盒', flag: 'heybox.enabled' },
   { id: 'multiParser', label: '内容解析', flag: 'multiParser.enabled' },
-  { id: 'rss', label: '资讯池' },
   { id: 'local', label: '本地接口' },
   { id: 'modules', label: '扩展' },
   { id: 'logs', label: '日志' },
@@ -61,7 +60,6 @@ export const TAB_KEYS = {
   douyin: ['douyin'],
   heybox: ['heybox'],
   multiParser: ['multiParser'],
-  rss: ['rss'],
   local: ['local']
 }
 

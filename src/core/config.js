@@ -39,12 +39,6 @@ const DEFAULTS_RAW = {
   files: { enabled: true, maxMB: 50, dirs: [] },
   // 危险命令确认（可选保护，默认关）：她在私聊里执行删根目录/格式化/关机/下载后直接执行等
   // 终端命令前，先发 QQ 私聊问主人，回复「确认」才执行；超时或「取消」就拦下。
-  // 资讯池：订阅源只把内容拉进池子，不主动推送（她自己按需查）
-  rss: {
-    enabled: false, intervalMinutes: 30, feeds: [], maxPerFeed: 50, summaryChars: 400, poolMaxItems: 2000,
-    // 每日精选：到点挑几条让她用群友口气说出去（默认关，开了才有）
-    digest: { enabled: false, hour: 9, count: 3, target: '' },
-  },
   security: {
     dangerConfirm: false,
     // 身份泄露闸（移植自 surfcore）：出站前扫主人的 QQ 号 / 别的群号
@@ -395,27 +389,6 @@ export function normalize(raw) {
   const g = c.group
   g.wakeWords = (Array.isArray(g.wakeWords) ? g.wakeWords : String(g.wakeWords || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.interjectChance = num(g.interjectChance, 0.15, 0, 1)
-  // 资讯池：订阅源只把内容拉进池子，不推送（她自己调 rss_read 查）
-  if (!isObj(c.rss)) c.rss = {}
-  c.rss.enabled = bool(c.rss.enabled, false)
-  c.rss.intervalMinutes = num(c.rss.intervalMinutes, 30, 5, 1440)
-  c.rss.maxPerFeed = num(c.rss.maxPerFeed, 50, 5, 100)
-  c.rss.summaryChars = num(c.rss.summaryChars, 400, 80, 2000)
-  c.rss.poolMaxItems = num(c.rss.poolMaxItems, 2000, 100, 20000)
-  if (!Array.isArray(c.rss.feeds)) c.rss.feeds = []
-  c.rss.feeds = c.rss.feeds.map((f) => {
-    if (typeof f === 'string') return { url: f.trim(), title: '', enabled: true }
-    if (!isObj(f)) return null
-    const url = String(f.url || '').trim()
-    if (!url) return null
-    return { url, title: String(f.title || '').slice(0, 120), enabled: f.enabled !== false }
-  }).filter(Boolean).slice(0, 50)
-  // 每日精选
-  if (!isObj(c.rss.digest)) c.rss.digest = {}
-  c.rss.digest.enabled = bool(c.rss.digest.enabled, false)
-  c.rss.digest.hour = num(c.rss.digest.hour, 9, 0, 23)
-  c.rss.digest.count = num(c.rss.digest.count, 3, 1, 6)
-  c.rss.digest.target = String(c.rss.digest.target || '').trim().slice(0, 60)
   // 群发送配额（QQ 每分钟 10 条，超了消息会真丢）
   if (!isObj(g.quota)) g.quota = {}
   g.quota.enabled = bool(g.quota.enabled, true)

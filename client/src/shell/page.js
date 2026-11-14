@@ -25,7 +25,6 @@ import { LocalApi, Modules, ExtPage } from '../views/modules.js'
 import { Bili } from '../views/platforms/bili.js'
 import { Douyin } from '../views/platforms/douyin.js'
 import { Heybox } from '../views/platforms/heybox.js'
-import { RssPage } from '../views/platforms/rss.js'
 import { MultiParser } from '../views/platforms/multiparser.js'
 import { ImageGen } from '../views/imagegen.js'
 import { Logs } from '../views/logs.js'
@@ -125,10 +124,10 @@ function QQHubPage() {
   const curTab = tabs.find((t) => t.id === tab) || tabs[0]
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, rss: RssPage, local: LocalApi, modules: Modules, logs: Logs,
+    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
-  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], memory: ['memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], rss: ['rss'], local: ['local'] }
+  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], memory: ['memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], local: ['local'] }
   const tabDirty = (id) => {
     if (!dirty) return false
     if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
