@@ -236,6 +236,9 @@ const DEFAULTS_RAW = {
     greeting: { enabled: true, morning: '08:00', night: '23:00' },
   },
   memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
+  // 挂起线索（US-019）：S1 规则层永远跑（零成本）；S2 慢思考每轮多一次小模型调用，
+  // 所以默认只在私聊跑，群里关掉（群里每人一句就一次模型调用，成本压不住）。
+  threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 15000, pruneIntervalMs: 60000 },
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
     enabled: false,              // 模块总开关，默认关
@@ -519,6 +522,13 @@ export function normalize(raw) {
   c.chatlog.keepDays = Math.round(num(c.chatlog.keepDays, 30, 14, 365))
   c.memory.hintCount = Math.round(num(c.memory.hintCount, 8, 1, 20)) // 每轮最多带几条记忆进提示词
   c.memory.hintMaxChars = Math.round(num(c.memory.hintMaxChars, 600, 120, 2000)) // 这些记忆合起来最多多少字
+  // 挂起线索（US-019）：开关 + S2 判定范围与预算。judge 关掉就只剩 S1 规则层（零成本）。
+  if (!isObj(c.threads)) c.threads = {}
+  c.threads.enabled = bool(c.threads.enabled, true)
+  c.threads.judge = bool(c.threads.judge, true)
+  c.threads.judgeInGroups = bool(c.threads.judgeInGroups, false)
+  c.threads.judgeTimeoutMs = Math.round(num(c.threads.judgeTimeoutMs, 15000, 1000, 60000))
+  c.threads.pruneIntervalMs = Math.round(num(c.threads.pruneIntervalMs, 60000, 5000, 3600000))
   g.interests = (Array.isArray(g.interests) ? g.interests : String(g.interests || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.minRelevance = num(g.minRelevance, 0.25, 0, 1)
   c.merge.enabled = bool(c.merge.enabled, true)

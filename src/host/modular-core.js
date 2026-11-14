@@ -27,6 +27,7 @@ import { createContextAssembly, createThreadProvider, createTimeScaleProvider, c
 import { isChatKey } from '../chat/chat-key.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
+import { createThreadObserver } from '../chat/thread-wiring.js'
 import { createInteractionState } from '../chat/interaction-state.js'
 import { createOutbound } from '../chat/outbound.js'
 import { createOutboundFiles } from '../chat/outbound-files.js'
@@ -211,6 +212,8 @@ export function createModularCore({
   // 所以这里按依赖注入接：宿主把账本传进来，core 不 import 账本实现（零业务耦合）。
   // 未传 = 不注册这两个 provider（优雅降级），不会因缺账本而启动失败。
   threadLedger,
+  // US-019 S2 慢思考判定实现（可选注入，测试用假模型；生产走默认的 judgeThreads）。
+  threadJudge,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -619,6 +622,29 @@ export function createModularCore({
     outbox: () => outbox,
     isCaptured: capture.isCaptured,
   })
+
+  // ---------- US-019 · 线索生产者（S1 规则层 + S2 慢思考层） ----------
+  //
+  // 接线位置说明（为什么在 modular-core 的轮末、而不是 reply-delivery 内部）：
+  //   1. **顺序**：新线索必须在本轮 applyThreadContinuation（reply-delivery 内）**之后**入账。
+  //      接在 reply-delivery 里会让同一轮的 advance() 把刚落地的 active 直接推成 extended
+  //      （生下来就漏一轮）。轮末是唯一同时满足「已投递」和「未推进」的位置。
+  //   2. **依赖**：S2 要 dsh（宿主模型）和 cfg，reply-delivery 这两样都没有、也不该有
+  //      （它是纯投递编排，注入模型会让它变成第二个决策点）。
+  //   3. **可测**：轮末调用点是 modular-core 的公开出口（simulateTurn/dispatch），
+  //      e2e 能直接打；藏在 delivery 里就只能靠 deliver 单测旁证。
+  // 默认只在私聊跑 S2（群里每人一句就一次模型调用，成本压不住；S1 规则层零成本照跑）。
+  const threadObserver = threadLedger
+    ? createThreadObserver({
+      dsh,
+      getConfig,
+      ledger: threadLedger,
+      log,
+      ...(threadJudge ? { judge: threadJudge } : {}),
+      // 裁剪节流跟着配置走（面板改完下一轮生效），默认 60 秒一次
+      pruneIntervalMs: () => Number(getConfig()?.threads?.pruneIntervalMs) || undefined,
+    })
+    : null
 
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
@@ -1182,6 +1208,27 @@ export function createModularCore({
         if (inGroup) {
           try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
         }
+        // US-019 · 轮末挖线索：这一轮**已经投递完**（applyThreadContinuation 跑过）才入账。
+        // fire-and-forget：S2 是一次额外的小模型调用，绝不能让它在投递链路上等
+        // （等 = 用户已经看到回复了，可这一轮的 turn 还不算结束，调度槽被白占）。
+        // recordTurn 内部全 try/catch，账本容量满也只记日志；flush() 供测试与退出时收尾。
+        if (threadObserver) {
+          try {
+            const sentText = replyItems.flatMap((item) => (item.kind === 'mixed' ? item.parts : [item]))
+              .filter((item) => item.kind === 'text' || item.kind === 'voice')
+              .map((item) => item.value).join('|||')
+            threadObserver.recordTurn({
+              chatKey: turn.chatKey,
+              userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
+              replyRaw: String(reply || ''),
+              replyText: sentText,
+              recentText: [String(participants.prevTextOf(String(sessionId)) || ''), textOfSegments(io.members.flatMap((m) => m.segments || []))].filter(Boolean).join('\n'),
+            }).catch(() => {})
+          } catch (error) {
+            log.warn(`线索生产接线失败：${error?.message || error}`)
+          }
+        }
+
         // US-015 · 回复已投递，才结算这一轮的关系信号（失败只记 debug，绝不影响投递结果）。
         // 文本口径 = 这一轮真正进模型的用户原话 + 她的回复；recentContext 是同一聊天域的最近几轮。
         const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
@@ -1490,6 +1537,8 @@ export function createModularCore({
   }
 
   async function dispose() {
+    // 线索挖掘链先收尾（S2 的模型调用可能还在飞），否则测试进程会带着未完成的 promise 退出。
+    try { await threadObserver?.flush() } catch { /* 收尾失败不影响退出 */ }
     for (const mounted of mountedTools.values()) {
       for (const off of mounted.offs) { try { off?.() } catch {} }
     }
@@ -1620,6 +1669,10 @@ export function createModularCore({
     lastOwnerChatAt: () => presence.lastOwnerChatAt,
     lastBotToOwner: () => presence.lastBotToOwner,
     selfId: () => selfId,
+    // US-019 测试/排障出口：线索生产者（S1+S2）的观察器。没有账本时为 null。
+    threadObserver: threadObserver || null,
+    /** 等未完成的线索挖掘收尾（S2 是 fire-and-forget，测试不能靠 sleep 猜）。 */
+    flushThreads: () => (threadObserver ? threadObserver.flush() : Promise.resolve()),
   }
 
   return {
