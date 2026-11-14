@@ -4,7 +4,7 @@ import { DAY, HOUR, MINUTE, clamp01, clampInt, clip, hashId, isPlainObject, reda
 import { DEFAULT_PURPOSE_CONFIG } from './shared.js';
 import { localDateKey } from './clock.js';
 import { isDuplicateText, textSimilarity } from './similarity.js';
-import { AROUSAL_RE, DEFAULT_DRIVES, NEED_LABELS, NEGATIVE_RE, PLAN_RE, POSITIVE_RE, PROMISE_RE, PURPOSE_NEEDS, QUESTION_RE, RELATION_RE, SELF_REF_RE, appraiseMaterial, cleanTopic, extractTopic, needAffinity, normalizeDrives, satisfyDrives, topNeedOf } from './drives.js'
+import { AROUSAL_RE, DEFAULT_DRIVES, NEED_LABELS, NEGATIVE_RE, PLAN_RE, POSITIVE_RE, PROMISE_RE, PURPOSE_NEEDS, QUESTION_RE, RELATION_RE, appraiseMaterial, cleanTopic, extractTopic, mentionsRole, needAffinity, normalizeDrives, satisfyDrives, topNeedOf } from './drives.js'
 ;
 
 export const GOAL_OWNERS = Object.freeze(['self', 'owner', 'member', 'media']);
@@ -36,7 +36,7 @@ function analyzeEvent(material, { drives = DEFAULT_DRIVES, persistence = 1, role
   const affinity = material?.needAffinity ?? needAffinity(text);
   const domain = topNeedOf(affinity, drives);
   const subject = subjectOf(material);
-  const addressed = Boolean(roleName && String(material?.text ?? '').includes(roleName));
+  const addressed = mentionsRole(String(material?.text ?? ''), roleName);
   const selfRelevance = subject === 'self'
     ? 1
     : material?.selfRef
