@@ -3,7 +3,7 @@ import { clone, setPath, getPath, cx } from '../core/utils.js'
 
 import { useStyle } from '../styles/use-style.js'
 import { WhaleIcon } from '../ui/icons.js'
-import { Switch, Btn, Empty, TabBoundary } from '../ui/primitives.js'
+import { Switch, Btn, Empty, TabBoundary, Pill } from '../ui/primitives.js'
 import { NavBar } from './nav-bar.js'
 
 import { get, post } from '../core/http.js'
@@ -41,6 +41,7 @@ function QQHubPage() {
   const toastTimer = useRef(null)
   const dirtyRef = useRef(false)
   const saveRef = useRef(null)
+  const stJsonRef = useRef(null)
   // kind：ok / err / 不填 = 普通
   const toast = (m, kind) => {
     const text = String(m || '')
@@ -53,6 +54,11 @@ function QQHubPage() {
     const r = await get('/state')
     if (!r || r.ok === false) { setErr(r && r.message ? r.message : '读不到插件状态'); return }
     setErr('')
+    // 5 秒轮询绝大多数时候内容没变：直接跳过 setSt，省掉一次全页重渲染（点按掉帧的大头之一）。
+    // 序列化两次（各 ~20KB）远比重渲染整棵组件树便宜。
+    const json = JSON.stringify(r)
+    if (stJsonRef.current === json) return
+    stJsonRef.current = json
     setSt(r)
     if (!dirtyRef.current) setDraft(clone(r.config))
   }, [])
@@ -76,6 +82,7 @@ function QQHubPage() {
     const r = await post('/save', body)
     if (r.ok === false) { toast(r.message || '保存失败', 'err'); return false }
     dirtyRef.current = false
+    stJsonRef.current = JSON.stringify(r)
     setSt(r)
     setDraft(clone(r.config))
     toast(r.message || '保存好了', 'ok')
@@ -99,11 +106,23 @@ function QQHubPage() {
   }, [])
 
   if (!st || !draft) {
-    return h('div', { className: 'ab-root' }, h('div', { className: 'ab-wrap' }, err ? h('div', { className: 'ab-note err' }, '面板读不到插件：', err, '。如果刚装好插件，重启一次 DSH 试试。') : h(Empty, { icon: '🐋', text: '大肥鱼正在游过来…' })))
+    return (
+      <div className="ab-root">
+        <div className="ab-wrap">
+          {err
+            ? <div className="ab-note err">面板读不到插件：{err}。如果刚装好插件，重启一次 DSH 试试。</div>
+            : <Empty icon="🐋" text="大肥鱼正在游过来…" />}
+        </div>
+      </div>
+    )
   }
   const cfg = st.config
   const conn = st.onebot.state === 'connected'
-  const status = !cfg.enabled ? { cls: '', text: '休息中（总开关关着）' } : !conn ? { cls: 'err', text: 'QQ 没连上' } : cfg.dryRun ? { cls: 'warn', text: '在线 · 试运行' } : { cls: 'ok', text: '在线' }
+  const status = !cfg.enabled
+    ? { cls: '', text: '休息中（总开关关着）' }
+    : !conn ? { cls: 'err', text: 'QQ 没连上' }
+      : cfg.dryRun ? { cls: 'warn', text: '在线 · 试运行' }
+        : { cls: 'ok', text: '在线' }
   const persona = st.personas.find((p) => p.id === cfg.persona.current)
   const props = { st, draft, setDraft: setD, toast, reload, go, openWizard: () => setWizardOpen(true) }
   const showWizard = !cfg.setupDone || wizardOpen
@@ -127,46 +146,60 @@ function QQHubPage() {
     stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
-  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], memory: ['memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], local: ['local'] }
   const tabDirty = (id) => {
     if (!dirty) return false
     if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
     return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
   }
-  return h('div', { className: 'ab-root' },
-    h('div', { className: 'ab-wrap' },
-      h('div', { className: 'ab-hero' },
-        h('button', { type: 'button', className: 'ab-avatar-btn', title: '点击换头像', onClick: () => pickAvatar(toast, reload) }, h('img', { className: 'ab-avatar', src: avatarSrc(st), alt: '头像' }), h('span', { className: 'ab-avatar-tip' }, '换头像')),
-        h('div', { className: 'ab-hero-main' },
-          h('h1', null, (st.onebot.login && st.onebot.login.nickname) || '大肥鱼'),
-          h('div', { className: 'ab-sub' }, 'QQ ' + cfg.botQQ + ' · ' + (persona ? persona.name : '默认人格')),
-          h('div', { className: 'ab-pills' },
-            h('span', { className: 'ab-pill' }, h('i', { className: cx('ab-dot', status.cls) }), status.text),
-            h('span', { className: 'ab-pill' }, 'SnowLuma ' + (st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装')),
-            h('span', { className: 'ab-pill' }, 'QQ Hub v' + st.version))),
-        h('div', { className: 'ab-hero-side' },
-          h('div', { className: 'ab-switch-row' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v) })),
-          h('div', { className: 'ab-switch-row' }, h('span', { className: 'ab-muted' }, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '开着时只写日志，不真的发到 QQ' })))),
-      showWizard ? h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null,
-      showWizard ? null : h(NavBar, {
-        tabs, cur: curTab, go, dirtyOf: tabDirty, subRef: tabsRef,
-        mark: (t) => {
-          if (tabDirty(t.id)) return h('i', { className: 'dirty', title: '有没保存的改动' })
-          if (!t.flag) return null
-          const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
-          return h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' })
-        },
-      }),
-      showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
-      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
-      dirty && !showWizard ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
-        h('span', { className: 'ab-muted ab-small' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
-        h(Btn, { kind: 'ghost', onClick: () => setDraft(clone(st.config)) }, '撤销'),
-        h(Btn, { kind: 'primary', onClick: () => save() }, '保存设置')) : null,
-    ),
-    toastMsg ? h('div', { className: cx('ab-toast', toastMsg.kind), role: 'status' }, toastMsg.text) : null,
+  const mark = (t) => {
+    if (tabDirty(t.id)) return <i className="dirty" title="有没保存的改动" />
+    if (!t.flag) return null
+    const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
+    return <i className={cx('ab-dot', flag && 'ok')} title={flag ? '开着' : '关着'} />
+  }
+  return (
+    <div className="ab-root">
+      <div className="ab-wrap">
+        {/* 紧凑顶栏：头像 + 名字 + 状态 + 主开关，代替旧的渐变大 hero */}
+        <header className="ab-topbar">
+          <button type="button" className="ab-avatar-btn" title="点击换头像" onClick={() => pickAvatar(toast, reload)}>
+            <img className="ab-avatar" src={avatarSrc(st)} alt="头像" />
+            <span className="ab-avatar-tip">换头像</span>
+          </button>
+          <div className="ab-topbar-main">
+            <h1>{(st.onebot.login && st.onebot.login.nickname) || '大肥鱼'}</h1>
+            <div className="ab-meta">QQ {cfg.botQQ} · {persona ? persona.name : '默认人格'}</div>
+            <div className="ab-pills">
+              <Pill kind={status.cls}><i className={cx('ab-dot', status.cls)} />{status.text}</Pill>
+              <Pill>SnowLuma {st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装'}</Pill>
+              <Pill>QQ Hub v{st.version}</Pill>
+            </div>
+          </div>
+          <div className="ab-topbar-side">
+            <div className="ab-switch-row"><span>总开关</span><Switch on={cfg.enabled} onChange={(v) => quickToggle('enabled', v)} /></div>
+            <div className="ab-switch-row"><span className="ab-muted">试运行</span><Switch on={cfg.dryRun} onChange={(v) => quickToggle('dryRun', v)} title="开着时只写日志，不真的发到 QQ" /></div>
+          </div>
+        </header>
+        {showWizard ? <Wizard st={st} draft={draft} setDraft={setD} save={save} toast={toast} reload={reload} onClose={() => setWizardOpen(false)} /> : null}
+        {showWizard ? null : <NavBar tabs={tabs} cur={curTab} go={go} mark={mark} dirtyOf={tabDirty} subRef={tabsRef} />}
+        {showWizard ? null : <TabBoundary key={curTab.id} onHome={() => go('overview')}>{h(body, { ...props, mod: curTab.ext })}</TabBoundary>}
+        {showWizard || curTab.ext
+          ? null
+          : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => (
+            <div key={'embed-' + m.id} style={{ marginTop: 14 }}><ExtPage {...props} mod={m.id} embedded /></div>
+          ))}
+        {dirty && !showWizard ? (
+          <div className="ab-savebar">
+            <span className="msg">有改动还没保存</span>
+            <span className="ab-muted ab-small"><span className="ab-kbd">Ctrl</span> + <span className="ab-kbd">S</span></span>
+            <Btn kind="ghost" onClick={() => setDraft(clone(st.config))}>撤销</Btn>
+            <Btn kind="primary" onClick={() => save()}>保存设置</Btn>
+          </div>
+        ) : null}
+      </div>
+      {toastMsg ? <div className={cx('ab-toast', toastMsg.kind)} role="status">{toastMsg.text}</div> : null}
+    </div>
   )
 }
-
 
 export { QQHubPage }
