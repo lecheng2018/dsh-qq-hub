@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { askModel } from '../core/llm.js'
 import { readChatLogSource } from '../chat/chat-log.js'
 import { consolidate as dreamConsolidateFacts } from './memory-dream.js'
@@ -31,7 +32,7 @@ export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
-  add, revise, supersede, scopeFromChatId, listFor,
+  add, revise, supersede, invalidate, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
   reflectImpl, styleImpl,
@@ -277,25 +278,52 @@ export function createMemoryLearning({
       const out = dreamConsolidateFacts(facts, options)
       if (!out.ok) return out
 
-      // 墓碑落盘：只调 supersede，绝不 remove
+      // 墓碑落盘：已在库中的条目被合并/证伪时只立墓碑（invalidate），绝不凭空插入第三条副本造成膨胀
       let applied = 0
       for (const tomb of (out.supersede || [])) {
         try {
-          const merged = (out.facts || []).find((f) => String(f.id) === String(tomb.newId))
-          if (typeof supersede !== 'function' || !merged) continue
-          supersede({
-            oldId: String(tomb.oldId),
-            text: String(merged.text || ''),
-            about: String(merged.entity || ''),
-            tags: Array.isArray(merged.tags) ? merged.tags : [],
-            importance: Number(merged.importance) || 0.5,
-            entity: String(merged.entity || ''),
-            topic: String(merged.topic || ''),
-            source: 'dream',
-          })
-          applied += 1
+          if (typeof invalidate === 'function') {
+            if (invalidate(String(tomb.oldId), String(tomb.newId))) applied += 1
+          } else if (typeof supersede === 'function') {
+            const merged = (out.facts || []).find((f) => String(f.id) === String(tomb.newId))
+            if (merged) {
+              supersede({
+                oldId: String(tomb.oldId),
+                text: String(merged.text || ''),
+                about: String(merged.entity || ''),
+                tags: Array.isArray(merged.tags) ? merged.tags : [],
+                importance: Number(merged.importance) || 0.5,
+                entity: String(merged.entity || ''),
+                topic: String(merged.topic || ''),
+                source: 'dream',
+              })
+              applied += 1
+            }
+          }
         } catch (error) {
           log?.warn?.('梦境墓碑落盘失败（跳过该条，不删事实）：', error?.message || error)
+        }
+      }
+
+      // 归纳出的经验条目写进派生洞察，使经验真正落地生效
+      if (Array.isArray(out.experiences) && out.experiences.length && typeof setDerivedInsights === 'function') {
+        const byPerson = new Map()
+        for (const exp of out.experiences) {
+          const sc = String(exp.scope || 'global')
+          const key = sc.startsWith('private:') ? `qq:${sc.slice(8)}` : sc
+          if (!byPerson.has(key)) byPerson.set(key, [])
+          byPerson.get(key).push({
+            id: `exp_${randomUUID().slice(0, 6)}`,
+            text: String(exp.summary || exp.text || '').trim(),
+            at: Date.now(),
+          })
+        }
+        for (const [key, list] of byPerson) {
+          try {
+            setDerivedInsights(key, list, '梦境归纳', { sourceFingerprint: 'dream-consolidate' })
+          } catch (err) {
+            log?.warn?.('梦境经验保存失败（跳过）：', err?.message || err)
+          }
         }
       }
       log?.info?.(`梦境巩固：输入 ${facts.length} 条，合并 ${out.merges?.length || 0}，证伪 ${out.conflicts?.length || 0}，经验 ${out.experiences?.length || 0}，墓碑落地 ${applied}`)
