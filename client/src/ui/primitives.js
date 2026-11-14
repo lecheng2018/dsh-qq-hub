@@ -197,7 +197,7 @@ function DataTable({ columns, rows, rowKey, empty = '暂无数据' }) {
 }
 function DangerZone({ title, description, actionLabel, onConfirm, confirmText }) {
   const [open, setOpen] = useState(false)
-  return h(Card, { title, desc: description, tone: 'danger' },
+  return h(Card, { title, desc: description, tone: 'danger', collapsible: true, defaultOpen: false },
     h(Btn, { kind: 'danger', small: true, onClick: () => setOpen(true) }, actionLabel),
     open ? h(Dialog, { title, onClose: () => setOpen(false) },
       h('p', { className: 'ab-dialog-copy' }, description),

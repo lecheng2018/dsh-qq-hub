@@ -34,28 +34,29 @@ function Overview({ st, toast, go }) {
   const quick = (p, body) => async () => { const r = await post(p, body); toast(r.message || (r.ok ? '好了' : '没成功')) }
   return h('div', { className: 'ab-grid' },
     h(UpdateNotes, { st, toast }),
-    !cfg.enabled ? h('div', { className: 'ab-note warn' }, '总开关是关着的：大肥鱼现在不会收也不会发任何 QQ 消息。准备好了就在右上角打开。') : null,
-    cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。') : null,
+    !cfg.enabled ? h('div', { className: 'ab-note warn' }, '总开关已关闭，不会收发 QQ 消息。') : null,
+    cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '试运行已开启：只记录日志，不会发送到 QQ。') : null,
     cfg.enabled && !conn ? h('div', { className: 'ab-note err' }, '还没连上 QQ 网关' + (st.onebot.problem ? '：' + st.onebot.problem + '。' : '。去「连接」标签看看 SnowLuma 有没有装好、启动没有。') + ' ', h('a', { href: '#', onClick: (e) => { e.preventDefault(); go('connect') } }, '去连接 →')) : null,
-    h('div', { className: 'ab-grid ab-g4' },
+    h('div', { className: 'ab-grid ab-g4 ab-stats' },
       [['今天收到', s.received], ['今天发出', s.sent], ['语音条', s.voice], ['表情包', s.stickers]].map(([l, n]) => h('div', { key: l, className: 'ab-card ab-stat' }, h('div', { className: 'n' }, n || 0), h('div', { className: 'l' }, l))),
     ),
-    h('div', { className: 'ab-grid ab-g2' },
-      h(Card, { title: '运行速览' },
-        h('div', { className: 'ab-kv' },
-          h('span', null, '表情库'), h('span', null, ((st.stickers && st.stickers.count) || 0) + ' 张'),
-          h('span', null, '下一篇日记'), h('span', null, cfg.diary.enabled ? ((st.diary && st.diary.next) || '今天写完了') : '未开启'),
-          h('span', null, '人格'), h('span', null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current),
-          h('span', null, 'QQ 会话'), h('span', null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith('system:')).length + ' 个'),
+    h('div', { className: 'ab-grid ab-g2 ab-overview-panels' },
+      h(Card, { title: '运行速览', className: 'ab-runtime-card' },
+        h('div', { className: 'ab-runtime-grid' },
+          [
+            ['表情库', ((st.stickers && st.stickers.count) || 0) + ' 张'],
+            ['下一篇日记', cfg.diary.enabled ? ((st.diary && st.diary.next) || '今天写完了') : '未开启'],
+            ['人格', (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current],
+            ['QQ 会话', Object.keys(st.sessions || {}).filter((k) => !k.startsWith('system:')).length + ' 个'],
+          ].map(([label, value]) => h('div', { key: label, className: 'ab-runtime-item' }, h('span', { className: 'k' }, label), h('span', { className: 'v' }, value))),
         ),
       ),
-      h(Card, { title: '快捷自测', desc: '试运行时只记录日志；关闭试运行后会真实发送到 QQ。' },
+      h(Card, { title: '快捷自测', desc: '试运行只记录日志；关闭后才会真实发送。', className: 'ab-quick-test' },
         h('div', { className: 'ab-flex' },
-          h(Btn, { kind: 'primary', onClick: quick('/test-send') }, '给主人发自测'),
-          h(Btn, { onClick: quick('/speakup/fire') }, '现在来找我'),
+          h(Btn, { kind: 'primary', onClick: quick('/test-send') }, '发消息自测'),
+          h(Btn, { onClick: quick('/speakup/fire') }, '主动找我'),
           h(Btn, { onClick: quick('/diary/run', { visibility: 'self' }) }, '写私密日记'),
         ),
-        h('p', { className: 'ab-muted ab-small', style: { marginTop: 12, marginBottom: 0 } }, '完整对话和工具调用记录位于 DSH 侧栏的「QQ Hub」工作区。'),
       ),
     ),
     h(RecentLogs, { go }),
@@ -73,18 +74,18 @@ function RecentLogs({ go }) {
   const [items, setItems] = useState(null)
   useEffect(() => {
     let alive = true
-    const load = () => get('/logs?limit=8&level=info').then((r) => alive && setItems(r.entries || []))
+    const load = () => get('/logs?limit=6&level=info').then((r) => alive && setItems(r.entries || []))
     load()
     const t = setInterval(load, 5000)
     return () => { alive = false; clearInterval(t) }
   }, [])
-  return h(Card, { title: '最近动态', right: h(Btn, { kind: 'ghost', small: true, onClick: () => go('logs') }, '全部日志 →') },
+  return h(Card, { title: '最近动态', className: 'ab-recent-card', collapsible: true, right: h(Btn, { kind: 'ghost', small: true, onClick: () => go('logs') }, '全部日志 →') },
     items === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : items.length === 0 ? h(Empty, { text: '还没有动静' }) :
-      h('div', { className: 'ab-logs', style: { maxHeight: 240 } }, items.slice().reverse().map((e, i) => h(LogLine, { key: i, e }))))
+      h('div', { className: 'ab-logs' }, items.slice().reverse().map((e, i) => h(LogLine, { key: i, e }))))
 }
 
 function LogLine({ e }) {
-  return h('div', { className: cx('ab-log', e.level) }, h('span', { className: 't' }, e.time), h('span', { className: 'a' }, e.area), h('span', { className: 'm' }, e.text))
+  return h('div', { className: cx('ab-log', e.level) }, h('div', { className: 'ab-log-meta' }, h('span', { className: 't' }, e.time), h('span', { className: 'a' }, e.area)), h('span', { className: 'm' }, e.text))
 }
 
 /** 控制台密码状态：插件自动管理；登不上时给「重置为自动密码」。 */
