@@ -1199,7 +1199,7 @@ export function createModularCore({
         replyItems = next
       }
       try {
-        await replyDelivery.deliver(turn.chatKey, reply, {
+        const delivered = await replyDelivery.deliver(turn.chatKey, reply, {
           own: true,
           userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
           wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
@@ -1241,7 +1241,18 @@ export function createModularCore({
           now: Date.now(),
         })
         noteRecentTurn(turn.chatKey, turnUserText, String(reply || ''))
-        return { state: 'sent', via: 'reply-delivery' }
+        // 如实上报（缺陷：轮次级谎报）。过去这里无条件写 state:'sent'，
+        // 于是「3 条气泡挂了 2 条」与「全成功」在调用方看来完全一样，台账里的
+        // unknown/failed 也没人读得到。现在按 reply-delivery 的气泡级回执区分：
+        //   · 全部拿到网关回执 → sent
+        //   · 有气泡没拿到回执 → partial（已经发出去的不重发，避免重复说话）
+        // attempted 为 0 的情况（整轮没有任何可发条目）保持 sent，与旧行为一致。
+        const failed = Number(delivered?.failedCount) || 0
+        const state = failed > 0 ? 'partial' : 'sent'
+        if (failed > 0) {
+          log.warn(`${turn.chatKey}：本轮投递归属 ${state}（${delivered?.delivered ?? '?'}/${delivered?.attempted ?? '?'} 条拿到回执）`)
+        }
+        return { state, via: 'reply-delivery', failedCount: failed, attempted: delivered?.attempted, delivered: delivered?.delivered }
       } catch (error) {
         log.warn(`回复发送失败：${error?.message || error}`)
         throw error
