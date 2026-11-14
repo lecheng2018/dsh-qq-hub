@@ -60,8 +60,10 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 /* ---------------- 布局 ---------------- */
 .ab-wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px }
 .ab-grid { display: grid; gap: 12px }
-.ab-g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) }
-.ab-g4 { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) }
+/* 网格轨道用 min(Npx, 100%) 而不是裸 Npx：窄屏（<320px 内容宽）时轨道能收到容器宽，
+ * 否则 1fr 的隐式 min-content 会把整条轨道顶出视口、页面出现横向滚动（真机 2026-11-15） */
+.ab-g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)) }
+.ab-g4 { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)) }
 
 /* ---------------- 顶栏（替代旧 hero，无卡片无波浪） ---------------- */
 .ab-topbar { display: flex; align-items: center; gap: 14px; padding: 14px 2px 16px }
@@ -188,7 +190,7 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-seg button.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }
 .ab-seg.off { opacity: .45 }
 .ab-seg.off button { cursor: not-allowed }
-.ab-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; width: 100% }
+.ab-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; width: 100% }
 .ab-choice { border: 1px solid var(--ab-line-2); border-radius: 10px; padding: 10px 12px; background: var(--ab-card); cursor: pointer; text-align: left; font: inherit; color: var(--ab-text); transition: border-color .12s, box-shadow .12s }
 .ab-choice:hover { border-color: var(--ab-sky) }
 .ab-choice.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }
@@ -307,9 +309,12 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); display: block }
 .ab-shot .cap { font-size: 11px; color: var(--ab-dim); line-height: 1.35; max-height: 2.7em; overflow: hidden }
 
-/* 人格页 */
-.ab-persona { display: grid; grid-template-columns: 240px 1fr; gap: 12px; align-items: start }
-.ab-plist { display: flex; flex-direction: column; gap: 6px }
+/* 人格页：左列（列表+头像）跟随滚动钉在吸顶导航下方——右侧编辑区很长时，
+ * 左列不跟着滚空一大块；列表条目少时视觉上也更完整。
+ * 轨道 minmax(0,1fr)：行内「200px 标签 + 240px 固定宽输入」的最小内容宽会把裸 1fr
+ * 轨道顶到 ~438px，窄屏整页横向溢出（真机 2026-11-15） */
+.ab-persona { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 12px; align-items: start }
+.ab-plist { position: sticky; top: 124px; display: flex; flex-direction: column; gap: 6px }
 .ab-pitem { text-align: left; border: 1px solid var(--ab-line); background: var(--ab-card); border-radius: 10px; padding: 10px 12px; cursor: pointer; color: var(--ab-text); font: inherit; transition: border-color .12s, box-shadow .12s }
 .ab-pitem:hover { border-color: var(--ab-line-2) }
 .ab-pitem.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }
@@ -362,12 +367,12 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-wiz-bar .seg span { font-size: 11.5px }
 
 /* 复查清单 / 驱动 / 安装步骤 */
-.ab-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px }
+.ab-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 8px }
 .ab-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--ab-line); background: var(--ab-card-2); color: var(--ab-sub); font-size: 12.5px }
 .ab-check i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-line-2); color: #fff; flex: none }
 .ab-check.done { color: var(--ab-text); border-color: color-mix(in srgb, var(--ab-ok) 30%, transparent); background: color-mix(in srgb, var(--ab-ok) 7%, var(--ab-card)) }
 .ab-check.done i { background: var(--ab-ok) }
-.ab-drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px }
+.ab-drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px }
 .ab-drive { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer; transition: border-color .12s, box-shadow .12s }
 .ab-drive:hover { border-color: var(--ab-sky) }
 .ab-drive.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }
@@ -411,6 +416,14 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-more summary:hover { color: var(--ab-sub) }
 .ab-more .ab-more-body { margin-top: 6px; color: var(--ab-sub); line-height: 1.65; white-space: pre-wrap }
 
+/* 可折叠长卡片（如「改资料与名单」16 行权限）：默认收起，标题行可点 */
+.ab-fold-head { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; cursor: pointer; user-select: none; border-radius: var(--ab-radius-sm) }
+.ab-fold-head h3 { margin: 0 }
+.ab-fold-head:hover h3, .ab-fold-head:focus-visible h3 { color: var(--ab-deep) }
+.ab-fold-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }
+.ab-fold-chev.open { transform: rotate(90deg) }
+.ab-fold-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }
+
 /* ---------------- 响应式 ---------------- */
 @media (max-width: 720px) {
   .ab-row { flex-direction: column; gap: 6px; padding: 12px 0 }
@@ -422,7 +435,8 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
   .ab-input, .ab-select, .ab-textarea, .ab-sel-btn { font-size: 16px }
   .ab-btn { min-height: 36px }
   .ab-range { min-width: 0; width: 100% }
-  .ab-persona { grid-template-columns: 1fr }
+  .ab-persona { grid-template-columns: minmax(0, 1fr) }
+  .ab-plist { position: static }
   .ab-finder { left: 6px; right: 6px; width: auto; max-width: none }
   .ab-wiz-bar .seg span { display: none }
   .ab-install-steps .st span { display: none }
