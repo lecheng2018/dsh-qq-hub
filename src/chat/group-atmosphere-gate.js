@@ -104,7 +104,9 @@ export function decideGroupReplyWithAtmosphere(p, options = {}) {
 /** 供 host 装配处使用的一句话封装：读 env 得到开关 → 带门禁的决策。 */
 export function gateFromEnv(env = process.env) {
   const gate = readAtmosphereGate(env)
-  return { enabled: gate.enabled, tensionLimit: DEFAULT_TENSION_LIMIT, reason: gate.reason }
+  // raw 一并透出：调用方要区分「从未设置（永久默认态）」与「显式关闭/设坏了」——
+  // 前者不值得每次重启刷一行日志，后者才需要让运维知道。
+  return { enabled: gate.enabled, tensionLimit: DEFAULT_TENSION_LIMIT, raw: gate.raw, reason: gate.reason }
 }
 
 export { burstCount }
