@@ -481,12 +481,32 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return true
   }
 
-  /** 标成过时：不再被想起，但不删（面板里能看到被哪条取代、能恢复）。 */
-  function invalidate(id, byId = '') {
+  /**
+   * 标成过时：不再被想起，但不删（面板里能看到被哪条取代、能恢复）。
+   *
+   * pinned 保护（缺陷 3）：`pinned` 是主人在面板上手动钉住的重要事实，既有契约是
+   * 「固定的事实永不自动失效」（supersede 早就这么拦了，见上面 :348）。但本函数
+   * 过去无条件下墓碑，于是**梦境巩固会给出 pinned 事实立碑**，直接违背契约。
+   *
+   * 两种调用方，语义必须分开：
+   *   · 自动路径（梦境巩固 / 抽取纠错）——**必须**拒绝 pinned，否则「永不自动失效」是句空话；
+   *   · 人工路径（主人在面板上显式点「标记过时」）—— 应当允许，那是人的决定，不是机器的。
+   *
+   * 所以默认拒绝、显式 `{ force: true }` 才放行。总线（memory-bus.invalidate）不传 force，
+   * 因为它是自动路径的入口；面板的显式失效如果要放开，得自己显式传 force。
+   * 真删（主人彻底不要这条）走 remove()，不受本保护影响。
+   * @param {string} id 目标事实 id
+   * @param {string} [byId] 取代它的新事实 id
+   * @param {{force?: boolean}} [opts] force=true 才允许给 pinned 立墓碑（人工路径专用）
+   * @returns {boolean} 是否真的立了墓碑
+   */
+  function invalidate(id, byId = '', opts = {}) {
     if (status === 'closed') return false
+    const force = opts && typeof opts === 'object' ? opts.force === true : false
     const s = load()
     const m = s.items.find((x) => x.id === id)
     if (!m) return false
+    if (m.pinned && !force) return false
     m.invalidAt = Date.now()
     if (byId) m.supersededBy = byId
     staleProfilesIn(s, String(m.about || ''), String(m.scope || ''))
@@ -623,17 +643,38 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   // ---------- 相处经验：按人（私聊按 QQ 号，群按群）归类的、概括性的「怎么和 TA 相处」，越聊越懂 ----------
+
+  /**
+   * 派生桶（s.insights / s.styles）的人设可见性判定 —— 缺陷 1 的读取侧唯一口径。
+   *
+   * 三条规则，按优先级：
+   *   1. 有 personaId（新数据）：只对同一人设可见；
+   *   2. 有 personaScope（更早的写法）：同上；
+   *   3. 都没有（历史存量）：**归属默认人设**，只在默认人设激活时可见。
+   *
+   * 第 3 条是本次修复的关键取舍。修复前这里是 `return true`，也就是「没有标注就谁都能读」——
+   * 而修复前的写入端从来没盖过 personaId，等于**全库存量都跨人设串味**（审计原型实测：
+   * 切到 dafeiyu 后 socrates 的相处经验和说话方式照样被拼进上下文）。
+   * 若继续放行，历史数据永远洗不干净，隔离只对新数据生效，等于没修。
+   * 归属默认人设的口径与 memory-persona-track.effectivePersonaId 完全一致
+   * （「未标注 = 默认人设，只读共享不丢弃」），既不删旧数据、也不把它泼到别的人设身上。
+   */
+  function derivedVisibleTo(item, active, { shareUnlabeled = false } = {}) {
+    if (!item || typeof item !== 'object') return true
+    const pid = normalizePersonaId(item.personaId || item.persona)
+    if (pid) return pid === active
+    const scopePid = normalizePersonaId(item.personaScope)
+    if (scopePid) return scopePid === active
+    // 无标注：self 桶是全局语感（shareUnlabeled），其余桶归默认人设
+    return shareUnlabeled || active === DEFAULT_PERSONA_ID
+  }
+
   const personKey = (chat) => (chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : '')
   function insightsOf(key, persona = activePersonaId()) {
     const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
     return ((load().insights || {})[key] || [])
       .filter((item) => !item.stale)
-      .filter((item) => {
-        const pid = normalizePersonaId(item.personaId || item.persona)
-        if (pid) return pid === active
-        if (item.personaScope) return normalizePersonaId(item.personaScope) === active
-        return true
-      })
+      .filter((item) => derivedVisibleTo(item, active))
   }
   function staleInsightsIn(s, key = '') {
     let changed = 0
@@ -653,7 +694,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    const defaultPid = normalizePersonaId((typeof opts === 'object' && opts?.personaId) || (typeof name === 'object' && name?.personaId) || '')
+    // 缺陷 1 写入侧：没显式指定人设时，按「此刻激活的人设」落款。
+    // 不落款的话，新条目在读取侧会被当成历史存量归到默认人设，
+    // 于是非默认人设写下的经验自己都读不回来（写了等于白写）。
+    const defaultPid = normalizePersonaId((typeof opts === 'object' && opts?.personaId) || (typeof name === 'object' && name?.personaId) || '') || activePersonaId()
     s.insights[key] = list.slice(0, 8).map((item) => {
       const pid = normalizePersonaId(item.personaId || defaultPid)
       return { ...item, origin: 'manual', ...(pid ? { personaId: pid } : {}) }
@@ -667,7 +711,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    const pid = normalizePersonaId(personaId)
+    const pid = normalizePersonaId(personaId) || activePersonaId()
     s.insights[key] = list.slice(0, 8).map((item) => {
       const itemPid = normalizePersonaId(item.personaId || pid)
       return {
@@ -681,6 +725,28 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   // ---------- 说话方式：聊久了潜移默化学到的（对方的说话习惯 + 她自己慢慢养成的说法） ----------
+  /**
+   * 「她自己养成的说法」这个桶（key === 'self'）的人设归属决策：**默认全局共享，显式落款才隔离**。
+   *
+   * 为什么不像 insights 那样默认按人设隔离：self 桶不是「和某个人相处学到的」，
+   * 是她自己的语感沉淀——换一件衣服，说话习惯本来就该跟着她走。而且它由
+   * memory-style.learnSelfStyle 把所有聊天的习惯汇总而来，天然是多会话共用的原料。
+   * 所以：写入时不自动盖 personaId（保持「无标注 = 全局」）；只有调用方**显式**传了
+   * personaId 才按人设隔离（US-017 的 setStyle('self', …, { personaId: 'socrates' })
+   * 就是按这个口径验的：socrates 的措辞不许出现在 dafeiyu 的上下文里）。
+   *
+   * 对比：insights 桶和「某个人的」style 桶（qq:* / group:*）是相处产物，默认按人设隔离，
+   * 写入时自动落款当前人设（见 derivedVisibleTo 与 setInsights/setDerivedInsights）。
+   */
+  const SELF_STYLE_KEY = 'self'
+  const isSelfStyleKey = (key) => key === SELF_STYLE_KEY
+  /** 说话方式的落款：self 桶默认不落款（全局共享），其余按当前人设落款。 */
+  function stylePidFor(key, personaId) {
+    const explicit = normalizePersonaId(personaId)
+    if (explicit) return explicit
+    return isSelfStyleKey(key) ? '' : activePersonaId()
+  }
+
   function styleSourceOf(key) {
     return (load().styleSources || {})[key] || null
   }
@@ -693,14 +759,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (src?.personaScope && normalizePersonaId(src.personaScope) !== active) return []
 
     const list = (load().styles || {})[key] || []
-    return list.filter((item) => {
-      if (typeof item === 'object' && item !== null) {
-        const pid = normalizePersonaId(item.personaId || item.persona)
-        if (pid) return pid === active
-        if (item.personaScope) return normalizePersonaId(item.personaScope) === active
-      }
-      return true
-    }).map((item) => (typeof item === 'object' && item !== null ? item.text || item.content || String(item) : String(item)))
+    return list
+      // self 桶的无标注条目是全局语感，不按默认人设隔离（见 SELF_STYLE_KEY 决策）
+      .filter((item) => derivedVisibleTo(item, active, { shareUnlabeled: isSelfStyleKey(key) }))
+      .map((item) => (typeof item === 'object' && item !== null ? item.text || item.content || String(item) : String(item)))
   }
   function staleStylesIn(s, key = '') {
     let changed = 0
@@ -715,8 +777,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function setStyle(key, list, { personaId } = {}) {
     const s = load()
     s.styles = s.styles || {}
-    s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
-    const pid = normalizePersonaId(personaId)
+    s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, isSelfStyleKey(key) ? 6 : 5)
+    const pid = stylePidFor(key, personaId)
     s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'manual', ...(pid ? { personaId: pid } : {}) } }
     s.rev = (s.rev || 0) + 1
     save(s)
@@ -724,8 +786,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function setDerivedStyle(key, list, { sourceFingerprint, personaId } = {}) {
     const s = load()
     s.styles = s.styles || {}
-    s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, key === 'self' ? 6 : 5)
-    const pid = normalizePersonaId(personaId)
+    s.styles[key] = list.map((t) => String(t).trim().slice(0, 40)).filter(Boolean).slice(0, isSelfStyleKey(key) ? 6 : 5)
+    // 和 styleSources 落款必须同一口径：读取侧先看 styleSources 的人设，
+    // 两处不一致就会出现「写进去的读不回来」或「别人的读得回来」。
+    const pid = stylePidFor(key, personaId)
     s.styleSources = { ...(s.styleSources || {}), [key]: { origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0, ...(pid ? { personaId: pid } : {}) } }
     s.rev = (s.rev || 0) + 1
     save(s)
