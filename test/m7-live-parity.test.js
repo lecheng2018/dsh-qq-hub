@@ -770,6 +770,40 @@ test('群聊补图：群闸放过的图片随下一段上下文登记成附件',
   } finally { restore(); await core.dispose(); await mock.close() }
 })
 
+test('群聊纯媒体：活跃/engaged 都不自行开回合，直接 @ 仍可带图回', async () => {
+  const restore = stubPngFetch(['x/gate.png'])
+  const { core, dsh, mock } = await fixture({
+    brain: async () => '看到图了',
+    cfgOver: { group: { interjectChance: 1, minRecentMessages: 0, minRelevance: 0, quietHours: [], fishGuard: { enabled: false } } },
+  })
+  const imageOnly = (id) => ({
+    ...groupEv(''), message_id: id,
+    message: [{ type: 'image', data: { url: 'https://x/gate.png', sub_type: 1 } }],
+  })
+  try {
+    // 活跃群 + 100% 插话：旧逻辑会在这里错误地开回合。
+    await core.dispatchLegacyEvent(imageOnly(818201))
+    await sleep(400)
+    assert.equal(dsh.turns.length, 0, '纯媒体不得靠随机插话自行开回合')
+
+    await core.dispatchLegacyEvent({
+      ...groupEv(''), message_id: 818202,
+      message: [
+        { type: 'at', data: { qq: Number(BOT) } },
+        { type: 'image', data: { url: 'https://x/gate.png', sub_type: 1 } },
+      ],
+    })
+    await sleep(700)
+    assert.equal(dsh.turns.length, 1, '直接 @ 带图仍应进入回合')
+    assert.match(String(dsh.turns[0]?.userText || ''), /不得猜图中的人物/)
+
+    // 刚才已经说过话，engaged 状态也不能让下一条纯媒体自行开新回合。
+    await core.dispatchLegacyEvent(imageOnly(818203))
+    await sleep(400)
+    assert.equal(dsh.turns.length, 1, 'engaged 状态下的纯媒体也不得自行开回合')
+  } finally { restore(); await core.dispose(); await mock.close() }
+})
+
 test('群聊补图：触发轮自带图片时按地址去重，最多 4 张', async () => {
   const restore = stubPngFetch(['x/a.png', 'x/b.png', 'x/c.png', 'x/d.png', 'x/e.png'])
   const { core, dsh, mock } = await fixture()
