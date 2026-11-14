@@ -286,7 +286,9 @@ export function createModularCore({
   // 默认关闭；非法/空值 fail-closed 回退 legacy（reason 带出来便于排障）。
   const atmosphereGate = gateFromEnv(process.env)
   if (atmosphereGate.enabled) log.info(`群聊张力门禁已开启（tensionLimit=${atmosphereGate.tensionLimit}）：高张力且未被叫到时不插嘴`)
-  else debug(`群聊张力门禁关闭：${atmosphereGate.reason}`)
+  // 从未设置（raw=null）是默认态：每次重启都刷「未设置，按 legacy 处理」纯属噪音，不打。
+  // 只有「显式关闭」或「值设坏了被兜底」才值得留一行——那是运维该知道的异常。
+  else if (atmosphereGate.raw !== null) debug(`群聊张力门禁关闭：${atmosphereGate.reason}`)
 
   /**
    * 群消息要不要回：与 legacy 同一 decideGroupReply 调用形状。
