@@ -1,24 +1,98 @@
-import { React, useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
-import { cx, pct } from '../core/utils.js'
+import { React, useState, useEffect, useRef, Fragment, h } from '../core/react.js'
+import { cx, parsePct } from '../core/utils.js'
+
+/* 基础控件层：所有视图与内置模块面板共用的组件。
+ * 注意：ExtPanel 会把 Card/Btn/Switch/Row/Empty/Select/Seg/Range 这些名字原样传给
+ * 模块的自定义 panel.js，导出名是隐形契约，只加不改。 */
 
 function Switch({ on, onChange, disabled, title }) {
-  return h('button', { type: 'button', className: cx('ab-switch', on && 'on'), onClick: () => !disabled && onChange(!on), disabled, title, role: 'switch', 'aria-checked': !!on })
+  return <button type="button" className={cx('ab-switch', on && 'on')} onClick={() => !disabled && onChange(!on)} disabled={disabled} title={title} role="switch" aria-checked={!!on} />
 }
+
+/** 字段行：左边是 label + hint，右边是控件；窄屏自动改成上下两行。 */
 function Row({ label, hint, children }) {
-  return h('div', { className: 'ab-row' }, h('div', { className: 'ab-label' }, h('b', null, label), hint ? h('small', null, hint) : null), h('div', { className: 'ab-ctl' }, children))
+  return (
+    <div className="ab-row">
+      <div className="ab-label">
+        <b>{label}</b>
+        {hint ? <small>{hint}</small> : null}
+      </div>
+      <div className="ab-ctl">{children}</div>
+    </div>
+  )
 }
-function Card({ title, desc, icon, right, children, className }) {
-  return h('div', { className: cx('ab-card', className) },
-    title ? h('div', { className: 'ab-flex', style: { marginBottom: desc ? 0 : 10 } }, h('h3', null, icon || null, title), h('div', { className: 'ab-spacer' }), right || null) : null,
-    desc ? h('p', { className: 'ab-desc' }, desc) : null,
-    children)
+
+function Card({ title, desc, icon, right, more, collapse, children, className }) {
+  // collapse：默认收起的长卡片（标题行可点展开）。描述保留在收起态，帮助决定要不要展开。
+  const [open, setOpen] = useState(!collapse)
+  if (!collapse) {
+    return (
+      <div className={cx('ab-card', className)}>
+        {title ? (
+          <div className="ab-flex" style={{ marginBottom: desc || more ? 0 : 10 }}>
+            <h3>{icon || null}{title}</h3>
+            <div className="ab-spacer" />
+            {right || null}
+          </div>
+        ) : null}
+        {desc ? <p className="ab-desc">{desc}</p> : null}
+        {more ? <More>{more}</More> : null}
+        {children}
+      </div>
+    )
+  }
+  return (
+    <div className={cx('ab-card ab-fold', !open && 'closed', className)}>
+      <div
+        className="ab-fold-head" role="button" tabIndex={0} aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
+      >
+        <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
+        </span>
+        <h3>{icon || null}{title}</h3>
+        <div className="ab-spacer" />
+        {right || null}
+      </div>
+      {desc ? <p className="ab-desc">{desc}</p> : null}
+      {open ? children : null}
+      {open && more ? <More>{more}</More> : null}
+    </div>
+  )
 }
+
 function Btn({ kind, small, onClick, disabled, children, title, className }) {
   const [busy, setBusy] = useState(false)
-  return h('button', {
-    type: 'button', title, className: cx('ab-btn', kind, small && 'sm', className), disabled: disabled || busy,
-    onClick: async () => { if (!onClick) return; setBusy(true); try { await onClick() } finally { setBusy(false) } },
-  }, busy ? [h('i', { key: 's', className: 'ab-spin' }), ' 处理中'] : children)
+  return (
+    <button
+      type="button" title={title} className={cx('ab-btn', kind, small && 'sm', className)} disabled={disabled || busy}
+      onClick={async () => { if (!onClick) return; setBusy(true); try { await onClick() } finally { setBusy(false) } }}
+    >
+      {busy ? [<i key="s" className="ab-spin" />, ' 处理中'] : children}
+    </button>
+  )
+}
+
+/** 长文案收纳：一句话摘要 + 可展开的详细说明（details/summary，无 JS 状态）。
+ * 面板「文字长又扎堆」的主出口：操作说明、踩坑背景这类内容收进这里。 */
+function More({ label = '详细说明', children }) {
+  return (
+    <details className="ab-more">
+      <summary>{label}</summary>
+      <div className="ab-more-body">{children}</div>
+    </details>
+  )
+}
+
+/** 状态徽章（模块行、pill 里用）。kind: dim/warn/err/mine */
+function Badge({ kind, title, children }) {
+  return <span className={cx('ab-badge', kind)} title={title}>{children}</span>
+}
+
+/** 状态胶囊（顶栏状态、小信息位）。kind: ok/warn/err/不填 */
+function Pill({ kind, title, children }) {
+  return <span className={cx('ab-pill', kind)} title={title}>{children}</span>
 }
 
 /** 自定义下拉：替代系统自带的蓝白 select。options: [{value, label, desc?, group?}] */
@@ -51,36 +125,62 @@ function Select({ value, options, onChange, placeholder, width }) {
   let lastGroup = null
   const items = []
   options.forEach((o, i) => {
-    if (o.group && o.group !== lastGroup) items.push(h('div', { key: 'g' + i, className: 'ab-sel-group' }, o.group))
+    if (o.group && o.group !== lastGroup) items.push(<div key={'g' + i} className="ab-sel-group">{o.group}</div>)
     lastGroup = o.group || lastGroup
-    items.push(h('div', { key: 'o' + i, role: 'option', 'aria-selected': o.value === value, className: cx('ab-sel-opt', o.value === value && 'on', i === act && 'act'), onMouseEnter: () => setAct(i), onMouseDown: (e) => { e.preventDefault(); pick(o) } },
-      h('span', { className: 'ck' }, o.value === value ? '✓' : ''),
-      h('span', { className: 'tx' }, o.label, o.desc ? h('span', { className: 'ds' }, o.desc) : null)))
+    items.push(
+      <div key={'o' + i} role="option" aria-selected={o.value === value} className={cx('ab-sel-opt', o.value === value && 'on', i === act && 'act')} onMouseEnter={() => setAct(i)} onMouseDown={(e) => { e.preventDefault(); pick(o) }}>
+        <span className="ck">{o.value === value ? '✓' : ''}</span>
+        <span className="tx">{o.label}{o.desc ? <span className="ds">{o.desc}</span> : null}</span>
+      </div>,
+    )
   })
-  return h('div', { className: cx('ab-sel', open && 'open'), ref, style: width ? { minWidth: width } : null },
-    h('button', { type: 'button', className: 'ab-sel-btn', onClick: () => (open ? setOpen(false) : openAt()), onKeyDown: onKey, 'aria-haspopup': 'listbox', 'aria-expanded': open },
-      h('span', { className: 'v' }, cur ? cur.label : h('span', { className: 'ab-muted' }, placeholder || '请选择')),
-      h('svg', { className: 'chev', width: 12, height: 12, viewBox: '0 0 12 12', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }, h('path', { d: 'M3 4.5 6 7.5 9 4.5' }))),
-    open ? h('div', { className: 'ab-sel-pop', role: 'listbox' }, items) : null)
+  return (
+    <div className={cx('ab-sel', open && 'open')} ref={ref} style={width ? { minWidth: width } : null}>
+      <button type="button" className="ab-sel-btn" onClick={() => (open ? setOpen(false) : openAt())} onKeyDown={onKey} aria-haspopup="listbox" aria-expanded={open}>
+        <span className="v">{cur ? cur.label : <span className="ab-muted">{placeholder || '请选择'}</span>}</span>
+        <svg className="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 4.5 6 7.5 9 4.5" /></svg>
+      </button>
+      {open ? <div className="ab-sel-pop" role="listbox">{items}</div> : null}
+    </div>
+  )
 }
 
 /** 卡片式单选：选项少、需要解释时用。 */
 function Choices({ value, options, onChange }) {
-  return h('div', { className: 'ab-choices', role: 'radiogroup' }, options.map((o) => h('button', { key: o.value, type: 'button', role: 'radio', 'aria-checked': o.value === value, className: cx('ab-choice', o.value === value && 'on'), onClick: () => onChange(o.value) },
-    h('b', null, o.icon || null, o.label), o.desc ? h('small', null, o.desc) : null)))
+  return (
+    <div className="ab-choices" role="radiogroup">
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={o.value === value} className={cx('ab-choice', o.value === value && 'on')} onClick={() => onChange(o.value)}>
+          <b>{o.icon || null}{o.label}</b>
+          {o.desc ? <small>{o.desc}</small> : null}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 /** 滑块 + 数值，比纯数字框直观。 */
 function Range({ value, min, max, step, onChange, fmt }) {
-  return h('div', { className: 'ab-range' },
-    h('input', { type: 'range', min, max, step: step || 1, value: value ?? min, onChange: (e) => onChange(Number(e.target.value)) }),
-    h('span', { className: 'val' }, fmt ? fmt(value) : value))
+  return (
+    <div className="ab-range">
+      <input type="range" min={min} max={max} step={step || 1} value={value ?? min} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="val">{fmt ? fmt(value) : value}</span>
+    </div>
+  )
 }
+
 function Seg({ value, options, onChange, disabled }) {
-  return h('div', { className: 'ab-seg' + (disabled ? ' off' : '') }, options.map((o) => h('button', { key: o.value, type: 'button', className: value === o.value ? 'on' : '', disabled: !!disabled, onClick: () => { if (!disabled) onChange(o.value) } }, o.label)))
+  return (
+    <div className={'ab-seg' + (disabled ? ' off' : '')}>
+      {options.map((o) => (
+        <button key={o.value} type="button" className={value === o.value ? 'on' : ''} disabled={!!disabled} onClick={() => { if (!disabled) onChange(o.value) }}>{o.label}</button>
+      ))}
+    </div>
+  )
 }
+
 function Empty({ icon, text }) {
-  return h('div', { className: 'ab-empty' }, h('div', { className: 'big' }, icon || '🐋'), text)
+  return <div className="ab-empty"><div className="big">{icon || '🐋'}</div>{text}</div>
 }
 
 /** 一行一个的列表框：输入时保留原文（含正在敲的空行），只把解析结果交给草稿。 */
@@ -89,9 +189,13 @@ function ListArea({ value, onChange, placeholder, numbers }) {
   const [text, setText] = useState(value.join('\n'))
   // 外面改了（保存、撤销、重新载入）而且和框里内容对不上时才覆盖
   useEffect(() => { if (parse(text).join('\n') !== value.join('\n')) setText(value.join('\n')) }, [value.join('\n')])
-  return h('textarea', { className: 'ab-textarea', style: { minHeight: 60 }, placeholder, value: text,
-    onChange: (e) => { setText(e.target.value); onChange(parse(e.target.value)) },
-    onBlur: () => setText(parse(text).join('\n')) })
+  return (
+    <textarea
+      className="ab-textarea" style={{ minHeight: 60 }} placeholder={placeholder} value={text}
+      onChange={(e) => { setText(e.target.value); onChange(parse(e.target.value)) }}
+      onBlur={() => setText(parse(text).join('\n'))}
+    />
+  )
 }
 
 /** 单行版 ListArea：输入过程保留原文（逗号、空格都能敲进去），失焦才解析成列表写回。
@@ -108,41 +212,44 @@ function ListInput({ value, onChange, placeholder, numbers, style }) {
   }
   const [text, setText] = useState(value.join(', '))
   useEffect(() => { if (parse(text, { strict: true }).join(',') !== value.join(',')) setText(value.join(', ')) }, [value.join(',')])
-  return h('input', { className: 'ab-input', style: { width: '100%', ...(style || {}) }, placeholder, value: text,
-    onChange: (e) => { setText(e.target.value); onChange(parse(e.target.value, { strict: true })) },
-    onBlur: () => { const t = parse(text, { strict: true }).join(', '); setText(t); onChange(parse(t, { strict: true })) } })
+  return (
+    <input
+      className="ab-input" style={{ width: '100%', ...(style || {}) }} placeholder={placeholder} value={text}
+      onChange={(e) => { setText(e.target.value); onChange(parse(e.target.value, { strict: true })) }}
+      onBlur={() => { const t = parse(text, { strict: true }).join(', '); setText(t); onChange(parse(t, { strict: true })) }}
+    />
+  )
 }
 
-/** 百分数行：输入过程保留原始字符串（打 0、0.、065 都不会被强行回写），
- * 失焦时才解析写回。原来的受控 number input 每敲一键就 Number() 一次：
- * 敲「0.」被归一成 0、光标跳到末尾，再敲就变成 065；清空时 Number('')=0
- * 和残留的旧值打架，保存出来是 100。清空 + 失焦 = 稳定写 0。
- * 框里就是百分数（0~100），别把 ≤1 的输入当 0~1 小数：旧写法里「1」既像
- * 1% 又像 1.0=100%，一律按小数解释后敲 1 直接变 100。按 0.01 设概率请敲 1。 */
+/** 百分数行：输入过程保留原始字符串（打 0、0.、065 都不会被强行回写），失焦才解析写回。
+ * 解析口径在 core/utils.js 的 parsePct（敲 1 = 1%，不把 ≤1 当小数）。 */
 function PercentRow({ label, value, fallback, write, remove }) {
   const shown = () => Math.round((Number(value !== undefined && value !== null && value !== '' ? value : (fallback ?? 0)) || 0) * 100)
   const [text, setText] = useState(String(shown()))
   useEffect(() => { const s = String(shown()); if (parsePct(text) !== shown()) setText(s) }, [shown()])
-  const parsePct = (t) => { const n = Number(String(t).trim()); if (!Number.isFinite(n) || n < 0) return 0; return Math.round(Math.min(n, 100)) }
   const commit = () => {
     const p = parsePct(text)
     setText(String(p))
     write(p / 100)
   }
-  return h(Row, { label },
-    h('input', { className: 'ab-input sm', type: 'number', min: 0, max: 100, value: text,
-      onChange: (e) => setText(e.target.value), onBlur: commit,
-      onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } } }),
-    h('span', { className: 'ab-muted' }, '% 插话'),
-    remove ? h(Btn, { small: true, kind: 'ghost', onClick: remove }, '移除') : null)
+  return (
+    <Row label={label}>
+      <input className="ab-input sm" type="number" min={0} max={100} value={text}
+        onChange={(e) => setText(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }} />
+      <span className="ab-muted">% 插话</span>
+      {remove ? <Btn small kind="ghost" onClick={remove}>移除</Btn> : null}
+    </Row>
+  )
 }
 
 // 绑定到草稿配置的控件
 
 
 function ModOff({ name }) {
-  return h(Card, { title: name }, h('div', { className: 'ab-muted ab-small' }, '「' + name + '」模块关着，这部分用不了。要用的话去「扩展」页把它打开。'))
+  return <Card title={name}><div className="ab-muted ab-small">「{name}」模块关着，这部分用不了。要用的话去「扩展」页把它打开。</div></Card>
 }
+
 /** 一个标签页出错时只坏这一页：显示原因和「回到概览」，不会整个面板白屏（也不会因为记住了这一页而一直白）。 */
 class TabBoundary extends React.Component {
   constructor(p) { super(p); this.state = { error: null } }
@@ -150,15 +257,19 @@ class TabBoundary extends React.Component {
   componentDidCatch(error) { try { localStorage.setItem('qq-hub.tab', 'overview') } catch (e) {} }
   render() {
     if (!this.state.error) return this.props.children
-    return h(Card, { title: '这一页出错了' },
-      h('div', { className: 'ab-note err' }, String((this.state.error && this.state.error.message) || this.state.error)),
-      h('div', { className: 'ab-small ab-muted', style: { margin: '8px 0' } }, '别的页面不受影响。把这段报错截图发给作者就行。'),
-      h('div', { className: 'ab-flex' },
-        h(Btn, { small: true, kind: 'primary', onClick: () => this.props.onHome && this.props.onHome() }, '回到概览'),
-        h(Btn, { small: true, kind: 'ghost', onClick: () => this.setState({ error: null }) }, '再试一次')))
+    return (
+      <Card title="这一页出错了">
+        <div className="ab-note err">{String((this.state.error && this.state.error.message) || this.state.error)}</div>
+        <div className="ab-small ab-muted" style={{ margin: '8px 0' }}>别的页面不受影响。把这段报错截图发给作者就行。</div>
+        <div className="ab-flex">
+          <Btn small kind="primary" onClick={() => this.props.onHome && this.props.onHome()}>回到概览</Btn>
+          <Btn small kind="ghost" onClick={() => this.setState({ error: null })}>再试一次</Btn>
+        </div>
+      </Card>
+    )
   }
 }
 
 export {
-  Switch, Row, Card, Btn, Select, Choices, Range, Seg, Empty, ListArea, ListInput, PercentRow, ModOff, TabBoundary
+  Switch, Row, Card, Btn, More, Badge, Pill, Select, Choices, Range, Seg, Empty, ListArea, ListInput, PercentRow, ModOff, TabBoundary
 }
