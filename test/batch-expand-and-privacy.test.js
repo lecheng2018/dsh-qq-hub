@@ -96,9 +96,10 @@ test('memory-privacy/list 没有 all=1 旁路：私聊打码只由 previewPrivat
 test('client.js 记忆列表：翻一翻默认收起（1.3.61），展开后仍按时间分段平铺', () => {
   const src = readFileSync(join(root, 'client/client.js'), 'utf8')
   assert.match(src, /browseOpen, setBrowseOpen\] = useState\(false\)/, '默认收起，整页不被拉长')
-  // 展开后照旧：按时间分段小标题、条目平铺全文
-  const i = src.indexOf("(browseOpen ? '▾' : '▸')")
-  const seg = src.slice(i, i + 3000)
+  // 展开后照旧：按时间分段小标题、条目平铺全文（esbuild 产物里字符串统一双引号）
+  const m = src.match(/\(browseOpen \? ["']▾["'] : ["']▸["']\)/)
+  assert.ok(m, '翻一翻的折叠标记还在')
+  const seg = src.slice(m.index, m.index + 6000)
   assert.match(seg, /ab-section-title/, '分段用小标题')
   assert.match(seg, /MemoryRow/, '条目照常平铺渲染')
 })
@@ -115,8 +116,8 @@ test('ListInput numbers=true：敲一半的短数字不被吃（strict 只在失
   const seg = src.slice(i, i + 1400)
   assert.match(seg, /strict/, 'parse 有 strict 模式')
   // onChange 也传 strict（draft 只收有效值），但输入框 text 保留原文 —— 关键断言：useEffect 对比用 strict，
-  // text 不被非 strict parse 覆盖
-  assert.match(seg, /onChange: \(e\) => \{ setText\(e\.target\.value\)/, '输入时 text 保留原文')
+  // text 不被非 strict parse 覆盖。产物里 JSX 属性对象会换行排版，正则要容忍空白。
+  assert.match(seg, /onChange: \(e\) => \{\s*setText\(e\.target\.value\)/, '输入时 text 保留原文')
 })
 
 test('heybox dutyInFlight 挂进程级单例（热重载不失效）', () => {
