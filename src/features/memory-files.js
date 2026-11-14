@@ -201,6 +201,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           items.push({
             id: e.id,
             text: e.text || '',
+            personaId: e.personaId || undefined,
             about: e.about || '',
             aboutName: e.aboutName || '',
             tags: e.tags || [],
@@ -373,6 +374,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         byScope.get(sc).push({
           id: it.id,
           kind: 'fact',
+          personaId: it.personaId || undefined,
           about: it.about,
           aboutName: it.aboutName,
           title: it.title,
