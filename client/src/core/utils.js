@@ -11,6 +11,13 @@ const setPath = (obj, path, value) => {
 const getPath = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj)
 const pct = (v) => Math.round((Number(v) || 0) * 100)
 const cx = (...a) => a.filter(Boolean).join(' ')
+// 百分数框（0~100）的解析：敲 1 就是 1%，不把 ≤1 当 0~1 小数（旧写法敲 1 直接变 100，
+// 和框面「% 插话」的语义打架，2026-11 复核钉死）。清空/非数字/负数落回 0，越界钳到 0~100。
+const parsePct = (t) => {
+  const n = Number(String(t).trim())
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.round(Math.min(n, 100))
+}
 // 音调存的是 '+20Hz' 这种字符串，滑条要数字；合法范围 ±80Hz（再往上 edge-tts 服务端会夹）
 const pitchNum = (s) => {
   const m = /^([+-]?\d+)Hz$/i.exec(String(s || ''))
@@ -39,5 +46,5 @@ const copy = (text, toast, msg) => {
 }
 
 export {
-  clone, setPath, getPath, pct, cx, pitchNum, pitchText, pitchLabel, timeAgo, copy
+  clone, setPath, getPath, pct, cx, parsePct, pitchNum, pitchText, pitchLabel, timeAgo, copy
 }

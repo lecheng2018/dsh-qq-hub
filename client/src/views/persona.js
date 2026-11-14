@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, Select, Seg, Empty, Switch } from '../ui/primitives.js'
+import { useState, useEffect, Fragment, h } from '../core/react.js'
+import { Card, Row, Btn, Select, Seg, Empty } from '../ui/primitives.js'
 import { navIcon } from '../ui/icons.js'
 import { setPath, cx } from '../core/utils.js'
 import { get, post } from '../core/http.js'
@@ -10,68 +10,78 @@ import {
 
 function AvatarCard({ st, toast, reload }) {
   const custom = st.avatar && st.avatar.custom
-  return h('div', { className: 'ab-card', style: { marginTop: 12, padding: 14 } },
-    h('div', { className: 'ab-flex', style: { alignItems: 'center', gap: 12 } },
-      h('img', { src: avatarSrc(st), alt: '头像', style: { width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', objectPosition: '50% 18%', border: '2px solid var(--ab-line)' } }),
-      h('div', null, h('b', null, '头像'), h('div', { className: 'ab-muted ab-small' }, custom ? '用的是你上传的图片' : '默认的大肥鱼'))),
-    h('div', { className: 'ab-flex', style: { marginTop: 10, flexWrap: 'wrap' } },
-      h(Btn, { small: true, kind: 'primary', onClick: () => pickAvatar(toast, reload) }, '换一张'),
-      custom ? h(Btn, { small: true, kind: 'ghost', onClick: async () => { const r = await post('/avatar/reset'); toast(r.message, 'ok'); reload() } }, '恢复默认') : null,
-      h(Btn, { small: true, kind: 'ghost', onClick: async () => { if (!confirm('把这张图设成机器人号的 QQ 头像？')) return; const r = await post('/avatar/sync-qq'); toast(r.message, r.ok ? 'ok' : 'err') } }, '同步成 QQ 头像')),
-    h('div', { className: 'ab-muted ab-small', style: { marginTop: 6 } }, '这是面板里显示的头像；点「同步成 QQ 头像」才会改机器人号在 QQ 上的头像。'))
+  return (
+    <div className="ab-card" style={{ marginTop: 12, padding: 14 }}>
+      <div className="ab-flex" style={{ alignItems: 'center', gap: 12 }}>
+        <img src={avatarSrc(st)} alt="头像" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', objectPosition: '50% 18%', border: '2px solid var(--ab-line)' }} />
+        <div><b>头像</b><div className="ab-muted ab-small">{custom ? '用的是你上传的图片' : '默认的大肥鱼'}</div></div>
+      </div>
+      <div className="ab-flex" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+        <Btn small kind="primary" onClick={() => pickAvatar(toast, reload)}>换一张</Btn>
+        {custom ? <Btn small kind="ghost" onClick={async () => { const r = await post('/avatar/reset'); toast(r.message, 'ok'); reload() }}>恢复默认</Btn> : null}
+        <Btn
+          small kind="ghost"
+          onClick={async () => { if (!confirm('把这张图设成机器人号的 QQ 头像？')) return; const r = await post('/avatar/sync-qq'); toast(r.message, r.ok ? 'ok' : 'err') }}
+        >
+          同步成 QQ 头像
+        </Btn>
+      </div>
+      <div className="ab-muted ab-small" style={{ marginTop: 6 }}>这是面板里显示的头像；点「同步成 QQ 头像」才会改机器人号在 QQ 上的头像。</div>
+    </div>
+  )
 }
 
 // 人格按【标题】分节：面板里拆开逐节编辑，保存时按原来的写法拼回一整段（文件格式不变）
 
-
 function PersonaSection({ sec, lead, first, last, onChange, onMove, onDelete, onPolish, pending, onPick, onFlip }) {
   const showing = pending ? (pending.view === 'new' ? pending.text : sec.text) : sec.text
   const color = lead ? 'var(--ab-sea)' : PSEC_COLORS[sec.k % PSEC_COLORS.length]
-  return h('div', { className: cx('ab-psec', lead && 'lead', pending && 'cmp'), style: { '--c': color } },
-    h('div', { className: 'ab-psec-head' },
-      lead
-        ? h('div', { className: 'ab-psec-fixed' }, '开场', h('small', null, '她是谁，一两段话'))
-        : h('input', { className: 'ab-psec-title', value: sec.title, placeholder: '这一节叫什么', maxLength: 30, onChange: (e) => onChange({ title: e.target.value.replace(/[【】\n]/g, '') }) }),
-      h('span', { className: 'ab-psec-n' }, showing.length + ' 字'),
-      h('div', { className: 'ab-psec-act' },
-        lead ? null : h('button', { type: 'button', className: 'ab-ibtn', title: '往上移', disabled: first || !!pending, onClick: () => onMove(-1) }, navIcon('M12 19V5M6 11l6-6 6 6')),
-        lead ? null : h('button', { type: 'button', className: 'ab-ibtn', title: '往下移', disabled: last || !!pending, onClick: () => onMove(1) }, navIcon('M12 5v14M6 13l6 6 6-6')),
-        lead ? null : h('button', { type: 'button', className: 'ab-ibtn danger', title: '删掉这一节', disabled: !!pending, onClick: onDelete }, navIcon('M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12'))),
-      pending
-        ? null
-        : h(AiButton, { onClick: onPolish, empty: !sec.text.trim() })),
-    h('textarea', {
-      value: showing, rows: autoRows(showing), readOnly: !!pending,
-      placeholder: lead ? '你是「…」，一个真实存在的人，正在用手机 QQ 和对面聊天。' : '- 一条一行，短句就好',
-      onChange: (e) => onChange({ text: e.target.value }),
-    }),
-    pending ? h('div', { className: 'ab-compare' },
-      h('span', { className: 'ab-compare-tag' }, pending.view === 'new' ? 'AI 润色版' : '原版'),
-      h('span', { className: 'ab-muted ab-small' }, pending.view === 'new' ? '和原版比：' + (pending.text.length - sec.text.length >= 0 ? '多 ' : '少 ') + Math.abs(pending.text.length - sec.text.length) + ' 字' : '还没改过的样子'),
-      h('div', { className: 'ab-spacer' }),
-      h('button', { type: 'button', className: 'ab-chip solid', onClick: onFlip }, pending.view === 'new' ? '看原版' : '看润色版'),
-      h(Btn, { small: true, kind: 'primary', onClick: () => onPick(pending.view) }, pending.view === 'new' ? '用润色版' : '保留原版')) : null)
+  return (
+    <div className={cx('ab-psec', lead && 'lead', pending && 'cmp')} style={{ '--c': color }}>
+      <div className="ab-psec-head">
+        {lead
+          ? <div className="ab-psec-fixed">开场<small>她是谁，一两段话</small></div>
+          : <input className="ab-psec-title" value={sec.title} placeholder="这一节叫什么" maxLength={30} onChange={(e) => onChange({ title: e.target.value.replace(/[【】\n]/g, '') })} />}
+        <span className="ab-psec-n">{showing.length} 字</span>
+        <div className="ab-psec-act">
+          {lead ? null : <button type="button" className="ab-ibtn" title="往上移" disabled={first || !!pending} onClick={() => onMove(-1)}>{navIcon('M12 19V5M6 11l6-6 6 6')}</button>}
+          {lead ? null : <button type="button" className="ab-ibtn" title="往下移" disabled={last || !!pending} onClick={() => onMove(1)}>{navIcon('M12 5v14M6 13l6 6 6-6')}</button>}
+          {lead ? null : <button type="button" className="ab-ibtn danger" title="删掉这一节" disabled={!!pending} onClick={onDelete}>{navIcon('M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12')}</button>}
+        </div>
+        {pending ? null : <AiButton onClick={onPolish} empty={!sec.text.trim()} />}
+      </div>
+      <textarea
+        value={showing} rows={autoRows(showing)} readOnly={!!pending}
+        placeholder={lead ? '你是「…」，一个真实存在的人，正在用手机 QQ 和对面聊天。' : '- 一条一行，短句就好'}
+        onChange={(e) => onChange({ text: e.target.value })}
+      />
+      {pending ? (
+        <div className="ab-compare">
+          <span className="ab-compare-tag">{pending.view === 'new' ? 'AI 润色版' : '原版'}</span>
+          <span className="ab-muted ab-small">{pending.view === 'new' ? '和原版比：' + (pending.text.length - sec.text.length >= 0 ? '多 ' : '少 ') + Math.abs(pending.text.length - sec.text.length) + ' 字' : '还没改过的样子'}</span>
+          <div className="ab-spacer" />
+          <button type="button" className="ab-chip solid" onClick={onFlip}>{pending.view === 'new' ? '看原版' : '看润色版'}</button>
+          <Btn small kind="primary" onClick={() => onPick(pending.view)}>{pending.view === 'new' ? '用润色版' : '保留原版'}</Btn>
+        </div>
+      ) : null}
+    </div>
+  )
 }
+
 function AiButton({ onClick, empty }) {
   const [busy, setBusy] = useState(false)
-  return h('button', {
-    type: 'button', className: 'ab-aibtn', disabled: busy, title: empty ? '让 AI 按这一节的标题先写一版' : '让 AI 把这一节改得更具体、更像真人',
-    onClick: async () => { setBusy(true); try { await onClick() } finally { setBusy(false) } },
-  },
-  busy ? h('i', { className: 'ab-spin' }) : navIcon('M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z'),
-  h('span', null, busy ? '润色中' : empty ? 'AI 写一版' : 'AI 润色'))
+  return (
+    <button
+      type="button" className="ab-aibtn" disabled={busy} title={empty ? '让 AI 按这一节的标题先写一版' : '让 AI 把这一节改得更具体、更像真人'}
+      onClick={async () => { setBusy(true); try { await onClick() } finally { setBusy(false) } }}
+    >
+      {busy ? <i className="ab-spin" /> : navIcon('M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z')}
+      <span>{busy ? '润色中' : empty ? 'AI 写一版' : 'AI 润色'}</span>
+    </button>
+  )
 }
 
-
-
 function Persona({ st, draft, setDraft, toast, reload }) {
-  // 机器人见过的群和私聊：用于「按聊天换人设」直接选，不用手打号码
-  const [chats, setChats] = useState([])
-  useEffect(() => {
-    let alive = true
-    get('/panel/chats').then((r) => { if (alive && r && r.ok && Array.isArray(r.chats)) setChats(r.chats) }).catch(() => {})
-    return () => { alive = false }
-  }, [])
   const [list, setList] = useState(st.personas)
   // 「按聊天换人设」里手输号码的暂存：key 是那一行的行标识，值是正在敲的文本。
   // 不能每敲一个字就改配置里的 key —— 那样 key 一变这一行就会被重建，
@@ -177,94 +187,149 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           return setPath(prev, 'persona.' + mapKey, m2)
         })
       }
-      return h('div', { key: id, className: 'ab-flex', style: { marginBottom: 6 } },
-        h('input', {
-          className: 'ab-input', style: { width: 240 }, value: shown,
-          placeholder: wantKind === 'group' ? '填群号' : '填 QQ 号',
-          inputMode: 'numeric',
-          // 敲的时候只进暂存，不逐字改配置里的 key（否则整行被重建、光标丢失）
-          onChange: (e) => {
-            const v = e.target.value.replace(/\D/g, '')
-            setTyping((t) => ({ ...t, [id]: v }))
-          },
-          onKeyDown: (e) => { if (e.key === 'Enter') commitRow(e.currentTarget.value) },
-          onBlur: (e) => commitRow(e.currentTarget.value),
-        }),
-      h(Select, { value: pid, width: 200, options: personaOpts('选人格'), onChange: (v) => {
-        // 同样必须函数式更新，别用旧的 m 重建
-        setDraft((prev) => {
-          const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
-          const m2 = { ...cur2 }
-          if (v) m2[id] = v; else delete m2[id]
-          return setPath(prev, 'persona.' + mapKey, m2)
-        })
-      } }),
-      h(Btn, { small: true, kind: 'danger', onClick: () => {
-        setTyping((t) => { const n = { ...t }; delete n[id]; return n })
-        setDraft((prev) => {
-          const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
-          const m2 = { ...cur2 }
-          delete m2[id]
-          return setPath(prev, 'persona.' + mapKey, m2)
-        })
-      } }, '删'))
+      return (
+        <div key={id} className="ab-flex" style={{ marginBottom: 6 }}>
+          <input
+            className="ab-input" style={{ width: 240 }} value={shown}
+            placeholder={wantKind === 'group' ? '填群号' : '填 QQ 号'}
+            inputMode="numeric"
+            // 敲的时候只进暂存，不逐字改配置里的 key（否则整行被重建、光标丢失）
+            onChange={(e) => {
+              const v = e.target.value.replace(/\D/g, '')
+              setTyping((t) => ({ ...t, [id]: v }))
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitRow(e.currentTarget.value) }}
+            onBlur={(e) => commitRow(e.currentTarget.value)}
+          />
+          <Select
+            value={pid} width={200} options={personaOpts('选人格')}
+            onChange={(v) => {
+              // 同样必须函数式更新，别用旧的 m 重建
+              setDraft((prev) => {
+                const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+                const m2 = { ...cur2 }
+                if (v) m2[id] = v; else delete m2[id]
+                return setPath(prev, 'persona.' + mapKey, m2)
+              })
+            }}
+          />
+          <Btn
+            small kind="danger"
+            onClick={() => {
+              setTyping((t) => { const n = { ...t }; delete n[id]; return n })
+              setDraft((prev) => {
+                const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+                const m2 = { ...cur2 }
+                delete m2[id]
+                return setPath(prev, 'persona.' + mapKey, m2)
+              })
+            }}
+          >
+            删
+          </Btn>
+        </div>
+      )
     })
     // 现在只用手输，不再依赖「机器人聊过哪些群」，所以没有「没候选」这回事
     const noMore = false
-    return h(Card, { title, desc: hint,
-      // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
-      // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
-      right: h(Btn, { small: true, onClick: () => setDraft((prev) => {
-        // 函数式更新：新行加在「最新」的分行表上，而不是渲染时的旧快照
-        const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
-        return setPath(prev, 'persona.' + mapKey, { ...cur2, ['#new' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)]: '' })
-      }) }, '＋ 添加') },
-      rows.length ? rows : h('div', { className: 'ab-muted ab-small' }, noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，点「＋ 添加」手输号码就行。' : '还没单独指定'),
-      h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
+    return (
+      <Card
+        title={title} desc={hint}
+        // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
+        // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
+        right={(
+          <Btn
+            small
+            onClick={() => setDraft((prev) => {
+              // 函数式更新：新行加在「最新」的分行表上，而不是渲染时的旧快照
+              const cur2 = (prev && prev.persona && prev.persona[mapKey]) || {}
+              return setPath(prev, 'persona.' + mapKey, { ...cur2, ['#new' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)]: '' })
+            })}
+          >
+            ＋ 添加
+          </Btn>
+        )}
+      >
+        {rows.length ? rows : <div className="ab-muted ab-small">{noMore ? '机器人还没在' + (wantKind === 'group' ? '群里说过话' : '私聊过') + '，点「＋ 添加」手输号码就行。' : '还没单独指定'}</div>}
+        <div style={{ marginTop: 10 }}>
+          <Row label="默认">
+            <Select
+              value={pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || ''} width={200}
+              options={personaOpts('跟随全局人设')}
+              onChange={(v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v)}
+            />
+          </Row>
+        </div>
+      </Card>
+    )
   }
-  return h('div', null,
-   h('div', { className: 'ab-persona' },
-    h('div', { className: 'ab-plist' },
-      list.map((p) => h('button', { key: p.id, type: 'button', className: cx('ab-pitem', sel === p.id && 'on'), onClick: () => setSel(p.id) },
-        h('div', { className: 'nm' }, p.name, p.id === current ? h('span', { className: 'ab-badge' }, '正在用') : null),
-        h('div', { className: 'tg' }, (p.tags || []).join(' · ') || p.id + ' · ' + p.chars + ' 字'))),
-      h(Btn, { kind: 'ghost', onClick: () => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setDirty(true); setPending({}) } }, '＋ 新建人格'),
-      h(AvatarCard, { st, toast, reload }),
-    ),
-    edit ? h(Card, { title: '编辑人格', desc: '人格写在系统提示词的最前面，按节写更好改。保存后，大肥鱼下一轮回复起就按新的来。',
-      right: h('div', { className: 'ab-flex' },
-        edit.id !== current ? h(Btn, { small: true, onClick: async () => { const r = await post('/persona/use', { id: edit.id }); toast(r.message); refresh(); reload() } }, '设为当前') : null,
-        edit.id !== current ? h(Btn, { small: true, kind: 'danger', onClick: async () => { if (!confirm('删掉这个人格？')) return; const r = await post('/persona/delete', { id: edit.id }); if (r.ok) { setList(r.list); setSel(current) } else toast(r.message) } }, '删除') : null) },
-      h(Row, { label: '名字' }, h('input', { className: 'ab-input', value: edit.name, onChange: (e) => patch({ name: e.target.value }) })),
-      h(Row, { label: '标签', hint: '用逗号隔开' }, h('input', { className: 'ab-input', value: edit.tags, onChange: (e) => patch({ tags: e.target.value }) })),
-      h('div', { className: 'ab-flex', style: { marginTop: 14 } },
-        h(Seg, { value: whole ? 'whole' : 'secs', onChange: (v) => setMode(v === 'whole'), options: [{ value: 'secs', label: '分节' }, { value: 'whole', label: '整段' }] }),
-        h('div', { className: 'ab-spacer' }),
-        h('span', { className: 'ab-muted ab-small' }, (edit.secs.length - 1) + ' 节 · ' + body.length + ' 字')),
-      whole
-        ? h('textarea', { className: 'ab-textarea', style: { minHeight: 380, marginTop: 12 }, value: body, onChange: (e) => setSecs(splitPersona(e.target.value)) })
-        : h('div', { className: 'ab-psecs' },
-          edit.secs.map((s, i) => h(PersonaSection, {
-            key: s.k, sec: s, lead: s.title === null, first: i <= 1, last: i === edit.secs.length - 1, pending: pending[s.k],
-            onChange: (p) => updSec(s.k, p), onMove: (d) => moveSec(i, d), onDelete: () => delSec(s),
-            onPolish: () => polish(s), onPick: (v) => pick(s, v), onFlip: () => flip(s),
-          })),
-          h('div', { className: 'ab-psec-add' },
-            h('span', { className: 'ab-muted ab-small' }, '加一节：'),
-            suggest.map((t) => h('button', { key: t, type: 'button', className: 'ab-chip', onClick: () => addSec(t) }, t)),
-            h('button', { type: 'button', className: 'ab-chip solid', onClick: () => addSec('') }, '＋ 自己起名'))),
-      h('div', { className: 'ab-flex', style: { marginTop: 14 } },
-        waiting ? h('span', { className: 'ab-muted ab-small' }, '还有 ' + waiting + ' 节 AI 润色没选定，选好再保存') : null,
-        h('div', { className: 'ab-spacer' }),
-        h(Btn, { kind: 'primary', disabled: !dirty || !!waiting, onClick: save }, dirty ? '保存人格' : '已保存')),
-    ) : h(Card, null, h(Empty, { icon: '⏳', text: '加载中…' })),
-  ),
-   h('div', { style: { height: 12 } }),
-   specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。'),
-   h('div', { style: { height: 12 } }),
-   specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。'),
+  return (
+    <div>
+      <div className="ab-persona">
+        <div className="ab-plist">
+          {list.map((p) => (
+            <button key={p.id} type="button" className={cx('ab-pitem', sel === p.id && 'on')} onClick={() => setSel(p.id)}>
+              <div className="nm">{p.name}{p.id === current ? <span className="ab-badge">正在用</span> : null}</div>
+              <div className="tg">{(p.tags || []).join(' · ') || p.id + ' · ' + p.chars + ' 字'}</div>
+            </button>
+          ))}
+          <Btn
+            kind="ghost"
+            onClick={() => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setDirty(true); setPending({}) }}
+          >
+            ＋ 新建人格
+          </Btn>
+          <AvatarCard st={st} toast={toast} reload={reload} />
+        </div>
+        {edit ? (
+          <Card
+            title="编辑人格" desc="人格写在系统提示词的最前面，按节写更好改。保存后，下一轮回复起就按新的来。"
+            right={(
+              <div className="ab-flex">
+                {edit.id !== current ? <Btn small onClick={async () => { const r = await post('/persona/use', { id: edit.id }); toast(r.message); refresh(); reload() }}>设为当前</Btn> : null}
+                {edit.id !== current ? <Btn small kind="danger" onClick={async () => { if (!confirm('删掉这个人格？')) return; const r = await post('/persona/delete', { id: edit.id }); if (r.ok) { setList(r.list); setSel(current) } else toast(r.message) }}>删除</Btn> : null}
+              </div>
+            )}
+          >
+            <Row label="名字"><input className="ab-input" value={edit.name} onChange={(e) => patch({ name: e.target.value })} /></Row>
+            <Row label="标签" hint="用逗号隔开"><input className="ab-input" value={edit.tags} onChange={(e) => patch({ tags: e.target.value })} /></Row>
+            <div className="ab-flex" style={{ marginTop: 14 }}>
+              <Seg value={whole ? 'whole' : 'secs'} onChange={(v) => setMode(v === 'whole')} options={[{ value: 'secs', label: '分节' }, { value: 'whole', label: '整段' }]} />
+              <div className="ab-spacer" />
+              <span className="ab-muted ab-small">{(edit.secs.length - 1) + ' 节 · ' + body.length + ' 字'}</span>
+            </div>
+            {whole
+              ? <textarea className="ab-textarea" style={{ minHeight: 380, marginTop: 12 }} value={body} onChange={(e) => setSecs(splitPersona(e.target.value))} />
+              : (
+                <div className="ab-psecs">
+                  {edit.secs.map((s, i) => (
+                    <PersonaSection
+                      key={s.k} sec={s} lead={s.title === null} first={i <= 1} last={i === edit.secs.length - 1} pending={pending[s.k]}
+                      onChange={(p) => updSec(s.k, p)} onMove={(d) => moveSec(i, d)} onDelete={() => delSec(s)}
+                      onPolish={() => polish(s)} onPick={(v) => pick(s, v)} onFlip={() => flip(s)}
+                    />
+                  ))}
+                  <div className="ab-psec-add">
+                    <span className="ab-muted ab-small">加一节：</span>
+                    {suggest.map((t) => <button key={t} type="button" className="ab-chip" onClick={() => addSec(t)}>{t}</button>)}
+                    <button type="button" className="ab-chip solid" onClick={() => addSec('')}>＋ 自己起名</button>
+                  </div>
+                </div>
+              )}
+            <div className="ab-flex" style={{ marginTop: 14 }}>
+              {waiting ? <span className="ab-muted ab-small">还有 {waiting} 节 AI 润色没选定，选好再保存</span> : null}
+              <div className="ab-spacer" />
+              <Btn kind="primary" disabled={!dirty || !!waiting} onClick={save}>{dirty ? '保存人格' : '已保存'}</Btn>
+            </div>
+          </Card>
+        ) : <Card><Empty icon="⏳" text="加载中…" /></Card>}
+      </div>
+      <div style={{ height: 12 }} />
+      {specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。')}
+      <div style={{ height: 12 }} />
+      {specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。')}
+    </div>
   )
 }
-
 
 export { Persona, AvatarCard, PersonaSection, AiButton }
