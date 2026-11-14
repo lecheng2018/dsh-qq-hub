@@ -18,6 +18,7 @@ import { legacyEventToNormalized } from '../chat/adapters/legacy-inbound.js'
 import { createDshSessionAdapter } from '../chat/adapters/dsh-session.js'
 import { createOnebotOutboxAdapter, paramsFor } from '../chat/adapters/onebot-outbox.js'
 import { createLegacyContextAdapter } from '../chat/adapters/legacy-context.js'
+import { resolveCharacterIdentity } from '../persona/identity-context.js'
 import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
 import { createSystemTurns } from '../chat/system-turns.js'
@@ -46,7 +47,7 @@ import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
-import { policyFor, topicRelevance } from '../chat/group-policy.js'
+import { policyFor, decideGroupReply, topicRelevance, withRoleWakeWords } from '../chat/group-policy.js'
 import { decideGroupReplyWithAtmosphere, gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
@@ -285,7 +286,9 @@ export function createModularCore({
     const now = Date.now()
     const gid = chatKey.slice(6)
     const pol0 = policyFor(cfg.group, cfg.group?.overrides, gid)
-    const pol = pol0
+    // 唤醒词不只认配置里那几个固定词：她自己卡上的名字也该叫得动，
+    // 否则换了卡就变成「在群里喊她新名字没反应」——和身份中枢认的名字劈叉。
+    const pol = withRoleWakeWords(pol0, resolveCharacterIdentity(`group:${gid}`, cfg))
     const recentTexts = groups.buffer(gid).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
     let memScore = 0
     try {

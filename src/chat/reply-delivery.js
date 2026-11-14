@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { parseReply, bubbleDelay, replyRules, extractAndStripInnerMonologue } from './reply.js'
+import { updateClosureState } from './conversation-closure.js'
 import { applyThreadContinuation, adaptThreadLedger } from './inner-thread-link.js'
 import { calculateTypingCadence, typingWaitAfter, typingCadenceEnabled } from './reply-cadence.js'
 
@@ -15,6 +16,34 @@ export function createReplyDelivery({
   logChat, onActivity, onDelivered, outbox, isCaptured, sleep, threadLedger, deliveryContext = new AsyncLocalStorage(),
 }) {
   const deliveryChains = new Map()
+  // US-006 · 四态会话收尾：per-chat 状态。放这里而不是宿主，因为真正决定
+  // 「这一轮说几条、要不要反问」的地方是 deliverNow 里的 rules —— 接在别处会被
+  // 这里的 replyRules(cfg, inGroup) 重新算一遍而失效。
+  const closureStates = new Map()
+  const CLOSURE_LEN_WINDOW = 6
+  const CLOSED_STATE = 'closed'
+
+  /** 依据「对方这轮说的话」推出本轮发言处方。异常时退回 null（不施加约束）。 */
+  function closurePlanFor(chatId, incomingText) {
+    const key = String(chatId || '')
+    if (!key) return null
+    try {
+      const prev = closureStates.get(key) || null
+      const prevLengths = Array.isArray(prev?.lengths) ? prev.lengths : []
+      const text = String(incomingText ?? '').trim()
+      const nextLengths = text ? [...prevLengths, Array.from(text).length].slice(-CLOSURE_LEN_WINDOW) : prevLengths
+      const next = updateClosureState(prev?.state || null, { lengths: nextLengths, ...(text ? { text } : {}) })
+      // CLOSED 的静默是有期限的（模块只给出时长 muteLockMs，不给时间戳），
+      // 所以接线方必须自己记「什么时候关的」，否则一次「晚安」会把该会话永久锁死。
+      const closedAt = next.state === CLOSED_STATE
+        ? (prev?.state?.state === CLOSED_STATE ? (prev?.closedAt || Date.now()) : Date.now())
+        : 0
+      closureStates.set(key, { state: next, lengths: nextLengths, closedAt })
+      return { ...next, closedAt }
+    } catch {
+      return null
+    }
+  }
   const wait = sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
 
   function deliver(chatId, text, opts = {}) {
@@ -59,8 +88,39 @@ export function createReplyDelivery({
     // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
     if (opts.forceReport || reportTurns.get(chatId)) rules.forceReport = true
     // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
+    // US-006 · 四态收尾：只收紧不放宽。maxBubbles 取更小值；CLOSED 时本轮直接不说话。
+    // 位置很关键 —— 必须在 replyRules 之后（否则被重算覆盖），在语音转换之前
+    // （否则会改到语音路径，语音用例会整片挂掉）。
+    const closurePlan = closurePlanFor(chatId, opts.userText || '')
+    // 触发门槛：单条短句不足以判「对方没劲」——中文 3~4 字（「好的」「第一句」）
+    // 是正常回话，按模块默认的 lastLen<=4 会把大量正常轮次压成 1 条气泡。
+    // 所以只有「连续 2 条以上短句/趋势向下」或「明确道别」才真正施加约束。
+    const closureActive = closurePlan && (
+      closurePlan.state === 'closed'
+      || Number(closurePlan.ackStreak) >= 1
+      || String(closurePlan.trend || '') === 'down'
+    )
+    // 注意：CLOSED 的 muteLockMs 是**主动搭话硬锁，不锁入站回复**（模块注释第 24 行）。
+    // 用户说完「晚安」又来找她，她必须回；把 CLOSED 用在回复静默上是接错了语义。
+    // 所以这里不因 CLOSED 直接 return，只收紧「这条回复怎么说」（气泡数/问句）。
+    // 群聊不套用私聊的四态紧缩：群里有多个发言者，isAck/trend 是按单会话算的，
+    // 套到群里会把正常群回复压成 1 条。群侧已有 groupLimit（见下方）做合并约束。
+    if (closureActive && !inGroup && Number.isFinite(Number(closurePlan.maxBubbles))) {
+      rules.maxBubbles = Math.min(
+        Number(rules.maxBubbles) || Number(closurePlan.maxBubbles),
+        Math.max(1, Number(closurePlan.maxBubbles)),
+      )
+    }
     const parseRules = inGroup ? { ...rules, maxBubbles: Number.MAX_SAFE_INTEGER } : rules
     const r = parseReply(text, parseRules)
+    // 对方没劲了（yielding）时不追问：把文字气泡末尾的问号改成句号，不删内容。
+    if (closureActive && !inGroup && closurePlan.allowQuestion === false && Array.isArray(r.items)) {
+      for (const it of r.items) {
+        if (it && it.kind === 'text' && typeof it.value === 'string') {
+          it.value = it.value.replace(/[?？]+\s*$/u, '。').replace(/[。]{2,}$/u, '。')
+        }
+      }
+    }
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groups.leaveTopic(chatId.slice(6)) // 不想聊就退出这个话题

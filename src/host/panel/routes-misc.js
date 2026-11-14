@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileOf, toImageBuffer } from '../../local/local.js'
 import { mimeOf } from '../../chat/inbound.js'
+import { characterName } from '../../persona/identity-context.js'
 import { askModel, clearReasoningCache, clearVisionCache } from '../../core/llm.js'
 import { dataDir, ensureDir } from '../../core/store.js'
 
@@ -32,7 +33,7 @@ export function registerMiscRoutes({
     const slot = String((await readBody(req)).slot || '')
     try {
       if (slot === 'tts') {
-        const file = fileOf(await local.call('tts', { text: '你好呀，我是大肥鱼，这是本地语音测试。' }))
+        const file = fileOf(await local.call('tts', { text: `你好呀，我是${characterName('', getConfig())}，这是本地语音测试。` }))
         if (!file || !existsSync(file)) return { ok: false, message: '脚本没返回音频文件' }
         return { ok: true, message: `念好了：${file}` }
       }
