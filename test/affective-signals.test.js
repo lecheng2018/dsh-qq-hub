@@ -23,8 +23,16 @@ const mine = (userText, botText = '', extra = {}) => mineSignals({ chatKey: CHAT
 /** 某种信号是否出现。 */
 const hasKind = (signals, kind) => signals.some((s) => s.kind === kind)
 
-/** 深夜时间戳（把"深夜长聊"这条规则变成可复现的输入，而不是读机器本地时间）。 */
-const DEEP_NIGHT = new Date('2026-01-01T02:30:00+08:00').getTime()
+/**
+ * 深夜时间戳（把"深夜长聊"这条规则变成可复现的输入，而不是读机器本地时间）。
+ *
+ * 必须用**本地时间**构造：mineSignals 的深夜判定走 `new Date(now).getHours()`，
+ * 语义是「用户手机上的几点」（与 group-policy 的 quietHours 同口径）。
+ * 曾经写成绝对时刻 `new Date('...T02:30:00+08:00')`：在 Asia/Shanghai 恰好是 2 点所以本地全绿，
+ * 但 CI 跑在 UTC，同一时刻 getHours()=18，深夜分支不触发 → 置信度 0.7 → 断言 >=0.8 失败。
+ * `new Date(y, m, d, h, mi)` 按本地时区解释，任何时区都得到 getHours()===2。
+ */
+const DEEP_NIGHT = new Date(2026, 0, 1, 2, 30).getTime()
 
 // ---------------------------------------------------------------------------
 // 词表契约
