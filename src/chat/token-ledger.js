@@ -124,6 +124,8 @@ export function createTokenLedger(options = {}) {
   const tiers = new Map()
   /** chatKey -> 已用 Token */
   const used = new Map()
+  /** 最近一次 allocate 落在哪一天（'' 表示这个实例还没分配过）。 */
+  let allocatedDay = ''
 
   function currentDate(optsIn) {
     return optsIn && optsIn.dateKey !== undefined ? assertDateKey(optsIn.dateKey) : dateKey
@@ -190,8 +192,32 @@ export function createTokenLedger(options = {}) {
     return Math.max(0, limit - spent)
   }
 
-  /** 是否已达配额（无配额恒为 true，调用方据此熔断）。 */
+  /**
+   * 这个日期是否已经分配过配额。
+   *
+   * 存在的意义：账本在**进程刚起来、当天还没走任何 session/usage 之前**是空的
+   * （limits/tiers 都没填）。这时的 `limit === 0` 有两种完全不同的含义：
+   *   · 还没分配 —— 「暂时不知道有多少额度」，应当 fail-open 放行；
+   *   · 分配过但没分到（非主人私聊 / 未授权群）—— 「本来就不该给额度」，应当照旧熔断。
+   * 把两者混为一谈，就会在「早晨主动问候」这种刚重启的时刻误熔断（缺陷 C）。
+   */
+  function hasAllocation(day) {
+    return allocatedDay !== '' && allocatedDay === day
+  }
+
+  /**
+   * 是否已达配额。
+   *
+   * 语义（缺陷 C 修正）：**没配额 ≠ 配额用完**。
+   *   · 尚未分配（本实例当天还没 allocate 过）→ false（fail-open，放行主动搭话）；
+   *   · 已分配但这会话分到 0（不在配额体系内）→ true（照旧不放行）；
+   *   · 已分配且额度耗尽 → true。
+   * 调用方（speakup / purpose）据此熔断，所以这里必须严格区分上面三种情况。
+   */
   function isExhausted(chatKey, optsIn = {}) {
+    parseChatKey(chatKey)
+    const day = currentDate(optsIn)
+    if (!hasAllocation(day)) return false
     return remaining(chatKey, optsIn) <= 0
   }
 
@@ -201,6 +227,7 @@ export function createTokenLedger(options = {}) {
     const day = currentDate(optsIn)
     const limit = limitOf(chatKey)
     const spent = day === dateKey ? (used.get(chatKey) || 0) : 0
+    const allocated = hasAllocation(day)
     return {
       chatKey,
       dateKey: day,
@@ -208,7 +235,9 @@ export function createTokenLedger(options = {}) {
       limit,
       used: spent,
       remaining: Math.max(0, limit - spent),
-      exhausted: limit - spent <= 0,
+      allocated,
+      // 未分配时不判「耗尽」，和 isExhausted 保持同一口径。
+      exhausted: allocated && limit - spent <= 0,
     }
   }
 
@@ -271,6 +300,9 @@ export function createTokenLedger(options = {}) {
       limits.set(key, limit)
       tiers.set(key, TIER_GROUP)
     }
+    // 记下「这一天分配过了」：之后再看到某会话 limit=0，就是「本来就没配额」，
+    // 而不是「还没分配」—— isExhausted 靠这个区分 fail-open 与真熔断。
+    allocatedDay = day
     return snapshot()
   }
 
@@ -296,6 +328,8 @@ export function createTokenLedger(options = {}) {
       groupShare: 1 - ownerShare,
       ownerBudget,
       groupBudget: budget - ownerBudget,
+      // 当天是否分配过。false 表示「账本还是空的」，此时 isExhausted 一律 fail-open。
+      allocated: hasAllocation(dateKey),
       totalLimit,
       totalUsed,
       totalRemaining: Math.max(0, totalLimit - totalUsed),
@@ -304,7 +338,49 @@ export function createTokenLedger(options = {}) {
     }
   }
 
-  return { allocate, record, remaining, isExhausted, quotaOf, resetDaily, snapshot }
+  /**
+   * 恢复落盘状态（进程重启后由调用方在 setup 时喂回来）。
+   * 只接受同一天（或指定日期）的快照；跨日直接拒收，让调用方重新分配 ——
+   * 昨天的用量绝不能算进今天，否则重启当天就凭空少一截额度。
+   * 结构不合法一律忽略（记 fail-closed：宁可从零开始，也不写坏账）。
+   */
+  function restore(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false
+    let day
+    try {
+      day = assertDateKey(raw.dateKey)
+    } catch {
+      return false
+    }
+    if (day !== dateKey) return false
+    const nums = (obj) => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+      const out = new Map()
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) return null
+        out.set(k, v)
+      }
+      return out
+    }
+    const allocs = nums(raw.allocations)
+    const usages = nums(raw.usage)
+    if (!allocs || !usages) return false
+    limits.clear()
+    tiers.clear()
+    used.clear()
+    for (const [key, limit] of allocs) {
+      limits.set(key, limit)
+      // 恢复时无法还原原始角色，按额度推断等级（0 → none），只影响展示口径。
+      tiers.set(key, limit > 0 ? TIER_OWNER : TIER_NONE)
+    }
+    for (const [key, spent] of usages) used.set(key, spent)
+    if (typeof raw.budget === 'number' && Number.isInteger(raw.budget) && raw.budget >= 0) budget = raw.budget
+    if (typeof raw.ownerShare === 'number' && raw.ownerShare >= 0 && raw.ownerShare <= 1) ownerShare = raw.ownerShare
+    allocatedDay = day
+    return true
+  }
+
+  return { allocate, record, remaining, isExhausted, quotaOf, resetDaily, snapshot, restore, hasAllocation }
 }
 
 /** 模块级单例（生产用）；测试建议用 `createTokenLedger()` 拿隔离实例。 */
