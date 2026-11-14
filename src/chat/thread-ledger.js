@@ -12,7 +12,7 @@
 //      --[仍未顺承 / TTL 到期]--> dormant（休眠沉淀）；状态迁移只发生在这两条显式入口
 //      （advance() 轮次推进 / pruneExpired() 软 TTL 裁剪）；
 //   3. **软 TTL 且严禁物理删除**：任何超时、任何容量压力都不物理删除 active / extended /
-//      dormant 记录；容量上限只允许淘汰 resolved，到顶且无可淘汰项就抛「容量已满」fail-closed；
+//      未完成归档的 dormant 记录；容量上限优先淘汰 resolved，其次淘汰已完成归档的 dormant，到顶且无可淘汰项就抛「容量已满」fail-closed；
 //   4. **读操作无副作用**：peek()/list() 只按时间判定可见性，绝不在查询里改状态。
 //
 // 休眠时的摘要转存**不在本模块存**：v3.4 要求直接复用 `src/features/memory-archive.js:383
@@ -54,7 +54,7 @@ export const DEFAULT_TTL_MS = 2 * 3600_000
 /** 摘要长度上限（按 Unicode code point 计）：进提示词的只有一行，超长截断而不是整条拒绝。 */
 export const MAX_SUMMARY_CHARS = 200
 
-/** 单账本最多保留多少条线索（内存上限兜底；到顶只淘汰 resolved，绝不删活线索）。 */
+/** 单账本最多保留多少条线索（内存上限兜底；到顶优先淘汰 resolved 或已归档 dormant，绝不删活线索）。 */
 export const DEFAULT_MAX_THREADS = 1000
 
 const TYPE_SET = new Set(THREAD_TYPES)
@@ -62,10 +62,10 @@ const STATE_SET = new Set(THREAD_STATES)
 const LIVE_SET = new Set(LIVE_STATES)
 const ELLIPSIS = '…'
 
-/** 容量已满：到上限且没有任何 resolved 可淘汰时抛出（fail-closed，绝不静默 evict 活线索）。 */
+/** 容量已满：到上限且无可淘汰记录时抛出（fail-closed，绝不静默 evict 活线索或未完成归档线索）。 */
 export class ThreadLedgerCapacityError extends Error {
   constructor(maxThreads) {
-    super(`挂起线索容量已满（上限 ${maxThreads} 条，且无可淘汰的已闭环线索）：拒绝新线索，绝不物理删除 dormant / active`)
+    super(`挂起线索容量已满（上限 ${maxThreads} 条，且无可淘汰的已闭环或已归档线索）：拒绝新线索，绝不物理删除活线索或未归档线索`)
     this.name = 'ThreadLedgerCapacityError'
     this.code = 'THREAD_LEDGER_CAPACITY_FULL'
     this.maxThreads = maxThreads
@@ -251,12 +251,23 @@ export function createThreadLedger(opts = {}) {
   }
 
   /**
-   * 容量闸门：到上限只允许淘汰 **resolved**。
-   * active / extended / dormant 一律不删（v3.4：严禁物理删除），无可淘汰项就 fail-closed。
+   * 容量闸门：到上限优先寻找最旧的 resolved 淘汰。
+   * 若没有 resolved，寻找最旧的、已经完成归档（pendingArchive !== true）的 dormant 线索淘汰。
+   * 仅当没有任何可淘汰线索（全部线索均为未完结的 active / extended 或正在归档的线索）时 fail-closed。
    */
   function ensureCapacity() {
     if (threads.length < maxThreads) return
-    const victim = oldestIndexOf('resolved')
+    let victim = oldestIndexOf('resolved')
+    if (victim === -1) {
+      for (let i = 0; i < threads.length; i += 1) {
+        const item = threads[i]
+        if (item.status === 'dormant' && item.pendingArchive !== true) {
+          if (victim === -1 || item.createdAt < threads[victim].createdAt) {
+            victim = i
+          }
+        }
+      }
+    }
     if (victim === -1) throw new ThreadLedgerCapacityError(maxThreads)
     removeAt(victim)
   }
