@@ -69,6 +69,10 @@ export default {
       memory: () => api.use('memory'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },
       budgetExhausted,
+      // 道别后静默期：与 speakup 同一份口径，避免两条主动开口路径行为不一致。
+      proactivelyMuted: (chatId) => {
+        try { return api.core?.proactiveMuteState?.(String(chatId || ''))?.muted === true } catch { return false }
+      },
     })
     api.every(60_000, () => purpose.tick(), '目的引擎')
     api.route('/purpose/fire', async () => {
