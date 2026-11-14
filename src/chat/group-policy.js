@@ -104,6 +104,9 @@ export function decideGroupReply(p) {
   if (burst >= (pol.burstMax ?? 8) && !(p.fromOwner && (p.mentioned || p.repliedToBot))) {
     return { reply: false, mode: 'none', reason: `刚说了太多（${burst} 次），歇一会儿` }
   }
+  // 纯图片/表情的正文是空串：可以缓冲供下一轮看，但不能自己触发插话或 engaged 回合。
+  // 直接 @ / 引用她仍放行，由后续视觉能力链决定是看图还是明确说看不到。
+  if (!text.trim() && !p.mentioned && !p.repliedToBot) return { reply: false, mode: 'none', reason: '空文本/纯媒体不主动插话' }
   if (p.mentioned) return { reply: true, mode: 'must', reason: '被 @' }
   if (p.repliedToBot) return { reply: true, mode: 'must', reason: '引用了她的消息' }
   const hit = (pol.wakeWords || []).find((w) => w && text.includes(w))
