@@ -680,6 +680,7 @@ export function createModularCore({
     const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
+      '若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。\n' +
       '大多数时候直接说就行。只有想专门接其中某一条时才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
     // 触发轮自身的图片与引用说明一并附上；reply 段已由 quoteNote 取代，不留下占位。
@@ -1423,6 +1424,8 @@ export function createModularCore({
         } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
         if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
         const offered = controller.offer(inbound)
+        // 正向决策也留痕：否则只能看到后一条“不回”，容易误判成它绕闸门发了上一条回合。
+        debug(`群闸 ${inbound.chatKey}：回 —— ${decision.reason}｜消息 ${inbound.messageId || '?'}｜回合 ${offered.turnId}`)
         return { handled: 'offered', turnId: offered.turnId }
       }
       const applyHook = (decision) => {
