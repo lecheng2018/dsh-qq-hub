@@ -452,11 +452,53 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-bg:#12161c;--ab-card:#1a
 .ab-data-table-desktop{overflow-x:auto}.ab-data-cards{display:none}.ab-data-card{padding:12px 0;border-top:1px solid var(--ab-line)}.ab-data-field{display:grid;grid-template-columns:104px minmax(0,1fr);gap:10px;padding:5px 0}.ab-data-label{color:var(--ab-sub);font-size:12px}.ab-data-value{min-width:0;overflow-wrap:anywhere}
 .ab-platform-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}.ab-platform-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;border-bottom:1px solid var(--ab-line);font-size:13px}.ab-test-bar{display:flex;align-items:center;gap:8px}.ab-test-bar .ab-input{flex:1;width:auto}.ab-test-result{margin-top:12px;padding:12px;border:1px solid var(--ab-line);border-radius:8px;background:var(--ab-card-2)}.ab-test-title{font-weight:600;color:var(--ab-deep);margin-bottom:4px}.ab-test-summary{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}.ab-ok-text{color:var(--ab-ok)}
 @media (max-width:1023px){.ab-layout{display:block;padding:20px}.ab-sidebar{display:none}.ab-menu-btn{display:flex}.ab-appbar{padding:10px 18px}.ab-main{max-width:none}.ab-savebar{left:50%;width:min(580px,calc(100% - 40px))}.ab-runtime{gap:10px}}
-@media (max-width:640px){.ab-root{font-size:14px}.ab-appbar{min-height:60px;padding:8px 12px;gap:8px}.ab-brand-avatar{display:none}.ab-appbar-title h1{font-size:16px}.ab-appbar-sub{max-width:150px}.ab-runtime{gap:8px}.ab-status{font-size:0;gap:0}.ab-status .ab-dot{width:8px;height:8px}.ab-quick-toggle span{display:none}.ab-quick-toggle.secondary{padding-left:8px}.ab-layout{padding:14px 12px 28px}.ab-wizard-main{padding:16px 12px}.ab-wrap{padding:0}.ab-main>.ab-grid{gap:12px}.ab-card{padding:15px 14px;border-radius:9px}.ab-card .ab-desc{font-size:12px}.ab-row{flex-direction:column;gap:7px;padding:12px 0}.ab-row .ab-label{flex:none;max-width:none}.ab-row .ab-label small{max-width:none}.ab-row .ab-ctl{width:100%;gap:8px}.ab-ctl>.ab-input:not(.sm),.ab-ctl>.ab-select,.ab-ctl>.ab-textarea,.ab-ctl>.ab-sel,.ab-ctl>.ab-list-area{flex:1;width:100%}.ab-input,.ab-select,.ab-textarea,.ab-sel-btn{min-height:44px}.ab-btn{min-height:42px}.ab-btn.sm{min-height:36px}.ab-switch{width:42px;height:24px}.ab-switch:after{width:18px;height:18px}.ab-switch.on:after{left:21px}.ab-seg{max-width:100%;overflow-x:auto}.ab-seg button{min-height:42px;padding:6px 12px}.ab-choice{min-height:44px}.ab-choices.compact{grid-template-columns:repeat(3,minmax(0,1fr))}.ab-choice-current-desc{font-size:12px}.ab-mod{flex-wrap:wrap}.ab-mod .side{width:100%;flex-direction:row;align-items:center;justify-content:space-between}.ab-mod .acts{gap:8px}.ab-li{flex-wrap:wrap}.ab-li .meta{white-space:normal}.ab-sticker .x,.ab-shot .x{opacity:1;width:36px;height:36px}.ab-psec-act,.ab-psec .ab-aibtn{opacity:1}.ab-ibtn{width:40px;height:40px}.ab-savebar{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));transform:none;width:auto;padding:9px 10px 9px 12px;gap:7px}.ab-savebar .msg{font-size:12px}.ab-save-shortcut{display:none}.has-dirty .ab-layout{padding-bottom:96px}.ab-toast{bottom:calc(92px + env(safe-area-inset-bottom));max-width:calc(100vw - 28px);width:max-content}.ab-data-table-desktop{display:none}.ab-data-cards{display:block}.ab-dialog-layer{padding:12px}.ab-dialog{padding:0 16px 16px}.ab-copy-text{flex-direction:column}.ab-copy-actions{align-self:flex-end}.ab-g2{grid-template-columns:1fr}.ab-g4{grid-template-columns:repeat(2,minmax(0,1fr))}.ab-stat .n{font-size:24px}.ab-section-nav{margin-bottom:10px}.ab-section-nav button{min-height:38px}.ab-finder-item{min-height:42px}.ab-data-field{grid-template-columns:92px minmax(0,1fr)}}
+@media (max-width:640px){.ab-root{font-size:14px}.ab-appbar{min-height:60px;padding:8px 12px;gap:8px}.ab-brand-avatar{display:none}.ab-appbar-title h1{font-size:16px}.ab-appbar-sub{max-width:150px}.ab-runtime{gap:8px}.ab-status{font-size:0;gap:0}.ab-status .ab-dot{width:8px;height:8px}.ab-quick-toggle span{display:inline}.ab-quick-toggle.secondary{padding-left:8px}.ab-layout{padding:14px 12px 28px}.ab-wizard-main{padding:16px 12px}.ab-wrap{padding:0}.ab-main>.ab-grid{gap:12px}.ab-card{padding:15px 14px;border-radius:9px}.ab-card .ab-desc{font-size:12px}.ab-row{flex-direction:column;gap:7px;padding:12px 0}.ab-row .ab-label{flex:none;max-width:none}.ab-row .ab-label small{max-width:none}.ab-row .ab-ctl{width:100%;gap:8px}.ab-ctl>.ab-input:not(.sm),.ab-ctl>.ab-select,.ab-ctl>.ab-textarea,.ab-ctl>.ab-sel,.ab-ctl>.ab-list-area{flex:1;width:100%}.ab-input,.ab-select,.ab-textarea,.ab-sel-btn{min-height:44px}.ab-btn{min-height:42px}.ab-btn.sm{min-height:36px}.ab-switch{width:42px;height:24px}.ab-switch:after{width:18px;height:18px}.ab-switch.on:after{left:21px}.ab-seg{max-width:100%;overflow-x:auto}.ab-seg button{min-height:42px;padding:6px 12px}.ab-choice{min-height:44px}.ab-choices.compact{grid-template-columns:repeat(3,minmax(0,1fr))}.ab-choice-current-desc{font-size:12px}.ab-mod{flex-wrap:wrap}.ab-mod .side{width:100%;flex-direction:row;align-items:center;justify-content:space-between}.ab-mod .acts{gap:8px}.ab-li{flex-wrap:wrap}.ab-li .meta{white-space:normal}.ab-sticker .x,.ab-shot .x{opacity:1;width:36px;height:36px}.ab-psec-act,.ab-psec .ab-aibtn{opacity:1}.ab-ibtn{width:40px;height:40px}.ab-savebar{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));transform:none;width:auto;padding:9px 10px 9px 12px;gap:7px}.ab-savebar .msg{font-size:12px}.ab-save-shortcut{display:none}.has-dirty .ab-layout{padding-bottom:96px}.ab-toast{bottom:calc(92px + env(safe-area-inset-bottom));max-width:calc(100vw - 28px);width:max-content}.ab-data-table-desktop{display:none}.ab-data-cards{display:block}.ab-dialog-layer{padding:12px}.ab-dialog{padding:0 16px 16px}.ab-copy-text{flex-direction:column}.ab-copy-actions{align-self:flex-end}.ab-g2{grid-template-columns:1fr}.ab-g4{grid-template-columns:repeat(2,minmax(0,1fr))}.ab-stat .n{font-size:24px}.ab-section-nav{margin-bottom:10px}.ab-section-nav button{min-height:38px}.ab-finder-item{min-height:42px}.ab-data-field{grid-template-columns:92px minmax(0,1fr)}}
 @media (max-width:640px){.ab-platform-grid{grid-template-columns:1fr}.ab-test-bar{flex-direction:column;align-items:stretch}.ab-test-bar .ab-input{width:100%}.ab-test-bar .ab-btn{width:100%}.ab-persona:not(.editor-open)>.ab-card,.ab-persona.editor-open>.ab-plist{display:none}.ab-persona-back{display:inline-flex}.ab-persona>.ab-card{min-width:0}.ab-persona .ab-card-head{flex-wrap:wrap}.ab-persona .ab-card-head .ab-flex{max-width:100%}}
 @media (min-width:641px){.ab-persona-back{display:none}}
 @media(max-width:640px){.ab-main .ab-card:has(>.ab-table){overflow-x:auto}.ab-main .ab-card>.ab-table{min-width:560px}.ab-main .ab-card:has(>.ab-data-table)>.ab-table{min-width:0}.ab-row-right>.ab-btn,.ab-li .ab-btn{min-height:44px}.ab-input.sm{min-width:0;max-width:100%}}
 @media (prefers-reduced-motion:reduce){.ab-drawer{animation:none}.ab-section-nav button{scroll-behavior:auto}}
+
+/* 真实移动端复核：保留开关含义，压缩首屏，并让日志按内容换行。 */
+.ab-log-meta{display:contents}
+.ab-runtime-grid{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 14px;font-size:12.5px}
+.ab-runtime-item{display:contents}.ab-runtime-item .k{color:var(--ab-sub)}
+.ab-recent-card .ab-logs{max-height:240px}
+@media (max-width:640px){
+  .ab-appbar{min-height:58px;padding:8px 10px;gap:8px}
+  .ab-appbar-main{gap:9px}
+  .ab-appbar-sub{display:none}
+  .ab-runtime{gap:10px}
+  .ab-status{display:none}
+  .ab-quick-toggle{gap:5px;font-size:12px}
+  .ab-quick-toggle.secondary{padding-left:9px}
+  .ab-quick-toggle .ab-switch{width:36px;height:21px}
+  .ab-quick-toggle .ab-switch:after{width:15px;height:15px}
+  .ab-quick-toggle .ab-switch.on:after{left:18px}
+  .ab-layout{padding:10px 10px 24px}
+  .ab-main>.ab-grid{gap:10px}
+  .ab-card{padding:13px 12px}
+  .ab-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:0;overflow:hidden;border:1px solid var(--ab-line);border-radius:9px;background:var(--ab-card)}
+  .ab-stats .ab-card{min-width:0;padding:10px 3px;border:0;border-right:1px solid var(--ab-line);border-radius:0;text-align:center;background:var(--ab-card)}
+  .ab-stats .ab-card:last-child{border-right:0}
+  .ab-stats .n{font-size:22px;line-height:1.25}
+  .ab-stats .l{margin-top:2px;font-size:11px;white-space:nowrap}
+  .ab-runtime-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:11px 18px}
+  .ab-runtime-item{display:flex;flex-direction:column;gap:1px;min-width:0}
+  .ab-runtime-item .k{color:var(--ab-dim);font-size:11px}
+  .ab-runtime-item .v{color:var(--ab-text);font-size:13px;font-weight:550;overflow-wrap:anywhere}
+  .ab-quick-test .ab-desc{margin-bottom:10px}
+  .ab-quick-test .ab-flex{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .ab-quick-test .ab-btn{min-height:40px;padding:6px 4px;font-size:12px;white-space:normal}
+  .ab-recent-card .ab-card-head{margin-bottom:6px}
+  .ab-recent-card .ab-logs{max-height:none;padding:0;border:0;background:transparent;font-family:inherit}
+  .ab-recent-card .ab-empty{padding:16px 8px}
+  .ab-card.danger>.ab-desc{display:none}
+  .ab-log{display:block;padding:8px 2px;border-bottom:1px solid var(--ab-line)}
+  .ab-log:last-child{border-bottom:0;padding-bottom:2px}
+  .ab-log-meta{display:flex;align-items:center;gap:8px;margin-bottom:3px;font-family:var(--dsh-font-family-code,ui-monospace,monospace);font-size:11px}
+  .ab-log .a{min-width:0}
+  .ab-log .m{display:block;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+}
 `;
 
 // client/src/styles/use-style.js
@@ -758,7 +800,7 @@ function DangerZone({ title, description, actionLabel, onConfirm, confirmText })
   const [open, setOpen] = useState(false);
   return h(
     Card,
-    { title, desc: description, tone: "danger" },
+    { title, desc: description, tone: "danger", collapsible: true, defaultOpen: false },
     h(Btn, { kind: "danger", small: true, onClick: () => setOpen(true) }, actionLabel),
     open ? h(
       Dialog,
@@ -1269,47 +1311,44 @@ function Overview({ st, toast, go }) {
     "div",
     { className: "ab-grid" },
     h(UpdateNotes, { st, toast }),
-    !cfg.enabled ? h("div", { className: "ab-note warn" }, "总开关是关着的：大肥鱼现在不会收也不会发任何 QQ 消息。准备好了就在右上角打开。") : null,
-    cfg.enabled && cfg.dryRun ? h("div", { className: "ab-note" }, "现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。") : null,
+    !cfg.enabled ? h("div", { className: "ab-note warn" }, "总开关已关闭，不会收发 QQ 消息。") : null,
+    cfg.enabled && cfg.dryRun ? h("div", { className: "ab-note" }, "试运行已开启：只记录日志，不会发送到 QQ。") : null,
     cfg.enabled && !conn ? h("div", { className: "ab-note err" }, "还没连上 QQ 网关" + (st.onebot.problem ? "：" + st.onebot.problem + "。" : "。去「连接」标签看看 SnowLuma 有没有装好、启动没有。") + " ", h("a", { href: "#", onClick: (e) => {
       e.preventDefault();
       go("connect");
     } }, "去连接 →")) : null,
     h(
       "div",
-      { className: "ab-grid ab-g4" },
+      { className: "ab-grid ab-g4 ab-stats" },
       [["今天收到", s.received], ["今天发出", s.sent], ["语音条", s.voice], ["表情包", s.stickers]].map(([l, n]) => h("div", { key: l, className: "ab-card ab-stat" }, h("div", { className: "n" }, n || 0), h("div", { className: "l" }, l)))
     ),
     h(
       "div",
-      { className: "ab-grid ab-g2" },
+      { className: "ab-grid ab-g2 ab-overview-panels" },
       h(
         Card,
-        { title: "运行速览" },
+        { title: "运行速览", className: "ab-runtime-card" },
         h(
           "div",
-          { className: "ab-kv" },
-          h("span", null, "表情库"),
-          h("span", null, (st.stickers && st.stickers.count || 0) + " 张"),
-          h("span", null, "下一篇日记"),
-          h("span", null, cfg.diary.enabled ? st.diary && st.diary.next || "今天写完了" : "未开启"),
-          h("span", null, "人格"),
-          h("span", null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current),
-          h("span", null, "QQ 会话"),
-          h("span", null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith("system:")).length + " 个")
+          { className: "ab-runtime-grid" },
+          [
+            ["表情库", (st.stickers && st.stickers.count || 0) + " 张"],
+            ["下一篇日记", cfg.diary.enabled ? st.diary && st.diary.next || "今天写完了" : "未开启"],
+            ["人格", (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current],
+            ["QQ 会话", Object.keys(st.sessions || {}).filter((k) => !k.startsWith("system:")).length + " 个"]
+          ].map(([label, value]) => h("div", { key: label, className: "ab-runtime-item" }, h("span", { className: "k" }, label), h("span", { className: "v" }, value)))
         )
       ),
       h(
         Card,
-        { title: "快捷自测", desc: "试运行时只记录日志；关闭试运行后会真实发送到 QQ。" },
+        { title: "快捷自测", desc: "试运行只记录日志；关闭后才会真实发送。", className: "ab-quick-test" },
         h(
           "div",
           { className: "ab-flex" },
-          h(Btn, { kind: "primary", onClick: quick("/test-send") }, "给主人发自测"),
-          h(Btn, { onClick: quick("/speakup/fire") }, "现在来找我"),
+          h(Btn, { kind: "primary", onClick: quick("/test-send") }, "发消息自测"),
+          h(Btn, { onClick: quick("/speakup/fire") }, "主动找我"),
           h(Btn, { onClick: quick("/diary/run", { visibility: "self" }) }, "写私密日记")
-        ),
-        h("p", { className: "ab-muted ab-small", style: { marginTop: 12, marginBottom: 0 } }, "完整对话和工具调用记录位于 DSH 侧栏的「QQ Hub」工作区。")
+        )
       )
     ),
     h(RecentLogs, { go }),
@@ -1329,7 +1368,7 @@ function RecentLogs({ go }) {
   const [items, setItems] = useState(null);
   useEffect(() => {
     let alive = true;
-    const load = () => get("/logs?limit=8&level=info").then((r) => alive && setItems(r.entries || []));
+    const load = () => get("/logs?limit=6&level=info").then((r) => alive && setItems(r.entries || []));
     load();
     const t = setInterval(load, 5e3);
     return () => {
@@ -1339,12 +1378,12 @@ function RecentLogs({ go }) {
   }, []);
   return h(
     Card,
-    { title: "最近动态", right: h(Btn, { kind: "ghost", small: true, onClick: () => go("logs") }, "全部日志 →") },
-    items === null ? h(Empty, { icon: "⏳", text: "加载中…" }) : items.length === 0 ? h(Empty, { text: "还没有动静" }) : h("div", { className: "ab-logs", style: { maxHeight: 240 } }, items.slice().reverse().map((e, i) => h(LogLine, { key: i, e })))
+    { title: "最近动态", className: "ab-recent-card", collapsible: true, right: h(Btn, { kind: "ghost", small: true, onClick: () => go("logs") }, "全部日志 →") },
+    items === null ? h(Empty, { icon: "⏳", text: "加载中…" }) : items.length === 0 ? h(Empty, { text: "还没有动静" }) : h("div", { className: "ab-logs" }, items.slice().reverse().map((e, i) => h(LogLine, { key: i, e })))
   );
 }
 function LogLine({ e }) {
-  return h("div", { className: cx("ab-log", e.level) }, h("span", { className: "t" }, e.time), h("span", { className: "a" }, e.area), h("span", { className: "m" }, e.text));
+  return h("div", { className: cx("ab-log", e.level) }, h("div", { className: "ab-log-meta" }, h("span", { className: "t" }, e.time), h("span", { className: "a" }, e.area)), h("span", { className: "m" }, e.text));
 }
 
 // client/src/ui/form.js
@@ -5060,8 +5099,8 @@ function QQHubPage() {
           "div",
           { className: "ab-runtime" },
           h("span", { className: cx("ab-status", status.cls) }, h("i", { className: cx("ab-dot", status.cls) }), status.text),
-          h("label", { className: "ab-quick-toggle" }, h("span", null, "总开关"), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })),
-          h("label", { className: "ab-quick-toggle secondary" }, h("span", null, "试运行"), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "只写日志，不发送到 QQ" }))
+          h("label", { className: "ab-quick-toggle" }, h("span", null, "总开关"), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v), title: "总开关" })),
+          h("label", { className: "ab-quick-toggle secondary" }, h("span", null, "试运行"), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "试运行：只写日志，不发送到 QQ" }))
         )
       ),
       showWizard ? h("main", { className: "ab-wizard-main" }, h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) })) : h(
