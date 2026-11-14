@@ -602,10 +602,25 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     let idx
     if (chat) idx = indexFor(chat)
     else if (Array.isArray(scopes)) {
-      idx = buildIndex(scopes.flatMap((sc) => {
+      // 逐个作用域取索引合并。**必须按 id 去重**：indexFor(scope) 是故意把 global 也算进去的
+      // （global 处处可见），于是 scopes = ['global', 'private:X'] 时 global 条目会被
+      // 收两遍 —— 表现就是面板上同一条记忆在同一轮召回里出现两次（同 id、同分），
+      // 而且因为每次 tick 都走一遍，看起来像「一直在重复」。
+      const seen = new Set()
+      const merged = []
+      for (const sc of scopes) {
         const i = indexFor(sc)
-        return i ? i.docs.map((d) => d.it) : []
-      }))
+        if (!i) continue
+        for (const d of i.docs) {
+          const id = d?.it?.id
+          if (id != null && id !== '') {
+            if (seen.has(String(id))) continue
+            seen.add(String(id))
+          }
+          merged.push(d.it)
+        }
+      }
+      idx = buildIndex(merged)
     } else idx = buildIndex([]) // 没声明可见域的后台调用：什么都不给
     const hits = scoped(search(idx, query, { about, limit: chat || Array.isArray(scopes) ? max * 3 : max })).slice(0, max)
     // 这一句没想起几条（「嗯嗯」「然后呢」）：用上一句再找找，分数打折
