@@ -317,9 +317,12 @@ test('silent：模型只输出内部备忘（跳过）也被清洗成 silent', a
   assert.equal(memo.status, '跳过')
 })
 
-test('清洗：去掉备忘段、引号和「大肥鱼：」前缀', () => {
+test('清洗：去掉备忘段、引号和「角色名：」前缀', () => {
   assert.equal(cleanReply('「主人，晚上一起打游戏吗」\n【目的】邀请主人玩游戏\n【状态】完成'), '主人，晚上一起打游戏吗')
-  assert.equal(cleanReply('大肥鱼：想你了'), '想你了')
+  // 名字由身份中枢给（换卡即换名），不再写死在清洗函数里——所以这里显式传当前角色名。
+  assert.equal(cleanReply('大肥鱼：想你了', '大肥鱼'), '想你了')
+  assert.equal(cleanReply('小鲸：想你了', '小鲸'), '想你了')
+  assert.equal(cleanReply('小鲸：想你了', '大肥鱼'), '小鲸：想你了', '不认识的署名不当前缀乱洗')
 })
 
 // ---------- 素材适配（记忆 importance 0~1 → 0~100） ----------
