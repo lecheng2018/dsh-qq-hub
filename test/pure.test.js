@@ -85,6 +85,15 @@ test('群聊：@、引用、唤醒词必回', () => {
   assert.equal(decideGroupReply(base({ mentioned: true, hour: 3 })).reply, true)
 })
 
+test('群聊：空文本/纯媒体不主动开回合，直接 @ 或引用仍可', () => {
+  const engaged = base({ text: ' ', engagedUntil: 10_100_000, relevance: 1, rand: () => 0 })
+  assert.equal(decideGroupReply(engaged).reply, false)
+  assert.equal(decideGroupReply(engaged).reason, '空文本/纯媒体不主动插话')
+  assert.equal(decideGroupReply(base({ text: '', rand: () => 0 })).reply, false)
+  assert.equal(decideGroupReply(base({ text: '', mentioned: true })).mode, 'must')
+  assert.equal(decideGroupReply(base({ text: '', repliedToBot: true })).mode, 'must')
+})
+
 test('群聊：插话受概率、冷却、上限、静默、冷群约束', () => {
   assert.equal(decideGroupReply(base({})).mode, 'interject')
   assert.equal(decideGroupReply(base({ rand: () => 0.5, relevance: 0.3 })).reply, false)
