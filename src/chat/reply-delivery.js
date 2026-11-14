@@ -16,15 +16,6 @@ export function createReplyDelivery({
   const closureStates = new Map()
   const CLOSURE_LEN_WINDOW = 6
   const CLOSED_STATE = 'closed'
-  /** CLOSED 是否仍在静默窗口内（过期的当没关过，让对话自然继续）。 */
-  function closureStillMuted(plan) {
-    if (!plan || plan.state !== CLOSED_STATE) return false
-    const lock = Math.max(0, Number(plan.muteLockMs) || 0)
-    if (lock <= 0) return false
-    const since = Number(plan.closedAt) || 0
-    if (!since) return true // 没有时刻就按「刚关」处理，宁短勿长由下一轮刷新
-    return Date.now() - since < lock
-  }
 
   /** 依据「对方这轮说的话」推出本轮发言处方。异常时退回 null（不施加约束）。 */
   function closurePlanFor(chatId, incomingText) {
@@ -117,7 +108,7 @@ export function createReplyDelivery({
     const parseRules = inGroup ? { ...rules, maxBubbles: Number.MAX_SAFE_INTEGER } : rules
     const r = parseReply(text, parseRules)
     // 对方没劲了（yielding）时不追问：把文字气泡末尾的问号改成句号，不删内容。
-    if (closureActive && closurePlan.allowQuestion === false && Array.isArray(r.items)) {
+    if (closureActive && !inGroup && closurePlan.allowQuestion === false && Array.isArray(r.items)) {
       for (const it of r.items) {
         if (it && it.kind === 'text' && typeof it.value === 'string') {
           it.value = it.value.replace(/[?？]+\s*$/u, '。').replace(/[。]{2,}$/u, '。')
