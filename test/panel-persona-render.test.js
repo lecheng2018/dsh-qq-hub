@@ -29,9 +29,9 @@ function extractFn (name) {
   return null
 }
 
-/** 抽省一行式 const（数组/字符串字面量）。 */
+/** 抽省一行式 const（数组/字符串字面量）。esbuild 产物里顶层 const 会被降级成 var，两种都认。 */
 function extractConst (name) {
-  const re = new RegExp('const\\s+' + name + '\\s*=\\s*')
+  const re = new RegExp('(?:const|var|let)\\s+' + name + '\\s*=\\s*')
   const m = re.exec(src)
   if (!m) return null
   const start = m.index + m[0].length
@@ -268,8 +268,8 @@ test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打�
 
 test('开关用的是 Switch 的 on，不是 value（写错会点了没反应）', () => {
   // 这类 bug 语法检查抓不到：Switch({on}) 收到 value 时 on 恒为 undefined，
-  // 点击只触发 onChange(true)，显示状态永远不变。
-  const bad = src.match(/h\(Switch,\s*\{[^}]*value:/)
+  // 点击只触发 onChange(true)，显示状态永远不变。正则容忍产物里的换行排版。
+  const bad = src.match(/h\(\s*Switch\s*,\s*\{[^}]*\bvalue\s*:/)
   assert.equal(bad, null, 'Switch 不能传 value，必须传 on')
 })
 
@@ -452,10 +452,12 @@ test('分流人设只用手输输入框，不再给选群下拉（用户要求�
     else if (src2[q] === '}') { d--; if (!d) { end = q; break } }
   }
   const body = src2.slice(a, end)
-  assert.ok(/placeholder: wantKind === 'group' \? '填群号' : '填 QQ 号'/.test(body), '应当有手输群号/QQ 号的输入框')
+  // esbuild 产物里字符串统一双引号，断言对引号不敏感
+  assert.ok(/placeholder: wantKind === ["']group["'] \? ["']填群号["'] : ["']填 QQ 号["']/.test(body), '应当有手输群号/QQ 号的输入框')
   // specific() 内部：行内人格下拉 1 个 + 底部「默认」人格下拉 1 个 = 2
-  // 关键是不能再有「选群/选人」那个 Select（options 来自 chats 候选）
-  const selCount = (body.match(/h\(Select,/g) || []).length
+  // 关键是不能再有「选群/选人」那个 Select（options 来自 chats 候选）。
+  // 产物里长 JSX 调用会多行排版（h(\n Select, ...），正则容忍空白。
+  const selCount = (body.match(/h\(\s*Select\s*,/g) || []).length
   assert.equal(selCount, 2, 'specific() 里只该剩两个「选人格」下拉，选群/选人下拉必须去掉，实际 ' + selCount)
   assert.ok(!/candidates/.test(body), '不该再有选群候选列表了')
   assert.ok(!/__manual__/.test(body), '不该再有「手动输入…」这个下拉项了')
