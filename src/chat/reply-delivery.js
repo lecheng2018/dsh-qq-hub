@@ -285,7 +285,11 @@ export function createReplyDelivery({
     if (inGroup) {
       const gid = chatId.slice(6)
       groups.noteSpeak(gid)
-      groups.noteSpokeInGroup(gid) // 在群里说了话 = 加入了话题
+      // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算（真机刷屏根因：
+      // 续聊也刷新话题窗口 → 自我续期永不离场，1% 摇号只管进门不管出去）。
+      // must/interject/其它路径的发言照旧算「加入话题」。
+      if (opts.topicMode === 'engaged') groups.noteEngagedReply?.(gid)
+      else groups.noteSpokeInGroup(gid)
     }
     const said = items.flatMap((item) => item.kind === 'mixed' ? item.parts : [item]).map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
     logChat?.(chatId, 'bot', said)
