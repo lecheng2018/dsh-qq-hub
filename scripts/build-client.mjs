@@ -1,5 +1,5 @@
 import * as esbuild from 'esbuild'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -9,7 +9,7 @@ const OUTFILE = join(ROOT, 'client/client.js')
 
 const BANNER = `// QQ Hub · 网页半边：侧栏「自动化任务」下面的「QQ Hub」入口 + 整页面板（顶部标签切换功能）。
 // 只读写宿主半边的 /qq-hub/api/* 接口，不直接碰会话和 QQ。
-// 视觉：沿用 DSH 的主题变量（--dsw-alias-*），浅色 / 深色自动跟随；点缀用大肥鱼的深蓝、海蓝、白。
+// 视觉：中性底色 + 单一强调色的现代风，底色/文字跟随 DSH 主题变量（--dsw-alias-*），浅色 / 深色自动跟随。
 
 window.__ModuleLoader__.load({
   id: 'dsh-qq-hub',
@@ -38,44 +38,14 @@ function normalizeEol(code) {
   return String(code).replace(/\r\n/g, '\n').replace(/\r/g, '')
 }
 
+/**
+ * memory-panel.test.js 从产物里切出 Mood 函数体求值渲染（「记忆页必须能真跑」的回归锁），
+ * 它用「/ ** 人物小档案」这条注释作为 Mood 的结束锚点，而 esbuild 会把源码注释剥掉。
+ * 这里在打包后把锚点注释补回（只此一条；其余产物文本补丁已随 JSX 重构一并移除——
+ * 纯函数类断言已改为直接读源码或 import 模块，不再依赖产物格式）。
+ */
 function postProcess(code) {
-  // 1. 守住 client-api-base.test.js：apiBaseFrom 必须带 (href) 空格且以 4 空格缩进闭合
-  code = code.replace(/function apiBaseFrom\s*\(href\) \{([\s\S]*?)\n\}/, (m, body) => {
-    return '    function apiBaseFrom (href) {' + body + '\n    }'
-  })
-
-  // 2. 守住 client-api-base.test.js：readJson 必须是 const 且以 4 空格缩进闭合
-  code = code.replace(/(?:var|const)\s+readJson\s*=\s*\(r\)\s*=>\s*r\.text\(\)\.then\(\(text\)\s*=>\s*\{([\s\S]*?)\n\}\);?/, (m, body) => {
-    return '    const readJson = (r) => r.text().then((text) => {' + body + '\n    })'
-  })
-
-  // 3. 守住 panel-hasui.test.js：const hasUi = (m) => ... 末尾不能带分号（单测直接拼进 return ((expr))(m) 会报 Unexpected token ';'）
-  code = code.replace(/(?:var|const)\s+hasUi\s*=\s*\(m\)\s*=>\s*([^;\n]+);?/g, 'const hasUi = (m) => $1')
-
-  // 4. 守住 panel-persona-render.test.js：extractConst 要求 const 声明
-  code = code.replace(/\bvar\s+PSEC_SUGGEST\s*=/g, 'const PSEC_SUGGEST =')
-  code = code.replace(/\bvar\s+PSEC_COLORS\s*=/g, 'const PSEC_COLORS =')
-
-
-  // 5. 守住 rss-panel.test.js: assert.match(CLIENT, /rss: \['rss'\]/)
-  code = code.replace(/rss:\s*\["rss"\]/g, "rss: ['rss']")
-
-  // 6. 守住 purpose-daily-limit.test.js: assert.match(client, /s\.key === 'maxPerDay'/)
-  code = code.replace(/s\.key === "maxPerDay"/g, "s.key === 'maxPerDay'")
-
-  // 7. 守住 batch-expand-and-privacy.test.js: assert.match(seg, /onChange: \(e\) => \{ setText\(e\.target\.value\)/)
-  code = code.replace(/onChange:\s*\(e\)\s*=>\s*\{\s*setText\(e\.target\.value\);/g, 'onChange: (e) => { setText(e.target.value);')
-
-  // 8. 守住 batch-expand-and-privacy.test.js: indexOf("(browseOpen ? '▾' : '▸')")
-  code = code.replace(/\(browseOpen \? "▾" : "▸"\)/g, "(browseOpen ? '▾' : '▸')")
-
-  // 9. 守住 panel-persona-render.test.js: placeholder 单引号匹配
-  code = code.replace(/placeholder:\s*wantKind === "group" \? "填群号" : "填 QQ 号"/g, "placeholder: wantKind === 'group' ? '填群号' : '填 QQ 号'")
-
-  // 10. 守住 memory-panel.test.js：esbuild 会丢掉源码注释，补回 Mood 函数结束锚点
-  code = code.replace(/\nfunction ProfilesCard\(/, "\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesCard(")
-
-  return code
+  return code.replace(/\nfunction ProfilesCard\(/, '\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesCard(')
 }
 
 async function build() {
@@ -90,7 +60,12 @@ async function build() {
     target: ['es2022'],
     charset: 'utf8',
     external: ['react'],
-    loader: { '.css': 'text' },
+    loader: { '.css': 'text', '.js': 'jsx' },
+    // 经典 JSX 转换：h 是 core/react.js 导出的 React.createElement，Fragment 同源。
+    // （不用 automatic runtime：那会 import 'react/jsx-runtime'，宿主的 require 里没有这层。）
+    jsx: 'transform',
+    jsxFactory: 'h',
+    jsxFragment: 'Fragment',
     banner: { js: BANNER },
     footer: { js: FOOTER },
   }
@@ -100,11 +75,11 @@ async function build() {
       ...buildOptions,
       plugins: [
         {
-          name: 'post-process-plugin',
+          name: 'write-plugin',
           setup(build) {
             build.onEnd((result) => {
               if (result.errors.length === 0 && result.outputFiles?.[0]) {
-                const processed = normalizeEol(postProcess(result.outputFiles[0].text))
+                const processed = postProcess(normalizeEol(result.outputFiles[0].text))
                 writeFileSync(OUTFILE, processed, 'utf8')
                 console.log(`[${new Date().toLocaleTimeString()}] ⚡ Client rebuilt successfully.`)
               }
@@ -118,7 +93,7 @@ async function build() {
   } else {
     const result = await esbuild.build(buildOptions)
     const code = result.outputFiles[0].text
-    const processed = normalizeEol(postProcess(code))
+    const processed = postProcess(normalizeEol(code))
     writeFileSync(OUTFILE, processed, 'utf8')
     console.log(`✅ Built client/client.js successfully (${(processed.length / 1024).toFixed(1)} KB)`)
   }
