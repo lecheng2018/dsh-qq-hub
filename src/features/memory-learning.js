@@ -360,13 +360,20 @@ export function createMemoryLearning({
       save(s2)
       // 提炼成功后接一次闲时梦境巩固（US-016）。失败不影响上面的成功记录：
       // 梦境只是把已存事实去重/证伪/归纳，是可重建的派生层。
+      //
+      // 依赖契约：**故意不传 scopes**。consolidate() 的返回值只有
+      // { ok, added, insights, days, forgot, blurred, profiles, failed, message } ——
+      // 它既不回传 scopes，也没有 committed 字段，所以这里永远拿不到「刚刚新增了哪些作用域」。
+      // 而 dreamConsolidate() 在自己内部就有推导：不传 scopes 时它从实际存储
+      // （load().items 里所有非空 scope）取全量作用域。让调用方再猜一次只会多一个断点
+      // —— 本缺陷的根因就是这里按不存在的 r.scopes / r.committed 推导，结果恒为 []，
+      // 于是 `if (scopes.length)` 永远为假，梦境一次都没跑过。
       try {
-        // scope 从最近的聊天流水里推导（listFor 空 scopes 会 fail-closed 返回空，
-        // 传错数组等于空转）。r.scopes 由提炼器在提交时给出实际作用域。
-        const scopes = Array.isArray(r.scopes) && r.scopes.length
-          ? r.scopes
-          : [...new Set((r.committed || []).map((x) => String(x.scope || '')).filter(Boolean))]
-        if (scopes.length) await dreamConsolidate({ scopes })
+        const dream = await dreamConsolidate()
+        // 没有可巩固的事实是正常情况（例如本次整理只更新了旧条目），不打日志。
+        if (dream?.ok && !dream.skipped) {
+          log?.info?.(`梦境巩固完成：合并 ${dream.merges?.length || 0}、证伪 ${dream.conflicts?.length || 0}、经验 ${dream.experiences?.length || 0}`)
+        }
       } catch (error) {
         log?.warn?.('梦境巩固异常（已忽略）：', error?.message || error)
       }
