@@ -23,7 +23,8 @@ import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
 import { createSystemTurns } from '../chat/system-turns.js'
 import { createTurnController } from '../chat/turn-controller.js'
-import { createContextAssembly, createThreadProvider, createTimeScaleProvider, TIME_SCALE_PROVIDER_ID, THREAD_PROVIDER_ID } from '../chat/context-assembly.js'
+import { createContextAssembly, createThreadProvider, createTimeScaleProvider, createAffectiveProvider, AFFECTIVE_PROVIDER_ID, TIME_SCALE_PROVIDER_ID, THREAD_PROVIDER_ID } from '../chat/context-assembly.js'
+import { isChatKey } from '../chat/chat-key.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
 import { createInteractionState } from '../chat/interaction-state.js'
@@ -517,7 +518,7 @@ export function createModularCore({
   // ---------- Context Assembly（模块上下文 + 人格 + 挂起线索 + 时空标尺） ----------
   // 线索/标尺 provider 声明 scope='global' 但内部 perChat：宿主只建一个全局实例，
   // 真正的聊天域由每次 assemble({ chatKey }) 带进来，并过 parseChatKey 校验。
-  // 优先级：persona(1000) > 线索(800) > 时空标尺(790) > legacy(100)。
+  // 优先级：persona(1000) > 线索(800) > 时空标尺(790) > 关系温度(780) > legacy(100)。
   const threadProviders = threadLedger
     ? [
       createThreadProvider({ ledger: threadLedger, perChat: true, includeDormant: true }),
@@ -535,10 +536,24 @@ export function createModularCore({
       }),
     ]
     : []
+  // US-015 · 关系温度：图谱模块算出的 tone 必须真的影响一句话。
+  // - 惰性现取（mods.use 每次问一次）：模块关掉/热重载/被替换都不会踩到旧导出；
+  // - perChat：作用域只来自本轮请求的 chatKey，群聊读群、私聊读私聊，物理上不可能串域；
+  // - resolveTone 抛错由 provider 的 isolate 策略兜住，绝不影响其他 provider。
+  const affectiveProvider = createAffectiveProvider({
+    perChat: true,
+    resolveTone: (chatKey) => {
+      const mod = mods?.use?.(AFFECTIVE_PROVIDER_ID)
+      if (!mod || typeof mod.toneFor !== 'function') return null
+      return mod.toneFor(chatKey)
+    },
+  })
+
   const assembly = createContextAssembly({
     providers: [
       ...(personaText ? [{ moduleId: 'persona', priority: 1000, scope: 'global', cacheStable: true, provide: () => personaText() || '' }] : []),
       ...threadProviders,
+      affectiveProvider,
       createLegacyContextAdapter({ mods, priority: 100 }),
     ],
   })
@@ -824,6 +839,51 @@ export function createModularCore({
       segments: [{ type: 'text', data: { text: `刚才的回复超过 ${minutes} 分钟还没完成，我先停止等待了，这条旧回复不会再补发。你发下一条消息时我会重新开始。` } }],
     })).catch((error) => debug(`回合超时提示没发出去：${error?.message || error}`))
   }
+  // ---------- US-015 · 关系信号自动喂料 ----------
+  // 一轮回复**投递之后**才结算：关系信号是"这段对话怎么样"的结论，回复没发出去就不该记分。
+  // 三层防护，任何一层失效都只影响记分，绝不影响回复投递：
+  //   1. 调用点包 try/catch（feed 自己也不抛，这里是第二道）；
+  //   2. 模块关着 / 没导出 feed / 导出坏掉 → 静默跳过（只记 debug，不刷 warn）；
+  //   3. 非法 chatKey → 连模块都不问，直接返回（图谱层也会 fail-closed）。
+  // 冷却（同 chatKey 同 kind 10 分钟只算一次）由模块内部处理，core 不重复实现。
+  //
+  // 最近几轮的原始对话（只留文本，不落盘）：信号挖掘需要"多轮"与"对方已经拒绝过"这类跨轮证据，
+  // 而这些证据只能来自真实对话，不能拿模块上下文（记忆/人设）冒充。每个聊天域独立一条环形缓冲。
+  const RECENT_TURN_CAP = 6
+  const recentTurns = new Map() // chatKey -> ['对方：…', '我：…'] 交替
+  function noteRecentTurn(chatKey, userText, botText) {
+    const key = String(chatKey || '')
+    if (!key) return
+    const lines = recentTurns.get(key) || []
+    if (userText) lines.push(`对方：${userText}`)
+    if (botText) lines.push(`我：${botText}`)
+    recentTurns.set(key, lines.slice(-RECENT_TURN_CAP * 2))
+  }
+  function recentContextOf(chatKey) {
+    const lines = recentTurns.get(String(chatKey || ''))
+    return lines ? lines.join('\n') : ''
+  }
+
+  function feedAffectiveSignals({ chatKey, userText, botText, recentContext, now }) {
+    try {
+      if (!isChatKey(String(chatKey || ''))) {
+        debug(`关系信号跳过：非法 chatKey ${JSON.stringify(String(chatKey || ''))}`)
+        return null
+      }
+      const mod = mods?.use?.(AFFECTIVE_PROVIDER_ID)
+      if (!mod || typeof mod.feed !== 'function') return null // 模块关着 = 正常降级，不是错误
+      const out = mod.feed({ chatKey: String(chatKey), userText, botText, recentContext, now })
+      if (out?.applied?.length) {
+        debug(`关系信号 → ${chatKey}：` + out.applied.map((s) => `${s.kind}(${s.confidence})`).join('、'))
+      }
+      return out || null
+    } catch (error) {
+      // 绝不冒泡：记分失败不能把已经发出去的回复变成失败回合
+      debug(`关系信号喂料失败（不影响投递）：${error?.message || error}`)
+      return null
+    }
+  }
+
   const controller = createTurnController({
     log,
     maxQueue: Math.max(1, Number(process.env.QQHUB_MAX_QUEUE) || 50),
@@ -1122,6 +1182,17 @@ export function createModularCore({
         if (inGroup) {
           try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
         }
+        // US-015 · 回复已投递，才结算这一轮的关系信号（失败只记 debug，绝不影响投递结果）。
+        // 文本口径 = 这一轮真正进模型的用户原话 + 她的回复；recentContext 是同一聊天域的最近几轮。
+        const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
+        feedAffectiveSignals({
+          chatKey: turn.chatKey,
+          userText: turnUserText,
+          botText: String(reply || ''),
+          recentContext: recentContextOf(turn.chatKey),
+          now: Date.now(),
+        })
+        noteRecentTurn(turn.chatKey, turnUserText, String(reply || ''))
         return { state: 'sent', via: 'reply-delivery' }
       } catch (error) {
         log.warn(`回复发送失败：${error?.message || error}`)
@@ -1432,6 +1503,7 @@ export function createModularCore({
   /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
   function resetChat(chatKey) {
     const key = String(chatKey || '')
+    recentTurns.delete(key) // 会话重置 = 关系线索的上下文也重新开始（不让旧对话影响新会话的信号判定）
     try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
