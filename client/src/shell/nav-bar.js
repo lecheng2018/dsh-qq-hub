@@ -64,7 +64,7 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
               >
                 {navIcon(g.icon)}
                 <span>{g.label}</span>
-                {g.list.some((t) => dirtyOf(t.id)) ? <i className="dirty" title="这组里有没保存的改动" /> : null}
+                {g.list.some((t) => dirtyOf(t.id)) ? <i className="dirty" title="这组里有没保存的改动" aria-hidden="true" /> : null}
               </button>
             ))}
           </div>
@@ -108,7 +108,7 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
           >
             {navIcon(g.icon)}
             <span>{g.label}</span>
-            {g.list.some((t) => dirtyOf(t.id)) ? <i className="dirty" title="这组里有没保存的改动" /> : null}
+            {g.list.some((t) => dirtyOf(t.id)) ? <i className="dirty" title="这组里有没保存的改动" aria-hidden="true" /> : null}
           </button>
         ))}
       </div>
