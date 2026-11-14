@@ -28,6 +28,24 @@ export default {
       }
     }
 
+    /**
+     * 刚道别后的静默期（conversation-closure 的 CLOSED + muteLockMs）。
+     *
+     * 这个闸门以前**根本不存在**：closure 处方表里给了 muteLockMs、reply-delivery 也一直
+     * 记着 closedAt，但没有任何消费者读它 —— 于是用户刚说「睡了晚安」，十分钟后又被她
+     * 按空闲阈值戳一下。现在由核心暴露 proactiveMuteState，这里少打扰一次。
+     * 只锁主动开口：用户说完晚安又回来找她，入站回复完全不受影响。
+     */
+    const coolingDown = (chatId) => {
+      try {
+        const st = api.core?.proactiveMuteState?.(String(chatId || ''))
+        return st?.muted === true
+      } catch {
+        // 核心没暴露或状态坏掉：按"没锁"处理，绝不永久掐话。
+        return false
+      }
+    }
+
     api.every(60_000, () => {
       // 熔断优先于一切：配额用完后连 tick 都不跑，省掉一次模型调用。
       const ownerKey = `private:${String(api.config().ownerQQ || '')}`
@@ -37,6 +55,8 @@ export default {
         api.log?.info?.(`Token 配额已用完 → 主动搭话熔断（剩余 ${left}）`)
         return
       }
+      // 刚道过别就先不主动开口（不必打 info：这是预期行为，每 60 秒刷一行会很吵）。
+      if (api.config().ownerQQ && coolingDown(ownerKey)) return
       return speakUp.tick()
     }, '主动搭话')
 
@@ -45,6 +65,12 @@ export default {
       const ownerKey = `private:${String(api.config().ownerQQ || '')}`
       if (api.config().ownerQQ && exhausted(ownerKey)) {
         return { ok: false, message: '今天的 Token 配额已经用完了，她先休息（明天自动恢复）' }
+      }
+      // 手动触发也受静默期约束，但要说清原因（面板点一下没反应会很困惑）。
+      if (api.config().ownerQQ && coolingDown(ownerKey)) {
+        let left = 0
+        try { left = Math.ceil((api.core?.proactiveMuteState?.(ownerKey)?.remainingMs || 0) / 60000) } catch { left = 0 }
+        return { ok: false, message: `刚道过别，${left || 60} 分钟内先不主动找主人（入站回复不受影响）` }
       }
       await speakUp.fire('手动')
       return { ok: true, message: '叫她去找你了' }
