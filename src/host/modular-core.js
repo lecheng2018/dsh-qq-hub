@@ -557,7 +557,19 @@ export function createModularCore({
 
   const assembly = createContextAssembly({
     providers: [
-      ...(personaText ? [{ moduleId: 'persona', priority: 1000, scope: 'global', cacheStable: true, provide: () => personaText() || '' }] : []),
+      // 人设 fragment 必须跟 personaTextFor 同口径：专卡生效时卡已经通过 {{qq_hub_persona}} 进了
+      // 系统提示词，这里若再把全局卡（personaText = persona.current）塞进 qq-hub-context，两张卡
+      // 每轮打架，模型听后注入的那张——真机实测全局豆包卡压掉私聊小鲸鱼卡（2026-11-14）。
+      // 专卡生效就返回空（装配层跳过空 fragment），跟随全局才给全局卡；群聊也因此省一份重复卡。
+      ...(personaText ? [{
+        moduleId: 'persona', priority: 1000, scope: 'global', cacheStable: true,
+        provide: ({ chat }) => {
+          if (typeof personaTextFor === 'function') {
+            try { if (personaTextFor(chat)) return '' } catch { /* 读不到专卡就按全局口径注入 */ }
+          }
+          return personaText() || ''
+        },
+      }] : []),
       ...threadProviders,
       affectiveProvider,
       createLegacyContextAdapter({ mods, priority: 100 }),

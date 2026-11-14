@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 修复「按聊天人设」被全局卡压掉（真机 2026-11-14）
+
+- **症状**：私聊单独指定的人设卡（`persona.privates` / 私聊默认）在系统提示词里是对的，但模型还是按全局人设卡说话——真机实测私聊每轮上下文里都叠着一份完整的全局卡，两张卡打架，模型听后注入的那张。
+- **根因**：modular core 的人设有两条注入通道，只有系统提示词变量（`{{qq_hub_persona}}`）接了按聊天人设（`personaTextFor`）；上下文装配里的人设 fragment（priority 1000，进 `qq-hub-context`）写死用全局卡（`personaText = persona.current`），没跟着改。
+- **修复**：`src/host/modular-core.js` 的人设 fragment 与 `personaTextFor` 同口径——专卡生效时返回空（装配层跳过空 fragment，卡只走系统提示词），跟随全局才注入全局卡。群聊/其他跟随全局的聊天因此少注入一份重复卡（每轮约省 4~5k token）。
+- **生效方式**：插件重载后下一条消息立即生效（fragment 每轮现算），无需重置会话；历史轮里已注入的全局卡仍在旧会话记录里，建议顺手重置一次被污染的会话。
+- **验证**：新增回归钉（`test/m7-live-parity.test.js`）：专卡生效的私聊上下文不含任何卡、跟随全局的群聊上下文仍注入全局卡。
+
 ### US-015 · 情感图谱补齐「信号喂料」与「温度消费」两端
 
 - **修复「图永远是空的」**：`src/chat/affective-graph.js` 497 行信任图谱此前全仓零调用方——`tone()` 没人调、`/affective/bump` 没有内部调用方，`/affective/state` 恒返回 `size:0 / tone:null`，等级永远停在「陌生人 cool」。现在两端都接上了。

@@ -829,3 +829,34 @@ test('群聊补图：触发轮自带图片时按地址去重，最多 4 张', as
     assert.equal(turn?.images, 4, `应去重且封顶 4 张，实际 ${turn?.images}`)
   } finally { restore(); await core.dispose(); await mock.close() }
 })
+
+// —— 按聊天人设 vs 全局卡（真机 2026-11-14，session-82cc1d03）：私聊系统提示词已是小鲸鱼专卡，
+//    但 qq-hub-context 每轮还带一份全局豆包卡，两卡打架、模型听后注入的那张——按聊天人设名存实亡。
+//    行为钉：专卡生效时人设 fragment 必须让位（上下文不再出现全局卡），跟随全局才注入全局卡。
+test('按聊天人设：专卡生效时上下文不再注入全局卡；跟随全局的聊天仍注入', async () => {
+  const { core, dsh, mock } = await fixture({
+    coreOver: {
+      personaText: () => '【全局人设卡】你是豆包',
+      personaTextFor: (chat) => (chat?.kind === 'private' ? '【专用人设卡】你是小鲸鱼' : null),
+    },
+    // 垫一行非人设内容：证明上下文管线在跑，专卡缺席不是「整段上下文为空」的假阳性。
+    modsOver: { contextFor: async () => '（模块上下文占位行）' },
+  })
+  try {
+    await core.dispatchLegacyEvent(privEv())
+    await sleep(600)
+    const snapshot = core.registry.snapshot()
+    const privSid = snapshot[`private:${OWNER}`]?.sessionId
+    assert.ok(privSid, '私聊会话未建立')
+    const privCtx = String(dsh.agents.get(String(privSid))?.contexts?.get('qq-hub-context')?.text?.() || '')
+    assert.match(privCtx, /模块上下文占位行/, '上下文管线应正常产出')
+    assert.doesNotMatch(privCtx, /全局人设卡/, '专卡生效时上下文不应再注入全局卡（两卡打架）')
+    assert.doesNotMatch(privCtx, /专用人设卡/, '专卡走系统提示词变量，不该重复进上下文 fragment')
+
+    await core.dispatchLegacyEvent(groupEv('群里冒个泡'))
+    await sleep(700)
+    const groupSid = Object.entries(core.registry.snapshot()).find(([k]) => k.startsWith('group:'))?.[1]?.sessionId
+    const groupCtx = String(dsh.agents.get(String(groupSid))?.contexts?.get('qq-hub-context')?.text?.() || '')
+    assert.match(groupCtx, /全局人设卡/, '跟随全局的聊天仍要注入全局卡')
+  } finally { await core.dispose(); await mock.close() }
+})
