@@ -56,6 +56,7 @@ import { createHttpKit } from './host/http.js'
 import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { createModularCore } from './host/modular-core.js'
+import { createThreadLedger } from './chat/thread-ledger.js'
 import { createCurrentHub } from './host/current-hub.js'
 import { createModuleSendBridge } from './host/module-send-bridge.js'
 import { createHostEffects } from './host/effects.js'
@@ -261,6 +262,16 @@ export function apply(ctx) {
     return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
   }
 
+  // US-004 · 挂起线索账本：modular-core 只认 peek/resolve/advance 契约（不 import 实现），
+  // 由宿主在这里注入。不传的话 core 会「优雅降级」不注册线索 Provider——
+  // 那等于 602 行账本 + 时空延续 Provider 全部空转，所以这里必须给。
+  // 落盘的 dormant 归档交给 memory：线索沉淀进长期记忆，而不是单独再存一份文件。
+  const threadLedger = createThreadLedger({
+    onDormant: (payload) => {
+      try { use('memory')?.addEvent?.({ ...payload, kind: 'thread-dormant' }) } catch { /* 记忆模块关着就只丢归档，不影响线索本身 */ }
+    },
+  })
+
   const modularCoreApi = createModularCore({
         dsh: ctx,
         onebot,
@@ -287,6 +298,7 @@ export function apply(ctx) {
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
         sessionStoreFile: dataDir('modular-sessions.json'),
+        threadLedger,
         // 真机审计补齐：群闸的话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
         isMuted: (chatId) => mutes.muted(chatId),
