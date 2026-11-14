@@ -16,6 +16,7 @@
 import { createOutbox } from '../chat/outbox.js'
 import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { createOnebotOutboxAdapter } from '../chat/adapters/onebot-outbox.js'
+import { createGroupQuota } from '../chat/group-quota.js'
 import { checkAllowed } from '../chat/access.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 
@@ -41,10 +42,27 @@ function textForGuard(delivery) {
  * @param {object} o.log
  * @param {string} [o.ledgerFile] 台账文件（缺省内存，测试用）
  */
-export function createSharedOutbox({ onebot, getConfig, log, ledgerFile, currentTicket }) {
+export function createSharedOutbox({ onebot, getConfig, log, ledgerFile, currentTicket, sleep, now }) {
   const ledger = ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
+  // 群发送配额（US-020）：QQ 群每分钟硬上限，超了网关直接拒、消息真丢。
+  // 只在群动作上生效；私聊/戳一戳/上传等一律直通，不引入额外等待。
+  // sleep / now 仅用于测试注入虚拟时钟；生产不传，走真实定时器。
+  const quota = createGroupQuota({
+    getConfig,
+    log: log?.child ? log.child('group-quota') : log,
+    ...(sleep ? { sleep } : {}),
+    ...(now ? { now } : {}),
+  })
+  const sendOnce = createOnebotOutboxAdapter({ onebot }).send
+  const send = async (action, params, opts) => {
+    if (action !== 'send_group_msg') return sendOnce(action, params, opts)
+    const groupId = String(params?.group_id ?? '')
+    const r = await quota.send(groupId, () => sendOnce(action, params, opts))
+    if (r.ok) return r.result
+    throw r.error
+  }
   return createOutbox({
-    send: createOnebotOutboxAdapter({ onebot }).send,
+    send,
     ...(ledger ? { ledger } : {}),
     authorize: async (delivery) => {
       if (delivery.action === 'send_qzone_msg') return true

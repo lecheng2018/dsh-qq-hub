@@ -13,6 +13,7 @@
 // 设计原则：默认关闭，主人在面板里打开才生效。
 
 import { readJson, writeJson } from '../../core/store.js'
+import { resolveCharacterIdentity } from '../../persona/identity-context.js'
 
 const ID = 'token-guardian'
 
@@ -223,7 +224,8 @@ export default {
       })
       // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
       // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
-      const systemPrompt = '你是「大肥鱼」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：'
+      // 摘要口径也得跟着卡走：换卡后摘要里不该再出现旧角色的名字。
+      const systemPrompt = `你是「${resolveCharacterIdentity(chatId, cfg).name}」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：`
         + '如果开头带【更早聊天的摘要】，那是上一份检查点：保留仍然成立的事实、丢掉已经过时的、把新内容并进去，输出**一份**合并后的摘要，不要照抄也不要分两截。'
         + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；最后一条用户发言按原意保留，别只写成「聊了某事」；'
         + '每句话写清是谁说的（用「你」和「对方」），分不清的就标「有人」；'
