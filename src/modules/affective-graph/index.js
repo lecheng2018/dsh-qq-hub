@@ -40,6 +40,7 @@ export default {
       catch (error) { api.log?.warn?.('情感图谱落盘失败：', error?.message || error) }
     }
     api.every(60_000, persist, '情感图谱落盘')
+    api.onDispose?.(persist)
 
     /** 给一轮回复用的姿态建议（temperature / jokeScale）。非法 chatKey 一律退回中性。 */
     function toneFor(chatId) {
@@ -60,7 +61,7 @@ export default {
 
     api.route('/affective/bump', async (req) => {
       if (req && req.method !== 'POST') return { ok: false, message: '请使用 POST 记录关系信号' }
-      const body = (await api.core.http.body(req)) || {}
+      const body = (await api.core.http.body(req).catch(() => ({}))) || {}
       const chatId = String(body.chat || '')
       const kind = String(body.signal || '')
       if (!chatId || !Object.hasOwn(SIGNAL_WEIGHTS, kind)) {
@@ -75,6 +76,6 @@ export default {
       }
     })
 
-    return { graph, toneFor, persist }
+    return { graph, toneFor, persist, dispose: persist }
   },
 }

@@ -9,25 +9,37 @@ function fakeApi() {
   const timers = []
   const logs = []
   const store = new Map()
+  const disposes = []
   return {
     log: { info: (m) => logs.push(String(m)), warn: (m) => logs.push('WARN:' + String(m)) },
     dataDir: (name) => `/tmp/ag-${name}`,
     every: (ms, fn) => timers.push({ ms, fn }),
+    onDispose: (fn) => disposes.push(fn),
     route: (p, fn) => routes.set(p, fn),
-    core: { http: { body: async (req) => req._body || {} } },
+    core: {
+      http: {
+        body: async (req) => {
+          if (req._bodyThrow) throw new Error('broken body stream')
+          return req._body || {}
+        },
+      },
+    },
     getRoute: (p) => routes.get(p),
+    disposes,
     logs, store,
   }
 }
 
 const CHAT = 'private:1000'
 
-test('模块 setup 返回 graph / toneFor / persist', () => {
+test('模块 setup 返回 graph / toneFor / persist / dispose，且注册 onDispose', () => {
   const api = fakeApi()
   const out = affectiveGraph.setup(api)
-  for (const k of ['graph', 'toneFor', 'persist']) {
+  for (const k of ['graph', 'toneFor', 'persist', 'dispose']) {
     assert.ok(out[k], `应返回 ${k}`)
   }
+  assert.equal(out.dispose, out.persist, 'dispose 与 persist 应当是同一函数')
+  assert.ok(api.disposes.includes(out.persist), '应向 api.onDispose 注册 persist')
 })
 
 test('陌生人（等级 0）给出 cool 且不主动私聊', () => {
@@ -77,6 +89,14 @@ test('GET 打 bump 端点被拒绝（只接受 POST）', async () => {
   const r = await api.getRoute('/affective/bump')({ method: 'GET' })
   assert.equal(r.ok, false)
   assert.match(String(r.message), /POST/)
+})
+
+test('/affective/bump 在 HTTP body 解析异常时优雅容错', async () => {
+  const api = fakeApi()
+  affectiveGraph.setup(api)
+  const r = await api.getRoute('/affective/bump')({ method: 'POST', _bodyThrow: true })
+  assert.equal(r.ok, false)
+  assert.match(String(r.message), /chat 与合法 signal 必填/)
 })
 
 test('非法 chatKey 的 tone 退回中性，不抛', () => {
