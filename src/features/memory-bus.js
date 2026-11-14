@@ -43,9 +43,17 @@ export function createMemoryBus({ store, log } = {}) {
   /**
    * 写一条事实记忆。
    * @param {{ text: string, chat?: object, chatId?: string, scope?: string, about?: string, aboutName?: string,
-   *           importance?: number, tags?: string[], source?: string }} o
+   *           importance?: number, tags?: string[], source?: string, pinned?: boolean, ephemeral?: boolean,
+   *           evidence?: string, kind?: string, selfView?: boolean, perspective?: string, personaId?: string }} o
    *  作用域优先级：显式 scope > chat（按聊天推） > chatId（按 id 推）。
    *  和主库 add 自己的兜底一致：都推不出来时落主人私聊，绝不落 global。
+   *
+   *  主观自传轨字段（kind / selfView / perspective / personaId）：**原样透传，不改默认值语义**。
+   *  修复前这里是逐字段手抄，只抄了客观事实那几项，于是 PR #119 给主库加的双轨能力
+   *  （主观条目打人设、按人设隔离召回）在「统一入口」这一层被悄悄剥掉：
+   *  任何经 bus 写进来的主观内容都退化成客观事实，personaId 也没了 → 又变成跨人设串味。
+   *  现在用 `?? ''` / `?? false` 保留旧默认（不传时与改造前逐字段一致），
+   *  只有调用方显式给了值才往下带。
    */
   function add(o = {}) {
     const st = requireStore('add')
@@ -63,6 +71,11 @@ export function createMemoryBus({ store, log } = {}) {
       ephemeral: Boolean(o.ephemeral),
       pinned: Boolean(o.pinned),
       evidence: o.evidence || '',
+      // US-017 主观自传轨：不传时保持原默认（空 kind / 非主观），由主库自行判定客观事实
+      kind: o.kind ?? '',
+      selfView: o.selfView ?? false,
+      perspective: o.perspective ?? '',
+      personaId: o.personaId ?? '',
     })
   }
 
@@ -90,6 +103,31 @@ export function createMemoryBus({ store, log } = {}) {
     const st = requireStore('supersede')
     if (!st || typeof st.supersede !== 'function') return { ok: false, message: '主记忆库未就绪' }
     return st.supersede(o)
+  }
+
+  /**
+   * 把一条事实标成过时（立墓碑）：不删、可恢复，但不再被召回。
+   *
+   * 为什么总线必须转发它（缺陷 2）：超时/证伪是「统一入口」的常规动作，
+   * 主库有、总线没有，调用方就只能绕过总线直摸 store —— 那正是本文件开头
+   * 要消灭的「三套记忆并存」的老路。所以在这儿补齐，口径与主库一致。
+   *
+   * pinned 保护（缺陷 3）：主库默认拒绝给手工固定的事实立墓碑，
+   * 这里是**自动路径**（梦境巩固 / 抽取纠错）的入口，因此不传 force —— 保持默认拒绝。
+   * 面板里主人显式删除走 remove()（真删），不经过这里，所以不存在「主人想删却删不掉」。
+   * @param {string} id 目标事实 id
+   * @param {string} [byId] 取代它的新事实 id（可空）
+   * @param {{force?: boolean}} [opts] 仅供显式人工路径使用；总线默认不放开
+   */
+  function invalidate(id, byId = '', opts = {}) {
+    const st = store
+    if (!st || typeof st.invalidate !== 'function') return false
+    try {
+      return st.invalidate(id, byId, opts) === true
+    } catch (error) {
+      warn('记忆总线：invalidate 失败', error)
+      return false
+    }
   }
 
   /**
@@ -139,7 +177,7 @@ export function createMemoryBus({ store, log } = {}) {
   }
 
   return {
-    add, addEvent, supersede, recall, listFor, recentEventsFor, list, remove,
+    add, addEvent, supersede, invalidate, recall, listFor, recentEventsFor, list, remove,
     /** 作用域口径的唯一真相（转发 memory-privacy 的纯函数） */
     scopeOf: (chat) => scopeOf(chat),
     visibleScopes: (chat) => visibleScopes(chat),
