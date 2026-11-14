@@ -418,6 +418,45 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
 .ab-mod .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .ab-mod .side{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .ab-code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;background:var(--ab-card-2);border:1px solid var(--ab-line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;word-break:break-all;margin:6px 0 0}
+
+/* ---------- 现代工作台壳与响应式控件 ---------- */
+.ab-root{--ab-deep:#175cd3;--ab-sea:#2474e0;--ab-sky:#84adff;--ab-foam:rgba(36,116,224,.07);--ab-foam-2:rgba(36,116,224,.13);--ab-bg:#f5f7fa;--ab-radius:10px;--ab-shadow:none;background:var(--ab-bg);font-size:14px;line-height:1.55;padding:0;overflow:auto}
+body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-bg:#12161c;--ab-card:#1a2028;--ab-card-2:#222933;--ab-text:#e6edf3;--ab-sub:#a5b1bf;--ab-dim:#7f8b99;--ab-hover:rgba(255,255,255,.06);--ab-ok:#4ac785;--ab-warn:#e3b341;--ab-err:#ff7b72;--ab-line:rgba(255,255,255,.09);--ab-line-2:rgba(255,255,255,.16);--ab-shadow:none}
+.ab-shell{min-height:100%;box-sizing:border-box}
+.ab-appbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:16px;min-height:68px;padding:10px 24px;border-bottom:1px solid var(--ab-line);background:color-mix(in srgb,var(--ab-bg) 92%,transparent);backdrop-filter:blur(16px);box-sizing:border-box}
+.ab-appbar-main{display:flex;align-items:center;gap:12px;min-width:0;flex:1}
+.ab-brand-avatar{width:42px;height:42px;flex:none;padding:0;border:0;border-radius:10px;background:var(--ab-card-2);overflow:hidden;cursor:pointer}
+.ab-brand-avatar img{display:block;width:100%;height:100%;object-fit:cover;object-position:50% 18%}
+.ab-appbar-title{min-width:0}.ab-appbar-title h1{margin:0;font-size:18px;line-height:1.3;font-weight:650;letter-spacing:0}.ab-appbar-sub{font-size:12px;color:var(--ab-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ab-runtime{display:flex;align-items:center;gap:14px;flex:none}.ab-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ab-sub)}.ab-status.ok{color:var(--ab-ok)}.ab-status.warn{color:var(--ab-warn)}.ab-status.err{color:var(--ab-err)}
+.ab-quick-toggle{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ab-sub);white-space:nowrap}.ab-quick-toggle.secondary{padding-left:14px;border-left:1px solid var(--ab-line)}
+.ab-menu-btn{display:none;width:42px;height:42px;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent;color:var(--ab-text);cursor:pointer}.ab-menu-btn svg,.ab-drawer-close svg,.ab-sheet-close svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ab-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:24px;max-width:1440px;margin:0 auto;padding:24px 28px 40px;box-sizing:border-box}
+.ab-sidebar{min-width:0;align-self:start;position:sticky;top:92px;max-height:calc(100dvh - 112px)}
+.ab-nav{position:relative;display:flex;flex-direction:column;gap:10px;margin:0;border:0;background:transparent;box-shadow:none;backdrop-filter:none;max-height:inherit;overflow:auto;padding:0 4px 12px 0;scrollbar-width:thin}
+.ab-nav:before{display:none}.ab-nav-search{flex:none}.ab-find-btn{width:100%;height:36px;justify-content:flex-start;padding:0 10px;background:var(--ab-card);border-radius:8px;color:var(--ab-sub)}.ab-find-btn span:nth-child(2){flex:1;text-align:left}.ab-find-btn .ab-kbd{font-size:10px}
+.ab-nav-tree{display:flex;flex-direction:column;gap:12px}.ab-nav-group-title{display:flex;align-items:center;gap:7px;padding:0 10px 5px;color:var(--ab-dim);font-size:11px;font-weight:600;letter-spacing:.06em}.ab-nav-group-title .dirty{width:5px;height:5px;border-radius:50%;background:var(--ab-warn)}
+.ab-nav-item{position:relative;width:100%;min-height:36px;display:flex;align-items:center;gap:8px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--ab-sub);font:inherit;font-size:13px;text-align:left;cursor:pointer}.ab-nav-item:hover{background:var(--ab-hover);color:var(--ab-text)}.ab-nav-item.on{background:var(--ab-foam-2);color:var(--ab-deep);font-weight:600}.ab-nav-item.on:before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--ab-sea)}.ab-nav-item-label{flex:1;min-width:0}.ab-nav-item .dirty{width:6px;height:6px;border-radius:50%;background:var(--ab-warn)}
+.ab-finder-inline{padding:8px;border:1px solid var(--ab-line);border-radius:10px;background:var(--ab-card);box-shadow:0 12px 32px rgba(0,0,0,.12)}.ab-finder-inline .ab-input{width:100%}.ab-finder-inline .ab-finder-list{max-height:min(420px,60dvh)}
+.ab-main{min-width:0;max-width:1180px;width:100%;margin:0 auto}.ab-main>.ab-grid{gap:16px}.ab-embedded{margin-top:16px}.ab-wizard-main{max-width:1040px;margin:0 auto;padding:24px 28px}
+.ab-card{border-radius:10px;padding:18px 20px;box-shadow:none;transition:border-color .15s}.ab-card h3{font-size:15px;font-weight:650}.ab-card h3:before{display:none}.ab-card-head{margin-bottom:4px}.ab-card .ab-desc{margin:4px 0 14px;max-width:78ch;line-height:1.6}.ab-card.danger{border-color:color-mix(in srgb,var(--ab-err) 35%,var(--ab-line))}.ab-card-collapse{display:flex;align-items:center;gap:4px;border:0;background:transparent;padding:0;color:var(--ab-text);cursor:pointer}.ab-card-collapse svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7}.ab-card-collapse h3{margin:0}
+.ab-row{padding:12px 0;gap:20px}.ab-row .ab-label{flex-basis:164px}.ab-row .ab-label small{max-width:180px;font-size:12px}.ab-row .ab-ctl{align-items:center}.ab-row.stacked{flex-direction:column;gap:8px}.ab-row.stacked .ab-label{flex:none;max-width:none}.ab-row.stacked .ab-label small{max-width:70ch}.ab-field-error{width:100%;font-size:12px;color:var(--ab-err)}
+.ab-input,.ab-select,.ab-textarea,.ab-sel-btn{min-height:36px;border-radius:8px}.ab-btn{min-height:36px;justify-content:center;border-radius:8px}.ab-btn.sm{min-height:32px}.ab-switch:before{content:"";position:absolute;inset:-11px -3px}.ab-ibtn{width:32px;height:32px}.ab-choice{border-radius:8px;padding:10px 12px}.ab-choice.on{box-shadow:0 0 0 2px var(--ab-foam-2);background:var(--ab-foam)}.ab-choices.compact{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}.ab-choice-current-desc{margin-top:7px;font-size:12px;color:var(--ab-sub)}
+.ab-help{width:100%;margin-top:2px}.ab-help-toggle{display:inline-flex;align-items:center;gap:4px;min-height:30px;padding:2px 0;border:0;background:transparent;color:var(--ab-sub);font:inherit;font-size:12px;cursor:pointer}.ab-help-toggle:hover{color:var(--ab-deep)}.ab-help-toggle svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7}.ab-help-body{padding:10px 12px;border-left:2px solid var(--ab-line-2);color:var(--ab-sub);font-size:12px;line-height:1.65}.ab-help-body p{margin:0 0 8px}.ab-help-body p:last-child{margin-bottom:0}
+.ab-section-nav{display:flex;gap:4px;overflow-x:auto;padding:4px;margin-bottom:12px;border:1px solid var(--ab-line);border-radius:9px;background:var(--ab-card);scrollbar-width:thin}.ab-section-nav button{flex:none;min-height:32px;padding:4px 11px;border:0;border-radius:6px;background:transparent;color:var(--ab-sub);font:inherit;font-size:12px;cursor:pointer}.ab-section-nav button:hover{background:var(--ab-hover);color:var(--ab-text)}
+.ab-savebar{position:fixed;left:calc(50% + 96px);bottom:20px;transform:translateX(-50%);width:min(580px,calc(100% - 300px));margin:0;padding:10px 12px 10px 16px;border:1px solid var(--ab-line-2);border-radius:10px;background:color-mix(in srgb,var(--ab-card) 94%,transparent);box-shadow:0 10px 36px rgba(0,0,0,.16);z-index:40;backdrop-filter:blur(14px)}.ab-savebar .msg{font-size:13px;color:var(--ab-text)}.ab-save-shortcut{font-size:11px;color:var(--ab-dim)}
+.ab-drawer-layer{position:fixed;inset:0;z-index:70;background:rgba(15,23,42,.42)}.ab-drawer{display:flex;flex-direction:column;width:min(340px,88vw);height:100dvh;background:var(--ab-bg);box-shadow:12px 0 40px rgba(0,0,0,.18);animation:abDrawer .18s ease-out}.ab-drawer-head{display:flex;align-items:center;justify-content:space-between;min-height:64px;padding:10px 16px;border-bottom:1px solid var(--ab-line)}.ab-drawer-close,.ab-sheet-close{width:42px;height:42px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent;color:var(--ab-sub);cursor:pointer}.ab-drawer .ab-nav{padding:14px;max-height:none;flex:1}.ab-nav-mobile .ab-nav-item{min-height:44px;font-size:14px}.ab-nav-mobile .ab-find-btn{height:44px}@keyframes abDrawer{from{transform:translateX(-100%)}to{transform:none}}
+.ab-sheet-layer,.ab-dialog-layer{position:fixed;inset:0;z-index:80;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,.45);padding:0}.ab-sheet{width:100%;max-height:72dvh;display:flex;flex-direction:column;padding:0 16px calc(16px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;background:var(--ab-card);box-shadow:0 -16px 48px rgba(0,0,0,.2);box-sizing:border-box}.ab-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;border-bottom:1px solid var(--ab-line)}.ab-sheet-head strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ab-sheet-search{width:100%;margin:12px 0}.ab-select-sheet .ab-sel-pop{position:static;min-width:0;max-height:none;overflow:auto;border:0;box-shadow:none;padding:6px 0;animation:none}.ab-select-sheet .ab-sel-opt{min-height:46px;align-items:center;white-space:normal}.ab-sel.up .ab-sel-pop{top:auto;bottom:calc(100% + 6px)}
+.ab-dialog-layer{align-items:center;padding:20px}.ab-dialog{width:min(480px,100%);max-height:85dvh;overflow:auto;padding:0 20px 20px;border:1px solid var(--ab-line);border-radius:12px;background:var(--ab-card);box-shadow:0 20px 60px rgba(0,0,0,.22)}.ab-dialog-copy{line-height:1.65;color:var(--ab-sub)}.ab-dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.ab-copy-text{display:flex;align-items:flex-start;gap:8px;min-width:0;width:100%}.ab-copy-text code{flex:1;min-width:0;padding:7px 9px;border-radius:7px;background:var(--ab-card-2);white-space:pre-wrap;overflow-wrap:anywhere}.ab-copy-text code.truncate{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ab-copy-actions{display:flex;gap:2px;flex:none}
+.ab-data-table-desktop{overflow-x:auto}.ab-data-cards{display:none}.ab-data-card{padding:12px 0;border-top:1px solid var(--ab-line)}.ab-data-field{display:grid;grid-template-columns:104px minmax(0,1fr);gap:10px;padding:5px 0}.ab-data-label{color:var(--ab-sub);font-size:12px}.ab-data-value{min-width:0;overflow-wrap:anywhere}
+.ab-platform-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 24px}.ab-platform-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;border-bottom:1px solid var(--ab-line);font-size:13px}.ab-test-bar{display:flex;align-items:center;gap:8px}.ab-test-bar .ab-input{flex:1;width:auto}.ab-test-result{margin-top:12px;padding:12px;border:1px solid var(--ab-line);border-radius:8px;background:var(--ab-card-2)}.ab-test-title{font-weight:600;color:var(--ab-deep);margin-bottom:4px}.ab-test-summary{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}.ab-ok-text{color:var(--ab-ok)}
+@media (max-width:1023px){.ab-layout{display:block;padding:20px}.ab-sidebar{display:none}.ab-menu-btn{display:flex}.ab-appbar{padding:10px 18px}.ab-main{max-width:none}.ab-savebar{left:50%;width:min(580px,calc(100% - 40px))}.ab-runtime{gap:10px}}
+@media (max-width:640px){.ab-root{font-size:14px}.ab-appbar{min-height:60px;padding:8px 12px;gap:8px}.ab-brand-avatar{display:none}.ab-appbar-title h1{font-size:16px}.ab-appbar-sub{max-width:150px}.ab-runtime{gap:8px}.ab-status{font-size:0;gap:0}.ab-status .ab-dot{width:8px;height:8px}.ab-quick-toggle span{display:none}.ab-quick-toggle.secondary{padding-left:8px}.ab-layout{padding:14px 12px 28px}.ab-wizard-main{padding:16px 12px}.ab-wrap{padding:0}.ab-main>.ab-grid{gap:12px}.ab-card{padding:15px 14px;border-radius:9px}.ab-card .ab-desc{font-size:12px}.ab-row{flex-direction:column;gap:7px;padding:12px 0}.ab-row .ab-label{flex:none;max-width:none}.ab-row .ab-label small{max-width:none}.ab-row .ab-ctl{width:100%;gap:8px}.ab-ctl>.ab-input:not(.sm),.ab-ctl>.ab-select,.ab-ctl>.ab-textarea,.ab-ctl>.ab-sel,.ab-ctl>.ab-list-area{flex:1;width:100%}.ab-input,.ab-select,.ab-textarea,.ab-sel-btn{min-height:44px}.ab-btn{min-height:42px}.ab-btn.sm{min-height:36px}.ab-switch{width:42px;height:24px}.ab-switch:after{width:18px;height:18px}.ab-switch.on:after{left:21px}.ab-seg{max-width:100%;overflow-x:auto}.ab-seg button{min-height:42px;padding:6px 12px}.ab-choice{min-height:44px}.ab-choices.compact{grid-template-columns:repeat(3,minmax(0,1fr))}.ab-choice-current-desc{font-size:12px}.ab-mod{flex-wrap:wrap}.ab-mod .side{width:100%;flex-direction:row;align-items:center;justify-content:space-between}.ab-mod .acts{gap:8px}.ab-li{flex-wrap:wrap}.ab-li .meta{white-space:normal}.ab-sticker .x,.ab-shot .x{opacity:1;width:36px;height:36px}.ab-psec-act,.ab-psec .ab-aibtn{opacity:1}.ab-ibtn{width:40px;height:40px}.ab-savebar{left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));transform:none;width:auto;padding:9px 10px 9px 12px;gap:7px}.ab-savebar .msg{font-size:12px}.ab-save-shortcut{display:none}.has-dirty .ab-layout{padding-bottom:96px}.ab-toast{bottom:calc(92px + env(safe-area-inset-bottom));max-width:calc(100vw - 28px);width:max-content}.ab-data-table-desktop{display:none}.ab-data-cards{display:block}.ab-dialog-layer{padding:12px}.ab-dialog{padding:0 16px 16px}.ab-copy-text{flex-direction:column}.ab-copy-actions{align-self:flex-end}.ab-g2{grid-template-columns:1fr}.ab-g4{grid-template-columns:repeat(2,minmax(0,1fr))}.ab-stat .n{font-size:24px}.ab-section-nav{margin-bottom:10px}.ab-section-nav button{min-height:38px}.ab-finder-item{min-height:42px}.ab-data-field{grid-template-columns:92px minmax(0,1fr)}}
+@media (max-width:640px){.ab-platform-grid{grid-template-columns:1fr}.ab-test-bar{flex-direction:column;align-items:stretch}.ab-test-bar .ab-input{width:100%}.ab-test-bar .ab-btn{width:100%}.ab-persona:not(.editor-open)>.ab-card,.ab-persona.editor-open>.ab-plist{display:none}.ab-persona-back{display:inline-flex}.ab-persona>.ab-card{min-width:0}.ab-persona .ab-card-head{flex-wrap:wrap}.ab-persona .ab-card-head .ab-flex{max-width:100%}}
+@media (min-width:641px){.ab-persona-back{display:none}}
+@media(max-width:640px){.ab-main .ab-card:has(>.ab-table){overflow-x:auto}.ab-main .ab-card>.ab-table{min-width:560px}.ab-main .ab-card:has(>.ab-data-table)>.ab-table{min-width:0}.ab-row-right>.ab-btn,.ab-li .ab-btn{min-height:44px}.ab-input.sm{min-width:0;max-width:100%}}
+@media (prefers-reduced-motion:reduce){.ab-drawer{animation:none}.ab-section-nav button{scroll-behavior:auto}}
 `;
 
 // client/src/styles/use-style.js
@@ -434,18 +473,40 @@ function useStyle() {
 
 // client/src/ui/primitives.js
 function Switch({ on, onChange, disabled, title }) {
-  return h("button", { type: "button", className: cx("ab-switch", on && "on"), onClick: () => !disabled && onChange(!on), disabled, title, role: "switch", "aria-checked": !!on });
+  return h("button", { type: "button", className: cx("ab-switch", on && "on"), onClick: () => !disabled && onChange(!on), disabled, title, "aria-label": title || "切换开关", role: "switch", "aria-checked": !!on });
 }
-function Row({ label, hint, children }) {
-  return h("div", { className: "ab-row" }, h("div", { className: "ab-label" }, h("b", null, label), hint ? h("small", null, hint) : null), h("div", { className: "ab-ctl" }, children));
-}
-function Card({ title, desc, icon, right, children, className }) {
+function HelpDisclosure({ label = "了解详细规则", children }) {
+  const [open, setOpen] = useState(false);
+  const id = useRef("ab-help-" + Math.random().toString(36).slice(2));
   return h(
     "div",
-    { className: cx("ab-card", className) },
-    title ? h("div", { className: "ab-flex", style: { marginBottom: desc ? 0 : 10 } }, h("h3", null, icon || null, title), h("div", { className: "ab-spacer" }), right || null) : null,
-    desc ? h("p", { className: "ab-desc" }, desc) : null,
-    children
+    { className: cx("ab-help", open && "open") },
+    h("button", { type: "button", className: "ab-help-toggle", "aria-expanded": open, "aria-controls": id.current, onClick: () => setOpen(!open) }, navIcon(open ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"), label),
+    open ? h("div", { className: "ab-help-body", id: id.current }, children) : null
+  );
+}
+function Row({ label, hint, description, details, children, error, layout = "auto" }) {
+  return h(
+    "div",
+    { className: cx("ab-row", layout === "stacked" && "stacked", error && "has-error") },
+    h("div", { className: "ab-label" }, h("b", null, label), hint || description ? h("small", null, description || hint) : null),
+    h("div", { className: "ab-ctl" }, children, error ? h("div", { className: "ab-field-error", role: "alert" }, error) : null, details ? h(HelpDisclosure, null, details) : null)
+  );
+}
+function Card({ title, desc, summary, icon, right, children, className, collapsible = false, defaultOpen = true, tone = "default", id }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return h(
+    "section",
+    { className: cx("ab-card", tone === "danger" && "danger", className), id },
+    title ? h(
+      "div",
+      { className: "ab-card-head" },
+      collapsible ? h("button", { type: "button", className: "ab-card-collapse", "aria-expanded": open, onClick: () => setOpen(!open) }, navIcon(open ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"), h("h3", null, icon || null, title)) : h("h3", null, icon || null, title),
+      h("div", { className: "ab-spacer" }),
+      right || null
+    ) : null,
+    desc || summary ? h("p", { className: "ab-desc" }, summary || desc) : null,
+    collapsible && !open ? null : children
   );
 }
 function Btn({ kind, small, onClick, disabled, children, title, className }) {
@@ -466,36 +527,142 @@ function Btn({ kind, small, onClick, disabled, children, title, className }) {
     }
   }, busy ? [h("i", { key: "s", className: "ab-spin" }), " 处理中"] : children);
 }
-function Select({ value, options, onChange, placeholder, width }) {
-  const [open, setOpen] = useState(false);
-  const [act, setAct] = useState(-1);
-  const ref = useRef(null);
-  const cur = options.find((o) => o.value === value);
+function useMedia(query) {
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener ? media.addEventListener("change", update) : media.addListener(update);
+    return () => media.removeEventListener ? media.removeEventListener("change", update) : media.removeListener(update);
+  }, [query]);
+  return matches;
+}
+function useModal(open, ref, onClose) {
   useEffect(() => {
     if (!open) return;
-    const close = (e) => {
+    const oldOverflow = document.body.style.overflow;
+    const oldFocus = document.activeElement;
+    document.body.style.overflow = "hidden";
+    const root = ref.current;
+    const focusable = () => root ? Array.from(root.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).filter((el) => el.offsetParent !== null) : [];
+    const items = focusable();
+    if (items[0]) items[0].focus();
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+      if (e.key !== "Tab") return;
+      const list = focusable();
+      if (!list.length) return;
+      if (e.shiftKey && document.activeElement === list[0]) {
+        e.preventDefault();
+        list[list.length - 1].focus();
+      } else if (!e.shiftKey && document.activeElement === list[list.length - 1]) {
+        e.preventDefault();
+        list[0].focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = oldOverflow;
+      document.removeEventListener("keydown", onKey);
+      if (oldFocus && oldFocus.focus) oldFocus.focus();
+    };
+  }, [open]);
+}
+function BottomSheet({ title, children, onClose, className }) {
+  const ref = useRef(null);
+  useModal(true, ref, onClose);
+  return h(
+    "div",
+    { className: "ab-sheet-layer", onMouseDown: (e) => {
+      if (e.target === e.currentTarget) onClose();
+    } },
+    h(
+      "section",
+      { className: cx("ab-sheet", className), role: "dialog", "aria-modal": true, "aria-label": title || "操作", ref },
+      h("div", { className: "ab-sheet-head" }, h("strong", null, title || ""), h("button", { type: "button", className: "ab-sheet-close", "aria-label": "关闭", onClick: onClose }, navIcon("M6 6l12 12M18 6 6 18"))),
+      children
+    )
+  );
+}
+function Dialog({ title, children, onClose, className }) {
+  const ref = useRef(null);
+  useModal(true, ref, onClose);
+  return h(
+    "div",
+    { className: "ab-dialog-layer", onMouseDown: (e) => {
+      if (e.target === e.currentTarget) onClose();
+    } },
+    h(
+      "section",
+      { className: cx("ab-dialog", className), role: "dialog", "aria-modal": true, "aria-label": title || "操作", ref },
+      h("div", { className: "ab-sheet-head" }, h("strong", null, title || ""), h("button", { type: "button", className: "ab-sheet-close", "aria-label": "关闭", onClick: onClose }, navIcon("M6 6l12 12M18 6 6 18"))),
+      children
+    )
+  );
+}
+function Select({ value, options = [], onChange, placeholder, width, disabled = false }) {
+  const mobile = useMedia("(max-width: 640px)");
+  const [open, setOpen] = useState(false);
+  const [act, setAct] = useState(-1);
+  const [query, setQuery] = useState("");
+  const [up, setUp] = useState(false);
+  const ref = useRef(null);
+  const listRef = useRef(null);
+  const cur = options.find((o) => o.value === value);
+  const shown = mobile && query.trim() ? options.filter((o) => (String(o.label) + " " + String(o.desc || "") + " " + String(o.group || "")).toLowerCase().includes(query.trim().toLowerCase())) : options;
+  useEffect(() => {
+    if (!open || mobile) return;
+    const close2 = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
+    document.addEventListener("mousedown", close2);
+    return () => document.removeEventListener("mousedown", close2);
+  }, [open, mobile]);
+  useEffect(() => {
+    if (!open) return;
+    const active = listRef.current && listRef.current.querySelector(".act, .on");
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }, [open, act]);
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
   const pick = (o) => {
     onChange(o.value);
-    setOpen(false);
+    close();
   };
   const openAt = () => {
-    setOpen(true);
+    if (disabled || !options.length) return;
+    if (!mobile && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setUp(typeof window !== "undefined" && window.innerHeight - rect.bottom < 280 && rect.top > 320);
+    }
     setAct(Math.max(0, options.indexOf(cur)));
+    setOpen(true);
   };
   const onKey = (e) => {
+    if (disabled) return;
     if (e.key === "Escape") {
-      setOpen(false);
+      close();
       return;
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) return openAt();
       setAct((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);
+    }
+    if (e.key === "Home" && open) {
+      e.preventDefault();
+      setAct(0);
+    }
+    if (e.key === "End" && open) {
+      e.preventDefault();
+      setAct(options.length - 1);
     }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -505,38 +672,56 @@ function Select({ value, options, onChange, placeholder, width }) {
   };
   let lastGroup = null;
   const items = [];
-  options.forEach((o, i) => {
+  shown.forEach((o) => {
+    const i = options.indexOf(o);
     if (o.group && o.group !== lastGroup) items.push(h("div", { key: "g" + i, className: "ab-sel-group" }, o.group));
     lastGroup = o.group || lastGroup;
     items.push(h(
-      "div",
-      { key: "o" + i, role: "option", "aria-selected": o.value === value, className: cx("ab-sel-opt", o.value === value && "on", i === act && "act"), onMouseEnter: () => setAct(i), onMouseDown: (e) => {
+      mobile ? "button" : "div",
+      { key: "o" + i, type: mobile ? "button" : void 0, role: "option", "aria-selected": o.value === value, className: cx("ab-sel-opt", o.value === value && "on", i === act && "act"), onMouseEnter: () => setAct(i), onMouseDown: mobile ? void 0 : (e) => {
         e.preventDefault();
         pick(o);
-      } },
+      }, onClick: mobile ? () => pick(o) : void 0 },
       h("span", { className: "ck" }, o.value === value ? "✓" : ""),
       h("span", { className: "tx" }, o.label, o.desc ? h("span", { className: "ds" }, o.desc) : null)
     ));
   });
+  const list = h("div", { className: "ab-sel-pop", role: "listbox", ref: listRef }, items.length ? items : h("div", { className: "ab-finder-empty" }, "没有匹配选项"));
   return h(
-    "div",
-    { className: cx("ab-sel", open && "open"), ref, style: width ? { minWidth: width } : null },
+    Fragment,
+    null,
     h(
-      "button",
-      { type: "button", className: "ab-sel-btn", onClick: () => open ? setOpen(false) : openAt(), onKeyDown: onKey, "aria-haspopup": "listbox", "aria-expanded": open },
-      h("span", { className: "v" }, cur ? cur.label : h("span", { className: "ab-muted" }, placeholder || "请选择")),
-      h("svg", { className: "chev", width: 12, height: 12, viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: 1.8 }, h("path", { d: "M3 4.5 6 7.5 9 4.5" }))
+      "div",
+      { className: cx("ab-sel", open && "open", up && "up"), ref, style: width ? { minWidth: width } : null },
+      h(
+        "button",
+        { type: "button", className: "ab-sel-btn", disabled, onClick: () => open ? close() : openAt(), onKeyDown: onKey, "aria-haspopup": "listbox", "aria-expanded": open },
+        h("span", { className: "v" }, cur ? cur.label : h("span", { className: "ab-muted" }, placeholder || "请选择")),
+        h("svg", { className: "chev", width: 12, height: 12, viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: 1.8 }, h("path", { d: "M3 4.5 6 7.5 9 4.5" }))
+      ),
+      open && !mobile ? list : null
     ),
-    open ? h("div", { className: "ab-sel-pop", role: "listbox" }, items) : null
+    open && mobile ? h(
+      BottomSheet,
+      { title: "选择" + (cur ? "（当前：" + cur.label + "）" : ""), onClose: close, className: "ab-select-sheet" },
+      options.length > 8 ? h("input", { className: "ab-input ab-sheet-search", autoFocus: true, placeholder: "搜索选项", value: query, onChange: (e) => setQuery(e.target.value) }) : null,
+      list
+    ) : null
   );
 }
-function Choices({ value, options, onChange }) {
-  return h("div", { className: "ab-choices", role: "radiogroup" }, options.map((o) => h(
-    "button",
-    { key: o.value, type: "button", role: "radio", "aria-checked": o.value === value, className: cx("ab-choice", o.value === value && "on"), onClick: () => onChange(o.value) },
-    h("b", null, o.icon || null, o.label),
-    o.desc ? h("small", null, o.desc) : null
-  )));
+function Choices({ value, options, onChange, compact = false }) {
+  const selected = options.find((o) => o.value === value);
+  return h(
+    "div",
+    { className: "ab-choice-wrap" },
+    h("div", { className: cx("ab-choices", compact && "compact"), role: "radiogroup" }, options.map((o) => h(
+      "button",
+      { key: o.value, type: "button", role: "radio", "aria-checked": o.value === value, className: cx("ab-choice", o.value === value && "on"), onClick: () => onChange(o.value) },
+      h("b", null, o.icon || null, o.label),
+      !compact && o.desc ? h("small", null, o.desc) : null
+    ))),
+    compact && selected && selected.desc ? h("div", { className: "ab-choice-current-desc" }, selected.desc) : null
+  );
 }
 function Range({ value, min, max, step, onChange, fmt }) {
   return h(
@@ -547,12 +732,45 @@ function Range({ value, min, max, step, onChange, fmt }) {
   );
 }
 function Seg({ value, options, onChange, disabled }) {
-  return h("div", { className: "ab-seg" + (disabled ? " off" : "") }, options.map((o) => h("button", { key: o.value, type: "button", className: value === o.value ? "on" : "", disabled: !!disabled, onClick: () => {
+  return h("div", { className: "ab-seg" + (disabled ? " off" : ""), role: "group" }, options.map((o) => h("button", { key: o.value, type: "button", "aria-pressed": value === o.value, className: value === o.value ? "on" : "", disabled: !!disabled, onClick: () => {
     if (!disabled) onChange(o.value);
   } }, o.label)));
 }
 function Empty({ icon, text }) {
-  return h("div", { className: "ab-empty" }, h("div", { className: "big" }, icon || "🐋"), text);
+  return h("div", { className: "ab-empty" }, icon ? h("div", { className: "big" }, icon) : null, text);
+}
+function SectionNav({ items }) {
+  return h("nav", { className: "ab-section-nav", "aria-label": "页内分区" }, items.map((item) => h("button", { key: item.id, type: "button", onClick: () => {
+    const el = document.getElementById(item.id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  } }, item.label)));
+}
+function DataTable({ columns, rows, rowKey, empty = "暂无数据" }) {
+  if (!rows.length) return h(Empty, { text: empty });
+  return h(
+    Fragment,
+    null,
+    h("div", { className: "ab-data-table-desktop" }, h("table", { className: "ab-table" }, h("thead", null, h("tr", null, columns.map((c) => h("th", { key: c.key }, c.label)))), h("tbody", null, rows.map((row, i) => h("tr", { key: rowKey ? rowKey(row) : i }, columns.map((c) => h("td", { key: c.key }, c.render(row, i)))))))),
+    h("div", { className: "ab-data-cards" }, rows.map((row, i) => h("div", { className: "ab-data-card", key: rowKey ? rowKey(row) : i }, columns.map((c) => h("div", { className: "ab-data-field", key: c.key }, h("span", { className: "ab-data-label" }, c.label), h("div", { className: "ab-data-value" }, c.render(row, i)))))))
+  );
+}
+function DangerZone({ title, description, actionLabel, onConfirm, confirmText }) {
+  const [open, setOpen] = useState(false);
+  return h(
+    Card,
+    { title, desc: description, tone: "danger" },
+    h(Btn, { kind: "danger", small: true, onClick: () => setOpen(true) }, actionLabel),
+    open ? h(
+      Dialog,
+      { title, onClose: () => setOpen(false) },
+      h("p", { className: "ab-dialog-copy" }, description),
+      confirmText ? h("p", { className: "ab-note warn" }, confirmText) : null,
+      h("div", { className: "ab-dialog-actions" }, h(Btn, { onClick: () => setOpen(false) }, "取消"), h(Btn, { kind: "danger", onClick: async () => {
+        await onConfirm();
+        setOpen(false);
+      } }, actionLabel))
+    ) : null
+  );
 }
 function ListArea({ value, onChange, placeholder, numbers }) {
   const parse = (t) => t.split(numbers ? /[\n,，;；\s]+/ : /[\n,，;；]+/).map((s) => s.trim()).filter(Boolean);
@@ -637,7 +855,7 @@ function PercentRow({ label, value, fallback, write, remove }) {
   );
 }
 function ModOff({ name }) {
-  return h(Card, { title: name }, h("div", { className: "ab-muted ab-small" }, "「" + name + "」模块关着，这部分用不了。要用的话去「扩展」页把它打开。"));
+  return h(Card, { title: name }, h("div", { className: "ab-muted ab-small" }, "「" + name + "」模块已关闭。需要使用时，请到「扩展」页开启。"));
 }
 var TabBoundary = class extends React.Component {
   constructor(p) {
@@ -659,7 +877,7 @@ var TabBoundary = class extends React.Component {
       Card,
       { title: "这一页出错了" },
       h("div", { className: "ab-note err" }, String(this.state.error && this.state.error.message || this.state.error)),
-      h("div", { className: "ab-small ab-muted", style: { margin: "8px 0" } }, "别的页面不受影响。把这段报错截图发给作者就行。"),
+      h("div", { className: "ab-small ab-muted", style: { margin: "8px 0" } }, "其他页面不受影响。可以把报错信息发给作者。"),
       h(
         "div",
         { className: "ab-flex" },
@@ -728,110 +946,173 @@ var NAV_ALIAS = {
   modules: "扩展 模块 插件",
   logs: "日志 报错"
 };
+var TAB_KEYS = {
+  connect: ["snowluma", "botQQ"],
+  access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
+  group: ["group", "merge", "reply"],
+  model: ["model", "chatModels"],
+  voice: ["voice"],
+  stickers: ["stickers"],
+  imagegen: ["imageGen"],
+  diary: ["diary", "qzoneSocial"],
+  speakup: ["speakUp"],
+  memory: ["memory"],
+  bili: ["bili"],
+  douyin: ["douyin"],
+  heybox: ["heybox"],
+  multiParser: ["multiParser"],
+  local: ["local"]
+};
 
 // client/src/shell/nav-bar.js
-function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
-  const [last, setLast] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("qq-hub.navlast") || "{}") || {};
-    } catch (e) {
-      return {};
-    }
-  });
-  const [find, setFind] = useState(null);
+function NavBar({ tabs, cur, go, mark, dirtyOf, open, onClose, returnFocusRef }) {
+  const [find, setFind] = useState("");
+  const [finding, setFinding] = useState(false);
   const [hi, setHi] = useState(0);
-  const box = useRef(null);
+  const drawerRef = useRef(null);
+  const searchRef = useRef(null);
   const groups = NAV_GROUPS.map((g) => ({ ...g, list: tabs.filter((t) => navGroupOf(t).id === g.id).sort((a, b) => navOrder(g, a) - navOrder(g, b)) })).filter((g) => g.list.length);
-  const curGroup = groups.find((g) => g.list.some((t) => t.id === cur.id)) || groups[0];
-  useEffect(() => {
-    if (!curGroup || last[curGroup.id] === cur.id) return;
-    const next = { ...last, [curGroup.id]: cur.id };
-    setLast(next);
-    try {
-      localStorage.setItem("qq-hub.navlast", JSON.stringify(next));
-    } catch (e) {
+  const q = find.trim().toLowerCase();
+  const hits = groups.flatMap((g) => g.list.map((t) => ({ t, g }))).filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || "", t.id].join(" ").toLowerCase().includes(q));
+  const pick = (t) => {
+    setFinding(false);
+    setFind("");
+    setHi(0);
+    go(t.id);
+  };
+  const openFind = () => {
+    if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 1023px)").matches) {
+      const button = returnFocusRef && returnFocusRef.current;
+      if (button) button.click();
     }
-  }, [cur.id]);
-  const openGroup = (g) => go((g.list.find((t) => t.id === last[g.id]) || g.list[0]).id);
-  const toggleFind = () => {
-    setFind((f) => f === null ? "" : null);
+    setFinding(true);
     setHi(0);
   };
   useEffect(() => {
     const onKey = (e) => {
       if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        toggleFind();
-      } else if (e.key === "Escape") setFind(null);
+        openFind();
+      } else if (e.key === "Escape") {
+        setFinding(false);
+        if (open) onClose();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [open]);
   useEffect(() => {
-    if (find === null) return;
-    const onDown = (e) => {
-      if (box.current && !box.current.contains(e.target)) setFind(null);
+    if (finding && searchRef.current) searchRef.current.focus();
+  }, [finding, open]);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const root = drawerRef.current;
+    const first = root && root.querySelector("button, input");
+    if (first) first.focus();
+    const trap = (e) => {
+      if (e.key !== "Tab" || !root) return;
+      const items = Array.from(root.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstItem) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && document.activeElement === lastItem) {
+        e.preventDefault();
+        firstItem.focus();
+      }
     };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [find === null]);
-  const q = (find || "").trim().toLowerCase();
-  const hits = find === null ? [] : groups.flatMap((g) => g.list.map((t) => ({ t, g }))).filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || "", t.id].join(" ").toLowerCase().includes(q));
-  const pick = (t) => {
-    setFind(null);
-    go(t.id);
-  };
-  const tabBtn = (t) => h("button", { key: t.id, type: "button", role: "tab", "aria-selected": cur.id === t.id, className: cx("ab-tab", cur.id === t.id && "on"), onClick: () => go(t.id) }, t.label, mark(t));
-  return h(
-    "nav",
-    { className: "ab-nav", ref: box, "aria-label": "QQ Hub 功能" },
+    document.addEventListener("keydown", trap);
+    return () => {
+      document.body.style.overflow = previous;
+      document.removeEventListener("keydown", trap);
+      if (returnFocusRef && returnFocusRef.current) returnFocusRef.current.focus();
+    };
+  }, [open]);
+  useEffect(() => {
+    const active = document.querySelector(open ? ".ab-nav-mobile .ab-nav-item.on" : ".ab-sidebar .ab-nav-item.on");
+    if (active) active.scrollIntoView({ block: "nearest" });
+  }, [cur.id, open]);
+  const tabBtn = (t) => h("button", {
+    key: t.id,
+    type: "button",
+    "aria-current": cur.id === t.id ? "page" : void 0,
+    className: cx("ab-nav-item", cur.id === t.id && "on"),
+    onClick: () => pick(t)
+  }, h("span", { className: "ab-nav-item-label" }, t.label), mark(t));
+  const finder = (scope) => finding ? h(
+    "div",
+    { className: "ab-finder-inline" },
+    h("input", {
+      ref: searchRef,
+      className: "ab-input",
+      placeholder: "搜索页面或功能",
+      value: find,
+      role: "combobox",
+      "aria-expanded": true,
+      "aria-controls": "ab-nav-results-" + scope,
+      onChange: (e) => {
+        setFind(e.target.value);
+        setHi(0);
+      },
+      onKeyDown: (e) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setHi(Math.min(hi + 1, hits.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setHi(Math.max(hi - 1, 0));
+        } else if (e.key === "Enter" && hits[hi]) {
+          e.preventDefault();
+          pick(hits[hi].t);
+        }
+      }
+    }),
+    h("div", { className: "ab-finder-list", role: "listbox", id: "ab-nav-results-" + scope }, hits.length ? hits.map(({ t, g }, i) => h("button", { key: t.id, type: "button", role: "option", "aria-selected": i === hi, className: cx("ab-finder-item", i === hi && "on"), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, h("small", null, g.label))) : h("div", { className: "ab-finder-empty" }, "没有匹配的功能"))
+  ) : null;
+  const tree = (scope) => h(
+    Fragment,
+    null,
     h(
       "div",
-      { className: "ab-nav-top" },
-      h("div", { className: "ab-nav-groups", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => h("button", {
-        key: g.id,
-        type: "button",
-        role: "tab",
-        "aria-selected": g.id === curGroup.id,
-        className: cx("ab-grp", g.id === curGroup.id && "on"),
-        title: g.list.map((t) => t.label).join(" · "),
-        onClick: () => openGroup(g)
-      }, navIcon(g.icon), h("span", null, g.label), g.list.some((t) => dirtyOf(t.id)) ? h("i", { className: "dirty", title: "这组里有没保存的改动" }) : null))),
+      { className: "ab-nav-search" },
       h(
         "button",
-        { type: "button", className: "ab-find-btn", "aria-expanded": find !== null, title: "查找功能（Alt+K）", onClick: toggleFind },
+        { type: "button", className: "ab-find-btn", "aria-expanded": finding, onClick: () => {
+          setFinding(!finding);
+          setHi(0);
+        } },
         navIcon("M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.2-4.2"),
-        h("span", { className: "t" }, "查找"),
+        h("span", null, "查找设置"),
         h("span", { className: "ab-kbd" }, "Alt K")
       )
     ),
-    curGroup && curGroup.list.length > 1 ? h("div", { className: "ab-nav-sub", role: "tablist", "aria-label": curGroup.label, ref: subRef }, curGroup.list.map(tabBtn)) : null,
-    find !== null ? h(
+    finder(scope),
+    finding ? null : h("div", { className: "ab-nav-tree" }, groups.map((g) => h(
+      "section",
+      { className: "ab-nav-group", key: g.id },
+      h("div", { className: "ab-nav-group-title" }, g.label, g.list.some((t) => dirtyOf(t.id)) ? h("i", { className: "dirty", title: "这组有未保存修改" }) : null),
+      g.list.map(tabBtn)
+    )))
+  );
+  return h(
+    Fragment,
+    null,
+    h("aside", { className: "ab-sidebar" }, h("nav", { className: "ab-nav", "aria-label": "QQ Hub 功能" }, tree("desktop"))),
+    open ? h(
       "div",
-      { className: "ab-finder" },
-      h("input", {
-        className: "ab-input",
-        autoFocus: true,
-        placeholder: "找功能：语音、抖音、白名单…",
-        value: find,
-        onChange: (e) => {
-          setFind(e.target.value);
-          setHi(0);
-        },
-        onKeyDown: (e) => {
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setHi(Math.min(hi + 1, hits.length - 1));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setHi(Math.max(hi - 1, 0));
-          } else if (e.key === "Enter" && hits[hi]) {
-            e.preventDefault();
-            pick(hits[hi].t);
-          }
-        }
-      }),
-      h("div", { className: "ab-finder-list", role: "listbox" }, hits.length ? hits.map(({ t, g }, i) => h("button", { key: t.id, type: "button", role: "option", "aria-selected": i === hi, className: cx("ab-finder-item", i === hi && "on"), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, h("small", null, g.label))) : h("div", { className: "ab-finder-empty" }, "没找到，换个说法试试：语音、抖音、白名单"))
+      { className: "ab-drawer-layer", role: "presentation", onMouseDown: (e) => {
+        if (e.target === e.currentTarget) onClose();
+      } },
+      h(
+        "div",
+        { className: "ab-drawer", role: "dialog", "aria-modal": true, "aria-label": "QQ Hub 功能菜单", ref: drawerRef },
+        h("div", { className: "ab-drawer-head" }, h("strong", null, "功能菜单"), h("button", { type: "button", className: "ab-drawer-close", "aria-label": "关闭菜单", onClick: onClose }, navIcon("M6 6l12 12M18 6 6 18"))),
+        h("nav", { className: "ab-nav ab-nav-mobile", "aria-label": "QQ Hub 功能" }, tree("mobile"))
+      )
     ) : null
   );
 }
@@ -997,52 +1278,51 @@ function Overview({ st, toast, go }) {
     h(
       "div",
       { className: "ab-grid ab-g4" },
-      [["今天收到", s.received, "📥"], ["今天发出", s.sent, "📤"], ["语音条", s.voice, "🎙️"], ["表情包", s.stickers, "😺"]].map(([l, n, ic]) => h("div", { key: l, className: "ab-card ab-stat" }, h("span", { className: "ic", "aria-hidden": true }, ic), h("div", { className: "n" }, n || 0), h("div", { className: "l" }, l)))
+      [["今天收到", s.received], ["今天发出", s.sent], ["语音条", s.voice], ["表情包", s.stickers]].map(([l, n]) => h("div", { key: l, className: "ab-card ab-stat" }, h("div", { className: "n" }, n || 0), h("div", { className: "l" }, l)))
     ),
     h(
       "div",
       { className: "ab-grid ab-g2" },
       h(
         Card,
-        { title: "她现在", desc: "她的近况速览：表情库、日记、人格与 QQ 会话。" },
-        h("div", { className: "ab-flex", style: { marginBottom: 8 } }, h("b", null, "她现在")),
-        h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "记录她的表情、日记与人格状态，随时在对应标签页调整。"),
+        { title: "运行速览" },
         h(
           "div",
-          { className: "ab-kv", style: { marginTop: 14 } },
+          { className: "ab-kv" },
           h("span", null, "表情库"),
-          h("span", null, st.stickers.count + " 张"),
+          h("span", null, (st.stickers && st.stickers.count || 0) + " 张"),
           h("span", null, "下一篇日记"),
-          h("span", null, cfg.diary.enabled ? st.diary.next || "今天写完了" : "没开"),
+          h("span", null, cfg.diary.enabled ? st.diary && st.diary.next || "今天写完了" : "未开启"),
           h("span", null, "人格"),
           h("span", null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current),
           h("span", null, "QQ 会话"),
-          h("span", null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith("system:")).length + " 个（在侧栏「QQ Hub」工作区里）")
+          h("span", null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith("system:")).length + " 个")
         )
       ),
       h(
         Card,
-        { title: "快捷操作", desc: "试一试她是不是活着。这些操作会真的发到 QQ（试运行时只写日志）。" },
+        { title: "快捷自测", desc: "试运行时只记录日志；关闭试运行后会真实发送到 QQ。" },
         h(
           "div",
           { className: "ab-flex" },
-          h(Btn, { kind: "primary", onClick: quick("/test-send") }, "给主人发一条自测"),
-          h(Btn, { onClick: quick("/speakup/fire") }, "让她现在来找你"),
-          h(Btn, { onClick: quick("/diary/run", { visibility: "self" }) }, "写一篇日记（仅自己可见）")
+          h(Btn, { kind: "primary", onClick: quick("/test-send") }, "给主人发自测"),
+          h(Btn, { onClick: quick("/speakup/fire") }, "现在来找我"),
+          h(Btn, { onClick: quick("/diary/run", { visibility: "self" }) }, "写私密日记")
         ),
-        h("p", { className: "ab-muted ab-small", style: { marginTop: 12, marginBottom: 0 } }, "想看她和每个人聊了什么、调了什么工具：点 DSH 侧栏「QQ Hub」工作区里对应的会话，也可以直接在会话里插话。"),
-        h(
-          "div",
-          { className: "ab-flex", style: { marginTop: 10 } },
-          h(Btn, { small: true, kind: "ghost", onClick: async () => {
-            if (!confirm("把现在所有 QQ 会话归档、让她从头开始聊？（旧会话在侧栏的归档里还能找到）")) return;
-            const r = await post("/sessions/reset");
-            toast(r.message);
-          } }, "重新开始所有 QQ 会话")
-        )
+        h("p", { className: "ab-muted ab-small", style: { marginTop: 12, marginBottom: 0 } }, "完整对话和工具调用记录位于 DSH 侧栏的「QQ Hub」工作区。")
       )
     ),
-    h(RecentLogs, { go })
+    h(RecentLogs, { go }),
+    h(DangerZone, {
+      title: "重新开始所有 QQ 会话",
+      description: "归档当前全部 QQ 会话，让她从新的上下文开始。旧会话仍保留在 DSH 归档中。",
+      actionLabel: "归档并重新开始",
+      confirmText: "正在进行的回复可能中断；此操作不会删除人格或长期记忆。",
+      onConfirm: async () => {
+        const r = await post("/sessions/reset");
+        toast(r.message);
+      }
+    })
   );
 }
 function RecentLogs({ go }) {
@@ -1456,6 +1736,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
   const [typing, setTyping] = useState({});
   const [current, setCurrent] = useState(st.config.persona.current);
   const [sel, setSel] = useState(st.config.persona.current);
+  const [mobileEdit, setMobileEdit] = useState(false);
   const [edit, setEdit] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState({});
@@ -1636,6 +1917,8 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       {
         title,
         desc: hint,
+        collapsible: true,
+        defaultOpen: false,
         // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
         // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
         right: h(Btn, { small: true, onClick: () => setDraft((prev) => {
@@ -1652,13 +1935,16 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     null,
     h(
       "div",
-      { className: "ab-persona" },
+      { className: cx("ab-persona", mobileEdit && "editor-open") },
       h(
         "div",
         { className: "ab-plist" },
         list.map((p) => h(
           "button",
-          { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => setSel(p.id) },
+          { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => {
+            setSel(p.id);
+            setMobileEdit(true);
+          } },
           h("div", { className: "nm" }, p.name, p.id === current ? h("span", { className: "ab-badge" }, "正在用") : null),
           h("div", { className: "tg" }, (p.tags || []).join(" · ") || p.id + " · " + p.chars + " 字")
         )),
@@ -1666,6 +1952,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           const id = "persona-" + Date.now().toString(36);
           setEdit({ id, name: "新人格", tags: "", secs: splitPersona("你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。") });
           setSel(id);
+          setMobileEdit(true);
           setDirty(true);
           setPending({});
         } }, "＋ 新建人格"),
@@ -1675,10 +1962,11 @@ function Persona({ st, draft, setDraft, toast, reload }) {
         Card,
         {
           title: "编辑人格",
-          desc: "人格写在系统提示词的最前面，按节写更好改。保存后，大肥鱼下一轮回复起就按新的来。",
+          summary: "保存后从下一轮回复生效；此处保存人格，不代替底部全局保存。",
           right: h(
             "div",
             { className: "ab-flex" },
+            h(Btn, { small: true, kind: "ghost", className: "ab-persona-back", onClick: () => setMobileEdit(false) }, "返回列表"),
             edit.id !== current ? h(Btn, { small: true, onClick: async () => {
               const r = await post("/persona/use", { id: edit.id });
               toast(r.message);
@@ -1739,9 +2027,9 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       ) : h(Card, null, h(Empty, { icon: "⏳", text: "加载中…" }))
     ),
     h("div", { style: { height: 12 } }),
-    specific("groups", "按群换人设", "指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。"),
+    specific("groups", "按群换人设", "指定群优先于群默认和全局人格。"),
     h("div", { style: { height: 12 } }),
-    specific("privates", "按人换人设（私聊）", "指定某个人私聊时用哪个人格；没指定的用「默认」。")
+    specific("privates", "按人换人设（私聊）", "指定私聊优先于私聊默认和全局人格。")
   );
 }
 
@@ -1751,43 +2039,43 @@ function Access({ draft, setDraft }) {
   return h(
     "div",
     { className: "ab-grid" },
+    h(SectionNav, { items: [{ id: "access-owner", label: "主人能力" }, { id: "access-profile", label: "操作权限" }, { id: "access-allow", label: "访问名单" }, { id: "access-reference", label: "群管与命令" }] }),
     h(
       Card,
-      { title: "主人", desc: "主人的 QQ 号。群管、电脑上的操作只听主人的。" },
+      { id: "access-owner", title: "主人与长任务", summary: "设置主人身份、私聊工具权限和后台任务能力。" },
       h(Row, { label: "主人 QQ 号" }, f.text("ownerQQ")),
       h(Row, { label: "她怎么称呼你" }, f.text("ownerName", { placeholder: "主人" })),
       h(
         Row,
-        { label: "主人私聊的权限", hint: "群聊永远没有电脑操作权限，这里管不到群。" },
+        { label: "主人私聊的权限", hint: "群聊永远没有电脑操作权限。" },
         h(
           "div",
           { style: { width: "100%" } },
-          h(Choices, { value: draft.ownerLevel, onChange: (v) => setDraft(setPath(draft, "ownerLevel", v)), options: [
-            { value: "full", label: "完整", desc: "私聊里让她用电脑做事（查文件、跑命令、上网查）也能做" },
-            { value: "social", label: "受限", desc: "只有发表情、发说说这类 QQ 工具，碰不到电脑" },
-            { value: "chat", label: "纯聊天", desc: "什么工具都没有，只聊天" }
+          h(Choices, { compact: true, value: draft.ownerLevel, onChange: (v) => setDraft(setPath(draft, "ownerLevel", v)), options: [
+            { value: "full", label: "完整", desc: "允许查文件、跑命令、上网查等电脑操作。" },
+            { value: "social", label: "受限", desc: "仅 QQ 工具，不接触电脑。" },
+            { value: "chat", label: "纯聊天", desc: "禁用工具，只聊天。" }
           ] }),
-          h("div", { className: "ab-muted ab-small", style: { marginTop: 8 } }, "切换后会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。")
+          h("div", { className: "ab-muted ab-small", style: { marginTop: 8 } }, "切换后主人私聊使用新的 DSH 会话，旧会话仍保留。")
         )
       ),
       h(
         Row,
-        { label: "长任务模式", hint: "只在「完整」权限下生效。打开后她能把命令放到后台跑、跑完自动回来告诉你，也能设定时任务；工具多一点，回话会稍慢。切换后同样换新会话。" },
-        h(Choices, { value: draft.longTasks ? "on" : "off", onChange: (v) => setDraft(setPath(draft, "longTasks", v === "on")), options: [
-          { value: "off", label: "关", desc: "维持现在的速度（默认）" },
-          { value: "on", label: "开", desc: "挂上后台任务（jobs）+ 定时任务（schedule）" }
+        { label: "长任务模式", hint: "仅完整权限生效；切换后使用新会话" },
+        h(Choices, { compact: true, value: draft.longTasks ? "on" : "off", onChange: (v) => setDraft(setPath(draft, "longTasks", v === "on")), options: [
+          { value: "off", label: "关", desc: "保持较少工具和更快回复。" },
+          { value: "on", label: "开", desc: "启用后台任务与定时任务，工具更多，回复可能稍慢。" }
         ] })
       )
     ),
     h(ProfilePerms, { draft, setDraft }),
     h(
       Card,
-      { title: "白名单", desc: "只有名单里的人和群，她才会理。一行一个号码。" },
-      h(Row, { label: "私聊白名单", hint: "主人默认就在里面。" }, f.list("allow.private", { placeholder: "每行一个 QQ 号", numbers: true })),
-      h(Row, { label: "群白名单", hint: "把机器人拉进群后，把群号加到这里。" }, f.list("allow.groups", { placeholder: "每行一个群号", numbers: true }))
+      { id: "access-allow", title: "白名单", summary: "仅名单内的人和群可以触发回复；主人始终可私聊。" },
+      h(Row, { label: "私聊白名单", hint: "一行一个 QQ 号" }, f.list("allow.private", { placeholder: "每行一个 QQ 号", numbers: true })),
+      h(Row, { label: "群白名单", hint: "一行一个群号" }, f.list("allow.groups", { placeholder: "每行一个群号", numbers: true }))
     ),
-    h(GroupRoles, null),
-    h(CommandList, null)
+    h("section", { id: "access-reference", className: "ab-grid" }, h(GroupRoles, null), h(CommandList, null))
   );
 }
 function ProfilePerms({ draft, setDraft }) {
@@ -1799,12 +2087,13 @@ function ProfilePerms({ draft, setDraft }) {
   ];
   const row = (key, label, hint) => h(
     Row,
-    { label, hint },
-    h(Choices, { value: perms[key] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + key, v)), options: opts })
+    { label, hint, layout: "stacked" },
+    h(Choices, { compact: true, value: perms[key] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + key, v)), options: opts })
   );
   return h(
     Card,
-    { title: "改资料与名单", desc: "她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，处理好友申请、改白名单，以及抖音上的浏览、点赞、评论、分享。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。抖音各项默认仅主人，要放开自己在这里开。" },
+    { id: "access-profile", title: "资料与平台操作权限", summary: "每项都可设为关闭、仅主人私聊或对白名单内所有人开放。" },
+    h("div", { className: "ab-note warn" }, "「所有人」仍受白名单限制。公开发帖、改白名单和主动私信属于高风险权限，请谨慎开放。"),
     row("qqNickname", "QQ 昵称"),
     row("qqSignature", "QQ 个性签名"),
     row("qqAvatar", "QQ 头像", "只用网址图片，或「刚才发的那张图」。"),
@@ -1830,13 +2119,11 @@ function CommandList() {
   }, []);
   return h(
     Card,
-    { title: "QQ 命令", desc: "主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。" },
-    h("table", { className: "ab-table" }, h("tbody", null, list.map((c) => h(
-      "tr",
-      { key: c.name },
-      h("td", { style: { whiteSpace: "nowrap" } }, h("code", null, "/" + c.name), c.aliases.length ? h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null),
-      h("td", null, c.desc)
-    ))))
+    { title: "QQ 命令", summary: "主人在私聊或白名单群中可直接使用；总开关关闭时仍可用。", collapsible: true, defaultOpen: false },
+    h(DataTable, { columns: [
+      { key: "command", label: "命令", render: (c) => h(Fragment, null, h("code", null, "/" + c.name), c.aliases.length ? h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null) },
+      { key: "desc", label: "作用", render: (c) => c.desc }
+    ], rows: list, rowKey: (c) => c.name })
   );
 }
 function GroupRoles() {
@@ -1850,7 +2137,9 @@ function GroupRoles() {
     Card,
     {
       title: "群管权限",
-      desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。",
+      summary: "群主或管理员身份决定禁言、踢人和公告能力；改专属头衔需群主。",
+      collapsible: true,
+      defaultOpen: false,
       right: h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新")
     },
     !list ? h("div", { className: "ab-muted ab-small" }, h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : h(
@@ -1889,7 +2178,9 @@ function OwnerBrief({ draft, setDraft }) {
     {
       title: "主人私聊：群聊摘要",
       right: f.sw("group.ownerBrief.enabled"),
-      desc: "主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在「主人私聊 + 这句话提到群相关」时触发，不常驻、不写进记忆；默认关。开启前先在「权限」页把群加进白名单。"
+      summary: "主人私聊问起群聊时，补充最近 24 小时的相关流水。",
+      collapsible: true,
+      defaultOpen: false
     },
     h(Row, { label: "每个群给几条", hint: "越少越省上下文；最多 30 条" }, f.range("group.ownerBrief.lines", 1, 30, 1, (v) => v + " 条")),
     h(
@@ -1914,122 +2205,110 @@ function Group({ draft, setDraft }) {
   return h(
     "div",
     { className: "ab-grid" },
+    h(SectionNav, { items: [{ id: "chat-rhythm", label: "回复节奏" }, { id: "chat-bubbles", label: "消息分条" }, { id: "chat-interject", label: "主动互动" }, { id: "chat-safety", label: "安全与例外" }] }),
     h(
-      Card,
-      { title: "连发合并", right: f.sw("merge.enabled"), desc: "人常常一口气发好几句。打开后她会等对方说完再一起回，而不是一句一回。" },
-      h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")),
-      h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")),
-      h(Row, { label: "群里停顿多久算一段", hint: "群里大家你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")),
-      h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒"))
-    ),
-    h(
-      Card,
-      { title: "回合超时", desc: "模型或工具长时间不结束时，停止等待并提示你，避免这个聊天一直排队。超时的旧回复不会补发；你发下一条消息时会新建会话。" },
+      "section",
+      { id: "chat-rhythm", className: "ab-grid ab-g2" },
       h(
-        Row,
-        { label: "最多等待", hint: "长报告可适当调大；可设 1～120 分钟" },
-        h("input", { className: "ab-input sm", type: "number", min: 1, max: 120, step: 1, value: Math.round((Number(draft.turnTimeoutMs) || 6e5) / 6e4), onChange: (e) => setDraft(setPath(draft, "turnTimeoutMs", Number(e.target.value) * 6e4)) }),
-        h("span", { className: "ab-muted" }, " 分钟")
+        Card,
+        { title: "连发合并", right: f.sw("merge.enabled"), summary: "等对方把连续消息说完，再统一回复。" },
+        h(Row, { label: "私聊停顿" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")),
+        h(Row, { label: "私聊最长等待" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")),
+        h(Row, { label: "群聊停顿", hint: "群里多人连续发言时等待" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")),
+        h(Row, { label: "群聊最长等待" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒"))
+      ),
+      h(
+        Card,
+        { title: "回合超时", summary: "模型或工具长时间不结束时释放等待。" },
+        h(
+          Row,
+          { label: "最多等待", hint: "可设 1～120 分钟" },
+          h("input", { className: "ab-input sm", type: "number", min: 1, max: 120, step: 1, value: Math.round((Number(draft.turnTimeoutMs) || 6e5) / 6e4), onChange: (e) => setDraft(setPath(draft, "turnTimeoutMs", Number(e.target.value) * 6e4)) }),
+          h("span", { className: "ab-muted" }, "分钟")
+        ),
+        h(HelpDisclosure, null, "超时后的旧回复不会补发。发送下一条消息时会创建新会话，避免这个聊天一直排队。")
       )
     ),
     h(
       Card,
-      { title: "说话的样子（怎么分条）", desc: "分条全走规则，不再多问一次模型。她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。换行不代表换消息，一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。句子太短不会单独成条，攒够一截才断。" },
-      h(Row, { label: "群里一条最长", hint: "攒到这么长就断开；正常聊天她一般写得比这短" }, f.num("reply.groupMaxChars", { min: 10, max: 500 }), h("span", { className: "ab-muted" }, " 字")),
-      h(Row, { label: "私聊一条最长", hint: "私聊可以整段说，设大一点更像正常聊天" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3 }), h("span", { className: "ab-muted" }, " 字")),
-      h(Row, { label: "一轮最多几条", hint: "超过就均匀合并，不会把剩下的全塞进最后一条" }, f.num("reply.maxBubbles", { min: 1, max: 12 }), h("span", { className: "ab-muted" }, " 条")),
-      h(Row, { label: "清单和汇报整段发", hint: "开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆" }, f.sw("reply.keepReports"))
-    ),
-    h(OwnerBrief, { draft, setDraft }),
-    h(
-      Card,
-      { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。她只能发 QQ 工作区和下面目录里的文件；单个文件有大小上限；发过什么会记在日志里。" },
-      h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), h("span", { className: "ab-muted" }, " MB")),
-      h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" }))
-    ),
-    h(Card, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "打开后，她在私聊里要执行终端危险命令（删根目录、格式化、关机、下载后直接执行等）之前，会先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。只拦真正致命的命令，普通删除/构建/改文件不受影响。" }),
-    h(
-      Card,
-      { title: "群里什么时候必回", desc: "被 @、有人引用回复她的消息、或者提到下面这些名字时，她一定会回。" },
-      h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))
+      { id: "chat-bubbles", title: "消息分条", summary: "控制单条消息长度和每轮消息数量。" },
+      h(Row, { label: "群聊单条上限" }, f.num("reply.groupMaxChars", { min: 10, max: 500 }), h("span", { className: "ab-muted" }, "字")),
+      h(Row, { label: "私聊单条上限" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3 }), h("span", { className: "ab-muted" }, "字")),
+      h(Row, { label: "每轮最多条数", hint: "超出后均匀合并" }, f.num("reply.maxBubbles", { min: 1, max: 12 }), h("span", { className: "ab-muted" }, "条")),
+      h(Row, { label: "清单和汇报整段发", hint: "避免小标题、编号和代码块被拆散" }, f.sw("reply.keepReports")),
+      h(HelpDisclosure, { label: "查看完整分条规则" }, "她写的 ||| 一定断开，空行算段落。普通句子按上面的长度上限聚合；一行一个要点的清单整段发送。连续短句可以按换行分条，过短的句子会先与相邻内容合并。")
     ),
     h(
       Card,
-      { title: "安全刹车", desc: "只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。" },
-      h(Row, { label: "最多说几次" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))
-    ),
-    h(
-      Card,
-      { title: "群里插话", desc: "没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。" },
-      h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")),
-      h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")),
-      h(Row, { label: "每小时最多插话" }, f.range("group.maxPerHour", 0, 30, 1, (v) => v + " 次")),
-      h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })),
-      h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")),
-      h("div", { className: "ab-note", style: { marginTop: 8 } }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她 3 分钟内说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却和每小时上限限制；话题跑偏或者她选择不说话就退出。"),
-      h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), h("span", { className: "ab-muted" }, "秒")),
+      { id: "chat-interject", title: "群里主动互动", summary: "没人叫她时，也可以按概率和话题相关度参与。" },
+      h(Row, { label: "插话概率" }, f.percent("group.interjectChance")),
+      h(Row, { label: "两次插话冷却" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")),
+      h(Row, { label: "每小时上限" }, f.range("group.maxPerHour", 0, 30, 1, (v) => v + " 次")),
+      h(Row, { label: "感兴趣的话题", hint: "一行一个" }, f.list("group.interests", { placeholder: "游戏\n追剧\n白米饭" })),
+      h(Row, { label: "话题相关度门槛", hint: "0 表示纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")),
+      h(Row, { label: "群冷清时不插话" }, f.num("group.minRecentMessages", { min: 0 }), h("span", { className: "ab-muted" }, "条 /"), f.num("group.activeWindowSec", { min: 30 }), h("span", { className: "ab-muted" }, "秒")),
       h(
         Row,
-        { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" },
+        { label: "静默时段", hint: "被叫到时仍会回复" },
         h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }),
         h("span", { className: "ab-muted" }, "点 到"),
         h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }),
         h("span", { className: "ab-muted" }, "点")
-      )
+      ),
+      h(HelpDisclosure, { label: "加入话题后如何回复" }, "被叫到或主动插话后会暂时加入话题。话题仍相关且她 3 分钟内说过话时，可以继续回复，不受冷却和每小时上限限制；话题跑偏或她选择不说话时退出。")
     ),
     h(
-      Card,
-      { title: "同类 bot 太多时不参与", desc: "防 bot 对聊刷屏，按「配对」掐（业界 bot-loop 做法）：她和一个对象互相针对地接话——已确认是鱼的 **2 个来回**就停、看不出来身份的 4 个来回才停，停的是这一对 30 分钟（它的 @ 也不接，别人和主人不受影响）；另有全局密度兜底（连续/占比）。名字看不出来的 bot（比如麦麦系的「某bot」）把号码加进下面的鱼名单，第二回合就掐。" },
-      h(Row, { label: "启用", hint: "关掉就完全不判定，她照常按插话概率说话。" }, f.sw("group.fishGuard.enabled")),
+      "section",
+      { id: "chat-safety", className: "ab-grid" },
+      h("div", { className: "ab-section-title" }, "安全与例外"),
+      h(OwnerBrief, { draft, setDraft }),
+      h(Card, { title: "群里什么时候必回", summary: "被 @、引用回复或提到唤醒词时回复。" }, h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))),
       h(
-        Row,
-        { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）。" },
-        // 输入过程保留原文（能敲逗号和空格），失焦才解析写回 —— 原来逐键 split+filter，
-        // 敲到分隔符的那一刻内容就被吃掉了
-        h(ListInput, {
-          value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
-          placeholder: "例如 123456789, 987654321",
-          numbers: true,
-          onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
-        })
+        Card,
+        { title: "发文件", right: f.sw("files.enabled"), summary: "允许主人私聊发送工作区和指定目录中的文件。" },
+        h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), h("span", { className: "ab-muted" }, "MB")),
+        h(Row, { label: "额外允许的目录", hint: "一行一个完整路径" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })),
+        h(HelpDisclosure, { label: "文件发送范围" }, "可以发给白名单里的人或群。QQ 工作区始终允许，无需重复填写；发送记录会写入日志。")
       ),
       h(
-        Row,
-        { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" },
-        h(ListInput, {
-          value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
-          placeholder: "例如 小鱼, 咸鱼罐头",
-          onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
-        })
-      )
-    ),
-    h(
-      Card,
-      { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" },
-      Object.keys(overrides).length === 0 ? h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => h(PercentRow, {
-        key: gid,
-        label: "群 " + gid,
-        value: o.interjectChance,
-        fallback: draft.group.interjectChance,
-        // 三个写回点全部用函数式 setDraft：旧快照会把刚删的群又写回来（与 persona 分流表同款 bug）
-        write: (v) => setDraft((prev) => {
-          const cur = (prev.group.overrides || {})[gid] || {};
-          return setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [gid]: { ...cur, interjectChance: v } });
-        }),
-        remove: () => setDraft((prev) => {
-          const n = { ...prev.group.overrides || {} };
-          delete n[gid];
-          return setPath(prev, "group.overrides", n);
-        })
-      })),
+        Card,
+        { title: "危险命令确认", right: f.sw("security.dangerConfirm"), summary: "执行致命终端命令前，先通过 QQ 私聊向主人确认。" },
+        h(HelpDisclosure, { label: "哪些命令需要确认" }, "删除根目录、格式化、关机、下载后直接执行等命令需要回复「确认」；回复「取消」或 60 秒未回复会拦下。普通删除、构建和改文件不受影响。默认关闭。")
+      ),
       h(
-        "div",
-        { className: "ab-flex" },
-        h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }),
-        h(Btn, { small: true, disabled: !newGid, onClick: () => {
+        Card,
+        { title: "安全刹车", summary: "短时间内在一个群里说得太多时暂停，主人 @ 除外。" },
+        h(Row, { label: "触发上限" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))
+      ),
+      h(
+        Card,
+        { title: "同类 bot 防护", right: f.sw("group.fishGuard.enabled"), summary: "识别同类 bot 的来回对话，避免互相刷屏。", collapsible: true, defaultOpen: false },
+        h(Row, { label: "按号码识别", hint: "逗号或空格隔开" }, h(ListInput, { value: Array.isArray(draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [], placeholder: "123456789, 987654321", numbers: true, onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list)) })),
+        h(Row, { label: "按名字识别", hint: "补充默认名单之外的后缀" }, h(ListInput, { value: Array.isArray(draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [], placeholder: "小鱼, 咸鱼罐头", onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list)) })),
+        h(HelpDisclosure, { label: "防护机制与例外" }, "与确认是同类 bot 的对象互相接话 2 个来回后暂停；身份不明的对象 4 个来回后暂停。暂停这一对 30 分钟，不影响其他成员和主人。另有连续消息和占比的全局密度兜底。")
+      ),
+      h(
+        Card,
+        { title: "按群单独设置", summary: "只覆盖指定群的插话概率。" },
+        Object.keys(overrides).length === 0 ? h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => h(PercentRow, {
+          key: gid,
+          label: "群 " + gid,
+          value: o.interjectChance,
+          fallback: draft.group.interjectChance,
+          write: (v) => setDraft((prev) => {
+            const cur = (prev.group.overrides || {})[gid] || {};
+            return setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [gid]: { ...cur, interjectChance: v } });
+          }),
+          remove: () => setDraft((prev) => {
+            const n = { ...prev.group.overrides || {} };
+            delete n[gid];
+            return setPath(prev, "group.overrides", n);
+          })
+        })),
+        h("div", { className: "ab-flex" }, h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), h(Btn, { small: true, disabled: !newGid, onClick: () => {
           setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
           setNewGid("");
-        } }, "添加")
+        } }, "添加"))
       )
     )
   );
@@ -2073,7 +2352,7 @@ function ChatModels({ draft, setDraft, list }) {
   };
   return h(
     Card,
-    { title: "按聊天选模型", desc: "顺序：这个私聊 > 这个群 > 所有私聊 / 所有群的默认 > 上面的全局模型。没选的一级就用下一级；选的模型在 DSH 里找不到时也自动退回。只有你能在这里改，聊天里的人换不了。换了之后从那个聊天的下一条消息起生效。" },
+    { title: "按聊天选模型", summary: "私聊或群聊的指定模型优先于全局默认；从下一条消息生效。", collapsible: true, defaultOpen: false },
     h(Row, { label: "私聊默认模型" }, h(Select, { value: val(cm.privateDefault), width: 280, options: optsFor(val(cm.privateDefault)), onChange: (v) => setCm({ privateDefault: toSel(v) }) })),
     h(Row, { label: "群聊默认模型" }, h(Select, { value: val(cm.groupDefault), width: 280, options: optsFor(val(cm.groupDefault)), onChange: (v) => setCm({ groupDefault: toSel(v) }) })),
     h("div", { style: { marginTop: 8 } }, h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, (open ? "收起" : "展开") + "单个 QQ / 群的例外（" + rows.length + "）")),
@@ -2117,9 +2396,10 @@ function Model({ draft, setDraft, toast }) {
   return h(
     "div",
     { className: "ab-grid" },
+    h(SectionNav, { items: [{ id: "model-default", label: "默认模型" }, { id: "model-apply", label: "应用到会话" }, { id: "model-list", label: "模型目录" }] }),
     h(
       Card,
-      { title: "聊天用的模型", desc: "新建的 QQ 会话按这里的设置来；已有会话也可以在 DSH 里点开单独切换。聊天对速度很敏感，可以先点「测速」挑个快的。" },
+      { id: "model-default", title: "默认聊天模型", summary: "新 QQ 会话使用这里的模型；已有会话可单独切换或统一应用。" },
       h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] })),
       h(Row, { label: "视觉能力", hint: visionHint }, h(Seg, {
         value: draft.model.vision || "auto",
@@ -2170,7 +2450,7 @@ function Model({ draft, setDraft, toast }) {
     // 这个按钮主动把配置抹平到所有已有会话，省得去 DSH 会话里一个个换。
     h(
       Card,
-      { title: "应用到现有会话", desc: "这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去 —— 保存设置之后点。" },
+      { id: "model-apply", title: "应用到现有会话", summary: "先保存设置，再将当前模型配置应用到全部已有 QQ 会话。" },
       h(Btn, { small: true, disabled: applying, onClick: async () => {
         setApplying(true);
         try {
@@ -2184,18 +2464,16 @@ function Model({ draft, setDraft, toast }) {
     ),
     h(
       Card,
-      { title: "可用的模型", desc: "点「测速」会真的问一次模型（花一点点额度），看它回一句话要多久。" },
-      list === null ? h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? h(Empty, { text: "DSH 没有列出模型" }) : h("table", { className: "ab-table" }, h("tbody", null, list.map((m) => h(
-        "tr",
-        { key: key(m) },
-        h("td", null, labelOf(m)),
-        h("td", { className: "ab-muted" }, m.provider),
-        h("td", null, ping[key(m)] || ""),
-        h("td", { style: { textAlign: "right" } }, h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), h(Btn, { small: true, kind: "ghost", onClick: () => {
+      { id: "model-list", title: "可用的模型", summary: "测速会真实调用一次模型并消耗少量额度。" },
+      list === null ? h(Empty, { text: "加载中…" }) : list.length === 0 ? h(Empty, { text: "DSH 没有列出模型" }) : h(DataTable, { columns: [
+        { key: "name", label: "模型", render: (m) => labelOf(m) },
+        { key: "provider", label: "提供商", render: (m) => h("span", { className: "ab-muted" }, m.provider) },
+        { key: "ping", label: "测速结果", render: (m) => ping[key(m)] || "未测速" },
+        { key: "actions", label: "操作", render: (m) => h("div", { className: "ab-flex" }, h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), h(Btn, { small: true, kind: "ghost", onClick: () => {
           setDraft(setPath(setPath(draft, "model.provider", m.provider), "model.model", m.model));
-          toast("选好了，记得保存");
-        } }, "用这个"))
-      ))))
+          toast("已选择，记得保存");
+        } }, "使用")) }
+      ], rows: list, rowKey: key })
     )
   );
 }
@@ -2692,18 +2970,18 @@ function Mood({ st, draft, setDraft, toast }) {
     h(ProfilesCard, { toast }),
     h(
       Card,
-      { title: "相处经验", desc: "她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。" },
+      { title: "相处经验", summary: "从长期聊天中总结的相处方式，只用于对应的人或群。" },
       ins === null ? h(Empty, { icon: "⏳", text: "加载中…" }) : ins.length === 0 ? h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))
     ),
     h(
       Card,
-      { title: "说话方式", desc: "聊久了潜移默化学到的：每个人的说话习惯（她会自然地贴近一点），和她自己慢慢养成的说法。不会变成另一个人，只是越来越像「你们的」大肥鱼。" },
+      { title: "说话方式", summary: "整理记忆时学习不同对象的表达习惯，不改变人格本身。" },
       h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }),
       Object.keys(styles).filter((k) => k !== "self").length === 0 ? h("div", { className: "ab-muted ab-small" }, "还没学到别人的说话习惯。整理记忆时会跟着相处经验一起总结（显示在上面每个人的相处经验下面）。") : null
     ),
     h(
       Card,
-      { title: "记忆库", right: f.sw("memory.enabled"), desc: "长期记忆：她聊天时自己记的、每天从聊天里整理出来的、写过的空间日记、你手动加的。每一轮回复前，她会按对方正在说的话翻出最相关的几条。" },
+      { id: "memory-library", title: "记忆库", right: f.sw("memory.enabled"), summary: "回复前按当前话题召回相关长期记忆；也可手动添加和搜索。" },
       h(
         "div",
         { className: "ab-grid ab-g4", style: { marginBottom: 12 } },
@@ -2769,8 +3047,8 @@ function Mood({ st, draft, setDraft, toast }) {
       ),
       h(
         "div",
-        { className: "ab-flex", style: { marginTop: 10, cursor: "pointer" }, onClick: () => setBrowseOpen(!browseOpen) },
-        h("div", { className: "ab-section-title", style: { margin: 0 } }, (browseOpen ? '▾' : '▸') + " 翻一翻"),
+        { className: "ab-flex", style: { marginTop: 10 } },
+        h(Btn, { small: true, kind: "ghost", onClick: () => setBrowseOpen(!browseOpen) }, (browseOpen ? '▾' : '▸') + (browseOpen ? " 收起记忆列表" : " 浏览与搜索记忆")),
         h("span", { className: "ab-muted ab-small" }, mem ? mem.length + " 条记忆" : "")
       ),
       browseOpen && h("input", { className: "ab-input wide", placeholder: "搜索记忆，例如：白米饭、游戏、约定…", value: q, onChange: (e) => setQ(e.target.value) }),
@@ -2814,8 +3092,7 @@ function Mood({ st, draft, setDraft, toast }) {
         })()
       )
     ),
-    h(RecallLog, null),
-    h(MemoryImport, { toast, onDone: () => load() })
+    h("section", { id: "memory-tools", className: "ab-grid" }, h(RecallLog, null), h(MemoryImport, { toast, onDone: () => load() }))
   );
 }
 /** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
@@ -2827,7 +3104,7 @@ function ProfilesCard({ toast }) {
   }, []);
   return h(
     Card,
-    { title: "人物小档案", desc: "她对每个人的印象：是谁、什么关系、喜好、最近在忙什么。和谁聊天就带上谁的那份（群里带上正在说话的几个人），不用等对方提到关键词她才想起来。每次整理记忆时，记忆有变化的人会按新记忆重写；你也可以直接改。" },
+    { id: "memory-people", title: "人物小档案", summary: "记录每个人是谁、喜好和近况；整理记忆时更新，也可手动修改。" },
     list === null ? h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? h(Empty, { icon: "🌱", text: "还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。" }) : h("div", { className: "ab-list" }, list.map((p) => h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load })))
   );
 }
@@ -2892,7 +3169,7 @@ function RecallLog() {
   }, []);
   return h(
     Card,
-    { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词想起来的；想不起来的那次也会列出来。", right: h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") },
+    { title: "召回日志", summary: "查看最近回复召回了哪些记忆及匹配原因。", collapsible: true, defaultOpen: false, right: h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") },
     !list ? h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => h(
       "div",
       { key: i, className: "ab-li" },
@@ -2976,7 +3253,7 @@ function MemoryImport({ toast, onDone }) {
   };
   return h(
     Card,
-    { title: "导入旧档案", desc: "以前写过的设定、聊天笔记、别的机器人的记忆文件（txt / md），贴进来或者上传。她会挑出值得记的，你勾选以后再存进记忆库；和已有记忆重复的会自动去掉。" },
+    { title: "导入旧档案", summary: "粘贴或上传 txt/md，筛选后再写入记忆库；自动去除重复内容。", collapsible: true, defaultOpen: false },
     h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }),
     h(
       "div",
@@ -3142,7 +3419,7 @@ function LocalApi({ draft, setDraft, toast }) {
     { className: "ab-grid" },
     h(
       Card,
-      { title: "本地接口", desc: "想用自己电脑上的模型或服务（GPT-SoVITS 语音、SD WebUI / ComfyUI 画图、自己训练的 so-vits-svc 音色、本地语音识别……）？在这里生成一个脚本模板，照注释改，或者点「复制给 DSH 的话」粘给 DSH，让它帮你改。脚本放在插件数据目录的 local 文件夹里，插件升级不会覆盖；改完保存就生效，不用重启。每一项要打开开关才会用，出错时语音和识别会自动退回内置方式。" },
+      { title: "本地接口", summary: "生成并管理本地语音、画图和识别脚本；开启后接管对应能力，失败时按原逻辑回退。" },
       h(
         "div",
         { className: "ab-flex" },
@@ -3189,6 +3466,7 @@ var MOD_STATE = (m) => {
 function ModuleRow({ m, draft, setModules, toast, reload }) {
   const s = MOD_STATE(m);
   const [open, setOpen] = useState(false);
+  const [details, setDetails] = useState(false);
   const setMod = async (patch) => {
     const r = await post("/save", { modules: { [m.id]: { ...(draft.modules || {})[m.id] || {}, ...patch } } });
     if (r.ok === false) return toast(r.message, "err");
@@ -3212,36 +3490,34 @@ function ModuleRow({ m, draft, setModules, toast, reload }) {
     h(
       "div",
       { className: "main" },
-      h(
-        "div",
-        { className: "nm" },
-        m.name,
-        h("code", null, m.id),
-        h("span", { className: cx("ab-badge", s.cls) }, s.text),
-        m.outdated ? h("span", { className: "ab-badge warn", title: "你复制 / 替换时内置的是 " + m.forkedFrom + "，现在是 " + m.builtinVersion }, "内置版本更新了") : null
-      ),
+      h("div", { className: "nm" }, m.name, h("code", null, m.id), h("span", { className: cx("ab-badge", s.cls) }, s.text), m.outdated ? h("span", { className: "ab-badge warn" }, "内置版本更新了") : null),
       m.description ? h("div", { className: "ds" }, m.description) : null,
-      what ? h("div", { className: "what" }, what) : null,
       errs.length ? h(
         "div",
         { className: "ab-note err", style: { marginTop: 6 } },
-        h("div", { style: { cursor: "pointer" }, onClick: () => setOpen(!open) }, (open ? "▾ " : "▸ ") + errs.length + " 条报错：" + String(errs[0].message).split("\n")[0].slice(0, 120)),
+        h("button", { type: "button", className: "ab-error-toggle", "aria-expanded": open, onClick: () => setOpen(!open) }, (open ? "收起" : "查看") + " " + errs.length + " 条报错：" + String(errs[0].message).split("\n")[0].slice(0, 100)),
         open ? h("div", { className: "ab-code" }, errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + " " : "") + (e.label || "") + "：" + e.message).join("\n\n")) : null
       ) : null,
-      h(
+      details ? h(
         "div",
-        { className: "acts" },
-        m.builtin && !m.hasUser ? h(Btn, { small: true, onClick: () => act("/modules/fork", { id: m.id }, "复制好了"), title: "把这个内置模块的源码复制到 modules/" + m.id + "/，改了就替换内置的" }, "复制一份来改") : null,
-        m.hasUser ? h(Btn, { small: true, onClick: () => post("/modules/open?id=" + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, "打开文件夹") : null,
-        m.hasUser ? h(Btn, { small: true, onClick: () => get("/modules/prompt?id=" + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, "复制好了，粘给 DSH，把【】里那句换成你想要的")) }, "复制给 DSH 的话") : null,
-        m.hasUser && !m.safeSkipped ? h(Btn, { small: true, onClick: () => act("/modules/reload", { id: m.id }, "重新加载好了") }, "重新加载") : null
-      )
+        { className: "ab-mod-details" },
+        what ? h("div", { className: "what" }, what) : null,
+        h(
+          "div",
+          { className: "acts" },
+          m.builtin && !m.hasUser ? h(Btn, { small: true, onClick: () => act("/modules/fork", { id: m.id }, "复制好了") }, "复制一份来改") : null,
+          m.hasUser ? h(Btn, { small: true, onClick: () => post("/modules/open?id=" + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, "打开文件夹") : null,
+          m.hasUser ? h(Btn, { small: true, onClick: () => get("/modules/prompt?id=" + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, "复制开发提示")) }, "复制给 DSH") : null,
+          m.hasUser && !m.safeSkipped ? h(Btn, { small: true, onClick: () => act("/modules/reload", { id: m.id }, "重新加载好了") }, "重新加载") : null
+        )
+      ) : null
     ),
     h(
       "div",
       { className: "side" },
       h(Switch, { on: m.enabled, onChange: (v) => setMod({ enabled: v }), title: m.enabled ? "关掉这个模块" : "打开这个模块" }),
-      m.builtin && m.hasUser ? h("label", { className: "ab-small ab-muted", style: { display: "flex", alignItems: "center", gap: 6 } }, "用内置的", h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null
+      h(Btn, { small: true, kind: "ghost", onClick: () => setDetails(!details) }, details ? "收起" : "管理"),
+      m.builtin && m.hasUser && details ? h("label", { className: "ab-small ab-muted ab-builtin-toggle" }, "用内置的", h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null
     )
   );
 }
@@ -3282,7 +3558,7 @@ function Simulate({ toast }) {
   const sentList = (sent) => sent && sent.length ? h("div", { className: "ab-code" }, sent.map((s) => "→ " + s.chatId + "：" + s.text).join("\n")) : h("div", { className: "ab-small ab-muted", style: { marginTop: 6 } }, "没有发出任何消息");
   return h(
     Card,
-    { title: "模拟测试", desc: "不用上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。（模块直接调 api.onebot 的操作，比如禁言、发空间，是真的会执行的；会改设置的内置命令不执行。）" },
+    { title: "模拟测试", summary: "消息默认只截获展示；直接调用 onebot 的操作仍会真实执行。", collapsible: true, defaultOpen: false },
     h(
       Row,
       { label: "假装是", hint: "谁在说话、在哪儿说" },
@@ -3353,36 +3629,33 @@ function Modules({ st, draft, toast, reload }) {
   return h(
     "div",
     { className: "ab-grid" },
+    h(SectionNav, { items: [{ id: "modules-installed", label: "模块列表" }, { id: "modules-create", label: "新建与开发" }, { id: "modules-simulate", label: "模拟测试" }] }),
+    st.config.safeMode ? h("div", { className: "ab-note warn" }, "安全模式已开启：用户模块均未加载，内置模块继续运行。") : null,
     h(
       Card,
-      { title: "扩展", desc: "她的每项本事都是一个模块：能单独关掉；能复制一份来改，改了就替换内置的；也能自己写新模块，让她学会你想要的任何事。自己写的东西放在下面这个文件夹，插件升级不会动；改完保存几秒内自动生效，不用重启。不会写代码？点「复制给 DSH 的话」，粘给 DSH，说你想要什么。" },
+      { title: "模块管理", summary: "开关模块、查看状态，或复制内置模块进行二次开发。" },
       h(
         "div",
         { className: "ab-flex" },
-        h("code", { className: "ab-small", style: { wordBreak: "break-all", flex: 1 } }, data.dir),
+        h("code", { className: "ab-small ab-path-text" }, data.dir),
         h(Btn, { small: true, onClick: () => post("/modules/open").then((r) => toast(r.message)) }, "打开文件夹"),
-        h(Btn, { small: true, onClick: () => copy(data.prompt, toast, "复制好了，粘给 DSH，把【】里那句换成你想要的") }, "复制给 DSH 的话"),
+        h(Btn, { small: true, onClick: () => copy(data.prompt, toast, "开发提示已复制") }, "复制开发提示"),
         h(Btn, { small: true, kind: "ghost", onClick: async () => {
           const r = await post("/modules/reload", {});
           setModules(r.list);
           toast(r.message);
         } }, "重新检查")
       ),
-      h(
-        Row,
-        { label: "安全模式", hint: "打开后你写的模块一个都不加载，内置的全部恢复。出了问题先开它，看是不是你的模块引起的。" },
-        h(Switch, { on: st.config.safeMode, onChange: async (v) => {
-          const r = await post("/save", { safeMode: v });
-          toast(v ? "安全模式开了：只跑内置模块" : "安全模式关了", "ok");
-          setModules(r.modules);
-          reload();
-        } })
-      ),
-      st.config.safeMode ? h("div", { className: "ab-note warn" }, "安全模式开着：你写的模块现在都没加载。") : null
+      h(Row, { label: "安全模式", hint: "排障时停用所有用户模块" }, h(Switch, { on: st.config.safeMode, onChange: async (v) => {
+        const r = await post("/save", { safeMode: v });
+        toast(v ? "安全模式已开启" : "安全模式已关闭", "ok");
+        setModules(r.modules);
+        reload();
+      } }))
     ),
     h(
       Card,
-      { title: "新建一个模块", desc: "从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。想改内置的本事，用下面内置模块那一行的「复制一份来改」。" },
+      { id: "modules-create", title: "新建模块", summary: "从关键词回复、命令和工具模板开始。id 使用小写英文。", collapsible: true, defaultOpen: false },
       h(
         "div",
         { className: "ab-flex" },
@@ -3391,13 +3664,13 @@ function Modules({ st, draft, toast, reload }) {
         h(Btn, { kind: "primary", small: true, disabled: !newId.trim(), onClick: create }, "新建")
       )
     ),
-    mine.length ? h(Card, { title: "自己写的（" + mine.length + "）" }, h("div", null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
+    mine.length ? h(Card, { id: "modules-installed", title: "用户模块（" + mine.length + "）" }, h("div", null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
     h(
       Card,
-      { title: "内置模块（" + builtin.length + "）", desc: "关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。" },
+      { id: mine.length ? void 0 : "modules-installed", title: "内置模块（" + builtin.length + "）", summary: "关闭模块会同时隐藏对应功能页；核心页面不可关闭。" },
       h("div", null, builtin.map((m) => h(ModuleRow, { key: m.id, m, ...props })))
     ),
-    h(Simulate, { toast })
+    h("div", { id: "modules-simulate" }, h(Simulate, { toast }))
   );
 }
 var PanelBoundary = class extends React.Component {
@@ -4047,11 +4320,9 @@ function MultiParser({ draft, setDraft, toast }) {
   const [testUrl, setTestUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState(null);
-  const [status, setStatus] = useState(null);
-  const loadStatus = () => get("/multi-parser/status").then((r) => r.ok && setStatus(r)).catch(() => {
-  });
   useEffect(() => {
-    loadStatus();
+    get("/multi-parser/status").catch(() => {
+    });
   }, []);
   const doTest = async () => {
     if (!testUrl.trim()) return toast("请先输入要测试的平台链接", "err");
@@ -4059,185 +4330,100 @@ function MultiParser({ draft, setDraft, toast }) {
     setTestResult(null);
     try {
       const r = await post("/multi-parser/test", { url: testUrl.trim() });
-      setBusy(false);
       if (!r.ok) return toast(r.message || "解析失败", "err");
       setTestResult(r.result);
-      toast("解析成功！", "ok");
+      toast("解析成功", "ok");
     } catch (e) {
-      setBusy(false);
       toast("请求失败：" + e.message, "err");
+    } finally {
+      setBusy(false);
     }
   };
   const platforms = [
-    { key: "bilibili", label: "Bilibili 视频 / 动态 / 专栏 / 短链" },
-    { key: "douyin", label: "抖音视频 / 汽水音乐" },
-    { key: "redbook", label: "小红书笔记 / 视频 / 图集" },
-    { key: "weibo", label: "微博博文 / 高清大图 / 视频" },
-    { key: "zhihu", label: "知乎问答 / 专栏文章 / 想法" },
-    { key: "wechat", label: "微信公众号文章" },
-    { key: "tieba", label: "百度贴吧帖子 / 楼主正文与配图" },
-    { key: "fanqie", label: "番茄小说书名 / 简介 / 封面" },
-    { key: "github", label: "GitHub 公开仓库卡片 / Star" },
-    { key: "xiaoheihe", label: "小黑盒社区资讯" }
+    ["bilibili", "Bilibili 视频 / 动态 / 专栏"],
+    ["douyin", "抖音视频 / 汽水音乐"],
+    ["redbook", "小红书笔记 / 视频 / 图集"],
+    ["weibo", "微博博文 / 图片 / 视频"],
+    ["zhihu", "知乎问答 / 专栏 / 想法"],
+    ["wechat", "微信公众号文章"],
+    ["tieba", "百度贴吧帖子"],
+    ["fanqie", "番茄小说"],
+    ["github", "GitHub 公开仓库"],
+    ["xiaoheihe", "小黑盒社区资讯"]
+  ];
+  const cookies = [
+    { key: "bilibili", label: "B站", hint: "用于高清视频与动态；留空复用 B站页配置。", fallback: (d) => Boolean(d.bili?.cookie || d.bili?.sessdata) },
+    { key: "weibo", label: "微博", hint: "包含 SUB，可降低 403/418 风控。" },
+    { key: "redbook", label: "小红书", hint: "包含 a1、web_session，提高图集解析稳定性。" },
+    { key: "zhihu", label: "知乎", hint: "包含 z_c0，用于完整回答和文章。" },
+    { key: "tieba", label: "百度贴吧", hint: "包含 BDUSS，用于高清原图。" },
+    { key: "xiaoheihe", label: "小黑盒", hint: "留空复用小黑盒页配置。", fallback: (d) => Boolean(d.heybox?.cookie) },
+    { key: "douyin", label: "抖音", hint: "选填，用于网页端接口鉴权。" }
   ];
   return h(
     "div",
     { className: "ab-grid" },
+    h(SectionNav, { items: [{ id: "parser-basic", label: "基本行为" }, { id: "parser-media", label: "发送策略" }, { id: "parser-platforms", label: "平台与登录" }, { id: "parser-test", label: "在线测试" }] }),
     h(
       Card,
-      {
-        title: "多平台内容解析",
-        right: f.sw("multiParser.enabled"),
-        desc: "自动识别群聊和私聊中的多平台内容链接（B站、小红书、微博、知乎、抖音、公众号等），提取无水印视频、高清图集与摘要；可自动发送媒体，并可作为上下文喂给大模型。"
-      },
-      h(Row, {
-        label: "群聊里提供解析",
-        hint: "关掉后群里发链接完全不管（不发卡片、不下载视频）。只想在私聊用就关掉它。"
-      }, f.sw("multiParser.inGroups")),
-      h(Row, {
-        label: "私聊里提供解析",
-        hint: "关掉后私聊发链接也不解析，只有群聊生效。"
-      }, f.sw("multiParser.inPrivate")),
-      h(Row, {
-        label: "这些群不解析",
-        hint: "群号用逗号或空格隔开。列在这里的群即使「群聊里提供解析」开着也不解析。"
-      }, h("input", {
-        className: "ab-input",
-        style: { width: "100%" },
-        placeholder: "例如 123456789, 987654321",
-        value: (Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(", "),
-        onChange: (e) => setDraft((prev) => setPath(prev, "multiParser.disabledGroups", String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, "")).filter((s) => s.length >= 4)))
-      })),
-      h(Row, {
-        label: "大模型上下文注入（AI 看懂链接）",
-        hint: "🌟 核心开关：开启后，自动将解析出的标题、作者、正文摘要喂给 AI，让她能看懂群友分享并自然接话讨论；关闭则仅作为纯工具运行。"
-      }, f.sw("multiParser.feedToAi")),
-      h(Row, {
-        label: "纯解析：解析后不让她接话",
-        hint: "开启后，只要解析成功就只发卡片和媒体，不再唤醒她回复这条消息。适合视频类内容——她看不到画面，硬接话只能靠标题和分享口令里的字去编。"
-      }, f.sw("multiParser.muteAi")),
-      h(Row, {
-        label: "发送解析媒体到 QQ",
-        hint: "开启后将解析出的无水印视频或高清图集直接发送到聊天中。"
-      }, f.sw("multiParser.sendMedia")),
+      { id: "parser-basic", title: "多平台内容解析", right: f.sw("multiParser.enabled"), summary: "识别聊天中的平台链接，提取摘要、图片和视频。" },
+      h(Row, { label: "群聊中解析链接" }, f.sw("multiParser.inGroups")),
+      h(Row, { label: "私聊中解析链接" }, f.sw("multiParser.inPrivate")),
+      h(Row, { label: "这些群不解析", hint: "逗号或空格分隔群号" }, h("input", { className: "ab-input", style: { width: "100%" }, placeholder: "123456789, 987654321", value: (Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(", "), onChange: (e) => setDraft((prev) => setPath(prev, "multiParser.disabledGroups", String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, "")).filter((s) => s.length >= 4))) })),
+      h(Row, { label: "让 AI 理解解析内容", hint: "把标题、作者和摘要加入对话上下文" }, f.sw("multiParser.feedToAi")),
+      h(Row, { label: "解析后不再自动回复", hint: "只发解析卡片和媒体" }, f.sw("multiParser.muteAi")),
+      h(HelpDisclosure, { label: "AI 注入与免回复怎么选" }, "开启 AI 注入后，她可以围绕链接内容自然讨论。视频画面本身不会提供给模型；如果只希望发送解析结果、不希望她根据标题猜测视频内容，可同时开启“解析后不再自动回复”。")
+    ),
+    h(
+      "section",
+      { id: "parser-media", className: "ab-grid ab-g2" },
       h(
-        Row,
-        {
-          label: "图文发送策略",
-          hint: "多图时是否打包为 QQ 聊天记录合并转发卡片（防刷屏）。"
-        },
-        f.select("multiParser.forwardMode", [
-          { value: "threshold", label: "超过图片阈值时合并转发 (推荐)" },
-          { value: "always", label: "总是使用合并转发卡片" },
-          { value: "never", label: "逐条发送普通图片消息" }
-        ], { width: 220 })
+        Card,
+        { title: "图片与媒体", summary: "控制媒体发送和多图合并方式。" },
+        h(Row, { label: "发送解析媒体到 QQ" }, f.sw("multiParser.sendMedia")),
+        h(Row, { label: "图文发送策略" }, f.select("multiParser.forwardMode", [{ value: "threshold", label: "超过阈值时合并转发" }, { value: "always", label: "总是合并转发" }, { value: "never", label: "逐条发送图片" }], { width: 220 })),
+        draft.multiParser.forwardMode === "threshold" ? h(Row, { label: "合并转发图片阈值" }, f.num("multiParser.imageThreshold", { min: 1, max: 20, fallback: 2 }), h("span", { className: "ab-muted" }, "张")) : null
       ),
-      h(Row, {
-        label: "合并转发图片张数门槛",
-        hint: "达到此图片张数时自动转为合并转发卡片。"
-      }, f.num("multiParser.imageThreshold", { min: 1, max: 20, fallback: 2 }))
-    ),
-    h(
-      Card,
-      {
-        title: "视频发送策略",
-        desc: "探测到视频链接时的直接发送上限与体积超限处理动作。"
-      },
-      h(Row, {
-        label: "单视频直接发送上限 (MB)",
-        hint: "低于此体积直接在聊天中发送原生播放视频气泡，超过则执行超限动作。"
-      }, f.num("multiParser.maxVideoMB", { min: 5, max: 200, step: 5, fallback: 100 })),
       h(
-        Row,
-        {
-          label: "视频超限处理动作",
-          hint: "当视频体积超出上限时采取的动作。"
-        },
-        f.select("multiParser.videoOverLimit", [
-          { value: "direct_link", label: "发送高速下载直链" },
-          { value: "group_file", label: "上传至群文件 (群聊有效)" },
-          { value: "notice", label: "仅发送超限文字通知" }
-        ], { width: 200 })
+        Card,
+        { title: "视频策略", summary: "设置原生视频体积上限和超限处理。" },
+        h(Row, { label: "直接发送上限" }, f.num("multiParser.maxVideoMB", { min: 5, max: 200, step: 5, fallback: 100 }), h("span", { className: "ab-muted" }, "MB")),
+        h(Row, { label: "超限处理" }, f.select("multiParser.videoOverLimit", [{ value: "direct_link", label: "发送下载直链" }, { value: "group_file", label: "上传至群文件" }, { value: "notice", label: "仅发送超限通知" }], { width: 200 }))
       )
     ),
     h(
       Card,
-      {
-        title: "支持平台独立开关",
-        desc: "单独控制是否响应特定平台的链接。"
-      },
-      h(
-        "div",
-        { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "8px 16px", padding: "6px 0" } },
-        platforms.map(
-          (p) => h(
-            "div",
-            { key: p.key, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--ab-line)" } },
-            h("span", { style: { fontSize: 13 } }, p.label),
-            f.sw(`multiParser.platforms.${p.key}`)
-          )
-        )
-      )
-    ),
-    h(
-      Card,
-      {
-        title: "平台 Cookies 配置（可选）",
-        desc: "为部分平台提供登录后的 Cookie，以获取更高清晰度媒体、避免接口风控或解除未登录限制。留空的平台将走免登录公开接口。"
-      },
-      [
-        { key: "bilibili", label: "B站 Cookie", hint: "用于解析高清视频流及动态；留空自动复用「B站」页已配 Cookie", fallback: (d) => Boolean(d.bili?.cookie || d.bili?.sessdata) },
-        { key: "weibo", label: "微博 Cookie", hint: "填写包含 SUB 的 Cookie，可避免微博移动端接口触发 403/418 风控" },
-        { key: "redbook", label: "小红书 Cookie", hint: "填写包含 a1、web_session 的 Cookie，提升笔记图集提取稳定性" },
-        { key: "zhihu", label: "知乎 Cookie", hint: "填写包含 z_c0 的 Cookie，用于获取知乎完整回答与文章" },
-        { key: "tieba", label: "百度贴吧 Cookie", hint: "填写包含 BDUSS 的 Cookie，用于获取贴吧高清原图" },
-        { key: "xiaoheihe", label: "小黑盒 Cookie", hint: "留空自动复用「小黑盒」页已配 Cookie", fallback: (d) => Boolean(d.heybox?.cookie) },
-        { key: "douyin", label: "抖音 Cookie", hint: "选填，用于抖音网页端接口鉴权" }
-      ].map((cp) => {
+      { id: "parser-platforms", title: "支持平台", summary: "按平台单独开启或关闭链接解析。" },
+      h("div", { className: "ab-platform-grid" }, platforms.map(([key, label]) => h("div", { key, className: "ab-platform-toggle" }, h("span", null, label), f.sw(`multiParser.platforms.${key}`)))),
+      h(Card, { title: "登录与 Cookie", summary: "可选。留空使用公开接口；已保存的 Cookie 不会回显。", collapsible: true, defaultOpen: false }, cookies.map((cp) => {
         const isSet = Boolean(getPath(draft, `multiParser.cookies.${cp.key}Set`));
         const isFallback = !isSet && cp.fallback && cp.fallback(draft);
-        const statusBadge = isSet ? h("span", { className: "ab-small", style: { color: "var(--ab-ok)", marginLeft: 8 } }, "✓ 已专属配置") : isFallback ? h("span", { className: "ab-small", style: { color: "var(--ab-sea)", marginLeft: 8 } }, "✓ 自动复用全局") : null;
         return h(
           Row,
-          {
-            key: cp.key,
-            label: h("span", null, cp.label, statusBadge),
-            hint: cp.hint
-          },
-          f.text(`multiParser.cookies.${cp.key}`, {
-            type: "password",
-            placeholder: isSet || isFallback ? "●●●●●●（已生效，留空保持不变）" : "粘贴整串 Cookie 或关键字段"
-          })
+          { key: cp.key, label: cp.label, hint: cp.hint },
+          h("span", { className: "ab-small ab-muted" }, isSet ? "已专属配置" : isFallback ? "复用平台配置" : "未配置"),
+          f.text(`multiParser.cookies.${cp.key}`, { type: "password", placeholder: isSet || isFallback ? "已生效，留空保持不变" : "粘贴 Cookie" })
         );
-      })
+      }))
     ),
     h(
       Card,
-      {
-        title: "在线测试解析",
-        desc: "粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。"
-      },
+      { id: "parser-test", title: "在线测试解析", summary: "用真实配置测试一个受支持的链接。" },
       h(
         "div",
-        { style: { display: "flex", gap: 8, alignItems: "center" } },
-        h("input", {
-          className: "ab-input",
-          style: { flex: 1 },
-          placeholder: "例如 https://www.bilibili.com/video/BV... 或 微博/知乎/小红书链接",
-          value: testUrl,
-          onChange: (e) => setTestUrl(e.target.value)
-        }),
+        { className: "ab-test-bar" },
+        h("input", { className: "ab-input", placeholder: "粘贴 B站、微博、知乎、小红书等链接", value: testUrl, onChange: (e) => setTestUrl(e.target.value) }),
         h(Btn, { kind: "primary", disabled: busy, onClick: doTest }, busy ? "解析中…" : "测试解析")
       ),
       testResult ? h(
         "div",
-        { style: { marginTop: 12, padding: 12, background: "var(--ab-card-2)", borderRadius: 8, border: "1px solid var(--ab-line)" } },
-        h("div", { style: { fontWeight: 600, color: "var(--ab-deep)", marginBottom: 4 } }, `[${testResult.platformName}] ${testResult.title}`),
+        { className: "ab-test-result" },
+        h("div", { className: "ab-test-title" }, `[${testResult.platformName}] ${testResult.title}`),
         testResult.author ? h("div", { className: "ab-small ab-muted" }, `作者：${testResult.author}`) : null,
-        testResult.summary ? h("div", { className: "ab-small", style: { margin: "6px 0", whiteSpace: "pre-wrap" } }, testResult.summary) : null,
+        testResult.summary ? h("div", { className: "ab-small ab-test-summary" }, testResult.summary) : null,
         testResult.stat ? h("div", { className: "ab-small ab-muted" }, testResult.stat) : null,
-        testResult.videoUrl ? h("div", { className: "ab-small", style: { color: "var(--ab-ok)", margin: "4px 0" } }, `📹 已嗅探到视频直链`) : null,
-        testResult.images && testResult.images.length ? h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, `🖼️ 共提取到 ${testResult.images.length} 张图片`) : null
+        testResult.videoUrl ? h("div", { className: "ab-small ab-ok-text" }, "已提取视频直链") : null,
+        testResult.images?.length ? h("div", { className: "ab-small ab-muted" }, `共提取 ${testResult.images.length} 张图片`) : null
       ) : null
     )
   );
@@ -4731,7 +4917,9 @@ function QQHubPage() {
   });
   const [toastMsg, setToastMsg] = useState(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const toastTimer = useRef(null);
+  const menuRef = useRef(null);
   const dirtyRef = useRef(false);
   const saveRef = useRef(null);
   const toast = (m, kind) => {
@@ -4758,27 +4946,14 @@ function QQHubPage() {
   }, [reload]);
   const go = (id) => {
     setTab(id);
+    setNavOpen(false);
     try {
       localStorage.setItem("qq-hub.tab", id);
+      const recent = [id, ...JSON.parse(localStorage.getItem("qq-hub.recentTabs") || "[]").filter((x) => x !== id)].slice(0, 3);
+      localStorage.setItem("qq-hub.recentTabs", JSON.stringify(recent));
     } catch (e) {
     }
   };
-  const tabsRef = useRef(null);
-  useEffect(() => {
-    const el = tabsRef.current;
-    if (!el) return;
-    const onWheel = (e) => {
-      if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        el.scrollLeft += e.deltaY;
-        e.preventDefault();
-      }
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  });
-  useEffect(() => {
-    tabsRef.current?.querySelector(".ab-tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [tab]);
   const dirty = useMemo(() => !!(st && draft) && JSON.stringify(draft) !== JSON.stringify(st.config), [st, draft]);
   dirtyRef.current = dirty;
   const setD = (d) => setDraft(d);
@@ -4810,11 +4985,11 @@ function QQHubPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   if (!st || !draft) {
-    return h("div", { className: "ab-root" }, h("div", { className: "ab-wrap" }, err ? h("div", { className: "ab-note err" }, "面板读不到插件：", err, "。如果刚装好插件，重启一次 DSH 试试。") : h(Empty, { icon: "🐋", text: "大肥鱼正在游过来…" })));
+    return h("div", { className: "ab-root" }, h("div", { className: "ab-wrap" }, err ? h("div", { className: "ab-note err" }, "面板读不到插件：", err, "。如果刚装好插件，重启一次 DSH 试试。") : h(Empty, { icon: "🐋", text: "正在读取 QQ Hub…" })));
   }
   const cfg = st.config;
   const conn = st.onebot.state === "connected";
-  const status = !cfg.enabled ? { cls: "", text: "休息中（总开关关着）" } : !conn ? { cls: "err", text: "QQ 没连上" } : cfg.dryRun ? { cls: "warn", text: "在线 · 试运行" } : { cls: "ok", text: "在线" };
+  const status = !cfg.enabled ? { cls: "", text: "已停用" } : !conn ? { cls: "err", text: "QQ 未连接" } : cfg.dryRun ? { cls: "warn", text: "试运行" } : { cls: "ok", text: "运行中" };
   const persona = st.personas.find((p) => p.id === cfg.persona.current);
   const props = { st, draft, setDraft: setD, toast, reload, go, openWizard: () => setWizardOpen(true) };
   const showWizard = !cfg.setupDone || wizardOpen;
@@ -4852,66 +5027,73 @@ function QQHubPage() {
     modules: Modules,
     logs: Logs
   }[curTab.id] || Overview;
-  const TAB_KEYS2 = { connect: ["snowluma", "botQQ"], access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"], group: ["group", "merge", "reply"], model: ["model", "chatModels"], voice: ["voice"], stickers: ["stickers"], imagegen: ["imageGen"], diary: ["diary", "qzoneSocial"], speakup: ["speakUp"], memory: ["memory"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multiParser"], local: ["local"] };
   const tabDirty = (id) => {
     if (!dirty) return false;
     if (id.startsWith("ext:")) {
       const k = id.slice(4);
       return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]);
     }
-    return (TAB_KEYS2[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]));
+    return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]));
   };
   return h(
     "div",
-    { className: "ab-root" },
+    { className: cx("ab-root", dirty && "has-dirty") },
     h(
       "div",
-      { className: "ab-wrap" },
+      { className: "ab-shell" },
       h(
-        "div",
-        { className: "ab-hero" },
-        h("button", { type: "button", className: "ab-avatar-btn", title: "点击换头像", onClick: () => pickAvatar(toast, reload) }, h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像" }), h("span", { className: "ab-avatar-tip" }, "换头像")),
+        "header",
+        { className: "ab-appbar" },
         h(
           "div",
-          { className: "ab-hero-main" },
-          h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"),
-          h("div", { className: "ab-sub" }, "QQ " + cfg.botQQ + " · " + (persona ? persona.name : "默认人格")),
+          { className: "ab-appbar-main" },
+          !showWizard ? h("button", { ref: menuRef, type: "button", className: "ab-menu-btn", "aria-label": "打开功能菜单", "aria-expanded": navOpen, onClick: () => setNavOpen(true) }, navIcon("M4 7h16M4 12h16M4 17h16")) : null,
+          h("button", { type: "button", className: "ab-brand-avatar", title: "更换面板头像", onClick: () => pickAvatar(toast, reload) }, h("img", { src: avatarSrc(st), alt: "大肥鱼头像" })),
           h(
             "div",
-            { className: "ab-pills" },
-            h("span", { className: "ab-pill" }, h("i", { className: cx("ab-dot", status.cls) }), status.text),
-            h("span", { className: "ab-pill" }, "SnowLuma " + (st.snowluma.installed ? st.snowluma.running ? "运行中" : "没启动" : "未安装")),
-            h("span", { className: "ab-pill" }, "QQ Hub v" + st.version)
+            { className: "ab-appbar-title" },
+            h("h1", null, showWizard ? "QQ Hub 初始化" : curTab.label),
+            h("div", { className: "ab-appbar-sub" }, (st.onebot.login && st.onebot.login.nickname || "大肥鱼") + " · " + (persona ? persona.name : "默认人格"))
           )
         ),
         h(
           "div",
-          { className: "ab-hero-side" },
-          h("div", { className: "ab-switch-row" }, h("span", null, "总开关"), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })),
-          h("div", { className: "ab-switch-row" }, h("span", { className: "ab-muted" }, "试运行"), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "开着时只写日志，不真的发到 QQ" }))
+          { className: "ab-runtime" },
+          h("span", { className: cx("ab-status", status.cls) }, h("i", { className: cx("ab-dot", status.cls) }), status.text),
+          h("label", { className: "ab-quick-toggle" }, h("span", null, "总开关"), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })),
+          h("label", { className: "ab-quick-toggle secondary" }, h("span", null, "试运行"), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "只写日志，不发送到 QQ" }))
         )
       ),
-      showWizard ? h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null,
-      showWizard ? null : h(NavBar, {
-        tabs,
-        cur: curTab,
-        go,
-        dirtyOf: tabDirty,
-        subRef: tabsRef,
-        mark: (t) => {
-          if (tabDirty(t.id)) return h("i", { className: "dirty", title: "有没保存的改动" });
-          if (!t.flag) return null;
-          const flag = t.flag === "group" ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag);
-          return h("i", { className: cx("ab-dot", flag && "ok"), title: flag ? "开着" : "关着" });
-        }
-      }),
-      showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })),
-      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser").map((m) => h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
+      showWizard ? h("main", { className: "ab-wizard-main" }, h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) })) : h(
+        "div",
+        { className: "ab-layout" },
+        h(NavBar, {
+          tabs,
+          cur: curTab,
+          go,
+          dirtyOf: tabDirty,
+          open: navOpen,
+          onClose: () => setNavOpen(false),
+          returnFocusRef: menuRef,
+          mark: (t) => {
+            if (tabDirty(t.id)) return h("i", { className: "dirty", title: "有未保存的改动" });
+            if (!t.flag) return null;
+            const flag = t.flag === "group" ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag);
+            return h("i", { className: cx("ab-dot", flag && "ok"), title: flag ? "已开启" : "已关闭" });
+          }
+        }),
+        h(
+          "main",
+          { className: "ab-main", id: "qq-hub-main" },
+          h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })),
+          curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser").map((m) => h("div", { key: "embed-" + m.id, className: "ab-embedded" }, h(ExtPage, { ...props, mod: m.id, embedded: true })))
+        )
+      ),
       dirty && !showWizard ? h(
         "div",
-        { className: "ab-savebar" },
-        h("span", { className: "msg" }, "有改动还没保存"),
-        h("span", { className: "ab-muted ab-small" }, h("span", { className: "ab-kbd" }, "Ctrl"), " + ", h("span", { className: "ab-kbd" }, "S")),
+        { className: "ab-savebar", role: "region", "aria-label": "保存设置" },
+        h("span", { className: "msg" }, "有未保存的修改"),
+        h("span", { className: "ab-save-shortcut" }, h("span", { className: "ab-kbd" }, "Ctrl"), " + ", h("span", { className: "ab-kbd" }, "S")),
         h(Btn, { kind: "ghost", onClick: () => setDraft(clone(st.config)) }, "撤销"),
         h(Btn, { kind: "primary", onClick: () => save() }, "保存设置")
       ) : null

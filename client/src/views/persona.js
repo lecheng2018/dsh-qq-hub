@@ -80,6 +80,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
   const [typing, setTyping] = useState({})
   const [current, setCurrent] = useState(st.config.persona.current)
   const [sel, setSel] = useState(st.config.persona.current)
+  const [mobileEdit, setMobileEdit] = useState(false)
   const [edit, setEdit] = useState(null) // { id, name, tags, secs }
   const [dirty, setDirty] = useState(false)
   const [pending, setPending] = useState({}) // 节的 k → { text, view: 'new' | 'old' } AI 润色还没选定的
@@ -211,7 +212,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     })
     // 现在只用手输，不再依赖「机器人聊过哪些群」，所以没有「没候选」这回事
     const noMore = false
-    return h(Card, { title, desc: hint,
+    return h(Card, { title, desc: hint, collapsible: true, defaultOpen: false,
       // 永远可点：没候选时也要能加一行手输号码。这里以前 disabled={noMore}，
       // 一旦 /panel/chats 没返回数据，按钮就是死的，用户看到的就是「点了添加没反应」。
       right: h(Btn, { small: true, onClick: () => setDraft((prev) => {
@@ -223,16 +224,17 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       h('div', { style: { marginTop: 10 } }, h(Row, { label: '默认' }, h(Select, { value: pm[mapKey === 'groups' ? 'groupDefault' : 'privateDefault'] || '', width: 200, options: personaOpts('跟随全局人设'), onChange: (v) => setPm(mapKey === 'groups' ? 'groupDefault' : 'privateDefault', v) }))))
   }
   return h('div', null,
-   h('div', { className: 'ab-persona' },
+   h('div', { className: cx('ab-persona', mobileEdit && 'editor-open') },
     h('div', { className: 'ab-plist' },
-      list.map((p) => h('button', { key: p.id, type: 'button', className: cx('ab-pitem', sel === p.id && 'on'), onClick: () => setSel(p.id) },
+      list.map((p) => h('button', { key: p.id, type: 'button', className: cx('ab-pitem', sel === p.id && 'on'), onClick: () => { setSel(p.id); setMobileEdit(true) } },
         h('div', { className: 'nm' }, p.name, p.id === current ? h('span', { className: 'ab-badge' }, '正在用') : null),
         h('div', { className: 'tg' }, (p.tags || []).join(' · ') || p.id + ' · ' + p.chars + ' 字'))),
-      h(Btn, { kind: 'ghost', onClick: () => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setDirty(true); setPending({}) } }, '＋ 新建人格'),
+      h(Btn, { kind: 'ghost', onClick: () => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setMobileEdit(true); setDirty(true); setPending({}) } }, '＋ 新建人格'),
       h(AvatarCard, { st, toast, reload }),
     ),
-    edit ? h(Card, { title: '编辑人格', desc: '人格写在系统提示词的最前面，按节写更好改。保存后，大肥鱼下一轮回复起就按新的来。',
+    edit ? h(Card, { title: '编辑人格', summary: '保存后从下一轮回复生效；此处保存人格，不代替底部全局保存。',
       right: h('div', { className: 'ab-flex' },
+        h(Btn, { small: true, kind: 'ghost', className: 'ab-persona-back', onClick: () => setMobileEdit(false) }, '返回列表'),
         edit.id !== current ? h(Btn, { small: true, onClick: async () => { const r = await post('/persona/use', { id: edit.id }); toast(r.message); refresh(); reload() } }, '设为当前') : null,
         edit.id !== current ? h(Btn, { small: true, kind: 'danger', onClick: async () => { if (!confirm('删掉这个人格？')) return; const r = await post('/persona/delete', { id: edit.id }); if (r.ok) { setList(r.list); setSel(current) } else toast(r.message) } }, '删除') : null) },
       h(Row, { label: '名字' }, h('input', { className: 'ab-input', value: edit.name, onChange: (e) => patch({ name: e.target.value }) })),
@@ -260,9 +262,9 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     ) : h(Card, null, h(Empty, { icon: '⏳', text: '加载中…' })),
   ),
    h('div', { style: { height: 12 } }),
-   specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。'),
+   specific('groups', '按群换人设', '指定群优先于群默认和全局人格。'),
    h('div', { style: { height: 12 } }),
-   specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。'),
+   specific('privates', '按人换人设（私聊）', '指定私聊优先于私聊默认和全局人格。'),
   )
 }
 

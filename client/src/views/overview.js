@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
 import { WhaleIcon } from '../ui/icons.js'
-import { Card, Row, Btn, Empty } from '../ui/primitives.js'
+import { Card, Row, Btn, Empty, DangerZone } from '../ui/primitives.js'
 import { timeAgo, copy, cx } from '../core/utils.js'
 import { get, post } from '../core/http.js'
 
@@ -38,31 +38,34 @@ function Overview({ st, toast, go }) {
     cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。') : null,
     cfg.enabled && !conn ? h('div', { className: 'ab-note err' }, '还没连上 QQ 网关' + (st.onebot.problem ? '：' + st.onebot.problem + '。' : '。去「连接」标签看看 SnowLuma 有没有装好、启动没有。') + ' ', h('a', { href: '#', onClick: (e) => { e.preventDefault(); go('connect') } }, '去连接 →')) : null,
     h('div', { className: 'ab-grid ab-g4' },
-      [['今天收到', s.received, '📥'], ['今天发出', s.sent, '📤'], ['语音条', s.voice, '🎙️'], ['表情包', s.stickers, '😺']].map(([l, n, ic]) => h('div', { key: l, className: 'ab-card ab-stat' }, h('span', { className: 'ic', 'aria-hidden': true }, ic), h('div', { className: 'n' }, n || 0), h('div', { className: 'l' }, l))),
+      [['今天收到', s.received], ['今天发出', s.sent], ['语音条', s.voice], ['表情包', s.stickers]].map(([l, n]) => h('div', { key: l, className: 'ab-card ab-stat' }, h('div', { className: 'n' }, n || 0), h('div', { className: 'l' }, l))),
     ),
     h('div', { className: 'ab-grid ab-g2' },
-      h(Card, { title: '她现在', desc: '她的近况速览：表情库、日记、人格与 QQ 会话。' },
-        h('div', { className: 'ab-flex', style: { marginBottom: 8 } }, h('b', null, '她现在')),
-        h('div', { className: 'ab-muted ab-small', style: { marginBottom: 8 } }, '记录她的表情、日记与人格状态，随时在对应标签页调整。'),
-        h('div', { className: 'ab-kv', style: { marginTop: 14 } },
-          h('span', null, '表情库'), h('span', null, st.stickers.count + ' 张'),
-          h('span', null, '下一篇日记'), h('span', null, cfg.diary.enabled ? (st.diary.next || '今天写完了') : '没开'),
+      h(Card, { title: '运行速览' },
+        h('div', { className: 'ab-kv' },
+          h('span', null, '表情库'), h('span', null, ((st.stickers && st.stickers.count) || 0) + ' 张'),
+          h('span', null, '下一篇日记'), h('span', null, cfg.diary.enabled ? ((st.diary && st.diary.next) || '今天写完了') : '未开启'),
           h('span', null, '人格'), h('span', null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current),
-          h('span', null, 'QQ 会话'), h('span', null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith('system:')).length + ' 个（在侧栏「QQ Hub」工作区里）'),
+          h('span', null, 'QQ 会话'), h('span', null, Object.keys(st.sessions || {}).filter((k) => !k.startsWith('system:')).length + ' 个'),
         ),
       ),
-      h(Card, { title: '快捷操作', desc: '试一试她是不是活着。这些操作会真的发到 QQ（试运行时只写日志）。' },
+      h(Card, { title: '快捷自测', desc: '试运行时只记录日志；关闭试运行后会真实发送到 QQ。' },
         h('div', { className: 'ab-flex' },
-          h(Btn, { kind: 'primary', onClick: quick('/test-send') }, '给主人发一条自测'),
-          h(Btn, { onClick: quick('/speakup/fire') }, '让她现在来找你'),
-          h(Btn, { onClick: quick('/diary/run', { visibility: 'self' }) }, '写一篇日记（仅自己可见）'),
+          h(Btn, { kind: 'primary', onClick: quick('/test-send') }, '给主人发自测'),
+          h(Btn, { onClick: quick('/speakup/fire') }, '现在来找我'),
+          h(Btn, { onClick: quick('/diary/run', { visibility: 'self' }) }, '写私密日记'),
         ),
-        h('p', { className: 'ab-muted ab-small', style: { marginTop: 12, marginBottom: 0 } }, '想看她和每个人聊了什么、调了什么工具：点 DSH 侧栏「QQ Hub」工作区里对应的会话，也可以直接在会话里插话。'),
-        h('div', { className: 'ab-flex', style: { marginTop: 10 } },
-          h(Btn, { small: true, kind: 'ghost', onClick: async () => { if (!confirm('把现在所有 QQ 会话归档、让她从头开始聊？（旧会话在侧栏的归档里还能找到）')) return; const r = await post('/sessions/reset'); toast(r.message) } }, '重新开始所有 QQ 会话')),
+        h('p', { className: 'ab-muted ab-small', style: { marginTop: 12, marginBottom: 0 } }, '完整对话和工具调用记录位于 DSH 侧栏的「QQ Hub」工作区。'),
       ),
     ),
     h(RecentLogs, { go }),
+    h(DangerZone, {
+      title: '重新开始所有 QQ 会话',
+      description: '归档当前全部 QQ 会话，让她从新的上下文开始。旧会话仍保留在 DSH 归档中。',
+      actionLabel: '归档并重新开始',
+      confirmText: '正在进行的回复可能中断；此操作不会删除人格或长期记忆。',
+      onConfirm: async () => { const r = await post('/sessions/reset'); toast(r.message) },
+    }),
   )
 }
 

@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
+import { useState, useEffect, useRef, useCallback, useMemo, h } from '../core/react.js'
 import { clone, setPath, getPath, cx } from '../core/utils.js'
 
 import { useStyle } from '../styles/use-style.js'
-import { WhaleIcon } from '../ui/icons.js'
 import { Switch, Btn, Empty, TabBoundary } from '../ui/primitives.js'
 import { NavBar } from './nav-bar.js'
+import { navIcon } from '../ui/icons.js'
 
 import { get, post } from '../core/http.js'
 import { pickAvatar, avatarSrc } from '../domain/persona.js'
@@ -38,10 +38,11 @@ function QQHubPage() {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem('qq-hub.tab') || 'overview' } catch (e) { return 'overview' } })
   const [toastMsg, setToastMsg] = useState(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const toastTimer = useRef(null)
+  const menuRef = useRef(null)
   const dirtyRef = useRef(false)
   const saveRef = useRef(null)
-  // kind：ok / err / 不填 = 普通
   const toast = (m, kind) => {
     const text = String(m || '')
     const k = kind || (/失败|出错|没成功|不能|读不到|连不上/.test(text) ? 'err' : '')
@@ -57,17 +58,15 @@ function QQHubPage() {
     if (!dirtyRef.current) setDraft(clone(r.config))
   }, [])
   useEffect(() => { reload(); const t = setInterval(reload, 5000); return () => clearInterval(t) }, [reload])
-  const go = (id) => { setTab(id); try { localStorage.setItem('qq-hub.tab', id) } catch (e) {} }
-  // 标签多、一屏放不下：滚轮横着滚，选中的标签自动滚进视野
-  const tabsRef = useRef(null)
-  useEffect(() => {
-    const el = tabsRef.current
-    if (!el) return
-    const onWheel = (e) => { if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { el.scrollLeft += e.deltaY; e.preventDefault() } }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  })
-  useEffect(() => { tabsRef.current?.querySelector('.ab-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [tab])
+  const go = (id) => {
+    setTab(id)
+    setNavOpen(false)
+    try {
+      localStorage.setItem('qq-hub.tab', id)
+      const recent = [id, ...JSON.parse(localStorage.getItem('qq-hub.recentTabs') || '[]').filter((x) => x !== id)].slice(0, 3)
+      localStorage.setItem('qq-hub.recentTabs', JSON.stringify(recent))
+    } catch (e) {}
+  }
   const dirty = useMemo(() => !!(st && draft) && JSON.stringify(draft) !== JSON.stringify(st.config), [st, draft])
   dirtyRef.current = dirty
   const setD = (d) => setDraft(d)
@@ -82,11 +81,9 @@ function QQHubPage() {
     return true
   }
   saveRef.current = save
-  // 右上角的开关立刻生效；有没保存的改动时连同改动一起保存，不会把它们冲掉
   const quickToggle = async (path, v) => {
     await save(setPath(dirtyRef.current ? draft : clone(st.config), path, v))
   }
-  // Ctrl/⌘ + S 保存
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && dirtyRef.current) {
@@ -99,22 +96,17 @@ function QQHubPage() {
   }, [])
 
   if (!st || !draft) {
-    return h('div', { className: 'ab-root' }, h('div', { className: 'ab-wrap' }, err ? h('div', { className: 'ab-note err' }, '面板读不到插件：', err, '。如果刚装好插件，重启一次 DSH 试试。') : h(Empty, { icon: '🐋', text: '大肥鱼正在游过来…' })))
+    return h('div', { className: 'ab-root' }, h('div', { className: 'ab-wrap' }, err ? h('div', { className: 'ab-note err' }, '面板读不到插件：', err, '。如果刚装好插件，重启一次 DSH 试试。') : h(Empty, { icon: '🐋', text: '正在读取 QQ Hub…' })))
   }
   const cfg = st.config
   const conn = st.onebot.state === 'connected'
-  const status = !cfg.enabled ? { cls: '', text: '休息中（总开关关着）' } : !conn ? { cls: 'err', text: 'QQ 没连上' } : cfg.dryRun ? { cls: 'warn', text: '在线 · 试运行' } : { cls: 'ok', text: '在线' }
+  const status = !cfg.enabled ? { cls: '', text: '已停用' } : !conn ? { cls: 'err', text: 'QQ 未连接' } : cfg.dryRun ? { cls: 'warn', text: '试运行' } : { cls: 'ok', text: '运行中' }
   const persona = st.personas.find((p) => p.id === cfg.persona.current)
   const props = { st, draft, setDraft: setD, toast, reload, go, openWizard: () => setWizardOpen(true) }
   const showWizard = !cfg.setupDone || wizardOpen
-  // 标签页：内置的按模块在不在跑决定显示；自己写的模块有设置或面板的各占一页
   const mods = st.modules || []
   const running = (id) => { const m = mods.find((x) => x.id === id); return Boolean(m && m.running) }
-  // 内置模块也要算「有界面」：它们和用户模块一样有 settings / panel，只是运行时 running 是 'builtin'。
-  // 老条件 m.running === 'user' 把内置模块全挡掉了 —— 这正是「五个面板一片空白、配置项一个都不出现」的根因。
   const hasUi = (m) => Boolean(m.running) && ((m.settings || []).length > 0 || m.panel)
-  // 写了 tab 的模块嵌进那个内置标签页；没写（或写的页不存在）的单独一页
-  // 老扩展若还写着心情页的旧 tab 名，归一成 memory（别名兜底）
   const TAB_ALIAS = { mood: 'memory' }
   const tabOf = (m) => TAB_ALIAS[m.tab] || m.tab
   const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === tabOf(m)))
@@ -126,47 +118,45 @@ function QQHubPage() {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
     stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
-  // 哪些标签有没保存的改动
-  const TAB_KEYS = { connect: ['snowluma', 'botQQ'], access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'], group: ['group', 'merge', 'reply'], model: ['model', 'chatModels'], voice: ['voice'], stickers: ['stickers'], imagegen: ['imageGen'], diary: ['diary', 'qzoneSocial'], speakup: ['speakUp'], memory: ['memory'], bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multiParser'], local: ['local'] }
   const tabDirty = (id) => {
     if (!dirty) return false
     if (id.startsWith('ext:')) { const k = id.slice(4); return JSON.stringify((draft.ext || {})[k]) !== JSON.stringify((cfg.ext || {})[k]) }
     return (TAB_KEYS[id] || []).some((k) => JSON.stringify(draft[k]) !== JSON.stringify(cfg[k]))
   }
-  return h('div', { className: 'ab-root' },
-    h('div', { className: 'ab-wrap' },
-      h('div', { className: 'ab-hero' },
-        h('button', { type: 'button', className: 'ab-avatar-btn', title: '点击换头像', onClick: () => pickAvatar(toast, reload) }, h('img', { className: 'ab-avatar', src: avatarSrc(st), alt: '头像' }), h('span', { className: 'ab-avatar-tip' }, '换头像')),
-        h('div', { className: 'ab-hero-main' },
-          h('h1', null, (st.onebot.login && st.onebot.login.nickname) || '大肥鱼'),
-          h('div', { className: 'ab-sub' }, 'QQ ' + cfg.botQQ + ' · ' + (persona ? persona.name : '默认人格')),
-          h('div', { className: 'ab-pills' },
-            h('span', { className: 'ab-pill' }, h('i', { className: cx('ab-dot', status.cls) }), status.text),
-            h('span', { className: 'ab-pill' }, 'SnowLuma ' + (st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装')),
-            h('span', { className: 'ab-pill' }, 'QQ Hub v' + st.version))),
-        h('div', { className: 'ab-hero-side' },
-          h('div', { className: 'ab-switch-row' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v) })),
-          h('div', { className: 'ab-switch-row' }, h('span', { className: 'ab-muted' }, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '开着时只写日志，不真的发到 QQ' })))),
-      showWizard ? h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null,
-      showWizard ? null : h(NavBar, {
-        tabs, cur: curTab, go, dirtyOf: tabDirty, subRef: tabsRef,
-        mark: (t) => {
-          if (tabDirty(t.id)) return h('i', { className: 'dirty', title: '有没保存的改动' })
-          if (!t.flag) return null
-          const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
-          return h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' })
-        },
-      }),
-      showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
-      showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
-      dirty && !showWizard ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
-        h('span', { className: 'ab-muted ab-small' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
+  return h('div', { className: cx('ab-root', dirty && 'has-dirty') },
+    h('div', { className: 'ab-shell' },
+      h('header', { className: 'ab-appbar' },
+        h('div', { className: 'ab-appbar-main' },
+          !showWizard ? h('button', { ref: menuRef, type: 'button', className: 'ab-menu-btn', 'aria-label': '打开功能菜单', 'aria-expanded': navOpen, onClick: () => setNavOpen(true) }, navIcon('M4 7h16M4 12h16M4 17h16')) : null,
+          h('button', { type: 'button', className: 'ab-brand-avatar', title: '更换面板头像', onClick: () => pickAvatar(toast, reload) }, h('img', { src: avatarSrc(st), alt: '大肥鱼头像' })),
+          h('div', { className: 'ab-appbar-title' },
+            h('h1', null, showWizard ? 'QQ Hub 初始化' : curTab.label),
+            h('div', { className: 'ab-appbar-sub' }, ((st.onebot.login && st.onebot.login.nickname) || '大肥鱼') + ' · ' + (persona ? persona.name : '默认人格')))),
+        h('div', { className: 'ab-runtime' },
+          h('span', { className: cx('ab-status', status.cls) }, h('i', { className: cx('ab-dot', status.cls) }), status.text),
+          h('label', { className: 'ab-quick-toggle' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v) })),
+          h('label', { className: 'ab-quick-toggle secondary' }, h('span', null, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '只写日志，不发送到 QQ' })))),
+      showWizard ? h('main', { className: 'ab-wizard-main' }, h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) })) : h('div', { className: 'ab-layout' },
+        h(NavBar, {
+          tabs, cur: curTab, go, dirtyOf: tabDirty, open: navOpen, onClose: () => setNavOpen(false), returnFocusRef: menuRef,
+          mark: (t) => {
+            if (tabDirty(t.id)) return h('i', { className: 'dirty', title: '有未保存的改动' })
+            if (!t.flag) return null
+            const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
+            return h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '已开启' : '已关闭' })
+          },
+        }),
+        h('main', { className: 'ab-main', id: 'qq-hub-main' },
+          h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
+          curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => h('div', { key: 'embed-' + m.id, className: 'ab-embedded' }, h(ExtPage, { ...props, mod: m.id, embedded: true }))))),
+      dirty && !showWizard ? h('div', { className: 'ab-savebar', role: 'region', 'aria-label': '保存设置' },
+        h('span', { className: 'msg' }, '有未保存的修改'),
+        h('span', { className: 'ab-save-shortcut' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
         h(Btn, { kind: 'ghost', onClick: () => setDraft(clone(st.config)) }, '撤销'),
         h(Btn, { kind: 'primary', onClick: () => save() }, '保存设置')) : null,
     ),
     toastMsg ? h('div', { className: cx('ab-toast', toastMsg.kind), role: 'status' }, toastMsg.text) : null,
   )
 }
-
 
 export { QQHubPage }
