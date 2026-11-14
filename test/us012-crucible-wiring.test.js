@@ -116,7 +116,7 @@ test('接线验证：未配置 interests 时，通过 materials 的 m.topic 降�
     hub,
     crucible: c,
     memory: () => ({
-      recall: () => [
+      listFor: () => [
         {
           id: 'mem-1',
           importance: 0.8,
@@ -160,7 +160,7 @@ test('接线验证：配置了 ext.purpose.interests 时，优先按配置的兴
     hub,
     crucible: c,
     memory: () => ({
-      recall: () => [
+      listFor: () => [
         {
           id: 'mem-1',
           importance: 0.8,
@@ -222,7 +222,7 @@ test('接线验证：素材来源映射基于 m.source，非 CRUCIBLE_SOURCES �
     hub,
     crucible: c,
     memory: () => ({
-      recall: () => [
+      listFor: () => [
         {
           id: 'mem-1',
           importance: 0.8,
@@ -265,7 +265,8 @@ test('接线验证：crucibleCycle 脏检查生效，无数据变动时不刷盘
       getConfig: () => cfg,
       hub,
       memory: () => ({
-        recall: () => [
+        // 素材采集走 listFor（见 purpose/module.js 的 memoryRecords）
+        listFor: () => [
           {
             id: 'mem-1',
             importance: 0.8,
