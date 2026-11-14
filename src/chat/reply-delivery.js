@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { parseReply, bubbleDelay, replyRules } from './reply.js'
+import { parseReply, bubbleDelay, replyRules, extractAndStripInnerMonologue } from './reply.js'
 import { updateClosureState } from './conversation-closure.js'
+import { applyThreadContinuation, adaptThreadLedger } from './inner-thread-link.js'
 import { calculateTypingCadence, typingWaitAfter, typingCadenceEnabled } from './reply-cadence.js'
 
 // AC-2 的字面要求：律动计算从投递模块表面也能直接取到。
@@ -12,7 +13,7 @@ export { calculateTypingCadence }
 export function createReplyDelivery({
   getConfig, log, hooks, reportTurns, groups, stickers, interaction,
   sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
-  logChat, onActivity, onDelivered, outbox, isCaptured, sleep, deliveryContext = new AsyncLocalStorage(),
+  logChat, onActivity, onDelivered, outbox, isCaptured, sleep, threadLedger, deliveryContext = new AsyncLocalStorage(),
 }) {
   const deliveryChains = new Map()
   // US-006 · 四态会话收尾：per-chat 状态。放这里而不是宿主，因为真正决定
@@ -137,6 +138,28 @@ export function createReplyDelivery({
       const all = texts.map((t) => t.value).join('，')
       if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
     }
+    // US-019 · 顺承前情 → 挂起线索闭环：从本轮 <inner> 读【顺承前情】标记与闭环信号。
+    // 命中的线索才 resolve，没标记的只按拓扑往后挪一格（用户换话题绝不误闭环）。
+    // threadLedger 由宿主注入，adaptThreadLedger 把它适配成 peek/resolve/advance 契约。
+    try {
+      const adapted = threadLedger ? adaptThreadLedger(threadLedger) : null
+      if (adapted) {
+        const innerMeta = extractAndStripInnerMonologue(String(text || '')).inner || {}
+        const innerRaw = String(innerMeta.raw || '')
+        // 直接把 inner 原文交给 applyThreadContinuation —— 它内部自己用 parseInnerClosure
+        // 重新解析，不需要我们预处理。之前为了绕开「inner.closure 默认是 continue」而
+        // 删除 raw 里的 `closure: continue` 字面量是错的：那会把模型**显式**写的
+        // no-close 信号一起删掉，导致本该拦截的轮次照常 resolve。
+        // 默认值和显式值的区分由 parseInnerClosure 自己负责（无信号返回 null）。
+        if (innerRaw) {
+          const applied = applyThreadContinuation(adapted, chatId, innerRaw)
+          if (applied.resolved.length) log.info(`${chatId}：闭环线索 ${applied.resolved.join(',')}`)
+        }
+      }
+    } catch (error) {
+      log.warn('线索闭环处理失败：', error?.message || error)
+    }
+
     const groupLimit = Math.max(1, Math.min(3, Number(rules.maxBubbles) || 3))
     let needsGroupPacking = false
     if (inGroup && items.length > groupLimit) {
