@@ -134,8 +134,8 @@ function QQHubPage() {
             h('div', { className: 'ab-appbar-sub' }, ((st.onebot.login && st.onebot.login.nickname) || '大肥鱼') + ' · ' + (persona ? persona.name : '默认人格')))),
         h('div', { className: 'ab-runtime' },
           h('span', { className: cx('ab-status', status.cls) }, h('i', { className: cx('ab-dot', status.cls) }), status.text),
-          h('label', { className: 'ab-quick-toggle' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v) })),
-          h('label', { className: 'ab-quick-toggle secondary' }, h('span', null, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '只写日志，不发送到 QQ' })))),
+          h('label', { className: 'ab-quick-toggle' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v), title: '总开关' })),
+          h('label', { className: 'ab-quick-toggle secondary' }, h('span', null, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '试运行：只写日志，不发送到 QQ' })))),
       showWizard ? h('main', { className: 'ab-wizard-main' }, h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) })) : h('div', { className: 'ab-layout' },
         h(NavBar, {
           tabs, cur: curTab, go, dirtyOf: tabDirty, open: navOpen, onClose: () => setNavOpen(false), returnFocusRef: menuRef,
