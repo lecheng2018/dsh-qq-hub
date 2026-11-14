@@ -57,7 +57,11 @@ jobs:
 
       - name: npm pack
         run: |
-          TGZ=$(npm pack)
+          OUT=$(npm pack 2>/dev/null)
+          TGZ=$(echo "$OUT" | tail -n1)
+          if [ -z "$TGZ" ] || [ ! -f "$TGZ" ]; then
+            echo "npm pack 失败或未产出 tgz："; echo "$OUT"; exit 1
+          fi
           echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
           sha256sum "$TGZ" | tee sha256.txt
         id: pack
