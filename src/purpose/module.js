@@ -88,7 +88,7 @@ export function cleanReply(raw, role = '') {
   return s
 }
 
-export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, crucible: injectedCrucible }) {
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, proactivelyMuted, crucible: injectedCrucible }) {
   // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
   const roleOf = (cfg = getConfig()) => characterName('', cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
@@ -439,6 +439,14 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     } catch {
       budgetBlocked = false
     }
+    // 刚道别后的静默期（同 speakup 的口径）：两个主动开口路径必须一致，
+    // 否则用户说完"睡了"之后，speakup 被锁住而 purpose 照样来戳一下。
+    try {
+      if (typeof proactivelyMuted === 'function' && proactivelyMuted(chatId) === true) {
+        log?.info?.('目的：刚道过别，静默期内不主动开口')
+        return
+      }
+    } catch { /* 判定坏掉就按没锁处理，绝不永久掐话 */ }
     const env = {
       enabled: true, modeOk: true, dshReady: true, paused: false, ownerAllowed: true,
       busy: false, friendOk: true, budgetBlocked, // 好友探测 QQ Hub 没有对应服务，恒可用（留 env 位）

@@ -301,5 +301,46 @@ export function createReplyDelivery({
     return { missedAt, attempted, delivered, failedCount: unconfirmed }
   }
 
-  return { deliver, deliverNow }
+  /**
+   * 这个会话现在该不该被「主动开口」打扰（道别后的一小时静默期）。
+   *
+   * 为什么补这个：`conversation-closure` 的四态处方表里给了 `muteLockMs`（CLOSED 的静默时长），
+   * `closurePlanFor` 也一直把 `closedAt` 记下来 —— 但**从来没有任何消费者读它**。
+   * 于是「她说了晚安，一小时内不该自己再找你」这个设计意图在生产上根本没实现：
+   * speakup 和 purpose 都不知道刚才道过别，照样按自己的空闲阈值开口。
+   * 结果就是用户刚说完「睡了」，十分钟后又被她戳一下。
+   *
+   * 语义严格照模块注释：**只锁主动开口，不锁入站回复**。用户说完晚安又回来找她，
+   * 照样必须回（deliverNow 完全不看这个函数）。
+   *
+   * @param {string} chatId
+   * @param {number} [now] 注入时间便于测试
+   * @returns {{muted: boolean, until: number, remainingMs: number, reason: string}}
+   */
+  function proactiveMuteState(chatId, now = Date.now()) {
+    const key = String(chatId || '')
+    const idle = { muted: false, until: 0, remainingMs: 0, reason: '' }
+    if (!key) return idle
+    try {
+      const rec = closureStates.get(key)
+      if (!rec || rec.state?.state !== CLOSED_STATE) return idle
+      const lock = Math.max(0, Number(rec.state?.muteLockMs) || 0)
+      if (lock <= 0) return idle
+      // 没有 closedAt 就按「刚关」算：宁可少打扰一次，也不放她立刻去戳人。
+      // （过期由时间自然解决，不会永久锁死 —— 这正是必须有时间戳的原因。）
+      const since = Number(rec.closedAt) || Number(now)
+      const until = since + lock
+      const remainingMs = Math.max(0, until - Number(now))
+      if (remainingMs <= 0) return idle
+      return { muted: true, until, remainingMs, reason: '刚道别（CLOSED 静默期）' }
+    } catch {
+      // 任何异常都当成「没锁」：锁的存在是为了少打扰，不能因为内部状态坏掉就永久掐话。
+      return idle
+    }
+  }
+
+  /** 只回答「现在能不能主动开口」，方便调用方一行判断。 */
+  const isProactivelyMuted = (chatId, now = Date.now()) => proactiveMuteState(chatId, now).muted
+
+  return { deliver, deliverNow, proactiveMuteState, isProactivelyMuted }
 }
