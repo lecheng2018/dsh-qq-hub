@@ -50,6 +50,7 @@ import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { policyFor, decideGroupReply, topicRelevance, withRoleWakeWords } from '../chat/group-policy.js'
+import { createRepeatGate } from '../core/repeat-gate.js'
 import { decideGroupReplyWithAtmosphere, gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
@@ -220,6 +221,13 @@ export function createModularCore({
   const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
   const inboundVision = sharedInboundVision || createInboundVision({ dsh, log, inboundImages })
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
+  // 高频否定判定（群闸不回、ACL 拒绝）逐条打会把面板刷爆（真机 2026-11-14 反馈）。
+  // 经去重闸：签名变化立刻打、同款一个窗口只补一条汇总。见 src/core/repeat-gate.js。
+  const repeatLog = createRepeatGate({ windowMs: 300_000 })
+  const gatedDebug = (gateKey, sig, line) => {
+    const r = repeatLog(gateKey, sig)
+    if (r.emit) debug(r.suppressed > 0 ? `${line}（同款判定已静默 ${r.suppressed} 条）` : line)
+  }
   // 「正在输入」状态机与 legacy 同一份（activity-state：私聊 + enabled + 非 dryRun 才亮，15s 续 ping、6 分钟封顶）
   const activity = createActivityState({ onTypingPing: () => {} })
   const pingTyping = (userId) => { try { Promise.resolve(onebot?.call?.('set_input_status', { user_id: Number(userId), event_type: 1 }, { timeoutMs: 5000 })).catch(() => {}) } catch {} }
@@ -1350,7 +1358,7 @@ export function createModularCore({
     // 入站 ACL：白名单外会话 offer 前即拒（绝不让未授权消息驱动 DSH）
     const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
     if (!acl.allowed) {
-      debug(`入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
+      gatedDebug(`acl:${inbound.chatKey}`, `deny|${acl.reason}`, `入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
       return { handled: 'acl-denied', reason: acl.reason }
     }
     presence.noteIncoming(inbound.chatKey, String(inbound?.sender?.userId || ''), cfg)
@@ -1410,7 +1418,7 @@ export function createModularCore({
       const offerWithDecision = (decision) => {
         emitActivity(mods, inbound, { direct: mentioned || decision.mode === 'must', owner: fromOwner })
         if (!decision.reply) {
-          debug(`群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
+          gatedDebug(`gate:${inbound.chatKey}`, decision.reason, `群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
           return { handled: 'group-pass', reason: decision.reason }
         }
         try {
