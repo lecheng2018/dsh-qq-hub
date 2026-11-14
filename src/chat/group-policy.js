@@ -20,6 +20,11 @@ export const DEFAULT_GROUP_POLICY = {
   minRelevance: 0.25, // 相关度低于这个就不插话（0 = 不看话题，纯随机）
   burstMax: 8, // 安全刹车：burstWindowSec 秒内她最多说这么多次，超了就歇着（主人 @ 除外），只防失控
   burstWindowSec: 120,
+  // 「正聊得起劲」的连聊预算：一次入场最多连着接这么多条，或聊满这么久，
+  // 到顶就退出话题（想再聊必须重新过插话摇号）。真机刷屏事故的根因就是
+  // engaged 既不受冷却/每小时上限约束、又会每次说话自我续期，一旦入场永不离场。
+  engagedMaxReplies: 3,
+  engagedMaxMs: 6 * 60_000,
 }
 
 /**
@@ -90,6 +95,9 @@ export function inQuietHours(hour, quiet) {
  * @param {number[]} p.recentTimes  本群最近消息的时间戳（毫秒）
  * @param {number[]} p.interjectTimes  本群最近插话的时间戳（毫秒）
  * @param {number[]} [p.botReplyTimes]  她在本群最近每次说话的时间戳（毫秒）
+ * @param {number} [p.engagedUntil]  话题加入截止时间戳（在此之前且相关度够 = 「正聊得起劲」）
+ * @param {number} [p.engagedReplies]  本次入场已经连着接了几条（engaged 预算用）
+ * @param {number} [p.engagedSince]  本次入场时间戳（engaged 预算用）
  * @param {number} p.hour  当前小时
  * @param {() => number} [p.rand]
  * @returns {{reply: boolean, mode: 'must'|'interject'|'engaged'|'none', reason: string}}
@@ -116,8 +124,21 @@ export function decideGroupReply(p) {
   if (!(pol.interjectChance > 0)) return { reply: false, mode: 'none', reason: '插话关着' }
   if (inQuietHours(p.hour, pol.quietHours)) return { reply: false, mode: 'none', reason: '静默时段' }
   const minRel = Number(pol.minRelevance) || 0
-  // 已经加入了这个话题：接着聊（每段看完再回，不受冷却和每小时上限限制）
+  // 已经加入了这个话题：接着聊（每段看完再回，不受冷却和每小时上限限制）——
+  // 但**有预算**：连聊条数与入场时长双双是硬顶，到顶就离场。
+  // 没有这两道顶时，engaged 是自我续期的死循环：她每回一条都刷新「刚加入」，
+  // 群里消息间隔只要小于窗口长度，她就永远在「起劲」，1% 摇号只管进门不管出去。
   if (p.engagedUntil && p.now < p.engagedUntil && rel >= minRel) {
+    const cap = Number(pol.engagedMaxReplies) || DEFAULT_GROUP_POLICY.engagedMaxReplies
+    const maxMs = Number(pol.engagedMaxMs) || DEFAULT_GROUP_POLICY.engagedMaxMs
+    const used = Number(p.engagedReplies) || 0
+    if (used >= cap) {
+      return { reply: false, mode: 'none', reason: `这个话题已连着接了 ${used} 条，先退一步（再想聊要重新摇号）` }
+    }
+    const since = Number(p.engagedSince) || 0
+    if (since && p.now - since > maxMs) {
+      return { reply: false, mode: 'none', reason: '这场聊得够久了，先退出来' }
+    }
     return { reply: true, mode: 'engaged', reason: `正聊得起劲，接着说（相关度 ${rel.toFixed(2)}）` }
   }
   const times = p.interjectTimes || []
