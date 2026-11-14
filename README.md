@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-success)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-当前版本：**v1.4.3-test.20261115.1**（预发布）。自 v1.3.65 稳定版升级属于大版本跨级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 的「移除（破坏性变更）」一节；版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：**v1.4.3-test.20261115.2**（预发布）。自 v1.3.65 稳定版升级属于大版本跨级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 的「移除（破坏性变更）」一节；版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 它是什么
 
