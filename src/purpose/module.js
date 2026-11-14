@@ -88,7 +88,7 @@ export function cleanReply(raw, role = '') {
   return s
 }
 
-export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, crucible: injectedCrucible }) {
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, crucible: injectedCrucible }) {
   // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
   const roleOf = (cfg = getConfig()) => characterName('', cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
@@ -429,9 +429,19 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     const now = Date.now()
     const state = loadState(config, now)
     if (await maybeNudge(cfg, state, now)) return
+    // Token 熔断（缺陷 D）：这条主动开口路径必须和 speakup 受同一份每日配额约束，
+    // 否则「目的引擎」会绕开配额无限花钱。账本由接线层注入（modules/purpose/index.js
+    // 从 token-billing 暴露的 ledger 拿来），本文件不 import 记账模块 —— 避免循环依赖。
+    // 查询失败一律按「未熔断」处理：记账出问题不该永久掐掉主动生活流（与 speakup 同口径）。
+    let budgetBlocked = false
+    try {
+      budgetBlocked = typeof budgetExhausted === 'function' && budgetExhausted(chatId) === true
+    } catch {
+      budgetBlocked = false
+    }
     const env = {
       enabled: true, modeOk: true, dshReady: true, paused: false, ownerAllowed: true,
-      busy: false, friendOk: true, budgetBlocked: false, // QQ Hub 无 token 预算/好友探测服务，恒可用（留 env 位）
+      busy: false, friendOk: true, budgetBlocked, // 好友探测 QQ Hub 没有对应服务，恒可用（留 env 位）
       ownerIdleMs: now - lastPrivateAt(cfg),
     }
     const verdict = evaluatePurposeTick({ now, config, state, env })

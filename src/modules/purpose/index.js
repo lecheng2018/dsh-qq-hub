@@ -34,6 +34,32 @@ export default {
     { key: 'maxPerDay', label: '每日上限', type: 'number', min: 0, max: 20, hint: '0 或留空 = 沿用「主动搭话」页的次数上限；填大于 0 的数才用这里自己的上限' },
   ],
   setup(api) {
+    // Token 熔断接线（缺陷 D）：purpose 和 speakup 一样受每日配额约束。
+    // 账本从 token-billing 模块**暴露的 exports** 上拿（api.use → { ledger }），
+    // 而不是直接 import 记账实现：模块间解耦，且 token-billing 被用户关掉时自然拿不到，
+    // 此时按「不计配额」继续跑，不因为记账模块缺席就把主动生活流永久掐死。
+    const ledgerOf = () => {
+      try {
+        const billing = api.use('token-billing')
+        const ledger = billing?.ledger
+        // 熔断判定需要 isExhausted；拿不到就返回 null（= 不熔断）。
+        return ledger && typeof ledger.isExhausted === 'function' ? ledger : null
+      } catch {
+        return null
+      }
+    }
+    const budgetExhausted = (chatId) => {
+      const ledger = ledgerOf()
+      if (!ledger) return false
+      try {
+        // isExhausted 的语义（缺陷 C 修过）：未分配配额 → false（放行），
+        // 已分配但耗尽 / 本来就分不到 → true（熔断）。非法 chatKey 抛错也按未熔断处理。
+        return ledger.isExhausted(String(chatId || '')) === true
+      } catch {
+        return false
+      }
+    }
+
     const purpose = createPurpose({
       getConfig: api.config,
       hub: api.core.hub,
@@ -42,6 +68,7 @@ export default {
       isMuted: (chatId) => { try { return api.core.mutes.muted(chatId) } catch { return false } },
       memory: () => api.use('memory'),
       personaText: () => { try { return api.core.personas?.current?.() || '' } catch { return '' } },
+      budgetExhausted,
     })
     api.every(60_000, () => purpose.tick(), '目的引擎')
     api.route('/purpose/fire', async () => {

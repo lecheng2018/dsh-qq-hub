@@ -12,8 +12,31 @@ export const DREAM_VERSION = 1
 
 export const DEFAULT_DREAM_OPTIONS = {
   tokenBudget: 1200,
-  // 判定重复的相似度阈值（0~1，二元字组 Jaccard）
-  dedupeSimilarity: 0.82,
+  // 判定重复的**内容相似度**下限（0~1，去虚词后的二元字组 Jaccard）。
+  //
+  // 实测依据（真实中文样本，回归见 test/memory-dream-threshold.test.js）：
+  //   · 旧默认 0.82 对真实改写完全失效：同一件事的两种说法
+  //     「主人下雨天喜欢呆在家里看书」/「下雨天主人最喜欢呆在家里面看书」
+  //     归一词 Jaccard 只有 0.563（原串 0.529）—— 一条都不合并，梦境等于白跑；
+  //   · 但**单纯降阈值必然误并**：这套指标上「换了一个字的另一件事」比真实改写更像。
+  //     同一份样本：猫/狗 0.636、3月5日/3月6日 0.600、早上/晚上 0.600、红衣/蓝衣 0.818，
+  //     前三条全都高于改写的 0.563。任何单一阈值都不可能同时「并改写」和「不并猫狗」。
+  // 所以这里不是一个阈值说了算，而是**两级判定**（见 isDuplicate）：
+  //   第一级 strictDedupeSimilarity（0.82，沿用旧值）：几乎逐字相同的，直接并，行为和以前完全一致；
+  //   第二级才看 dedupeSimilarity，并且必须同时过完三道闸门 + 一条硬否决：
+  //     ① 内容相似度 ≥ dedupeSimilarity（粗筛，排除明显不同的事实）
+  //     ② 内容字符袋重合 ≥ dedupeBag（语序可以变，但用到的字必须几乎一样 —— 挡「换了主宾」）
+  //     ③ 内容串 LCS-Dice ≥ dedupeOrder（语序崩了就不是同一句）
+  //     ④ contradicts() 判为矛盾/取值改写的一律不并（猫狗、喜欢/不喜欢、日期、数字都靠这条兜）
+  //   实测这三道门把上面所有「不应合并」样本全部挡住（误并 0 条），只漏掉 2 条极端改写 ——
+  //   漏并在本模块是安全方向（少并一条只是多留一条记忆），误并才是不可恢复的错误。
+  dedupeSimilarity: 0.55,
+  // 第一级：几乎逐字相同就直接判重（旧的 0.82 语义原样保留）。
+  strictDedupeSimilarity: 0.82,
+  // ② 内容字符袋（多重集）Jaccard 下限：语序可变，用字必须几乎一致。
+  dedupeBag: 0.9,
+  // ③ 内容串 LCS-Dice 下限（0~1，衡量语序一致性）。
+  dedupeOrder: 0.7,
   // 判定矛盾所需的最小主体重叠度（同一 entity/topic 槽位下，陈述指向同一主体才算证伪）
   conflictOverlap: 0.5,
   // 共性归纳的最小成员数
@@ -76,6 +99,65 @@ function bigrams(s) {
   }
   for (let i = 0; i < n.length - 1; i += 1) set.add(n.slice(i, i + 2))
   return set
+}
+
+// 纯语法虚词（助词/语气/程度/量词）：增删**不承载事实**，所以判重前先剔掉。
+// 注意：方位词（上/里/面/边/家）会改变语义（"在家"/"在店里"），绝不能进这张表。
+const FILLER_CHARS = /[的了着过呀啊吧呢嘛哦最很太就又再个只把被们当即刻]/gu
+
+/** 判重用的「内容串」：归一化后剔掉纯语法虚词。 */
+function contentText(text) {
+  return normalizeText(text).replace(FILLER_CHARS, '')
+}
+
+/** 内容二元字组：比原串更能扛住中文改写的语序调整与虚词增减。 */
+function contentBigrams(text) {
+  const n = contentText(text)
+  const set = new Set()
+  if (!n) return set
+  if (n.length === 1) {
+    set.add(n)
+    return set
+  }
+  for (let i = 0; i < n.length - 1; i += 1) set.add(n.slice(i, i + 2))
+  return set
+}
+
+/** 字符多重集 Jaccard：语序可以不同，但「用了哪些字、各几次」必须几乎一致。 */
+function bagJaccard(a, b) {
+  if (!a || !b) return 0
+  const count = (s) => {
+    const m = new Map()
+    for (const ch of s) m.set(ch, (m.get(ch) || 0) + 1)
+    return m
+  }
+  const A = count(a)
+  const B = count(b)
+  let inter = 0
+  let total = 0
+  for (const [ch, n] of A) {
+    total += n
+    inter += Math.min(n, B.get(ch) || 0)
+  }
+  for (const [, n] of B) total += n
+  return total ? inter / (total - inter) : 0
+}
+
+/** LCS-Dice：衡量两串的语序一致性（0~1，1 表示一条是另一条的子序列且几乎等长）。 */
+function lcsDice(a, b) {
+  const A = String(a || '')
+  const B = String(b || '')
+  if (!A.length || !B.length) return 0
+  if (A === B) return 1
+  let prev = new Array(B.length + 1).fill(0)
+  for (let i = 1; i <= A.length; i += 1) {
+    const cur = new Array(B.length + 1).fill(0)
+    for (let j = 1; j <= B.length; j += 1) {
+      cur[j] = A[i - 1] === B[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1])
+    }
+    prev = cur
+  }
+  return (2 * prev[B.length]) / (A.length + B.length)
 }
 
 function jaccard(a, b) {
@@ -256,6 +338,9 @@ export function consolidate(facts, options = {}) {
 
   const budget = Math.max(0, Math.floor(num(opts.tokenBudget, DEFAULT_DREAM_OPTIONS.tokenBudget)))
   const dedupeSim = Math.max(0, Math.min(1, num(opts.dedupeSimilarity, DEFAULT_DREAM_OPTIONS.dedupeSimilarity)))
+  const strictSim = Math.max(dedupeSim, Math.min(1, num(opts.strictDedupeSimilarity, DEFAULT_DREAM_OPTIONS.strictDedupeSimilarity)))
+  const dedupeBag = Math.max(0, Math.min(1, num(opts.dedupeBag, DEFAULT_DREAM_OPTIONS.dedupeBag)))
+  const dedupeOrder = Math.max(0, Math.min(1, num(opts.dedupeOrder, DEFAULT_DREAM_OPTIONS.dedupeOrder)))
   const conflictFloor = Math.max(0, Math.min(1, num(opts.conflictOverlap, DEFAULT_DREAM_OPTIONS.conflictOverlap)))
   const minCluster = Math.max(2, Math.floor(num(opts.minCluster, DEFAULT_DREAM_OPTIONS.minCluster)))
   const maxEvidence = Math.max(1, Math.floor(num(opts.maxEvidence, DEFAULT_DREAM_OPTIONS.maxEvidence)))
@@ -327,6 +412,36 @@ export function consolidate(facts, options = {}) {
     groups.get(key).push(fact)
   }
 
+  /**
+   * 判重（两级）：
+   *   第一级：原串二元字组 Jaccard ≥ strictSim（默认 0.82）—— 几乎逐字相同，直接并，
+   *          行为和引入第二级之前完全一致，现有数据与测试不受影响。
+   *   第二级：真实中文改写。仅靠降阈值会误并（「换一个字」比「改写」更像），
+   *          所以必须同时满足内容相似度、字符袋重合、语序一致，且不构成矛盾。
+   * 漏并是安全方向（多留一条记忆），误并才不可恢复 —— 所有闸门都往这个方向偏。
+   */
+  function isDuplicate(a, b, fa, fb) {
+    if (jaccard(fa.bigrams, fb.bigrams) >= strictSim) return true
+
+    const ca = contentText(a.text)
+    const cb = contentText(b.text)
+    if (!ca || !cb) return false
+    // ① 内容串完全相同（只差虚词/标点/语气）＝同一句话，直接判重。
+    //    这一条必须放在 contradicts 之前：contradicts 对「加个虚词」也会误报成
+    //    单值槽位改写（实测「主人喜欢喝咖啡」vs「主人喜欢喝咖啡的」判矛盾），
+    //    不先兜住就会把真正的重复当成冲突去证伪 —— 那就从「漏并」变成「错杀」了。
+    if (ca === cb) return true
+    // ② 内容相似度粗筛
+    if (jaccard(contentBigrams(a.text), contentBigrams(b.text)) < dedupeSim) return false
+    // ③ 用字必须几乎一致（挡「换了主宾/对象」：小明喜欢小红 ≠ 小红喜欢小明）
+    if (bagJaccard(ca, cb) < dedupeBag) return false
+    // ④ 语序不能崩（同上，另一视角）
+    if (lcsDice(ca, cb) < dedupeOrder) return false
+    // ⑤ 硬否决：判为矛盾/取值改写的一律不并（猫狗、喜欢/不喜欢、日期、数字）
+    if (contradicts(a, b, fa, fb, conflictFloor)) return false
+    return true
+  }
+
   const survivors = []
   for (const key of [...groups.keys()].sort()) {
     const members = groups.get(key)
@@ -335,14 +450,18 @@ export function consolidate(facts, options = {}) {
       const feats = featurize(fact.text)
       let target = null
       for (const c of clusters) {
-        if (jaccard(feats.bigrams, c.feats.bigrams) >= dedupeSim) {
+        if (isDuplicate(fact, c.rep, feats, c.feats)) {
           target = c
           break
         }
       }
       if (target) {
         target.members.push(fact)
-        if (better(fact, target.rep)) target.rep = fact
+        // rep 换人时 feats 必须同步：判重/判矛盾都拿 rep 的文本配 feats，配错等于拿别人的特征比。
+        if (better(fact, target.rep)) {
+          target.rep = fact
+          target.feats = feats
+        }
       } else {
         clusters.push({ rep: fact, members: [fact], feats })
       }
