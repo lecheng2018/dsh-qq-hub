@@ -1,5 +1,5 @@
 import { React, useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, Switch, Select, Range, Seg, Empty, ModOff } from '../ui/primitives.js'
+import { Card, Row, Btn, Switch, Select, Range, Seg, Empty, ModOff, SectionNav, HelpDisclosure } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { API } from '../core/api-base.js'
 import { clone, setPath, getPath, timeAgo, copy, cx } from '../core/utils.js'
@@ -14,7 +14,7 @@ function LocalApi({ draft, setDraft, toast }) {
   useEffect(() => { load() }, [])
   const act = async (path, slot, label) => { setBusy(slot + label); const r = await post(path, { slot }); setBusy(''); toast(r.message, r.ok ? 'ok' : 'err'); if (r.image) setImg(r.image); load() }
   return h('div', { className: 'ab-grid' },
-    h(Card, { title: '本地接口', desc: '想用自己电脑上的模型或服务（GPT-SoVITS 语音、SD WebUI / ComfyUI 画图、自己训练的 so-vits-svc 音色、本地语音识别……）？在这里生成一个脚本模板，照注释改，或者点「复制给 DSH 的话」粘给 DSH，让它帮你改。脚本放在插件数据目录的 local 文件夹里，插件升级不会覆盖；改完保存就生效，不用重启。每一项要打开开关才会用，出错时语音和识别会自动退回内置方式。' },
+    h(Card, { title: '本地接口', summary: '生成并管理本地语音、画图和识别脚本；开启后接管对应能力，失败时按原逻辑回退。' },
       h('div', { className: 'ab-flex' },
         h('code', { className: 'ab-small', style: { wordBreak: 'break-all', flex: 1 } }, st ? st.dir : '…'),
         h(Btn, { small: true, onClick: () => post('/local/open').then((r) => toast(r.message)) }, '打开文件夹'))),
@@ -46,41 +46,40 @@ const MOD_STATE = (m) => {
 function ModuleRow({ m, draft, setModules, toast, reload }) {
   const s = MOD_STATE(m)
   const [open, setOpen] = useState(false)
+  const [details, setDetails] = useState(false)
   const setMod = async (patch) => {
     const r = await post('/save', { modules: { [m.id]: { ...((draft.modules || {})[m.id] || {}), ...patch } } })
     if (r.ok === false) return toast(r.message, 'err')
     toast(patch.enabled === false ? `「${m.name}」关掉了` : patch.enabled ? `「${m.name}」打开了` : '好了', 'ok')
-    setModules(r.modules)
-    reload()
+    setModules(r.modules); reload()
   }
   const act = async (path, body, okMsg) => {
     const r = await post(path, body)
     toast(r.message || okMsg, r.ok === false ? 'err' : 'ok')
     if (r.list) setModules(r.list)
     if (r.prompt && r.ok) copy(r.prompt, toast)
-    reload()
-    return r
+    reload(); return r
   }
   const what = [m.tools.length ? '工具：' + m.tools.join('、') : '', m.commands.length ? '命令：' + m.commands.map((c) => '/' + c).join(' ') : ''].filter(Boolean).join('　')
   const errs = (m.error ? [{ label: '加载', message: m.error }] : []).concat(m.errors || [])
   return h('div', { className: 'ab-mod' },
     h('div', { className: 'main' },
-      h('div', { className: 'nm' }, m.name, h('code', null, m.id),
-        h('span', { className: cx('ab-badge', s.cls) }, s.text),
-        m.outdated ? h('span', { className: 'ab-badge warn', title: '你复制 / 替换时内置的是 ' + m.forkedFrom + '，现在是 ' + m.builtinVersion }, '内置版本更新了') : null),
+      h('div', { className: 'nm' }, m.name, h('code', null, m.id), h('span', { className: cx('ab-badge', s.cls) }, s.text), m.outdated ? h('span', { className: 'ab-badge warn' }, '内置版本更新了') : null),
       m.description ? h('div', { className: 'ds' }, m.description) : null,
-      what ? h('div', { className: 'what' }, what) : null,
       errs.length ? h('div', { className: 'ab-note err', style: { marginTop: 6 } },
-        h('div', { style: { cursor: 'pointer' }, onClick: () => setOpen(!open) }, (open ? '▾ ' : '▸ ') + errs.length + ' 条报错：' + String(errs[0].message).split('\n')[0].slice(0, 120)),
+        h('button', { type: 'button', className: 'ab-error-toggle', 'aria-expanded': open, onClick: () => setOpen(!open) }, (open ? '收起' : '查看') + ' ' + errs.length + ' 条报错：' + String(errs[0].message).split('\n')[0].slice(0, 100)),
         open ? h('div', { className: 'ab-code' }, errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + ' ' : '') + (e.label || '') + '：' + e.message).join('\n\n')) : null) : null,
-      h('div', { className: 'acts' },
-        m.builtin && !m.hasUser ? h(Btn, { small: true, onClick: () => act('/modules/fork', { id: m.id }, '复制好了'), title: '把这个内置模块的源码复制到 modules/' + m.id + '/，改了就替换内置的' }, '复制一份来改') : null,
-        m.hasUser ? h(Btn, { small: true, onClick: () => post('/modules/open?id=' + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, '打开文件夹') : null,
-        m.hasUser ? h(Btn, { small: true, onClick: () => get('/modules/prompt?id=' + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, '复制好了，粘给 DSH，把【】里那句换成你想要的')) }, '复制给 DSH 的话') : null,
-        m.hasUser && !m.safeSkipped ? h(Btn, { small: true, onClick: () => act('/modules/reload', { id: m.id }, '重新加载好了') }, '重新加载') : null)),
+      details ? h('div', { className: 'ab-mod-details' },
+        what ? h('div', { className: 'what' }, what) : null,
+        h('div', { className: 'acts' },
+          m.builtin && !m.hasUser ? h(Btn, { small: true, onClick: () => act('/modules/fork', { id: m.id }, '复制好了') }, '复制一份来改') : null,
+          m.hasUser ? h(Btn, { small: true, onClick: () => post('/modules/open?id=' + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, '打开文件夹') : null,
+          m.hasUser ? h(Btn, { small: true, onClick: () => get('/modules/prompt?id=' + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, '复制开发提示')) }, '复制给 DSH') : null,
+          m.hasUser && !m.safeSkipped ? h(Btn, { small: true, onClick: () => act('/modules/reload', { id: m.id }, '重新加载好了') }, '重新加载') : null)) : null),
     h('div', { className: 'side' },
       h(Switch, { on: m.enabled, onChange: (v) => setMod({ enabled: v }), title: m.enabled ? '关掉这个模块' : '打开这个模块' }),
-      m.builtin && m.hasUser ? h('label', { className: 'ab-small ab-muted', style: { display: 'flex', alignItems: 'center', gap: 6 } }, '用内置的', h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null))
+      h(Btn, { small: true, kind: 'ghost', onClick: () => setDetails(!details) }, details ? '收起' : '管理'),
+      m.builtin && m.hasUser && details ? h('label', { className: 'ab-small ab-muted ab-builtin-toggle' }, '用内置的', h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null))
 }
 
 /** 模拟测试：不上 QQ 试模块。发出去的只截下来看，不真发。 */
@@ -105,7 +104,7 @@ function Simulate({ toast }) {
     setTout(r)
   }
   const sentList = (sent) => (sent && sent.length ? h('div', { className: 'ab-code' }, sent.map((s) => '→ ' + s.chatId + '：' + s.text).join('\n')) : h('div', { className: 'ab-small ab-muted', style: { marginTop: 6 } }, '没有发出任何消息'))
-  return h(Card, { title: '模拟测试', desc: '不用上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。（模块直接调 api.onebot 的操作，比如禁言、发空间，是真的会执行的；会改设置的内置命令不执行。）' },
+  return h(Card, { title: '模拟测试', summary: '消息默认只截获展示；直接调用 onebot 的操作仍会真实执行。', collapsible: true, defaultOpen: false },
     h(Row, { label: '假装是', hint: '谁在说话、在哪儿说' },
       h('div', { className: 'ab-flex' },
         h(Seg, { value: as, options: [{ value: 'owner', label: '主人' }, { value: 'other', label: '别人' }], onChange: setAs }),
@@ -149,24 +148,24 @@ function Modules({ st, draft, toast, reload }) {
     reload()
   }
   return h('div', { className: 'ab-grid' },
-    h(Card, { title: '扩展', desc: '她的每项本事都是一个模块：能单独关掉；能复制一份来改，改了就替换内置的；也能自己写新模块，让她学会你想要的任何事。自己写的东西放在下面这个文件夹，插件升级不会动；改完保存几秒内自动生效，不用重启。不会写代码？点「复制给 DSH 的话」，粘给 DSH，说你想要什么。' },
+    h(SectionNav, { items: [{ id: 'modules-installed', label: '模块列表' }, { id: 'modules-create', label: '新建与开发' }, { id: 'modules-simulate', label: '模拟测试' }] }),
+    st.config.safeMode ? h('div', { className: 'ab-note warn' }, '安全模式已开启：用户模块均未加载，内置模块继续运行。') : null,
+    h(Card, { title: '模块管理', summary: '开关模块、查看状态，或复制内置模块进行二次开发。' },
       h('div', { className: 'ab-flex' },
-        h('code', { className: 'ab-small', style: { wordBreak: 'break-all', flex: 1 } }, data.dir),
+        h('code', { className: 'ab-small ab-path-text' }, data.dir),
         h(Btn, { small: true, onClick: () => post('/modules/open').then((r) => toast(r.message)) }, '打开文件夹'),
-        h(Btn, { small: true, onClick: () => copy(data.prompt, toast, '复制好了，粘给 DSH，把【】里那句换成你想要的') }, '复制给 DSH 的话'),
+        h(Btn, { small: true, onClick: () => copy(data.prompt, toast, '开发提示已复制') }, '复制开发提示'),
         h(Btn, { small: true, kind: 'ghost', onClick: async () => { const r = await post('/modules/reload', {}); setModules(r.list); toast(r.message) } }, '重新检查')),
-      h(Row, { label: '安全模式', hint: '打开后你写的模块一个都不加载，内置的全部恢复。出了问题先开它，看是不是你的模块引起的。' },
-        h(Switch, { on: st.config.safeMode, onChange: async (v) => { const r = await post('/save', { safeMode: v }); toast(v ? '安全模式开了：只跑内置模块' : '安全模式关了', 'ok'); setModules(r.modules); reload() } })),
-      st.config.safeMode ? h('div', { className: 'ab-note warn' }, '安全模式开着：你写的模块现在都没加载。') : null),
-    h(Card, { title: '新建一个模块', desc: '从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。想改内置的本事，用下面内置模块那一行的「复制一份来改」。' },
+      h(Row, { label: '安全模式', hint: '排障时停用所有用户模块' }, h(Switch, { on: st.config.safeMode, onChange: async (v) => { const r = await post('/save', { safeMode: v }); toast(v ? '安全模式已开启' : '安全模式已关闭', 'ok'); setModules(r.modules); reload() } }))),
+    h(Card, { id: 'modules-create', title: '新建模块', summary: '从关键词回复、命令和工具模板开始。id 使用小写英文。', collapsible: true, defaultOpen: false },
       h('div', { className: 'ab-flex' },
         h('input', { className: 'ab-input', style: { maxWidth: 180 }, placeholder: 'id，如 weather', value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }),
         h('input', { className: 'ab-input', placeholder: '名字，如 查天气', value: newName, onChange: (e) => setNewName(e.target.value) }),
         h(Btn, { kind: 'primary', small: true, disabled: !newId.trim(), onClick: create }, '新建'))),
-    mine.length ? h(Card, { title: '自己写的（' + mine.length + '）' }, h('div', null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
-    h(Card, { title: '内置模块（' + builtin.length + '）', desc: '关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。' },
+    mine.length ? h(Card, { id: 'modules-installed', title: '用户模块（' + mine.length + '）' }, h('div', null, mine.map((m) => h(ModuleRow, { key: m.id, m, ...props })))) : null,
+    h(Card, { id: mine.length ? undefined : 'modules-installed', title: '内置模块（' + builtin.length + '）', summary: '关闭模块会同时隐藏对应功能页；核心页面不可关闭。' },
       h('div', null, builtin.map((m) => h(ModuleRow, { key: m.id, m, ...props })))),
-    h(Simulate, { toast }),
+    h('div', { id: 'modules-simulate' }, h(Simulate, { toast })),
   )
 }
 

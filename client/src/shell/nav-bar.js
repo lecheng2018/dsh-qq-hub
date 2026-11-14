@@ -1,68 +1,99 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
+import { useState, useEffect, useRef, Fragment, h } from '../core/react.js'
 import { navIcon } from '../ui/icons.js'
 import { cx } from '../core/utils.js'
 import { NAV_GROUPS, navGroupOf, navOrder, NAV_ALIAS } from '../domain/nav.js'
 
-function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
-  const [last, setLast] = useState(() => { try { return JSON.parse(localStorage.getItem('qq-hub.navlast') || '{}') || {} } catch (e) { return {} } })
-  const [find, setFind] = useState(null) // null = 没开；字符串 = 正在搜的字
+function NavBar({ tabs, cur, go, mark, dirtyOf, open, onClose, returnFocusRef }) {
+  const [find, setFind] = useState('')
+  const [finding, setFinding] = useState(false)
   const [hi, setHi] = useState(0)
-  const box = useRef(null)
+  const drawerRef = useRef(null)
+  const searchRef = useRef(null)
   const groups = NAV_GROUPS
     .map((g) => ({ ...g, list: tabs.filter((t) => navGroupOf(t).id === g.id).sort((a, b) => navOrder(g, a) - navOrder(g, b)) }))
     .filter((g) => g.list.length)
-  const curGroup = groups.find((g) => g.list.some((t) => t.id === cur.id)) || groups[0]
-  // 记住每组最后看的那页：点分组时回到那页
-  useEffect(() => {
-    if (!curGroup || last[curGroup.id] === cur.id) return
-    const next = { ...last, [curGroup.id]: cur.id }
-    setLast(next)
-    try { localStorage.setItem('qq-hub.navlast', JSON.stringify(next)) } catch (e) {}
-  }, [cur.id])
-  const openGroup = (g) => go((g.list.find((t) => t.id === last[g.id]) || g.list[0]).id)
-  const toggleFind = () => { setFind((f) => (f === null ? '' : null)); setHi(0) }
+  const q = find.trim().toLowerCase()
+  const hits = groups.flatMap((g) => g.list.map((t) => ({ t, g })))
+    .filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || '', t.id].join(' ').toLowerCase().includes(q))
+  const pick = (t) => { setFinding(false); setFind(''); setHi(0); go(t.id) }
+  const openFind = () => {
+    if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 1023px)').matches) {
+      // The parent owns drawer visibility; Alt+K inside the closed desktop tree is handled by the menu button.
+      const button = returnFocusRef && returnFocusRef.current
+      if (button) button.click()
+    }
+    setFinding(true)
+    setHi(0)
+  }
   useEffect(() => {
     const onKey = (e) => {
-      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'k') { e.preventDefault(); toggleFind() }
-      else if (e.key === 'Escape') setFind(null)
+      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'k') { e.preventDefault(); openFind() }
+      else if (e.key === 'Escape') { setFinding(false); if (open) onClose() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
-  // 点到查找框外面就收起
+  }, [open])
   useEffect(() => {
-    if (find === null) return
-    const onDown = (e) => { if (box.current && !box.current.contains(e.target)) setFind(null) }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [find === null])
-  const q = (find || '').trim().toLowerCase()
-  const hits = find === null ? [] : groups.flatMap((g) => g.list.map((t) => ({ t, g })))
-    .filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || '', t.id].join(' ').toLowerCase().includes(q))
-  const pick = (t) => { setFind(null); go(t.id) }
-  const tabBtn = (t) => h('button', { key: t.id, type: 'button', role: 'tab', 'aria-selected': cur.id === t.id, className: cx('ab-tab', cur.id === t.id && 'on'), onClick: () => go(t.id) }, t.label, mark(t))
-  return h('nav', { className: 'ab-nav', ref: box, 'aria-label': 'QQ Hub 功能' },
-    h('div', { className: 'ab-nav-top' },
-      h('div', { className: 'ab-nav-groups', role: 'tablist', 'aria-label': '功能分组' }, groups.map((g) => h('button', {
-        key: g.id, type: 'button', role: 'tab', 'aria-selected': g.id === curGroup.id, className: cx('ab-grp', g.id === curGroup.id && 'on'),
-        title: g.list.map((t) => t.label).join(' · '), onClick: () => openGroup(g),
-      }, navIcon(g.icon), h('span', null, g.label), g.list.some((t) => dirtyOf(t.id)) ? h('i', { className: 'dirty', title: '这组里有没保存的改动' }) : null))),
-      h('button', { type: 'button', className: 'ab-find-btn', 'aria-expanded': find !== null, title: '查找功能（Alt+K）', onClick: toggleFind },
-        navIcon('M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.2-4.2'), h('span', { className: 't' }, '查找'), h('span', { className: 'ab-kbd' }, 'Alt K'))),
-    curGroup && curGroup.list.length > 1 ? h('div', { className: 'ab-nav-sub', role: 'tablist', 'aria-label': curGroup.label, ref: subRef }, curGroup.list.map(tabBtn)) : null,
-    find !== null ? h('div', { className: 'ab-finder' },
-      h('input', {
-        className: 'ab-input', autoFocus: true, placeholder: '找功能：语音、抖音、白名单…', value: find,
-        onChange: (e) => { setFind(e.target.value); setHi(0) },
-        onKeyDown: (e) => {
-          if (e.key === 'ArrowDown') { e.preventDefault(); setHi(Math.min(hi + 1, hits.length - 1)) }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(Math.max(hi - 1, 0)) }
-          else if (e.key === 'Enter' && hits[hi]) { e.preventDefault(); pick(hits[hi].t) }
-        },
-      }),
-      h('div', { className: 'ab-finder-list', role: 'listbox' }, hits.length
-        ? hits.map(({ t, g }, i) => h('button', { key: t.id, type: 'button', role: 'option', 'aria-selected': i === hi, className: cx('ab-finder-item', i === hi && 'on'), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, h('small', null, g.label)))
-        : h('div', { className: 'ab-finder-empty' }, '没找到，换个说法试试：语音、抖音、白名单'))) : null)
+    if (finding && searchRef.current) searchRef.current.focus()
+  }, [finding, open])
+  useEffect(() => {
+    if (!open) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const root = drawerRef.current
+    const first = root && root.querySelector('button, input')
+    if (first) first.focus()
+    const trap = (e) => {
+      if (e.key !== 'Tab' || !root) return
+      const items = Array.from(root.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).filter((el) => el.offsetParent !== null)
+      if (!items.length) return
+      const firstItem = items[0]
+      const lastItem = items[items.length - 1]
+      if (e.shiftKey && document.activeElement === firstItem) { e.preventDefault(); lastItem.focus() }
+      else if (!e.shiftKey && document.activeElement === lastItem) { e.preventDefault(); firstItem.focus() }
+    }
+    document.addEventListener('keydown', trap)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', trap)
+      if (returnFocusRef && returnFocusRef.current) returnFocusRef.current.focus()
+    }
+  }, [open])
+  useEffect(() => {
+    const active = document.querySelector(open ? '.ab-nav-mobile .ab-nav-item.on' : '.ab-sidebar .ab-nav-item.on')
+    if (active) active.scrollIntoView({ block: 'nearest' })
+  }, [cur.id, open])
+  const tabBtn = (t) => h('button', {
+    key: t.id, type: 'button', 'aria-current': cur.id === t.id ? 'page' : undefined,
+    className: cx('ab-nav-item', cur.id === t.id && 'on'), onClick: () => pick(t),
+  }, h('span', { className: 'ab-nav-item-label' }, t.label), mark(t))
+  const finder = (scope) => finding ? h('div', { className: 'ab-finder-inline' },
+    h('input', {
+      ref: searchRef, className: 'ab-input', placeholder: '搜索页面或功能', value: find, role: 'combobox', 'aria-expanded': true, 'aria-controls': 'ab-nav-results-' + scope,
+      onChange: (e) => { setFind(e.target.value); setHi(0) },
+      onKeyDown: (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); setHi(Math.min(hi + 1, hits.length - 1)) }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(Math.max(hi - 1, 0)) }
+        else if (e.key === 'Enter' && hits[hi]) { e.preventDefault(); pick(hits[hi].t) }
+      },
+    }),
+    h('div', { className: 'ab-finder-list', role: 'listbox', id: 'ab-nav-results-' + scope }, hits.length
+      ? hits.map(({ t, g }, i) => h('button', { key: t.id, type: 'button', role: 'option', 'aria-selected': i === hi, className: cx('ab-finder-item', i === hi && 'on'), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, h('small', null, g.label)))
+      : h('div', { className: 'ab-finder-empty' }, '没有匹配的功能'))) : null
+  const tree = (scope) => h(Fragment, null,
+    h('div', { className: 'ab-nav-search' },
+      h('button', { type: 'button', className: 'ab-find-btn', 'aria-expanded': finding, onClick: () => { setFinding(!finding); setHi(0) } },
+        navIcon('M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.2-4.2'), h('span', null, '查找设置'), h('span', { className: 'ab-kbd' }, 'Alt K'))),
+    finder(scope),
+    finding ? null : h('div', { className: 'ab-nav-tree' }, groups.map((g) => h('section', { className: 'ab-nav-group', key: g.id },
+      h('div', { className: 'ab-nav-group-title' }, g.label, g.list.some((t) => dirtyOf(t.id)) ? h('i', { className: 'dirty', title: '这组有未保存修改' }) : null),
+      g.list.map(tabBtn)))))
+  return h(Fragment, null,
+    h('aside', { className: 'ab-sidebar' }, h('nav', { className: 'ab-nav', 'aria-label': 'QQ Hub 功能' }, tree('desktop'))),
+    open ? h('div', { className: 'ab-drawer-layer', role: 'presentation', onMouseDown: (e) => { if (e.target === e.currentTarget) onClose() } },
+      h('div', { className: 'ab-drawer', role: 'dialog', 'aria-modal': true, 'aria-label': 'QQ Hub 功能菜单', ref: drawerRef },
+        h('div', { className: 'ab-drawer-head' }, h('strong', null, '功能菜单'), h('button', { type: 'button', className: 'ab-drawer-close', 'aria-label': '关闭菜单', onClick: onClose }, navIcon('M6 6l12 12M18 6 6 18'))),
+        h('nav', { className: 'ab-nav ab-nav-mobile', 'aria-label': 'QQ Hub 功能' }, tree('mobile')))) : null)
 }
 
 export { NavBar }

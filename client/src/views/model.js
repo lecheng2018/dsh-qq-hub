@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, Switch, Select, ListInput, Seg, Empty } from '../ui/primitives.js'
+import { Card, Row, Btn, Switch, Select, ListInput, Seg, Empty, SectionNav, DataTable } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath, clone } from '../core/utils.js'
 import { get, post } from '../core/http.js'
@@ -28,7 +28,7 @@ function ChatModels({ draft, setDraft, list }) {
     setAdd({ ...add, id: '' })
   }
   const remove = (kind, id) => { const field = kind === 'private' ? 'privates' : 'groups'; const n = { ...(cm[field] || {}) }; delete n[id]; setCm({ [field]: n }) }
-  return h(Card, { title: '按聊天选模型', desc: '顺序：这个私聊 > 这个群 > 所有私聊 / 所有群的默认 > 上面的全局模型。没选的一级就用下一级；选的模型在 DSH 里找不到时也自动退回。只有你能在这里改，聊天里的人换不了。换了之后从那个聊天的下一条消息起生效。' },
+  return h(Card, { title: '按聊天选模型', summary: '私聊或群聊的指定模型优先于全局默认；从下一条消息生效。', collapsible: true, defaultOpen: false },
     h(Row, { label: '私聊默认模型' }, h(Select, { value: val(cm.privateDefault), width: 280, options: optsFor(val(cm.privateDefault)), onChange: (v) => setCm({ privateDefault: toSel(v) }) })),
     h(Row, { label: '群聊默认模型' }, h(Select, { value: val(cm.groupDefault), width: 280, options: optsFor(val(cm.groupDefault)), onChange: (v) => setCm({ groupDefault: toSel(v) }) })),
     h('div', { style: { marginTop: 8 } }, h(Btn, { small: true, kind: 'ghost', onClick: () => setOpen(!open) }, (open ? '收起' : '展开') + '单个 QQ / 群的例外（' + rows.length + '）')),
@@ -78,7 +78,8 @@ function Model({ draft, setDraft, toast }) {
     setPing((p) => ({ ...p, [key(m)]: r.ok ? (r.ms / 1000).toFixed(1) + ' 秒' : '失败：' + (r.message || '') }))
   }
   return h('div', { className: 'ab-grid' },
-    h(Card, { title: '聊天用的模型', desc: '新建的 QQ 会话按这里的设置来；已有会话也可以在 DSH 里点开单独切换。聊天对速度很敏感，可以先点「测速」挑个快的。' },
+    h(SectionNav, { items: [{ id: 'model-default', label: '默认模型' }, { id: 'model-apply', label: '应用到会话' }, { id: 'model-list', label: '模型目录' }] }),
+    h(Card, { id: 'model-default', title: '默认聊天模型', summary: '新 QQ 会话使用这里的模型；已有会话可单独切换或统一应用。' },
       h(Row, { label: '思考强度', hint: noReasoning ? '这个模型不支持思考强度，会自动忽略' : '聊天建议「低」，回得快' }, h(Seg, { value: draft.model.reasoningEffort || 'low', disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, 'model.reasoningEffort', v)), options: [{ value: 'low', label: '低' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' }] })),
       h(Row, { label: '视觉能力', hint: visionHint }, h(Seg, {
         value: draft.model.vision || 'auto',
@@ -118,7 +119,7 @@ function Model({ draft, setDraft, toast }) {
     h(ChatModels, { draft, setDraft, list }),
     // 模型配置默认「等对方发下一条消息才切」，冷群可能几小时不动。
     // 这个按钮主动把配置抹平到所有已有会话，省得去 DSH 会话里一个个换。
-    h(Card, { title: '应用到现有会话', desc: '这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去 —— 保存设置之后点。' },
+    h(Card, { id: 'model-apply', title: '应用到现有会话', summary: '先保存设置，再将当前模型配置应用到全部已有 QQ 会话。' },
       h(Btn, { small: true, disabled: applying, onClick: async () => {
         setApplying(true)
         try {
@@ -127,13 +128,14 @@ function Model({ draft, setDraft, toast }) {
         } finally { setApplying(false) }
       } }, applying ? '切着呢…' : '立刻应用到所有会话'),
       h('div', { className: 'ab-small ab-muted', style: { marginTop: 8 } }, '只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。')),
-    h(Card, { title: '可用的模型', desc: '点「测速」会真的问一次模型（花一点点额度），看它回一句话要多久。' },
-      list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { text: 'DSH 没有列出模型' }) :
-        h('table', { className: 'ab-table' }, h('tbody', null, list.map((m) => h('tr', { key: key(m) },
-          h('td', null, labelOf(m)), h('td', { className: 'ab-muted' }, m.provider),
-          h('td', null, ping[key(m)] || ''),
-          h('td', { style: { textAlign: 'right' } }, h(Btn, { small: true, kind: 'ghost', onClick: () => test(m) }, '测速'), h(Btn, { small: true, kind: 'ghost', onClick: () => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') } }, '用这个')))))),
-    ),
+    h(Card, { id: 'model-list', title: '可用的模型', summary: '测速会真实调用一次模型并消耗少量额度。' },
+      list === null ? h(Empty, { text: '加载中…' }) : list.length === 0 ? h(Empty, { text: 'DSH 没有列出模型' }) :
+        h(DataTable, { columns: [
+          { key: 'name', label: '模型', render: (m) => labelOf(m) },
+          { key: 'provider', label: '提供商', render: (m) => h('span', { className: 'ab-muted' }, m.provider) },
+          { key: 'ping', label: '测速结果', render: (m) => ping[key(m)] || '未测速' },
+          { key: 'actions', label: '操作', render: (m) => h('div', { className: 'ab-flex' }, h(Btn, { small: true, kind: 'ghost', onClick: () => test(m) }, '测速'), h(Btn, { small: true, kind: 'ghost', onClick: () => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('已选择，记得保存') } }, '使用')) },
+        ], rows: list, rowKey: key })),
   )
 }
 

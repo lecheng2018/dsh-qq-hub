@@ -28,13 +28,13 @@ function Mood({ st, draft, setDraft, toast }) {
   if (!memOn) return h('div', { className: 'ab-grid' }, h(ModOff, { name: '记忆' }))
   return h('div', { className: 'ab-grid' },
     h(ProfilesCard, { toast }),
-    h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
+    h(Card, { title: '相处经验', summary: '从长期聊天中总结的相处方式，只用于对应的人或群。' },
       ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
         ins.map((p) => h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))),
-    h(Card, { title: '说话方式', desc: '聊久了潜移默化学到的：每个人的说话习惯（她会自然地贴近一点），和她自己慢慢养成的说法。不会变成另一个人，只是越来越像「你们的」大肥鱼。' },
+    h(Card, { title: '说话方式', summary: '整理记忆时学习不同对象的表达习惯，不改变人格本身。' },
       h(StyleEditor, { k: 'self', label: '她自己养成的说法', list: styles.self || [], toast, onSaved: loadIns }),
       Object.keys(styles).filter((k) => k !== 'self').length === 0 ? h('div', { className: 'ab-muted ab-small' }, '还没学到别人的说话习惯。整理记忆时会跟着相处经验一起总结（显示在上面每个人的相处经验下面）。') : null),
-    h(Card, { title: '记忆库', right: f.sw('memory.enabled'), desc: '长期记忆：她聊天时自己记的、每天从聊天里整理出来的、写过的空间日记、你手动加的。每一轮回复前，她会按对方正在说的话翻出最相关的几条。' },
+    h(Card, { id: 'memory-library', title: '记忆库', right: f.sw('memory.enabled'), summary: '回复前按当前话题召回相关长期记忆；也可手动添加和搜索。' },
       h('div', { className: 'ab-grid ab-g4', style: { marginBottom: 12 } },
         h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.count : '–'), h('div', { className: 'l' }, '条长期记忆')),
         h('div', { className: 'ab-card ab-stat' }, h('div', { className: 'n' }, stats ? stats.auto : '–'), h('div', { className: 'l' }, '条来自每日整理' + (stats && stats.outdated ? '（另有 ' + stats.outdated + ' 条已过时）' : ''))),
@@ -67,8 +67,8 @@ function Mood({ st, draft, setDraft, toast }) {
         h('input', { className: 'ab-input', style: { flex: '1 1 120px' }, placeholder: '关于谁（可选）', value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }),
         h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: '随口一提' }, { value: 0.6, label: '比较重要' }, { value: 0.9, label: '非常重要' }] }),
         h(Btn, { small: true, kind: 'primary', disabled: !adding.text.trim(), onClick: async () => { const r = await post('/memory/add', adding); toast(r.ok ? '记住了' : r.message); setAdding({ text: '', aboutName: '', importance: 0.6 }); load() } }, '记住')),
-      h('div', { className: 'ab-flex', style: { marginTop: 10, cursor: 'pointer' }, onClick: () => setBrowseOpen(!browseOpen) },
-        h('div', { className: 'ab-section-title', style: { margin: 0 } }, (browseOpen ? '▾' : '▸') + ' 翻一翻'),
+      h('div', { className: 'ab-flex', style: { marginTop: 10 } },
+        h(Btn, { small: true, kind: 'ghost', onClick: () => setBrowseOpen(!browseOpen) }, (browseOpen ? '▾' : '▸') + (browseOpen ? ' 收起记忆列表' : ' 浏览与搜索记忆')),
         h('span', { className: 'ab-muted ab-small' }, mem ? mem.length + ' 条记忆' : '')),
       browseOpen && h('input', { className: 'ab-input wide', placeholder: '搜索记忆，例如：白米饭、游戏、约定…', value: q, onChange: (e) => setQ(e.target.value) }),
       !browseOpen ? null : mem === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : mem.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没找到相关的记忆' : '还没有记住什么。' }) :
@@ -97,8 +97,7 @@ function Mood({ st, draft, setDraft, toast }) {
                 ...groups.get(k).map((m) => h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast })),
               ]))
           })())),
-    h(RecallLog, null),
-    h(MemoryImport, { toast, onDone: () => load() }),
+    h('section', { id: 'memory-tools', className: 'ab-grid' }, h(RecallLog, null), h(MemoryImport, { toast, onDone: () => load() })),
   )
 }
 
@@ -107,7 +106,7 @@ function ProfilesCard({ toast }) {
   const [list, setList] = useState(null)
   const load = () => get('/profiles').then((r) => setList(r.list || []))
   useEffect(() => { load() }, [])
-  return h(Card, { title: '人物小档案', desc: '她对每个人的印象：是谁、什么关系、喜好、最近在忙什么。和谁聊天就带上谁的那份（群里带上正在说话的几个人），不用等对方提到关键词她才想起来。每次整理记忆时，记忆有变化的人会按新记忆重写；你也可以直接改。' },
+  return h(Card, { id: 'memory-people', title: '人物小档案', summary: '记录每个人是谁、喜好和近况；整理记忆时更新，也可手动修改。' },
     list === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { icon: '🌱', text: '还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。' }) :
       h('div', { className: 'ab-list' }, list.map((p) => h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load }))))
 }
@@ -139,7 +138,7 @@ function RecallLog() {
   const [list, setList] = useState(null)
   const load = () => get('/memory/recalls').then((r) => setList(r.list || []))
   useEffect(() => { load() }, [])
-  return h(Card, { title: '最近想起了什么', desc: '每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词想起来的；想不起来的那次也会列出来。', right: h(Btn, { small: true, kind: 'ghost', onClick: load }, '刷新') },
+  return h(Card, { title: '召回日志', summary: '查看最近回复召回了哪些记忆及匹配原因。', collapsible: true, defaultOpen: false, right: h(Btn, { small: true, kind: 'ghost', onClick: load }, '刷新') },
     !list ? h(Empty, { icon: '⏳', text: '加载中…' }) : list.length === 0 ? h(Empty, { icon: '🫧', text: '还没有记录（重启后从头记）。' }) :
       h('div', { className: 'ab-list' }, list.slice(0, 10).map((r, i) => h('div', { key: i, className: 'ab-li' },
         h('div', { className: 'meta' }, timeAgo(r.at), h('br'), h('span', { className: 'ab-small' }, String(r.where || '').replace(/^private:/, '私聊 ').replace(/^group:/, '群 '))),
@@ -195,7 +194,7 @@ function MemoryImport({ toast, onDone }) {
     const r = await post('/memory/import/commit', { items, scope })
     toast(r.message, 'ok'); setCands(null); setText(''); onDone()
   }
-  return h(Card, { title: '导入旧档案', desc: '以前写过的设定、聊天笔记、别的机器人的记忆文件（txt / md），贴进来或者上传。她会挑出值得记的，你勾选以后再存进记忆库；和已有记忆重复的会自动去掉。' },
+  return h(Card, { title: '导入旧档案', summary: '粘贴或上传 txt/md，筛选后再写入记忆库；自动去除重复内容。', collapsible: true, defaultOpen: false },
     h('textarea', { className: 'ab-textarea', style: { minHeight: 110 }, placeholder: '把旧档案的文字粘贴到这里（最多 3 万字）', value: text, onChange: (e) => setText(e.target.value) }),
     h('div', { className: 'ab-flex', style: { marginTop: 8 } },
       h(Btn, { small: true, onClick: readFile }, '选择文件'),

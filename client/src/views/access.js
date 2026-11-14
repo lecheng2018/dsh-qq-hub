@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, Switch, Select, ListInput, Choices } from '../ui/primitives.js'
+import { Card, Row, Btn, Switch, Select, ListInput, Choices, SectionNav, HelpDisclosure, DataTable } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath, cx } from '../core/utils.js'
 import { get } from '../core/http.js'
@@ -7,30 +7,30 @@ import { get } from '../core/http.js'
 function Access({ draft, setDraft }) {
   const f = useField(draft, setDraft)
   return h('div', { className: 'ab-grid' },
-    h(Card, { title: '主人', desc: '主人的 QQ 号。群管、电脑上的操作只听主人的。' },
+    h(SectionNav, { items: [{ id: 'access-owner', label: '主人能力' }, { id: 'access-profile', label: '操作权限' }, { id: 'access-allow', label: '访问名单' }, { id: 'access-reference', label: '群管与命令' }] }),
+    h(Card, { id: 'access-owner', title: '主人与长任务', summary: '设置主人身份、私聊工具权限和后台任务能力。' },
       h(Row, { label: '主人 QQ 号' }, f.text('ownerQQ')),
       h(Row, { label: '她怎么称呼你' }, f.text('ownerName', { placeholder: '主人' })),
-      h(Row, { label: '主人私聊的权限', hint: '群聊永远没有电脑操作权限，这里管不到群。' },
+      h(Row, { label: '主人私聊的权限', hint: '群聊永远没有电脑操作权限。' },
         h('div', { style: { width: '100%' } },
-          h(Choices, { value: draft.ownerLevel, onChange: (v) => setDraft(setPath(draft, 'ownerLevel', v)), options: [
-            { value: 'full', label: '完整', desc: '私聊里让她用电脑做事（查文件、跑命令、上网查）也能做' },
-            { value: 'social', label: '受限', desc: '只有发表情、发说说这类 QQ 工具，碰不到电脑' },
-            { value: 'chat', label: '纯聊天', desc: '什么工具都没有，只聊天' },
+          h(Choices, { compact: true, value: draft.ownerLevel, onChange: (v) => setDraft(setPath(draft, 'ownerLevel', v)), options: [
+            { value: 'full', label: '完整', desc: '允许查文件、跑命令、上网查等电脑操作。' },
+            { value: 'social', label: '受限', desc: '仅 QQ 工具，不接触电脑。' },
+            { value: 'chat', label: '纯聊天', desc: '禁用工具，只聊天。' },
           ] }),
-          h('div', { className: 'ab-muted ab-small', style: { marginTop: 8 } }, '切换后会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。'))),
-      h(Row, { label: '长任务模式', hint: '只在「完整」权限下生效。打开后她能把命令放到后台跑、跑完自动回来告诉你，也能设定时任务；工具多一点，回话会稍慢。切换后同样换新会话。' },
-        h(Choices, { value: draft.longTasks ? 'on' : 'off', onChange: (v) => setDraft(setPath(draft, 'longTasks', v === 'on')), options: [
-          { value: 'off', label: '关', desc: '维持现在的速度（默认）' },
-          { value: 'on', label: '开', desc: '挂上后台任务（jobs）+ 定时任务（schedule）' },
+          h('div', { className: 'ab-muted ab-small', style: { marginTop: 8 } }, '切换后主人私聊使用新的 DSH 会话，旧会话仍保留。'))),
+      h(Row, { label: '长任务模式', hint: '仅完整权限生效；切换后使用新会话' },
+        h(Choices, { compact: true, value: draft.longTasks ? 'on' : 'off', onChange: (v) => setDraft(setPath(draft, 'longTasks', v === 'on')), options: [
+          { value: 'off', label: '关', desc: '保持较少工具和更快回复。' },
+          { value: 'on', label: '开', desc: '启用后台任务与定时任务，工具更多，回复可能稍慢。' },
         ] })),
     ),
     h(ProfilePerms, { draft, setDraft }),
-    h(Card, { title: '白名单', desc: '只有名单里的人和群，她才会理。一行一个号码。' },
-      h(Row, { label: '私聊白名单', hint: '主人默认就在里面。' }, f.list('allow.private', { placeholder: '每行一个 QQ 号', numbers: true })),
-      h(Row, { label: '群白名单', hint: '把机器人拉进群后，把群号加到这里。' }, f.list('allow.groups', { placeholder: '每行一个群号', numbers: true })),
+    h(Card, { id: 'access-allow', title: '白名单', summary: '仅名单内的人和群可以触发回复；主人始终可私聊。' },
+      h(Row, { label: '私聊白名单', hint: '一行一个 QQ 号' }, f.list('allow.private', { placeholder: '每行一个 QQ 号', numbers: true })),
+      h(Row, { label: '群白名单', hint: '一行一个群号' }, f.list('allow.groups', { placeholder: '每行一个群号', numbers: true })),
     ),
-    h(GroupRoles, null),
-    h(CommandList, null),
+    h('section', { id: 'access-reference', className: 'ab-grid' }, h(GroupRoles, null), h(CommandList, null)),
   )
 }
 
@@ -42,9 +42,10 @@ function ProfilePerms({ draft, setDraft }) {
     { value: 'owner', label: '仅主人私聊', desc: '只有你私聊让她改才改（默认）' },
     { value: 'all', label: '所有人', desc: '白名单里的人、群里的人都能让她改' },
   ]
-  const row = (key, label, hint) => h(Row, { label, hint },
-    h(Choices, { value: perms[key] || 'owner', onChange: (v) => setDraft(setPath(draft, 'profilePerms.' + key, v)), options: opts }))
-  return h(Card, { title: '改资料与名单', desc: '她能不能听人的话改自己的 QQ 昵称、签名、头像和 B 站签名，处理好友申请、改白名单，以及抖音上的浏览、点赞、评论、分享。改 QQ 资料要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。抖音各项默认仅主人，要放开自己在这里开。' },
+  const row = (key, label, hint) => h(Row, { label, hint, layout: 'stacked' },
+    h(Choices, { compact: true, value: perms[key] || 'owner', onChange: (v) => setDraft(setPath(draft, 'profilePerms.' + key, v)), options: opts }))
+  return h(Card, { id: 'access-profile', title: '资料与平台操作权限', summary: '每项都可设为关闭、仅主人私聊或对白名单内所有人开放。' },
+    h('div', { className: 'ab-note warn' }, '「所有人」仍受白名单限制。公开发帖、改白名单和主动私信属于高风险权限，请谨慎开放。'),
     row('qqNickname', 'QQ 昵称'),
     row('qqSignature', 'QQ 个性签名'),
     row('qqAvatar', 'QQ 头像', '只用网址图片，或「刚才发的那张图」。'),
@@ -68,10 +69,11 @@ function ProfilePerms({ draft, setDraft }) {
 function CommandList() {
   const [list, setList] = useState([])
   useEffect(() => { get('/commands').then((r) => setList(r.list || [])) }, [])
-  return h(Card, { title: 'QQ 命令', desc: '主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。' },
-    h('table', { className: 'ab-table' }, h('tbody', null, list.map((c) => h('tr', { key: c.name },
-      h('td', { style: { whiteSpace: 'nowrap' } }, h('code', null, '/' + c.name), c.aliases.length ? h('div', { className: 'ab-muted ab-small' }, c.aliases.map((a) => '/' + a).join(' ')) : null),
-      h('td', null, c.desc))))))
+  return h(Card, { title: 'QQ 命令', summary: '主人在私聊或白名单群中可直接使用；总开关关闭时仍可用。', collapsible: true, defaultOpen: false },
+    h(DataTable, { columns: [
+      { key: 'command', label: '命令', render: (c) => h(Fragment, null, h('code', null, '/' + c.name), c.aliases.length ? h('div', { className: 'ab-muted ab-small' }, c.aliases.map((a) => '/' + a).join(' ')) : null) },
+      { key: 'desc', label: '作用', render: (c) => c.desc },
+    ], rows: list, rowKey: (c) => c.name }))
 }
 
 /** 她在每个白名单群里的身份：群主 / 管理员才能禁言踢人。 */
@@ -79,7 +81,7 @@ function GroupRoles() {
   const [list, setList] = useState(null)
   const load = () => { setList(null); get('/groups/roles').then((r) => setList(r.list || [])) }
   useEffect(load, [])
-  return h(Card, { title: '群管权限', desc: '她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。',
+  return h(Card, { title: '群管权限', summary: '群主或管理员身份决定禁言、踢人和公告能力；改专属头衔需群主。', collapsible: true, defaultOpen: false,
     right: h(Btn, { small: true, kind: 'ghost', onClick: load }, '刷新') },
     !list ? h('div', { className: 'ab-muted ab-small' }, h('i', { className: 'ab-spin' }), ' 查询中…')
       : list.length === 0 ? h('div', { className: 'ab-muted ab-small' }, '群白名单是空的。')
@@ -104,7 +106,7 @@ function OwnerBrief({ draft, setDraft }) {
   const on = (gid) => (ob.groups || []).includes(gid)
   const toggle = (gid) => setDraft(setPath(draft, 'group.ownerBrief.groups', on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...(ob.groups || []), gid]))
   return h(Card, { title: '主人私聊：群聊摘要', right: f.sw('group.ownerBrief.enabled'),
-    desc: '主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在「主人私聊 + 这句话提到群相关」时触发，不常驻、不写进记忆；默认关。开启前先在「权限」页把群加进白名单。' },
+    summary: '主人私聊问起群聊时，补充最近 24 小时的相关流水。', collapsible: true, defaultOpen: false },
     h(Row, { label: '每个群给几条', hint: '越少越省上下文；最多 30 条' }, f.range('group.ownerBrief.lines', 1, 30, 1, (v) => v + ' 条')),
     h(Row, { label: '只取哪些群', hint: '没勾 = 所有白名单群；只列白名单里的群' },
       groups.length
