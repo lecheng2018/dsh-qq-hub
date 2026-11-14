@@ -147,8 +147,23 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       // 后台素材采集没有 chat：只允许 global + 主人私聊域（fail-closed，不拿全库）
       const cfg = getConfig()
       const scopes = cfg.ownerQQ ? ['global', `private:${cfg.ownerQQ}`] : ['global']
-      const items = (mem.recall?.('最近 在做 想起 关心 日常', { limit: 200, scopes }) || [])
-        .map((h) => ({ ...h, ...(h.it || {}), text: h.text || h.it?.text }))
+      // 素材 = 「最近、最重要的一些记忆」，不是「跟某句话相似的一些记忆」。
+      //
+      // 这里原来调的是 recall('最近 在做 想起 关心 日常', ...) —— 一串像占位符的关键词，
+      // 两个后果都很实在：
+      //   ① 召回质量差：BM25 拿「关心」「日常」去匹配，捞回来的是恰好含这两个字的记忆
+      //      （比如「nbcs：没人关心」），跟「她最近在想什么」毫无关系；
+      //   ② 面板被刷屏：recall() 每次都会往 recallLog 写一条，而 tick 每 60 秒跑一次，
+      //      于是「最近想起了什么」被同一句假查询灌满 20 条，真正有意义的召回想看都看不见。
+      // 改用 listFor：按「重要度优先、同级按时间倒序」取已声明域里的记忆，
+      // 既不写 recallLog（那是给「对话中想起了什么」看的），也不会重复
+      // （recall 的 scopes 模式过去会把 global 条目算两遍）。
+      // listFor 返回的是扁平条目；但记忆总线在别的路径上也会交出 { it } 包一层的 hits 形状。
+      // 这里统一拍平（有 it 就摊开），两种形状都吃 —— 少一个「换了个取数口就静默没素材」的坑。
+      const raw = mem.listFor?.(scopes, { limit: 200 }) || []
+      const items = (Array.isArray(raw) ? raw : [])
+        .filter((h) => h && typeof h === 'object')
+        .map((h) => (h.it && typeof h.it === 'object' ? { ...h, ...h.it, text: h.text || h.it.text } : h))
       return items
         .filter((m) => m && !m.invalidAt && m.text)
         .map((m) => ({

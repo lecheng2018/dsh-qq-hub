@@ -65,11 +65,14 @@ function makePurpose(hub, overrides = {}) {
     hub,
     log: { info() {}, warn() {}, debug() {} },
     isMuted: () => false,
-    // P1-1 后 purpose 走 recall（scopes fail-closed）拿素材，不再用 list —— mock 同步，recall 返回 hits 结构 { it }
+    // 素材采集现在走 listFor（按作用域取最近/最重要的记忆），**不再**用一句固定的假关键词
+    // 去 recall —— 那样既召回质量差，又会每 60 秒往面板的「最近想起了什么」灌一条。
+    // 替身两个都给上：listFor 供采集，recall 留着供将来别的路径用。
     memory: () => {
       const items = (overrides.memories ?? DEFAULT_MEMORIES).map((m) => ({ id: m.id || 'm1', text: m.text, importance: m.importance ?? 0.8, at: Date.now() }))
       return {
         list: () => items,
+        listFor: () => items,
         recall: () => items.map((it) => ({ it, score: 1, why: [] })),
       }
     },
