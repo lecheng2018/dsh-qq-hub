@@ -142,7 +142,13 @@ export default {
           const okList = kind === 'group' ? cfg.allow.groups : kind === 'private' ? [cfg.ownerQQ, ...cfg.allow.private] : []
           if (!okList.includes(String(id))) return { ok: false, message: '不在白名单里，不能发' }
           const r = await hub.deliver(`${kind}:${id}`, String(text || ''))
-          return r?.missedAt?.length ? { ok: true, message: `发出去了，但 ${r.missedAt.map((n) => '@' + n).join('、')} 没对上群里的人（群名片和昵称里没有），只是文字、对方收不到提醒。要真 @ 得写 <at:QQ号>，不知道就问主人要他的群名片或 QQ 号` } : { ok: true, message: '发出去了' }
+          // 如实回报（缺陷：谎报成功）：deliver 在被模块拦下/她选择沉默时返回 undefined，
+          // 旧版把 undefined 也当「发出去了」。现在按返回值与气泡级回执区分。
+          if (!r) return { ok: false, message: '这条没发出去（被扩展模块拦下，或她选择不说话）' }
+          if (!cfg.enabled) return { ok: false, message: '总开关关着，没发' }
+          if (cfg.dryRun) return { ok: false, message: '试运行，只记了日志，没真发' }
+          if (Number(r.failedCount) > 0) return { ok: true, message: `发出去了，但 ${r.attempted} 条里有 ${r.failedCount} 条没拿到网关回执（可能没送达）` }
+          return r.missedAt?.length ? { ok: true, message: `发出去了，但 ${r.missedAt.map((n) => '@' + n).join('、')} 没对上群里的人（群名片和昵称里没有），只是文字、对方收不到提醒。要真 @ 得写 <at:QQ号>，不知道就问主人要他的群名片或 QQ 号` } : { ok: true, message: '发出去了' }
         },
       }))
       return tools

@@ -87,7 +87,7 @@ export function createReplyDelivery({
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
     const inGroup = chatId.startsWith('group:')
-    const rules = replyRules(cfg, inGroup)
+    const rules = replyRules(cfg, inGroup, random)
     // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
     // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
     if (opts.forceReport || reportTurns.get(chatId)) rules.forceReport = true
@@ -246,7 +246,7 @@ export function createReplyDelivery({
     const cadence = typingCadenceEnabled(cfg) ? calculateTypingCadence(items.map((item) => ({ kind: item.kind, value: item.kind === 'text' || item.kind === 'voice' ? item.value : '' })), { random }) : null
     const cadenceUsable = Boolean(cadence?.valid)
     const waitBefore = (index) => {
-      if (!cadenceUsable) return bubbleDelay(items[index].kind === 'text' ? items[index].value : '')
+      if (!cadenceUsable) return bubbleDelay(items[index].kind === 'text' ? items[index].value : '', random)
       return typingWaitAfter(cadence, index - 1)
     }
     const firstSendable = items.findIndex(sendable)
