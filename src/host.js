@@ -274,6 +274,41 @@ export function apply(ctx) {
       try { use('memory')?.addEvent?.({ ...payload, kind: 'thread-dormant' }) } catch { /* 记忆模块关着就只丢归档，不影响线索本身 */ }
     },
   })
+  // 快照持久化（缺陷：账本纯内存，重启丢全部 active/extended 活线索）：
+  // 账本本体保持零 I/O，落盘在上层接驳——变更 debounce 落盘，启动时恢复重推。
+  // 只存活线索（active/extended）；dormant 已归档进记忆、resolved 已闭环，都不必存。
+  const threadFile = () => dataDir('threads.json')
+  let threadSaveTimer = null
+  const saveThreads = () => {
+    try {
+      const live = threadLedger.list({ status: ['active', 'extended'] })
+      writeJson(threadFile(), { version: 1, savedAt: Date.now(), threads: live })
+    } catch (error) { try { logger.debug?.('线索账本落盘失败：', error?.message || error) } catch { /* 不影响主链 */ } }
+  }
+  const scheduleThreadSave = () => {
+    if (threadSaveTimer) clearTimeout(threadSaveTimer)
+    threadSaveTimer = setTimeout(() => { threadSaveTimer = null; saveThreads() }, 2000)
+    threadSaveTimer.unref?.() // 落盘定时器不拖住进程退出
+  }
+  for (const method of ['push', 'advance', 'resolve', 'pruneExpired']) {
+    const orig = threadLedger[method]
+    threadLedger[method] = (...args) => {
+      const r = orig(...args)
+      scheduleThreadSave()
+      return r
+    }
+  }
+  // 启动恢复：重推快照里的活线索（createdAt/ttl 保真，过期条目由 pruneExpired 自然退役；
+  // recurrence 计数不保真——push 恢复从 1 起算，线索本身不失）。
+  try {
+    const saved = readJson(threadFile(), null)
+    for (const t of Array.isArray(saved?.threads) ? saved.threads : []) {
+      try {
+        if (!t?.chatKey || !t.type || !t.summary) continue
+        threadLedger.push({ chatKey: t.chatKey, type: t.type, summary: t.summary, ttlMs: t.ttlMs, createdAt: t.createdAt, id: t.id })
+      } catch { /* 单条坏数据不挡整体恢复 */ }
+    }
+  } catch { /* 读不到快照按空账本启动 */ }
 
   const modularCoreApi = createModularCore({
         dsh: ctx,
@@ -470,6 +505,7 @@ export function apply(ctx) {
   ctx.effect(() => () => {
     interactions.questions.dispose('插件卸载')
     interactions.approvals.clear('插件卸载')
+    try { saveThreads() } catch { /* 线索账本收尾落盘失败不影响退出 */ }
     hub.disposeRecentMedia()
     mods.dispose()
     try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
