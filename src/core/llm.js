@@ -178,7 +178,36 @@ const isImageRejected = (error) => {
   return /\bimage(s)?\b/i.test(msg) && /not support|unsupported|invalid|cannot|can't|must be text|expect(ed)? text/i.test(msg)
 }
 
+/**
+ * 这次报错是不是「模型不收这个 temperature」。各家措辞不同，判定保守：
+ * 只认同时提到 temperature **且**带拒绝语气的错误（如 kimi 系的
+ * "`temperature` only 1 is allowed for this model"），避免把普通 400 误判进来。
+ */
+const isTemperatureRestricted = (error) => {
+  const msg = String((error && (error.message || error.code)) || '')
+  if (!/temperature/i.test(msg)) return false
+  return /only [\d.]+ is allowed|not support|unsupported|invalid|not allowed|must be/i.test(msg)
+}
+
+/**
+ * 流式执行 + 温度限制兜底：有的模型只收固定值（真机 2026-11-14，kimi 系
+ * "`temperature` only 1 is allowed for this model"，辅助看图固定 0.2 被整轮拒掉）。
+ * 明确撞上温度限制时**去掉 temperature 重试一次**（用模型默认值），只在本次调用内完成。
+ * 重试只发生在纯文本生成上（无 QQ 侧副作用），且仅一次；其他错误原样上抛。
+ */
 async function runStream (llm, params) {
+  try {
+    return await streamOnce(llm, params)
+  } catch (error) {
+    if (params.temperature !== undefined && isTemperatureRestricted(error)) {
+      const { temperature: _omit, ...rest } = params
+      return await streamOnce(llm, rest)
+    }
+    throw error
+  }
+}
+
+async function streamOnce (llm, params) {
   let out = ''
   for await (const chunk of llm.stream(params)) {
     if (!chunk) continue
