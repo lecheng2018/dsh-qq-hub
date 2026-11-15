@@ -3,7 +3,7 @@
 // 保存/切换人格后立刻重置正在用旧人设的会话：静态前缀 {{qq_hub_persona}} 是建会话时
 // 固化的，光改文件旧会话拿不到；不重置的话新旧两段人设会在历史里打架。
 
-import { listPersonas, readPersona, savePersona, deletePersona } from '../../persona/personas.js'
+import { listPersonas, readPersona, savePersona, deletePersona, personaIdFor } from '../../persona/personas.js'
 import { askModel } from '../../core/llm.js'
 
 export function registerPersonaRoutes({
@@ -41,21 +41,45 @@ export function registerPersonaRoutes({
   route('/persona/use', async (req) => {
     const b = await readBody(req)
     if (!readPersona(b.id)) return { ok: false, message: '没有这个人格' }
+    // 变更前先留一份配置快照：重置判定要用「旧预期人设 vs 新预期人设」，
+    // 而不是拿会话里的 personaId 去比已改过的 current（那样恒不相等 / 恒相等，两种都错）。
+    const before = getConfig()
     // 只改 current，别把 persona 整块替换掉——否则按聊天配的人设会被一起清空
-    setConfig({ ...getConfig(), persona: { ...(getConfig().persona || {}), current: b.id } })
+    setConfig({ ...before, persona: { ...(before.persona || {}), current: b.id } })
     log.info(`切换人格 → ${b.id}`)
-    // 切完立刻重置正在用全局人设的会话：旧历史里的人设块清不掉，模型会逐条仲裁新旧人设
-    //（agentFor 里按 personaId 比对的 hook 下一轮也会触发，这里提前到保存动作本身）。
-    let reset = 0
-    try {
-      for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
-        if (entry.personaId && entry.personaId === (getConfig().persona && getConfig().persona.current)) { hub.resetChat(chatId); reset++ }
-      }
-    } catch (error) {
+    // 切完立刻重置受影响的会话：旧历史里的人设块清不掉，模型会逐条仲裁新旧人设。
+    // 判定口径统一在核心侧（resetChatsForPersonaChange），这里只负责调用和如实回报。
+    let changed = []
+    try { changed = hub.resetChatsForPersonaChange?.(before) || [] } catch (error) {
       log.debug('切换人格后重置会话出错：', error.message)
     }
-    return { ok: true, current: b.id, message: reset > 0 ? `切换好了，${reset} 个正在用的会话已重置，下一轮起生效` : '切换好了，下一轮回复起生效' }
+    const left = countFollowing(before, b.id)
+    const msg = changed.length
+      ? `切换好了，${changed.length} 个会话已重置，下一轮起按「${readPersona(b.id).name}」回`
+      : (left > 0
+        ? `切换好了，但 ${left} 个会话用着单独指定的人设，不受全局切换影响；要一起换请在下面「按群聊/私聊分开设人设」里把它们改成「跟随全局人设」`
+        : '切换好了，下一轮回复起生效')
+    return { ok: true, current: b.id, reset: changed.length, changed, message: msg }
   })
+
+  /**
+   * 有多少会话的人设不受这次全局切换影响（被单独指定或群/私聊默认钉住了）。
+   * 只用于如实回报，不参与任何重置决策。
+   */
+  function countFollowing(oldCfg, newCurrent) {
+    try {
+      const sessions = hub.sessions() || {}
+      let n = 0
+      for (const chatId of Object.keys(sessions)) {
+        const chat = chatId.startsWith('group:') ? { kind: 'group', groupId: chatId.slice(6) }
+          : chatId.startsWith('private:') ? { kind: 'private', userId: chatId.slice(8) } : { kind: 'system' }
+        const want = personaIdFor(chat, getConfig())
+        // 预期仍是旧全局卡 = 它没跟上这次切换
+        if (want && want === personaIdFor(chat, oldCfg)) n++
+      }
+      return n
+    } catch { return 0 }
+  }
   // 人格页「AI 润色」：只改面板上这一节的文字，不保存；用不用由主人在面板里选
   route('/persona/polish', async (req) => {
     const b = await readBody(req)
