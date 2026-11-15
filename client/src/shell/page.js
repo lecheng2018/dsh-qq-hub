@@ -22,6 +22,7 @@ import { Stickers } from '../views/stickers.js'
 import { Diary } from '../views/diary.js'
 import { SpeakUp } from '../views/speakup.js'
 import { Mood } from '../views/mood.js'
+import { Enhance } from '../views/enhance.js'
 import { LocalApi, Modules, ExtPage } from '../views/modules.js'
 import { Bili } from '../views/platforms/bili.js'
 import { Douyin } from '../views/platforms/douyin.js'
@@ -145,6 +146,7 @@ function QQHubPage() {
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
     stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
+    enhance: Enhance,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
   const tabDirty = (id) => {
@@ -186,7 +188,9 @@ function QQHubPage() {
         {showWizard ? null : <TabBoundary key={curTab.id} onHome={() => go('overview')}>{h(body, { ...props, mod: curTab.ext })}</TabBoundary>}
         {showWizard || curTab.ext
           ? null
-          : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser').map((m) => (
+          // memory 模块的设置由「记忆」页自己在「整理与检索」卡里渲染（不再自动追加到页尾）；
+          // multi-parser 保留在扩展页设置，别的模块照旧嵌在所属标签页。
+          : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser' && !(curTab.id === 'memory' && m.id === 'memory')).map((m) => (
             <div key={'embed-' + m.id} style={{ marginTop: 14 }}><ExtPage {...props} mod={m.id} embedded /></div>
           ))}
         {dirty && !showWizard ? (

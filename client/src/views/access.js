@@ -153,7 +153,7 @@ function OwnerBrief({ draft, setDraft }) {
   const toggle = (gid) => setDraft(setPath(draft, 'group.ownerBrief.groups', on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...(ob.groups || []), gid]))
   return (
     <Card
-      title="主人私聊：群聊摘要" right={f.sw('group.ownerBrief.enabled')}
+      title="主人私聊：群聊摘要" right={f.sw('group.ownerBrief.enabled')} collapse
       desc="主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在主人私聊提到群相关的事时触发，不常驻、不写进记忆；默认关。"
       more={'开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。'}
     >

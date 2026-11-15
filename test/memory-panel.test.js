@@ -6,11 +6,13 @@ const src = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8'
 const body = src.slice(src.indexOf('function Mood('), src.indexOf('/** 人物小档案'))
 
 function render({ health = null, reloading = false, post = async () => ({ ok: true, message: '已重新载入' }) } = {}) {
-  const states = [[], {}, '', [], { text: '', aboutName: '', importance: 0.6 }, false, health, reloading, {}]
+  // 顺序与 Mood 里的 useState 一一对应：
+  // mem / stats / q / ins / adding / addOpen / browseOpen / personaTab / health / reloading / vec / vecBusy / rerank / styles
+  const states = [null, null, '', null, { text: '', aboutName: '', importance: 0.6 }, false, false, 'profiles', health, reloading, null, false, null, {}]
   const updates = [], toasts = [], requests = []
   let slot = 0
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((x) => x != null && x !== false) })
-  const names = ['Card', 'Btn', 'Row', 'Select', 'Empty', 'ProfilesCard', 'InsightCard', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff']
+  const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'ProfilesList', 'InsightRow', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff', 'ExtPage']
   const factory = new Function('h', 'useState', 'useEffect', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Mood`)
   const Mood = factory(h, (initial) => {
     const i = slot++
@@ -43,7 +45,7 @@ test('重新载入调用 POST 并刷新档案与派生列表，处理进行中�
     assert.ok(button)
     await button.props.onClick()
     assert.deepEqual(calls, [['/memory/reload', {}]])
-    assert.deepEqual(env.updates.filter((x) => x.slot === 7).map((x) => x.value), [true, false])
+    assert.deepEqual(env.updates.filter((x) => x.slot === 9).map((x) => x.value), [true, false])
     assert.ok(env.toasts.some((args) => args[0] === (failed ? '连接中断' : '已重新载入')))
     if (!failed) {
       assert.ok(env.requests.some((path) => path.startsWith('/memories?')))
