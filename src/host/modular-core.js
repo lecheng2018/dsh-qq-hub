@@ -49,6 +49,7 @@ import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
+import { readJson, writeJson } from '../core/store.js'
 import { policyFor, decideGroupReply, topicRelevance, withRoleWakeWords } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
 import { decideGroupReplyWithAtmosphere, gateFromEnv } from '../chat/group-atmosphere-gate.js'
@@ -181,6 +182,7 @@ function segmentsToContent(members) {
  * @param {(inbound: object, view: object) => Promise<string|null>} [o.runCommand] owner 命令闸（返回回复文本或 null）
  * @param {string} [o.ledgerFile] 投递台账文件（提供则真实持久化；缺省 = 内存，测试用）
  * @param {string} [o.sessionStoreFile] 会话映射文件（提供则持久化 + 启动恢复；缺省 = 内存，测试用）
+ * @param {string} [o.groupStateFile] 群刹车/话题状态文件（提供则持久化 + 启动恢复；缺省 = 内存，测试用）
  * @param {(text: string, chat: object) => number} [o.memoryScore] 话题相关度（同 hub memoryScore，缺省 0）
  * @param {(chatId: string) => boolean} [o.isMuted] 静音判定（真机审计 1.10：入口就要拦，关了嘴不等于停脑）
  * @param {(msg: {text: string, userId: string, chatId: string}) => boolean} [o.interceptInteraction]
@@ -207,7 +209,7 @@ function segmentsToContent(members) {
  */
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
-  personaText, runCommand, ledgerFile, sessionStoreFile,
+  personaText, runCommand, ledgerFile, sessionStoreFile, groupStateFile,
   memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
   // 挂起线索账本（US-004 产出）。线索 provider 只认 peek(chatKey, o) 这一个契约，
   // 所以这里按依赖注入接：宿主把账本传进来，core 不 import 账本实现（零业务耦合）。
@@ -262,7 +264,14 @@ export function createModularCore({
   }
 
   // ---------- 群回复闸（真机审计 §1）：复用 legacy 的纯函数与状态模块，不另起一套策略 ----------
-  const groups = createGroupState()
+  // 群刹车/话题状态（said/interjects/engaged）提供文件则落盘 + 启动恢复，缺省纯内存（测试用）。
+  const groups = createGroupState(groupStateFile ? {
+    storage: {
+      read: () => readJson(groupStateFile, () => ({})),
+      write: (value) => writeJson(groupStateFile, value),
+    },
+    log,
+  } : {})
   const interaction = createInteractionState()
   const participants = createTurnParticipants({ getConfig, chatOfSession: chatKeyOfSession })
   const presence = createPresence()
@@ -680,7 +689,11 @@ export function createModularCore({
     const buf = groups.buffer(gid)
     const fresh = buf.filter((x) => !x.fed).slice(-20)
     const older = buf.filter((x) => x.fed).slice(-8)
-    for (const x of buf) x.fed = true
+    // fed 不在这里标（缺陷：群缓冲静默丢消息）。旧版 `for (const x of buf) x.fed = true`
+    // 有两个丢消息口子：① 一次把整段 buf 标 fed，突发超过 20 条时**未选中**的新消息也被
+    // 标 fed，永远进不了上下文；② 标在 followup 之前，回合若在模型消费前失败，这些消息
+    // 已 fed，下轮不再喂。现只把**选中的 fresh** 作为 fedItems 返回，由 execute 在拿到回复
+    // （模型确实消费了这段输入）后才标 fed；失败路径不标 → 下轮重新作为 fresh 喂入。
     const mode = pendingMode.get(chatKey) || 'must'
     pendingMode.delete(chatKey)
     const nowAt = Date.now()
@@ -750,7 +763,7 @@ export function createModularCore({
     const autoReply = target ? { mid: target.mid, uid: target.uid } : null
     const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
     const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
-    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, query, speakers }
+    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, query, speakers, fedItems: fresh }
   }
   // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
   // 键必须是**会话 id**：resolveAgent 每轮返回新的 agent 包装对象，用对象做键永远不命中
@@ -958,6 +971,8 @@ export function createModularCore({
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
       let turnMode = null
       let autoReply = null
+      // 本轮选中、待模型消费后才标 fed 的群缓冲条目（缺陷：群缓冲静默丢消息）。
+      let groupFedItems = null
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
       const expanded = await hydrateForwards(io.members, onebot, log)
@@ -976,6 +991,7 @@ export function createModularCore({
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
+        groupFedItems = gp.fedItems
         try { participants.note(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
       } else {
         content = segmentsToContent(members)
@@ -1205,6 +1221,12 @@ export function createModularCore({
         if (error.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
         throw error
       }
+
+      // 模型已确实消费这段群输入（拿到回复）→ 此刻才把选中的 fresh 标 fed。
+      // 之前任何失败路径（followup 抛错、回合超时、turn/end 异常）都已 throw，不会走到这里，
+      // 那些消息保持 unfed，下一轮重新作为 fresh 喂入，不静默丢（缺陷：群缓冲静默丢消息）。
+      // 只标选中的 fresh（≤20），突发超量时未选中的新消息仍 unfed，留给下一轮。
+      if (groupFedItems) for (const x of groupFedItems) x.fed = true
 
       // 6. 出站后处理（真机报告 6：不处理后处理链时 `|||` 字面外发）：
       //    stripReasoning、按 ||| 分气泡（maxBubbles 上限由 replyRules 收敛）、[沉默] 不说话——与 legacy 同一函数。
@@ -1587,6 +1609,7 @@ export function createModularCore({
     await registry.dispose()
     await controller.dispose()
     outbox.dispose()
+    try { groups.dispose?.() } catch { /* 群刹车状态收尾失败不影响退出 */ }
   }
 
   /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
