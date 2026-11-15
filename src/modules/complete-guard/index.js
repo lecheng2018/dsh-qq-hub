@@ -39,7 +39,7 @@ export default {
   version: '1.0.0',
   api: 1,
   description: '移植自 dsh-qq：识别被截断的回复（停在「因为」「1.」上），提醒模型接着说',
-  tab: 'model',
+  tab: 'token',
   defaults: {
     enabled: true,
     /** 检测到没说完时，是否在日志里显式告警（面板「日志」页能看到） */
