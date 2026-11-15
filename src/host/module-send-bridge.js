@@ -2,19 +2,40 @@
 // unified=true 时 hub 已接同一 Outbox，不再用 recordExternal 重复补账。
 // captureOnly 保证面板模拟测试只记录、不实发。
 //
-// 返回形状兼容：hub.sendText 返回网关回执对象（{message_id}）或 null；
-// 桥统一返回 { message_id, state }（state 取 outbox 三态；被拦时 message_id=null，与 legacy 关闸返回 null 的判truthy用法兼容）。
+// 出站清洗（真机 2026-11-15）：主回复链路的清洗在 reply-delivery（deliver 路径），
+// 模块的 sendText/sendSegments/reply 直发走这里——模型思考残片会从这条口子漏出去。
+// 在适配层统一过 sanitizeOutbound（含代码块保护；幂等），outbox 本身保持「segments
+// 原样透传」的既有契约（清洗是适配层的事，见 m2d-outbox-ledger 测试）。
+
+import { sanitizeOutbound } from '../chat/reply.js'
 
 export function createModuleSendBridge({ hub, outbox, log, unified = false }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
 
+  /** 文本段出站清洗：只碰 text 段；cleaned 全空时整段丢弃（一条全是思考残片的消息没有发送价值）。 */
+  function cleanSegments(segments) {
+    let changed = false
+    const out = []
+    for (const seg of segments) {
+      if (seg?.type === 'text' && typeof seg.data?.text === 'string' && seg.data.text) {
+        const next = sanitizeOutbound(seg.data.text)
+        if (next !== seg.data.text) changed = true
+        if (!next.trim()) { changed = true; continue } // 整段都是思考残片 → 丢弃
+        out.push(changed ? { type: 'text', data: { text: next } } : seg)
+      } else out.push(seg)
+    }
+    return changed ? out : segments
+  }
+
   async function sendViaOutbox(chatId, segments, sourceModuleId) {
-    const captured = hub.captureOnly?.(String(chatId), segments, sourceModuleId || 'module')
+    const cleaned = cleanSegments(segments)
+    if (!cleaned.length) { debug(`${chatId}：清洗后没有剩余内容，不发送`); return { message_id: null, state: 'cancelled' } }
+    const captured = hub.captureOnly?.(String(chatId), cleaned, sourceModuleId || 'module')
     if (captured) return { ...captured, state: 'sent' }
     const r = await outbox.request({
       chatKey: String(chatId),
       sourceModuleId: sourceModuleId || 'module',
-      segments,
+      segments: cleaned,
     })
     return { message_id: r.gatewayMessageId ?? null, state: r.state }
   }
