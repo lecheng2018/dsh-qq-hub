@@ -626,6 +626,10 @@ const SECRETS = [
   ['multiParser', 'cookies', 'tieba'],
   ['multiParser', 'cookies', 'douyin'],
   ['multiParser', 'cookies', 'xiaoheihe'],
+  // 向量通道 API Key（1.4.5）：模块 password 字段的动态登记（registerSecretField）在运行环境
+  // 未生效（memory 是该机制首个使用者，疑似模块实例隔离问题，待查），静态清单双保险：
+  // 掩码（publicConfig）与「留空保存保留原值」（mergeFromPanel）都依赖这份清单。
+  ['ext', 'memory', 'vectorApiKey'],
 ]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
