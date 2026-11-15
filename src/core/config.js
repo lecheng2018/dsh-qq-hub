@@ -111,7 +111,9 @@ const DEFAULTS_RAW = {
     engine: 'auto',
     cosyvoice: { url: 'http://127.0.0.1:50000', mode: 'sft', spkId: '中文女', instruct: '', sampleRate: 22050 },
     gptsovits: { url: 'http://127.0.0.1:9880', refAudio: '', promptText: '', promptLang: 'zh', textLang: 'zh' },
-    http: { urlTemplate: '' }, // 通用：GET 这个地址（{text} 会替换成要念的话），返回音频
+    // 通用 HTTP TTS：GET 地址模板（{text} 替换成要念的话）；POST 时配请求头/请求体，
+    // 可接火山豆包 / 阿里 / 讯飞这类要鉴权的云 TTS（JSON 里的 base64 音频自动解出）
+    http: { urlTemplate: '', method: 'GET', headers: '', body: '' },
     voice: 'zh-CN-XiaoyiNeural',
     rate: '+0%',
     pitch: '+0Hz',
@@ -530,6 +532,24 @@ export function normalize(raw) {
   g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
   if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
+  // 通用 HTTP TTS：手改 config 写脏了也不能把请求发歪（语义移植上游）
+  if (!c.voice.http || typeof c.voice.http !== 'object' || Array.isArray(c.voice.http)) c.voice.http = { urlTemplate: '', method: 'GET', headers: '', body: '' }
+  c.voice.http.urlTemplate = String(c.voice.http.urlTemplate ?? '').trim()
+  const httpMethod = String(c.voice.http.method ?? '').trim().toUpperCase()
+  c.voice.http.method = httpMethod === 'POST' ? 'POST' : 'GET' // 只认 GET/POST，其余（尤其 PUT）一律当 GET
+  const headerText = (v) => {
+    if (typeof v === 'string') return v
+    if (Array.isArray(v)) return v.map(String).join('\n')
+    if (v && typeof v === 'object') return Object.entries(v).map(([k, val]) => `${k}: ${val}`).join('\n')
+    return v == null ? '' : String(v)
+  }
+  const bodyText = (v) => {
+    if (typeof v === 'string') return v
+    if (v && typeof v === 'object') { try { return JSON.stringify(v) } catch (error) { return '' } }
+    return v == null ? '' : String(v)
+  }
+  c.voice.http.headers = headerText(c.voice.http.headers)
+  c.voice.http.body = bodyText(c.voice.http.body)
   c.voice.cosyvoice.sampleRate = num(c.voice.cosyvoice.sampleRate, 22050, 8000, 48000)
   if (!['sft', 'instruct'].includes(c.voice.cosyvoice.mode)) c.voice.cosyvoice.mode = 'sft'
   // edge-tts 的语速 / 音调：只认 ±N% 和 ±NHz，写着玩的回落默认值，超范围的夹回来。
