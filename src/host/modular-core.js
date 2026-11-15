@@ -1608,6 +1608,44 @@ export function createModularCore({
     return true
   }
 
+  /**
+   * 人设配置变更后，按「新旧预期人设」逐聊天比对，重置真正变了的那批会话。
+   *
+   * 为什么不让面板自己比：面板只有 `entry.personaId`（建会话时记下的），而
+   *   - 各路由拿到的 sessions 视图经过不同包装，字段和时机都对不上；
+   *   - 更关键的是 `personaId` 只记录「建会话那一刻」，之后 groupDefault /
+   *     privateDefault 改了它不会动。用「旧记录 vs 新配置」去比，必然漏判
+   *     （2026-11-15 真机：群聊默认锁在豆包卡，点「设为当前」切成小鲸鱼，
+   *      群会话人设其实没变、也确实不该重置，但私聊被 privateDefault 同样锁住
+   *      时用户看到的就是「切卡完全没反应」）。
+   * 这里统一以**配置**为准算两边预期：oldConfig 的预期 vs 现状，换卡即有 diff。
+   *
+   * @param {object} oldConfig 变更前的配置（必须是人设变更前的快照）
+   * @returns {{chatId:string, from:string, to:string}[]} 被重置的会话清单
+   */
+  function resetChatsForPersonaChange(oldConfig) {
+    const nextCfg = getConfig()
+    const changed = []
+    let snap = {}
+    try { snap = registry.snapshot() || {} } catch { return changed }
+    for (const [chatKey, entry] of Object.entries(snap)) {
+      if (!entry?.sessionId) continue
+      let want = ''
+      let had = ''
+      try {
+        want = personaIdFor(chatViewFor(chatKey), nextCfg)
+        had = personaIdFor(chatViewFor(chatKey), oldConfig)
+      } catch { continue }
+      // 预期没变 = 这张卡对这条聊天没影响，历史里也没有别的卡，不用动它
+      if (want === had) continue
+      // 会话里固化的正是旧卡才需要重置；若已经是新卡（上一轮刚重建过）就跳过
+      const recorded = sessionPersonas.get(chatKey)?.personaId || ''
+      if (recorded === want) continue
+      if (resetChat(chatKey)) changed.push({ chatId: chatKey, from: recorded || had || '', to: want || '' })
+    }
+    return changed
+  }
+
   function knownChats() {
     return Object.entries(registry.snapshot()).map(([chatId, entry]) => {
       const kind = chatId.startsWith('group:') ? 'group' : 'private'
@@ -1736,6 +1774,7 @@ export function createModularCore({
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,
+    resetChatsForPersonaChange,
     dispatchBackfill,
     outbox,
     registry,

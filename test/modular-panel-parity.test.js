@@ -373,3 +373,39 @@ test('模型同步支持 session.append 回退且跳过未变化模型', async (
   assert.equal(second.applied, 0)
   assert.equal(second.skipped, 1)
 })
+
+// —— 真机 2026-11-15：群聊默认锁在「豆包」、私聊默认锁在小鲸鱼时，点「设为当前」切全局卡。
+//    旧实现拿 entry.personaId（建会话那一刻的快照）去比已改过的 current：
+//      · 群被 groupDefault 钉住 → 预期人设没变，确实不该重置（这条要保住）；
+//      · 但私聊被 privateDefault 钉住、用户点「设为当前」时，预期同样没变 ——
+//        用户看到的却是「切卡完全没反应」，且回执说「下一轮回复起生效」，属于谎报。
+//    新口径：按配置算新旧预期，预期真的变了才重置；没变的如实回报「不受全局切换影响」。
+test('/persona/use 与默认人设锁定时：如实回报原因，不谎称已生效', async () => {
+  await f.fake.call('/persona/save', { id: 'p-global-a', name: '全局A', body: '你是全局A。' })
+  await f.fake.call('/persona/save', { id: 'p-group-x', name: '群X', body: '你是群X。' })
+  await f.fake.call('/persona/save', { id: 'p-priv-y', name: '私聊Y', body: '你是私聊Y。' })
+  // 全局 = 全局A；群 777 默认锁「群X」；私聊默认锁「私聊Y」
+  await f.fake.call('/save', { persona: { current: 'p-global-a', groupDefault: 'p-group-x', privateDefault: 'p-priv-y' } })
+  const priv = await send({ text: '私聊先来一句' })
+  const group = await send({ group: '777', user: OTHER, text: '群里来一句' })
+  assert.match(priv.persona, /私聊Y/)
+  assert.match(group.persona, /群X/)
+
+  // 切全局卡：两条聊天的预期人设都没变（被默认值钉住）
+  const used = (await f.fake.call('/persona/use', { id: 'p-priv-y' })).json()
+  assert.equal(used.ok, true)
+  assert.equal(used.reset, 0, '被默认值钉住的会话不该被重置')
+  assert.ok(!f.fake.ctx.workspaceRegistry.archivedSessionIds.includes(priv.sessionId))
+  assert.ok(!f.fake.ctx.workspaceRegistry.archivedSessionIds.includes(group.sessionId))
+  assert.match(used.message, /不受全局切换影响/, '没生效必须如实说，不能谎称「下一轮起生效」')
+  assert.match(used.message, /跟随全局人设/)
+
+  // 把群默认松开（改成跟随全局）：预期从「群X」变成新全局 → 必须立刻重置
+  const saved = (await f.fake.call('/save', { persona: { groupDefault: '' } })).json()
+  assert.equal(saved.ok, true)
+  assert.ok(f.fake.ctx.workspaceRegistry.archivedSessionIds.includes(group.sessionId), '改默认人设后该群会话要立即重置')
+  assert.ok(!f.fake.ctx.workspaceRegistry.archivedSessionIds.includes(priv.sessionId), '私聊默认没变，不能连带重置')
+  const next = await send({ group: '777', user: OTHER, text: '松绑后' })
+  assert.notEqual(next.sessionId, group.sessionId)
+  assert.match(next.persona, /私聊Y/, '松开群默认后跟随全局，而此时全局就是私聊Y这张卡')
+})
