@@ -14,7 +14,7 @@ const BUFFER_KEEP = 40
 const WINDOW_MS = 3600_000 // 她说话/插话的时间序列只看最近 1 小时
 const ENGAGE_MS = 3 * 60_000 // 说了话算加入话题，持续 3 分钟
 
-export function createGroupState() {
+export function createGroupState({ storage, log } = {}) {
   const buf = new Map() // groupId → [{ t, uid, nick, text, at, mid, direct, replyId, media?, quote?, fed?, ... }]
   const refs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
   // groupId → { until, since, replies }：话题加入的截止时间、入场时刻、连聊条数。
@@ -28,11 +28,59 @@ export function createGroupState() {
   const names = new Map() // groupId → 群名
   const members = new Map() // groupId → { at, list }  群成员缓存
 
+  // ---- 刹车 / 话题状态持久化（缺陷：engaged/刹车不持久）----
+  // said/interjects/engaged 是「她最近说过几次话、还能不能接着聊」的刹车依据。纯内存时
+  // 重启即清零 → 重启后刹车失效，活跃群里可能立刻又刷屏。这里把这三张表落盘；缓冲 buf、
+  // 引用 refs、群名/成员缓存都是可再生的临时态，不持久化（重启重收/重拉即可）。
+  // I/O 经 storage={read,write} 注入，本模块仍零 import、可纯内存单测；缺省 = 不持久化。
+  const SAVE_DEBOUNCE_MS = 2000
+  let saveTimer = null
+  const snapshot = () => ({
+    said: Object.fromEntries(said),
+    interjects: Object.fromEntries(interjects),
+    engaged: Object.fromEntries(engaged),
+  })
+  const save = () => {
+    if (!storage?.write) return
+    try { storage.write(snapshot()) } catch (error) { log?.warn?.('群刹车状态落盘失败：', error?.message || error) }
+  }
+  const scheduleSave = () => {
+    if (!storage?.write) return
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => { saveTimer = null; save() }, SAVE_DEBOUNCE_MS)
+    saveTimer.unref?.() // 落盘定时器不该拖住进程退出
+  }
+  // 启动恢复：只收仍在有效期内的条目（said/interjects 看 1 小时窗口，engaged 看 until）。
+  if (storage?.read) {
+    try {
+      const saved = storage.read() || {}
+      const now = Date.now()
+      const restoreSeries = (map, obj) => {
+        if (!obj || typeof obj !== 'object') return
+        for (const [gid, list] of Object.entries(obj)) {
+          if (!Array.isArray(list)) continue
+          const fresh = list.filter((t) => Number.isFinite(t) && now - t < WINDOW_MS)
+          if (fresh.length) map.set(String(gid), fresh)
+        }
+      }
+      restoreSeries(said, saved.said)
+      restoreSeries(interjects, saved.interjects)
+      if (saved.engaged && typeof saved.engaged === 'object') {
+        for (const [gid, rec] of Object.entries(saved.engaged)) {
+          if (rec && Number.isFinite(rec.until) && rec.until > now) {
+            engaged.set(String(gid), { until: rec.until, since: Number(rec.since) || now, replies: Number(rec.replies) || 0 })
+          }
+        }
+      }
+    } catch (error) { log?.warn?.('群刹车状态恢复失败（按空状态启动）：', error?.message || error) }
+  }
+
   const joinTopicOf = (gid, now) => {
     // 说话者走到这里 = 她「重新入场」了（摇号命中，或被人直接搭话）。
     // 硬重置窗口/入场时刻/连聊条数：继续对话的死循环由 engaged 分叉负责（见 noteEngagedReply），
     // 这里不再可能被续聊路径摸到 —— 窗口活着时闸门锁死 engaged，摇不到 interject。
     engaged.set(String(gid), { until: now + ENGAGE_MS, since: now, replies: 0 })
+    scheduleSave()
   }
   const recent = (map, gid, now) => {
     const list = (map.get(String(gid)) || []).filter((t) => now - t < WINDOW_MS)
@@ -88,6 +136,7 @@ export function createGroupState() {
     },
     leaveTopic (gid) {
       engaged.delete(String(gid))
+      scheduleSave()
     },
     /**
      * 在群里说了话 = 重新入场（硬重置窗口/条数）。
@@ -100,7 +149,7 @@ export function createGroupState() {
     noteEngagedReply (gid, now = Date.now()) {
       const id = String(gid)
       const rec = engaged.get(id)
-      if (rec && now < rec.until) rec.replies += 1
+      if (rec && now < rec.until) { rec.replies += 1; scheduleSave() }
     },
 
     // ---- 时间序列（刹车 / 插话频率）----
@@ -114,6 +163,7 @@ export function createGroupState() {
       const list = recent(said, id, now)
       list.push(now)
       said.set(id, list)
+      scheduleSave()
       return list
     },
     /** 她最近 1 小时在这个群主动插话的时间戳。 */
@@ -126,6 +176,7 @@ export function createGroupState() {
       const list = recent(interjects, id, now)
       list.push(now)
       interjects.set(id, list)
+      scheduleSave()
       return list
     },
 
@@ -148,6 +199,12 @@ export function createGroupState() {
     },
     setMembers (gid, list, now = Date.now()) {
       members.set(String(gid), { at: now, list })
+    },
+
+    /** 收尾：清掉 debounce 定时器并立即落盘一次（宿主 dispose 时调；无 storage 时是空操作）。 */
+    dispose () {
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+      save()
     },
 
     /** groupNames 这个 Map 本身（memory.js 等外部按 `.get?.()` 用，保持原样）。 */
