@@ -46,6 +46,7 @@ import { defaultModel, askModel } from './core/llm.js'
 import { parseCommand, runCommand, createMutes } from './chat/commands.js'
 import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas, personaIdFor } from './persona/personas.js'
 import { createModules, API_VERSION } from './core/modules.js'
+import { createMarket } from './core/market.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
 import { BUILTINS } from './modules/index.js'
@@ -89,6 +90,7 @@ export function apply(ctx) {
   const log = logger.child('core')
   let cfg = loadConfig()
   let mods = null
+  let market = null
   let bridge = null
   let hub = null // 当前核心的冻结 facade，在 modular core 成功后创建；失败时不存在旧实例可回退
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
@@ -409,6 +411,8 @@ export function apply(ctx) {
   // 模块只获得当前服务的冻结发送桥，所有媒体共用 Shared Outbox。
   core.hub = Object.freeze(createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), unified: true }))
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
+  // 模块市场「分发半套」：默认 OFF（config.modules.market.enabled），索引多源 failover
+  market = createMarket({ mods, getConfig, setConfig, log: logger.child('模块市场'), version: VERSION, builtinDir: join(ROOT, 'src', 'modules') })
   bridge = createBridge({ ctx, getConfig, setConfig, hub, mods, log: logger.child('bridge'), version: VERSION, apiVersion: API_VERSION, overview: () => overviewApi.overview() })
   core.bridge = bridge
   core.modules = mods
@@ -512,7 +516,7 @@ registerPersonaRoutes({
   registerModulesRoutes({
     route, readBody, query, send,
     getConfig,
-    hub, mods, openFolder,
+    hub, mods, market, openFolder,
   })
   registerMiscRoutes({
     route, readBody, query, send,
