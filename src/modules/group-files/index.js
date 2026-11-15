@@ -86,6 +86,17 @@ export function manageGate({ ownerInTurn, confirm, dryRun, allowManage }) {
   return { ok: true }
 }
 
+/**
+ * upload 子命令的门控（纯函数）：往共享空间新增条目，要求这一轮有主人发言；
+ * 发文件能力（面板「聊天」页）没开时如实提示。dryRun 由 outbox 兜，这里提前说明。
+ */
+export function uploadGate({ ownerInTurn, dryRun, filesEnabled }) {
+  if (!filesEnabled) return { ok: false, message: '发文件没打开（面板「聊天」页 → 发文件），打开后才能传' }
+  if (!ownerInTurn) return { ok: false, message: '只有主人（或主人在这个群里开口）能让我往群文件传东西' }
+  if (dryRun) return { ok: false, message: '试运行：没真传，台账会记一条' }
+  return { ok: true }
+}
+
 export default {
   id: 'group-files',
   name: '群文件',
@@ -102,7 +113,7 @@ export default {
     { key: 'maxDownloadMB', label: '单文件下载上限 (MB)', type: 'number', min: 1, max: 1024, step: 1 },
   ],
   setup(api) {
-    const { onebot } = api.core
+    const { onebot, hub } = api.core
 
     const reg = registerReadActions(['get_group_file_system_info', 'get_group_root_files', 'get_group_files_by_folder'])
     if (reg.rejected.length) api.log.warn(`只读动作登记被拒收：${reg.rejected.join('、')}`)
@@ -128,14 +139,15 @@ export default {
       if (chat.kind === 'system') return []
       return defineTool({
         name: 'qq_group_file',
-        description: '群文件盘：browse 浏览目录（只读）、download 把一个群文件下载到工作区再用文件工具读（只读）、manage 建夹/移动/转存/删除（改共享空间，仅主人 + confirm=确认）。默认当前群，别的群要给群号且必须在白名单里。',
+        description: '群文件盘：browse 浏览目录（只读）、download 把一个群文件下载到工作区再用文件工具读（只读）、upload 把工作区里的文件传进群文件（主人要求时）、manage 建夹/移动/转存/删除（改共享空间，仅主人 + confirm=确认）。默认当前群，别的群要给群号且必须在白名单里。',
         properties: {
-          action: { type: 'string', enum: ['browse', 'download', 'manage'], description: 'browse 浏览 / download 下载 / manage 管理' },
+          action: { type: 'string', enum: ['browse', 'download', 'upload', 'manage'], description: 'browse 浏览 / download 下载 / upload 上传 / manage 管理' },
           group_id: str('群号；在群聊里用可省略'),
           folder_id: str('browse：要看的目录 id，省略 = 根目录'),
           file_id: str('download/manage：文件 id（browse 结果里方括号里的）'),
           busid: int('download：browse 结果里的 busid 原值（缺了网关会报参数错误）'),
-          name: str('manage mkdir：要建的文件夹名'),
+          file: str('upload：工作区里文件的绝对路径（qq_write_file 写的、download 下载的都行）'),
+          name: str('upload：传上去显示的文件名；manage mkdir：要建的文件夹名'),
           op: { type: 'string', enum: ['mkdir', 'move', 'trans', 'delete'], description: 'manage 的具体操作' },
           dest_folder_id: str('manage move：目标目录 id'),
           confirm: str('manage：必须写「确认」'),
@@ -178,6 +190,22 @@ export default {
             const file = join(dir, `${Date.now()}-${name}`)
             await writeFile(file, buf)
             return { ok: true, message: `已下载到 ${file}（${humanSize(buf.length)}），可以用文件工具读了` }
+          }
+
+          if (action === 'upload') {
+            // 上传走 hub.sendFile：它自带目录白名单校验、大小上限、以及网关看不到
+            // 本机路径时的 base64 兜底——群聊发文件底层就是 upload_group_file。
+            const gate = uploadGate({
+              ownerInTurn: api.core.hub.turnHasOwner(sessionId),
+              dryRun: Boolean(cfg.dryRun),
+              filesEnabled: Boolean(cfg.files?.enabled),
+            })
+            if (!gate.ok) return { ok: false, message: gate.message }
+            const file = String(args.file || '').trim()
+            if (!file) return { ok: false, message: 'upload 要给 file（工作区里文件的绝对路径）' }
+            const label = String(args.name || '').trim() || file.split(/[\\/]/).pop()
+            await hub.sendFile(`group:${gid}`, file, label)
+            return { ok: true, message: `已传到群文件：${label}` }
           }
 
           if (action === 'manage') {
