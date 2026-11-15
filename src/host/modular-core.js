@@ -216,7 +216,7 @@ export function createModularCore({
   // US-019 S2 慢思考判定实现（可选注入，测试用假模型；生产走默认的 judgeThreads）。
   threadJudge,
 }) {
-  const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log })
+  const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log, getConfig })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
   const inboundImages = sharedInboundImages || createInboundImages({ onebot, dsh, log })
   const inboundVision = sharedInboundVision || createInboundVision({ dsh, log, inboundImages })
