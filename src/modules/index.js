@@ -24,6 +24,7 @@ import completeGuard from './complete-guard/index.js'
 import memoryPrivacy from './memory-privacy/index.js'
 import multiParser from './multi-parser/index.js'
 import deliveryInbox from './delivery-inbox/index.js'
+import flashTransfer from './flash-transfer/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
@@ -31,4 +32,6 @@ export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule,
   // 移植自 astrbot_plugin_multi_parser 的多平台内容解析器
   multiParser,
   // 投递异常收件箱：只读查看没送出去/不确定送达的消息（不提供重发）
-  deliveryInbox]
+  deliveryInbox,
+  // 闪传（SnowLuma 专属）：入站清单进上下文；主人可下载到工作区、转发白名单会话
+  flashTransfer]
