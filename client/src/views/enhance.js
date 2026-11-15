@@ -10,7 +10,7 @@ const CAPABILITIES = [
   { id: 'online-status', name: '在线与已读', desc: '查看对方在线状态与已读回执。', need: '需要网关支持在线状态扩展' },
   { id: 'social-actions', name: '社交动作', desc: '表情回应、设为精华、空间写扩展等社区动作。', need: '需要网关支持对应动作' },
   { id: 'ark-cards', name: 'Ark 卡片', desc: '发送分享、音乐、位置、联系人等结构化卡片消息。', need: '需要网关支持卡片段，不支持时降级文字' },
-  { id: 'ai-voice', name: 'AI 语音', desc: '使用 SnowLuma 的 AI 语音合成发语音条。', need: '需要 SnowLuma 的 AI 语音能力' },
+  { id: 'ai-voice', name: 'AI 语音', desc: 'QQ 官方 AI 变声：/变声 命令（群聊专用），零成本云端 TTS 备选；不接自动语音链。', need: '需要网关/QQ 支持 AI 变声接口' },
 ]
 
 /** 网关能力概览页：模块自己的设置卡会自动排在下面（有 settings/panel 的模块）。 */

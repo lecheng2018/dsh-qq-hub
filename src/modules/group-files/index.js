@@ -101,6 +101,7 @@ export default {
   id: 'group-files',
   name: '群文件',
   version: '1.0.0',
+  tab: 'enhance',
   description: '浏览群文件盘、把群文件下载到工作区（qq_group_file browse/download）；主人可开管理（建夹/移动/转存/删除，manage 子命令）',
   defaults: {
     allowManage: false,
