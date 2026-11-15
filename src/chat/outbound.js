@@ -96,8 +96,11 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         return false
       }
       log.warn('语音没发出去，改发文字：', error.message)
-      await sendText(chatId, text, replyId, undefined, userId)
-      return false
+      // 降级文字真发出去了就按实发记账（缺陷：语音降级文字不进流水）：旧版无论降级成败
+      // 都 return false，上层把这条计为未确认、降级文字也不进聊天流水。现返回降级文字的回执
+      // （拿到才算送达），降级也没发出去才 return false。unknown 路径上面已 return，不降级。
+      const fallback = await sendText(chatId, text, replyId, undefined, userId)
+      return fallback || false
     }
   }
 
