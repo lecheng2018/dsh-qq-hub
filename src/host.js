@@ -298,6 +298,8 @@ export function apply(ctx) {
         // 真实持久化（报告 §4.4/§5.6）：投递台账 + 会话映射落插件数据目录；fail-closed 由 ledger 承担
         ledgerFile: dataDir('deliveries.json'),
         sessionStoreFile: dataDir('modular-sessions.json'),
+        // 群刹车/话题状态落盘：重启后 said/interjects/engaged 不清零，避免重启即刷屏
+        groupStateFile: dataDir('group-state.json'),
         threadLedger,
         // 真机审计补齐：群闸的话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
