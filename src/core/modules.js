@@ -161,6 +161,14 @@ export function rewriteImports(code, fromKey, keep = new Set()) {
  * @param {string} o.version     插件版本
  * @param {object[]} o.builtins  内置模块定义（按启动顺序）
  */
+
+/**
+ * 已上商店、不再内置的可选模块 id（分发在 dsh-qq-hub-mods）。
+ * 它们没安装/没运行时，人格提示词里对应的「她会什么」不能写进去——否则她会答应做不到的事。
+ * 商店再搬新模块时，把 id 加到这里（与 src/modules/index.js 顶部注释保持同步）。
+ */
+export const OPTIONAL_MODULE_IDS = Object.freeze(['bili', 'douyin', 'heybox', 'multi-parser', 'qzone-social', 'delivery-inbox'])
+
 export function createModules({ ctx, core, getConfig, setConfig, logger, version, builtins }) {
   const log = logger.child('modules')
   const builtinDefs = new Map(builtins.map((d) => [d.id, d]))
@@ -602,7 +610,12 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   const commands = () => [...live.values()].flatMap((r) => r.commands)
   const dshTools = () => [...live.values()].flatMap((r) => r.dshTools.map((t) => ({ ...t, module: r.id })))
   /** 内置模块里没在跑的（关掉的、被替换的）。 */
-  const builtinOff = () => new Set([...builtinDefs.keys()].filter((id) => live.get(id)?.source !== 'builtin'))
+  // 「现在不能用的模块」= 没在跑的内置（关了/被替换）+ 没装的商店可选模块（见 OPTIONAL_MODULE_IDS）。
+  // 人格能力行按这个集合裁掉：已上商店的模块未安装时，不能写「她会刷 B 站」这类话。
+  const builtinOff = () => new Set([...builtinDefs.keys(), ...OPTIONAL_MODULE_IDS].filter((id) => {
+    const src = live.get(id)?.source
+    return src !== 'builtin' && src !== 'user'
+  }))
 
   async function handle(path, req, res) {
     const r = routes.get(path)

@@ -1,15 +1,11 @@
 // 回归（投递诚实性补全，#142 后续）：
-// ① delivery-inbox 读全局台账（旧版读模块私有目录恒「读不到」）
-// ② qq_send_message 不再把 undefined/部分失败谎报成「发出去了」
-// ③ 语音降级文字真发出去就按实发记账（返回降级回执，而非一律 false）
-// ④ 分条随机源可注入（replyRules 透传 rand，气泡切分可复现）
+// ① qq_send_message 不再把 undefined/部分失败谎报成「发出去了」
+// ② 语音降级文字真发出去就按实发记账（返回降级回执，而非一律 false）
+// ③ 分条随机源可注入（replyRules 透传 rand，气泡切分可复现）
+// 注：delivery-inbox 已上商店（dsh-qq-hub-mods），其「读全局台账」回归随模块壳迁到商店仓库测试。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
-const { default: deliveryInbox } = await import('../src/modules/delivery-inbox/index.js')
 const { default: qqTools } = await import('../src/modules/qq-tools/index.js')
 const { createOutbound } = await import('../src/chat/outbound.js')
 const { replyRules, segmentBubbles } = await import('../src/chat/reply.js')
@@ -19,40 +15,7 @@ const OWNER = '10001'
 const BOT = '10002'
 const log = { info() {}, warn() {}, debug() {} }
 
-// ---- ① delivery-inbox 读全局台账 ----
-test('delivery-inbox：路由读全局 dataDir 的台账，而非模块私有目录', async () => {
-  const globalDir = mkdtempSync(join(tmpdir(), 'inbox-global-'))
-  const moduleDir = mkdtempSync(join(tmpdir(), 'inbox-module-'))
-  const prev = process.env.DSH_QQ_HUB_DATA_DIR
-  process.env.DSH_QQ_HUB_DATA_DIR = globalDir
-  try {
-    writeFileSync(join(globalDir, 'deliveries.json'), JSON.stringify({
-      version: 1, savedAt: 1, deliveries: [
-        { deliveryId: 'd1', chatKey: 'group:555', state: 'unknown', segments: [{ type: 'text', data: { text: '丢了的消息' } }], createdAt: 1 },
-      ],
-    }))
-    let handler
-    const api = {
-      // 模块私有目录故意指向别处：修复前会读这里（空）→ 恒「读不到」
-      dataDir: (...p) => join(moduleDir, ...p),
-      route: (path, fn) => { if (path === '/deliveries/exceptions') handler = fn },
-      log,
-    }
-    deliveryInbox.setup(api)
-    const out = await handler({ query: {} })
-    assert.equal(out.ok, true, '应读到全局台账而非报「读不到」')
-    assert.equal(out.items.length, 1)
-    assert.equal(out.items[0].preview, '丢了的消息')
-    assert.equal(out.file, join(globalDir, 'deliveries.json'), '文件路径应是全局台账')
-  } finally {
-    if (prev === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
-    else process.env.DSH_QQ_HUB_DATA_DIR = prev
-    rmSync(globalDir, { recursive: true, force: true })
-    rmSync(moduleDir, { recursive: true, force: true })
-  }
-})
-
-// ---- ② qq_send_message 如实回报 ----
+// ---- ① qq_send_message 如实回报 ----
 // 返回一个调用器（把工具的 execute 起个别名，避免静态扫描误报）。
 function mountQqTools(deliverImpl, cfgOver = {}) {
   let builder
