@@ -1199,39 +1199,98 @@ function Persona({ st, draft, setDraft, toast, reload }) {
 }
 
 // client/src/views/access.js
+var LEVEL_TEXT = { full: "完整权限", social: "受限（只有 QQ 工具）", chat: "纯聊天" };
 function Access({ draft, setDraft }) {
+  const privates = draft.allow && draft.allow.private || [];
+  const groups = draft.allow && draft.allow.groups || [];
+  const perms = draft.profilePerms || {};
+  const loosened = Object.values(perms).filter((v) => v && v !== "owner").length;
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
+    Card,
+    {
+      title: "现在她是谁、能碰什么",
+      desc: "一眼看清：主人是谁、给到什么档位、白名单里有谁、改资料类放开了几项。要改去下面对应的卡。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { title: "主人 QQ 号" }, "主人 ", draft.ownerQQ || "没设"), /* @__PURE__ */ h(Pill, { kind: draft.ownerLevel === "full" ? "warn" : void 0 }, LEVEL_TEXT[draft.ownerLevel] || "完整权限"), /* @__PURE__ */ h(Pill, { title: "只有名单里的人和群她才会理" }, "白名单 私聊 ", privates.length, " / 群 ", groups.length), /* @__PURE__ */ h(Pill, { kind: loosened ? "warn" : void 0, title: "改资料类操作里被放开到「所有人」或显式开启的项数" }, "改资料放开 ", loosened, " 项"), draft.longTasks ? /* @__PURE__ */ h(Pill, { kind: "warn" }, "长任务模式 开") : null)
+  ), /* @__PURE__ */ h(OwnerCard, { draft, setDraft }), /* @__PURE__ */ h(Whitelist, { draft, setDraft }), /* @__PURE__ */ h(OwnerPower, { draft, setDraft }), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null));
+}
+function OwnerCard({ draft, setDraft }) {
   const f = useField(draft, setDraft);
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "主人", desc: "主人的 QQ 号。群管、电脑上的操作只听主人的。" }, /* @__PURE__ */ h(Row, { label: "主人 QQ 号" }, f.text("ownerQQ")), /* @__PURE__ */ h(Row, { label: "她怎么称呼你" }, f.text("ownerName", { placeholder: "主人" })), /* @__PURE__ */ h(Row, { label: "主人私聊的权限", hint: "群聊永远没有电脑操作权限，这里管不到群。" }, /* @__PURE__ */ h("div", { style: { width: "100%" } }, /* @__PURE__ */ h(
-    Choices,
+  return /* @__PURE__ */ h(Card, { title: "主人", desc: "主人的 QQ 号。群管、电脑上的操作只听主人的。" }, /* @__PURE__ */ h(Row, { label: "主人 QQ 号" }, f.text("ownerQQ")), /* @__PURE__ */ h(Row, { label: "她怎么称呼你" }, f.text("ownerName", { placeholder: "主人" })));
+}
+function Whitelist({ draft, setDraft }) {
+  const f = useField(draft, setDraft);
+  return /* @__PURE__ */ h(Card, { title: "白名单", desc: "只有名单里的人和群，她才会理。一行一个号码。" }, /* @__PURE__ */ h(Row, { label: "私聊白名单", hint: "主人默认就在里面。" }, f.list("allow.private", { placeholder: "每行一个 QQ 号", numbers: true })), /* @__PURE__ */ h(Row, { label: "群白名单", hint: "把机器人拉进群后，把群号加到这里。" }, f.list("allow.groups", { placeholder: "每行一个群号", numbers: true })));
+}
+function OwnerPower({ draft, setDraft }) {
+  return /* @__PURE__ */ h(
+    Card,
     {
-      value: draft.ownerLevel,
-      onChange: (v) => setDraft(setPath(draft, "ownerLevel", v)),
-      options: [
-        { value: "full", label: "完整", desc: "私聊里让她用电脑做事（查文件、跑命令、上网查）也能做" },
-        { value: "social", label: "受限", desc: "只有发表情、发说说这类 QQ 工具，碰不到电脑" },
-        { value: "chat", label: "纯聊天", desc: "什么工具都没有，只聊天" }
-      ]
-    }
-  ), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 8 } }, "切换后会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。"))), /* @__PURE__ */ h(Row, { label: "长任务模式", hint: "只在「完整」权限下生效。打开后她能把命令放到后台跑、跑完自动回来告诉你，也能设定时任务；工具多一点，回话会稍慢。切换后同样换新会话。" }, /* @__PURE__ */ h(
-    Choices,
-    {
-      value: draft.longTasks ? "on" : "off",
-      onChange: (v) => setDraft(setPath(draft, "longTasks", v === "on")),
-      options: [
-        { value: "off", label: "关", desc: "维持现在的速度（默认）" },
-        { value: "on", label: "开", desc: "挂上后台任务（jobs）+ 定时任务（schedule）" }
-      ]
-    }
-  ))), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h(Card, { title: "白名单", desc: "只有名单里的人和群，她才会理。一行一个号码。" }, /* @__PURE__ */ h(Row, { label: "私聊白名单", hint: "主人默认就在里面。" }, f.list("allow.private", { placeholder: "每行一个 QQ 号", numbers: true })), /* @__PURE__ */ h(Row, { label: "群白名单", hint: "把机器人拉进群后，把群号加到这里。" }, f.list("allow.groups", { placeholder: "每行一个群号", numbers: true }))), /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null));
+      collapse: true,
+      title: "她能做到哪一步",
+      desc: "主人私聊的权限档位（能不能用电脑上的工具）和长任务模式。默认「完整」；不需要她碰电脑时，降到「受限」或「纯聊天」更安全。",
+      more: "群聊永远没有电脑操作权限，这里管不到群。\n切换档位会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。\n长任务模式只在「完整」下生效：打开后她能把命令放后台跑、跑完回来告诉你，也能设定时任务；工具多一点，回话会稍慢。"
+    },
+    /* @__PURE__ */ h(Row, { label: "主人私聊的权限" }, /* @__PURE__ */ h("div", { style: { width: "100%" } }, /* @__PURE__ */ h(
+      Choices,
+      {
+        value: draft.ownerLevel,
+        onChange: (v) => setDraft(setPath(draft, "ownerLevel", v)),
+        options: [
+          { value: "full", label: "完整", desc: "私聊里让她用电脑做事（查文件、跑命令、上网查）也能做" },
+          { value: "social", label: "受限", desc: "只有发表情、发说说这类 QQ 工具，碰不到电脑" },
+          { value: "chat", label: "纯聊天", desc: "什么工具都没有，只聊天" }
+        ]
+      }
+    ))),
+    /* @__PURE__ */ h(Row, { label: "长任务模式", hint: "只在「完整」权限下生效。" }, /* @__PURE__ */ h(
+      Choices,
+      {
+        value: draft.longTasks ? "on" : "off",
+        onChange: (v) => setDraft(setPath(draft, "longTasks", v === "on")),
+        options: [
+          { value: "off", label: "关", desc: "维持现在的速度（默认）" },
+          { value: "on", label: "开", desc: "挂上后台任务（jobs）+ 定时任务（schedule）" }
+        ]
+      }
+    ))
+  );
 }
 var PERM_OPTS = [
   { value: "off", label: "关", desc: "谁说都不改" },
   { value: "owner", label: "仅主人私聊", desc: "只有你私聊让她改才改（默认）" },
   { value: "all", label: "所有人", desc: "白名单里的人、群里的人都能让她改" }
 ];
+var PERM_GROUPS = [
+  { id: "qq", label: "QQ", keys: ["qqNickname", "qqSignature", "qqAvatar"] },
+  { id: "social", label: "好友", keys: ["qqFriendRequest", "whitelist"] },
+  { id: "bili", label: "B站", keys: ["biliSign", "biliAvatar"] },
+  { id: "douyin", label: "抖音", keys: ["douyinBrowse", "douyinLike", "douyinComment", "douyinShareOwner", "douyinDm"] },
+  { id: "heybox", label: "小黑盒", keys: ["heyboxBrowse", "heyboxLike", "heyboxComment", "heyboxPost"] }
+];
+var PERM_ITEMS = {
+  qqNickname: ["QQ 昵称", ""],
+  qqSignature: ["QQ 个性签名", ""],
+  qqAvatar: ["QQ 头像", "只用网址图片，或「刚才发的那张图」。"],
+  qqFriendRequest: ["处理好友申请", "让她通过 / 拒绝别人加她为好友的申请。"],
+  whitelist: ["改白名单", "让她把 QQ 号 / 群号加进或移出白名单。主人不会被移出。开成「所有人」前请想清楚。"],
+  biliSign: ["B 站签名", "要先在 B 站页登录并打开 B 站。"],
+  biliAvatar: ["B 站头像", "要先在 B 站页登录并打开 B 站。图片网址或刚才发的图，最大 2MB。"],
+  douyinBrowse: ["刷抖音 / 看视频", "让她去刷推荐、点开别人发来的抖音链接。"],
+  douyinLike: ["抖音点赞", "有人让她给某个视频点赞；关掉后她自己刷的时候也不点赞。"],
+  douyinComment: ["抖音评论", "有人让她去某个视频下评论；关掉后她自己刷的时候也不评论。"],
+  douyinShareOwner: ["分享抖音给主人", "刷到好玩的视频在 QQ 私聊里发给你（她的话 + 链接）。"],
+  douyinDm: ["主动发抖音私信", "主人明确让她给某个人发私信时（主页链接或抖音号）。默认仅主人私聊。"],
+  heyboxBrowse: ["逛小黑盒 / 看帖子", "让她翻信息流、读帖子正文和热评、看热榜和搜帖子。"],
+  heyboxLike: ["小黑盒点赞", "有人让她给某个帖子点赞；关掉后她自己逛的时候也不点赞。"],
+  heyboxComment: ["小黑盒评论", "有人让她去某个帖子下评论；关掉后她自己逛的时候也不评论。"],
+  heyboxPost: ["小黑盒发帖 / 删帖", "让她发帖（文章模式可带图）和删自己发的帖。发帖会用你的账号公开发布，默认仅主人私聊。"]
+};
 function ProfilePerms({ draft, setDraft }) {
   const perms = draft.profilePerms || {};
-  const row = (key2, label, hint) => /* @__PURE__ */ h(Row, { key: key2, label, hint }, /* @__PURE__ */ h(Choices, { value: perms[key2] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + key2, v)), options: PERM_OPTS }));
+  const [group, setGroup] = useState("qq");
+  const cur = PERM_GROUPS.find((g) => g.id === group) || PERM_GROUPS[0];
+  const loosened = (keys) => keys.filter((k) => perms[k] && perms[k] !== "owner").length;
   return /* @__PURE__ */ h(
     Card,
     {
@@ -1240,22 +1299,9 @@ function ProfilePerms({ draft, setDraft }) {
       desc: "她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，要放开在这里逐项开。",
       more: "说明：\n· QQ 昵称 / 签名 / 头像要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。\n· B 站签名 / 头像要先在「B站」页登录。\n· 好友申请：她自己主动加别人暂不支持（SnowLuma 没有这个接口）。\n· 抖音 / 小黑盒的定时自动刷不受「浏览」这项限制；「分享抖音给主人」指刷到好玩的私聊发给你。"
     },
-    row("qqNickname", "QQ 昵称"),
-    row("qqSignature", "QQ 个性签名"),
-    row("qqAvatar", "QQ 头像", "只用网址图片，或「刚才发的那张图」。"),
-    row("biliSign", "B 站签名", "要先在 B 站页登录并打开 B 站。"),
-    row("biliAvatar", "B 站头像", "要先在 B 站页登录并打开 B 站。图片网址或刚才发的图，最大 2MB。"),
-    row("qqFriendRequest", "处理好友申请", "让她通过 / 拒绝别人加她为好友的申请。"),
-    row("whitelist", "改白名单", "让她把 QQ 号 / 群号加进或移出白名单。主人不会被移出。开成「所有人」前请想清楚。"),
-    row("douyinBrowse", "刷抖音 / 看视频", "让她去刷推荐、点开别人发来的抖音链接。"),
-    row("douyinLike", "抖音点赞", "有人让她给某个视频点赞；关掉后她自己刷的时候也不点赞。"),
-    row("douyinComment", "抖音评论", "有人让她去某个视频下评论；关掉后她自己刷的时候也不评论。"),
-    row("douyinShareOwner", "分享抖音给主人", "刷到好玩的视频在 QQ 私聊里发给你（她的话 + 链接）。"),
-    row("douyinDm", "主动发抖音私信", "主人明确让她给某个人发私信时（主页链接或抖音号）。默认仅主人私聊。"),
-    row("heyboxBrowse", "逛小黑盒 / 看帖子", "让她翻信息流、读帖子正文和热评、看热榜和搜帖子。"),
-    row("heyboxLike", "小黑盒点赞", "有人让她给某个帖子点赞；关掉后她自己逛的时候也不点赞。"),
-    row("heyboxComment", "小黑盒评论", "有人让她去某个帖子下评论；关掉后她自己逛的时候也不评论。"),
-    row("heyboxPost", "小黑盒发帖 / 删帖", "让她发帖（文章模式可带图）和删自己发的帖。发帖会用你的账号公开发布，默认仅主人私聊。")
+    /* @__PURE__ */ h(Seg, { value: group, onChange: setGroup, options: PERM_GROUPS.map((g) => ({ value: g.id, label: g.label })) }),
+    /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "这一组（", cur.label, "）共 ", cur.keys.length, " 项 · 放开 ", loosened(cur.keys), " 项（没放开的都是「仅主人私聊」）"),
+    /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, cur.keys.map((k) => /* @__PURE__ */ h(Row, { key: k, label: PERM_ITEMS[k][0], hint: PERM_ITEMS[k][1] }, /* @__PURE__ */ h(Choices, { value: perms[k] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + k, v)), options: PERM_OPTS }))))
   );
 }
 function CommandList() {
@@ -1263,7 +1309,7 @@ function CommandList() {
   useEffect(() => {
     get("/commands").then((r) => setList(r.list || []));
   }, []);
-  return /* @__PURE__ */ h(Card, { title: "QQ 命令", desc: "主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc))))));
+  return /* @__PURE__ */ h(Card, { collapse: true, title: "QQ 命令（" + list.length + " 条）", desc: "主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc))))));
 }
 function GroupRoles() {
   const [list, setList] = useState(null);
@@ -1272,7 +1318,7 @@ function GroupRoles() {
     get("/groups/roles").then((r) => setList(r.list || []));
   };
   useEffect(load, []);
-  return /* @__PURE__ */ h(Card, { title: "群管权限", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行")))))));
+  return /* @__PURE__ */ h(Card, { collapse: true, title: "群管权限", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行")))))));
 }
 function OwnerBrief({ draft, setDraft }) {
   const f = useField(draft, setDraft);
@@ -1301,7 +1347,7 @@ function OwnerBrief({ draft, setDraft }) {
       more: "开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。"
     },
     /* @__PURE__ */ h(Row, { label: "每个群给几条", hint: "越少越省上下文；最多 30 条" }, f.range("group.ownerBrief.lines", 1, 30, 1, (v) => v + " 条")),
-    /* @__PURE__ */ h(Row, { label: "只取哪些群", hint: "没勾 = 所有白名单群；只列白名单里的群" }, groups.length ? /* @__PURE__ */ h("div", { className: "ab-flex" }, groups.map((gid) => /* @__PURE__ */ h("button", { key: gid, type: "button", className: cx("ab-chip", on(gid) && "on"), onClick: () => toggle(gid) }, (on(gid) ? "✓ " : "") + (nameOf(gid) || "群"), /* @__PURE__ */ h("span", { className: "n" }, gid)))) : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "群白名单是空的，先在「权限」页加群。"))
+    /* @__PURE__ */ h(Row, { label: "只取哪些群", hint: "没勾 = 所有白名单群；只列白名单里的群" }, groups.length ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { flexWrap: "wrap" } }, groups.map((gid) => /* @__PURE__ */ h("button", { key: gid, type: "button", className: cx("ab-chip", on(gid) && "on"), onClick: () => toggle(gid) }, (on(gid) ? "✓ " : "") + (nameOf(gid) || "群"), /* @__PURE__ */ h("span", { className: "n" }, gid)))) : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "群白名单是空的，先在「权限」页加群。"))
   );
 }
 
@@ -1399,6 +1445,7 @@ var toSel = (v) => {
   const [p, ...m] = v.split("::");
   return v ? { provider: p, model: m.join("::"), reasoningEffort: "" } : { provider: "", model: "", reasoningEffort: "" };
 };
+var EFFORT = { low: "低", high: "高", max: "最高" };
 function nameLabels(list) {
   const count = {};
   for (const m of list || []) count[m.name] = (count[m.name] || 0) + 1;
@@ -1440,11 +1487,24 @@ function ChatModels({ draft, setDraft, list }) {
     /* @__PURE__ */ h(Row, { label: "私聊默认模型" }, /* @__PURE__ */ h(Select, { value: val(cm.privateDefault), width: 280, options: optsFor(val(cm.privateDefault)), onChange: (v) => setCm({ privateDefault: toSel(v) }) })),
     /* @__PURE__ */ h(Row, { label: "群聊默认模型" }, /* @__PURE__ */ h(Select, { value: val(cm.groupDefault), width: 280, options: optsFor(val(cm.groupDefault)), onChange: (v) => setCm({ groupDefault: toSel(v) }) })),
     /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, (open ? "收起" : "展开") + "单个 QQ / 群的例外（" + rows.length + "）")),
-    open ? /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, rows.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的 QQ 或群。") : rows.map((r) => /* @__PURE__ */ h(Row, { key: r.kind + r.id, label: (r.kind === "private" ? "私聊 " : "群 ") + r.id }, /* @__PURE__ */ h("span", { className: "ab-muted" }, label(r.sel)), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => remove(r.kind, r.id) }, "移除"))), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Seg, { value: add.kind, onChange: (v) => setAdd({ ...add, kind: v }), options: [{ value: "private", label: "私聊" }, { value: "group", label: "群" }] }), /* @__PURE__ */ h("input", { className: "ab-input", placeholder: add.kind === "private" ? "QQ 号" : "群号", value: add.id, onChange: (e) => setAdd({ ...add, id: e.target.value.replace(/\D/g, "") }) }), /* @__PURE__ */ h(Select, { value: add.sel, width: 220, options: base.filter((o) => o.value), placeholder: "选模型", onChange: (v) => setAdd({ ...add, sel: v }) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !add.id || !add.sel, onClick: addRow }, "添加"))) : null
+    open ? /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, rows.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的 QQ 或群。") : rows.map((r) => /* @__PURE__ */ h(Row, { key: r.kind + r.id, label: (r.kind === "private" ? "私聊 " : "群 ") + r.id }, /* @__PURE__ */ h("span", { className: "ab-muted" }, label(r.sel)), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => remove(r.kind, r.id) }, "移除"))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { flexWrap: "wrap" } }, /* @__PURE__ */ h(Seg, { value: add.kind, onChange: (v) => setAdd({ ...add, kind: v }), options: [{ value: "private", label: "私聊" }, { value: "group", label: "群" }] }), /* @__PURE__ */ h("input", { className: "ab-input", placeholder: add.kind === "private" ? "QQ 号" : "群号", value: add.id, onChange: (e) => setAdd({ ...add, id: e.target.value.replace(/\D/g, "") }) }), /* @__PURE__ */ h(Select, { value: add.sel, width: 220, options: base.filter((o) => o.value), placeholder: "选模型", onChange: (v) => setAdd({ ...add, sel: v }) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !add.id || !add.sel, onClick: addRow }, "添加"))) : null
   );
 }
-function Model({ draft, setDraft, toast }) {
-  const f = useField(draft, setDraft);
+function ModelSummary({ draft, list, curModel, noReasoning, exceptions }) {
+  const modelText = curModel ? nameLabels(list)(curModel) : draft.model.model || "跟随 DSH 默认";
+  const effortText = noReasoning ? "这个模型不管思考强度" : "思考 " + (EFFORT[draft.model.reasoningEffort || "low"] || "低");
+  const visionText = draft.model.vision === "on" ? "看图 强制支持" : draft.model.vision === "off" ? "看图 强制不支持" : curModel && curModel.vision === true ? "看图 自动（模型支持）" : curModel && curModel.vision === false ? "看图 自动（模型看不了）" : "看图 自动（照发）";
+  const helperOn = !!(draft.visionHelper && draft.visionHelper.enabled);
+  return /* @__PURE__ */ h(
+    Card,
+    {
+      title: "现在用哪个模型",
+      desc: "新建的 QQ 会话按这里的设置来；已有会话可以在 DSH 里单独切。改动都要点底部「保存设置」。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { title: "全局模型" }, modelText), draft.model.provider ? /* @__PURE__ */ h(Pill, { title: "provider" }, draft.model.provider) : null, /* @__PURE__ */ h(Pill, null, effortText), /* @__PURE__ */ h(Pill, { kind: curModel && curModel.vision === false && draft.model.vision !== "on" ? "warn" : void 0 }, visionText), /* @__PURE__ */ h(Pill, { kind: helperOn ? "ok" : void 0 }, "辅助看图 ", helperOn ? "开" : "关"), /* @__PURE__ */ h(Pill, { title: "按聊天单独指定的数量" }, "例外 ", exceptions, " 处"), /* @__PURE__ */ h(Pill, null, list === null ? "模型列表加载中…" : "可用 " + list.length + " 个"))
+  );
+}
+function Model({ st, draft, setDraft, toast }) {
   const [list, setList] = useState(null);
   const [ping, setPing] = useState({});
   const [applying, setApplying] = useState(false);
@@ -1457,30 +1517,14 @@ function Model({ draft, setDraft, toast }) {
   const noReasoning = Boolean(curModel && curModel.reasoning === null);
   const autoVision = curModel ? curModel.vision : void 0;
   const visionHint = draft.model.vision === "on" ? "强制当「能看图」；模型其实看不了的话，带图的那一轮会报错" : draft.model.vision === "off" ? "强制当「看不懂」：收到图片只给一行文字提示，不会把图塞给模型" : autoVision === true ? "自动：DSH 说这个模型支持看图" : autoVision === false ? "自动：DSH 说这个模型看不了图，会自动降级成文字提示" : "自动：DSH 没声明，默认照发；真看不了就手动选「不支持」";
+  const cm = draft.chatModels || {};
+  const exceptions = Object.keys(cm.privates || {}).length + Object.keys(cm.groups || {}).length;
   const test = async (m) => {
     setPing({ ...ping, [key(m)]: "测速中…" });
     const r = await post("/model/ping", { provider: m.provider, model: m.model });
     setPing((p) => ({ ...p, [key(m)]: r.ok ? (r.ms / 1e3).toFixed(1) + " 秒" : "失败：" + (r.message || "") }));
   };
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "聊天用的模型", desc: "新建的 QQ 会话按这里的设置来；已有会话也可以在 DSH 里点开单独切换。聊天对速度很敏感，可以先点「测速」挑个快的。" }, /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] })), /* @__PURE__ */ h(Row, { label: "视觉能力", hint: visionHint }, /* @__PURE__ */ h(
-    Seg,
-    {
-      value: draft.model.vision || "auto",
-      onChange: (v) => setDraft(setPath(draft, "model.vision", v)),
-      options: [{ value: "auto", label: "自动" }, { value: "on", label: "支持" }, { value: "off", label: "不支持" }]
-    }
-  )), /* @__PURE__ */ h(Row, { label: "辅助看图模型", hint: "主模型看不了图时，先让这个模型看一眼、转成文字再交给主模型。主模型自己能看图时不走这条，不额外花钱。" }, /* @__PURE__ */ h(Switch, { on: !!draft.visionHelper.enabled, onChange: (v) => setDraft(setPath(draft, "visionHelper.enabled", v)) })), draft.visionHelper.enabled ? /* @__PURE__ */ h(Row, { label: "用哪个模型看图" }, /* @__PURE__ */ h(
-    Select,
-    {
-      value: draft.visionHelper.provider && draft.visionHelper.model ? draft.visionHelper.provider + "::" + draft.visionHelper.model : "",
-      width: 280,
-      options: [{ value: "", label: "选一个能看图的模型", desc: "要和聊天用的模型不同" }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: m.provider, group: m.provider }))),
-      onChange: (v) => {
-        const [p, ...m] = v.split("::");
-        setDraft(setPath(setPath(draft, "visionHelper.provider", v ? p : ""), "visionHelper.model", v ? m.join("::") : ""));
-      }
-    }
-  )) : null, /* @__PURE__ */ h(Row, { label: "模型" }, /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(ModelSummary, { draft, list, curModel, noReasoning, exceptions }), /* @__PURE__ */ h(Card, { title: "聊天用的模型", desc: "她平时回 QQ 用哪个模型。聊天对速度很敏感，可以先点「测速」挑个快的；留空就是跟随你在 DSH 里平时用的模型。" }, /* @__PURE__ */ h(Row, { label: "模型" }, /* @__PURE__ */ h(
     Select,
     {
       value: cur,
@@ -1491,7 +1535,38 @@ function Model({ draft, setDraft, toast }) {
         setDraft(setPath(setPath(draft, "model.provider", v ? p : ""), "model.model", v ? m.join("::") : ""));
       }
     }
-  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null)), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { title: "应用到现有会话", desc: "这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去——保存设置之后点。" }, /* @__PURE__ */ h(
+  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null), /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] }))), /* @__PURE__ */ h(
+    Card,
+    {
+      title: "看图",
+      desc: "收到图片时怎么处理：直接把图给模型、先让另一个模型转成文字、还是只给一行提示。",
+      more: "辅助看图是给「主模型看不了图」准备的：先让一个能看图的模型瞄一眼、写成文字，再交给主模型。主模型自己能看图时不走这条，不额外花钱。"
+    },
+    /* @__PURE__ */ h(Row, { label: "视觉能力", hint: visionHint }, /* @__PURE__ */ h(
+      Seg,
+      {
+        value: draft.model.vision || "auto",
+        onChange: (v) => setDraft(setPath(draft, "model.vision", v)),
+        options: [{ value: "auto", label: "自动" }, { value: "on", label: "支持" }, { value: "off", label: "不支持" }]
+      }
+    )),
+    /* @__PURE__ */ h(Row, { label: "辅助看图模型", hint: "主模型看不了图时，先让这个模型看一眼、转成文字再交给主模型。" }, /* @__PURE__ */ h(Switch, { on: !!draft.visionHelper.enabled, onChange: (v) => setDraft(setPath(draft, "visionHelper.enabled", v)) })),
+    draft.visionHelper.enabled ? /* @__PURE__ */ h(Row, { label: "用哪个模型看图" }, /* @__PURE__ */ h(
+      Select,
+      {
+        value: draft.visionHelper.provider && draft.visionHelper.model ? draft.visionHelper.provider + "::" + draft.visionHelper.model : "",
+        width: 280,
+        options: [{ value: "", label: "选一个能看图的模型", desc: "要和聊天用的模型不同" }].concat((list || []).map((m) => ({ value: key(m), label: labelOf(m), desc: m.provider, group: m.provider }))),
+        onChange: (v) => {
+          const [p, ...m] = v.split("::");
+          setDraft(setPath(setPath(draft, "visionHelper.provider", v ? p : ""), "visionHelper.model", v ? m.join("::") : ""));
+        }
+      }
+    )) : null
+  ), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { collapse: true, title: "可用的模型", desc: "DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+    setDraft(setPath(setPath(draft, "model.provider", m.provider), "model.model", m.model));
+    toast("选好了，记得保存");
+  } }, "用这个"))))))), /* @__PURE__ */ h(Card, { collapse: true, title: "应用到现有会话", desc: "这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去——保存设置之后点。" }, /* @__PURE__ */ h(
     Btn,
     {
       small: true,
@@ -1507,10 +1582,7 @@ function Model({ draft, setDraft, toast }) {
       }
     },
     applying ? "切着呢…" : "立刻应用到所有会话"
-  ), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。")), /* @__PURE__ */ h(Card, { title: "可用的模型", desc: "点「测速」会真的问一次模型（花一点点额度），看它回一句话要多久。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
-    setDraft(setPath(setPath(draft, "model.provider", m.provider), "model.model", m.model));
-    toast("选好了，记得保存");
-  } }, "用这个"))))))));
+  ), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。")));
 }
 
 // client/src/views/token.js
@@ -1934,15 +2006,20 @@ function LocalApi({ draft, setDraft, toast }) {
     if (r.image) setImg(r.image);
     load();
   };
+  const list = st && st.list || [];
+  const taken = list.filter((x) => x.active).length;
+  const failed2 = list.filter((x) => x.last && !x.last.ok).length;
+  const missing = list.filter((x) => !x.exists).length;
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
       title: "本地接口",
-      desc: "想用自己电脑上的模型或服务（本地语音、画图、识别）？在这里生成一个脚本模板，照注释改；或者点「复制给 DSH 的话」粘给 DSH 让它帮你改。",
+      desc: "用自己电脑上的模型或服务（本地语音、画图、识别）：生成脚本模板，照注释改，或者复制那段话让 DSH 帮你改。",
       more: "脚本放在插件数据目录的 local 文件夹里，插件升级不会覆盖；改完保存就生效，不用重启。每一项要打开开关才会用，出错时语音和识别会自动退回内置方式。"
     },
-    /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("code", { className: "ab-small", style: { wordBreak: "break-all", flex: 1 } }, st ? st.dir : "…"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => post("/local/open").then((r) => toast(r.message)) }, "打开文件夹"))
-  ), !st ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : st.list.map((x) => /* @__PURE__ */ h(Card, { key: x.slot, title: x.title + "（" + x.file + "）", right: f.sw("local." + x.slot) }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 8 } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: x.active ? "var(--ab-ok)" : "var(--ab-dim)" } }, x.active ? "● 正在由本地脚本接管" : !x.exists ? "还没有这个脚本" : !x.enabled ? "脚本已经有了，开关没开（用内置方式）" : "用内置方式"), x.last ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: x.last.ok ? "var(--ab-ok)" : "var(--ab-err)" } }, " · 上次", x.last.ok ? "成功，" + x.last.message : "出错：" + x.last.message) : null), /* @__PURE__ */ h("div", { className: "ab-flex" }, x.exists ? null : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !!busy, onClick: () => act("/local/template", x.slot, "t") }, "生成模板"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
+    /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h("span", { className: cx("ab-pill", taken && "ok") }, taken ? "本地接管 " + taken + " 项" : "全部走内置方式"), failed2 ? /* @__PURE__ */ h("span", { className: "ab-pill err" }, "出错 " + failed2 + " 项") : null, missing ? /* @__PURE__ */ h("span", { className: "ab-pill" }, "还没生成 " + missing + " 项") : null),
+    /* @__PURE__ */ h("div", { className: "ab-dirrow", style: { marginTop: 10 } }, /* @__PURE__ */ h("code", { className: "ab-small", style: { flex: "1 1 220px", minWidth: 0, wordBreak: "break-all" } }, st ? st.dir : "…"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => post("/local/open").then((r) => toast(r.message)) }, "打开文件夹"))
+  ), !st ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.map((x) => /* @__PURE__ */ h(Card, { key: x.slot, title: x.title + "（" + x.file + "）", right: f.sw("local." + x.slot) }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 8, flexWrap: "wrap" } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: x.active ? "var(--ab-ok)" : "var(--ab-dim)" } }, x.active ? "● 正在由本地脚本接管" : !x.exists ? "还没有这个脚本" : !x.enabled ? "脚本已经有了，开关没开（用内置方式）" : "用内置方式"), x.last ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: x.last.ok ? "var(--ab-ok)" : "var(--ab-err)" } }, " · 上次", x.last.ok ? "成功，" + x.last.message : "出错：" + x.last.message) : null), /* @__PURE__ */ h("div", { className: "ab-flex", style: { flexWrap: "wrap", gap: 6 } }, x.exists ? null : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !!busy, onClick: () => act("/local/template", x.slot, "t") }, "生成模板"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
     navigator.clipboard.writeText(x.prompt);
     toast("复制好了，粘给 DSH，再把【】里那句换成你的情况", "ok");
   } }, "复制给 DSH 的话"), x.exists && (x.slot === "tts" || x.slot === "image") ? /* @__PURE__ */ h(Btn, { small: true, disabled: !!busy, onClick: () => act("/local/test", x.slot, "x") }, busy === x.slot + "x" ? "正在试…" : "试一下") : null), x.slot === "image" && img ? /* @__PURE__ */ h("img", { src: "data:image/png;base64," + img, style: { marginTop: 10, maxWidth: 240, borderRadius: 8 } }) : null)));
