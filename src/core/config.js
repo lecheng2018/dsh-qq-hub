@@ -598,7 +598,8 @@ export function normalize(raw) {
   if (!isObj(c.modules.market)) c.modules.market = {}
   const market = c.modules.market
   market.enabled = bool(market.enabled, false)
-  market.indexUrls = Array.isArray(market.indexUrls) ? market.indexUrls.map((s) => String(s).trim()).filter(Boolean).slice(0, 10) : []
+  // 索引源只收 https（缺陷：indexUrls 无协议白名单，可指向内网 http 服务）。
+  market.indexUrls = Array.isArray(market.indexUrls) ? market.indexUrls.map((s) => String(s).trim()).filter((s) => /^https:\/\//i.test(s)).slice(0, 10) : []
   if (!isObj(market.installed)) market.installed = {}
   if (!isObj(c.ext)) c.ext = {}
   for (const k of Object.keys(c.ext)) if (!isObj(c.ext[k])) delete c.ext[k] // 传 null = 删掉这个模块的设置
@@ -659,6 +660,8 @@ const SECRETS = [
   // 未生效（memory 是该机制首个使用者，疑似模块实例隔离问题，待查），静态清单双保险：
   // 掩码（publicConfig）与「留空保存保留原值」（mergeFromPanel）都依赖这份清单。
   ['ext', 'memory', 'vectorApiKey'],
+  // 精排 API Key（#146）同口径进静态清单（缺陷：rerankApiKey 漏进 SECRETS，明文回传面板）。
+  ['ext', 'memory', 'rerankApiKey'],
 ]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
