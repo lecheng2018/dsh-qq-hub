@@ -96,6 +96,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   const lastPrivateAt = (cfg) => Math.max(hub?.lastOwnerChatAt || 0, hub?.lastBotToOwner?.at || 0)
   const stateFile = () => dataDir('purpose', 'purpose-state.json')
   const nudgeFile = () => dataDir('purpose', 'nudge.json')
+  let bothEnabledWarned = false // 与「主动搭话」同开的告警只发一次
 
   // ---------- 状态 ----------
   function loadState(config, now = Date.now()) {
@@ -395,14 +396,26 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
         conversations: conversations(cfg, now),
         biliEntries: [], memoryRecords: memoryRecords(),
       })
+      const ownerKey = cfg.ownerQQ ? `private:${String(cfg.ownerQQ).replace(/[^\d]/g, '')}` : ''
       const incoming = (fresh.items || [])
         .filter((m) => m && m.text)
-        .map((m) => ({
-          source: CRUCIBLE_SOURCES.includes(m.source) ? m.source : 'group',
-          title: String(m.text || '').slice(0, 160),
-          fingerprint: m.fingerprint,
-          capturedAt: Number(m.at) || now,
-        }))
+        .map((m) => {
+          // 隐私单向流动（缺陷：私聊素材被标 source:'group' 且不带 scope → 池内全是 global，
+          // 主人私事将来供群聊匹配时就会泄露）。按素材来源会话挂 scope：
+          // 私聊/记忆/自省素材挂主人私聊域，群素材挂各自群域；match 只在同 chatKey 可见，
+          // 生产 match 的 chatKey 正是主人私聊（见 prepare），私事不出这个域。
+          const originKey = String(m.meta?.key || '')
+          const scope = /^group:\d+$/.test(originKey) ? originKey
+            : (ownerKey && m.source !== 'bili') ? ownerKey
+            : ''
+          return {
+            source: CRUCIBLE_SOURCES.includes(m.source) ? m.source : 'group',
+            title: String(m.text || '').slice(0, 160),
+            fingerprint: m.fingerprint,
+            capturedAt: Number(m.at) || now,
+            ...(scope ? { scope } : {}),
+          }
+        })
       let dirty = false
       let pool
       if (incoming.length) {
@@ -443,7 +456,6 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     if (isMuted?.(chatId)) return
     const now = Date.now()
     const state = loadState(config, now)
-    if (await maybeNudge(cfg, state, now)) return
     // Token 熔断（缺陷 D）：这条主动开口路径必须和 speakup 受同一份每日配额约束，
     // 否则「目的引擎」会绕开配额无限花钱。账本由接线层注入（modules/purpose/index.js
     // 从 token-billing 暴露的 ledger 拿来），本文件不 import 记账模块 —— 避免循环依赖。
@@ -462,6 +474,14 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
         return
       }
     } catch { /* 判定坏掉就按没锁处理，绝不永久掐话 */ }
+    // 追问也要烧一次模型调用：配额耗尽时不追问（缺陷：nudge 排在熔断判定之前），
+    // 交给下面的 evaluatePurposeTick 走 budget 分支如实记 skip 与下次开火时间。
+    if (!budgetBlocked && await maybeNudge(cfg, state, now)) return
+    // 「主动搭话」与「目的引擎」二选一（缺陷：无互锁，同开双份打扰）：至少明确告警一次。
+    if (!bothEnabledWarned && (cfg.speakUp || {}).enabled !== false) {
+      bothEnabledWarned = true
+      log?.warn?.('目的引擎与「主动搭话」同时开启：两条主动通路会各自独立打扰（文档建议二选一），建议关闭其中一个')
+    }
     const env = {
       enabled: true, modeOk: true, dshReady: true, paused: false, ownerAllowed: true,
       busy: false, friendOk: true, budgetBlocked, // 好友探测 QQ Hub 没有对应服务，恒可用（留 env 位）
@@ -476,13 +496,22 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     await runOnce({ reason: '定时', config, state })
   }
 
-  /** 手动触发（面板「现在就让她来找我」）：跳过排程类闸门，不跳过总开关/禁言。 */
+  /** 手动触发（面板「现在就让她来找我」）：跳过排程类闸门，不跳过总开关/禁言，
+   *  也**不跳过** Token 配额熔断与道别静默期（缺陷：手动 fire 绕过治理闸门）——
+   *  与 speakup 的 /speakup/fire 同口径：配额判定失败按未熔断（不永久掐话）。 */
   async function fire(reason = '手动') {
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled) return { outcome: 'disabled' }
     if (isMuted?.(chatIdOf(cfg))) return { outcome: 'muted' }
     if (!cfg.ownerQQ) return { outcome: 'no-owner' }
+    const chatId = chatIdOf(cfg)
+    try {
+      if (typeof budgetExhausted === 'function' && budgetExhausted(chatId) === true) return { outcome: 'budget' }
+    } catch { /* 判定坏掉按未熔断，绝不永久掐话 */ }
+    try {
+      if (typeof proactivelyMuted === 'function' && proactivelyMuted(chatId) === true) return { outcome: 'muted' }
+    } catch { /* 判定坏掉按没锁处理 */ }
     const state = loadState(config)
     return runOnce({ reason, config, state, force: true })
   }
