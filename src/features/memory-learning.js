@@ -97,6 +97,9 @@ export function createMemoryLearning({
     const mine = sourceState.items
       .filter((m) => !m.invalidAt && String(m.about) === String(qq))
       .filter((m) => String(m.scope || '') === String(scope))
+      // 传闻不进人物档案（上游 607090a 语义，fail-closed 加固）：听来的话不塑造对一个人的印象，
+      // 但仍留在普通记忆召回里（memoryLine 带「听X说」标注，模型自己知道分寸）。
+      .filter((m) => m.status !== 'hearsay')
       .sort((a, b) => a.at - b.at)
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
@@ -153,6 +156,7 @@ export function createMemoryLearning({
         about: about || target.about || '',
         importance: x.importance ?? target.importance ?? 0.5,
         source: 'auto',
+        status: target.status || 'guess',
         chatId,
         scope: scopeFromChatId(chatId),
         evidence: x.evidence,
@@ -168,6 +172,7 @@ export function createMemoryLearning({
       tags,
       importance: x.importance ?? 0.5,
       source: 'auto',
+      status: 'guess',
       chatId,
       scope: scopeFromChatId(chatId),
       evidence: x.evidence,

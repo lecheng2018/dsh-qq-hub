@@ -240,6 +240,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       ephemeral = false, pinned = false, entity = '', topic = '',
       evidence = '', title = '', personaId = '',
       kind: rawKind, selfView, perspective,
+      speaker = '', status: entryStatus = '',
     } = entry
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
@@ -280,6 +281,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       topic: String(topic || '').slice(0, 20),
       evidence: String(evidence || '').slice(0, 200),
       title: String(title || '').slice(0, 50),
+      // 写入时归因（上游 607090a 语义）：speaker=谁说的，status=hearsay(听来的)/guess(她自己提炼的)。
+      // 缺省视为 direct 不落字段，老数据天然兼容；hearsay 默认不进人物档案链路（见 buildProfile）。
+      ...(String(speaker || '').trim() ? { speaker: String(speaker).trim().slice(0, 40) } : {}),
+      ...(entryStatus === 'hearsay' || entryStatus === 'guess' ? { status: entryStatus } : {}),
       ...(personaId ? { personaId: String(personaId).trim() } : {}),
     }
 

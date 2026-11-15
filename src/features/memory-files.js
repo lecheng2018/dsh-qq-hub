@@ -232,6 +232,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             title: e.title || undefined,
             evidence: e.evidence || undefined,
             revision: e.revision || undefined,
+            // 传闻归因（上游 607090a 语义）：谁说的 / direct|hearsay|guess，缺省 direct 不落字段
+            speaker: e.speaker || undefined,
+            status: e.status || undefined,
           })
         } else if (kind === 'profile') {
           const key = `${e.about || ''}@${scope}`
@@ -403,6 +406,8 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           chatId: it.chatId || undefined,
           entity: it.entity || undefined,
           topic: it.topic || undefined,
+          speaker: it.speaker || undefined,
+          status: it.status || undefined,
         })
       }
 
