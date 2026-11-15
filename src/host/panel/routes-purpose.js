@@ -21,7 +21,7 @@ export function registerPurposeRoutes({
     const pu = use('purpose')
     if (typeof pu?.run !== 'function') return { ok: false, available: false, message: '目的引擎模块没在跑' }
     const r = await pu.run('面板')
-    const msg = r && { sent: '已经去找你了', silent: '她这轮想了想，决定不说（不硬发）', muted: '主人在私聊里让她闭嘴了', disabled: '目的引擎开关是关的' }[r.outcome]
+    const msg = r && { sent: '已经去找你了', silent: '她这轮想了想，决定不说（不硬发）', muted: '主人在私聊里让她闭嘴了', disabled: '目的引擎开关是关的', budget: '今天的 Token 配额已经用完了，她先休息（明天自动恢复）', 'no-owner': '还没配置主人 QQ' }[r.outcome]
     return { ok: !r || r.outcome !== 'disabled', message: msg || (r ? `这轮结束：${r.outcome}` : '没有结果'), result: redactTokens(r) }
   })
   route('/panel/purpose/config', async (req) => {
