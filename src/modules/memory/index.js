@@ -24,6 +24,12 @@ export default {
     vectorApiKey: '',
     vectorModel: 'BAAI/bge-m3',
     vectorDim: 1024,
+    // Cross-encoder 精排（1.4.4）：RRF 融合后的可选第二级排序，存 ext.memory.rerank*
+    rerankEnabled: false,
+    rerankUrl: '',
+    rerankApiKey: '',
+    rerankModel: 'BAAI/bge-reranker-v2-m3',
+    rerankTopN: 20,
   },
   settings: [
     { key: 'vectorEnabled', label: '语义召回（向量通道）', type: 'switch', hint: 'BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。需要自备 OpenAI 兼容 /embeddings 端点（如 SiliconFlow 的 BAAI/bge-m3）。保存后立即生效，无需重启；开启后存量记忆在下次写入或点「补全向量」时自动补齐' },
@@ -31,6 +37,11 @@ export default {
     { key: 'vectorApiKey', label: 'API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
     { key: 'vectorModel', label: '模型名', type: 'text', placeholder: 'BAAI/bge-m3' },
     { key: 'vectorDim', label: '向量维度', type: 'number', min: 64, max: 4096, step: 1, hint: '必须和模型实际输出一致（BAAI/bge-m3 是 1024）。改维度后旧向量自动失效重算' },
+    { key: 'rerankEnabled', label: '记忆精排（reranker）', type: 'switch', hint: '语义召回的进阶排序：RRF 融合后用 cross-encoder 对候选精排（只重排、不扩可见性）。需要 OpenAI 兼容 /rerank 端点（如 SiliconFlow 的 BAAI/bge-reranker-v2-m3），且先开启上面的语义召回。失败自动退回 RRF 顺序，保存即生效' },
+    { key: 'rerankUrl', label: 'Rerank 接口地址', type: 'text', placeholder: 'https://api.siliconflow.cn/v1/rerank', hint: '留空默认 SiliconFlow /rerank' },
+    { key: 'rerankApiKey', label: 'Rerank API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
+    { key: 'rerankModel', label: 'Rerank 模型名', type: 'text', placeholder: 'BAAI/bge-reranker-v2-m3' },
+    { key: 'rerankTopN', label: '精排候选数', type: 'number', min: 2, max: 50, step: 1, hint: 'RRF 融合后取前 N 条送精排，其余保持原顺序' },
   ],
   setup(api) {
     const { hub, http } = api.core
@@ -144,7 +155,7 @@ export default {
     api.route('/insights', async () => ({ ok: true, items: memory.insights(), styles: memory.styles() }))
     api.route('/memory/recalls', async () => ({ ok: true, list: memory.recalls() }))
     // 向量通道（1.4.4）：状态 + 手动补全。补全只 embed 缺失/文本变更的条目；要全量重建先删各作用域的 vectors.bin。
-    api.route('/memory/vector', async () => ({ ok: true, status: (typeof memory.vectorStatus === 'function' ? memory.vectorStatus() : { enabled: false }) }))
+    api.route('/memory/vector', async () => ({ ok: true, status: (typeof memory.vectorStatus === 'function' ? memory.vectorStatus() : { enabled: false }), rerank: (typeof memory.rerankStatus === 'function' ? memory.rerankStatus() : { enabled: false }) }))
     api.route('/memory/vector/backfill', async (req) => {
       if (req.method !== 'POST') return { ok: false, message: '请使用 POST 补全向量' }
       if (!memory.vectorEnabled?.()) return { ok: false, message: '向量通道未启用：在面板「记忆」页的记忆模块设置里开启，或配置 memory.embeddings' }
