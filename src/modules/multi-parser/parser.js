@@ -676,3 +676,24 @@ async function parseHeybox(url, cookie = '') {
     url,
   }
 }
+
+/**
+ * 这个聊天里要不要提供解析（纯函数）。
+ * 分三层：群开不开 → 私聊开不开 → 这个群有没有被单独关掉。
+ * 默认全开，行为不变；关掉后**连链接都不碰**（不发卡片、不下载、不占带宽）。
+ * 注：multi-parser 已上商店（壳在 dsh-qq-hub-mods），实现留包内；这里保留纯函数供回归与实现引用。
+ * @param {{kind?:string, chatId?:string, groupId?:string}} msg
+ * @param {object} c multi-parser 配置
+ */
+export function allowedHere(msg, c = {}) {
+  const kind = msg && msg.kind
+  if (kind === 'group') {
+    if (c.inGroups === false) return false
+    const gid = String((msg && (msg.groupId || (String(msg.chatId || '').startsWith('group:') ? String(msg.chatId).slice(6) : ''))) || '')
+    const off = Array.isArray(c.disabledGroups) ? c.disabledGroups.map(String) : []
+    return !(gid && off.includes(gid))
+  }
+  if (kind === 'private') return c.inPrivate !== false
+  // system 后台轮次不解析
+  return false
+}
