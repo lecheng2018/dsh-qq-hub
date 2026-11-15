@@ -21,9 +21,10 @@ test('内置清单完整：迁移前的全部动作都在', () => {
 })
 
 test('运行时登记：允许前缀生效、重复登记幂等', () => {
-  const r1 = registerReadActions(['get_fileset_id', 'get_flash_file_list', 'download_fileset'])
+  const r1 = registerReadActions(['get_fileset_id', 'get_flash_file_list', 'download_fileset', 'check_url_safely', 'ocr_image'])
   assert.deepEqual(r1.rejected, [])
   assert.ok(isReadAction('get_fileset_id'))
+  assert.ok(isReadAction('check_url_safely'), 'check_ 是纯预检，应放行')
   const r2 = registerReadActions(['get_fileset_id'])
   assert.deepEqual(r2.added, [], '重复登记不该再新增')
 })
