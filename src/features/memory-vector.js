@@ -334,7 +334,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
 
   /** 面板手动触发：把传入条目按 scope 分组强推入队（只补缺失/文本变更的；要全量重建先删 vectors.bin）。 */
   async function backfill(items) {
-    if (!enabled()) return { ok: false, message: '向量通道未启用（memory.embeddings）' }
+    if (!enabled()) return { ok: false, message: '向量通道未启用：面板「记忆」页模块设置或 memory.embeddings' }
     const byScope = new Map()
     for (const m of items || []) {
       if (!m || m.invalidAt) continue
