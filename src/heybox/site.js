@@ -25,6 +25,7 @@ const DEFAULT_STATE = {
   history: [],
   lastRun: 0,
   lastSkipReason: '',
+  topicsCache: null, // 分区全表：每天拉一次缓存 { date, list, fetchedAt }，面板下拉不用每次打开都打接口
 }
 
 const today = () => new Date().toISOString().slice(0, 10)
@@ -298,17 +299,44 @@ export function createHeybox({ getConfig, hub, memory, log }) {
       const r = d.result || {}
       const raw = r.topics || r.list || r.categories || []
       const out = []
+      const seen = new Set()
       const walk = (arr, dep = 0) => {
         if (!Array.isArray(arr) || dep > 2) return
         for (const t of arr) {
-          if (t && t.topic_id && t.name) out.push({ id: String(t.topic_id), name: String(t.name) })
+          if (t && t.topic_id && t.name && !seen.has(String(t.topic_id))) {
+            seen.add(String(t.topic_id))
+            out.push({ id: String(t.topic_id), name: String(t.name) })
+          }
           if (t && Array.isArray(t.children)) walk(t.children, dep + 1)
         }
       }
       walk(raw)
-      if (out.length) return { ok: true, list: out, message: out.map((t) => `${t.id} = ${t.name}`).join('\n') }
+      // live 标记区分「真拉到了」和「内置保底」：面板刷新提示要照实显示，零结果不冒充成功
+      if (out.length) return { ok: true, live: true, list: out, message: out.map((t) => `${t.id} = ${t.name}`).join('\n') }
     } catch { /* 拿不到就用内置的三个 */ }
-    return { ok: true, list: fallback, message: fallback.map((t) => `${t.id} = ${t.name}`).join('\n') + '（接口没返回，这是内置的三个）' }
+    return { ok: true, live: false, list: fallback, message: fallback.map((t) => `${t.id} = ${t.name}`).join('\n') + '（接口没返回，这是内置的三个）' }
+  }
+
+  /**
+   * 面板用的分区表：每天拉一次缓存进状态文件，不用每次打开面板都打接口。
+   * force=true（手动「刷新分区」）：一个都没拉到就返回 ok:false，面板按真实状态提示失败；
+   * 普通加载（打开面板）：拉不到就静默回落内置三个，保底不缓存（下次打开还会再试）。
+   */
+  async function topicsForPanel(force = false) {
+    const st = readState()
+    const cache = st.topicsCache
+    if (!force && cache && cache.date === today() && Array.isArray(cache.list) && cache.list.length) {
+      return { ok: true, cached: true, list: cache.list, count: cache.list.length, fetchedAt: cache.fetchedAt || 0 }
+    }
+    const r = await topicList()
+    if (r.live && r.list.length) {
+      const next = readState()
+      next.topicsCache = { date: today(), list: r.list, fetchedAt: nowMs() }
+      writeState(next)
+      return { ok: true, cached: false, list: r.list, count: r.list.length, fetchedAt: next.topicsCache.fetchedAt }
+    }
+    if (force) return { ok: false, list: r.list, count: r.list.length, message: '一个分区都没拉到（接口没返回），下拉先用内置的三个保底' }
+    return { ok: true, cached: false, live: false, list: r.list, count: r.list.length }
   }
 
   // ── 写：点赞 / 评论 / 删帖 ───────────────────────────────────────
@@ -675,7 +703,7 @@ export function createHeybox({ getConfig, hub, memory, log }) {
   log?.info?.('小黑盒模块起来了' + (cookie() ? '' : '（还没填 Cookie）'))
 
   return {
-    feed, feedReport, detail, watch, hot, search, topicList,
+    feed, feedReport, detail, watch, hot, search, topicList, topicsForPanel,
     like, comment, remove, post, browse, tick, account, saveCookie, clearQuota, state,
     linkIdOf, postBrief, POST_STYLES, DEFAULT_POST_STYLE, runDuty,
   }
