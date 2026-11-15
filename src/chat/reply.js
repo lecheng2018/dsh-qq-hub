@@ -27,6 +27,51 @@ export function stripReasoning(text) {
   return s
 }
 
+/** 无标记思考残片的保守清洗（语义移植上游 PR #348）：只删明确的思考标签/括号段、
+ * 带元信息的标签行、「最终回答」前的推理开场、「用户说…」推理开头段。
+ * 在 sanitizeOutbound 的保护区内调用：围栏代码/行内代码已被 protectExamples 换成占位符，天然豁免。
+ * 已知取舍：元信息行启发式按上游保守集合原样移植，「分析：这个方案需要先跑测试。」这类
+ * 含元信息关键词的正常行会被上游同样删掉，不自行扩大也不自行收窄。 */
+export function stripUnmarkedThinking(text) {
+  const raw = String(text || '')
+  const found = []
+  const add = (start, end) => { if (end > start) found.push({ start, end }) }
+
+  // 【思考】…【/思考】、[analysis]…[/analysis] 这类显式块
+  for (const m of raw.matchAll(/(?:【|\[)\s*(?:思考|分析|推理|内心|思路|thinking|analysis|reasoning)\s*(?:】|\])[\s\S]*?(?:【|\[)\s*\/\s*(?:思考|分析|推理|内心|思路|thinking|analysis|reasoning)\s*(?:】|\])/gi)) add(m.index, m.index + m[0].length)
+
+  // （思考：…）/（分析：…）这类括号内心段
+  for (const m of raw.matchAll(/[（(]\s*(?:思考|分析|推理|内心活动)\s*[：:][\s\S]{0,2000}?[）)]/g)) add(m.index, m.index + m[0].length)
+
+  // 单独成行的「思考过程：/分析：…」；只在带元信息时删，避免误伤正常回答里的“分析：这个方案…”
+  for (const m of raw.matchAll(/(^|\n)([ \t]*(?:\*\*)?(?:思考过程|分析过程|推理过程|思考|分析|推理|内心活动|内心|思路|回复策略|回答策略|意图分析|用户意图)\s*[：:][^\n]*)(?=\n|$)/g)) {
+    const line = m[2]
+    if (/(?:用户|对方|她|他|我|需要|先|然后|回复|回答|意图|情绪|场景|判断|想)/.test(line)) add(m.index + m[1].length, m.index + m[0].length)
+  }
+
+  // 结构化推理开场 + 「最终回答：」：只保留最终回答，前面有明确元信息才触发
+  const final = /(?:^|\n)[ \t]*(?:最终回答|最终回复|最终答复|回复用户|答复)\s*[：:][ \t]*/i.exec(raw)
+  if (final && final.index > 0) {
+    const prefix = raw.slice(0, final.index)
+    if (/(?:用户|对方|提问者|需要|让我|首先|接下来|分析|判断|回复|回答)/.test(prefix)) add(0, final.index + final[0].length)
+  }
+
+  // 「用户说…」+ 空行 + 正文：把纯推理开场段落去掉
+  const meta = /^\s*(?:用户|对方|提问者)(?:说|问|想|希望|要求)[\s\S]{0,300}?(?:。|！|？)\s*\n\s*\n/.exec(raw)
+  if (meta) add(0, meta[0].length)
+
+  if (!found.length) return raw
+  found.sort((a, b) => a.start - b.start || b.end - a.end)
+  let out = ''
+  let cursor = 0
+  for (const { start, end } of found) {
+    if (end <= cursor) continue
+    if (start >= cursor) out += raw.slice(cursor, start)
+    cursor = end
+  }
+  return out + raw.slice(cursor)
+}
+
 /**
  * 心智独白的解析预算（计划书 v3.4 §4.3「150 Token 预算兜底」）。
  * 超过这个字数的 inner 块视为「模型跑飞的损坏内心流」：整块丢弃、正文照常输出，
@@ -289,8 +334,8 @@ function sanitizeOutbound(text) {
   const protectedText = protectExamples(text)
   const protectedJson = protectJsonExamples(protectedText.text)
   // 心智独白（v3.4 Phase 1）：<inner>…</inner> 只给状态机消费，绝不能混进 QQ。
-  // 管线顺序按计划书：stripReasoning → extractAndStripInnerMonologue → stripPromptEcho。
-  const stripped = extractAndStripInnerMonologue(stripReasoning(protectedJson.text)).text
+  // 管线顺序按计划书：stripReasoning → stripUnmarkedThinking → extractAndStripInnerMonologue → stripPromptEcho。
+  const stripped = extractAndStripInnerMonologue(stripUnmarkedThinking(stripReasoning(protectedJson.text))).text
   const cleaned = stripInternalMemo(stripped)
   const sanitized = stripPromptEcho(stripToolOutput(cleaned))
   return protectedText.restore(protectedJson.restore(sanitized))
