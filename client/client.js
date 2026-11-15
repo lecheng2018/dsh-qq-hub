@@ -96,7 +96,12 @@ var theme_default = '/* QQ Hub 面板样式 —— 现代中性 SaaS 风。\n * 
 var CSS = theme_default;
 function useStyle() {
   useEffect(() => {
-    if (document.getElementById("qq-hub-css")) return;
+    const existing = document.getElementById("qq-hub-css");
+    if (existing) {
+      if (existing.textContent === CSS) return;
+      existing.textContent = CSS;
+      return;
+    }
     const s = document.createElement("style");
     s.id = "qq-hub-css";
     s.textContent = CSS;
@@ -2775,7 +2780,7 @@ function Bili({ draft, setDraft, toast }) {
     /* @__PURE__ */ h(Row, { label: "截图库最多存", hint: "超过就自动删最旧的；下面的截图库里也能一张张手动删" }, f.num("bili.shotLibrary", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
     /* @__PURE__ */ h(Row, { label: "ffmpeg 路径", hint: "留空就自己在 PATH 里找；找不到就填绝对路径" }, f.text("bili.ffmpegPath", { placeholder: "C:\\ffmpeg\\bin\\ffmpeg.exe" })),
     s && s.vision ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4, color: s.vision.ffmpeg ? "var(--ab-ok)" : "var(--ab-warn)" } }, (s.vision.ffmpeg ? "✓ 已找到 ffmpeg：" + s.vision.ffmpeg : "✗ 没找到 ffmpeg：抽帧会被跳过，装一个或者在上面填路径") + (s.shots ? "　·　手上存了 " + s.shots.count + " 张截图" : "")) : null
-  ), /* @__PURE__ */ h(Card, { title: "截图库" + (shots ? "（" + shots.length + " / " + (draft.bili && draft.bili.shotLibrary || 300) + "）" : ""), right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: loadShots }, "刷新")) }, !shots ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : shots.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🎬", text: "还没有截图。打开上面的「让她看画面」刷一轮 B 站，就会开始截。" }) : /* @__PURE__ */ h("div", { className: "ab-shots" }, shots.map((it) => /* @__PURE__ */ h(ShotCell, { key: it.file, it, onChanged: () => {
+  ), /* @__PURE__ */ h(Card, { title: "截图库" + (shots ? "（" + shots.length + " / " + (draft.bili && draft.bili.shotLibrary || 300) + "）" : ""), right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: loadShots }, "刷新")) }, !shots ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : (shots || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🎬", text: "还没有截图。打开上面的「让她看画面」刷一轮 B 站，就会开始截。" }) : /* @__PURE__ */ h("div", { className: "ab-shots" }, (shots || []).map((it) => /* @__PURE__ */ h(ShotCell, { key: it.file, it, onChanged: () => {
     loadShots();
     load();
   }, toast })))), /* @__PURE__ */ h(Card, { title: "评论、回复和分享", desc: "评论和回复要登录。试运行开着时只记日志不发。" }, /* @__PURE__ */ h(Row, { label: "自己发评论" }, f.sw("bili.comment"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxCommentsPerDay", { min: 0, max: 50 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "回别人回她的评论" }, f.sw("bili.reply"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxRepliesPerDay", { min: 0, max: 100 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "看到好玩的分享给你", hint: "私聊发给主人，带视频链接" }, f.sw("bili.shareToOwner")), /* @__PURE__ */ h(Row, { label: "顺手点赞" }, f.sw("bili.like"))), /* @__PURE__ */ h(
@@ -2786,7 +2791,7 @@ function Bili({ draft, setDraft, toast }) {
     },
     s && s.pauseReason ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginBottom: 8 } }, "今天先不发评论和回复了：", s.pauseReason, "（明天自动恢复；Cookie 过期的话重新复制一份填上）") : null,
     s ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "今天自动刷了 ", s.runs, " 轮 · 评论 ", s.comments, " 条 · 回复 ", s.replies, " 条", s.lastRun ? " · 上次 " + timeAgo(s.lastRun) : "", "（手动刷不占次数）") : null,
-    !s ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : s.history.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📺", text: "还没刷过。点「现在刷一轮」试试。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, s.history.map((x, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(x.at), /* @__PURE__ */ h("br", null), BILI_KIND[x.kind] || x.kind), /* @__PURE__ */ h("div", { className: "body" }, x.bvid ? /* @__PURE__ */ h("a", { href: "https://www.bilibili.com/video/" + x.bvid, target: "_blank", rel: "noreferrer" }, "《", x.title, "》") : /* @__PURE__ */ h("b", null, "《", x.title, "》"), x.text ? /* @__PURE__ */ h("div", { className: "ab-muted" }, x.text) : null))))
+    !s ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : (s.history || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📺", text: "还没刷过。点「现在刷一轮」试试。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, (s.history || []).map((x, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(x.at), /* @__PURE__ */ h("br", null), BILI_KIND[x.kind] || x.kind), /* @__PURE__ */ h("div", { className: "body" }, x.bvid ? /* @__PURE__ */ h("a", { href: "https://www.bilibili.com/video/" + x.bvid, target: "_blank", rel: "noreferrer" }, "《", x.title, "》") : /* @__PURE__ */ h("b", null, "《", x.title, "》"), x.text ? /* @__PURE__ */ h("div", { className: "ab-muted" }, x.text) : null))))
   ));
 }
 function ShotCell({ it, onChanged, toast }) {
@@ -2901,7 +2906,7 @@ function Douyin({ draft, setDraft, toast }) {
     },
     s && s.pauseReason ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginBottom: 8 } }, "今天先不点赞评论了：", s.pauseReason, "。要验证的话点上面「显示浏览器窗口」处理，明天自动恢复。") : null,
     s ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "今天自动刷了 " + s.runs + " 轮 · 看了 " + s.watched + " · 赞 " + s.like + "/" + caps.like + " · 评 " + s.comment + "/" + caps.comment + " · 分享 " + s.share + "/" + caps.share + (s.atOwner ? " · @你 " + s.atOwner + "/" + caps.atOwner : ""), s.newAccount ? "（新号，上限减半）" : "", s.lastRun ? " · 上次 " + timeAgo(s.lastRun) : "", s.lastSkipReason ? " · 上次没刷成：" + s.lastSkipReason : "") : null,
-    !s ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : s.history.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📱", text: "还没刷过。先扫码登录、打开开关，再点「现在刷一轮」。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, s.history.map((x, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(x.at), /* @__PURE__ */ h("br", null), DOUYIN_KIND[x.kind] || x.kind), /* @__PURE__ */ h("div", { className: "body" }, x.awemeId ? /* @__PURE__ */ h("a", { href: "https://www.douyin.com/video/" + x.awemeId, target: "_blank", rel: "noreferrer" }, x.title || (x.author ? x.author + " 的视频" : x.awemeId)) : null, x.author && x.title ? /* @__PURE__ */ h("span", { className: "ab-muted" }, " · ", x.author) : null, x.text ? /* @__PURE__ */ h("div", { className: "ab-muted" }, (x.atOwner ? "@你 " : "") + (x.via ? "（" + x.via.map((w) => w === "douyin" ? "抖音私信" : "QQ").join(" + ") + "）" : "") + x.text) : null))))
+    !s ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : (s.history || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📱", text: "还没刷过。先扫码登录、打开开关，再点「现在刷一轮」。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, (s.history || []).map((x, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(x.at), /* @__PURE__ */ h("br", null), DOUYIN_KIND[x.kind] || x.kind), /* @__PURE__ */ h("div", { className: "body" }, x.awemeId ? /* @__PURE__ */ h("a", { href: "https://www.douyin.com/video/" + x.awemeId, target: "_blank", rel: "noreferrer" }, x.title || (x.author ? x.author + " 的视频" : x.awemeId)) : null, x.author && x.title ? /* @__PURE__ */ h("span", { className: "ab-muted" }, " · ", x.author) : null, x.text ? /* @__PURE__ */ h("div", { className: "ab-muted" }, (x.atOwner ? "@你 " : "") + (x.via ? "（" + x.via.map((w) => w === "douyin" ? "抖音私信" : "QQ").join(" + ") + "）" : "") + x.text) : null))))
   ));
 }
 
