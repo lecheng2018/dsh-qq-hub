@@ -203,7 +203,8 @@ function ProfileRow({ p, toast, onChanged }) {
       <div className="meta">
         <b>{p.name || p.qq}</b><br />
         <span className="ab-small">{p.qq}</span><br />
-        <span className="ab-pill" style={{ padding: '0 6px', fontSize: 11, background: p.scope === 'global' ? 'var(--ab-sea, #35506b)' : 'rgba(0,0,0,.18)' }}>
+        {/* 蓝底胶囊必须显式白字：.ab-pill 默认 color 是 var(--ab-sub)（深灰），压在 --ab-sea 上几乎看不见 */}
+        <span className="ab-pill" style={{ padding: '0 6px', fontSize: 11, background: p.scope === 'global' ? 'var(--ab-sea, #35506b)' : 'rgba(0,0,0,.18)', color: p.scope === 'global' ? '#fff' : 'var(--ab-sub)' }}>
           {scopeLabel}
         </span><br />
         <span className="ab-small">{timeAgo(p.at)}</span>

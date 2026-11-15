@@ -55,6 +55,7 @@ export default {
   id: 'social-actions',
   name: '社交动作',
   version: '1.0.0',
+  tab: 'enhance',
   description: '关系温度够了才有的表情回应（可关可调）；主人私聊工具：设/取精华（qq_essence）、QZone 赞/评论/改可见性（qq_qzone_action）',
   defaults: {
     reactionsEnabled: false,

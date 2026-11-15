@@ -48,6 +48,7 @@ export default {
   id: 'online-status',
   name: '在线与已读',
   version: '1.0.0',
+  tab: 'enhance',
   description: '收到消息后上报已读（可配延迟）；网关连上时设置自定义在线状态文字',
   defaults: {
     markReadEnabled: false,
