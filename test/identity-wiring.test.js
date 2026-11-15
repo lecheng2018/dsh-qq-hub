@@ -156,14 +156,11 @@ test('语感学习：全局沉淀用全局那张卡的名字', async (t) => {
   assert.doesNotMatch(params[0].system, /大肥鱼/)
 })
 
-test('群唤醒词：卡名并进唤醒词，但没卡时不乱加兜底名', async () => {
+test('群唤醒词：不自动将卡名并进唤醒词，唤醒词完全由配置决定', async () => {
   const { DEFAULT_GROUP_POLICY, withRoleWakeWords, policyFor } = await import('../src/chat/group-policy.js')
   const pol = policyFor({}, {}, '777')
   const withCard = withRoleWakeWords(pol, { name: '小鲸', hasCard: true })
-  assert.deepEqual(withCard.wakeWords.slice(0, 1), ['小鲸'], '换卡后喊新名字要叫得动')
-  assert.deepEqual(withCard.wakeWords, ['小鲸', ...DEFAULT_GROUP_POLICY.wakeWords], '原有唤醒词不能丢')
+  assert.deepEqual(withCard.wakeWords, DEFAULT_GROUP_POLICY.wakeWords, '不自动将卡名并进唤醒词')
   const noCard = withRoleWakeWords(pol, { name: 'AI伴侣', hasCard: false })
   assert.deepEqual(noCard.wakeWords, DEFAULT_GROUP_POLICY.wakeWords, '兜底名不该变成唤醒词')
-  const dup = withRoleWakeWords(pol, { name: DEFAULT_GROUP_POLICY.wakeWords[0], hasCard: true })
-  assert.deepEqual(dup.wakeWords, DEFAULT_GROUP_POLICY.wakeWords, '已经在列表里的不重复加')
 })
