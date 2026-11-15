@@ -214,7 +214,7 @@ export function apply(ctx) {
   }
 
   const recentMedia = createRecentMedia({ log: logger.child('recent-media') })
-  const inboundAudio = createInboundAudio({ onebot, dsh: ctx, localApi: local, log: logger.child('inbound-audio') })
+  const inboundAudio = createInboundAudio({ onebot, dsh: ctx, localApi: local, log: logger.child('inbound-audio'), getConfig })
   const inboundImages = createInboundImages({ onebot, dsh: ctx, log: logger.child('inbound-images') })
   const inboundVision = createInboundVision({ dsh: ctx, log: logger.child('inbound-vision'), inboundImages })
   const quotedMessages = createQuotedMessages({

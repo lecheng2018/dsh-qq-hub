@@ -1,7 +1,10 @@
 import { fetchImage } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
+import { createCloudAsr } from '../voice/cloud-asr.js'
 
-export function createInboundAudio({ onebot, dsh, localApi, log } = {}) {
+export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {}) {
+  // 云端 ASR（1.4.4）：配置门控默认关；未传 getConfig 时恒不启用（兼容旧调用方）。
+  const cloudAsr = createCloudAsr({ getConfig: getConfig || (() => ({})), log })
   async function recordWav(rec) {
     const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
     const raw = info?.base64
@@ -48,12 +51,23 @@ export function createInboundAudio({ onebot, dsh, localApi, log } = {}) {
     return text ? String(text).trim() : ''
   }
 
+  async function cloudText(rec) {
+    if (!cloudAsr.enabled()) return ''
+    return cloudAsr.transcribe(await recordWav(rec))
+  }
+
   async function transcribeRecord(rec, messageId) {
     try {
       const text = await localText(rec)
       if (text) return text
     } catch (error) {
       log?.debug?.('本地接口语音识别失败：', error.message)
+    }
+    try {
+      const text = await cloudText(rec)
+      if (text) return text
+    } catch (error) {
+      log?.debug?.('云端语音识别失败：', error.message)
     }
     try {
       const text = await gatewayText(messageId)
