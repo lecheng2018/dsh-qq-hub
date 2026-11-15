@@ -20,7 +20,7 @@ function fakeApi({ ownerQQ = '1000', conf = {} } = {}) {
   }
   const api = {
     config: () => cfg,
-    log: { info: (m) => logs.push(String(m)), warn: (m, e) => logs.push(String(m) + (e || '')) },
+    log: { info: (m) => logs.push(String(m)), warn: (m, e) => logs.push(String(m) + (e || '')), debug: (m) => logs.push(String(m)) },
     on: (ev, fn) => { if (!handlers.has(ev)) handlers.set(ev, []); handlers.get(ev).push(fn) },
     every: (ms, fn) => timers.push({ ms, fn }),
     route: (p, fn) => routes.set(p, fn),

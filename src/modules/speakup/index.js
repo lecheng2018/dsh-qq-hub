@@ -52,7 +52,8 @@ export default {
       if (api.config().ownerQQ && exhausted(ownerKey)) {
         let left = 0
         try { left = defaultLedger.remaining(ownerKey) } catch { left = 0 }
-        api.log?.info?.(`Token 配额已用完 → 主动搭话熔断（剩余 ${left}）`)
+        // debug 而非 info：熔断期间这条每 60 秒刷一次，属预期状态而非需要主人处理的事。
+        api.log?.debug?.(`Token 配额已用完 → 主动搭话熔断（剩余 ${left}）`)
         return
       }
       // 刚道过别就先不主动开口（不必打 info：这是预期行为，每 60 秒刷一行会很吵）。

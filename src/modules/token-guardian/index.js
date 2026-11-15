@@ -24,7 +24,7 @@ export default {
   api: 1,
   description: '移植自 dsh-qq：会话 token 涨太多时提前压缩历史，省下缓存读取的钱',
   panel: 'panel.js',
-  tab: 'model',
+  tab: 'token',
   defaults: {
     enabled: false,
     /** 触发阈值（token 估算，真实 usage 不可用时按字符数 × 1.4 粗算） */

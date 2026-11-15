@@ -12,18 +12,39 @@
 // 但两者用途不同 —— guardian 判「上下文要不要压缩」，本模块累计「今天一共花了多少」。
 
 import { readJson, writeJson } from '../../core/store.js'
-import { defaultLedger } from '../../chat/token-ledger.js'
+import { defaultLedger, todayKey } from '../../chat/token-ledger.js'
 
 /** 落盘节流：用量变化后最多每 30 秒写一次，避免每轮聊天都刷盘。 */
 const FLUSH_INTERVAL_MS = 30_000
+
+/**
+ * 面板设置 → 账本预算（纯函数，测试直打）。
+ * dailyBudget 单位 Token；ownerSharePercent 是百分数字面量（60 = 60%）。
+ * 非法输入回退默认值（50,000 / 60%），绝不抛——设置页手滑不该炸掉记账。
+ */
+export function budgetFromSettings(s = {}) {
+  const total = Math.max(1000, Math.min(5_000_000, Math.round(Number(s.dailyBudget) || 50_000) || 50_000))
+  const percent = Math.max(0, Math.min(100, Number(s.ownerSharePercent) || 0))
+  const ownerSharePercent = Number.isFinite(Number(s.ownerSharePercent)) && String(s.ownerSharePercent ?? '').trim() !== '' ? percent : 60
+  return { total, ownerShare: ownerSharePercent / 100 }
+}
 
 export default {
   id: 'token-billing',
   name: 'Token 记账',
   version: '1.0.1',
-  description: '按会话累计每日 Token 消耗，供主动生活流熔断使用',
+  description: '按会话累计每日 Token 消耗，供主动生活流熔断使用；预算与占比可在下方调整，改完立即重新分配',
   tab: 'token',
   files: ['chat/token-ledger.js'],
+  panel: 'panel.js',
+  defaults: {
+    dailyBudget: 50000,
+    ownerSharePercent: 60,
+  },
+  settings: [
+    { key: 'dailyBudget', label: '每日总预算 (Token)', type: 'number', min: 1000, max: 5000000, step: 5000, hint: '主人私聊 + 白名单群这一天总共允许后台生活流烧多少；改完立即重新分配，已用部分保留' },
+    { key: 'ownerSharePercent', label: '主人私聊占比 (%)', type: 'number', min: 0, max: 100, step: 5, hint: '总预算里主人私聊拿走的比例（60 = 60%），剩下由白名单群均摊。烧完只熔断主动搭话/目的引擎，正常问答不受影响' },
+  ],
   setup(api) {
     const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
 
@@ -31,22 +52,28 @@ export default {
     // 返回 refused/no-quota，账本永远是 0 —— 那样熔断条件永远不成立。
     // 所以每天第一次记账前先把当期会话分配一次（allocate 幂等，重复调用只刷新分配表）。
     let allocatedDay = ''
+    let allocatedSig = '' // `${day}|${total}|${share}`——设置变化时立即重新分配（已用保留，剩余按新上限重算）
     // 脏标记必须声明在 ensureAllocated 之前：它内部会置 dirty=true。
     // 放在后面虽然当前调用时机安全（都在声明之后才调），但那是靠调用顺序兜着的
     // 隐性 TDZ 风险 —— 谁把 ensureAllocated 提前一次调用就炸。
     let dirty = false
-    function ensureAllocated(cfg) {
+    function ensureAllocated(cfg, { force = false } = {}) {
       const snap = defaultLedger.snapshot()
       const day = String(snap?.dateKey || '')
-      if (day === allocatedDay) return
+      const s = api.settings ? api.settings() : {}
+      const budget = budgetFromSettings(s)
+      const sig = `${day}|${budget.total}|${budget.ownerShare}`
+      if (!force && day === allocatedDay && sig === allocatedSig) return
       // 主人私聊 + 白名单群：这两类才分主动生活流配额（计划书 §八.2 的口径）。
       const chats = []
       const ownerQQ = String(cfg?.ownerQQ || '')
       if (ownerQQ) chats.push({ chatKey: `private:${ownerQQ}`, owner: true })
       for (const g of (cfg?.allow?.groups || [])) chats.push({ chatKey: `group:${g}`, whitelisted: true })
       try {
-        defaultLedger.allocate(chats)
+        // allocate 只重算限额、不清已用——改设置后剩余 = 新上限 − 已用，即时生效。
+        defaultLedger.allocate(chats, budget)
         allocatedDay = day
+        allocatedSig = sig
         dirty = true
       } catch (error) {
         api.log?.warn?.('Token 配额分配失败：', error?.message || error)
@@ -116,6 +143,19 @@ export default {
 
     // 面板/诊断用：今日各会话用量与配额。
     api.route('/token-usage', async () => ({ ok: true, ...defaultLedger.snapshot() }))
+
+    // 面板「重置今天用量」：清空已用、保留分配，剩余立刻回满。主人手动救急用，
+    // 不是日常操作——所以面板按钮做了两步确认，这里不再另设口令。
+    api.route('/token-usage/reset', async () => {
+      ensureAllocated(api.config())
+      const snap = defaultLedger.resetDaily(todayKey())
+      dirty = true
+      flush(true)
+      return { ok: true, message: '今天的用量已清零，配额回满', snapshot: snap }
+    })
+
+    // 设置变化（面板保存 / 配置文件改动）→ 立即按新预算重新分配
+    api.on('config', () => { ensureAllocated(api.config(), { force: true }) })
     return { ledger: defaultLedger }
   },
 }
