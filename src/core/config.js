@@ -270,7 +270,10 @@ const DEFAULTS_RAW = {
   tabs: {}, // 面板记住的小偏好
   // 模块：内置的和数据目录 modules/ 里自己写的。{ 模块id: { enabled, useBuiltin } }，没写的算开着
   // useBuiltin：自己写了同名模块，但想先用回内置的
-  modules: {},
+  modules: {
+    // 模块市场（分发半套）：默认 OFF；indexUrls 按序 failover；installed 记账
+    market: { enabled: false, indexUrls: [], installed: {} },
+  },
   safeMode: false, // 安全模式：自己写的模块一个都不加载（排查问题用）
   ext: {}, // 自己写的模块的设置：{ 模块id: {...} }
   // 联动：让别的程序、DSH 里别的会话和插件也能用她
@@ -567,10 +570,16 @@ export function normalize(raw) {
 
   if (!isObj(c.modules)) c.modules = {}
   for (const [id, m] of Object.entries(c.modules)) {
+    if (id === 'market') continue // market 是市场记账块，不是模块设置（下面单独归一化，默认 OFF）
     if (!isObj(m)) { delete c.modules[id]; continue }
     m.enabled = bool(m.enabled, true)
     m.useBuiltin = bool(m.useBuiltin, false)
   }
+  if (!isObj(c.modules.market)) c.modules.market = {}
+  const market = c.modules.market
+  market.enabled = bool(market.enabled, false)
+  market.indexUrls = Array.isArray(market.indexUrls) ? market.indexUrls.map((s) => String(s).trim()).filter(Boolean).slice(0, 10) : []
+  if (!isObj(market.installed)) market.installed = {}
   if (!isObj(c.ext)) c.ext = {}
   for (const k of Object.keys(c.ext)) if (!isObj(c.ext[k])) delete c.ext[k] // 传 null = 删掉这个模块的设置
   if (!isObj(c.multiParser)) c.multiParser = {}
