@@ -91,8 +91,8 @@ function Bili({ draft, setDraft, toast }) {
       <Card title={'截图库' + (shots ? '（' + shots.length + ' / ' + ((draft.bili && draft.bili.shotLibrary) || 300) + '）' : '')} right={<div className="ab-flex"><Btn small kind="ghost" onClick={loadShots}>刷新</Btn></div>}>
         {!shots
           ? <Empty icon="⏳" text="加载中…" />
-          : shots.length === 0 ? <Empty icon="🎬" text="还没有截图。打开上面的「让她看画面」刷一轮 B 站，就会开始截。" />
-            : <div className="ab-shots">{shots.map((it) => <ShotCell key={it.file} it={it} onChanged={() => { loadShots(); load() }} toast={toast} />)}</div>}
+          : (shots || []).length === 0 ? <Empty icon="🎬" text="还没有截图。打开上面的「让她看画面」刷一轮 B 站，就会开始截。" />
+            : <div className="ab-shots">{(shots || []).map((it) => <ShotCell key={it.file} it={it} onChanged={() => { loadShots(); load() }} toast={toast} />)}</div>}
       </Card>
       <Card title="评论、回复和分享" desc="评论和回复要登录。试运行开着时只记日志不发。">
         <Row label="自己发评论">{f.sw('bili.comment')}<span className="ab-muted">每天最多</span>{f.num('bili.maxCommentsPerDay', { min: 0, max: 50 })}<span className="ab-muted">条</span></Row>
@@ -113,10 +113,10 @@ function Bili({ draft, setDraft, toast }) {
         {s ? <div className="ab-muted ab-small" style={{ marginBottom: 8 }}>今天自动刷了 {s.runs} 轮 · 评论 {s.comments} 条 · 回复 {s.replies} 条{s.lastRun ? ' · 上次 ' + timeAgo(s.lastRun) : ''}（手动刷不占次数）</div> : null}
         {!s
           ? <Empty icon="⏳" text="加载中…" />
-          : s.history.length === 0 ? <Empty icon="📺" text="还没刷过。点「现在刷一轮」试试。" />
+          : (s.history || []).length === 0 ? <Empty icon="📺" text="还没刷过。点「现在刷一轮」试试。" />
             : (
               <div className="ab-list">
-                {s.history.map((x, i) => (
+                {(s.history || []).map((x, i) => (
                   <div key={i} className="ab-li">
                     <div className="meta">{timeAgo(x.at)}<br />{BILI_KIND[x.kind] || x.kind}</div>
                     <div className="body">
