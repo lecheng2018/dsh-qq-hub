@@ -2265,6 +2265,77 @@ function Simulate({ toast }) {
     setTout(null);
   } })), cur && cur.parameters && Object.keys(cur.parameters.properties || {}).length ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { margin: "0 0 6px" } }, "参数：", Object.entries(cur.parameters.properties).map(([k, v]) => k + (v.description ? "（" + v.description + "）" : "")).join("；")) : null, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 50 }, value: args, onChange: (e) => setArgs(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: call, disabled: !tool }, "调用")), tout ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-code" }, JSON.stringify(tout.result, null, 2)), sentList(tout.sent)) : null) : /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "这个场合没有工具"));
 }
+function Market({ st, toast, reload }) {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [prog, setProg] = useState(null);
+  const load = () => get("/modules/market").then(setData).catch(() => setData({ ok: false, message: "市场加载失败", list: [] }));
+  useEffect(() => {
+    load();
+  }, []);
+  useEffect(() => {
+    if (!busy) return void 0;
+    const t = setInterval(() => get("/modules/market/progress").then((r) => setProg(r.progress)).catch(() => {
+    }), 700);
+    return () => clearInterval(t);
+  }, [busy]);
+  const enabled = st.config?.modules?.market?.enabled === true;
+  const toggle = async (v) => {
+    const r = await post("/save", { modules: { market: { enabled: v } } });
+    toast(v ? "模块市场开了" : "模块市场关了", "ok");
+    reload();
+    load();
+    return r;
+  };
+  const install = async (e, confirmReplace = false) => {
+    setBusy(e.id);
+    try {
+      let r = await post("/modules/market/install", { id: e.id, confirmReplace });
+      if (r.needConfirm && window.confirm(r.message + "\n\n装模块等于装进程内代码，确认替换内置模块？")) {
+        r = await post("/modules/market/install", { id: e.id, confirmReplace: true });
+      }
+      toast(r.message, r.ok ? "ok" : "err");
+      if (r.ok) {
+        load();
+        reload();
+      }
+    } finally {
+      setBusy("");
+      setProg(null);
+    }
+  };
+  const remove = async (e, purge) => {
+    if (!window.confirm(purge ? `卸载「${e.name || e.id}」并清掉它的数据和设置？` : `卸载「${e.name || e.id}」？数据和设置会留着。`)) return;
+    setBusy(e.id);
+    try {
+      const r = await post("/modules/market/remove", { id: e.id, purge });
+      toast(r.message, r.ok ? "ok" : "err");
+      if (r.ok) {
+        load();
+        reload();
+      }
+    } finally {
+      setBusy("");
+    }
+  };
+  const stageText = { index: "读索引…", download: "下载中", install: "校验安装…", start: "启动模块…" };
+  return /* @__PURE__ */ h(
+    Card,
+    {
+      title: "模块市场",
+      desc: "从社区模块库安装新本事。装模块等于装进程内代码：看清作者、许可和校验和再装；默认不自动更新。",
+      more: "索引支持多源（GitHub raw → jsdelivr 镜像），也可在配置 modules.market.indexUrls 里填自建/内网源。\\n市场模块和内置一样：发送必经 Outbox 台账，记忆按会话隔离。",
+      right: /* @__PURE__ */ h(Switch, { on: enabled, onChange: toggle })
+    },
+    !enabled ? /* @__PURE__ */ h("div", { className: "ab-note" }, "市场没开。打开右上角开关后刷新列表。") : null,
+    enabled && !data ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : null,
+    enabled && data && !data.ok ? /* @__PURE__ */ h("div", { className: "ab-note err" }, data.message || "索引读不到", "（已装模块不受影响）") : null,
+    enabled && data && data.ok ? /* @__PURE__ */ h(Fragment, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).map((e) => /* @__PURE__ */ h("div", { key: e.id, style: { padding: "8px 0", borderBottom: "1px solid var(--ab-line, rgba(127,127,127,.15))" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 8 } }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null, /* @__PURE__ */ h("span", { style: { flex: 1 } }), e.installed ? /* @__PURE__ */ h(Fragment, null, e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : null, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4 } }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）`].filter(Boolean).join(" · ")), e.sha256 ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2, wordBreak: "break-all" } }, "sha256: ", e.sha256, e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : "") : null, e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 4 } }, e.blocked) : null)), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+      setData(null);
+      await load();
+    } }, "刷新列表"), data.source ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "索引源：", data.source) : null)) : null
+  );
+}
 function Modules({ st, draft, toast, reload }) {
   const [data, setData] = useState(null);
   const [newId, setNewId] = useState("");
@@ -2313,7 +2384,7 @@ function Modules({ st, draft, toast, reload }) {
       reload();
     } })),
     st.config.safeMode ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "安全模式开着：你写的模块现在都没加载。") : null
-  ), /* @__PURE__ */ h(Card, { title: "新建一个模块", desc: "从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { maxWidth: 180 }, placeholder: "id，如 weather", value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }), /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "名字，如 查天气", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !newId.trim(), onClick: create }, "新建"))), mine.length ? /* @__PURE__ */ h(Card, { title: "自己写的（" + mine.length + "）" }, mine.map((m) => /* @__PURE__ */ h(ModuleRow, { key: m.id, m, ...props }))) : null, /* @__PURE__ */ h(Card, { title: "内置模块（" + builtin.length + "）", desc: "关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。" }, builtin.map((m) => /* @__PURE__ */ h(ModuleRow, { key: m.id, m, ...props }))), /* @__PURE__ */ h(Simulate, { toast }));
+  ), /* @__PURE__ */ h(Card, { title: "新建一个模块", desc: "从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { maxWidth: 180 }, placeholder: "id，如 weather", value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }), /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "名字，如 查天气", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !newId.trim(), onClick: create }, "新建"))), mine.length ? /* @__PURE__ */ h(Card, { title: "自己写的（" + mine.length + "）" }, mine.map((m) => /* @__PURE__ */ h(ModuleRow, { key: m.id, m, ...props }))) : null, /* @__PURE__ */ h(Card, { title: "内置模块（" + builtin.length + "）", desc: "关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。" }, builtin.map((m) => /* @__PURE__ */ h(ModuleRow, { key: m.id, m, ...props }))), /* @__PURE__ */ h(Market, { st, toast, reload }), /* @__PURE__ */ h(Simulate, { toast }));
 }
 var PanelBoundary = class extends React.Component {
   constructor(p) {
