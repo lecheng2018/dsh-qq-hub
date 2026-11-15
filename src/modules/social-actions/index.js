@@ -15,6 +15,7 @@
 
 import { defineTool, str, int } from '../../tools/tools.js'
 import { registerReadActions } from '../../onebot/read-actions.js'
+import { mineSignals } from '../../chat/affective-signals.js'
 
 /** recent 表容量与 TTL。 */
 const RECENT_CAP = 50
@@ -74,8 +75,6 @@ export default {
 
     // 状态写动作不进只读白名单（保守：失败不重试）。
     registerReadActions([])
-
-    const mineSignals = api.lib('chat/affective-signals.js')?.mineSignals
 
     const settingsOf = () => {
       const s = api.settings() || {}
