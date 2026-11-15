@@ -19,6 +19,7 @@ import { inflateRawSync, crc32 } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
 import { API_VERSION, checkDef, userDir } from './modules.js'
 import { dataDir } from './store.js'
+import { assertPublicUrl } from './net.js'
 
 export const REGISTRY_URL = 'https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json'
 // 多源 failover（比上游强一档）：raw → jsdelivr CDN；config.modules.market.indexUrls / env 可追加覆盖
@@ -118,7 +119,7 @@ export function validEntry(e) {
   return true
 }
 
-export function createMarket({ mods, getConfig, setConfig, log, version, alive = () => true, fetcher = fetch, retryMs = RETRY_MS, builtinDir }) {
+export function createMarket({ mods, getConfig, setConfig, log, version, alive = () => true, fetcher = fetch, retryMs = RETRY_MS, builtinDir, validateUrl = assertPublicUrl }) {
   const dirOf = (id) => join(userDir(), id)
   let cache = null // { at, index, url }
   let busy = null
@@ -149,7 +150,10 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
     for (const url of urls) {
       try {
         const index = await withRetry(async () => {
-          const r = await fetcher(url, { signal: AbortSignal.timeout(20_000), cache: 'no-store' })
+          // SSRF 防护（缺陷：索引源可指向内网）：自定义 indexUrls 也须是公网地址。
+          await validateUrl(url)
+          const r = await fetcher(url, { signal: AbortSignal.timeout(20_000), cache: 'no-store', redirect: 'manual' })
+          if (r.status >= 300 && r.status < 400) throw new Error('索引源发生重定向，已拒绝（防 SSRF）')
           if (!r.ok) throw new Error(`读不到模块索引（HTTP ${r.status}）`)
           return r.json()
         }, retryMs)
@@ -202,7 +206,23 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
     if (!/^https:\/\//.test(url)) throw new Error('下载地址不对')
     const buf = await withRetry(async () => {
       progress = { id: e.id, name: e.name, stage: 'download', received: 0, total: 0 }
-      const r = await fetcher(url, { signal: AbortSignal.timeout(120_000), redirect: 'follow' })
+      // SSRF 防护（缺陷：下载 redirect:'follow' 可被重定向到内网/http）：手动重定向，
+      // 每一跳都过 validateUrl（拒环回/内网/保留地址），且只允许 https，最多 5 跳。
+      let current = url
+      let r
+      for (let hop = 0; hop < 5; hop++) {
+        await validateUrl(current)
+        r = await fetcher(current, { signal: AbortSignal.timeout(120_000), redirect: 'manual' })
+        if (r.status >= 300 && r.status < 400) {
+          const loc = r.headers?.get?.('location')
+          if (!loc) throw new Error('下载重定向缺少 Location')
+          current = new URL(loc, current).href
+          if (!/^https:\/\//.test(current)) throw new Error('下载重定向到了非 https 地址，已拒绝')
+          continue
+        }
+        break
+      }
+      if (r.status >= 300 && r.status < 400) throw new Error('下载重定向次数过多')
       if (!r.ok) throw new Error(`下载失败（HTTP ${r.status}）`)
       progress.total = Number(r.headers?.get?.('content-length')) || 0
       return readBody(r, (received) => { progress.received = received })
@@ -243,7 +263,8 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
         if (existsSync(old)) renameSync(old, target)
         throw error
       }
-      rmSync(old, { recursive: true, force: true })
+      // 不在这里删 old（缺陷：更新失败丢旧版）：保留 .old 直到 install 确认加载成功，
+      // 加载失败时才能回滚到旧版本，而不是新旧两空。
     } finally { rmSync(stage, { recursive: true, force: true }) }
   }
 
@@ -292,12 +313,16 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
     progress = { id, name: e.name, stage: 'start', received: 0, total: 0 }
     await mods.sync()
     const m = mods.status().find((x) => x.id === id)
+    const old = join(userDir(), `.${id}.old`)
     if (m?.error) {
-      // 加载失败：回滚落位，不留坏模块
+      // 加载失败：回滚到旧版本（place 保留了 .old），不留坏模块也不丢旧版。
       rmSync(dirOf(id), { recursive: true, force: true })
+      if (existsSync(old)) renameSync(old, dirOf(id))
       await mods.sync()
-      return { ok: false, message: `装上了但加载失败，已回滚：${m.error}` }
+      return { ok: false, message: `装上了但加载失败，已回滚到旧版本：${m.error}` }
     }
+    // 确认加载成功才删旧版并记账（避免账实不符）
+    rmSync(old, { recursive: true, force: true })
     bookInstall(id, e)
     return { ok: true, message: `「${e.name}」${readSource(id) ? '装好了' : '更新好了'}` }
   })
