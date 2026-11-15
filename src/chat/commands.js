@@ -173,9 +173,19 @@ export async function runCommand(cmd, msg, deps) {
     case 'remember': {
       if (!memory) return '记忆模块关着'
       if (!cmd.arg) return '要我记住什么呀？比如 /remember 我不吃香菜'
+      // 传闻归因：--hearsay 显式标记，或「听X说」前缀（X 落 speaker）；其余按直接陈述。
+      let arg = String(cmd.arg)
+      let status = ''
+      let speaker = ''
+      if (/(^|\s)--hearsay(?=\s|$)/.test(arg)) { status = 'hearsay'; arg = arg.replace(/(^|\s)--hearsay(?=\s|$)/g, ' ').trim() }
+      const heard = /^听(.{1,20}?)说[：:,，]?\s*/.exec(arg)
+      if (heard) { status = 'hearsay'; speaker = heard[1]; arg = arg.slice(heard[0].length).trim() }
+      if (!arg) return '要我记住什么呀？比如 /remember 我不吃香菜'
+      // 群聊里记录实际发言人；私聊默认主人亲述（direct）
+      if (!speaker && String(msg.chatId || '').startsWith('group:') && msg.userId) speaker = String(msg.userId)
       // 作用域跟着发命令的那个聊天走：在群里 /remember 的只在那群可见
       const sc = String(msg.chatId || '').startsWith('private:') || String(msg.chatId || '').startsWith('group:') ? String(msg.chatId) : 'global'
-      const r = memory.add({ text: cmd.arg, aboutName: cfg.ownerName || '主人', about: cfg.ownerQQ, importance: 0.8, source: 'panel', chatId: msg.chatId, scope: sc })
+      const r = memory.add({ text: arg, aboutName: cfg.ownerName || '主人', about: cfg.ownerQQ, importance: 0.8, source: 'panel', chatId: msg.chatId, scope: sc, speaker, status })
       return r.ok ? '记住了' : '没记上：' + (r.message || '')
     }
     case 'reset':
