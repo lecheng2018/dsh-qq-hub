@@ -42,18 +42,13 @@ export function topicRelevance(recentTexts, interests, memoryScore = 0) {
 
 /**
  * 把「她自己卡上的名字」并进唤醒词。
- *
- * 换卡后群里喊新名字也该叫得动，否则会出现「身份中枢认小鲸、群策略只认大肥鱼」的劈叉：
- * 她听了也不会应。只在真的读到卡时才加——没卡时 name 是兜底名，加进去会误触发插话。
+ * （已关闭自动并入卡名：群消息文本匹配完全以配置中的 wakeWords 为准，
+ * 避免人设名与群日常话题重叠（如「豆包」模型/反代/客户端）导致频繁误唤醒。）
  * @param {object} policy 已经合并过单群覆盖的策略
- * @param {{name?:string, hasCard?:boolean}} identity 身份中枢的解析结果
+ * @param {{name?:string, hasCard?:boolean}} [identity] 身份中枢的解析结果
  */
 export function withRoleWakeWords(policy, identity) {
-  const pol = policy || DEFAULT_GROUP_POLICY
-  const name = String(identity?.name || '').trim()
-  const base = Array.isArray(pol.wakeWords) ? pol.wakeWords : []
-  if (!identity?.hasCard || !name || base.includes(name)) return pol
-  return { ...pol, wakeWords: [name, ...base] }
+  return policy || DEFAULT_GROUP_POLICY
 }
 
 /** 合并全局策略和单群覆盖。 */
