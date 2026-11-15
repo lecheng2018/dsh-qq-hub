@@ -765,7 +765,24 @@ export function mergeFromPanel(current, incoming) {
   next.bridge.token = current.bridge?.token || ''
   // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开
   if (incoming?.bili && (incoming.bili.sessdata || incoming.bili.biliJct)) next.bili.cookie = ''
-  if (incoming?.group?.overrides) next.group.overrides = incoming.group.overrides
+  // 按群单独设置：防局部 PATCH 抹掉其它群，同时保留群原有的内部字段（如 minRelevance）
+  if (incoming?.group?.overrides !== undefined) {
+    if (isObj(incoming.group.overrides)) {
+      const isFullGroupSubmit = incoming.group.interjectChance !== undefined || incoming.group.wakeWords !== undefined || incoming.enabled !== undefined
+      const baseOverrides = isFullGroupSubmit ? {} : { ...(current.group?.overrides || {}) }
+      const merged = { ...baseOverrides }
+      for (const [gid, over] of Object.entries(incoming.group.overrides)) {
+        if (over === null) {
+          delete merged[gid]
+        } else if (isObj(over)) {
+          merged[gid] = { ...(current.group?.overrides?.[gid] || {}), ...over }
+        }
+      }
+      next.group.overrides = merged
+    } else {
+      next.group.overrides = {}
+    }
+  }
   // 按聊天选模型：两张表整张替换（deepMerge 会让删掉的条目又回来）
   if (incoming?.chatModels?.privates !== undefined) next.chatModels.privates = incoming.chatModels.privates
   if (incoming?.chatModels?.groups !== undefined) next.chatModels.groups = incoming.chatModels.groups
