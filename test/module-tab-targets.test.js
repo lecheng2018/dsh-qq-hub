@@ -42,5 +42,9 @@ test('「用量」页收着 token 系三个模块，模型页不再挂它们', (
   }
   const src = readFileSync(join(ROOT, 'client/src/domain/nav.js'), 'utf8')
   assert.match(src, /token: \['token-billing', 'token-guardian', 'complete-guard'\]/, 'TAB_MODS.token 要绑这三个模块（都没跑就整页隐藏）')
-  assert.match(src, /'connect', 'model', 'token', 'access'/, '系统分组里「用量」排在「模型」之后')
+  // 只锁「用量排在模型之后」这条相对顺序——中间还可能插别的页（#168 就插了「QQ 增强」），别锁整串字面量
+  const sysTabs = (src.match(/id: 'system'[\s\S]*?tabs: \[([^\]]*)\]/) || [])[1] || ''
+  const order = [...sysTabs.matchAll(/'([A-Za-z0-9_]+)'/g)].map((m) => m[1])
+  assert.ok(order.includes('model') && order.includes('token'), `系统分组里要有「模型」和「用量」，实际：${order.join('/')}`)
+  assert.ok(order.indexOf('model') < order.indexOf('token'), '「用量」排在「模型」之后')
 })
