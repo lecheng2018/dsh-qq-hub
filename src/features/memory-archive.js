@@ -96,9 +96,23 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!migrated) throw new Error(`旧记忆库尚未确认迁移，请停写并执行 node scripts/migrate-memory-markdown.js "${dataDir()}"；若 memory/ 已存在，须先人工核对冲突，禁止自动覆盖。`)
   }
   const store = openMemoryFiles(dataDir('memory'), { log })
-  // 向量通道（1.4.4）：配置门控（memory.embeddings），默认关 —— 关着时 enabled() 恒 false，
-  // 一切调用短路，行为与 1.4.3 一致。挂了只影响语义召回的加成，绝不影响 BM25 主路径。
-  const vec = createVectorChannel({ memoryDir: dataDir('memory'), getConfig, log })
+  // 向量通道（1.4.4）：配置门控，默认关 —— 关着时 enabled() 恒 false，一切调用短路，
+  // 行为与 1.4.3 一致。挂了只影响语义召回的加成，绝不影响 BM25 主路径。
+  // 配置双源（1.4.4）：面板「记忆」页的记忆模块设置（ext.memory.vector*）填了接口地址就以面板为准，
+  // 否则回落配置文件 memory.embeddings。getConfig 是 live 读取（面板保存即时落内存）——
+  // 面板开关 / 改配置立刻生效，无需重启。
+  const vec = createVectorChannel({
+    memoryDir: dataDir('memory'),
+    getConfig: () => {
+      const c = getConfig()
+      const ext = (c.ext && c.ext.memory) || {}
+      if (String(ext.vectorUrl || '').trim()) {
+        return { ...c, memory: { ...(c.memory || {}), embeddings: { enabled: ext.vectorEnabled === true, url: ext.vectorUrl, apiKey: ext.vectorApiKey || '', model: ext.vectorModel || '', dim: ext.vectorDim } } }
+      }
+      return c
+    },
+    log,
+  })
   const vecStatusSafe = () => { try { return vec.status() } catch { return { enabled: false } } }
   const load = () => {
     if (status === 'closed') throw new Error('主记忆库已关闭')

@@ -15,6 +15,23 @@ export default {
   tab: 'memory',
   files: ['features/memory.js', 'features/memory-archive.js', 'features/memory-learning.js', 'features/memory-extractor.js'],
   provides: ['memory-store'], // 伴生模块经 api.use('memory') 读记忆（SDK 能力声明）
+  // 向量通道面板设置（1.4.4）：存 ext.memory.vector*，由 memory-archive 桥接进向量通道
+  //（面板填了接口地址即为 source of truth，config.json 的 memory.embeddings 兜底）。
+  // apiKey 用 password 类型：加载时自动登记为密钥字段（面板不回显原文、留空保存不清空）。
+  defaults: {
+    vectorEnabled: false,
+    vectorUrl: '',
+    vectorApiKey: '',
+    vectorModel: 'BAAI/bge-m3',
+    vectorDim: 1024,
+  },
+  settings: [
+    { key: 'vectorEnabled', label: '语义召回（向量通道）', type: 'switch', hint: 'BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。需要自备 OpenAI 兼容 /embeddings 端点（如 SiliconFlow 的 BAAI/bge-m3）。保存后立即生效，无需重启；开启后存量记忆在下次写入或点「补全向量」时自动补齐' },
+    { key: 'vectorUrl', label: 'Embeddings 接口地址', type: 'text', placeholder: 'https://api.siliconflow.cn/v1/embeddings', hint: '填了这里就以面板为准；留空则用配置文件 memory.embeddings（两边都没配就保持纯 BM25）' },
+    { key: 'vectorApiKey', label: 'API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
+    { key: 'vectorModel', label: '模型名', type: 'text', placeholder: 'BAAI/bge-m3' },
+    { key: 'vectorDim', label: '向量维度', type: 'number', min: 64, max: 4096, step: 1, hint: '必须和模型实际输出一致（BAAI/bge-m3 是 1024）。改维度后旧向量自动失效重算' },
+  ],
   setup(api) {
     const { hub, http } = api.core
     const memory = createMemoryStore({
@@ -130,7 +147,7 @@ export default {
     api.route('/memory/vector', async () => ({ ok: true, status: (typeof memory.vectorStatus === 'function' ? memory.vectorStatus() : { enabled: false }) }))
     api.route('/memory/vector/backfill', async (req) => {
       if (req.method !== 'POST') return { ok: false, message: '请使用 POST 补全向量' }
-      if (!memory.vectorEnabled?.()) return { ok: false, message: '向量通道未启用（配置 memory.embeddings）' }
+      if (!memory.vectorEnabled?.()) return { ok: false, message: '向量通道未启用：在面板「记忆」页的记忆模块设置里开启，或配置 memory.embeddings' }
       return memory.vectorBackfill(memory.list(''))
     })
     api.route('/memory/restore', async (req) => memory.restore((await http.body(req)).id))
