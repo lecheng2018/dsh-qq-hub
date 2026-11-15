@@ -1,7 +1,7 @@
 // 回归：内容解析的群/私聊分流（主人要求：有时候不希望给群提供这个功能）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { allowedHere } from '../src/modules/multi-parser/index.js'
+import { allowedHere } from '../src/modules/multi-parser/parser.js'
 
 const group = (gid) => ({ kind: 'group', groupId: gid, chatId: `group:${gid}` })
 const priv = (uid) => ({ kind: 'private', userId: uid, chatId: `private:${uid}` })

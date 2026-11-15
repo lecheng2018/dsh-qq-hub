@@ -1,7 +1,5 @@
 # 更新记录
 
-
-
 ## Unreleased · fix(llm) temperature 兜底
 
 - **辅助看图不再被「挑温度」的模型卡死**：辅助看图固定发 `temperature: 0.2`，kimi 系模型只收 1（真机 2026-11-14 `400: \`temperature\` only 1 is allowed`），整轮 400 → 她看不到图。现在 `runStream` 明确撞上温度限制时**去掉 temperature 重试一次**（用模型默认值）；判定保守（须同时提到 temperature 且带拒绝语气），重试仅一次且只发生在纯文本生成上；辅助看图与主回合两条路径同时受益。
@@ -39,6 +37,23 @@
 - **只读白名单迁出为注册表**（`src/onebot/read-actions.js`）：原 `client.js` 内嵌的 `READ_ACTIONS` 迁为独立数据文件并支持运行时登记（`registerReadActions`，前缀 fail-closed：`get_/can_/fetch_/download_` 才放行）。此后新模块接只读动作只需在自己 setup 里登记，`client.js` 不再被逐期修改。判定入口统一为 `isReadAction`，红线不变：不在表里一律按副作用对待（unknown 不自动重试，ADR-0001）。
 - **架构约定**：本模块全部逻辑自包含（能力层 `src/chat/flash-transfer.js` 纯函数 + 显式注入网关），`inbound.js` 零改动——闪传段由模块自己从 `msg.raw` 抽取。
 - 下载按需触发（工具/命令），事件里绝不自动拖文件；`recent` 清单表有界（50 条）+ 5 分钟过期 + dispose 清理。
+
+## 未发布 · 模块解耦：六个模块改为商店按需安装
+
+### 变更（破坏性）
+
+- **六个模块改为商店按需安装**：B 站（bili）、抖音（douyin）、小黑盒（heybox）、内容解析（multi-parser）、空间互动（qzone-social）与投递异常（delivery-inbox）不再内置，统一由模块市场（内容仓库 [dsh-qq-hub-mods](https://github.com/lecheng2018/dsh-qq-hub-mods)）分发。
+  - 升级后这些功能**默认不出现**：在面板「扩展 → 市场」开启市场并安装对应模块即可恢复，安装后行为与内置版一致；原有配置项与数据文件保留。
+  - 迁移期若已安装商店版本，加载失败会自动回退内置（本版仍内置的模块适用）；从下一版起包内不再含这六个模块的实现壳。
+  - 这些模块的实现库仍随包提供（`bili/`、`douyin/`、`heybox/`、`features/qzone-social.js`、`modules/multi-parser/{parser,delivery}.js`），商店模块经 `api.lib` 引用。
+- **人格能力行按「模块是否在跑」裁剪**：未安装上述模块时，提示词不再声称她会刷 B 站等能力（避免答应了做不到）。
+
+### 测试与工程
+
+- package 内有壳级回归迁往模块仓库（bili 头像/截图路由、multi-parser 注入与 Cookie、delivery-inbox 全局台账）；包内保留实现层回归。
+- 内核对「已上商店的可选模块」引入 `OPTIONAL_MODULE_IDS` 清单，新增/移除商店模块时同步维护。
+
+---
 
 ## 1.4.5-test.20261115.1
 
