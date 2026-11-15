@@ -1,5 +1,11 @@
 # 更新记录
 
+## Unreleased · SnowLuma 深度接入 P2（群文件系统）
+
+- **新增「群文件」内置模块**（`src/modules/group-files/`）：单一工具 `qq_group_file` 三个子命令——`browse` 浏览群文件盘（容量摘要 + 目录列表，只读）、`download` 把群文件换下载地址立刻落工作区（链接有时效，拿到就下）、`manage` 建夹/移动/转存/删除。零改动成本接入：只读动作（`get_group_file_system_info` / `get_group_root_files` / `get_group_files_by_folder`）在本模块 setup 里 `registerReadActions` 运行时登记，`client.js` / `read-actions.js` 静态清单都不动。
+- **manage 三重门**（纯函数 `manageGate`，测试直打）：面板「允许管理」默认关 + 这一轮必须有主人发言 + `confirm=「确认」` 显式确认 + dryRun 感知。群文件是共享空间，删除类动作不向模型单独开放。
+- 上传沿用既有 `qq_send_file`，不重复造发送面。
+
 ## Unreleased · SnowLuma 深度接入 P1（闪传双向）
 
 - **新增「闪传」内置模块**（`src/modules/flash-transfer/`）：别人发来的 QQ 闪传不再只是一句占位——文件清单（名字/体积）自动进她的上下文（可关）；主人私聊可用 `qq_flash_download` 把闪传文件下载到工作区、`qq_flash_forward` 把收到过的闪传转发给白名单会话；`/闪传 <分享码>` 命令直接查清单。出站 `send_flash_msg` 经统一 Outbox（台账/dryRun/身份闸生效）。
