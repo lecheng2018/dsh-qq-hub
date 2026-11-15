@@ -499,30 +499,15 @@ export function apply(ctx) {
     getMods: () => mods, log,
     pkg: PKG, version: VERSION, root: ROOT,
   })
-  // /persona/use 的既有筛选匹配新 current；仅向该路由提供有效人设真正改变的会话视图。
-  let personaSwitchSessions = null
-  const personaDescriptors = Object.fromEntries(Object.entries(Object.getOwnPropertyDescriptors(hub)).map(([key, descriptor]) => [key, 'value' in descriptor ? { ...descriptor, writable: true, configurable: true } : { ...descriptor, configurable: true }]))
-  const personaPanelHub = Object.defineProperties({}, personaDescriptors)
-  personaPanelHub.sessions = () => {
-    if (personaSwitchSessions === null) return hub.sessions()
-    const sessions = personaSwitchSessions
-    personaSwitchSessions = null
-    return sessions
-  }
-  const setPersonaPanelConfig = (next) => {
-    const before = hub.sessions()
-    const current = setConfig(next)
-    personaSwitchSessions = Object.fromEntries(Object.entries(before).filter(([chatId, entry]) => {
-      const chat = chatId.startsWith('group:') ? { kind: 'group', groupId: chatId.slice(6) }
-        : chatId.startsWith('private:') ? { kind: 'private', userId: chatId.slice(8) } : { kind: 'system' }
-      return entry?.personaId && entry.personaId !== personaIdFor(chat, current)
-    }).map(([chatId, entry]) => [chatId, { ...entry, personaId: current.persona.current }]))
-    return current
-  }
-  registerPersonaRoutes({
+  // 人设变更后的会话重置统一在核心侧做（hub.resetChatsForPersonaChange）：
+// 按「旧配置预期人设 vs 新配置预期人设」逐聊天比对，改 current、改群/私聊默认、改单独指定
+// 三种情况用同一条口径。这里不再需要给面板单独包装一份「裁剪过的 sessions 视图」——
+// 那套包装只服务旧的 personaId 比对，而 personaId 只是建会话那一刻的快照，改默认值不会动，
+// 于是「改了默认人设却一个会话都不重置」（2026-11-15 真机）。
+registerPersonaRoutes({
     route, readBody, query,
-    ctx, getConfig, setConfig: setPersonaPanelConfig,
-    hub: personaPanelHub, log,
+    ctx, getConfig, setConfig,
+    hub, log,
   })
   registerModulesRoutes({
     route, readBody, query, send,
