@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import memoryModule from '../src/modules/memory/index.js'
 import { normalizeEmbeddingConfig } from '../src/features/memory-vector.js'
+import { publicConfig, mergeFromPanel } from '../src/core/config.js'
 
 // 与 memory-archive.js createVectorChannel.getConfig 里的桥接保持一致
 function bridged(getConfig) {
@@ -64,4 +65,16 @@ test('桥接双源：面板开关关着 → 通道不启用（即使文件配置
     ext: { memory: { vectorEnabled: false, vectorUrl: 'https://panel.example.com/v1/embeddings', vectorApiKey: '', vectorModel: '', vectorDim: 1024 } },
   }))
   assert.equal(normalizeEmbeddingConfig(panel.memory), null, '面板填了 url 时以面板 enabled=false 为准')
+})
+
+test('vectorApiKey 静态密钥清单（1.4.5）：面板掩码 + 留空保存保留原值 + null 清空', () => {
+  const cfg = { bili: {}, douyin: {}, bridge: {}, ext: { memory: { vectorApiKey: 'sk-test-secret', vectorEnabled: true } } }
+  const pub = publicConfig(cfg)
+  assert.equal(pub.ext.memory.vectorApiKey, '', '面板不回传原文')
+  assert.equal(pub.ext.memory.vectorApiKeySet, true, '已保存标记')
+  const merged = mergeFromPanel(cfg, { ext: { memory: { vectorApiKey: '', vectorEnabled: false } } })
+  assert.equal(merged.ext.memory.vectorApiKey, 'sk-test-secret', '留空保存不清空 key')
+  assert.equal(merged.ext.memory.vectorEnabled, false, '其他字段正常覆盖')
+  const cleared = mergeFromPanel(cfg, { ext: { memory: { vectorApiKey: null } } })
+  assert.equal(cleared.ext.memory.vectorApiKey, '', 'null 明确清空')
 })
