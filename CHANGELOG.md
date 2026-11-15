@@ -1,5 +1,9 @@
 # 更新记录
 
+## Unreleased · fix(llm) temperature 兜底
+
+- **辅助看图不再被「挑温度」的模型卡死**：辅助看图固定发 `temperature: 0.2`，kimi 系模型只收 1（真机 2026-11-14 `400: \`temperature\` only 1 is allowed`），整轮 400 → 她看不到图。现在 `runStream` 明确撞上温度限制时**去掉 temperature 重试一次**（用模型默认值）；判定保守（须同时提到 temperature 且带拒绝语气），重试仅一次且只发生在纯文本生成上；辅助看图与主回合两条路径同时受益。
+
 ## Unreleased · SnowLuma 深度接入 P5（Ark 卡片 + AI 语音）
 
 - **新增「Ark 卡片」内置模块**（`src/modules/ark-cards/`）：主人私聊工具 `qq_send_ark` 发原生图文卡片（`send_tuwen_ark`，经统一 Outbox）；出站链接先过 QQ 侧 `check_url_safely`（只对「明确不安全」拒发，检查接口挂了不拦发送）；**三级降级**：原生 Ark 失败 → json 分享卡（复用 `qq-tools` 的 `cardSegment`）→ 文字摘要，逐级如实回报用了哪级。
