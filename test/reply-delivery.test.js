@@ -131,3 +131,79 @@ test('模拟回复不占 Outbox 队列票，失败回复也会释放队列', asy
   assert.equal(reserves, 1)
   assert.equal(releases, 1)
 })
+
+// ---- 上游遗留缺陷①：流水只记实发 ----
+test('流水只记实发：部分气泡失败时聊天流水不含未送达内容', async () => {
+  let call = 0
+  const { delivery, logged } = fixture({
+    sendText: async () => { call += 1; return call === 2 ? null : { message_id: call } },
+  })
+  await delivery.deliverNow('private:1', '甲|||乙|||丙', {})
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0][2], '甲 丙', '失败的「乙」不该出现在流水里（旧版会记满 甲 乙 丙）')
+})
+
+test('流水只记实发：整轮都没发出去时不记流水/旁白', async () => {
+  const asides = []
+  const { delivery, logged } = fixture({
+    sendText: async () => null,
+    interaction: { queueAside: (...args) => asides.push(args) },
+  })
+  await delivery.deliverNow('private:1', '甲|||乙', { own: false })
+  assert.equal(logged.length, 0, '一条都没实发就不该记 bot 流水')
+  assert.equal(asides.length, 0, '也不该记旁白')
+})
+
+test('流水只记实发：mixed 整泡拿到回执时其全部 parts 都进流水', async () => {
+  // 用 hooks.items 直接注入一个 mixed 条目（文字+图片），整泡拿到回执 → 两部分都进流水
+  const { delivery, logged } = fixture({
+    hooks: { items: async () => [{ kind: 'mixed', parts: [{ kind: 'text', value: '你好' }, { kind: 'image', value: 'x' }] }] },
+    sendMixed: async () => ({ message_id: 5 }),
+  })
+  await delivery.deliverNow('private:1', '原文', {})
+  assert.equal(logged[0][2], '你好 [image]', 'mixed 送达 → 文字与媒体占位都记')
+})
+
+// ---- 上游遗留缺陷④：随机源可注入 ----
+test('随机源可注入：random 命中阈值时短回复整条变语音', async () => {
+  const voiceCfg = { ...config, voice: { enabled: true, autoChance: 0.5, autoMaxChars: 300 } }
+  const { delivery, sent } = fixture({ getConfig: () => voiceCfg, random: () => 0 })
+  await delivery.deliverNow('private:1', '你好呀', {})
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].kind, 'voice', 'random()=0 < 0.5 应整条变语音')
+})
+
+test('随机源可注入：random 未命中阈值时保持文字', async () => {
+  const voiceCfg = { ...config, voice: { enabled: true, autoChance: 0.5, autoMaxChars: 300 } }
+  const { delivery, sent } = fixture({ getConfig: () => voiceCfg, random: () => 0.9 })
+  await delivery.deliverNow('private:1', '你好呀', {})
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].kind, 'text', 'random()=0.9 ≥ 0.5 应保持文字')
+})
+
+test('随机源可注入：random 命中时补一张表情', async () => {
+  const stickerCfg = { ...config, stickers: { enabled: true, autoChance: 0.5 } }
+  const pick = { md5: 'abc', name: '笑' }
+  const { delivery, sent } = fixture({
+    getConfig: () => stickerCfg,
+    random: () => 0,
+    stickers: { match: () => pick, pickForReply: () => pick },
+    sendSticker: async (chatId, value) => { sent.push({ kind: 'sticker', value }); return { message_id: 7 } },
+  })
+  await delivery.deliverNow('private:1', '哈哈', {})
+  assert.ok(sent.some((s) => s.kind === 'sticker'), 'random()=0 < 0.5 应补表情')
+})
+
+test('随机源透传律动：固定 random 下气泡间隔可复现', async () => {
+  const cfg = { ...config, reply: { maxBubbles: 3, cadence: { enabled: true } } }
+  const run = async () => {
+    const waits = []
+    const { delivery } = fixture({ getConfig: () => cfg, random: () => 0.5, sleep: async (ms) => { waits.push(ms) } })
+    await delivery.deliverNow('private:1', '一|||二', {})
+    return waits
+  }
+  const first = await run()
+  const second = await run()
+  assert.ok(first.length > 0 && first.every((w) => w > 0), '律动开启应产生正的等待')
+  assert.deepEqual(second, first, '同一 random 序列 → 律动间隔完全一致（随机源已透传）')
+})

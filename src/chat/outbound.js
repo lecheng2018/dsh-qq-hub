@@ -107,10 +107,14 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     if (!item) return false
     const seg = stickers.segmentFor(item)
     if (!seg) return false
-    await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    // 如实记账（缺陷：sticker 谎报成功）：过去丢掉 sendSegments 的返回值、无条件 return true，
+    // 于是网关拒收/状态未知时上层仍按「已送达」计，markUsed/onStats 也照记。现在拿到回执
+    // 才算成功（与 sendText/sendImage 同口径返回回执），失败 return false 且不记使用/统计。
+    const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    if (!result) return false
     stickers.markUsed?.(item.md5)
     onStats?.('stickers')
-    return true
+    return result
   }
 
   async function sendImage(chatId, src, replyId, userId) {
@@ -146,7 +150,8 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     if (!segs.length) return null
     const note = parts.map((part) => part.kind === 'text' ? part.value : `[${part.kind}]`).join(' ').slice(0, 60)
     const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
-    for (const item of used) { stickers.markUsed?.(item.md5); onStats?.('stickers') }
+    // 整泡没发出去就不记表情使用/统计（与 sendSticker 同一口径，避免失败也计数）。
+    if (result) for (const item of used) { stickers.markUsed?.(item.md5); onStats?.('stickers') }
     return result
   }
 
