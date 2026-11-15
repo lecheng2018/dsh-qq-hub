@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto'
 import { HeyboxClient, HeyboxError, cosSign, WEB_BASE, TOPICS } from './api.js'
 import { POST_STYLES, DEFAULT_POST_STYLE, styleOf, stylePrompt } from './styles.js'
 import { guardOutbound } from '../chat/identity-guard.js'
+import { dataDir } from '../core/store.js'
 
 const HOME = process.env.USERPROFILE || os.homedir()
 const CRED_DIR = path.join(HOME, '.heybox-ai')
@@ -374,6 +375,27 @@ export function createHeybox({ getConfig, hub, memory, log }) {
 
   // ── 写：发帖（文章模式 + 行内图） ────────────────────────────────
 
+  /** 真正的图片魔数校验（缺陷：发帖配图任意文件读）：非图片一律拒绝，
+   *  防止把 config.json（含各平台 Cookie）这类文本当「图」传上公网。 */
+  function isImageBuffer(buf) {
+    if (!buf || buf.length < 12) return false
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true // PNG
+    if (buf[0] === 0xff && buf[1] === 0xd8) return true // JPEG
+    if (buf.slice(0, 3).toString('latin1') === 'GIF') return true // GIF
+    if (buf.slice(0, 4).toString('latin1') === 'RIFF' && buf.slice(8, 12).toString('latin1') === 'WEBP') return true // WebP
+    if (buf[0] === 0x42 && buf[1] === 0x4d) return true // BMP
+    return false
+  }
+
+  /** 配图只允许工作区 / 插件数据目录下的文件（防任意本地文件读）。 */
+  function imagePathAllowed(p) {
+    const roots = []
+    try { const ws = getConfig().workspaceDir; if (ws) roots.push(path.resolve(ws)) } catch {}
+    try { roots.push(path.resolve(dataDir())) } catch {}
+    const resolved = path.resolve(String(p))
+    return roots.some((r) => resolved === r || resolved.startsWith(r + path.sep))
+  }
+
   function imageInfo(buf, filename) {
     const head = buf.slice(0, 8).toString('latin1')
     const isPng = head.includes('PNG')
@@ -478,7 +500,9 @@ export function createHeybox({ getConfig, hub, memory, log }) {
     if (text) segs.push({ type: 'text', text })
     for (const p of images) {
       try {
+        if (!imagePathAllowed(p)) { log?.warn?.('配图路径不在允许目录（工作区/数据目录），跳过：' + p); continue }
         const buf = fs.readFileSync(p)
+        if (!isImageBuffer(buf)) { log?.warn?.('配图不是真正的图片文件，跳过：' + p); continue }
         segs.push({ type: 'img', buf, filename: path.basename(p) })
       } catch { log?.warn?.('配图读不到，跳过：' + p) }
     }
