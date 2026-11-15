@@ -76,7 +76,29 @@ function Voice({ st, draft, setDraft, toast, reload }) {
             <Row label="参考音频的文字">{f.text('voice.gptsovits.promptText', { size: 'wide' })}</Row>
           </Fragment>
         ) : null}
-        {draft.voice.engine === 'http' ? <Row label="地址模板" hint="{text} 会换成要念的话，返回 wav/mp3">{f.text('voice.http.urlTemplate', { size: 'wide', placeholder: 'http://127.0.0.1:8000/tts?text={text}' })}</Row> : null}
+        {draft.voice.engine === 'http' ? (
+          <Fragment>
+            <Row label="请求方式" hint="GET 把 {text} 拼进地址；POST 配请求头和请求体（可接火山豆包等云 TTS）">
+              {f.select('voice.http.method', [{ value: 'GET', label: 'GET' }, { value: 'POST', label: 'POST' }], { width: 120 })}
+              <Btn small onClick={() => {
+                // 豆包（火山引擎）TTS 预设：填好模板，把 APPID_HERE / TOKEN_HERE / VOICE_TYPE_HERE 换成自己的
+                let d = setPath(draft, 'voice.http.urlTemplate', 'https://openspeech.bytedance.com/api/v1/tts')
+                d = setPath(d, 'voice.http.method', 'POST')
+                d = setPath(d, 'voice.http.headers', 'Authorization: Bearer;TOKEN_HERE')
+                d = setPath(d, 'voice.http.body', '{"app":{"appid":"APPID_HERE","token":"TOKEN_HERE","cluster":"volcano_tts"},"user":{"uid":"dsh-qq-hub"},"audio":{"voice_type":"VOICE_TYPE_HERE","encoding":"mp3","speed_ratio":1.0},"request":{"reqid":"{reqid}","text":"{text}","operation":"query"}}')
+                setDraft(d)
+                toast('已填入豆包模板：把 APPID_HERE / TOKEN_HERE / VOICE_TYPE_HERE 换成你在火山引擎开通的值，保存后试听')
+              }}>豆包预设</Btn>
+            </Row>
+            <Row label="地址模板" hint={draft.voice.http.method === 'POST' ? 'POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON' : '{text} 会换成要念的话，返回 wav/mp3'}>{f.text('voice.http.urlTemplate', { size: 'wide', placeholder: 'http://127.0.0.1:8000/tts?text={text}' })}</Row>
+            {draft.voice.http.method === 'POST' ? (
+              <Fragment>
+                <Row label="请求头" hint="一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON">{f.area('voice.http.headers', { rows: 3, placeholder: 'Authorization: Bearer;你的token' })}</Row>
+                <Row label="请求体" hint="{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID">{f.area('voice.http.body', { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}' })}</Row>
+              </Fragment>
+            ) : null}
+          </Fragment>
+        ) : null}
         <Row label="短回复变语音的概率">{f.percent('voice.autoChance')}</Row>
         <Row label="多短算短回复">{f.range('voice.autoMaxChars', 10, 200, 5, (v) => v + ' 字')}</Row>
         <Row label="试听" hint="先保存设置再试听">
