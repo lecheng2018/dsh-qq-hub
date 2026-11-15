@@ -18,6 +18,7 @@ import { openMemoryFiles } from './memory-files.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 import { visibleScopes } from './memory-scope.js'
 import { createVectorChannel, fuseRrf } from './memory-vector.js'
+import { createReranker } from './memory-rerank.js'
 
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
@@ -114,6 +115,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     log,
   })
   const vecStatusSafe = () => { try { return vec.status() } catch { return { enabled: false } } }
+  // Cross-encoder 精排（1.4.4）：RRF 之后的可选第二级排序，配置门控默认关。
+  // 只重排 RRF 已召回候选（不扩可见性），失败退回 RRF 顺序（fail-open）。
+  const reranker = createReranker({ getConfig, log })
+  const rerankStatusSafe = () => { try { return reranker.status() } catch { return { enabled: false } } }
   const load = () => {
     if (status === 'closed') throw new Error('主记忆库已关闭')
     return store.load()
@@ -1120,7 +1125,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
         }
       }
       vecHits.sort((a, b) => b.score - a.score)
-      const hits = fuseRrf(bm25, vecHits, { limit: maxItems })
+      let hits = fuseRrf(bm25, vecHits, { limit: maxItems })
+      hits = await reranker.rerank(q, hits)
       return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars })
     } catch (error) {
       return recallHint(chat, queryText, prevText, { sessionId }) // 任何意外：退回同步主路径
@@ -1244,6 +1250,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vectorEnabled: () => vec.enabled(),
     vectorStatus: vecStatusSafe,
     vectorBackfill: (items) => vec.backfill(items),
+    rerankStatus: rerankStatusSafe,
     scopeOfChat, scopeVisible, registerScopeOverride,
     add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),

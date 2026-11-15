@@ -19,8 +19,9 @@ function Mood({ st, draft, setDraft, toast }) {
   const [reloading, setReloading] = useState(false)
   const [vec, setVec] = useState(null)
   const [vecBusy, setVecBusy] = useState(false)
+  const [rerank, setRerank] = useState(null)
   const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null); setHealth(r.health || null) })
-  const loadVec = () => get('/memory/vector').then((r) => setVec(r.status || { enabled: false })).catch(() => setVec({ enabled: false }))
+  const loadVec = () => get('/memory/vector').then((r) => { setVec(r.status || { enabled: false }); setRerank(r.rerank || { enabled: false }) }).catch(() => { setVec({ enabled: false }); setRerank({ enabled: false }) })
   const [styles, setStyles] = useState({})
   const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
   const times = draft.memory.consolidateTimes || []
@@ -80,6 +81,13 @@ function Mood({ st, draft, setDraft, toast }) {
                 <Btn small disabled={!!vecBusy} onClick={async () => { setVecBusy(true); try { const r = await post('/memory/vector/backfill', {}); toast(r.message || ('存量补全完成，这次向量化 ' + (r.embedded || 0) + ' 条'), r.ok ? 'ok' : 'err'); loadVec() } catch (error) { toast(error.message, 'err') } finally { setVecBusy(false) } }}>{vecBusy ? '补全中…' : '补全存量向量'}</Btn>
               </span>
             ) : <span className="ab-small" style={{ color: 'var(--ab-dim)' }}>未开启 —— 在下面「记忆」模块设置里填 Embeddings 接口地址、API Key，打开「语义召回」</span>
+          ) : '…'}
+        </Row>
+        <Row label="记忆精排（reranker）" hint="RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。在下面「记忆」模块设置里填 Rerank 接口地址和 API Key，保存即生效。">
+          {rerank ? (
+            rerank.enabled ? (
+              <span className="ab-small" style={{ color: 'var(--ab-ok)' }}>● {rerank.model || '?'} · 精排前 {rerank.topN || 20} 条{rerank.lastError ? ' · 上次失败已退回 RRF：' + rerank.lastError : ''}</span>
+            ) : <span className="ab-small" style={{ color: 'var(--ab-dim)' }}>未开启 —— 需先开启语义召回，再在下面「记忆」模块设置里填 Rerank API Key 并打开开关</span>
           ) : '…'}
         </Row>
         <Row label="每天自动整理两次" hint="把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。">
