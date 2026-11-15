@@ -211,7 +211,8 @@ export function cutAtSentence(line, max = 120) {
 }
 
 export function memoryLine(it, now = Date.now()) {
-  return `[${whenText(it.at, now)}] ` + (it.aboutName ? `[${it.aboutName}] ` : '') + it.text
+  const heard = it.status === 'hearsay' ? `（听${it.speaker || '别人'}说）` : ''
+  return `[${whenText(it.at, now)}] ` + (it.aboutName ? `[${it.aboutName}] ` : '') + heard + it.text
 }
 
 /**
