@@ -74,6 +74,8 @@ const SIDE_EFFECT_PATHS = new Set([
   '/modules/open',         // :36 spawn explorer
   '/modules/simulate',     // :49 执行模块命令/钩子代码
   '/modules/tool',         // :83 真执行工具（可能落 onebot 操作）
+  '/modules/market/install', // 市场安装：下载并执行进程内代码（仅主人面板 POST）
+  '/modules/market/remove',  // 市场卸载：删模块目录（purge 连数据）
   // routes-misc.js
   '/local/open',           // :30 spawn explorer
   '/local/test',           // :31 跑本地 tts/image 脚本、产文件

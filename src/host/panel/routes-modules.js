@@ -10,8 +10,22 @@ import { API_VERSION } from '../../core/modules.js'
 export function registerModulesRoutes({
   route, readBody, query, send,
   getConfig,
-  hub, mods, openFolder,
+  hub, mods, market, openFolder,
 }) {
+  // 模块市场（分发半套）：列表 / 安装 / 卸载 / 进度。安装须主人在面板操作（R4），
+  // install/remove 在 guard.js SIDE_EFFECT_PATHS 登记为仅 POST。
+  route('/modules/market', async () => {
+    try { return await market.list() } catch (error) { return { ok: false, message: String(error?.message || error), list: [] } }
+  })
+  route('/modules/market/install', async (req) => {
+    const b = await readBody(req)
+    return market.install(String(b.id || '').trim(), { confirmReplace: b.confirmReplace === true })
+  })
+  route('/modules/market/remove', async (req) => {
+    const b = await readBody(req)
+    return market.remove(String(b.id || '').trim(), { purge: b.purge === true })
+  })
+  route('/modules/market/progress', async () => ({ ok: true, progress: market.progress() }))
   // 模块（面板「扩展」页）
   route('/modules', async () => ({ ok: true, dir: mods.dir(), safeMode: getConfig().safeMode, apiVersion: API_VERSION, list: mods.status(), prompt: mods.promptFor('') }))
   route('/modules/reload', async (req) => {
