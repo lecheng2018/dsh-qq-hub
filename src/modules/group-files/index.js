@@ -9,7 +9,7 @@
 
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { defineTool, str } from '../../tools/tools.js'
+import { defineTool, str, int } from '../../tools/tools.js'
 import { fetchImage } from '../../core/net.js'
 import { registerReadActions } from '../../onebot/read-actions.js'
 
