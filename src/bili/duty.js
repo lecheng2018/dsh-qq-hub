@@ -242,13 +242,21 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
         const comment = String(d.comment || '').trim()
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
-            if (getConfig().dryRun) log.info(`试运行：本来要在 B 站《${v.title}》下评论：${comment}`)
-            else if (guard(comment.slice(0, 200))) await api.postComment(v.aid, comment.slice(0, 200))
-            else log.info('这条评论因包含账号标识没有发出去')
-            commented++
-            s.comments++
-            memory?.addEvent?.({ text: `在B站一条视频下评论过：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.38 })
-            record(s, { kind: 'comment', title: v.title, bvid: v.bvid, text: comment })
+            // 如实计数（缺陷：被拦/试运行也计数）：只有真发出去才 commented++/s.comments++/
+            // 记「评论过」的记忆；试运行与被身份闸拦下都不占次数、不记成已评论。
+            if (getConfig().dryRun) {
+              log.info(`试运行：本来要在 B 站《${v.title}》下评论：${comment}`)
+              record(s, { kind: 'dry:comment', title: v.title, bvid: v.bvid, text: comment })
+            } else if (guard(comment.slice(0, 200))) {
+              await api.postComment(v.aid, comment.slice(0, 200))
+              commented++
+              s.comments++
+              memory?.addEvent?.({ text: `在B站一条视频下评论过：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.38 })
+              record(s, { kind: 'comment', title: v.title, bvid: v.bvid, text: comment })
+            } else {
+              log.info('这条评论因包含账号标识没有发出去')
+              record(s, { kind: 'blocked', title: v.title, bvid: v.bvid, text: comment })
+            }
           } catch (error) {
             log.warn('B 站评论失败：', error.message)
             pauseIf(s, error)
@@ -322,13 +330,20 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
         const reply = String(out || '').trim().split(/\n+/)[0]
         if (!reply || isSilence(reply)) continue
         try {
-          if (getConfig().dryRun) log.info(`试运行：本来要在 B 站回复 ${x.name}：${reply}`)
-          else if (!guard(reply)) log.info('这条回复因包含账号标识没有发出去')
-          else await api.postComment(x.oid, `回复 @${x.name} :${reply}`.slice(0, 200), { root: x.root, parent: x.parent })
-          s.replies++
-          n++
-          memory?.addEvent?.({ text: `在B站回复了 ${x.name}：${reply.slice(0, 50)}`, tags: ['B站'], importance: 0.35 })
-          record(s, { kind: 'reply', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
+          // 如实计数（缺陷：被拦/试运行也计数）：只有真发出去才 s.replies++/n++/记记忆。
+          if (getConfig().dryRun) {
+            log.info(`试运行：本来要在 B 站回复 ${x.name}：${reply}`)
+            record(s, { kind: 'dry:reply', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
+          } else if (!guard(reply)) {
+            log.info('这条回复因包含账号标识没有发出去')
+            record(s, { kind: 'blocked', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
+          } else {
+            await api.postComment(x.oid, `回复 @${x.name} :${reply}`.slice(0, 200), { root: x.root, parent: x.parent })
+            s.replies++
+            n++
+            memory?.addEvent?.({ text: `在B站回复了 ${x.name}：${reply.slice(0, 50)}`, tags: ['B站'], importance: 0.35 })
+            record(s, { kind: 'reply', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
+          }
         } catch (error) {
           log.warn('B 站回复失败：', error.message)
           pauseIf(s, error)
