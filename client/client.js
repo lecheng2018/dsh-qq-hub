@@ -343,7 +343,11 @@ var TABS = [
   { id: "access", label: "权限" },
   { id: "group", label: "聊天", flag: "group" },
   { id: "model", label: "模型" },
+<<<<<<< HEAD
   { id: "token", label: "用量" },
+=======
+  { id: "enhance", label: "QQ 增强" },
+>>>>>>> 9754b2e (feat(panel): 人设组记忆/聊天页重排 + 新增「QQ 增强」页)
   { id: "voice", label: "语音", flag: "voice.enabled" },
   { id: "stickers", label: "表情包", flag: "stickers.enabled" },
   { id: "imagegen", label: "生图", flag: "imageGen.enabled" },
@@ -358,14 +362,35 @@ var TABS = [
   { id: "modules", label: "扩展" },
   { id: "logs", label: "日志" }
 ];
+<<<<<<< HEAD
 var TAB_MODS = { voice: ["voice"], stickers: ["stickers"], imagegen: ["imagegen"], diary: ["diary", "qzone-social"], speakup: ["speakup", "purpose"], memory: ["memory", "reflection", "style", "memory-privacy"], bili: ["bili"], douyin: ["douyin"], heybox: ["heybox"], multiParser: ["multi-parser"], token: ["token-billing", "token-guardian", "complete-guard"] };
+=======
+var TAB_MODS = {
+  voice: ["voice"],
+  stickers: ["stickers"],
+  imagegen: ["imagegen"],
+  diary: ["diary", "qzone-social"],
+  speakup: ["speakup", "purpose"],
+  memory: ["memory", "reflection", "style", "memory-privacy"],
+  bili: ["bili"],
+  douyin: ["douyin"],
+  heybox: ["heybox"],
+  multiParser: ["multi-parser"],
+  // 网关能力页：任一模块在跑才显示这一页
+  enhance: ["flash-transfer", "group-files", "online-status", "social-actions", "ark-cards", "ai-voice"]
+};
+>>>>>>> 9754b2e (feat(panel): 人设组记忆/聊天页重排 + 新增「QQ 增强」页)
 var modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running);
 var NAV_GROUPS = [
   { id: "home", label: "概览", icon: "M3 10.5 12 3l9 7.5M5.5 9v11.5h13V9M10 20.5v-6h4v6", tabs: ["overview"] },
   { id: "self", label: "人设", icon: "M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5", tabs: ["persona", "group", "speakup", "memory"] },
   { id: "express", label: "表达", icon: "M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01", tabs: ["voice", "stickers", "imagegen"] },
   { id: "platform", label: "平台", icon: "M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z", tabs: ["diary", "bili", "douyin", "heybox", "multiParser"] },
+<<<<<<< HEAD
   { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "model", "token", "access", "local", "modules", "logs"] }
+=======
+  { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "enhance", "model", "access", "local", "modules", "logs"] }
+>>>>>>> 9754b2e (feat(panel): 人设组记忆/聊天页重排 + 新增「QQ 增强」页)
 ];
 var PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站|小黑盒/;
 var navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ext && PLATFORM_EXT.test(t.label) ? NAV_GROUPS[3] : NAV_GROUPS[4]);
@@ -387,6 +412,7 @@ var NAV_ALIAS = {
   diary: "空间 说说 日记",
   speakup: "搭话 主动",
   memory: "记忆 档案 相处经验 黑话 蒸馏",
+  enhance: "qq 增强 群文件 闪传 在线 已读 卡片 ark ai 语音 社交动作",
   bili: "b站 bilibili 视频",
   douyin: "抖音 短视频 私信",
   heybox: "小黑盒 游戏 社区 资讯",
@@ -1279,6 +1305,7 @@ function OwnerBrief({ draft, setDraft }) {
     {
       title: "主人私聊：群聊摘要",
       right: f.sw("group.ownerBrief.enabled"),
+      collapse: true,
       desc: "主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在主人私聊提到群相关的事时触发，不常驻、不写进记忆；默认关。",
       more: "开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。"
     },
@@ -1288,11 +1315,33 @@ function OwnerBrief({ draft, setDraft }) {
 }
 
 // client/src/views/group.js
+function FoldSection({ title, desc, right, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return /* @__PURE__ */ h("div", { className: "ab-fold-section" }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 12 } }, /* @__PURE__ */ h(
+    "div",
+    {
+      className: "ab-fold-head",
+      style: { margin: 0, flex: 1 },
+      role: "button",
+      tabIndex: 0,
+      "aria-expanded": open,
+      onClick: () => setOpen(!open),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(!open);
+        }
+      }
+    },
+    /* @__PURE__ */ h("span", { className: cx("ab-fold-chev", open && "open"), "aria-hidden": "true" }, /* @__PURE__ */ h("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ h("path", { d: "M4.5 3 7.5 6 4.5 9" }))),
+    /* @__PURE__ */ h("h3", null, title)
+  ), right || null), desc ? /* @__PURE__ */ h("p", { className: "ab-desc", style: { marginTop: 2 } }, desc) : null, open ? /* @__PURE__ */ h("div", null, children) : null);
+}
 function Group({ draft, setDraft }) {
   const f = useField(draft, setDraft);
   const overrides = draft.group.overrides || {};
   const [newGid, setNewGid] = useState("");
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "连发合并", right: f.sw("merge.enabled"), desc: "人常常一口气发好几句。打开后她会等对方说完再一起回，而不是一句一回。" }, /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒"))), /* @__PURE__ */ h(Card, { title: "回合超时", desc: "模型或工具长时间不结束时，停止等待并提示你，避免这个聊天一直排队。超时的旧回复不会补发；你发下一条消息时会新建会话。" }, /* @__PURE__ */ h(Row, { label: "最多等待", hint: "长报告可适当调大；可设 1～120 分钟" }, /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "消息节奏", desc: "人常常一口气发好几句：她等对方说完再一起回，而不是一句一回；模型或工具卡住时也不会无限等。" }, /* @__PURE__ */ h(Row, { label: "连发合并", hint: "打开后她会等对方说完再回" }, f.sw("merge.enabled")), /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "回合超时", hint: "模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟" }, /* @__PURE__ */ h(
     "input",
     {
       className: "ab-input sm",
@@ -1306,7 +1355,7 @@ function Group({ draft, setDraft }) {
   ), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟"))), /* @__PURE__ */ h(
     Card,
     {
-      title: "说话的样子（怎么分条）",
+      title: "怎么说话（分条）",
       desc: "她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。句子太短不会单独成条，攒够一截才断。",
       more: "换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。"
     },
@@ -1314,50 +1363,22 @@ function Group({ draft, setDraft }) {
     /* @__PURE__ */ h(Row, { label: "私聊一条最长", hint: "私聊可以整段说，设大一点更像正常聊天" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
     /* @__PURE__ */ h(Row, { label: "一轮最多几条", hint: "超过就均匀合并，不会把剩下的全塞进最后一条" }, f.num("reply.maxBubbles", { min: 1, max: 12 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")),
     /* @__PURE__ */ h(Row, { label: "清单和汇报整段发", hint: "开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆" }, f.sw("reply.keepReports"))
-  ), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }), /* @__PURE__ */ h(
-    Card,
+  ), /* @__PURE__ */ h(Card, { title: "群聊行为", desc: "群里什么时候必回、什么时候插话、怎么防刷屏。低频的刹车与防 bot 规则默认收起。" }, /* @__PURE__ */ h(FoldSection, { title: "被叫到一定回", defaultOpen: true, desc: "被 @、有人引用回复她的消息、或者提到下面这些名字时，她一定会回。" }, /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))), /* @__PURE__ */ h(FoldSection, { title: "插话", defaultOpen: true, desc: "没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。" }, /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")), /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "每小时最多插话" }, f.range("group.maxPerHour", 0, 30, 1, (v) => v + " 次")), /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })), /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")), /* @__PURE__ */ h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点 到"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")), /* @__PURE__ */ h(More, { label: "加入话题之后怎么聊" }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她 3 分钟内说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却和每小时上限限制；话题跑偏或者她选择不说话就退出。")), /* @__PURE__ */ h(FoldSection, { title: "安全刹车", desc: "只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。" }, /* @__PURE__ */ h(Row, { label: "最多说几次" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))), /* @__PURE__ */ h(FoldSection, { title: "防同类 bot", desc: "防 bot 对聊刷屏：她和一个对象互相针对地接话，已确认是同类 bot 的 2 个来回就停、看不出身份的 4 个来回才停，停的是这一对 30 分钟。" }, /* @__PURE__ */ h(Row, { label: "启用", hint: "关掉就完全不判定，她照常按插话概率说话。" }, f.sw("group.fishGuard.enabled")), /* @__PURE__ */ h(Row, { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）" }, /* @__PURE__ */ h(
+    ListInput,
     {
-      title: "发文件",
-      right: f.sw("files.enabled"),
-      desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。",
-      more: "限制：她只能发 QQ 工作区和下面目录里的文件；单个文件有大小上限；发过什么会记在日志里。"
-    },
-    /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")),
-    /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" }))
-  ), /* @__PURE__ */ h(
-    Card,
-    {
-      title: "危险命令确认",
-      right: f.sw("security.dangerConfirm"),
-      desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。",
-      more: "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。\n注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"
+      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
+      placeholder: "例如 123456789, 987654321",
+      numbers: true,
+      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
     }
-  ), /* @__PURE__ */ h(Card, { title: "群里什么时候必回", desc: "被 @、有人引用回复她的消息、或者提到下面这些名字时，她一定会回。" }, /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))), /* @__PURE__ */ h(Card, { title: "安全刹车", desc: "只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。" }, /* @__PURE__ */ h(Row, { label: "最多说几次" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))), /* @__PURE__ */ h(Card, { title: "群里插话", desc: "没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。" }, /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")), /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "每小时最多插话" }, f.range("group.maxPerHour", 0, 30, 1, (v) => v + " 次")), /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })), /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")), /* @__PURE__ */ h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点 到"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")), /* @__PURE__ */ h(More, { label: "加入话题之后怎么聊" }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她 3 分钟内说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却和每小时上限限制；话题跑偏或者她选择不说话就退出。")), /* @__PURE__ */ h(
-    Card,
+  )), /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
+    ListInput,
     {
-      title: "同类 bot 太多时不参与",
-      desc: "防 bot 对聊刷屏：她和一个对象互相针对地接话，已确认是同类 bot 的 2 个来回就停、看不出身份的 4 个来回才停，停的是这一对 30 分钟。",
-      more: "另有全局密度兜底（连续 / 占比 / 乒乓交替）。停的对象的 @ 也不接，别人和主人不受影响。\n名字看不出来的 bot（比如麦麦系的「某bot」）把号码加进下面的鱼名单，第二回合就掐。"
-    },
-    /* @__PURE__ */ h(Row, { label: "启用", hint: "关掉就完全不判定，她照常按插话概率说话。" }, f.sw("group.fishGuard.enabled")),
-    /* @__PURE__ */ h(Row, { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）" }, /* @__PURE__ */ h(
-      ListInput,
-      {
-        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
-        placeholder: "例如 123456789, 987654321",
-        numbers: true,
-        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
-      }
-    )),
-    /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
-      ListInput,
-      {
-        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
-        placeholder: "例如 小鱼, 咸鱼罐头",
-        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
-      }
-    ))
-  ), /* @__PURE__ */ h(Card, { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
+      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
+      placeholder: "例如 小鱼, 咸鱼罐头",
+      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
+    }
+  ))), /* @__PURE__ */ h(FoldSection, { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
     PercentRow,
     {
       key: gid,
@@ -1377,7 +1398,7 @@ function Group({ draft, setDraft }) {
   )), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
     setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
     setNewGid("");
-  } }, "添加"))));
+  } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
 }
 
 // client/src/views/model.js
@@ -1904,301 +1925,6 @@ function SpeakUp({ st, draft, setDraft, toast }) {
   ));
 }
 
-// client/src/views/mood.js
-var SOURCE = { tool: "她自己记的", auto: "每日整理", diary: "空间日记", panel: "你加的", event: "她的经历", import: "导入的" };
-function Mood({ st, draft, setDraft, toast }) {
-  const f = useField(draft, setDraft);
-  const [mem, setMem] = useState(null);
-  const [stats, setStats] = useState(null);
-  const [q, setQ] = useState("");
-  const [ins, setIns] = useState(null);
-  const [adding, setAdding] = useState({ text: "", aboutName: "", importance: 0.6 });
-  const [browseOpen, setBrowseOpen] = useState(false);
-  const [health, setHealth] = useState(null);
-  const [reloading, setReloading] = useState(false);
-  const [vec, setVec] = useState(null);
-  const [vecBusy, setVecBusy] = useState(false);
-  const [rerank, setRerank] = useState(null);
-  const load = (query) => get("/memories?q=" + encodeURIComponent(query ?? q)).then((r) => {
-    setMem(r.items || []);
-    setStats(r.stats || null);
-    setHealth(r.health || null);
-  });
-  const loadVec = () => get("/memory/vector").then((r) => {
-    setVec(r.status || { enabled: false });
-    setRerank(r.rerank || { enabled: false });
-  }).catch(() => {
-    setVec({ enabled: false });
-    setRerank({ enabled: false });
-  });
-  const [styles, setStyles] = useState({});
-  const loadIns = () => get("/insights").then((r) => {
-    setIns(r.items || []);
-    setStyles(r.styles || {});
-  });
-  const times = draft.memory.consolidateTimes || [];
-  const setTime = (i, v) => {
-    const t = times.slice();
-    t[i] = v;
-    setDraft(setPath(draft, "memory.consolidateTimes", t));
-  };
-  const memOn = modOn(st, "memory");
-  useEffect(() => {
-    if (memOn) {
-      load("");
-      loadIns();
-      loadVec();
-    }
-  }, [memOn]);
-  useEffect(() => {
-    if (!memOn) return;
-    const t = setTimeout(() => load(q), 250);
-    return () => clearTimeout(t);
-  }, [q]);
-  const last = st.memory && st.memory.lastConsolidate;
-  if (!memOn) return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(ModOff, { name: "记忆" }));
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(ProfilesCard, { toast }), /* @__PURE__ */ h(Card, { title: "相处经验", desc: "她对每个人（和每个群）总结出来的相处之道，比如「他累的时候不想多聊」。每次整理记忆时回顾一次；聊天时只带上对当前这个人的那份。" }, ins === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : ins.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : ins.map((p) => /* @__PURE__ */ h(InsightCard, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }))), /* @__PURE__ */ h(Card, { title: "说话方式", desc: "聊久了潜移默化学到的说话习惯——不会变成另一个人，只是越来越像「你们的」大肥鱼。" }, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), Object.keys(styles).filter((k) => k !== "self").length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "还没学到别人的说话习惯。整理记忆时会跟着相处经验一起总结（显示在上面每个人的相处经验下面）。") : null), /* @__PURE__ */ h(Card, { title: "记忆库", right: f.sw("memory.enabled"), desc: "她聊天时自己记的、每天从聊天里整理出来的、你手动加的。每轮回复前，她会按对方正在说的话翻出最相关的几条。" }, /* @__PURE__ */ h("div", { className: "ab-grid ab-g4", style: { marginBottom: 12 } }, /* @__PURE__ */ h("div", { className: "ab-card ab-stat" }, /* @__PURE__ */ h("div", { className: "n" }, stats ? stats.count : "–"), /* @__PURE__ */ h("div", { className: "l" }, "条长期记忆")), /* @__PURE__ */ h("div", { className: "ab-card ab-stat" }, /* @__PURE__ */ h("div", { className: "n" }, stats ? stats.auto : "–"), /* @__PURE__ */ h("div", { className: "l" }, "条来自每日整理", stats && stats.outdated ? "（另有 " + stats.outdated + " 条已过时）" : "")), /* @__PURE__ */ h("div", { className: "ab-card ab-stat" }, /* @__PURE__ */ h("div", { className: "n", style: { fontSize: 16, paddingTop: 6 } }, last ? new Date(last.at).toLocaleString() : "还没整理过"), /* @__PURE__ */ h("div", { className: "l" }, "上次整理"))), health && !health.ok ? /* @__PURE__ */ h("div", { className: "ab-note err", role: "alert" }, /* @__PURE__ */ h("b", null, "档案异常，自动整理已暂停。修复文件后点击「重新载入档案」。"), health.stateError ? /* @__PURE__ */ h("div", null, health.stateError) : null, (health.brokenScopes || []).map((item) => /* @__PURE__ */ h("div", { key: item.file }, item.file, "：", item.error))) : null, /* @__PURE__ */ h(Row, { label: "档案维护", hint: "手动修改 memory.md 后重新载入；在途整理会被取消，损坏档案不会被覆盖。" }, /* @__PURE__ */ h(
-    Btn,
-    {
-      small: true,
-      disabled: reloading,
-      onClick: async () => {
-        setReloading(true);
-        try {
-          const r = await post("/memory/reload", {});
-          setHealth(r.health || null);
-          toast(r.message, r.ok ? "ok" : "err");
-          await Promise.all([load(), loadIns()]);
-        } catch (error) {
-          toast(error.message, "err");
-        } finally {
-          setReloading(false);
-        }
-      }
-    },
-    reloading ? "正在载入…" : "重新载入档案"
-  )), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。在下面「记忆」模块设置里填接口地址和 API Key，保存即生效、无需重启。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
-    setVecBusy(true);
-    try {
-      const r = await post("/memory/vector/backfill", {});
-      toast(r.message || "存量补全完成，这次向量化 " + (r.embedded || 0) + " 条", r.ok ? "ok" : "err");
-      loadVec();
-    } catch (error) {
-      toast(error.message, "err");
-    } finally {
-      setVecBusy(false);
-    }
-  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「记忆」模块设置里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。在下面「记忆」模块设置里填 Rerank 接口地址和 API Key，保存即生效。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「记忆」模块设置里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "04:00", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "16:00", onChange: (e) => setTime(1, e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
-    toast("正在整理，可能要一两分钟…");
-    const r = await post("/memory/extract", {});
-    toast(r.message);
-    load();
-    loadIns();
-  } }, "现在整理一次")), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() }), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "手动加一条"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 260px" }, placeholder: "要她记住的事，例如：主人不吃香菜", value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 120px" }, placeholder: "关于谁（可选）", value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }), /* @__PURE__ */ h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: "随口一提" }, { value: 0.6, label: "比较重要" }, { value: 0.9, label: "非常重要" }] }), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !adding.text.trim(), onClick: async () => {
-    const r = await post("/memory/add", adding);
-    toast(r.ok ? "记住了" : r.message);
-    setAdding({ text: "", aboutName: "", importance: 0.6 });
-    load();
-  } }, "记住")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10, cursor: "pointer" }, onClick: () => setBrowseOpen(!browseOpen) }, /* @__PURE__ */ h("div", { className: "ab-section-title", style: { margin: 0 } }, (browseOpen ? "▾" : "▸") + " 翻一翻"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem ? mem.length + " 条记忆" : "")), browseOpen && /* @__PURE__ */ h("input", { className: "ab-input wide", placeholder: "搜索记忆，例如：白米饭、游戏、约定…", value: q, onChange: (e) => setQ(e.target.value) }), !browseOpen ? null : mem === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : mem.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: q ? "没找到相关的记忆" : "还没有记住什么。" }) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem.length + " 条" + (mem.length >= 300 ? "（只显示最近 300 条，可搜索）" : ""))), (() => {
-    const secOf = (m) => {
-      const t = new Date(m.invalidAt || m.at);
-      const now = /* @__PURE__ */ new Date();
-      const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-      const diff = (day(now) - day(t)) / 864e5;
-      if (diff <= 0) return "今天";
-      if (diff === 1) return "昨天";
-      if (diff <= 3) return "近几天";
-      if (diff <= 7) return "本周";
-      if (diff <= 31) return "本月";
-      return "更早";
-    };
-    const order = ["今天", "昨天", "近几天", "本周", "本月", "更早"];
-    const groups = /* @__PURE__ */ new Map();
-    for (const m of mem) {
-      const k = secOf(m);
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(m);
-    }
-    return /* @__PURE__ */ h("div", { className: "ab-list", style: { marginTop: 8 } }, order.filter((k) => groups.has(k)).flatMap((k) => [
-      /* @__PURE__ */ h("div", { key: "s:" + k, className: "ab-section-title", style: { margin: "10px 0 4px" } }, k, /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 6 } }, groups.get(k).length + " 条")),
-      ...groups.get(k).map((m) => /* @__PURE__ */ h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast }))
-    ]));
-  })())), /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }));
-}
-/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
-function ProfilesCard({ toast }) {
-  const [list, setList] = useState(null);
-  const load = () => get("/profiles").then((r) => setList(r.list || []));
-  useEffect(() => {
-    load();
-  }, []);
-  return /* @__PURE__ */ h(Card, { title: "人物小档案", desc: "她对每个人的印象：是谁、什么关系、喜好、最近在忙什么。和谁聊天就带上谁的那份，不用等对方提到关键词。每次整理记忆时，记忆有变化的人会按新记忆重写；你也可以直接改。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.map((p) => /* @__PURE__ */ h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load }))));
-}
-function ProfileRow({ p, toast, onChanged }) {
-  const [text, setText] = useState(p.text);
-  const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  useEffect(() => {
-    setText(p.text);
-  }, [p.text]);
-  const del = async () => {
-    const r = await post("/profiles/delete", { qq: p.qq, scope: p.scope });
-    toast(r.message, r.ok ? "ok" : "err");
-    onChanged();
-  };
-  return /* @__PURE__ */ h("div", { className: "ab-li", style: { alignItems: "flex-start" } }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, p.name || p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11, background: p.scope === "global" ? "var(--ab-sea, #35506b)" : "rgba(0,0,0,.18)" } }, p.scope === "global" ? "通用" : p.scope.startsWith("group:") ? "群 " + p.scope.slice(6) : "私聊"), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, timeAgo(p.at))), /* @__PURE__ */ h("textarea", { className: "ab-input wide", rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: text === p.text, onClick: async () => {
-    const r = await post("/profiles/save", { qq: p.qq, text, scope: p.scope });
-    toast(r.message, "ok");
-    onChanged();
-  } }, "保存"), /* @__PURE__ */ h(
-    Btn,
-    {
-      small: true,
-      kind: "ghost",
-      disabled: busy,
-      onClick: async () => {
-        setBusy(true);
-        const r = await post("/profiles/rebuild", { qq: p.qq, scope: p.scope });
-        setBusy(false);
-        toast(r.message, r.ok ? "ok" : "err");
-        onChanged();
-      }
-    },
-    busy ? "重写中…" : "按记忆重写"
-  ), confirming ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
-    setConfirming(false);
-    del();
-  } }, "确认删除") : /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setConfirming(true) }, "删除")));
-}
-function RecallLog() {
-  const [list, setList] = useState(null);
-  const load = () => get("/memory/recalls").then((r) => setList(r.list || []));
-  useEffect(() => {
-    load();
-  }, []);
-  return /* @__PURE__ */ h(Card, { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
-}
-function OwnerMigrate({ toast, onChanged }) {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const doMove = async () => {
-    if (!/^\d{5,}$/.test(from) || !/^\d{5,}$/.test(to)) {
-      toast("两边都要填 QQ 号");
-      return;
-    }
-    if (!confirm("把 " + from + " 名下的私聊记忆全部搬给 " + to + "？")) return;
-    const r = await post("/memory/reassign-owner", { from, to });
-    toast(r.message || (r.ok ? "搬好了" : "没搬成"));
-    if (r.ok) {
-      setFrom("");
-      setTo("");
-      onChanged();
-    }
-  };
-  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主人换号迁移"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center" } }, /* @__PURE__ */ h("input", { className: "ab-input sm", placeholder: "旧 QQ 号", value: from, onChange: (e) => setFrom(e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "→"), /* @__PURE__ */ h("input", { className: "ab-input sm", placeholder: "新 QQ 号", value: to, onChange: (e) => setTo(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !from || !to, onClick: doMove }, "迁移记忆")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "换了 QQ 号用这个：旧号私聊里的记忆（包括记在你名下的小档案）会整体搬到新号，一次就好。"));
-}
-function MemoryImport({ toast, onDone }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [cands, setCands] = useState(null);
-  const [pick, setPick] = useState({});
-  const [scope, setScope] = useState("private");
-  const readFile = () => {
-    const inp = document.createElement("input");
-    inp.type = "file";
-    inp.accept = ".txt,.md,.markdown,.json";
-    inp.onchange = () => {
-      const f = inp.files && inp.files[0];
-      if (!f) return;
-      const fr = new FileReader();
-      fr.onload = () => setText(String(fr.result || "").slice(0, 3e4));
-      fr.readAsText(f);
-    };
-    inp.click();
-  };
-  const scan = async () => {
-    setBusy(true);
-    setCands(null);
-    const r = await post("/memory/import", { text });
-    setBusy(false);
-    if (!r.ok) return toast(r.message, "err");
-    setCands(r.list);
-    setPick(Object.fromEntries(r.list.map((_, i) => [i, true])));
-  };
-  const commit = async () => {
-    const items = cands.filter((_, i) => pick[i]);
-    const r = await post("/memory/import/commit", { items, scope });
-    toast(r.message, "ok");
-    setCands(null);
-    setText("");
-    onDone();
-  };
-  return /* @__PURE__ */ h(Card, { title: "导入旧档案", desc: "以前写过的设定、聊天笔记、别的机器人的记忆文件，贴进来或上传。她会挑出值得记的，你勾选后再存；和已有记忆重复的会自动去掉。" }, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: readFile }, "选择文件"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy || !text.trim(), onClick: scan }, busy ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在挑…") : "挑出值得记的"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, text ? text.length + " 字" : "")), cands ? cands.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 10 } }, "没挑出新的可记的东西（或者都已经记过了）。") : /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h("div", { className: "ab-list" }, cands.map((c, i) => /* @__PURE__ */ h("label", { key: i, className: "ab-li", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: "var(--ab-sea)", marginTop: 3 } }), /* @__PURE__ */ h("div", { className: "body" }, c.aboutName ? /* @__PURE__ */ h("b", null, "[", c.aboutName, "] ") : null, c.text, c.importance >= 0.8 ? " ★" : "")))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "private", onChange: () => setScope("private"), style: { accentColor: "var(--ab-sea)" } }), " 只在她的私聊里想起（默认）"), /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer", marginLeft: 12 } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "global", onChange: () => setScope("global"), style: { accentColor: "var(--ab-sea)" } }), " 所有聊天都能想起（她自己的设定选这个）")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: commit, disabled: !Object.values(pick).some(Boolean) }, "存进记忆库（", Object.values(pick).filter(Boolean).length, " 条）"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setCands(null) }, "取消"))) : null);
-}
-function StyleEditor({ k, label, list, toast, onSaved }) {
-  const [text, setText] = useState(list.join("\n"));
-  useEffect(() => setText(list.join("\n")), [list.join("\n")]);
-  const changed = text !== list.join("\n");
-  return /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 4 } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-sub)" } }, label), /* @__PURE__ */ h("div", { className: "ab-spacer" }), changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
-    const r = await post("/style/save", { key: k, list: text.split("\n") });
-    toast(r.message, "ok");
-    onSaved();
-  } }, "保存") : null), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 50, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条，例如：消息很短，常一句话分几条发" }));
-}
-function InsightCard({ p, toast, onSaved, style }) {
-  const [text, setText] = useState(p.list.map((x) => x.text).join("\n"));
-  const changed = text !== p.list.map((x) => x.text).join("\n");
-  const who = p.key.startsWith("group:") ? "群 " + p.key.slice(6) : p.name ? p.name + "（" + p.key.slice(3) + "）" : p.key.slice(3);
-  const delOne = async (lineIdx) => {
-    const item = p.list[lineIdx];
-    if (!item) return;
-    const r = await post("/insights/delete", { key: p.key, id: item.id });
-    toast(r.message, r.ok ? "ok" : "err");
-    onSaved();
-  };
-  return /* @__PURE__ */ h("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("b", null, who), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, p.list.length + " 条"), /* @__PURE__ */ h("div", { className: "ab-spacer" }), changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
-    const r = await post("/insights/save", { key: p.key, list: text.split("\n") });
-    toast(r.message, "ok");
-    onSaved();
-  } }, "保存") : null), p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
-    if (window.confirm("删掉这条相处经验？\n\n" + x.text.slice(0, 60))) delOne(i);
-  } }, "删")))) : null, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 70, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条经验" }), /* @__PURE__ */ h(StyleEditor, { k: p.key, label: "说话方式", list: style || [], toast, onSaved }));
-}
-function MemoryRow({ m, onChanged, toast }) {
-  const [edit, setEdit] = useState(false);
-  const [text, setText] = useState(m.text);
-  if (m.invalidAt) {
-    return /* @__PURE__ */ h("div", { className: "ab-li", style: { opacity: 0.6 } }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(m.invalidAt), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11 } }, "已过时")), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("s", null, (m.aboutName ? "[" + m.aboutName + "] " : "") + m.text), m.supersededText ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "→ 现在是：", m.supersededText) : null), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
-      await post("/memory/restore", { id: m.id });
-      toast("恢复了", "ok");
-      onChanged();
-    } }, "恢复"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
-      await post("/memory/delete", { id: m.id });
-      onChanged();
-    } }, "删掉"));
-  }
-  return /* @__PURE__ */ h("div", { className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(m.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11 } }, SOURCE[m.source] || "记忆")), edit ? /* @__PURE__ */ h(
-    "input",
-    {
-      className: "ab-input wide",
-      value: text,
-      onChange: (e) => setText(e.target.value),
-      onKeyDown: async (e) => {
-        if (e.key === "Enter") {
-          await post("/memory/update", { id: m.id, text });
-          setEdit(false);
-          toast("改好了", "ok");
-          onChanged();
-        }
-        if (e.key === "Escape") setEdit(false);
-      }
-    }
-  ) : /* @__PURE__ */ h("div", { className: "body" }, m.aboutName ? /* @__PURE__ */ h("b", null, "[", m.aboutName, "] ") : null, m.text, m.importance >= 0.8 ? /* @__PURE__ */ h("span", { title: "很重要" }, " ★") : null), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setEdit(!edit) }, edit ? "取消" : "改一下"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
-    await post("/memory/delete", { id: m.id });
-    onChanged();
-  } }, "忘掉"));
-}
-
 // client/src/views/modules.js
 function LocalApi({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
@@ -2569,6 +2295,337 @@ function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
     return f.text(p, { placeholder: s.placeholder });
   };
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, (m.settings || []).length || (m.errors || []).length || !m.panel ? /* @__PURE__ */ h(Card, { title: m.name, desc: m.description, right: /* @__PURE__ */ h("span", { className: "ab-badge mine" }, embedded ? "扩展模块 · " + m.id : m.id) }, (m.settings || []).map((s) => /* @__PURE__ */ h(Row, { key: s.key, label: s.label || s.key, hint: s.hint }, field(s))), (m.settings || []).length ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "改完点下面的「保存设置」。") : null, (m.errors || []).length ? /* @__PURE__ */ h("div", { className: "ab-note err", style: { marginTop: 8 } }, "最近的报错：", m.errors[0].message) : null) : null, m.panel ? /* @__PURE__ */ h(ExtPanel, { m, settings, draftSettings, setSettings, toast, reload, draft, setDraft }) : null);
+}
+
+// client/src/views/mood.js
+var SOURCE = { tool: "她自己记的", auto: "每日整理", diary: "空间日记", panel: "你加的", event: "她的经历", import: "导入的" };
+function Mood({ st, draft, setDraft, toast }) {
+  const f = useField(draft, setDraft);
+  const [mem, setMem] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [q, setQ] = useState("");
+  const [ins, setIns] = useState(null);
+  const [adding, setAdding] = useState({ text: "", aboutName: "", importance: 0.6 });
+  const [addOpen, setAddOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [personaTab, setPersonaTab] = useState("profiles");
+  const [health, setHealth] = useState(null);
+  const [reloading, setReloading] = useState(false);
+  const [vec, setVec] = useState(null);
+  const [vecBusy, setVecBusy] = useState(false);
+  const [rerank, setRerank] = useState(null);
+  const load = (query) => get("/memories?q=" + encodeURIComponent(query ?? q)).then((r) => {
+    setMem(r.items || []);
+    setStats(r.stats || null);
+    setHealth(r.health || null);
+  });
+  const loadVec = () => get("/memory/vector").then((r) => {
+    setVec(r.status || { enabled: false });
+    setRerank(r.rerank || { enabled: false });
+  }).catch(() => {
+    setVec({ enabled: false });
+    setRerank({ enabled: false });
+  });
+  const [styles, setStyles] = useState({});
+  const loadIns = () => get("/insights").then((r) => {
+    setIns(r.items || []);
+    setStyles(r.styles || {});
+  });
+  const times = draft.memory.consolidateTimes || [];
+  const setTime = (i, v) => {
+    const t = times.slice();
+    t[i] = v;
+    setDraft(setPath(draft, "memory.consolidateTimes", t));
+  };
+  const memOn = modOn(st, "memory");
+  useEffect(() => {
+    if (memOn) {
+      load("");
+      loadIns();
+      loadVec();
+    }
+  }, [memOn]);
+  useEffect(() => {
+    if (!memOn) return;
+    const t = setTimeout(() => load(q), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+  const last = st.memory && st.memory.lastConsolidate;
+  if (!memOn) return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(ModOff, { name: "记忆" }));
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "记忆概览", desc: "她记得多少、上次整理是什么时候；档案有问题会在这里冒红条。" }, /* @__PURE__ */ h("div", { className: "ab-pills", style: { marginTop: 0, marginBottom: 10 } }, /* @__PURE__ */ h("span", { className: "ab-pill" }, stats ? stats.count : "–", " 条长期记忆"), /* @__PURE__ */ h("span", { className: "ab-pill" }, stats ? stats.auto : "–", " 条来自每日整理", stats && stats.outdated ? " · 另有 " + stats.outdated + " 条已过时" : ""), /* @__PURE__ */ h("span", { className: "ab-pill" }, "上次整理：", last ? new Date(last.at).toLocaleString() : "还没整理过")), health && !health.ok ? /* @__PURE__ */ h("div", { className: "ab-note err", role: "alert" }, /* @__PURE__ */ h("b", null, "档案异常，自动整理已暂停。修复文件后点击「重新载入档案」。"), health.stateError ? /* @__PURE__ */ h("div", null, health.stateError) : null, (health.brokenScopes || []).map((item) => /* @__PURE__ */ h("div", { key: item.file }, item.file, "：", item.error))) : null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
+    toast("正在整理，可能要一两分钟…");
+    const r = await post("/memory/extract", {});
+    toast(r.message);
+    load();
+    loadIns();
+  } }, "现在整理一次"), /* @__PURE__ */ h(
+    Btn,
+    {
+      small: true,
+      disabled: reloading,
+      onClick: async () => {
+        setReloading(true);
+        try {
+          const r = await post("/memory/reload", {});
+          setHealth(r.health || null);
+          toast(r.message, r.ok ? "ok" : "err");
+          await Promise.all([load(), loadIns()]);
+        } catch (error) {
+          toast(error.message, "err");
+        } finally {
+          setReloading(false);
+        }
+      }
+    },
+    reloading ? "正在载入…" : "重新载入档案"
+  ))), /* @__PURE__ */ h(Card, { title: "记忆库", right: f.sw("memory.enabled"), desc: "她聊天时自己记的、每天从聊天里整理出来的、你手动加的。每轮回复前，她会按对方正在说的话翻出最相关的几条。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 260px" }, placeholder: "搜索记忆，例如：白米饭、游戏、约定…", value: q, onChange: (e) => {
+    setQ(e.target.value);
+    if (e.target.value) setBrowseOpen(true);
+  } }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setAddOpen(!addOpen) }, addOpen ? "收起" : "＋ 手动加一条")), addOpen ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 260px" }, placeholder: "要她记住的事，例如：主人不吃香菜", value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 120px" }, placeholder: "关于谁（可选）", value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }), /* @__PURE__ */ h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: "随口一提" }, { value: 0.6, label: "比较重要" }, { value: 0.9, label: "非常重要" }] }), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !adding.text.trim(), onClick: async () => {
+    const r = await post("/memory/add", adding);
+    toast(r.ok ? "记住了" : r.message);
+    setAdding({ text: "", aboutName: "", importance: 0.6 });
+    setAddOpen(false);
+    load();
+  } }, "记住")) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10, cursor: "pointer" }, onClick: () => setBrowseOpen(!browseOpen) }, /* @__PURE__ */ h("div", { className: "ab-section-title", style: { margin: 0 } }, (browseOpen ? "▾" : "▸") + " 全部记忆"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem ? mem.length + " 条" : "")), !browseOpen ? null : mem === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : mem.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: q ? "没找到相关的记忆" : "还没有记住什么。" }) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem.length + " 条" + (mem.length >= 300 ? "（只显示最近 300 条，可搜索）" : ""))), (() => {
+    const secOf = (m) => {
+      const t = new Date(m.invalidAt || m.at);
+      const now = /* @__PURE__ */ new Date();
+      const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const diff = (day(now) - day(t)) / 864e5;
+      if (diff <= 0) return "今天";
+      if (diff === 1) return "昨天";
+      if (diff <= 3) return "近几天";
+      if (diff <= 7) return "本周";
+      if (diff <= 31) return "本月";
+      return "更早";
+    };
+    const order = ["今天", "昨天", "近几天", "本周", "本月", "更早"];
+    const groups = /* @__PURE__ */ new Map();
+    for (const m of mem) {
+      const k = secOf(m);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(m);
+    }
+    return /* @__PURE__ */ h("div", { className: "ab-list", style: { marginTop: 8 } }, order.filter((k) => groups.has(k)).flatMap((k) => [
+      /* @__PURE__ */ h("div", { key: "s:" + k, className: "ab-section-title", style: { margin: "10px 0 4px" } }, k, /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 6 } }, groups.get(k).length + " 条")),
+      ...groups.get(k).map((m) => /* @__PURE__ */ h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast }))
+    ]));
+  })())), /* @__PURE__ */ h(Card, { title: "人物与相处", desc: "她对每个人的印象、总结出的相处之道，以及潜移默化学到的说话方式。点开某一项才编辑。" }, /* @__PURE__ */ h(Seg, { value: personaTab, onChange: setPersonaTab, options: [{ value: "profiles", label: "人物档案" }, { value: "insights", label: "相处经验" }, { value: "style", label: "说话方式" }] }), /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, personaTab === "profiles" ? /* @__PURE__ */ h(ProfilesList, { toast }) : null, personaTab === "insights" ? ins === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : ins.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : ins.map((p) => /* @__PURE__ */ h(InsightRow, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] })) : null, personaTab === "style" ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "每个人的说话习惯跟着上面的「相处经验」一起显示和编辑。")) : null)), /* @__PURE__ */ h(Card, { title: "整理与检索", desc: "每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。" }, /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "04:00", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "16:00", onChange: (e) => setTime(1, e.target.value) })), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
+    setVecBusy(true);
+    try {
+      const r = await post("/memory/vector/backfill", {});
+      toast(r.message || "存量补全完成，这次向量化 " + (r.embedded || 0) + " 条", r.ok ? "ok" : "err");
+      loadVec();
+    } catch (error) {
+      toast(error.message, "err");
+    } finally {
+      setVecBusy(false);
+    }
+  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。", collapse: true }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() })));
+}
+/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
+function ProfilesList({ toast }) {
+  const [list, setList] = useState(null);
+  const load = () => get("/profiles").then((r) => setList(r.list || []));
+  useEffect(() => {
+    load();
+  }, []);
+  if (list === null) return /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" });
+  if (list.length === 0) return /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。" });
+  return /* @__PURE__ */ h("div", { className: "ab-list" }, list.map((p) => /* @__PURE__ */ h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load })));
+}
+function ProfileRow({ p, toast, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(p.text);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    setText(p.text);
+  }, [p.text]);
+  const del = async () => {
+    const r = await post("/profiles/delete", { qq: p.qq, scope: p.scope });
+    toast(r.message, r.ok ? "ok" : "err");
+    onChanged();
+  };
+  const scopeLabel = p.scope === "global" ? "通用" : p.scope.startsWith("group:") ? "群 " + p.scope.slice(6) : "私聊";
+  return /* @__PURE__ */ h("div", { className: "ab-li", style: { alignItems: "flex-start" } }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, p.name || p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11, background: p.scope === "global" ? "var(--ab-sea, #35506b)" : "rgba(0,0,0,.18)" } }, scopeLabel), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, timeAgo(p.at))), open ? /* @__PURE__ */ h("textarea", { className: "ab-input wide", rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: 1 } }) : /* @__PURE__ */ h("div", { className: "body ab-small", style: { flex: 1, whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } }, p.text), /* @__PURE__ */ h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setOpen(!open) }, open ? "收起" : "编辑"), open ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: text === p.text, onClick: async () => {
+    const r = await post("/profiles/save", { qq: p.qq, text, scope: p.scope });
+    toast(r.message, "ok");
+    onChanged();
+  } }, "保存") : null, open ? /* @__PURE__ */ h(
+    Btn,
+    {
+      small: true,
+      kind: "ghost",
+      disabled: busy,
+      onClick: async () => {
+        setBusy(true);
+        const r = await post("/profiles/rebuild", { qq: p.qq, scope: p.scope });
+        setBusy(false);
+        toast(r.message, r.ok ? "ok" : "err");
+        onChanged();
+      }
+    },
+    busy ? "重写中…" : "按记忆重写"
+  ) : null, open ? confirming ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+    setConfirming(false);
+    del();
+  } }, "确认删除") : /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setConfirming(true) }, "删除") : null));
+}
+function RecallLog() {
+  const [list, setList] = useState(null);
+  const load = () => get("/memory/recalls").then((r) => setList(r.list || []));
+  useEffect(() => {
+    load();
+  }, []);
+  return /* @__PURE__ */ h(Card, { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新"), collapse: true }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
+}
+function OwnerMigrate({ toast, onChanged }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const doMove = async () => {
+    if (!/^\d{5,}$/.test(from) || !/^\d{5,}$/.test(to)) {
+      toast("两边都要填 QQ 号");
+      return;
+    }
+    if (!confirm("把 " + from + " 名下的私聊记忆全部搬给 " + to + "？")) return;
+    const r = await post("/memory/reassign-owner", { from, to });
+    toast(r.message || (r.ok ? "搬好了" : "没搬成"));
+    if (r.ok) {
+      setFrom("");
+      setTo("");
+      onChanged();
+    }
+  };
+  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主人换号迁移"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center" } }, /* @__PURE__ */ h("input", { className: "ab-input sm", placeholder: "旧 QQ 号", value: from, onChange: (e) => setFrom(e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "→"), /* @__PURE__ */ h("input", { className: "ab-input sm", placeholder: "新 QQ 号", value: to, onChange: (e) => setTo(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !from || !to, onClick: doMove }, "迁移记忆")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "换了 QQ 号用这个：旧号私聊里的记忆（包括记在你名下的小档案）会整体搬到新号，一次就好。"));
+}
+function MemoryImport({ toast, onDone }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [cands, setCands] = useState(null);
+  const [pick, setPick] = useState({});
+  const [scope, setScope] = useState("private");
+  const readFile = () => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".txt,.md,.markdown,.json";
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      const fr = new FileReader();
+      fr.onload = () => setText(String(fr.result || "").slice(0, 3e4));
+      fr.readAsText(f);
+    };
+    inp.click();
+  };
+  const scan = async () => {
+    setBusy(true);
+    setCands(null);
+    const r = await post("/memory/import", { text });
+    setBusy(false);
+    if (!r.ok) return toast(r.message, "err");
+    setCands(r.list);
+    setPick(Object.fromEntries(r.list.map((_, i) => [i, true])));
+  };
+  const commit = async () => {
+    const items = cands.filter((_, i) => pick[i]);
+    const r = await post("/memory/import/commit", { items, scope });
+    toast(r.message, "ok");
+    setCands(null);
+    setText("");
+    onDone();
+  };
+  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "导入旧档案"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "以前写过的设定、聊天笔记、别的机器人的记忆文件，贴进来或上传。她会挑出值得记的，你勾选后再存；和已有记忆重复的会自动去掉。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: readFile }, "选择文件"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy || !text.trim(), onClick: scan }, busy ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在挑…") : "挑出值得记的"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, text ? text.length + " 字" : "")), cands ? cands.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 10 } }, "没挑出新的可记的东西（或者都已经记过了）。") : /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h("div", { className: "ab-list" }, cands.map((c, i) => /* @__PURE__ */ h("label", { key: i, className: "ab-li", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: "var(--ab-sea)", marginTop: 3 } }), /* @__PURE__ */ h("div", { className: "body" }, c.aboutName ? /* @__PURE__ */ h("b", null, "[", c.aboutName, "] ") : null, c.text, c.importance >= 0.8 ? " ★" : "")))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "private", onChange: () => setScope("private"), style: { accentColor: "var(--ab-sea)" } }), " 只在她的私聊里想起（默认）"), /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer", marginLeft: 12 } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "global", onChange: () => setScope("global"), style: { accentColor: "var(--ab-sea)" } }), " 所有聊天都能想起（她自己的设定选这个）")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: commit, disabled: !Object.values(pick).some(Boolean) }, "存进记忆库（", Object.values(pick).filter(Boolean).length, " 条）"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setCands(null) }, "取消"))) : null);
+}
+function StyleEditor({ k, label, list, toast, onSaved }) {
+  const [text, setText] = useState(list.join("\n"));
+  useEffect(() => setText(list.join("\n")), [list.join("\n")]);
+  const changed = text !== list.join("\n");
+  return /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 4 } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-sub)" } }, label), /* @__PURE__ */ h("div", { className: "ab-spacer" }), changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
+    const r = await post("/style/save", { key: k, list: text.split("\n") });
+    toast(r.message, "ok");
+    onSaved();
+  } }, "保存") : null), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 50, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条，例如：消息很短，常一句话分几条发" }));
+}
+function InsightRow({ p, toast, onSaved, style }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState(p.list.map((x) => x.text).join("\n"));
+  const joined = p.list.map((x) => x.text).join("\n");
+  useEffect(() => setText(joined), [joined]);
+  const changed = text !== joined;
+  const who = p.key.startsWith("group:") ? "群 " + p.key.slice(6) : p.name ? p.name + "（" + p.key.slice(3) + "）" : p.key.slice(3);
+  const delOne = async (lineIdx) => {
+    const item = p.list[lineIdx];
+    if (!item) return;
+    const r = await post("/insights/delete", { key: p.key, id: item.id });
+    toast(r.message, r.ok ? "ok" : "err");
+    onSaved();
+  };
+  return /* @__PURE__ */ h("div", { style: { marginBottom: open ? 12 : 4, borderTop: "1px solid var(--ab-line)", paddingTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: open ? 6 : 0 } }, /* @__PURE__ */ h("b", null, who), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, p.list.length + " 条"), /* @__PURE__ */ h("div", { className: "ab-spacer" }), open && changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
+    const r = await post("/insights/save", { key: p.key, list: text.split("\n") });
+    toast(r.message, "ok");
+    onSaved();
+  } }, "保存") : null, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "编辑")), open ? /* @__PURE__ */ h(Fragment, null, p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+    if (window.confirm("删掉这条相处经验？\n\n" + x.text.slice(0, 60))) delOne(i);
+  } }, "删")))) : null, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 70, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条经验" }), /* @__PURE__ */ h(StyleEditor, { k: p.key, label: "说话方式", list: style || [], toast, onSaved })) : null);
+}
+function MemoryRow({ m, onChanged, toast }) {
+  const [edit, setEdit] = useState(false);
+  const [text, setText] = useState(m.text);
+  if (m.invalidAt) {
+    return /* @__PURE__ */ h("div", { className: "ab-li", style: { opacity: 0.6 } }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(m.invalidAt), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11 } }, "已过时")), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("s", null, (m.aboutName ? "[" + m.aboutName + "] " : "") + m.text), m.supersededText ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "→ 现在是：", m.supersededText) : null), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+      await post("/memory/restore", { id: m.id });
+      toast("恢复了", "ok");
+      onChanged();
+    } }, "恢复"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+      await post("/memory/delete", { id: m.id });
+      onChanged();
+    } }, "删掉"));
+  }
+  return /* @__PURE__ */ h("div", { className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(m.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11 } }, SOURCE[m.source] || "记忆")), edit ? /* @__PURE__ */ h(
+    "input",
+    {
+      className: "ab-input wide",
+      value: text,
+      onChange: (e) => setText(e.target.value),
+      onKeyDown: async (e) => {
+        if (e.key === "Enter") {
+          await post("/memory/update", { id: m.id, text });
+          setEdit(false);
+          toast("改好了", "ok");
+          onChanged();
+        }
+        if (e.key === "Escape") setEdit(false);
+      }
+    }
+  ) : /* @__PURE__ */ h("div", { className: "body" }, m.aboutName ? /* @__PURE__ */ h("b", null, "[", m.aboutName, "] ") : null, m.text, m.importance >= 0.8 ? /* @__PURE__ */ h("span", { title: "很重要" }, " ★") : null), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setEdit(!edit) }, edit ? "取消" : "改一下"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+    await post("/memory/delete", { id: m.id });
+    onChanged();
+  } }, "忘掉"));
+}
+
+// client/src/views/enhance.js
+var CAPABILITIES = [
+  { id: "flash-transfer", name: "闪传", desc: "收发 QQ 闪传文件：看文件清单、下载到工作区、把收到的闪传转发给白名单会话。", need: "需要网关支持闪传相关动作" },
+  { id: "group-files", name: "群文件", desc: "浏览和下载群文件，必要时转存到工作区再处理。", need: "标准 OneBot 群文件接口" },
+  { id: "online-status", name: "在线与已读", desc: "查看对方在线状态与已读回执。", need: "需要网关支持在线状态扩展" },
+  { id: "social-actions", name: "社交动作", desc: "表情回应、设为精华、空间写扩展等社区动作。", need: "需要网关支持对应动作" },
+  { id: "ark-cards", name: "Ark 卡片", desc: "发送分享、音乐、位置、联系人等结构化卡片消息。", need: "需要网关支持卡片段，不支持时降级文字" },
+  { id: "ai-voice", name: "AI 语音", desc: "使用 SnowLuma 的 AI 语音合成发语音条。", need: "需要 SnowLuma 的 AI 语音能力" }
+];
+function Enhance({ st }) {
+  const mods = st.modules || [];
+  const running = (id) => mods.some((m) => m.id === id && m.running);
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
+    Card,
+    {
+      title: "QQ 增强",
+      desc: "这些是网关与 QQ 版本提供的扩展能力：群文件、在线与已读、卡片、闪传、社交动作、AI 语音。部分动作只有部分网关实现（SnowLuma 已验证）；不支持的动作会在日志里说明或自动降级。",
+      more: "下面每张卡是对应模块的设置；模块开关统一在「系统 → 扩展」里管理。某个能力没出现，说明对应模块没装或没在跑。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-list" }, CAPABILITIES.map((c) => /* @__PURE__ */ h("div", { key: c.id, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, c.name)), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-small" }, c.desc), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2 } }, c.need)), /* @__PURE__ */ h("span", { className: cx("ab-badge", !running(c.id) && "dim") }, running(c.id) ? "在跑" : "没在跑"))))
+  ));
 }
 
 // client/src/views/platforms/bili.js
@@ -3447,7 +3504,8 @@ function QQHubPage() {
     token: Token,
     local: LocalApi,
     modules: Modules,
-    logs: Logs
+    logs: Logs,
+    enhance: Enhance
   }[curTab.id] || Overview;
   const tabDirty = (id) => {
     if (!dirty) return false;
@@ -3463,7 +3521,7 @@ function QQHubPage() {
     const flag = t.flag === "group" ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag);
     return /* @__PURE__ */ h("i", { className: cx("ab-dot", flag && "ok"), title: flag ? "开着" : "关着", "aria-hidden": "true" });
   };
-  return /* @__PURE__ */ h("div", { className: "ab-root" }, /* @__PURE__ */ h("div", { className: "ab-wrap" }, /* @__PURE__ */ h("header", { className: "ab-topbar" }, /* @__PURE__ */ h("button", { type: "button", className: "ab-avatar-btn", title: "点击换头像", onClick: () => pickAvatar(toast, reload) }, /* @__PURE__ */ h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像" }), /* @__PURE__ */ h("span", { className: "ab-avatar-tip" }, "换头像")), /* @__PURE__ */ h("div", { className: "ab-topbar-main" }, /* @__PURE__ */ h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"), /* @__PURE__ */ h("div", { className: "ab-meta" }, "QQ ", cfg.botQQ, " · ", persona ? persona.name : "默认人格"), /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { kind: status.cls }, /* @__PURE__ */ h("i", { className: cx("ab-dot", status.cls) }), status.text), /* @__PURE__ */ h(Pill, null, "SnowLuma ", st.snowluma.installed ? st.snowluma.running ? "运行中" : "没启动" : "未安装"), /* @__PURE__ */ h(Pill, null, "QQ Hub v", st.version))), /* @__PURE__ */ h("div", { className: "ab-topbar-side" }, /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", null, "总开关"), /* @__PURE__ */ h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })), /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", { className: "ab-muted" }, "试运行"), /* @__PURE__ */ h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "开着时只写日志，不真的发到 QQ" })))), showWizard ? /* @__PURE__ */ h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null, showWizard ? null : /* @__PURE__ */ h(NavBar, { tabs, cur: curTab, go, mark, dirtyOf: tabDirty, subRef: tabsRef }), showWizard ? null : /* @__PURE__ */ h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })), showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser").map((m) => /* @__PURE__ */ h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, /* @__PURE__ */ h(ExtPage, { ...props, mod: m.id, embedded: true }))), dirty && !showWizard ? /* @__PURE__ */ h("div", { className: "ab-savebar" }, /* @__PURE__ */ h("span", { className: "msg" }, "有改动还没保存"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Ctrl"), " + ", /* @__PURE__ */ h("span", { className: "ab-kbd" }, "S")), /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => setDraft(clone(st.config)) }, "撤销"), /* @__PURE__ */ h(Btn, { kind: "primary", onClick: () => save() }, "保存设置")) : null), toastMsg ? /* @__PURE__ */ h("div", { className: cx("ab-toast", toastMsg.kind), role: "status" }, toastMsg.text) : null);
+  return /* @__PURE__ */ h("div", { className: "ab-root" }, /* @__PURE__ */ h("div", { className: "ab-wrap" }, /* @__PURE__ */ h("header", { className: "ab-topbar" }, /* @__PURE__ */ h("button", { type: "button", className: "ab-avatar-btn", title: "点击换头像", onClick: () => pickAvatar(toast, reload) }, /* @__PURE__ */ h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像" }), /* @__PURE__ */ h("span", { className: "ab-avatar-tip" }, "换头像")), /* @__PURE__ */ h("div", { className: "ab-topbar-main" }, /* @__PURE__ */ h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"), /* @__PURE__ */ h("div", { className: "ab-meta" }, "QQ ", cfg.botQQ, " · ", persona ? persona.name : "默认人格"), /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { kind: status.cls }, /* @__PURE__ */ h("i", { className: cx("ab-dot", status.cls) }), status.text), /* @__PURE__ */ h(Pill, null, "SnowLuma ", st.snowluma.installed ? st.snowluma.running ? "运行中" : "没启动" : "未安装"), /* @__PURE__ */ h(Pill, null, "QQ Hub v", st.version))), /* @__PURE__ */ h("div", { className: "ab-topbar-side" }, /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", null, "总开关"), /* @__PURE__ */ h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })), /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", { className: "ab-muted" }, "试运行"), /* @__PURE__ */ h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "开着时只写日志，不真的发到 QQ" })))), showWizard ? /* @__PURE__ */ h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null, showWizard ? null : /* @__PURE__ */ h(NavBar, { tabs, cur: curTab, go, mark, dirtyOf: tabDirty, subRef: tabsRef }), showWizard ? null : /* @__PURE__ */ h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })), showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser" && !(curTab.id === "memory" && m.id === "memory")).map((m) => /* @__PURE__ */ h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, /* @__PURE__ */ h(ExtPage, { ...props, mod: m.id, embedded: true }))), dirty && !showWizard ? /* @__PURE__ */ h("div", { className: "ab-savebar" }, /* @__PURE__ */ h("span", { className: "msg" }, "有改动还没保存"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Ctrl"), " + ", /* @__PURE__ */ h("span", { className: "ab-kbd" }, "S")), /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => setDraft(clone(st.config)) }, "撤销"), /* @__PURE__ */ h(Btn, { kind: "primary", onClick: () => save() }, "保存设置")) : null), toastMsg ? /* @__PURE__ */ h("div", { className: cx("ab-toast", toastMsg.kind), role: "status" }, toastMsg.text) : null);
 }
 
 // client/src/entry.js
