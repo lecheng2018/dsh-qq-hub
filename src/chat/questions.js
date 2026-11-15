@@ -176,7 +176,7 @@ export function parseUserAnswer(text, question) {
 /**
  * 创建提问登记器与状态机
  */
-export function createQuestionRegistry({ deliver, timeoutMs = 300_000, log } = {}) {
+export function createQuestionRegistry({ deliver, ownerQQ, timeoutMs = 300_000, log } = {}) {
   // chatId → { questions, resolve, reject, timer, createdAt, sessionId }
   const pending = new Map()
 
@@ -256,9 +256,14 @@ export function createQuestionRegistry({ deliver, timeoutMs = 300_000, log } = {
    * @param {string} text
    * @returns {boolean} 是否被提问状态机消费
    */
-  function handleReply(chatId, text) {
+  function handleReply(chatId, text, userId) {
     const entry = pending.get(chatId)
     if (!entry) return false
+
+    // 发送者校验（缺陷：群里任何成员都能替主人回答提问）：提问面向主人，配置了主人 QQ
+    // 时只认主人的回复，与 approvals 同口径；非主人的回复不消费，照常进模型。
+    const owner = typeof ownerQQ === 'function' ? String(ownerQQ() || '') : String(ownerQQ || '')
+    if (owner && String(userId || '') !== owner) return false
 
     pending.delete(chatId)
     clearTimeout(entry.timer)

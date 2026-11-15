@@ -78,7 +78,9 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
   async function request(req, { chatId, sessionId, command, args } = {}) {
     const id = nextApprovalId++
     const owner = typeof ownerQQ === 'function' ? ownerQQ() : ownerQQ
-    const targetChat = owner ? `private:${owner}` : (chatId || '')
+    // fail-closed（缺陷：ownerQQ 空值降级）：未配置主人时直接拒绝，绝不把审批卡发进
+    // 来源聊天（可能是白名单群，导致群内任何人可批）。
+    const targetChat = owner ? `private:${owner}` : ''
 
     if (!targetChat) {
       log?.warn?.(`[approvals] 未配置主人 QQ，无法发送审批卡，直接拒绝`)
@@ -148,7 +150,8 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
    */
   function handleReply(text, userId, chatId) {
     const owner = typeof ownerQQ === 'function' ? String(ownerQQ()) : String(ownerQQ || '')
-    if (owner && String(userId) !== owner) {
+    // fail-closed（缺陷：ownerQQ 空值时跳过校验）：未配置主人或发送者不是主人都不消费。
+    if (!owner || String(userId) !== owner) {
       return false
     }
 

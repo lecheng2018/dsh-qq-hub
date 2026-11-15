@@ -1457,12 +1457,17 @@ export function createModularCore({
             const now = Date.now()
             const gid = inbound.chatKey.slice(6)
             const pairKey = `${gid}:${userId}`
+            // 鱼群保护需要「她↔对方」交替视角（缺陷：bot 自发不入缓冲 → pair/乒乓恒 0 空转）。
+            // 缓冲只收入站消息；把她最近发言时间（speakTimes，noteSpeak 已记）合成 self 条目
+            // 一并喂给 pair/密度判定。不写回缓冲，避免污染群提示词上下文。
+            const botQQ = String(getConfig().botQQ || '')
+            const selfMsgs = groups.speakTimes(gid, now).map((t) => ({ sender: '她', userId: botQQ, time: t, isSelf: true }))
+            const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true })), ...selfMsgs]
+              .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
             if (userId !== String(getConfig().ownerQQ || '')) {
               const calmUntil = pairCalmUntil.get(pairKey) || 0
               if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
-              const pairMsgs = dedupConvo(groups.buffer(gid).filter((x) => x.uid && (x.self === true || String(x.uid) === userId)).map((x) => ({
-                sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
-              })))
+              const pairMsgs = dedupConvo(fishMsgs.filter((x) => x.userId && (x.isSelf === true || String(x.userId) === userId)))
               const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
               if (loop.blocked) {
                 pairCalmSweep(now)
@@ -1473,9 +1478,7 @@ export function createModularCore({
               }
             }
             const direct = decision.mode === 'must'
-            const density = assessFishDensity(groups.buffer(gid).map((x) => ({
-              sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true,
-            })), { now, guard: fg, groupId: gid })
+            const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid })
             if (density.blocked) {
               const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
               if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
