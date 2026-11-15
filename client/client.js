@@ -1886,11 +1886,14 @@ function Mood({ st, draft, setDraft, toast }) {
   const [browseOpen, setBrowseOpen] = useState(false);
   const [health, setHealth] = useState(null);
   const [reloading, setReloading] = useState(false);
+  const [vec, setVec] = useState(null);
+  const [vecBusy, setVecBusy] = useState(false);
   const load = (query) => get("/memories?q=" + encodeURIComponent(query ?? q)).then((r) => {
     setMem(r.items || []);
     setStats(r.stats || null);
     setHealth(r.health || null);
   });
+  const loadVec = () => get("/memory/vector").then((r) => setVec(r.status || { enabled: false })).catch(() => setVec({ enabled: false }));
   const [styles, setStyles] = useState({});
   const loadIns = () => get("/insights").then((r) => {
     setIns(r.items || []);
@@ -1907,6 +1910,7 @@ function Mood({ st, draft, setDraft, toast }) {
     if (memOn) {
       load("");
       loadIns();
+      loadVec();
     }
   }, [memOn]);
   useEffect(() => {
@@ -1936,7 +1940,18 @@ function Mood({ st, draft, setDraft, toast }) {
       }
     },
     reloading ? "正在载入…" : "重新载入档案"
-  )), /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "04:00", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "16:00", onChange: (e) => setTime(1, e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+  )), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。在下面「记忆」模块设置里填接口地址和 API Key，保存即生效、无需重启。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
+    setVecBusy(true);
+    try {
+      const r = await post("/memory/vector/backfill", {});
+      toast(r.message || "存量补全完成，这次向量化 " + (r.embedded || 0) + " 条", r.ok ? "ok" : "err");
+      loadVec();
+    } catch (error) {
+      toast(error.message, "err");
+    } finally {
+      setVecBusy(false);
+    }
+  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「记忆」模块设置里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "04:00", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "16:00", onChange: (e) => setTime(1, e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
     toast("正在整理，可能要一两分钟…");
     const r = await post("/memory/extract", {});
     toast(r.message);
