@@ -71,11 +71,14 @@ test('真实实例梦境共性归纳：归纳出的经验条目成功持久化�
   assert.ok(Array.isArray(res.experiences) && res.experiences.length > 0, '梦境应产出共性归纳经验')
 
   const insights = store.insights()
-  const dreamInsight = insights.find((item) => item.name === '梦境归纳')
-  assert.ok(dreamInsight, '应存在名称为“梦境归纳”的洞察项')
+  // 梦境经验按人物 key 追加合并（修复后不再整桶覆盖、不再把人名污染成「梦境归纳」）。
+  const dreamInsight = insights.find((item) => item.key === 'qq:10001')
+  assert.ok(dreamInsight, '应存在该人物的洞察桶')
   assert.ok(dreamInsight.list.length > 0, '归纳经验条目应持久化进 insights 列表')
-  assert.equal(dreamInsight.list[0].origin, 'derived', '洞察来源应标记为 derived')
-  assert.equal(dreamInsight.list[0].sourceFingerprint, 'dream-consolidate')
+  assert.notEqual(dreamInsight.name, '梦境归纳', '梦境不应污染人名')
+  const derived = dreamInsight.list.find((x) => x.sourceFingerprint === 'dream-consolidate')
+  assert.ok(derived, '应有梦境来源的洞察条目')
+  assert.equal(derived.origin, 'derived', '洞察来源应标记为 derived')
 })
 
 test('单条墓碑写入异常不中断整体，且不删除事实', async () => {

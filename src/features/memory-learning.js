@@ -325,7 +325,9 @@ export function createMemoryLearning({
         }
         for (const [key, list] of byPerson) {
           try {
-            setDerivedInsights(key, list, '梦境归纳', { sourceFingerprint: 'dream-consolidate' })
+            // 追加合并而非整桶覆盖（缺陷：梦境覆盖反思经验）：保留既有相处经验、按正文去重；
+            // name 传空不覆盖人名（旧版把 insightNames[key] 改成「梦境归纳」污染面板人名）。
+            setDerivedInsights(key, list, '', { sourceFingerprint: 'dream-consolidate', merge: true })
           } catch (err) {
             log?.warn?.('梦境经验保存失败（跳过）：', err?.message || err)
           }

@@ -263,8 +263,10 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
           const file = fileOf(scope)
           if (!file) continue
           const map = file.load()
-          // 对账：只留还活着的条目（被遗忘/清空/搬走作用域的自动摘除向量）
-          for (const id of [...map.keys()]) if (!pend.has(id)) map.delete(id)
+          // 对账：只留还活着的条目（被遗忘/清空/搬走作用域的自动摘除向量）。
+          // 只能有这一个摘除循环并如实计 pruned：旧版前面还有一个先删尽死 id 的循环，
+          // 使这里 pruned 恒 0 → 纯摘除的 flush 命中下方 continue 永不 save，
+          // 磁盘只涨不清、状态失真、重启后死向量复活回灌候选池。
           const need = []
           let pruned = 0
           for (const id of [...map.keys()]) if (!pend.has(id)) { map.delete(id); pruned++ }

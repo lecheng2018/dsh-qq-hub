@@ -76,6 +76,13 @@ export function createMemoryBus({ store, log } = {}) {
       selfView: o.selfView ?? false,
       perspective: o.perspective ?? '',
       personaId: o.personaId ?? '',
+      // 来源归因（#145 hearsay）与槽位字段：原样透传，缺省由主库判定。
+      // 旧版漏抄这几项，经总线写入的传闻/猜测归因全丢（与 #119 双轨字段被剥同型缺陷）。
+      speaker: o.speaker ?? '',
+      status: o.status ?? '',
+      entity: o.entity ?? '',
+      topic: o.topic ?? '',
+      title: o.title ?? '',
     })
   }
 

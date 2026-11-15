@@ -367,6 +367,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       if (entity) dup.entity = String(entity).slice(0, 30)
       if (topic) dup.topic = String(topic).slice(0, 20)
       if (pinned) dup.pinned = 1
+      // 来源归因随合并传递（缺陷：去重把传闻洗成直接事实）：新条目带 hearsay/guess 或
+      // speaker 时一并落到合并结果上，否则旧 direct 条目吞掉传闻正文却仍标「直接」。
+      if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
+      if (entryStatus === 'hearsay' || entryStatus === 'guess') dup.status = entryStatus
       staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
       s.rev = (s.rev || 0) + 1
       save(s)
@@ -385,7 +389,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
    * 显式替代操作（C-01 规范）：用新事实替代某条过时旧事实。
    * 新事实创建、旧事实失效（invalidAt 与 supersededBy）在单次事务中原子完成。
    */
-  function supersede({ oldId, text, about = '', aboutName = '', tags = [], importance, source = 'auto', sourceId = '', chatId = '', scope = '', evidence = '', entity = '', topic = '', title = '' }) {
+  function supersede({ oldId, text, about = '', aboutName = '', tags = [], importance, source = 'auto', sourceId = '', chatId = '', scope = '', evidence = '', entity = '', topic = '', title = '', speaker = '', status: entryStatus = '' }) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
     const s = load()
     const target = s.items.find((x) => x.id === oldId)
@@ -420,6 +424,15 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       topic: String(topic || '').slice(0, 20),
       title: String(title || target.title || '').slice(0, 50),
       supersededFrom: target.id,
+      // 来源归因随替代传递（缺陷：supersede 丢 hearsay/guess 归因）：显式传入优先，否则继承
+      // 旧事实，避免「提炼纠错」把听来的事实洗成直接事实。主观自传轨 likewise 继承，不丢人设。
+      ...(String(speaker || target.speaker || '').trim() ? { speaker: String(speaker || target.speaker).trim().slice(0, 40) } : {}),
+      ...((entryStatus === 'hearsay' || entryStatus === 'guess') ? { status: entryStatus }
+        : (target.status === 'hearsay' || target.status === 'guess') ? { status: target.status } : {}),
+      ...(target.kind ? { kind: target.kind } : {}),
+      ...(target.selfView ? { selfView: true } : {}),
+      ...(target.perspective ? { perspective: target.perspective } : {}),
+      ...(target.personaId ? { personaId: target.personaId } : {}),
     }
 
     target.invalidAt = Date.now()
@@ -767,18 +780,28 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     s.rev = (s.rev || 0) + 1
     save(s)
   }
-  function setDerivedInsights(key, list, name, { sourceFingerprint, personaId } = {}) {
+  function setDerivedInsights(key, list, name, { sourceFingerprint, personaId, merge = false } = {}) {
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
     const pid = normalizePersonaId(personaId) || activePersonaId()
-    s.insights[key] = list.slice(0, 8).map((item) => {
+    const mapped = list.slice(0, 8).map((item) => {
       const itemPid = normalizePersonaId(item.personaId || pid)
       return {
         ...item, origin: 'derived', sourceFingerprint, sourceRev: s.rev || 0,
         ...(itemPid ? { personaId: itemPid } : {}),
       }
     })
+    if (merge) {
+      // 追加合并（梦境归纳用）：保留既有反思经验、按正文去重，不整桶覆盖。
+      // 旧版梦境直接整桶替换，会把反思相处经验换成 bigram 关键词摘要（质量倒挂）。
+      const existing = Array.isArray(s.insights[key]) ? s.insights[key] : []
+      const seen = new Set(existing.map((it) => String(it.text || '').trim()))
+      const added = mapped.filter((it) => { const t = String(it.text || '').trim(); if (!t || seen.has(t)) return false; seen.add(t); return true })
+      s.insights[key] = [...existing, ...added].slice(0, 8)
+    } else {
+      s.insights[key] = mapped
+    }
     if (name) s.insightNames[key] = name
     s.rev = (s.rev || 0) + 1
     save(s)
@@ -1046,7 +1069,9 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       : undefined
     // 「嗯嗯」「然后呢」这种短句单看检索不到东西，把上一句也带上
     const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
-    const memCfg = (cfg.memory || {})
+    // cfg 已是 getConfig().memory（见上），旧版又取 cfg.memory → 永远 undefined，
+    // 面板 hintCount/hintMaxChars 在向量通道关着（默认）时完全失效。直接用 cfg。
+    const memCfg = cfg
     const maxItems = Math.max(1, Math.min(20, Math.round(Number(memCfg.hintCount) || 8)))
     const maxChars = Math.max(120, Math.min(2000, Math.round(Number(memCfg.hintMaxChars) || 600)))
     const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
