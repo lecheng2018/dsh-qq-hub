@@ -206,10 +206,78 @@ async function gptsovitsSynth(text, c) {
 }
 
 /** 通用：GET 一个地址模板，{text} 换成要念的话。 */
-async function httpSynth(text, c) {
-  const tpl = String(c.urlTemplate || '')
-  if (!tpl.includes('{text}')) throw new Error('通用 TTS 地址里要有 {text}')
-  return saveAudio(await fetchAudio(tpl.split('{text}').join(encodeURIComponent(text)), { method: 'GET' }), 24000)
+/** 请求头文本 → 对象。一行一个「Key: Value」，空行和 # 开头的行忽略。 */
+export function parseHeaderText(raw) {
+  const out = {}
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const s = line.trim()
+    if (!s || s.startsWith('#')) continue
+    const i = s.indexOf(':')
+    if (i <= 0) continue
+    const k = s.slice(0, i).trim()
+    const v = s.slice(i + 1).trim()
+    if (k && v) out[k] = v
+  }
+  return out
+}
+
+/** 云厂商把音频塞在 JSON 里（base64），这里把常见的几种字段扒出来。 */
+export function pickAudioFromJson(obj) {
+  if (!obj || typeof obj !== 'object') return ''
+  const keys = ['data', 'audio', 'audio_base64', 'audioBase64', 'base64', 'voice', 'result']
+  for (const k of keys) {
+    const v = obj[k]
+    if (typeof v === 'string' && v.length > 200) return v
+    if (v && typeof v === 'object') {
+      const inner = pickAudioFromJson(v)
+      if (inner) return inner
+    }
+  }
+  return ''
+}
+
+/** 通用 HTTP TTS（语义移植上游）：GET/POST + 自定义请求头/请求体，JSON 里的 base64 音频自动解出。
+ * 火山豆包 / 阿里 / 讯飞这类要鉴权的云 TTS 都靠它接上。{text} 自动 JSON 转义，{text_raw} 不转义（表单用），
+ * {reqid} 每次换新 UUID。老配置只填 urlTemplate 的照旧走 GET，行为不变。 */
+export async function httpSynth(text, c) {
+  const url = String(c.urlTemplate || '').trim()
+  if (!url) throw new Error('通用 TTS 没填地址')
+  const method = String(c.method || 'GET').trim().toUpperCase()
+  const headers = parseHeaderText(c.headers)
+  const hasHeader = (name) => Object.keys(headers).some((k) => k.toLowerCase() === name)
+
+  let target = url
+  let body
+  if (method === 'GET' || method === 'HEAD') {
+    if (!url.includes('{text}')) throw new Error('GET 方式的地址里要有 {text}')
+    target = url.split('{text}').join(encodeURIComponent(text))
+  } else {
+    const raw = String(c.body || '').trim()
+    if (!raw) throw new Error(`${method} 方式要填请求体`)
+    const escaped = JSON.stringify(text).slice(1, -1)
+    body = raw.split('{text}').join(escaped).split('{text_raw}').join(text).split('{reqid}').join(randomUUID())
+    if (!hasHeader('content-type')) headers['content-type'] = 'application/json'
+  }
+
+  const r = await fetch(target, { method, headers, body, signal: AbortSignal.timeout(120000) })
+  if (!r.ok) throw new Error(`HTTP ${r.status}：${(await r.text().catch(() => '')).slice(0, 160)}`)
+
+  let buf = Buffer.from(await r.arrayBuffer())
+  const ctype = String(r.headers.get('content-type') || '')
+  const looksJson = ctype.includes('json') || buf[0] === 0x7b
+  if (looksJson) {
+    let parsed = null
+    try { parsed = JSON.parse(buf.toString('utf8')) } catch (error) {}
+    if (!parsed) throw new Error('返回的是 JSON 但解析失败：' + buf.toString('utf8').slice(0, 160))
+    const code = parsed.code ?? parsed.status ?? parsed.retcode
+    const b64 = pickAudioFromJson(parsed)
+    if (!b64) {
+      throw new Error(`返回里没找到音频数据（code=${code}，message=${parsed.message || parsed.msg || parsed.err_msg || '-'}）`)
+    }
+    buf = Buffer.from(b64, 'base64')
+  }
+  if (buf.length < 400) throw new Error('返回的音频太短：' + buf.toString('utf8').slice(0, 160))
+  return saveAudio(buf, c.sampleRate || 24000)
 }
 
 /** 说话语音的后处理：目前原样返回（语音条直接用 TTS 的声音）。 */
