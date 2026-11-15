@@ -13,27 +13,36 @@ function LocalApi({ draft, setDraft, toast }) {
   const load = () => get('/local/status').then(setSt)
   useEffect(() => { load() }, [])
   const act = async (path, slot, label) => { setBusy(slot + label); const r = await post(path, { slot }); setBusy(''); toast(r.message, r.ok ? 'ok' : 'err'); if (r.image) setImg(r.image); load() }
+  const list = (st && st.list) || []
+  const taken = list.filter((x) => x.active).length
+  const failed = list.filter((x) => x.last && !x.last.ok).length
+  const missing = list.filter((x) => !x.exists).length
   return (
     <div className="ab-grid">
       <Card
         title="本地接口"
-        desc="想用自己电脑上的模型或服务（本地语音、画图、识别）？在这里生成一个脚本模板，照注释改；或者点「复制给 DSH 的话」粘给 DSH 让它帮你改。"
+        desc="用自己电脑上的模型或服务（本地语音、画图、识别）：生成脚本模板，照注释改，或者复制那段话让 DSH 帮你改。"
         more={'脚本放在插件数据目录的 local 文件夹里，插件升级不会覆盖；改完保存就生效，不用重启。每一项要打开开关才会用，出错时语音和识别会自动退回内置方式。'}
       >
-        <div className="ab-flex">
-          <code className="ab-small" style={{ wordBreak: 'break-all', flex: 1 }}>{st ? st.dir : '…'}</code>
+        <div className="ab-pills">
+          <span className={cx('ab-pill', taken && 'ok')}>{taken ? '本地接管 ' + taken + ' 项' : '全部走内置方式'}</span>
+          {failed ? <span className="ab-pill err">{'出错 ' + failed + ' 项'}</span> : null}
+          {missing ? <span className="ab-pill">{'还没生成 ' + missing + ' 项'}</span> : null}
+        </div>
+        <div className="ab-dirrow" style={{ marginTop: 10 }}>
+          <code className="ab-small" style={{ flex: '1 1 220px', minWidth: 0, wordBreak: 'break-all' }}>{st ? st.dir : '…'}</code>
           <Btn small onClick={() => post('/local/open').then((r) => toast(r.message))}>打开文件夹</Btn>
         </div>
       </Card>
-      {!st ? <Empty icon="⏳" text="加载中…" /> : st.list.map((x) => (
+      {!st ? <Empty icon="⏳" text="加载中…" /> : list.map((x) => (
         <Card key={x.slot} title={x.title + '（' + x.file + '）'} right={f.sw('local.' + x.slot)}>
-          <div className="ab-flex" style={{ marginBottom: 8 }}>
+          <div className="ab-flex" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
             <span className="ab-small" style={{ color: x.active ? 'var(--ab-ok)' : 'var(--ab-dim)' }}>
               {x.active ? '● 正在由本地脚本接管' : !x.exists ? '还没有这个脚本' : !x.enabled ? '脚本已经有了，开关没开（用内置方式）' : '用内置方式'}
             </span>
             {x.last ? <span className="ab-small" style={{ color: x.last.ok ? 'var(--ab-ok)' : 'var(--ab-err)' }}> · 上次{x.last.ok ? '成功，' + x.last.message : '出错：' + x.last.message}</span> : null}
           </div>
-          <div className="ab-flex">
+          <div className="ab-flex" style={{ flexWrap: 'wrap', gap: 6 }}>
             {x.exists ? null : <Btn small kind="primary" disabled={!!busy} onClick={() => act('/local/template', x.slot, 't')}>生成模板</Btn>}
             <Btn small onClick={() => { navigator.clipboard.writeText(x.prompt); toast('复制好了，粘给 DSH，再把【】里那句换成你的情况', 'ok') }}>复制给 DSH 的话</Btn>
             {x.exists && (x.slot === 'tts' || x.slot === 'image') ? <Btn small disabled={!!busy} onClick={() => act('/local/test', x.slot, 'x')}>{busy === x.slot + 'x' ? '正在试…' : '试一下'}</Btn> : null}
