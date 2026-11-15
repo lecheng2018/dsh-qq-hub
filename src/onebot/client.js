@@ -9,24 +9,12 @@ const RETRY_DELAYS = [1000, 3000, 5000]
 // 只有能确证「连接都没建起来、请求没出门」的网络错误（refused/DNS/不可达）才可安全重试；
 // 超时、连接中途断开、响应丢失、响应无法解析成合法信封一律标 unknown（副作用可能已发生），
 // 由调用方按 unknown 状态处理，严禁「请求失败即可安全重发」的旧假设（ADR-0001：unknown 不能自动重试）。
-// 策略方向（代码审查 P1 修正）：旧的 SEND_ACTIONS 只显式列了 5 个发送动作，漏掉了
-// send_group_forward_msg / send_private_forward_msg / send_qzone_msg / set_* / delete_* / *_qzone 等
-// 真实存在的副作用动作。现改为反向白名单：只有下面显式枚举的幂等查询（READ_ACTIONS）默认可回退/重试，
-// 其余一律按副作用对待——枚举漏一个查询只是少一次重试（保守、无害），漏一个副作用则是重复发消息（有害）。
-const READ_ACTIONS = new Set([
-  // 纯查询（get_*）：幂等，失败了可以安全重发
-  'get_login_info', 'get_status', 'get_stranger_info', 'get_friend_list', 'get_group_list',
-  'get_group_info', 'get_group_member_info', 'get_group_member_list', 'get_msg', 'get_forward_msg',
-  'get_group_msg_history', 'get_friend_msg_history', 'get_group_file_url', 'get_private_file_url',
-  'get_record', 'get_image', 'get_qzone_feeds', 'get_qzone_msg_list', 'get_qzone_msg_detail',
-  'get_doubt_friends_add_request',
-  // 权限预检查（can_*）：只读不回写
-  'can_send_group_msg', 'can_send_private_msg',
-  // 媒体/转写读取：网关只是转码或取回文本，无对外副作用
-  'fetch_ptt_text', 'fetch_custom_face',
-])
+// 反向白名单：只有幂等查询默认可回退/重试，其余一律按副作用对待。白名单本体在
+// ./read-actions.js（独立数据文件 + 运行时注册），client.js 只认 isReadAction 这一个判定。
+import { isReadAction } from './read-actions.js'
+
 /** 副作用动作 = 不在只读白名单里的一切（send_*、set_*、delete_*、*_qzone、upload_*、请求处理等）。 */
-const isSideEffect = (action) => !READ_ACTIONS.has(action)
+const isSideEffect = (action) => !isReadAction(action)
 const PRE_SEND_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH'])
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
