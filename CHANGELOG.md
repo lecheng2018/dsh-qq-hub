@@ -1,5 +1,12 @@
 # 更新记录
 
+## Unreleased · SnowLuma 深度接入 P3（在线与已读）
+
+- **新增「在线与已读」内置模块**（`src/modules/online-status/`）：收到消息后按可配延迟上报已读（`mark_all_as_read`，账号级、一批合并成一次调用、防抖计时器 unref + dispose 清理）；网关连上/配置变化时设置自定义在线状态文字（`set_diy_online_status`，幂等重设，失败不重试只记日志）。
+- 两项都是**状态写**，刻意不进只读白名单（保守：失败不重试）。
+- `/在线 <文字>` 主人命令直设；`/在线 关` 停自动设置（QQ 端已有状态需手机手动取消——协议目录里没有清除动作，如实说明）。
+- 主线已有的私聊「正在输入」状态机（activity-state，15s 续 ping / 6 分钟封顶）保持不变，本模块不重复做。
+
 ## Unreleased · SnowLuma 深度接入 P2（群文件系统）
 
 - **新增「群文件」内置模块**（`src/modules/group-files/`）：单一工具 `qq_group_file` 三个子命令——`browse` 浏览群文件盘（容量摘要 + 目录列表，只读）、`download` 把群文件换下载地址立刻落工作区（链接有时效，拿到就下）、`manage` 建夹/移动/转存/删除。零改动成本接入：只读动作（`get_group_file_system_info` / `get_group_root_files` / `get_group_files_by_folder`）在本模块 setup 里 `registerReadActions` 运行时登记，`client.js` / `read-actions.js` 静态清单都不动。
