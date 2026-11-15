@@ -36,6 +36,7 @@ function useField(draft, setDraft) {
     range: (path, min, max, step, fmt) => <Range min={min} max={max} step={step} value={getPath(draft, path)} onChange={(v) => setDraft(setPath(draft, path, v))} fmt={fmt} />,
     list: (path, props) => <ListArea value={getPath(draft, path) || []} placeholder={props && props.placeholder} numbers={props && props.numbers} onChange={(v) => setDraft(setPath(draft, path, v))} />,
     select: (path, options, props) => <Select value={getPath(draft, path) ?? ''} options={options} onChange={(v) => setDraft(setPath(draft, path, v))} {...(props || {})} />,
+    area: (path, props) => <textarea className="ab-textarea" style={{ minHeight: (props && props.rows ? props.rows * 20 : 60) }} placeholder={props && props.placeholder} value={getPath(draft, path) ?? ''} onChange={(e) => setDraft(setPath(draft, path, e.target.value))} />,
     choices: (path, options) => <Choices value={getPath(draft, path)} options={options} onChange={(v) => setDraft(setPath(draft, path, v))} />,
   }
 }
