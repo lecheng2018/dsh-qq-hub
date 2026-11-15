@@ -1,6 +1,6 @@
 // 数据目录、JSON 读写（UTF-8 无 BOM、先写临时文件再改名）。
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, openSync, closeSync, fsyncSync, unlinkSync, readdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, openSync, closeSync, fsyncSync, unlinkSync, readdirSync, chmodSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname, basename } from 'node:path'
 
@@ -51,6 +51,9 @@ export function writeJson(file, value, { mode = 0o644 } = {}) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}`
   const fd = openSync(tmp, 'w', mode)
+  // 部署现实（2026-11-14）：fnOS 面板环境 umask 077 会把 openSync 的 mode 参数砍成 0o600 ——
+  // open 的 mode 只是上限，chmod 才是落定。没有这一步，运维放开组读后下一次写入又自动锁回去。
+  try { chmodSync(tmp, mode) } catch {}
   try {
     writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8')
     // rename 前 fsync：进程 kill -9 时不丢已确认写入的数据（tmp+rename 只保证不写半截，
