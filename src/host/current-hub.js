@@ -11,7 +11,7 @@ export function createCurrentHub({
   function interceptInteraction({ text, userId, chatId, who } = {}) {
     try {
       if (interactions.approvals.handleReply(text, userId, chatId)) { logChat(chatId, who || '', text, userId); return true }
-      if (interactions.questions.has(chatId) && interactions.questions.handleReply(chatId, text)) { logChat(chatId, who || '', text, userId); return true }
+      if (interactions.questions.has(chatId) && interactions.questions.handleReply(chatId, text, userId)) { logChat(chatId, who || '', text, userId); return true }
     } catch (error) { log?.debug?.('旁路指令判定出错：', error.message) }
     return false
   }

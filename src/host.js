@@ -227,6 +227,7 @@ export function apply(ctx) {
   const interactions = {
     questions: createQuestionRegistry({
       deliver: (chatId, text) => hub.sendText(chatId, text, undefined, [], undefined),
+      ownerQQ: () => getConfig().ownerQQ,
       timeoutMs: Number(getConfig().questions?.timeoutMs) || 300_000,
       log: logger.child('questions'),
     }),
