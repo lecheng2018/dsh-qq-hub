@@ -139,6 +139,9 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
   .ab-mgrp svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }
   .ab-mgrp.on { color: var(--ab-deep) }
   .ab-mgrp .dirty { position: absolute; top: 4px; right: calc(50% - 14px); width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
+  /* 扩展页：窄屏下搜索框收窄，分组头允许换行 */
+  .ab-search { max-width: 132px }
+  .ab-modgroup-head { flex-wrap: wrap; row-gap: 2px }
 }
 
 /* ---------------- 卡片 ---------------- */
@@ -406,6 +409,26 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-mod .what { color: var(--ab-dim); font-size: 11.5px; margin-top: 4px; word-break: break-word }
 .ab-mod .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px }
 .ab-mod .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }
+
+/* 扩展页：模块分组（按能力折叠）+ 搜索 + 紧凑行 */
+.ab-modgroup { border-top: 1px solid var(--ab-line) }
+.ab-modgroup:first-of-type { border-top: 0 }
+.ab-modgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0; cursor: pointer; user-select: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; border-radius: var(--ab-radius-sm) }
+.ab-modgroup-head:hover .ab-modgroup-name { color: var(--ab-deep) }
+.ab-modgroup-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }
+.ab-modgroup-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }
+.ab-modgroup-chev.open { transform: rotate(90deg) }
+.ab-modgroup-name { font-weight: 600 }
+.ab-modgroup-meta { color: var(--ab-dim); font-size: 11.5px; font-variant-numeric: tabular-nums }
+.ab-modgroup-body { padding-bottom: 4px }
+.ab-search { max-width: 200px }
+/* 目录路径 + 操作按钮：窄屏时路径独占一行，别被按钮挤成一字一行 */
+.ab-dirrow { flex-wrap: wrap; row-gap: 8px }
+.ab-dirrow code { flex: 1 1 220px; min-width: 0 }
+.ab-mod.compact { padding: 8px 0 }
+.ab-mod.compact .ds { margin-top: 1px }
+.ab-mod.compact .ds.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }
+.ab-mod.compact .what, .ab-mod.compact .acts { margin-top: 6px }
 
 /* 可折叠的补充说明（长文案收纳用） */
 .ab-more { margin-top: 6px; font-size: 12px; color: var(--ab-dim) }
