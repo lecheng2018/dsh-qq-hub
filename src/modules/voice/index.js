@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { characterName } from '../../persona/identity-context.js'
 import { textToSpeech, edgeInstalled, installEdge } from '../../voice/tts.js'
 import { toMono16k } from '../../voice/wav.js'
+import { createCloudAsr } from '../../voice/cloud-asr.js'
 import { fileOf } from '../../local/local.js'
 
 export default {
@@ -14,9 +15,25 @@ export default {
   version: '1.0.0',
   description: '发语音条：把她的话念出来（关掉后想发语音时改发文字）',
   tab: 'voice',
-  files: ['voice/tts.js', 'voice/uv.js'],
+  files: ['voice/tts.js', 'voice/uv.js', 'voice/cloud-asr.js'],
+  // 云端 ASR（1.4.4）：存 ext.voice.cloudAsr*，入站语音链路在本地接口之后尝试
+  defaults: {
+    cloudAsrEnabled: false,
+    cloudAsrProvider: 'siliconflow',
+    cloudAsrBaseUrl: '',
+    cloudAsrApiKey: '',
+    cloudAsrModel: 'FunAudioLLM/SenseVoiceSmall',
+  },
+  settings: [
+    { key: 'cloudAsrEnabled', label: '云端语音识别', type: 'switch', hint: '别人发来的语音条，本地接口识别不了时用云端 ASR（硅基 SenseVoice / OpenAI 兼容 whisper）。云端失败自动落回 QQ 转文字与 DSH 本地识别。保存即生效' },
+    { key: 'cloudAsrProvider', label: '云端服务商', type: 'select', options: [{ value: 'siliconflow', label: '硅基流动 SenseVoice' }, { value: 'openai', label: 'OpenAI 兼容 whisper' }], hint: '两家都是 /audio/transcriptions 协议，只是默认地址和模型不同' },
+    { key: 'cloudAsrBaseUrl', label: '接口地址（base）', type: 'text', placeholder: 'https://api.siliconflow.cn/v1', hint: '留空默认硅基流动；OpenAI 兼容服务填自己的 base（不含 /audio/transcriptions）' },
+    { key: 'cloudAsrApiKey', label: 'API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
+    { key: 'cloudAsrModel', label: '模型名', type: 'text', placeholder: 'FunAudioLLM/SenseVoiceSmall', hint: 'OpenAI 兼容 whisper 一般填 whisper-1' },
+  ],
   setup(api) {
     const { hub, onebot, local, http } = api.core
+    const cloudAsr = createCloudAsr({ getConfig: api.config, log: api.log })
 
     async function speak(text) {
       // 本地接口接管语音合成；出错退回内置
@@ -41,10 +58,10 @@ export default {
     const stt = () => api.dsh.get('speechToText')
     api.route('/voice/asr-status', async () => {
       const s0 = stt()
-      if (!s0 || typeof s0.snapshot !== 'function') return { ok: false, enabled: false, message: 'DSH 里没有开启「语音输入」插件' }
+      if (!s0 || typeof s0.snapshot !== 'function') return { ok: false, enabled: false, cloud: cloudAsr.status(), message: 'DSH 里没有开启「语音输入」插件' }
       const s = s0.snapshot()
       const p = s.providers.find((x) => x.id === s.selection.providerId) || s.providers[0]
-      return { ok: true, enabled: true, provider: p?.id, phase: p?.preparation?.phase || 'ready', detail: p?.preparation }
+      return { ok: true, enabled: true, provider: p?.id, phase: p?.preparation?.phase || 'ready', detail: p?.preparation, cloud: cloudAsr.status() }
     })
     api.route('/voice/asr-prepare', async () => {
       const s0 = stt()
@@ -67,6 +84,19 @@ export default {
     // 自检「听语音」：Windows 语音念一句 → 转 16k 单声道 → DSH 自带识别 → 看能不能认回来
     api.route('/voice/asr-test', async (req) => {
       const b = await http.body(req)
+      // 云端 ASR 自检：TTS 念一句 → 16k 单声道 → 云端识别（provider=cloud 时）
+      if (b.provider === 'cloud') {
+        if (!cloudAsr.enabled()) return { ok: false, message: '云端 ASR 未启用：在下面语音模块设置里填 API Key 并打开开关' }
+        const text = String(b.text || '今天想吃白米饭')
+        const t = Date.now()
+        try {
+          const { file } = await textToSpeech(text, api.config().voice, api.log)
+          const heard = await cloudAsr.transcribe(toMono16k(readFileSync(file)))
+          return { ok: Boolean(heard), said: text, heard, engine: 'cloud', ms: Date.now() - t }
+        } catch (error) {
+          return { ok: false, said: text, message: String(error.message || error), ms: Date.now() - t }
+        }
+      }
       const s0 = stt()
       if (!s0 || typeof s0.resolve !== 'function') return { ok: false, message: 'DSH 里没有开启语音识别（设置 → 插件 → 语音输入）' }
       const text = String(b.text || '今天想吃白米饭')
