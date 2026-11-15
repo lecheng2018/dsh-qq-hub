@@ -62,7 +62,7 @@ function setup(packs, { cfg = {}, revoked = [], status = [], fetcher: customFetc
   })
   const mods = { status: () => status, sync: async () => {} }
   const log = { info() {}, warn() {}, debug() {} }
-  const m = createMarket({ mods, getConfig: () => config, setConfig: (n) => { config = n }, log, version: '1.4.3', fetcher, retryMs: 1, builtinDir })
+  const m = createMarket({ mods, getConfig: () => config, setConfig: (n) => { config = n }, log, version: '1.4.3', fetcher, retryMs: 1, builtinDir, validateUrl: async () => {} })
   return { m, cfg: () => config }
 }
 
@@ -303,7 +303,7 @@ test('进度：安装各阶段上报，装完清空', async () => {
   }
   const mods = { status: () => [], sync: async () => { stages.push(m.progress()?.stage) } }
   let config = { modules: { market: { enabled: true } } }
-  m = createMarket({ mods, getConfig: () => config, setConfig: (n) => { config = n }, log: { warn() {}, debug() {} }, version: '1.4.3', fetcher, retryMs: 1 })
+  m = createMarket({ mods, getConfig: () => config, setConfig: (n) => { config = n }, log: { warn() {}, debug() {} }, version: '1.4.3', fetcher, retryMs: 1, validateUrl: async () => {} })
   assert.equal((await m.install('prog-mod')).ok, true)
   assert.deepEqual(stages, ['index', 'download', 'start'])
   assert.equal(m.progress(), null)

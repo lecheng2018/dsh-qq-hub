@@ -139,6 +139,7 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
     //    跨站 fetch/img/prefetch 带跨源 Origin 的 GET 全绕过了；同域 fetch 带同源 Origin、
     //    顶层导航不带 Origin，都不受影响；Origin 解析失败按 fail-closed 拒）
     const method = String(req.method || 'GET').toUpperCase()
+    const path = subPath(req, prefix)
     const origin = String(h.origin ?? '').trim()
     if (origin) {
       let originHost = ''
@@ -148,12 +149,13 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
         return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
       }
     }
-    // 3. 改写型请求且没带 Origin：cross-site 证据（Sec-Fetch-Site）直接拒；两者都没有 = 非浏览器客户端（curl/脚本/测试）
-    else if (MUTATING.has(method) && String(h['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    // 3. 改写型请求或模块自定义路由（/ext/*，可能挂 GET 副作用）且没带 Origin：
+    //    cross-site 证据（Sec-Fetch-Site）直接拒；两者都没有 = 非浏览器客户端（curl/脚本/测试）。
+    //    （缺陷：模块路由不在 SIDE_EFFECT_PATHS，跨站 <img>/链接 GET 可触发其副作用 → 一并查 cross-site）
+    else if ((MUTATING.has(method) || path.startsWith('/ext/')) && String(h['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
       debug('面板 CSRF 拒绝：Sec-Fetch-Site=cross-site 且无 Origin')
       return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
     }
-    const path = subPath(req, prefix)
     // 4. 副作用路径只认提交方法：GET/HEAD/OPTIONS/TRACE 等非提交方法一律 405，不进 handler
     //    （挡掉不带 Origin 的 <img>/顶层链接/prefetch 式触发；面板前端对这些全部用 POST）
     if (!MUTATING.has(method) && SIDE_EFFECT_PATHS.has(path)) {
