@@ -2669,16 +2669,36 @@ function Douyin({ draft, setDraft, toast }) {
 
 // client/src/views/platforms/heybox.js
 var HEYBOX_KIND = { browse: "逛了一圈", like: "点了赞", comment: "发了评论", post: "发了帖", delete: "删了帖" };
+var TOPIC_FALLBACK = [
+  { value: 7214, label: "盒友杂谈", desc: "最常用，什么都能聊" },
+  { value: 18745, label: "数码硬件", desc: "显卡、笔记本、外设" },
+  { value: 806933, label: "AI", desc: "AI 相关，容易涨浏览" }
+];
 function Heybox({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
   const [s, setS] = useState(null);
   const [busy, setBusy] = useState("");
   const [hot, setHot] = useState(null);
   const [cookieText, setCookieText] = useState("");
+  const [topics, setTopics] = useState(null);
   const load = () => get("/heybox/state").then(setS);
+  const loadTopics = () => get("/heybox/topics").then(setTopics).catch(() => {
+  });
   useEffect(() => {
     load();
+    loadTopics();
   }, []);
+  const refreshTopics = async () => {
+    setBusy("topics");
+    try {
+      const r = await post("/heybox/topics/refresh");
+      toast(r.message || "已刷新", r.ok === false ? "err" : "ok");
+      if (r.ok !== false) setTopics(r);
+    } catch {
+      toast("刷新失败", "err");
+    }
+    setBusy("");
+  };
   const act = (path, label, body) => async () => {
     setBusy(label);
     const r = await post(path, body);
@@ -2720,12 +2740,21 @@ function Heybox({ draft, setDraft, toast }) {
   const acctText = !acct || !acct.checkedAt ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "还没检查过") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: acct.loggedIn ? "var(--ab-ok)" : "var(--ab-warn)" } }, acct.loggedIn ? "已登录：" + (acct.nickname || "") + (acct.heyboxId ? "（id " + acct.heyboxId + "）" : "") : acct.message || "还没登录", acct.checkedAt ? /* @__PURE__ */ h("span", { className: "ab-muted" }, " · ", timeAgo(acct.checkedAt), "查的") : null);
   const quota = s && s.quota || {};
   const limits = s && s.limits || {};
+  const topicOptions = (() => {
+    const live = topics && Array.isArray(topics.list) && topics.list.length && topics.live !== false;
+    const opts = live ? topics.list.map((t) => ({ value: Number(t.id) || t.id, label: String(t.name || t.id) })) : TOPIC_FALLBACK.slice();
+    const cur = draft && draft.heybox && draft.heybox.defaultTopic;
+    if (cur !== void 0 && cur !== null && cur !== "" && !opts.some((o) => o.value === cur)) {
+      opts.unshift({ value: cur, label: "当前分区（" + cur + "）" });
+    }
+    return opts;
+  })();
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
       title: "刷小黑盒",
       right: f.sw("heybox.enabled"),
-      desc: "用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度），发完把链接报给你。写操作各有权限（「权限」页），每天有额度上限。"
+      desc: "用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么）。配图她自己准备：本机图片最多 4 张，传小黑盒图床插进正文，哪张传不上就跳过哪张、不影响发帖，发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。"
     },
     /* @__PURE__ */ h(Row, { label: "小黑盒账号", hint: "从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: checkAccount, disabled: !!busy }, busy === "account" ? "检查中…" : "检查登录"), acctText), /* @__PURE__ */ h("div", { style: { marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" } }, /* @__PURE__ */ h(
       "textarea",
@@ -2753,11 +2782,7 @@ function Heybox({ draft, setDraft, toast }) {
       { value: "news", label: "热搜文", desc: "报道新闻体，摆具体数字，200-800字" },
       { value: "mix", label: "肥鱼热搜", desc: "用日记口吻写热搜，150-500字" }
     ], { width: 220 })),
-    /* @__PURE__ */ h(Row, { label: "发帖默认分区", hint: "文章帖必须挂分区，否则会报「请添加分区」。这三个是实测存在的" }, f.select("heybox.defaultTopic", [
-      { value: 7214, label: "盒友杂谈", desc: "最常用，什么都能聊" },
-      { value: 18745, label: "数码硬件", desc: "显卡、笔记本、外设" },
-      { value: 806933, label: "AI", desc: "AI 相关，容易涨浏览" }
-    ], { width: 200 })),
+    /* @__PURE__ */ h(Row, { label: "发帖默认分区", hint: "文章帖必须挂分区，否则会报「请添加分区」。分区全表每天自动拉一次；拉不到就用内置的三个保底" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, f.select("heybox.defaultTopic", topicOptions, { width: 200 }), /* @__PURE__ */ h(Btn, { small: true, onClick: refreshTopics, disabled: !!busy }, busy === "topics" ? "刷新中…" : "刷新分区"), topics ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, topics.live === false ? "接口没返回，用内置保底" : (topics.count || (topics.list || []).length) + " 个分区 · " + (topics.cached ? "今天已更新" : "刚更新")) : null)),
     s ? /* @__PURE__ */ h(Row, { label: "今天已经用掉", hint: "到 0 就等明天，或者手动清零（重启一次会话不会重置）" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "逛 " + (quota.browse || 0) + "/" + (limits.maxRunsPerDay || 0) + " · 赞 " + (quota.like || 0) + "/" + (limits.likeDaily || 0) + " · 评 " + (quota.comment || 0) + "/" + (limits.commentDaily || 0) + " · 帖 " + (quota.post || 0) + "/" + (limits.maxPostsPerDay || 0)), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: act("/heybox/clear-quota", "quota") }, busy === "quota" ? "清零中…" : "清零"))) : null
   ), /* @__PURE__ */ h(
     Card,
@@ -2771,9 +2796,9 @@ function Heybox({ draft, setDraft, toast }) {
     "① 先看热榜挑题（不许跳过），挑不出来就说今天没合适的，别硬凑。",
     "② 再看社区高赞帖在聊什么角度，可以借角度但用自己的话。",
     "③ 素材里必须有具体的东西：价格、销量、时长、机制名、star 增速——没具体信息就是水文。",
-    "④ 标题别和正文第一行重复；不编造第一人称经历；正文 200-800 字；配图越多越好。",
+    "④ 标题别和正文第一行重复；不编造第一人称经历；正文符合所选风格的字数（日记 120-300 / 热搜文 200-800 / 肥鱼热搜 150-500）；配图最多 4 张，至少 3 张更好。",
     "⑤ 不碰政治、医疗法律建议、评价真人、判断价格是否合理；读一遍像不像人话（转折词堆砌就是 AI 腔）。"
-  ].join("\n")), /* @__PURE__ */ h("div", { className: "ab-note warn" }, "格式上的坑（已修在内核里）：帖子类型必须是「文章」(link_tag=11) 才能解析 HTML 并把图插在文字中间；分区 id 必须是真实存在的 7214 / 18745 / 806933，乱填会一直报「错误的帖子类型」。")), /* @__PURE__ */ h(
+  ].join("\n")), /* @__PURE__ */ h("div", { className: "ab-note warn" }, "格式上的坑（已修在内核里）：帖子类型必须是「文章」(link_tag=11) 才能解析 HTML 并把图插在文字中间；分区 id 必须真实存在（上面下拉里列出来的都行，内置保底 7214 / 18745 / 806933），乱填会一直报「错误的帖子类型」。")), /* @__PURE__ */ h(
     Card,
     {
       title: "她逛过什么",

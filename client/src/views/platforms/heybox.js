@@ -6,6 +6,13 @@ import { get, post } from '../../core/http.js'
 
 const HEYBOX_KIND = { browse: '逛了一圈', like: '点了赞', comment: '发了评论', post: '发了帖', delete: '删了帖' }
 
+// 分区保底：接口拉不到全表时用这三个（实测存在）。拉到了就优先用全表（topicsForPanel 每天缓存一次）。
+const TOPIC_FALLBACK = [
+  { value: 7214, label: '盒友杂谈', desc: '最常用，什么都能聊' },
+  { value: 18745, label: '数码硬件', desc: '显卡、笔记本、外设' },
+  { value: 806933, label: 'AI', desc: 'AI 相关，容易涨浏览' },
+]
+
 /** 「小黑盒」页：账号、逛法、额度、热榜预览、发帖分区与自检提醒、逛过什么。 */
 function Heybox({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft)
@@ -13,8 +20,19 @@ function Heybox({ draft, setDraft, toast }) {
   const [busy, setBusy] = useState('')
   const [hot, setHot] = useState(null)
   const [cookieText, setCookieText] = useState('')
+  const [topics, setTopics] = useState(null)
   const load = () => get('/heybox/state').then(setS)
-  useEffect(() => { load() }, [])
+  const loadTopics = () => get('/heybox/topics').then(setTopics).catch(() => {})
+  useEffect(() => { load(); loadTopics() }, [])
+  const refreshTopics = async () => {
+    setBusy('topics')
+    try {
+      const r = await post('/heybox/topics/refresh')
+      toast(r.message || '已刷新', r.ok === false ? 'err' : 'ok')
+      if (r.ok !== false) setTopics(r)
+    } catch { toast('刷新失败', 'err') }
+    setBusy('')
+  }
   const act = (path, label, body) => async () => {
     setBusy(label)
     const r = await post(path, body)
@@ -57,11 +75,23 @@ function Heybox({ draft, setDraft, toast }) {
     )
   const quota = (s && s.quota) || {}
   const limits = (s && s.limits) || {}
+  // 分区下拉：优先用接口拉到的全表（每天缓存一次），拉不到用内置保底；当前已选的值永远在选项里
+  const topicOptions = (() => {
+    const live = topics && Array.isArray(topics.list) && topics.list.length && topics.live !== false
+    const opts = live
+      ? topics.list.map((t) => ({ value: Number(t.id) || t.id, label: String(t.name || t.id) }))
+      : TOPIC_FALLBACK.slice()
+    const cur = draft && draft.heybox && draft.heybox.defaultTopic
+    if (cur !== undefined && cur !== null && cur !== '' && !opts.some((o) => o.value === cur)) {
+      opts.unshift({ value: cur, label: '当前分区（' + cur + '）' })
+    }
+    return opts
+  })()
   return (
     <div className="ab-grid">
       <Card
         title="刷小黑盒" right={f.sw('heybox.enabled')}
-        desc="用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度），发完把链接报给你。写操作各有权限（「权限」页），每天有额度上限。"
+        desc="用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么）。配图她自己准备：本机图片最多 4 张，传小黑盒图床插进正文，哪张传不上就跳过哪张、不影响发帖，发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。"
       >
         <Row label="小黑盒账号" hint="从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）">
           <div>
@@ -106,12 +136,18 @@ function Heybox({ draft, setDraft, toast }) {
             { value: 'mix', label: '肥鱼热搜', desc: '用日记口吻写热搜，150-500字' },
           ], { width: 220 })}
         </Row>
-        <Row label="发帖默认分区" hint="文章帖必须挂分区，否则会报「请添加分区」。这三个是实测存在的">
-          {f.select('heybox.defaultTopic', [
-            { value: 7214, label: '盒友杂谈', desc: '最常用，什么都能聊' },
-            { value: 18745, label: '数码硬件', desc: '显卡、笔记本、外设' },
-            { value: 806933, label: 'AI', desc: 'AI 相关，容易涨浏览' },
-          ], { width: 200 })}
+        <Row label="发帖默认分区" hint="文章帖必须挂分区，否则会报「请添加分区」。分区全表每天自动拉一次；拉不到就用内置的三个保底">
+          <div className="ab-flex">
+            {f.select('heybox.defaultTopic', topicOptions, { width: 200 })}
+            <Btn small onClick={refreshTopics} disabled={!!busy}>{busy === 'topics' ? '刷新中…' : '刷新分区'}</Btn>
+            {topics ? (
+              <span className="ab-small ab-muted">
+                {topics.live === false
+                  ? '接口没返回，用内置保底'
+                  : (topics.count || (topics.list || []).length) + ' 个分区 · ' + (topics.cached ? '今天已更新' : '刚更新')}
+              </span>
+            ) : null}
+          </div>
         </Row>
         {s ? (
           <Row label="今天已经用掉" hint="到 0 就等明天，或者手动清零（重启一次会话不会重置）">
@@ -157,12 +193,12 @@ function Heybox({ draft, setDraft, toast }) {
             '① 先看热榜挑题（不许跳过），挑不出来就说今天没合适的，别硬凑。',
             '② 再看社区高赞帖在聊什么角度，可以借角度但用自己的话。',
             '③ 素材里必须有具体的东西：价格、销量、时长、机制名、star 增速——没具体信息就是水文。',
-            '④ 标题别和正文第一行重复；不编造第一人称经历；正文 200-800 字；配图越多越好。',
+            '④ 标题别和正文第一行重复；不编造第一人称经历；正文符合所选风格的字数（日记 120-300 / 热搜文 200-800 / 肥鱼热搜 150-500）；配图最多 4 张，至少 3 张更好。',
             '⑤ 不碰政治、医疗法律建议、评价真人、判断价格是否合理；读一遍像不像人话（转折词堆砌就是 AI 腔）。',
           ].join('\n')}
         </div>
         <div className="ab-note warn">
-          格式上的坑（已修在内核里）：帖子类型必须是「文章」(link_tag=11) 才能解析 HTML 并把图插在文字中间；分区 id 必须是真实存在的 7214 / 18745 / 806933，乱填会一直报「错误的帖子类型」。
+          格式上的坑（已修在内核里）：帖子类型必须是「文章」(link_tag=11) 才能解析 HTML 并把图插在文字中间；分区 id 必须真实存在（上面下拉里列出来的都行，内置保底 7214 / 18745 / 806933），乱填会一直报「错误的帖子类型」。
         </div>
       </Card>
       <Card

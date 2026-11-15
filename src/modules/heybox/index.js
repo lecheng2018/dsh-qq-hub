@@ -122,7 +122,9 @@ export default {
     api.route('/heybox/state', async () => ({ ok: true, ...hb.state() }))
     api.route('/heybox/feed', async () => hb.feedReport())
     api.route('/heybox/hot', async () => hb.hot(10))
-    api.route('/heybox/topics', async () => hb.topicList())
+    api.route('/heybox/topics', async () => hb.topicsForPanel())
+    // 手动「刷新分区」：强制重拉；一个都没拉到返回 ok:false，面板按真实状态提示（对齐 aurabot 3c17ebb）
+    api.route('/heybox/topics/refresh', async () => hb.topicsForPanel(true))
     api.route('/heybox/account', async () => hb.account(true))
     api.route('/heybox/login-cookie', async (req) => {
       const b = await http.body(req).catch(() => ({}))
