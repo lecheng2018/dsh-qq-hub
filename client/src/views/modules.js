@@ -171,6 +171,100 @@ function Simulate({ toast }) {
   )
 }
 
+/** 模块市场（分发半套）：索引列表、安装/更新/卸载、进度、撤回提示。
+ * 装模块 = 装进程内代码：capabilities 只展示不是安全边界；装前把来源/许可/校验和给用户看（R8）。 */
+function Market({ st, toast, reload }) {
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState('')
+  const [prog, setProg] = useState(null)
+  const load = () => get('/modules/market').then(setData).catch(() => setData({ ok: false, message: '市场加载失败', list: [] }))
+  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!busy) return undefined
+    const t = setInterval(() => get('/modules/market/progress').then((r) => setProg(r.progress)).catch(() => {}), 700)
+    return () => clearInterval(t)
+  }, [busy])
+  const enabled = st.config?.modules?.market?.enabled === true
+  const toggle = async (v) => {
+    const r = await post('/save', { modules: { market: { enabled: v } } })
+    toast(v ? '模块市场开了' : '模块市场关了', 'ok')
+    reload()
+    load()
+    return r
+  }
+  const install = async (e, confirmReplace = false) => {
+    setBusy(e.id)
+    try {
+      let r = await post('/modules/market/install', { id: e.id, confirmReplace })
+      if (r.needConfirm && window.confirm(r.message + '\n\n装模块等于装进程内代码，确认替换内置模块？')) {
+        r = await post('/modules/market/install', { id: e.id, confirmReplace: true })
+      }
+      toast(r.message, r.ok ? 'ok' : 'err')
+      if (r.ok) { load(); reload() }
+    } finally { setBusy(''); setProg(null) }
+  }
+  const remove = async (e, purge) => {
+    if (!window.confirm(purge ? `卸载「${e.name || e.id}」并清掉它的数据和设置？` : `卸载「${e.name || e.id}」？数据和设置会留着。`)) return
+    setBusy(e.id)
+    try {
+      const r = await post('/modules/market/remove', { id: e.id, purge })
+      toast(r.message, r.ok ? 'ok' : 'err')
+      if (r.ok) { load(); reload() }
+    } finally { setBusy('') }
+  }
+  const stageText = { index: '读索引…', download: '下载中', install: '校验安装…', start: '启动模块…' }
+  return (
+    <Card
+      title="模块市场"
+      desc="从社区模块库安装新本事。装模块等于装进程内代码：看清作者、许可和校验和再装；默认不自动更新。"
+      more="索引支持多源（GitHub raw → jsdelivr 镜像），也可在配置 modules.market.indexUrls 里填自建/内网源。\n市场模块和内置一样：发送必经 Outbox 台账，记忆按会话隔离。"
+      right={<Switch on={enabled} onChange={toggle} />}
+    >
+      {!enabled ? <div className="ab-note">市场没开。打开右上角开关后刷新列表。</div> : null}
+      {enabled && !data ? <Empty icon="⏳" text="加载中…" /> : null}
+      {enabled && data && !data.ok ? <div className="ab-note err">{data.message || '索引读不到'}（已装模块不受影响）</div> : null}
+      {enabled && data && data.ok ? (
+        <Fragment>
+          {data.revoked && data.revoked.length ? <div className="ab-note warn">已装版本被撤回：{data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join('；')}。建议卸载或更新。</div> : null}
+          {prog && busy ? <div className="ab-note">{prog.name || prog.id}：{stageText[prog.stage] || prog.stage}{prog.stage === 'download' && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : ''}</div> : null}
+          {(data.list || []).length === 0 ? <Empty icon="📦" text="索引里还没有模块" /> : null}
+          {(data.list || []).map((e) => (
+            <div key={e.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--ab-line, rgba(127,127,127,.15))' }}>
+              <div className="ab-flex" style={{ alignItems: 'center', gap: 8 }}>
+                <b>{e.name || e.id}</b>
+                <span className="ab-small ab-muted">{e.version}{e.installed ? `（已装 ${e.installed}）` : ''}</span>
+                {e.update ? <span className="ab-pill ok">可更新</span> : null}
+                {e.delisted ? <span className="ab-pill warn">已下架</span> : null}
+                {e.foreign ? <span className="ab-pill warn">同名自有文件夹</span> : null}
+                <span style={{ flex: 1 }} />
+                {e.installed ? (
+                  <Fragment>
+                    {e.update && !e.blocked ? <Btn small kind="primary" disabled={busy === e.id} onClick={() => install(e)}>更新</Btn> : null}
+                    <Btn small disabled={busy === e.id} onClick={() => remove(e, false)}>卸载</Btn>
+                    <Btn small kind="ghost" disabled={busy === e.id} onClick={() => remove(e, true)}>卸载并清数据</Btn>
+                  </Fragment>
+                ) : (
+                  <Btn small kind="primary" disabled={busy === e.id || Boolean(e.blocked) || e.foreign} onClick={() => install(e)}>安装</Btn>
+                )}
+              </div>
+              {e.description ? <div className="ab-small" style={{ marginTop: 4 }}>{e.description}</div> : null}
+              <div className="ab-small ab-muted" style={{ marginTop: 4 }}>
+                {[e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join('、')}（仅展示，不是安全边界）`].filter(Boolean).join(' · ')}
+              </div>
+              {e.sha256 ? <div className="ab-small ab-muted" style={{ marginTop: 2, wordBreak: 'break-all' }}>sha256: {e.sha256}{e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : ''}</div> : null}
+              {e.blocked ? <div className="ab-note warn" style={{ marginTop: 4 }}>{e.blocked}</div> : null}
+            </div>
+          ))}
+          <div className="ab-flex" style={{ marginTop: 8 }}>
+            <Btn small kind="ghost" onClick={async () => { setData(null); await load() }}>刷新列表</Btn>
+            {data.source ? <span className="ab-small ab-muted">索引源：{data.source}</span> : null}
+          </div>
+        </Fragment>
+      ) : null}
+    </Card>
+  )
+}
+
 /** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式。 */
 function Modules({ st, draft, toast, reload }) {
   const [data, setData] = useState(null)
@@ -222,6 +316,7 @@ function Modules({ st, draft, toast, reload }) {
       <Card title={'内置模块（' + builtin.length + '）'} desc="关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。">
         {builtin.map((m) => <ModuleRow key={m.id} m={m} {...props} />)}
       </Card>
+      <Market st={st} toast={toast} reload={reload} />
       <Simulate toast={toast} />
     </div>
   )
