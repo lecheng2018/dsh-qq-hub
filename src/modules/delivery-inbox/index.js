@@ -13,7 +13,7 @@
 //   · **读不到就说读不到**：文件缺失/损坏时明确告知，绝不显示成「今天没有异常」。
 //     （把"读失败"显示成"没问题"是这类面板最容易犯的错。）
 
-import { readJson } from '../../core/store.js'
+import { readJson, dataDir } from '../../core/store.js'
 
 /** 面板/接口里最多列多少条。台账本身有容量上限，这里再收一道，避免把一屏撑爆。 */
 const MAX_ITEMS = 50
@@ -101,7 +101,10 @@ export default {
   tab: 'memory',
   files: ['chat/delivery-ledger.js'],
   setup(api) {
-    const file = () => api.dataDir('deliveries.json')
+    // 台账是**核心全局**文件（host 用 dataDir('deliveries.json') 写），不是本模块私有数据。
+    // 旧版用 api.dataDir → modules-data/delivery-inbox/deliveries.json，永远读不到真台账，
+    // 收件箱生产恒「读不到」。这里直接读全局数据目录，与写入侧同一路径。
+    const file = () => dataDir('deliveries.json')
 
     api.route('/deliveries/exceptions', async (req) => {
       const q = (req && req.query) || {}
