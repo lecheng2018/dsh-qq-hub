@@ -827,7 +827,7 @@ function looksLikeReport(t) {
 }
 
 /** 面板上的分条规则 → parseReply 的参数。群聊与私聊可以有不同上限。 */
-export function replyRules(cfg, inGroup) {
+export function replyRules(cfg, inGroup, rand) {
   const r = (cfg && cfg.reply) || {}
   // 注意 0 是合法输入（不能因为 Number(0) 是 falsy 就退回默认值）
   const pick = (v, def, min, max) => {
@@ -840,6 +840,9 @@ export function replyRules(cfg, inGroup) {
     maxBubbles: pick(r.maxBubbles, 6, 1, 12),
     minBubbleRatio: 0.4,
     keepReports: r.keepReports !== false,
+    // 随机源透传（缺陷：分条随机源未注入）：segmentBubbles/mergeUnits 本就认 rules.rand，
+    // 这里把调用方注入的 random 带进去，气泡切分也可复现；缺省仍 Math.random。
+    ...(typeof rand === 'function' ? { rand } : {}),
   }
 }
 
