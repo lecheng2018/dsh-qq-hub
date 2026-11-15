@@ -388,7 +388,9 @@ test('群聊引用回复：她写 <reply:编号>，发出去的那条带上对�
   assert.equal(plain.params.message[0].type, 'text', '其余的照常发，不引用')
 })
 
-test('空间互动：回复自己说说下的新评论、评论好友说说并点赞，不重复', async () => {
+// qzone-social 已上商店（不再内置）。以下两条 e2e 需要先安装商店模块才能跑，
+// 包内 e2e 暂跳过；实现行为由 src/features 的单测与商店仓库测试覆盖。
+test.skip('空间互动：回复自己说说下的新评论、评论好友说说并点赞，不重复（模块已上商店，e2e 需安装后跑）', async () => {
   const now = Math.floor(Date.now() / 1000)
   mock.state.qzoneList = [{ tid: 't1', content: '今天吃了白米饭', time: now - 600, comment_num: 1, is_private: false, images: [] }]
   mock.state.qzoneDetail = {
@@ -416,7 +418,7 @@ test('空间互动：回复自己说说下的新评论、评论好友说说并�
   assert.ok(api.memory.recentEventsFor([`private:${OWNER}`, "global"], 24, 10).some((m) => m.text.includes("评论了") && m.about === OWNER))
 })
 
-test('空间互动：别人在她的评论下面接着回她，她会接着回（一串只回一次）', async () => {
+test.skip('空间互动：别人在她的评论下面接着回她，她会接着回（一串只回一次，模块已上商店）', async () => {
   const now = Math.floor(Date.now() / 1000)
   const before = mock.sent('comment_qzone').length
   mock.state.feeds = []

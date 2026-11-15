@@ -179,7 +179,8 @@ test('modules.js：boot 后全部内置模块健康 enabled；卸载后 events/�
     await booted
     const health = mods.health()
     const enabled = Object.values(health).filter((h) => h.state === 'enabled').length
-    assert.ok(enabled >= 20, `绝大多数内置模块健康 enabled（实际 ${enabled}）`)
+    // 6 个模块（bili/douyin/heybox/multi-parser/qzone-social/delivery-inbox）已上商店、不再内置
+    assert.ok(enabled >= 15, `绝大多数内置模块健康 enabled（实际 ${enabled}）`)
     assert.equal(Object.values(health).filter((h) => h.state === 'failed').length, 0, '零 failed')
     // 卸载：全部模块停止（dispose 完整性——监听器/路由/定时器随 stop 清理）
     assert.ok(mods.status().some((m) => m.running), '卸载前有在跑的模块')
