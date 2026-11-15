@@ -57,10 +57,13 @@ const MOD_STATE = (m) => {
   return { cls: 'err', text: m.error ? '没加载成功' : '没在跑' }
 }
 
-/** 一个模块一行：开关、状态、报错，能复制来改 / 用回内置的 / 重新加载。 */
-function ModuleRow({ m, draft, setModules, toast, reload }) {
+/** 一个模块一行：开关、状态、报错，能复制来改 / 用回内置的 / 重新加载。
+ *  compact：扩展页内置分组用——默认只露名称/状态/开关，描述截断，工具与操作收进「详情」；
+ *  报错始终可见（不因收起而藏掉）。 */
+function ModuleRow({ m, draft, setModules, toast, reload, compact = false }) {
   const s = MOD_STATE(m)
   const [open, setOpen] = useState(false)
+  const [detail, setDetail] = useState(!compact)
   const setMod = async (patch) => {
     const r = await post('/save', { modules: { [m.id]: { ...((draft.modules || {})[m.id] || {}), ...patch } } })
     if (r.ok === false) return toast(r.message, 'err')
@@ -76,31 +79,38 @@ function ModuleRow({ m, draft, setModules, toast, reload }) {
     reload()
     return r
   }
-  const what = [m.tools.length ? '工具：' + m.tools.join('、') : '', m.commands.length ? '命令：' + m.commands.map((c) => '/' + c).join(' ') : ''].filter(Boolean).join('　')
+  // 模块状态可能缺 tools/commands（老版本或手工 mock）：这里一律容错，缺字段不能让整页崩
+  const tools = m.tools || []
+  const commands = m.commands || []
+  const what = [tools.length ? '工具：' + tools.join('、') : '', commands.length ? '命令：' + commands.map((c) => '/' + c).join(' ') : ''].filter(Boolean).join('　')
   const errs = (m.error ? [{ label: '加载', message: m.error }] : []).concat(m.errors || [])
   return (
-    <div className="ab-mod">
+    <div className={cx('ab-mod', compact && 'compact')}>
       <div className="main">
         <div className="nm">
           {m.name}
           <code>{m.id}</code>
           <span className={cx('ab-badge', s.cls)}>{s.text}</span>
+          {m.market ? <span className="ab-badge mine" title="从模块市场安装（.qqhub-source.json）">市场</span> : null}
           {m.outdated ? <span className="ab-badge warn" title={'你复制 / 替换时内置的是 ' + m.forkedFrom + '，现在是 ' + m.builtinVersion}>内置版本更新了</span> : null}
+          {compact ? <span style={{ marginLeft: 'auto' }}><Btn small kind="ghost" onClick={() => setDetail(!detail)}>{detail ? '收起' : '详情'}</Btn></span> : null}
         </div>
-        {m.description ? <div className="ds">{m.description}</div> : null}
-        {what ? <div className="what">{what}</div> : null}
+        {m.description ? <div className={cx('ds', compact && !detail && 'clip')}>{m.description}</div> : null}
+        {detail && what ? <div className="what">{what}</div> : null}
         {errs.length ? (
           <div className="ab-note err" style={{ marginTop: 6 }}>
             <div style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>{(open ? '▾ ' : '▸ ') + errs.length + ' 条报错：' + String(errs[0].message).split('\n')[0].slice(0, 120)}</div>
             {open ? <div className="ab-code">{errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + ' ' : '') + (e.label || '') + '：' + e.message).join('\n\n')}</div> : null}
           </div>
         ) : null}
-        <div className="acts">
-          {m.builtin && !m.hasUser ? <Btn small onClick={() => act('/modules/fork', { id: m.id }, '复制好了')} title={'把这个内置模块的源码复制到 modules/' + m.id + '/，改了就替换内置的'}>复制一份来改</Btn> : null}
-          {m.hasUser ? <Btn small onClick={() => post('/modules/open?id=' + encodeURIComponent(m.id)).then((r) => toast(r.message))}>打开文件夹</Btn> : null}
-          {m.hasUser ? <Btn small onClick={() => get('/modules/prompt?id=' + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, '复制好了，粘给 DSH，把【】里那句换成你想要的'))}>复制给 DSH 的话</Btn> : null}
-          {m.hasUser && !m.safeSkipped ? <Btn small onClick={() => act('/modules/reload', { id: m.id }, '重新加载好了')}>重新加载</Btn> : null}
-        </div>
+        {detail ? (
+          <div className="acts">
+            {m.builtin && !m.hasUser ? <Btn small onClick={() => act('/modules/fork', { id: m.id }, '复制好了')} title={'把这个内置模块的源码复制到 modules/' + m.id + '/，改了就替换内置的'}>复制一份来改</Btn> : null}
+            {m.hasUser ? <Btn small onClick={() => post('/modules/open?id=' + encodeURIComponent(m.id)).then((r) => toast(r.message))}>打开文件夹</Btn> : null}
+            {m.hasUser ? <Btn small onClick={() => get('/modules/prompt?id=' + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, '复制好了，粘给 DSH，把【】里那句换成你想要的'))}>复制给 DSH 的话</Btn> : null}
+            {m.hasUser && !m.safeSkipped ? <Btn small onClick={() => act('/modules/reload', { id: m.id }, '重新加载好了')}>重新加载</Btn> : null}
+          </div>
+        ) : null}
       </div>
       <div className="side">
         <Switch on={m.enabled} onChange={(v) => setMod({ enabled: v })} title={m.enabled ? '关掉这个模块' : '打开这个模块'} />
@@ -112,6 +122,7 @@ function ModuleRow({ m, draft, setModules, toast, reload }) {
 
 /** 模拟测试：不上 QQ 试模块。发出去的只截下来看，不真发。 */
 function Simulate({ toast }) {
+  const [open, setOpen] = useState(false) // 高级工具：默认收起，展开才注册模拟表单
   const [as, setAs] = useState('owner')
   const [kind, setKind] = useState('private')
   const [text, setText] = useState('')
@@ -135,7 +146,8 @@ function Simulate({ toast }) {
     ? <div className="ab-code">{sent.map((s) => '→ ' + s.chatId + '：' + s.text).join('\n')}</div>
     : <div className="ab-small ab-muted" style={{ marginTop: 6 }}>没有发出任何消息</div>)
   return (
-    <Card title="模拟测试" desc="不上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。">
+    <Card title="模拟测试" desc="不上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。" right={<Btn small kind="ghost" onClick={() => setOpen(!open)}>{open ? '收起' : '展开'}</Btn>}>
+      {open ? <Fragment>
       <More label="哪些副作用是真的">
         {'模块直接调 api.onebot 的操作（比如禁言、发空间）是真的会执行的；会改设置的内置命令不执行。'}
       </More>
@@ -167,6 +179,7 @@ function Simulate({ toast }) {
           {tout ? <div><div className="ab-code">{JSON.stringify(tout.result, null, 2)}</div>{sentList(tout.sent)}</div> : null}
         </div>
       ) : <div className="ab-small ab-muted">这个场合没有工具</div>}
+      </Fragment> : null}
     </Card>
   )
 }
@@ -265,28 +278,78 @@ function Market({ st, toast, reload }) {
   )
 }
 
-/** 扩展页：所有模块（内置的 + 自己写的）、新建、安全模式。 */
+// ---- 扩展页：内置模块分组（按能力，不按代码顺序）----
+// 商店模块未安装时不在这里（它们在「已安装的扩展」）；新内置模块没归组会落到「其他」，不会丢。
+const EXT_GROUPS = [
+  { id: 'express', label: '表达与内容', ids: ['voice', 'stickers', 'imagegen', 'diary', 'qzone-social'] },
+  { id: 'platform', label: '平台', ids: ['bili', 'douyin', 'heybox', 'multi-parser'] },
+  { id: 'memory', label: '记忆与主动', ids: ['memory', 'reflection', 'style', 'memory-privacy', 'speakup', 'purpose'] },
+  { id: 'govern', label: '治理与工具', ids: ['token-guardian', 'token-billing', 'complete-guard', 'group-admin', 'qq-tools', 'profile', 'contacts', 'affective-graph'] },
+  { id: 'snowluma', label: 'QQ 增强（SnowLuma 协议）', ids: ['flash-transfer', 'group-files', 'online-status', 'social-actions', 'ark-cards', 'ai-voice', 'workspace-files'] },
+]
+const EXT_OTHER = { id: 'other', label: '其他', ids: [] }
+// 核心页面不是模块：始终显示，不随模块开关变化
+const CORE_PAGES = ['连接', '权限', '人格', '聊天', '模型', '记忆', '本地接口']
+const GROUP_OPEN_KEY = 'qq-hub:ext-groups:v1'
+
+const groupBuiltins = (list) => {
+  const buckets = new Map([...EXT_GROUPS, EXT_OTHER].map((g) => [g.id, []]))
+  for (const m of list) {
+    const g = EXT_GROUPS.find((x) => x.ids.includes(m.id))
+    buckets.get(g ? g.id : EXT_OTHER.id).push(m)
+  }
+  return [...EXT_GROUPS, EXT_OTHER].map((g) => ({ ...g, list: buckets.get(g.id) })).filter((g) => g.list.length)
+}
+const groupNeedsAttention = (g) => g.list.some((m) => m.error || (m.errors || []).length || m.outdated)
+const loadGroupOpen = () => { try { return JSON.parse(localStorage.getItem(GROUP_OPEN_KEY) || '{}') || {} } catch { return {} } }
+
+/** 扩展页：概览 → 核心页面 → 市场 → 已安装扩展 → 内置模块（分组/搜索/默认折叠）→ 模拟测试（收起）。 */
 function Modules({ st, draft, toast, reload }) {
   const [data, setData] = useState(null)
+  const [q, setQ] = useState('')
+  const [creating, setCreating] = useState(false)
   const [newId, setNewId] = useState('')
   const [newName, setNewName] = useState('')
+  const [openGroups, setOpenGroups] = useState(loadGroupOpen)
+  const [marketUpdates, setMarketUpdates] = useState(0)
   const load = () => get('/modules').then(setData)
   useEffect(() => { load() }, [])
   useEffect(() => { if (data && st.modules) setData((d) => ({ ...d, list: st.modules })) }, [JSON.stringify(st.modules)])
   const setModules = (list) => list && setData((d) => ({ ...d, list }))
+  // 市场可更新数（市场开着才查；失败静默，不影响页面）
+  const marketOn = st.config?.modules?.market?.enabled === true
+  useEffect(() => {
+    if (!marketOn) { setMarketUpdates(0); return undefined }
+    let alive = true
+    get('/modules/market').then((r) => { if (alive && r?.ok) setMarketUpdates((r.list || []).filter((e) => e.update).length) }).catch(() => {})
+    return () => { alive = false }
+  }, [marketOn])
   if (!data) return <Empty icon="⏳" text="加载中…" />
   const list = data.list || []
   const builtin = list.filter((m) => m.builtin)
   const mine = list.filter((m) => !m.builtin)
+  const running = builtin.filter((m) => m.running).length
+  const off = builtin.filter((m) => !m.enabled).length
+  const errCount = list.filter((m) => m.error || (m.errors || []).length).length
+  const groups = groupBuiltins(builtin)
+  const qn = q.trim().toLowerCase()
+  const hit = (m) => !qn || [m.name, m.id, m.description, ...(m.tools || []), ...(m.commands || [])].some((x) => String(x || '').toLowerCase().includes(qn))
+  const isOpen = (g) => (qn ? true : openGroups[g.id] === undefined ? groupNeedsAttention(g) : openGroups[g.id] === true)
+  const toggleGroup = (g) => {
+    const next = { ...loadGroupOpen(), [g.id]: !isOpen(g) }
+    setOpenGroups(next)
+    try { localStorage.setItem(GROUP_OPEN_KEY, JSON.stringify(next)) } catch {}
+  }
   const props = { draft, setModules, toast, reload: () => { reload(); load() } }
   const create = async () => {
     const r = await post('/modules/create', { id: newId.trim(), name: newName.trim() })
     if (!r.ok) return toast(r.message, 'err')
-    setNewId(''); setNewName('')
+    setNewId(''); setNewName(''); setCreating(false)
     setModules(r.list)
     copy(r.prompt, toast, '建好了，「复制给 DSH 的话」已经复制好，粘给 DSH 让它帮你写')
     reload()
   }
+  const matched = groups.some((g) => g.list.some(hit))
   return (
     <div className="ab-grid">
       <Card
@@ -294,8 +357,16 @@ function Modules({ st, draft, toast, reload }) {
         desc="她的每项本事都是一个模块：能单独关掉；能复制一份来改，改了就替换内置的；也能自己写新模块。"
         more={'自己写的东西放在下面这个文件夹，插件升级不会动；改完保存几秒内自动生效，不用重启。\n不会写代码？点「复制给 DSH 的话」，粘给 DSH，说你想要什么。'}
       >
-        <div className="ab-flex">
-          <code className="ab-small" style={{ wordBreak: 'break-all', flex: 1 }}>{data.dir}</code>
+        <div className="ab-pills" style={{ marginTop: 0, marginBottom: 8 }}>
+          <span className="ab-pill">内置 {builtin.length}</span>
+          <span className="ab-pill ok">运行 {running}</span>
+          {off ? <span className="ab-pill warn">关闭 {off}</span> : null}
+          {errCount ? <span className="ab-pill err">异常 {errCount}</span> : null}
+          <span className="ab-pill">扩展 {mine.length}</span>
+          {marketOn && marketUpdates ? <span className="ab-pill ok">市场可更新 {marketUpdates}</span> : null}
+        </div>
+        <div className="ab-flex ab-dirrow">
+          <code className="ab-small" style={{ wordBreak: 'break-all', flex: '1 1 220px', minWidth: 0 }}>{data.dir}</code>
           <Btn small onClick={() => post('/modules/open').then((r) => toast(r.message))}>打开文件夹</Btn>
           <Btn small onClick={() => copy(data.prompt, toast, '复制好了，粘给 DSH，把【】里那句换成你想要的')}>复制给 DSH 的话</Btn>
           <Btn small kind="ghost" onClick={async () => { const r = await post('/modules/reload', {}); setModules(r.list); toast(r.message) }}>重新检查</Btn>
@@ -305,18 +376,51 @@ function Modules({ st, draft, toast, reload }) {
         </Row>
         {st.config.safeMode ? <div className="ab-note warn">安全模式开着：你写的模块现在都没加载。</div> : null}
       </Card>
-      <Card title="新建一个模块" desc="从模板建一个能直接跑的例子（关键词自动回复 + 一个命令 + 一个工具），在它上面改。id 用小写英文，比如 weather。">
-        <div className="ab-flex">
-          <input className="ab-input" style={{ maxWidth: 180 }} placeholder="id，如 weather" value={newId} onChange={(e) => setNewId(e.target.value.toLowerCase())} />
-          <input className="ab-input" placeholder="名字，如 查天气" value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <Btn kind="primary" small disabled={!newId.trim()} onClick={create}>新建</Btn>
+      <Card title="核心页面" desc="这些页面是插件本体，始终显示、不能关；模块开关只影响它自己的标签页。">
+        <div className="ab-pills" style={{ marginTop: 0 }}>
+          {CORE_PAGES.map((t) => <span key={t} className="ab-pill">{t}</span>)}
         </div>
       </Card>
-      {mine.length ? <Card title={'自己写的（' + mine.length + '）'}>{mine.map((m) => <ModuleRow key={m.id} m={m} {...props} />)}</Card> : null}
-      <Card title={'内置模块（' + builtin.length + '）'} desc="关掉的模块：她就没有这项本事，相关的标签页也会藏起来。连接、权限、人格、聊天这些是核心，不能关。">
-        {builtin.map((m) => <ModuleRow key={m.id} m={m} {...props} />)}
-      </Card>
       <Market st={st} toast={toast} reload={reload} />
+      <Card
+        title={'已安装的扩展（' + mine.length + '）'}
+        desc="自己写的或从模块市场安装的模块；和内置一样走统一发送出口，数据和设置按模块隔离。"
+        right={<Btn small onClick={() => setCreating((v) => !v)}>{creating ? '取消' : '＋ 新建'}</Btn>}
+      >
+        {creating ? (
+          <div className="ab-flex" style={{ marginBottom: 8 }}>
+            <input className="ab-input" style={{ maxWidth: 180 }} placeholder="id，如 weather" value={newId} onChange={(e) => setNewId(e.target.value.toLowerCase())} />
+            <input className="ab-input" placeholder="名字，如 查天气" value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <Btn kind="primary" small disabled={!newId.trim()} onClick={create}>新建</Btn>
+          </div>
+        ) : null}
+        {mine.length ? mine.map((m) => <ModuleRow key={m.id} m={m} {...props} />) : <Empty icon="🧩" text="还没有自己写的或从市场安装的扩展" />}
+      </Card>
+      <Card
+        title={'内置模块（' + builtin.length + '）'}
+        desc="关掉的模块：她就没有这项本事，相关的标签页也会藏起来；核心页面不受影响。"
+        right={<input className="ab-input ab-search" placeholder="搜索模块…" value={q} onChange={(e) => setQ(e.target.value)} />}
+      >
+        {groups.map((g) => {
+          const items = g.list.filter(hit)
+          if (qn && !items.length) return null
+          const open = isOpen(g)
+          return (
+            <div key={g.id} className="ab-modgroup">
+              <button type="button" className="ab-modgroup-head" onClick={() => toggleGroup(g)} aria-expanded={open}>
+                <span className={cx('ab-modgroup-chev', open && 'open')}>›</span>
+                <span className="ab-modgroup-name">{g.label}</span>
+                <span className="ab-modgroup-meta">（{g.list.length}）· 运行 {g.list.filter((m) => m.running).length}</span>
+                {groupNeedsAttention(g) ? <span className="ab-badge warn">有情况</span> : null}
+                <span style={{ flex: 1 }} />
+                <span className="ab-modgroup-meta">{open ? '收起' : '展开'}</span>
+              </button>
+              {open ? <div className="ab-modgroup-body">{items.map((m) => <ModuleRow key={m.id} m={m} {...props} compact />)}</div> : null}
+            </div>
+          )
+        })}
+        {qn && !matched ? <Empty icon="🔍" text={'没有匹配「' + q.trim() + '」的模块'} /> : null}
+      </Card>
       <Simulate toast={toast} />
     </div>
   )
