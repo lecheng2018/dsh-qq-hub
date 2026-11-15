@@ -9,7 +9,7 @@
 
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { defineTool, str } from '../../tools/tools.js'
+import { defineTool, str, int } from '../../tools/tools.js'
 import { fetchImage } from '../../core/net.js'
 import { registerReadActions } from '../../onebot/read-actions.js'
 
@@ -30,6 +30,8 @@ export function normalizeFileEntry(it) {
     id: String(o.file_id ?? o.fileId ?? o.id ?? o.fid ?? '').trim(),
     name: String(o.file_name ?? o.name ?? o.title ?? '').trim() || '（未命名）',
     size: Number(o.file_size ?? o.size ?? o.bytes ?? 0) || 0,
+    // busid：换下载地址（get_group_file_url）要带原值，缺了网关会报参数错误（真机 2026-11-15）
+    busid: Number(o.busid ?? o.bus_id ?? 0) || 0,
     isDir: Boolean(o.is_dir ?? o.isDir ?? o.folder ?? false) || String(o.type ?? '') === 'folder',
     folderId: String(o.folder_id ?? o.folderId ?? o.id ?? '').trim(),
   }
@@ -56,7 +58,7 @@ export function formatDirListing(entries, { limit = 40 } = {}) {
   const files = entries.filter((e) => !e.isDir)
   const lines = [
     ...dirs.slice(0, limit).map((e) => `📁 ${e.name}  [目录 id=${e.folderId || e.id}]`),
-    ...files.slice(0, limit).map((e) => `${e.name}（${humanSize(e.size)}）  [文件 id=${e.id}]`),
+    ...files.slice(0, limit).map((e) => `${e.name}（${humanSize(e.size)}）  [文件 id=${e.id}${e.busid ? ` busid=${e.busid}` : ''}]`),
   ]
   const shown = dirs.length + files.length
   if (shown > lines.length || entries.length > limit) lines.push(`…共 ${entries.length} 项，只列了前 ${Math.min(limit, entries.length)} 项`)
@@ -132,6 +134,7 @@ export default {
           group_id: str('群号；在群聊里用可省略'),
           folder_id: str('browse：要看的目录 id，省略 = 根目录'),
           file_id: str('download/manage：文件 id（browse 结果里方括号里的）'),
+          busid: int('download：browse 结果里的 busid 原值（缺了网关会报参数错误）'),
           name: str('manage mkdir：要建的文件夹名'),
           op: { type: 'string', enum: ['mkdir', 'move', 'trans', 'delete'], description: 'manage 的具体操作' },
           dest_folder_id: str('manage move：目标目录 id'),
@@ -164,7 +167,8 @@ export default {
           if (action === 'download') {
             const fileId = String(args.file_id || '').trim()
             if (!fileId) return { ok: false, message: 'download 要给 file_id（browse 结果里方括号里的）' }
-            const info = await onebot.call('get_group_file_url', { group_id: gid, file_id: fileId, busid: 0 }, { timeoutMs: 15000 })
+            // busid 必须用 browse 原值（真机 2026-11-15：缺 busid 网关报参数错误）
+            const info = await onebot.call('get_group_file_url', { group_id: gid, file_id: fileId, busid: Number(args.busid) || 0 }, { timeoutMs: 15000 })
             const url = info?.url || info?.file || info?.data?.url
             if (!url) return { ok: false, message: '没能换来下载地址（链接有时效，浏览后尽快下载）' }
             const buf = await fetchImage(url, { maxBytes: s.maxBytes, timeoutMs: 60000 })
