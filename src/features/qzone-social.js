@@ -120,7 +120,10 @@ export function createQzoneSocial({ getConfig, onebot, hub, chatLog, log, memory
           (others.length ? `这条说说下面大家的评论：\n${others.join('\n')}\n\n` : '') +
           `你要回的是这一串：\n${thread}\n\n${last.name} 刚刚说了新的话，结合说说内容和上面的评论，用你的口气接着回 TA 一句。`)
         if (!text) continue
-        await sendComment(m.tid, `回复 ${last.name}：${text}`)
+        // 如实计数（缺陷：被闸拦仍记成已回复）：sendComment 被身份闸拦下返回 false，
+        // 此时不记记忆/不占次数，避免「没发出去却记成发了」。
+        const sent = await sendComment(m.tid, `回复 ${last.name}：${text}`)
+        if (!sent) continue
         // 空间评论是公开行为（对方空间里本来就看得见），可以进 global；但只记「回了谁、说了什么」，不涉及主人的私事
         memory?.addEvent?.({ text: `在空间回复了${last.name}的评论：${text}`, about: String(last.uin), aboutName: last.name, tags: ['空间'], importance: 0.35, scope: 'global' })
         record(s, { kind: 'reply', who: last.name, post: String(m.content).slice(0, 30), text })
@@ -170,7 +173,9 @@ export function createQzoneSocial({ getConfig, onebot, hub, chatLog, log, memory
         if (c.like) record(s, { kind: 'like', who: f.nickname, post: content.slice(0, 30), text: '' }, false)
         continue
       }
-      await sendComment(f.key, text, f.uin)
+      // 如实计数（缺陷：被闸拦仍记成已评论）：被身份闸拦下返回 false 时不记记忆/不占次数。
+      const sent = await sendComment(f.key, text, f.uin)
+      if (!sent) continue
       // 同上：公开发生在对方说说下面，算 global
       memory?.addEvent?.({ text: `在空间评论了${isOwner ? owner() : f.nickname}的说说「${content.slice(0, 24)}」：${text}`, about: String(f.uin), aboutName: f.nickname, tags: ['空间'], scope: 'global' })
       record(s, { kind: 'comment', who: f.nickname, post: content.slice(0, 30), text })

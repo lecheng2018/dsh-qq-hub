@@ -9,7 +9,7 @@ import { isOwner, profileToolVisible, profilePermits } from '../../chat/access.j
 import { createQqProfile } from '../../features/qq-profile.js'
 import { resolvePainting } from '../../features/paintings.js'
 import { findFfmpeg, findSharp, shrinkImage, shrinkWithSharp } from '../../core/img.js'
-import { segmentBytes } from '../../core/net.js'
+import { segmentBytes, assertPublicUrl } from '../../core/net.js'
 
 const NICK_MAX = 36
 const SIGN_MAX = 80
@@ -183,6 +183,9 @@ export default {
           if (/^https?:\/\//i.test(raw)) {
             const src = avatarSource(raw)
             if (!src.ok) return src
+            // SSRF 防护（缺陷：换头像网址无 host 校验）：网关会去拉这个地址，
+            // 拒绝环回/内网/保留地址，与 fetchImage/multi-parser 同一基准。
+            try { await assertPublicUrl(src.file) } catch (error) { return { ok: false, message: '这个头像网址不能用：' + error.message } }
             if (c.dryRun) return { ok: true, message: `试运行：本来要把 QQ 头像换成：${src.file}` }
             await onebot.call('set_qq_avatar', { file: src.file }, { timeoutMs: 30000 })
             return { ok: true, message: 'QQ 头像换好了' }
