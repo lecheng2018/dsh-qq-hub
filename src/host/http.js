@@ -23,9 +23,20 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), isAuthorize
       res.end?.(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body))
     } catch (error) {}
   }
+  // JSON 请求体上限（缺陷：readBody 无大小上限，可被大 POST 打爆内存）。
+  const MAX_BODY_BYTES = 2 * 1024 * 1024
   const readBody = async (req) => {
     let s = ''
-    try { for await (const c of req) s += c } catch (error) {}
+    let n = 0
+    let tooBig = false
+    try {
+      for await (const c of req) {
+        n += Buffer.isBuffer(c) ? c.length : Buffer.byteLength(String(c))
+        if (n > MAX_BODY_BYTES) { tooBig = true; break }
+        s += c
+      }
+    } catch (error) {}
+    if (tooBig) throw new Error('请求体太大了（最多 2MB）')
     try { return JSON.parse(s || '{}') } catch (error) { return {} }
   }
   /** 原样读请求体（上传大文件用），超过 max 字节就报错。 */
