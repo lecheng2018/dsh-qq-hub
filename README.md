@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-success)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-当前版本：**v1.4.6**（正式版，v1.3.65 之后的第一个正式版）。自 v1.3.65 或任一 1.4.x-test 升级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 中 1.4.6 的「升级须知（破坏性）」一节（六个内容模块改为「扩展 → 市场」按需安装）；版本历史与全部 test/beta 记录同在 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：**v1.4.6**（正式版，v1.3.65 之后的第一个正式版；2026-11-15 曾重发一次修复商店模块面板路由 404 与扩展页分组样式，版本号不变，升级到最新 v1.4.6 资产即可）。自 v1.3.65 或任一 1.4.x-test 升级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 中 1.4.6 的「升级须知（破坏性）」一节（六个内容模块改为「扩展 → 市场」按需安装）；版本历史与全部 test/beta 记录同在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 它是什么
 

@@ -153,10 +153,10 @@ function Douyin({ draft, setDraft, toast }) {
         ) : null}
         {!s
           ? <Empty icon="⏳" text="加载中…" />
-          : s.history.length === 0 ? <Empty icon="📱" text="还没刷过。先扫码登录、打开开关，再点「现在刷一轮」。" />
+          : (s.history || []).length === 0 ? <Empty icon="📱" text="还没刷过。先扫码登录、打开开关，再点「现在刷一轮」。" />
             : (
               <div className="ab-list">
-                {s.history.map((x, i) => (
+                {(s.history || []).map((x, i) => (
                   <div key={i} className="ab-li">
                     <div className="meta">{timeAgo(x.at)}<br />{DOUYIN_KIND[x.kind] || x.kind}</div>
                     <div className="body">

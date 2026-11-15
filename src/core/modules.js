@@ -169,6 +169,20 @@ export function rewriteImports(code, fromKey, keep = new Set()) {
  */
 export const OPTIONAL_MODULE_IDS = Object.freeze(['bili', 'douyin', 'heybox', 'multi-parser', 'qzone-social', 'delivery-inbox'])
 
+/**
+ * 面板页留在核心包里的模块：client/src/views/platforms/（B 站 / 抖音 / 小黑盒 / 内容解析）
+ * 与 diary.js 的空间互动段直接打这些模块的**无前缀**路由。它们改由商店分发后（#163），
+ * 内置清单里已经没有这几个 id，路由挂载不能再按 builtinDefs 判断——否则这些路由全被
+ * 挂到 /ext/<id>/ 下，面板页 404，抖音页更是直接整页崩（state.history 读不到，真机 1.4.6）。
+ * 这批 id 写死在这里：无论内置还是商店装，路由都挂老路径。delivery-inbox 不在其中——
+ * 它自带 panel.js，ExtPage 的模块绑定 call 自己会拼对前缀。
+ */
+const CORE_PANEL_IDS = new Set(['bili', 'douyin', 'heybox', 'multi-parser', 'qzone-social'])
+
+export function routePrefixFor(id, hasBuiltinDef) {
+  return hasBuiltinDef || CORE_PANEL_IDS.has(id) ? '' : `/ext/${id}`
+}
+
 export function createModules({ ctx, core, getConfig, setConfig, logger, version, builtins }) {
   const log = logger.child('modules')
   const builtinDefs = new Map(builtins.map((d) => [d.id, d]))
@@ -210,8 +224,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       }
     }
     const track = (off) => { if (typeof off === 'function') rec.offs.push(off); return off }
-    // 内置模块和替换它的版本用原来的路径（内置的面板页照常能用）；新模块放在 /ext/模块id/ 下
-    const prefix = builtinDefs.has(id) ? '' : `/ext/${id}`
+    // 内置模块用原来的路径；面板页在核心包里的模块（CORE_PANEL_IDS）商店装上来也沿用老路径；
+    // 其余模块放在 /ext/模块id/ 下
+    const prefix = routePrefixFor(id, builtinDefs.has(id))
     const def = rec.def
     const api = {
       id,
