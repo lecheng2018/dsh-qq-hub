@@ -8,7 +8,8 @@ import {
 } from '../src/modules/group-files/index.js'
 
 test('normalizeFileEntry：snake / camel / folder 三种形状都能整', () => {
-  assert.deepEqual(normalizeFileEntry({ file_id: 'f1', file_name: 'a.zip', file_size: 10 }), { id: 'f1', name: 'a.zip', size: 10, isDir: false, folderId: '' })
+  assert.deepEqual(normalizeFileEntry({ file_id: 'f1', file_name: 'a.zip', file_size: 10 }), { id: 'f1', name: 'a.zip', size: 10, busid: 0, isDir: false, folderId: '' })
+  assert.equal(normalizeFileEntry({ file_id: 'f2', file_name: 'b.zip', busid: 77 }).busid, 77, 'busid 原值保留（下载要用）')
   const dir = normalizeFileEntry({ id: 'd1', name: '相册', is_dir: true })
   assert.equal(dir.isDir, true)
   assert.equal(dir.folderId, 'd1')
