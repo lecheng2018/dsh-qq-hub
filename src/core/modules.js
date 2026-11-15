@@ -651,6 +651,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         fallback: Boolean(rec?.fallback),
         enabled: m.enabled !== false,
         useBuiltin: Boolean(m.useBuiltin),
+        // 面板用：这个用户模块是不是从模块市场装的（有 .qqhub-source.json 来源凭据）。
+        // 只是展示标记，真正的归属判定仍以 SOURCE_FILE 为准（market.js）。
+        market: Boolean(u && existsSync(join(u.dir, '.qqhub-source.json'))),
         forkedFrom: m.forkedFrom || '',
         outdated: Boolean(b && rec?.source === 'user' && m.forkedFrom && m.forkedFrom !== b.version),
         error: err ? err.message : '',
