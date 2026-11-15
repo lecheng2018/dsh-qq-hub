@@ -5,6 +5,7 @@
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { isSilence } from '../chat/reply.js'
 import { permOf } from '../chat/access.js'
+import { guardOutbound } from '../chat/identity-guard.js'
 import { createBrowser } from './browser.js'
 import { createSite, findAwemeId, resolveShort, digestOf, videoLink } from './site.js'
 import { join } from 'node:path'
@@ -99,6 +100,21 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     return ''
   }
 
+  // 出站身份闸（缺陷：抖音公开评论/分享私信绕过身份闸）：公开评论与发给别人的私信
+  // 对方/全网可见，正文出现主人/机器人账号标识一律不发。与 B站/小黑盒/空间同口径。
+  // 主人自己的私密私信不在此列（不是泄露面，等同 QQ 私聊）。
+  const guard = (text, surface) => {
+    try {
+      const g = guardOutbound(String(text || ''), {
+        surface,
+        ids: [getConfig().ownerQQ, getConfig().botQQ].filter(Boolean),
+        mode: getConfig().security?.identityGuard?.mode === 'warn' ? 'warn' : 'block',
+      })
+      if (g.hits.length) log.warn(`身份泄露闸拦下 → 抖音${surface}：${g.message}`)
+      return g.ok
+    } catch (error) { log.debug('身份泄露闸判定出错：', error.message); return true }
+  }
+
   /** 做一次写操作（点赞 / 评论）。试运行只记日志不占次数；出错是验证码 / 风控就停一天。刷流里间隔不够就等够再做。 */
   async function doWrite(s, kind, meta, act, { waitGap = false } = {}) {
     if (waitGap) {
@@ -107,6 +123,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     }
     const why = blocked(s, kind)
     if (why) return { ok: false, message: why }
+    // 评论正文先过身份闸（点赞无 text 不受影响）
+    if (meta.text && !guard(meta.text, NAME[kind] || '评论')) return { ok: false, message: '身份泄露闸拦下，没发' }
     if (getConfig().dryRun) {
       log.info(`试运行：本来要在抖音${NAME[kind]}`, meta.title || meta.awemeId, meta.text || '')
       record(s, { kind: 'dry:' + kind, ...meta })
@@ -493,6 +511,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         record(s, { kind: 'dry:dm-out', text: say, title: u.nickname })
         return { ok: true, message: `试运行：本来要发给「${u.nickname}」`, nickname: u.nickname }
       }
+      if (!guard(say, '私信')) return { ok: false, message: '身份泄露闸拦下，没发', nickname: u.nickname }
       await site.sendDm(say)
       record(s, { kind: 'dm-out', text: say, title: u.nickname })
       // 抖音私信是一对一的私密对话：只让主人私聊看得到，别让群里问出来
