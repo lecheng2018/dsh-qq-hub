@@ -264,36 +264,5 @@ test('自动截图：只发主人私聊、使用真实文件路径，试运行�
   }
 })
 
-test('B 站模块：截图库路由预览 / 删除、工具固定发当前会话、关闭后隐藏', async () => {
-  freshDir()
-  const { default: module } = await import('../src/modules/bili/index.js')
-  const { cfg, sent } = makeBili()
-  const routes = new Map(), builders = []
-  const fake = {
-    config: () => cfg, lazy: () => null, log: { info() {}, warn() {}, debug() {} },
-    on() {}, every() {}, tool: (build) => builders.push(build), route: (p, handler) => routes.set(p, handler),
-    core: {
-      hub: { sendImage: async (chatId, src) => { sent.push({ chatId, src }); return { message_id: 8 } } },
-      http: { query: (req) => req.query, body: async (req) => req.body, send: (_res, status, body, type) => ({ status, body, type }) },
-    },
-  }
-  module.setup(fake)
-  const shot = createShotStore().put(Buffer.from('preview'), { title: '预览' })
-  const list = await routes.get('/bili/shots')()
-  assert.equal(list.items[0].file, shot.file)
-  const image = await routes.get('/bili/shot/image')({ query: { file: shot.file } }, {})
-  assert.equal(image.type, 'image/jpeg')
-  assert.equal(image.body.toString(), 'preview')
-  assert.equal((await routes.get('/bili/shot/image')({ query: { file: '../outside' } }, {})).status, 404)
-  const tools = builders[0]({ chat: { kind: 'group', chatId: 'group:123' } })
-  const tool = tools.find((t) => t.name === 'qq_send_shot')
-  assert.deepEqual(Object.keys(tool.parameters.properties), ['query'])
-  assert.equal((await tool.execute({})).sent, true)
-  assert.equal(sent[0].chatId, 'group:123')
-  cfg.bili.enabled = false
-  assert.deepEqual(builders[0]({ chat: { kind: 'private' } }), [])
-  assert.equal((await tool.execute({})).ok, false, '旧工具也复查开关')
-  const deleted = await routes.get('/bili/shot/delete')({ body: { file: shot.file } })
-  assert.equal(deleted.ok, true)
-  assert.equal((await routes.get('/bili/shot/image')({ query: { file: shot.file } }, {})).status, 404)
-})
+// 注：B站模块壳已上商店（dsh-qq-hub-mods），截图库路由/工具的壳级接线测试随之迁到商店仓库；
+// 这里保留 bili 实现（duty/shot-store）的行为回归。
