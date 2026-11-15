@@ -4,6 +4,9 @@
 
 const { useState, useEffect } = React
 
+/** token 数转千分位人话。 */
+const fmt = (n) => Number(n || 0).toLocaleString('en-US')
+
 /** 用量条：剩余越少越红。返回一个 div（背景槽 + 前景填充）。 */
 function bar(used, limit) {
   const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0
