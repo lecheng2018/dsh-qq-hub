@@ -300,7 +300,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     if (!hasEnough) {
       markPurposeSkip(state, { now, reason: 'materials', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
       saveState(state)
-      log.info?.(`目的（${reason}）：素材太少，改约下一次`)
+      log?.info?.(`目的（${reason}）：素材太少，改约下一次`)
       return { outcome: 'skipped-materials' }
     }
 
@@ -313,7 +313,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     if (!picked.purpose) {
       markPurposeSkip(state, { now, reason: 'no-candidate', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
       saveState(state)
-      log.info?.(`目的（${reason}）：这轮没选出目的，改约下一次`)
+      log?.info?.(`目的（${reason}）：这轮没选出目的，改约下一次`)
       return { outcome: 'skipped-no-candidate' }
     }
 
@@ -325,13 +325,13 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     let raw = ''
     let genError = null
     try {
-      log.info?.(`目的（${reason}）：${picked.purpose.text}`)
+      log?.info?.(`目的（${reason}）：${picked.purpose.text}`)
       raw = typeof hub.runPromptTurn === 'function'
         ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
         : await hub.runSystemTurn('purpose', 'QQ · 主动搭话（目的回合）', prompt, { timeoutMs: 180000, noTools: true })
     } catch (error) {
       genError = error
-      log.warn?.('目的：生成出错：', error?.message)
+      log?.warn?.('目的：生成出错：', error?.message)
     }
     const memo = parsePurposeMemo(raw)
     const text = cleanReply(raw, roleOf(cfg))
@@ -344,12 +344,12 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
         outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
       } catch (error) {
         outcome = 'delivery-failed'
-        log.warn?.('目的：投递失败：', error?.message)
+        log?.warn?.('目的：投递失败：', error?.message)
       }
     }
     applyPurposeOutcome(state, { now: Date.now(), config, outcome, text, memo, planned: picked.purpose })
     saveState(state)
-    log.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
+    log?.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
     return { outcome, text, memo }
   }
 
@@ -377,7 +377,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       const text = cleanReply(raw, roleOf(cfg))
       if (text) await hub.deliver(chatIdOf(cfg), text, { own: true })
     } catch (error) {
-      log.warn?.('目的：追问出错：', error?.message)
+      log?.warn?.('目的：追问出错：', error?.message)
     }
     return true
   }
