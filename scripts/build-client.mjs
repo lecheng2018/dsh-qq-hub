@@ -45,7 +45,7 @@ function normalizeEol(code) {
  * 纯函数类断言已改为直接读源码或 import 模块，不再依赖产物格式）。
  */
 function postProcess(code) {
-  return code.replace(/\nfunction ProfilesCard\(/, '\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesCard(')
+  return code.replace(/\nfunction ProfilesList\(/, '\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesList(')
 }
 
 async function build() {
