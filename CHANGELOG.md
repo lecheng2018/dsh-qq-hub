@@ -1,5 +1,13 @@
 # 更新记录
 
+## Unreleased · SnowLuma 深度接入 P4（社交动作）
+
+- **新增「社交动作」内置模块**（`src/modules/social-actions/`），三项全部默认关：
+  - **表情回应（自动）**：关系温度 ≥1（情感图谱 toneFor）且这一轮无冲突/越界信号（复用 `affective-signals` 的保守判定，判定器坏了按「在场」处理——宁可漏回应）时，按概率（默认 12%，可调）给对方刚发的消息加 `set_msg_emoji_like`；同会话冷却默认 30 分钟；软失败不重试。决策是纯函数 `decideReaction`（随机源/时间注入，测试直打）。
+  - **精华**（`qq_essence`，仅主人/群聊）：`set_essence_msg` / `delete_essence_msg`。
+  - **QZone 写扩展**（`qq_qzone_action`，仅主人 + 面板开关）：赞/取消赞/评论/改单条说说可见范围（1/4/16/64/128）；评论与改可见性是**公开足迹**，`confirm=「确认」` 显式确认。
+- 所有写入动作不进只读白名单（保守：失败不重试）；`recent`/`cooldown` 两张表有界 + TTL 过期清理 + dispose 清空；无新定时器。
+
 ## Unreleased · SnowLuma 深度接入 P3（在线与已读）
 
 - **新增「在线与已读」内置模块**（`src/modules/online-status/`）：收到消息后按可配延迟上报已读（`mark_all_as_read`，账号级、一批合并成一次调用、防抖计时器 unref + dispose 清理）；网关连上/配置变化时设置自定义在线状态文字（`set_diy_online_status`，幂等重设，失败不重试只记日志）。
