@@ -30,7 +30,7 @@ const BASE_READ_ACTIONS = [
 const READ_ACTIONS = new Set(BASE_READ_ACTIONS)
 
 /** 允许运行时登记的前缀：查询/预检/取回/下载，都是「重试也无害」的形状。 */
-const REGISTERABLE_PREFIXES = ['get_', 'can_', 'fetch_', 'download_']
+const REGISTERABLE_PREFIXES = ['get_', 'can_', 'fetch_', 'download_', 'check_', 'ocr_', 'translate_']
 
 /**
  * 运行时登记新的只读动作（模块 setup 里调用；重复登记幂等）。
