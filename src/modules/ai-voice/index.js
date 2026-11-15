@@ -51,7 +51,7 @@ export default {
   name: 'AI 语音',
   version: '1.0.0',
   description: 'QQ 官方 AI 变声（/变声 主人命令，群聊专用）：零成本云端 TTS 备选；不接自动语音链，只做命令触发',
-  tab: 'voice',
+  tab: 'enhance',
   defaults: {
     character: '',
   },

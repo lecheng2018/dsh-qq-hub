@@ -50,6 +50,7 @@ export default {
   id: 'ark-cards',
   name: 'Ark 卡片',
   version: '1.0.0',
+  tab: 'enhance',
   description: '主人私聊里让她发原生图文卡片（qq_send_ark）；出站链接先过 QQ 安全检查；网关不支持时自动降级 json 卡片 → 文字摘要',
   defaults: {
     urlCheckEnabled: true,

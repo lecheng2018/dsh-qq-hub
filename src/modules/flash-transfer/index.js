@@ -27,6 +27,7 @@ export default {
   id: 'flash-transfer',
   name: '闪传',
   version: '1.0.0',
+  tab: 'enhance',
   description: '别人发来的 QQ 闪传能看到文件清单；主人可让她下载到工作区（qq_flash_download）、把收到过的闪传转发给白名单会话（qq_flash_forward）、/闪传 命令按分享码查',
   defaults: {
     autoList: true,     // 把清单自动塞进她的上下文（关掉后只有占位文本）
