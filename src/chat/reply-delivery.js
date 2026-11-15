@@ -14,6 +14,10 @@ export function createReplyDelivery({
   getConfig, log, hooks, reportTurns, groups, stickers, interaction,
   sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
   logChat, onActivity, onDelivered, outbox, isCaptured, sleep, threadLedger, deliveryContext = new AsyncLocalStorage(),
+  // 随机源统一注入（缺陷：随机源不一致）：短回复变语音、补表情、打字律动三处过去各调
+  // 各的 Math.random，测试无法固定序列。这里收成一个口子，默认仍是 Math.random，
+  // 测试可注入固定序列；律动计算也透传同一个源（reply-cadence 本就支持 random 注入）。
+  random = Math.random,
 }) {
   const deliveryChains = new Map()
   // US-006 · 四态会话收尾：per-chat 状态。放这里而不是宿主，因为真正决定
@@ -136,7 +140,7 @@ export function createReplyDelivery({
     const texts = items.filter((i) => i.kind === 'text')
     if (cfg.voice?.enabled && items.length === texts.length && texts.length > 0) {
       const all = texts.map((t) => t.value).join('，')
-      if (all.length <= cfg.voice.autoMaxChars && Math.random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
+      if (all.length <= cfg.voice.autoMaxChars && random() < cfg.voice.autoChance) items = [{ kind: 'voice', value: all }]
     }
     // US-019 · 顺承前情 → 挂起线索闭环：从本轮 <inner> 读【顺承前情】标记与闭环信号。
     // 命中的线索才 resolve，没标记的只按拓扑往后挪一格（用户换话题绝不误闭环）。
@@ -186,7 +190,7 @@ export function createReplyDelivery({
       log.info(`${chatId}：回复超过 ${groupLimit} 条，按原顺序合并相邻气泡`)
     }
     // 按概率补一张表情（群里已经有两条以上就不补了）
-    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && Math.random() < cfg.stickers.autoChance) {
+    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && random() < cfg.stickers.autoChance) {
       const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
@@ -239,7 +243,7 @@ export function createReplyDelivery({
     const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers?.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
     // 仿真打字律动：多条气泡时按「思考 + 逐字击键 + 呼吸间隙」拉长间隔。
     // 关闭开关或算不出来（条目非法）时退回既有的固定公式，行为与旧版一致。
-    const cadence = typingCadenceEnabled(cfg) ? calculateTypingCadence(items.map((item) => ({ kind: item.kind, value: item.kind === 'text' || item.kind === 'voice' ? item.value : '' }))) : null
+    const cadence = typingCadenceEnabled(cfg) ? calculateTypingCadence(items.map((item) => ({ kind: item.kind, value: item.kind === 'text' || item.kind === 'voice' ? item.value : '' })), { random }) : null
     const cadenceUsable = Boolean(cadence?.valid)
     const waitBefore = (index) => {
       if (!cadenceUsable) return bubbleDelay(items[index].kind === 'text' ? items[index].value : '')
@@ -256,6 +260,10 @@ export function createReplyDelivery({
     let attempted = 0
     let delivered = 0
     let unconfirmed = 0
+    // 流水只记实发（缺陷：部分失败仍记全量）：过去 said 由**全部** items 拼成，
+    // 于是「3 条挂了 2 条」时聊天流水/旁白仍记满 3 条，仿佛都发出去了。现在只把
+    // 真正拿到回执的气泡收进来，与 delivered 计数同口径（mixed 整泡拿到回执才算其全部 parts）。
+    const deliveredParts = []
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       const selected = it.replyTo ? refs[it.replyTo] : (!explicit && i === firstSendable ? opts.autoReply : null)
@@ -276,8 +284,12 @@ export function createReplyDelivery({
       else if (it.kind === 'mixed') receipt = await sendMixed(chatId, it.parts, replyId, missedAt, userId)
       if (counted && !opts.simulate) {
         attempted += 1
-        if (receipt) delivered += 1
-        else unconfirmed += 1
+        if (receipt) {
+          delivered += 1
+          for (const part of (it.kind === 'mixed' ? it.parts : [it])) {
+            deliveredParts.push(part.kind === 'text' || part.kind === 'voice' ? part.value : `[${part.kind}]`)
+          }
+        } else unconfirmed += 1
       }
       if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
     }
@@ -291,10 +303,11 @@ export function createReplyDelivery({
       if (opts.topicMode === 'engaged') groups.noteEngagedReply?.(gid)
       else groups.noteSpokeInGroup(gid)
     }
-    const said = items.flatMap((item) => item.kind === 'mixed' ? item.parts : [item]).map((i) => (i.kind === 'text' || i.kind === 'voice' ? i.value : `[${i.kind}]`)).join(' ')
-    logChat?.(chatId, 'bot', said)
+    const said = deliveredParts.join(' ')
+    // 一条都没实发就不记流水/旁白（没发出去的话不该出现在「她说过什么」里）。
+    if (said) logChat?.(chatId, 'bot', said)
     // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
-    if (!opts.own) interaction.queueAside(chatId, said)
+    if (!opts.own && said) interaction.queueAside(chatId, said)
     // 有气泡没拿到回执就必须让调用方知道（不是致命错误：剩下的已经发出去了，
     // 也不该重发——那会重复说话）。调用方据此把 turn 记成部分送达而不是 sent。
     if (unconfirmed > 0) {
