@@ -1,5 +1,12 @@
 # 更新记录
 
+## Unreleased · SnowLuma 深度接入 P1（闪传双向）
+
+- **新增「闪传」内置模块**（`src/modules/flash-transfer/`）：别人发来的 QQ 闪传不再只是一句占位——文件清单（名字/体积）自动进她的上下文（可关）；主人私聊可用 `qq_flash_download` 把闪传文件下载到工作区、`qq_flash_forward` 把收到过的闪传转发给白名单会话；`/闪传 <分享码>` 命令直接查清单。出站 `send_flash_msg` 经统一 Outbox（台账/dryRun/身份闸生效）。
+- **只读白名单迁出为注册表**（`src/onebot/read-actions.js`）：原 `client.js` 内嵌的 `READ_ACTIONS` 迁为独立数据文件并支持运行时登记（`registerReadActions`，前缀 fail-closed：`get_/can_/fetch_/download_` 才放行）。此后新模块接只读动作只需在自己 setup 里登记，`client.js` 不再被逐期修改。判定入口统一为 `isReadAction`，红线不变：不在表里一律按副作用对待（unknown 不自动重试，ADR-0001）。
+- **架构约定**：本模块全部逻辑自包含（能力层 `src/chat/flash-transfer.js` 纯函数 + 显式注入网关），`inbound.js` 零改动——闪传段由模块自己从 `msg.raw` 抽取。
+- 下载按需触发（工具/命令），事件里绝不自动拖文件；`recent` 清单表有界（50 条）+ 5 分钟过期 + dispose 清理。
+
 ## 1.4.5-test.20261115.1
 
 本版收拢 1.4.3-test.20261115.2 之后的全部主干变更：模块市场上线、记忆系统三路增强、平台与表达层扩展，以及一轮全仓缺陷排查的集中修复。自上一测试版升级无破坏性变更；新增数据文件（`group-state.json`、`threads.json`）由插件自动创建。
