@@ -232,7 +232,9 @@ test('发语音：确定失败（网关拒绝语音条）→ 约定内改发文�
   try {
     gw.state.failRecord = true // record 段必被拒（确定失败）
     const ok = await h.sendVoice('private:10000001', '今天天气不错')
-    assert.equal(ok, false, '语音没发出去')
+    // 语音条本身失败，但降级文字真发出去了 → 返回降级回执（按实发记账，#142 后续修复）。
+    // 旧版一律 return false，导致这条已送达的降级文字不进流水/被计为未确认。
+    assert.ok(ok, '降级文字已送达应返回回执，而非 false')
     const texts = gw.sent('send_private_msg').filter((c) => (c.params.message || []).some((s) => s.type === 'text' && String(s.data?.text || '').includes('今天天气不错')))
     assert.equal(texts.length, 1, '确定失败后改发文字一次（约定内 fallback）')
     const records = gw.sent('send_private_msg').filter((c) => (c.params.message || []).some((s) => s.type === 'record'))
