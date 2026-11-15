@@ -50,6 +50,10 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
   const pending = new Set()
   /** PR-1 直通模式登记：deliveryId -> {action, params, opts, receipt} */
   const passMap = new Map()
+  // 临时会话（SnowLuma 能力补齐）：私聊 QQ → 最近一次临时会话的来源群。
+  // 只有入站 ACL 放行的消息才登记（routeInboundCore 调 notePrivateSource）；
+  // 回复私聊时带上 group_id，SnowLuma 才会送进临时会话。普通私聊不受影响。
+  const privateSources = new Map()
   let disposed = false
 
   /**
@@ -217,9 +221,10 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
     } else {
       const parsed = parseChatKey(chatKey)
       action = parsed.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
+      const sourceGroupId = parsed.kind === 'private' ? privateSources.get(parsed.id) : ''
       params = parsed.kind === 'group'
         ? { group_id: Number(parsed.id), message: req.segments }
-        : { user_id: Number(parsed.id), message: req.segments }
+        : { user_id: Number(parsed.id), ...(sourceGroupId ? { group_id: Number(sourceGroupId) } : {}), message: req.segments }
       receipt = 'required'
     }
     try {
@@ -260,6 +265,7 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
   function dispose() {
     if (disposed) return
     disposed = true
+    privateSources.clear()
     for (const deliveryId of [...pending]) {
       try {
         const rec = book.get(deliveryId)
@@ -285,5 +291,12 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
     return id
   }
 
-  return { request, reserve, cancel, dispose, recordExternal, ledger: book }
+  /** 登记临时会话来源群（仅 ACL 放行后调用）；last-source-wins，空值不清除（同上游）。 */
+  function notePrivateSource(userId, groupId) {
+    const u = String(userId || '')
+    const g = String(groupId || '')
+    if (u && g && /^\d+$/.test(g)) privateSources.set(u, g)
+  }
+
+  return { request, reserve, cancel, dispose, recordExternal, notePrivateSource, ledger: book }
 }

@@ -1364,6 +1364,12 @@ export function createModularCore({
       return { handled: 'acl-denied', reason: acl.reason }
     }
     presence.noteIncoming(inbound.chatKey, String(inbound?.sender?.userId || ''), cfg)
+    // 临时会话（SnowLuma 能力补齐）：ACL 放行的私聊若来自群临时会话，记住来源群，
+    // 回复经 outbox 时带 group_id 才能送进临时会话。普通私聊不带、行为不变。
+    if (String(inbound.chatKey || '').startsWith('private:') && ev?.sub_type === 'group') {
+      const sg = String(ev?.sender?.group_id ?? '')
+      if (/^\d+$/.test(sg) && Number(sg) > 0) outbox.notePrivateSource(inbound?.sender?.userId, sg)
+    }
     // 旁路指令（审批批复 / 等待中的交互提问回答）：命中即消费，不进回合
     if (typeof interceptInteraction === 'function') {
       const text = textOfSegments(inbound.segments)

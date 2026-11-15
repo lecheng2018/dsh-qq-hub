@@ -47,7 +47,7 @@ export default {
   id: 'contacts',
   name: '好友申请与白名单',
   version: '1.0.0',
-  description: '听话通过 / 拒绝别人加她为好友的申请（qq_handle_friend_request）、改私聊 / 群白名单（qq_whitelist）；权限在「权限」页',
+  description: '听话通过 / 拒绝别人加她为好友的申请（qq_handle_friend_request）、处理加群申请与邀请（qq_list_group_requests / qq_handle_group_request，仅主人私聊）、改私聊 / 群白名单（qq_whitelist）；权限在「权限」页',
   setup(api) {
     const { hub, onebot } = api.core
     const pendingFile = () => api.dataDir('friend-requests.json')
@@ -64,9 +64,11 @@ export default {
       try { writeFileSync(pendingFile(), JSON.stringify(list.slice(-PENDING_MAX))) } catch (error) { api.log.warn('存好友申请出错：', error.message) }
     }
 
-    // 好友申请事件：只记下来（flag 必须原样用，不能自己拼），再给主人提一句
+    // 申请事件统一入口：好友 / 加群分发（单监听器，避免覆盖）
     api.on('onebot', (ev) => {
-      if (!ev || ev.post_type !== 'request' || ev.request_type !== 'friend' || !ev.flag) return
+      if (!ev || ev.post_type !== 'request') return
+      if (ev.request_type === 'group') return onGroupRequest(ev)
+      if (ev.request_type !== 'friend' || !ev.flag) return
       const userId = String(ev.user_id || '')
       if (!userId) return
       const list = loadPending()
@@ -88,6 +90,50 @@ export default {
       if (!p.ok) return p
       return run(args, cfg)
     }
+
+    // ---- 加群申请 / 邀请（SnowLuma 能力补齐，语义移植上游 8f58ce4）----
+    // 只记下来 + 通知主人；通过/拒绝仅主人私聊可操作，默认不自动同意。
+    const groupPendingFile = () => api.dataDir('group-requests.json')
+    const loadGroupPending = () => {
+      try {
+        const f = groupPendingFile()
+        if (!existsSync(f)) return []
+        const j = JSON.parse(readFileSync(f, 'utf8'))
+        return Array.isArray(j) ? j.filter((x) => x && x.flag && x.subType) : []
+      } catch (error) { return [] }
+    }
+    const saveGroupPending = (list) => {
+      try { writeFileSync(groupPendingFile(), JSON.stringify(list.slice(-PENDING_MAX))) } catch (error) { api.log.warn('存加群申请出错：', error.message) }
+    }
+    const groupRequestText = (r, botQQ) => {
+      const user = r.userId ? `QQ ${r.userId}` : '未知用户'
+      const group = r.groupId ? `群 ${r.groupId}` : '未知群'
+      if (r.subType === 'add') return `${user} 申请加入${group}`
+      const invited = r.invitedId ? (r.invitedId === String(botQQ) ? '我' : `QQ ${r.invitedId}`) : '成员'
+      return `${user} 邀请${invited}加入${group}`
+    }
+    const groupInFlight = new Set()
+
+    function onGroupRequest(ev) {
+      if (!ev.flag || !['add', 'invite'].includes(ev.sub_type)) return
+      const list = loadGroupPending()
+      if (list.some((x) => x.flag === String(ev.flag))) return
+      const req = { flag: String(ev.flag), subType: ev.sub_type, userId: String(ev.user_id || ''), groupId: String(ev.group_id || ''), invitedId: String(ev.invited_id || ''), comment: String(ev.comment || '').slice(0, 80), at: Date.now() }
+      list.push(req)
+      saveGroupPending(list)
+      const cfg = api.config()
+      if (cfg.ownerQQ && (cfg.profilePerms?.qqFriendRequest || 'owner') !== 'off') {
+        const note = req.comment ? `，验证消息：「${req.comment}」` : ''
+        api.sendText(`private:${cfg.ownerQQ}`, `${groupRequestText(req, cfg.botQQ)}${note}。可以让我列出待处理的加群申请并通过或拒绝。`).catch(() => {})
+      }
+    }
+
+    // 加群申请比好友申请更敏感：仅主人私聊（群里主人说话也不行），执行时再查一遍
+    const guardedGroup = (chat, sessionId, run) => guarded('qqFriendRequest', chat, sessionId, async (args, cfg) => {
+      const ownerPrivate = chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
+      if (!ownerPrivate || !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '只有主人私聊才能处理加群申请' }
+      return run(args, cfg)
+    })
 
     /** 找要处理的那条申请：先看收到过的事件，再看 QQ 过滤掉的「可能认识的人」。 */
     async function findRequest(qq) {
@@ -133,6 +179,44 @@ export default {
           return { ok: true, message: `已${verb} QQ ${req.userId} 的好友申请` }
         }),
       }))
+      // 加群申请工具只挂在主人私聊（不随 'all' 档扩散到群/别人；执行时 guardedGroup 再查一遍）
+      const groupToolsVisible = chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '') && (cfg.profilePerms?.qqFriendRequest || 'owner') !== 'off'
+      if (groupToolsVisible) {
+        tools.push(defineTool({
+          name: 'qq_list_group_requests',
+          description: '列出收到过、尚未处理的加群申请和邀请，处理时使用列表中的 flag。',
+          execute: guardedGroup(chat, sessionId, async (_args, c) => {
+            const list = loadGroupPending()
+            return { ok: true, message: list.length ? list.map((r) => `${groupRequestText(r, c.botQQ)}${r.comment ? `，验证消息：「${r.comment}」` : ''}（flag: ${r.flag}）`).join('\n') : '现在没有待处理的加群申请或邀请' }
+          }),
+        }))
+        tools.push(defineTool({
+          name: 'qq_handle_group_request',
+          description: '通过或拒绝收到过的加群申请或邀请。flag 从待处理列表原样取得，只有一条时可不填；approve 填 true 或 false，拒绝时可填 reason。',
+          properties: { flag: str('待处理列表里的 flag，可不填'), approve: bool('true 通过，false 拒绝'), reason: str('拒绝原因，可不填') },
+          required: ['approve'],
+          execute: guardedGroup(chat, sessionId, async ({ flag, approve, reason }, c) => {
+            if (typeof approve !== 'boolean') return { ok: false, message: 'approve 要写 true（通过）或 false（拒绝）' }
+            const list = loadGroupPending()
+            const wanted = String(flag ?? '')
+            if (!wanted && list.length > 1) return { ok: false, message: '有多条待处理的加群申请，请先列出并指定 flag' }
+            const req = wanted ? list.find((x) => x.flag === wanted) : list[0]
+            if (!req) return { ok: false, message: '没找到这条待处理的加群申请或邀请' }
+            const verb = approve ? '通过' : '拒绝'
+            const label = groupRequestText(req, c.botQQ)
+            if (c.dryRun) return { ok: true, message: `试运行：本来要${verb}「${label}」` }
+            if (groupInFlight.has(req.flag)) return { ok: false, message: '这条申请正在处理' }
+            groupInFlight.add(req.flag)
+            try {
+              await onebot.call('set_group_add_request', { flag: req.flag, sub_type: req.subType, approve, ...(reason && !approve ? { reason: String(reason) } : {}) }, { timeoutMs: 15000 })
+              saveGroupPending(loadGroupPending().filter((x) => x.flag !== req.flag))
+              return { ok: true, message: `已${verb}「${label}」` }
+            } catch (error) {
+              return { ok: false, message: `${verb}「${label}」没成功：${error.message}` }
+            } finally { groupInFlight.delete(req.flag) }
+          }),
+        }))
+      }
       if (profileToolVisible(cfg, 'whitelist', chat)) tools.push(defineTool({
         name: 'qq_whitelist',
         description: '改白名单：action 填 add（加进）或 remove（移出），kind 填 private（某个 QQ 号可以私聊你）或 group（某个群你会理），id 填 QQ 号或群号。主人不能被移出。',
