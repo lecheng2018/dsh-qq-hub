@@ -28,6 +28,8 @@ import flashTransfer from './flash-transfer/index.js'
 import groupFiles from './group-files/index.js'
 import onlineStatus from './online-status/index.js'
 import socialActions from './social-actions/index.js'
+import arkCards from './ark-cards/index.js'
+import aiVoice from './ai-voice/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
@@ -43,4 +45,8 @@ export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule,
   // 在线与已读：已读上报（账号级防抖合并）+ 自定义在线状态
   onlineStatus,
   // 社交动作：温度联动的表情回应（可关）+ 精华/QZone 写扩展（仅主人）
-  socialActions]
+  socialActions,
+  // Ark 卡片：原生图文卡片 + 三级降级（分享卡 → 文字摘要）
+  arkCards,
+  // AI 语音：QQ 官方变声（/变声 命令触发，群聊专用），零成本 TTS 备选
+  aiVoice]
