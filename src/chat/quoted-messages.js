@@ -1,4 +1,4 @@
-import { parseMessageEvent } from './inbound.js'
+import { parseMessageEvent, neutralizeInboundDsl } from './inbound.js'
 
 const CACHE_MAX = 200
 
@@ -87,7 +87,9 @@ export function createQuotedMessages({ onebot, getConfig, selfId, faceName, isSe
       const stickers = parsed.stickers || []
       out = {
         ok: true,
-        who: String(sender.card || sender.nickname || uid || '某人'),
+        // 引用说明的 who 也是不可信原文（缺陷：群名片 DSL 注入）：群名片可被改成
+        // <inner>…</inner>，经 quoteNote 拼进群上下文。与昵称/缓冲文本同口径中和。
+        who: neutralizeInboundDsl(String(sender.card || sender.nickname || uid || '某人')),
         uid,
         text: String(parsed.text || '').trim().slice(0, 300),
         images,
