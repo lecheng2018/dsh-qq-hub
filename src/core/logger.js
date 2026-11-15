@@ -1,6 +1,6 @@
 // 日志：按天写文件 + 内存里留最近几百条给面板看。所有文本先脱敏。
 
-import { appendFileSync, readdirSync, unlinkSync, statSync } from 'node:fs'
+import { appendFileSync, readdirSync, unlinkSync, statSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { dataDir, ensureDir } from './store.js'
 import { redact } from './redact.js'
@@ -11,6 +11,7 @@ const LEVELS = ['debug', 'info', 'warn', 'error']
 export function createLogger({ dsh, retainDays = 14 } = {}) {
   const ring = []
   const listeners = new Set()
+  const chmodDone = new Set() // 当天已 chmod 过的日志文件（append 创建新文件时 umask 077 会锁 0o600）
   const dir = () => ensureDir(dataDir('logs'))
   let lastCleanup = 0
 
@@ -36,7 +37,14 @@ export function createLogger({ dsh, retainDays = 14 } = {}) {
     ring.push(entry)
     if (ring.length > RING) ring.shift()
     try {
-      appendFileSync(join(dir(), `qq-hub-${day}.log`), `${day} ${time} [${level}] [${area}] ${text}\n`, 'utf8')
+      const logFile = join(dir(), `qq-hub-${day}.log`)
+      appendFileSync(logFile, `${day} ${time} [${level}] [${area}] ${text}\n`, 'utf8')
+      // 同 store.js：umask 077 部署环境新建的日志是 Harness 私有，运维放开组读活不过次日。
+      // 每个日志文件只在当天第一次写入后 chmod 一次。
+      if (!chmodDone.has(logFile)) {
+        chmodDone.add(logFile)
+        try { chmodSync(logFile, 0o644) } catch {}
+      }
     } catch (error) {}
     try {
       const fn = level === 'error' ? dsh?.logger?.error : level === 'warn' ? dsh?.logger?.warn : dsh?.logger?.info
