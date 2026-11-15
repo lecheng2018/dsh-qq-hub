@@ -26,6 +26,7 @@ import multiParser from './multi-parser/index.js'
 import deliveryInbox from './delivery-inbox/index.js'
 import flashTransfer from './flash-transfer/index.js'
 import groupFiles from './group-files/index.js'
+import onlineStatus from './online-status/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, purpose, bili, profile, contacts, douyin, heybox,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
@@ -37,4 +38,6 @@ export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule,
   // 闪传（SnowLuma 专属）：入站清单进上下文；主人可下载到工作区、转发白名单会话
   flashTransfer,
   // 群文件盘：browse/download 只读工具；主人可开 manage（建夹/移动/转存/删除）
-  groupFiles]
+  groupFiles,
+  // 在线与已读：已读上报（账号级防抖合并）+ 自定义在线状态
+  onlineStatus]
