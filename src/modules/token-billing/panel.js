@@ -72,5 +72,5 @@ return function TokenBillingPanel(props) {
         ? [h(Btn, { key: 'yes', small: true, disabled: busy, onClick: reset }, '确认清零今天用量'),
            h(Btn, { key: 'no', small: true, onClick: () => setConfirming(false) }, '算了')]
         : h(Btn, { small: true, disabled: busy || totalUsed <= 0, onClick: () => setConfirming(true) }, '重置今天用量'),
-      h('span', { className: 'ab-muted ab-small' }, '重置只清已用，分配保留')))
-})
+      h('span', { className: 'ab-muted ab-small' }, '重置只清已用，分配保留')
+}
