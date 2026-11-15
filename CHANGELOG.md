@@ -1,5 +1,11 @@
 # 更新记录
 
+## Unreleased · SnowLuma 深度接入 P5（Ark 卡片 + AI 语音）
+
+- **新增「Ark 卡片」内置模块**（`src/modules/ark-cards/`）：主人私聊工具 `qq_send_ark` 发原生图文卡片（`send_tuwen_ark`，经统一 Outbox）；出站链接先过 QQ 侧 `check_url_safely`（只对「明确不安全」拒发，检查接口挂了不拦发送）；**三级降级**：原生 Ark 失败 → json 分享卡（复用 `qq-tools` 的 `cardSegment`）→ 文字摘要，逐级如实回报用了哪级。
+- **新增「AI 语音」内置模块**（`src/modules/ai-voice/`，tab=voice）：QQ 官方 AI 变声（`send_group_ai_record`）——零成本云端 TTS 备选，免自建。入口 `/变声 [角色] <文字>`（主人命令，群聊专用）与 `qq_ai_record` 工具；角色列表 `get_ai_characters` 单条缓存 10 分钟（防御式抽取，按 id/精确名/包含名挑角色）。**刻意不接自动语音链**：AI 变声是服务端直接发送、没有文件产物，与 voice 模块「speak 返回文件」的契约不兼容——如实写进模块头注释，等协议端暴露文件级导出再接。
+- 两模块均为状态写不进只读白名单（`check_url_safely` / `get_ai_characters` 已运行时登记为只读）；send_ 前缀动作自动进统一 Outbox（台账/dryRun/身份闸生效）。
+
 ## Unreleased · SnowLuma 深度接入 P4（社交动作）
 
 - **新增「社交动作」内置模块**（`src/modules/social-actions/`），三项全部默认关：
