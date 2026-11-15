@@ -5,7 +5,6 @@
 
 import { mergeFromPanel } from '../../core/config.js'
 import { clearReasoningCache, clearVisionCache } from '../../core/llm.js'
-import { personaIdFor } from '../../persona/personas.js'
 
 export function registerConfigRoutes({
   route, readBody,
@@ -96,14 +95,11 @@ export function registerConfigRoutes({
     // agentFor 的 hook 下一轮也会兜底，这里提前到保存动作本身，冷群不用等消息进来。
     const personaChanged = JSON.stringify(before.persona || {}) !== JSON.stringify(cfg.persona || {})
     if (personaChanged) {
+      // 判定口径与 /persona/use 一致：核心按「旧配置预期 vs 新配置预期」逐聊天比对。
+      // 以前这里拿 entry.personaId（建会话那一刻的快照）去比新配置，改默认值/换默认卡
+      // 时那个字段不会动，于是「改了默认人设却一个会话都不重置」（2026-11-15 真机）。
       let reset = 0
-      try {
-        for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
-          if (!entry.personaId) continue
-          const want = personaIdFor({ kind: chatId.startsWith('group:') ? 'group' : chatId.startsWith('private:') ? 'private' : 'system', groupId: chatId.slice(6), userId: chatId.slice(8) }, cfg)
-          if (want && entry.personaId !== want) { hub.resetChat(chatId); reset++ }
-        }
-      } catch (error) {
+      try { reset = (hub.resetChatsForPersonaChange?.(before) || []).length } catch (error) {
         log.debug('人设配置变更后重置会话出错：', error.message)
       }
       if (reset) log.info(`[人设] 配置变更，重置了 ${reset} 个会话`)
