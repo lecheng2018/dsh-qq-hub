@@ -237,6 +237,7 @@ async function parseBilibili(url, cookie = '') {
       images: d.pic ? [d.pic] : [],
       url: `https://www.bilibili.com/video/${bvid}`,
       videoUrl,
+      referer: 'https://www.bilibili.com/',
       stat: `播放: ${d.stat?.view || 0} · 弹幕: ${d.stat?.danmaku || 0}`,
     }
   } catch {
@@ -279,6 +280,7 @@ async function parseWeibo(url, cookie = '', rawText = '') {
           cover: images[0] || d.page_info?.page_pic?.url || '',
           images,
           videoUrl,
+          referer: 'https://weibo.com/',
           url: `https://weibo.com/${d.user?.id}/${d.bid || id}`,
           stat: `转发: ${d.reposts_count || 0} · 评论: ${d.comments_count || 0} · 点赞: ${d.attitudes_count || 0}`,
         }
@@ -619,6 +621,7 @@ async function parseDouyin(url, cookie = '', rawText = '') {
                   cover: cover || images[0] || '',
                   images: images.length ? images : (cover ? [cover] : []),
                   videoUrl,
+                  referer: 'https://www.douyin.com/',
                   // 分享链接带一堆 ssr / utm / share_sign 追踪参数，原样塞进卡片能有 860 字、
                   // 在手机上占二十多行，把视频挤到屏幕外面。压成干净短链。
                   url: `https://www.iesdouyin.com/share/video/${workId}/`,

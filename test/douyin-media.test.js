@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:http'
 import { downloadVideo, safeName } from '../src/douyin/media.js'
 
 // 这组用例盯住「把视频真正发出去」这条路：
@@ -53,4 +54,35 @@ test('体积超限会拒绝，且不留下半截文件', async () => {
   )
   const left = readdirSync(dir)
   assert.deepEqual(left, [], '失败后目录里不该留 .part 之类的残骸：' + JSON.stringify(left))
+})
+
+test('downloadVideo 下载时不带 range: bytes=0- 请求头，并正确透传 Referer', async () => {
+  let capturedHeaders = null
+  const server = createServer((req, res) => {
+    capturedHeaders = req.headers
+    const dummyVideo = Buffer.alloc(2048, 0x42)
+    res.writeHead(200, {
+      'Content-Type': 'video/mp4',
+      'Content-Length': String(dummyVideo.length),
+    })
+    res.end(dummyVideo)
+  })
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  const dir = mkdtempSync(join(tmpdir(), 'dy-media-mock-'))
+
+  try {
+    const res = await downloadVideo(
+      { awemeId: '888999', title: 'mock-video', videoUrls: [`http://127.0.0.1:${port}/video.mp4`] },
+      { dir, referer: 'https://www.bilibili.com/' },
+    )
+    assert.ok(capturedHeaders, '服务端应收到请求')
+    assert.equal(capturedHeaders.range, undefined, '不应发送 range 请求头（否则触发 CDN 限速挂起）')
+    assert.equal(capturedHeaders.referer, 'https://www.bilibili.com/', '应使用传入的 referer')
+    assert.ok(res.path.endsWith('.mp4'), '落盘路径应为 mp4')
+    assert.equal(statSync(res.path).size, 2048, '下载文件大小应与内容一致')
+  } finally {
+    server.close()
+  }
 })
