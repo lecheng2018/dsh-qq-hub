@@ -783,6 +783,7 @@ export function createModularCore({
   const personaBound = new Set() // 已注册过 persona 变量的 sessionId
   const ctxFallback = new Set() // 宿主已占用同名 context：退回「把背景拼进消息」
   const ctxFallbackDone = new Set() // 已经投过一次的会话（避免每轮重复注入）
+  const activeChatBySessionId = new Map() // sessionId -> chatKey（即时反查，为人设变量/工具判定提供毫秒级保障）
 
   /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
   const mountedTools = new Map() // sessionId -> { agent, key, offs }
@@ -799,6 +800,7 @@ export function createModularCore({
     ctxBound.delete(sid)
     ctxFallback.delete(sid)
     ctxFallbackDone.delete(sid)
+    activeChatBySessionId.delete(sid)
     selectedModels.delete(sid)
     slowNoticeSent.delete(sid)
     for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
@@ -974,6 +976,7 @@ export function createModularCore({
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
       const { sessionId } = await sessionForChat(turn.chatKey)
+      activeChatBySessionId.set(String(sessionId), turn.chatKey)
       // 装配上下文时使用当前会话，避免重建人设后仍传入旧 sessionId。
       const { fragments } = await assembly.assemble({ chatKey: turn.chatKey, sessionId, chat })
       const queryText = textOfSegments(io.members.flatMap((m) => m.segments || []))
@@ -1712,6 +1715,8 @@ export function createModularCore({
   function chatKeyOfSession(sessionId) {
     const sid = String(sessionId || '')
     if (!sid) return ''
+    const hit = activeChatBySessionId.get(sid)
+    if (hit) return hit
     const snap = registry.snapshot?.() || {}
     for (const [chatKey, entry] of Object.entries(snap)) {
       if (entry && String(entry.sessionId) === sid) return chatKey
