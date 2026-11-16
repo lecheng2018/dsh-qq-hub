@@ -1,5 +1,14 @@
 # 更新记录
 
+## Unreleased · chore 移除「QQ 增强」七件套（2026-11-17）
+
+- **7 个内置模块整体移除**：闪传（`flash-transfer`）、群文件（`group-files`）、在线与已读（`online-status`）、社交动作（`social-actions`）、Ark 卡片（`ark-cards`）、AI 语音（`ai-voice`）、工作区文件（`workspace-files`）。这些能力依赖 SnowLuma / QQ 侧的扩展动作，在当前网关与 QQ 版本上已无法工作，却仍会在面板显示「在跑」，留着只会误导。
+- **面板**：删除「QQ 增强」标签页、系统分组导航入口与搜索别名；扩展页的内置模块分组「QQ 增强（SnowLuma 协议）」一并删除。内置功能标签页由 17 个减为 16 个。
+- **代码**：删除 `src/modules/<上述 7 个模块>/`、闪传能力层 `src/chat/flash-transfer.js`，以及 `test/` 下 6 个对应回归文件。消息解析仍保留 `flash_file` 段的文字占位，收到闪传不会变成空消息。
+- **保留**：`src/onebot/read-actions.js` 的只读白名单注册表（`registerReadActions` / `isReadAction`）留在原位，其它模块继续使用；移除的只是这 7 个模块自己的运行时登记。同一个 PR 里 P1 的「只读白名单迁出为注册表」属于共享基础设施，不在移除范围。
+- **归档**：上述实现、面板页与测试已转存到 [dsh-qq-hub-mods](https://github.com/lecheng2018/dsh-qq-hub-mods) 的 `modules/_qq-enhance/`。目录以下划线开头，不参与清单校验、打包与 registry 发布，待日后重新开发并验证可用网关后再拆成正式市场模块。
+- **升级影响**：聊天主链、发送出口、记忆与白名单都不受影响；旧配置里这 7 个模块的设置块不再被加载，`modules-data/` 与工作区里已下载的文件原样保留。
+
 ## Unreleased · fix 群聊引用回复脱节导致回错人（2026-11-16）
 
 - **群聊引用说明内联至消息行内**：此前群消息如果包含引用，引用说明会被剥离出来作为孤立文本块追加在提示词末尾。当当前批次有 `[1]~[3]` 消息且末尾带有多条引用时，模型容易误将底部的第 2 条引用当成编号 `<reply:2>` 回复，导致错误引用无辜群友（如引用 A 的「爆炒」回复「哪变了」），并在后续引发连环争执。现将引用说明直接内联在对应消息行内（`[N] 发言人：正文 （引用 ...）`），移除末尾孤立段落；同时在提示词中强化 `<reply:编号>` 的规则说明（编号仅限上方方括号数字，前情引用不要当成编号）。
@@ -15,46 +24,6 @@
 
 - **线索判定三层兜底**（真机 2026-11-15：spark-x2.6 把思考混进正文 → 「模型返回的不是合法 JSON 数组」）：①解析前剥掉 `<think>` 等思考块与孤立围栏；②首轮解析失败带更硬的格式要求**重试一次**；③彻底失败时 warn 里带**原文片段**（前 200 字），主人能直接看见模型到底回了什么。
 - **人设卡可观测**（真机反馈：不确定「分别设卡」是否生效）：`personaTextFor` 在某会话**实际生效的人设卡变化时**记一条 info（含卡名与此前状态），主人从日志直接确认群聊/私聊专卡生效；有界表（200 会话），首访不记不刷屏。
-
-## Unreleased · SnowLuma 接入 P6（文件写读 + 群文件上传）
-
-- **新增「工作区文件」内置模块**（`src/modules/workspace-files/`）：`qq_write_file` / `qq_read_file`——补上她此前完全缺失的文件读写能力（真机 2026-11-15：让她生成十个字的 txt 传群文件，她说「没有写本地文件的工具」）。纪律：路径由模块构造（只落 `workspaceDir('files')`），不接受任意路径、没有目录穿越面；写 = UTF-8 文本 ≤512KB（重名覆盖）；读 = 文本 ≤6 万字直接给内容（超长截断），二进制如实只给路径。门控：主人私聊直接可用，群聊里这一轮有主人发言也可以。
-- **`qq_group_file` 新增 `upload` 子命令**：把工作区里的文件传进群文件——底层复用 `hub.sendFile`（自带目录白名单校验、大小上限、网关看不到本机路径时的 base64 兜底；群聊发文件底层就是 `upload_group_file`）。门控（纯函数 `uploadGate`）：这一轮有主人发言 + 面板「发文件」开关已开 + dryRun 如实提示；删/移/转仍走 manage 的 confirm 三重门。
-- 全链路打通：`qq_write_file` 写好 → `qq_group_file upload` 传群文件 → `browse` 能看到。
-
-## Unreleased · SnowLuma 深度接入 P5（Ark 卡片 + AI 语音）
-
-- **新增「Ark 卡片」内置模块**（`src/modules/ark-cards/`）：主人私聊工具 `qq_send_ark` 发原生图文卡片（`send_tuwen_ark`，经统一 Outbox）；出站链接先过 QQ 侧 `check_url_safely`（只对「明确不安全」拒发，检查接口挂了不拦发送）；**三级降级**：原生 Ark 失败 → json 分享卡（复用 `qq-tools` 的 `cardSegment`）→ 文字摘要，逐级如实回报用了哪级。
-- **新增「AI 语音」内置模块**（`src/modules/ai-voice/`，tab=voice）：QQ 官方 AI 变声（`send_group_ai_record`）——零成本云端 TTS 备选，免自建。入口 `/变声 [角色] <文字>`（主人命令，群聊专用）与 `qq_ai_record` 工具；角色列表 `get_ai_characters` 单条缓存 10 分钟（防御式抽取，按 id/精确名/包含名挑角色）。**刻意不接自动语音链**：AI 变声是服务端直接发送、没有文件产物，与 voice 模块「speak 返回文件」的契约不兼容——如实写进模块头注释，等协议端暴露文件级导出再接。
-- 两模块均为状态写不进只读白名单（`check_url_safely` / `get_ai_characters` 已运行时登记为只读）；send_ 前缀动作自动进统一 Outbox（台账/dryRun/身份闸生效）。
-
-## Unreleased · SnowLuma 深度接入 P4（社交动作）
-
-- **新增「社交动作」内置模块**（`src/modules/social-actions/`），三项全部默认关：
-  - **表情回应（自动）**：关系温度 ≥1（情感图谱 toneFor）且这一轮无冲突/越界信号（复用 `affective-signals` 的保守判定，判定器坏了按「在场」处理——宁可漏回应）时，按概率（默认 12%，可调）给对方刚发的消息加 `set_msg_emoji_like`；同会话冷却默认 30 分钟；软失败不重试。决策是纯函数 `decideReaction`（随机源/时间注入，测试直打）。
-  - **精华**（`qq_essence`，仅主人/群聊）：`set_essence_msg` / `delete_essence_msg`。
-  - **QZone 写扩展**（`qq_qzone_action`，仅主人 + 面板开关）：赞/取消赞/评论/改单条说说可见范围（1/4/16/64/128）；评论与改可见性是**公开足迹**，`confirm=「确认」` 显式确认。
-- 所有写入动作不进只读白名单（保守：失败不重试）；`recent`/`cooldown` 两张表有界 + TTL 过期清理 + dispose 清空；无新定时器。
-
-## Unreleased · SnowLuma 深度接入 P3（在线与已读）
-
-- **新增「在线与已读」内置模块**（`src/modules/online-status/`）：收到消息后按可配延迟上报已读（`mark_all_as_read`，账号级、一批合并成一次调用、防抖计时器 unref + dispose 清理）；网关连上/配置变化时设置自定义在线状态文字（`set_diy_online_status`，幂等重设，失败不重试只记日志）。
-- 两项都是**状态写**，刻意不进只读白名单（保守：失败不重试）。
-- `/在线 <文字>` 主人命令直设；`/在线 关` 停自动设置（QQ 端已有状态需手机手动取消——协议目录里没有清除动作，如实说明）。
-- 主线已有的私聊「正在输入」状态机（activity-state，15s 续 ping / 6 分钟封顶）保持不变，本模块不重复做。
-
-## Unreleased · SnowLuma 深度接入 P2（群文件系统）
-
-- **新增「群文件」内置模块**（`src/modules/group-files/`）：单一工具 `qq_group_file` 三个子命令——`browse` 浏览群文件盘（容量摘要 + 目录列表，只读）、`download` 把群文件换下载地址立刻落工作区（链接有时效，拿到就下）、`manage` 建夹/移动/转存/删除。零改动成本接入：只读动作（`get_group_file_system_info` / `get_group_root_files` / `get_group_files_by_folder`）在本模块 setup 里 `registerReadActions` 运行时登记，`client.js` / `read-actions.js` 静态清单都不动。
-- **manage 三重门**（纯函数 `manageGate`，测试直打）：面板「允许管理」默认关 + 这一轮必须有主人发言 + `confirm=「确认」` 显式确认 + dryRun 感知。群文件是共享空间，删除类动作不向模型单独开放。
-- 上传沿用既有 `qq_send_file`，不重复造发送面。
-
-## Unreleased · SnowLuma 深度接入 P1（闪传双向）
-
-- **新增「闪传」内置模块**（`src/modules/flash-transfer/`）：别人发来的 QQ 闪传不再只是一句占位——文件清单（名字/体积）自动进她的上下文（可关）；主人私聊可用 `qq_flash_download` 把闪传文件下载到工作区、`qq_flash_forward` 把收到过的闪传转发给白名单会话；`/闪传 <分享码>` 命令直接查清单。出站 `send_flash_msg` 经统一 Outbox（台账/dryRun/身份闸生效）。
-- **只读白名单迁出为注册表**（`src/onebot/read-actions.js`）：原 `client.js` 内嵌的 `READ_ACTIONS` 迁为独立数据文件并支持运行时登记（`registerReadActions`，前缀 fail-closed：`get_/can_/fetch_/download_` 才放行）。此后新模块接只读动作只需在自己 setup 里登记，`client.js` 不再被逐期修改。判定入口统一为 `isReadAction`，红线不变：不在表里一律按副作用对待（unknown 不自动重试，ADR-0001）。
-- **架构约定**：本模块全部逻辑自包含（能力层 `src/chat/flash-transfer.js` 纯函数 + 显式注入网关），`inbound.js` 零改动——闪传段由模块自己从 `msg.raw` 抽取。
-- 下载按需触发（工具/命令），事件里绝不自动拖文件；`recent` 清单表有界（50 条）+ 5 分钟过期 + dispose 清理。
 
 ## 1.4.5-test.20261115.1
 

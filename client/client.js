@@ -349,7 +349,6 @@ var TABS = [
   { id: "group", label: "聊天", flag: "group" },
   { id: "model", label: "模型" },
   { id: "token", label: "用量" },
-  { id: "enhance", label: "QQ 增强" },
   { id: "voice", label: "语音", flag: "voice.enabled" },
   { id: "stickers", label: "表情包", flag: "stickers.enabled" },
   { id: "imagegen", label: "生图", flag: "imageGen.enabled" },
@@ -376,9 +375,7 @@ var TAB_MODS = {
   heybox: ["heybox"],
   multiParser: ["multi-parser"],
   // 用量页：token 系三个模块任一在跑才显示
-  token: ["token-billing", "token-guardian", "complete-guard"],
-  // 网关能力页：任一模块在跑才显示这一页
-  enhance: ["flash-transfer", "group-files", "online-status", "social-actions", "ark-cards", "ai-voice"]
+  token: ["token-billing", "token-guardian", "complete-guard"]
 };
 var modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running);
 var NAV_GROUPS = [
@@ -386,7 +383,7 @@ var NAV_GROUPS = [
   { id: "self", label: "人设", icon: "M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5", tabs: ["persona", "group", "speakup", "memory"] },
   { id: "express", label: "表达", icon: "M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01", tabs: ["voice", "stickers", "imagegen"] },
   { id: "platform", label: "平台", icon: "M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z", tabs: ["diary", "bili", "douyin", "heybox", "multiParser"] },
-  { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "enhance", "model", "token", "access", "local", "modules", "logs"] }
+  { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "model", "token", "access", "local", "modules", "logs"] }
 ];
 var PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站|小黑盒/;
 var navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ext && PLATFORM_EXT.test(t.label) ? NAV_GROUPS[3] : NAV_GROUPS[4]);
@@ -408,7 +405,6 @@ var NAV_ALIAS = {
   diary: "空间 说说 日记",
   speakup: "搭话 主动",
   memory: "记忆 档案 相处经验 黑话 蒸馏",
-  enhance: "qq 增强 群文件 闪传 在线 已读 卡片 ark ai 语音 社交动作 工作区 写文件",
   bili: "b站 bilibili 视频",
   douyin: "抖音 短视频 私信",
   heybox: "小黑盒 游戏 社区 资讯",
@@ -2180,8 +2176,7 @@ var EXT_GROUPS = [
   { id: "express", label: "表达与内容", ids: ["voice", "stickers", "imagegen", "diary", "qzone-social"] },
   { id: "platform", label: "平台", ids: ["bili", "douyin", "heybox", "multi-parser"] },
   { id: "memory", label: "记忆与主动", ids: ["memory", "reflection", "style", "memory-privacy", "speakup", "purpose"] },
-  { id: "govern", label: "治理与工具", ids: ["token-guardian", "token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts", "affective-graph"] },
-  { id: "snowluma", label: "QQ 增强（SnowLuma 协议）", ids: ["flash-transfer", "group-files", "online-status", "social-actions", "ark-cards", "ai-voice", "workspace-files"] }
+  { id: "govern", label: "治理与工具", ids: ["token-guardian", "token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts", "affective-graph"] }
 ];
 var EXT_OTHER = { id: "other", label: "其他", ids: [] };
 var CORE_PAGES = ["连接", "权限", "人格", "聊天", "模型", "记忆", "本地接口"];
@@ -2676,30 +2671,6 @@ function MemoryRow({ m, onChanged, toast }) {
     await post("/memory/delete", { id: m.id });
     onChanged();
   } }, "忘掉"));
-}
-
-// client/src/views/enhance.js
-var CAPABILITIES = [
-  { id: "flash-transfer", name: "闪传", desc: "收发 QQ 闪传文件：看文件清单、下载到工作区、把收到的闪传转发给白名单会话。", need: "需要网关支持闪传相关动作" },
-  { id: "group-files", name: "群文件", desc: "浏览和下载群文件，必要时转存到工作区再处理。", need: "标准 OneBot 群文件接口" },
-  { id: "online-status", name: "在线与已读", desc: "查看对方在线状态与已读回执。", need: "需要网关支持在线状态扩展" },
-  { id: "social-actions", name: "社交动作", desc: "表情回应、设为精华、空间写扩展等社区动作。", need: "需要网关支持对应动作" },
-  { id: "ark-cards", name: "Ark 卡片", desc: "发送分享、音乐、位置、联系人等结构化卡片消息。", need: "需要网关支持卡片段，不支持时降级文字" },
-  { id: "ai-voice", name: "AI 语音", desc: "QQ 官方 AI 变声：/变声 命令（群聊专用），零成本云端 TTS 备选；不接自动语音链。", need: "需要网关/QQ 支持 AI 变声接口" },
-  { id: "workspace-files", name: "工作区文件", desc: "写/读工作区里的文本文件（qq_write_file / qq_read_file）：先写成 txt/md/json，再配合群文件上传或闪传转发「写好发出去」。", need: "不依赖网关，本地工作区就能用" }
-];
-function Enhance({ st }) {
-  const mods = st.modules || [];
-  const running = (id) => mods.some((m) => m.id === id && m.running);
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
-    Card,
-    {
-      title: "QQ 增强",
-      desc: "这些是网关与 QQ 版本提供的扩展能力，加一个本地小工具：群文件、在线与已读、卡片、闪传、社交动作、AI 语音、工作区文件。部分动作只有部分网关实现（SnowLuma 已验证）；不支持的动作会在日志里说明或自动降级。",
-      more: "下面每张卡是对应模块的设置；模块开关统一在「系统 → 扩展」里管理。某个能力没出现，说明对应模块没装或没在跑。"
-    },
-    /* @__PURE__ */ h("div", { className: "ab-list" }, CAPABILITIES.map((c) => /* @__PURE__ */ h("div", { key: c.id, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, c.name)), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-small" }, c.desc), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2 } }, c.need)), /* @__PURE__ */ h("span", { className: cx("ab-badge", !running(c.id) && "dim") }, running(c.id) ? "在跑" : "没在跑"))))
-  ));
 }
 
 // client/src/views/platforms/bili.js
@@ -3578,8 +3549,7 @@ function QQHubPage() {
     token: Token,
     local: LocalApi,
     modules: Modules,
-    logs: Logs,
-    enhance: Enhance
+    logs: Logs
   }[curTab.id] || Overview;
   const tabDirty = (id) => {
     if (!dirty) return false;
