@@ -4,6 +4,10 @@
 
 **v1.3.65 之后的第一个正式版**。这一版收拢了 1.3.66-test → 1.4.5-test 的全部测试版记录，以及随后的模块解耦与面板重构：下面「本版新增」是 1.4.5-test.20261115.1 之后的内容，「test / beta 版本记录」把此前每个测试版写了什么**完整保留**，不用再去翻历史 Release。
 
+### 2026-11-16：修复内容解析视频下载卡死
+
+- **内容解析与抖音视频下载卡死修复**：修复 `downloadVideo` 在向抖音 CDN 请求视频时携带 `Range: 'bytes=0-'`，导致 CDN（`douyinvod.com`）触发流媒体限速并在约 47KB 处挂起 TCP 连接直至 `ETIMEDOUT`，最终造成内容解析降级仅发出文本卡片而无法发出视频的缺陷；移除冗余分段请求头，为流下载增加 AbortSignal 超时保护，并为各平台解析器补充准确的 `referer` 防盗链头。
+
 ### 2026-11-15 重发：修复两处真机问题（版本号不变，直接顶掉首发的 v1.4.6）
 
 - **商店模块面板路由 404 → 抖音页整页崩**：改成商店分发的六个模块里，面板页留在核心包的五个（B 站 / 抖音 / 小黑盒 / 内容解析 / 空间互动）路由被错挂到 `/ext/<id>/` 下，核心面板打的老路径全部 404，抖音页拿到没有 `history` 的空壳直接崩（`Cannot read properties of undefined (reading 'length')`）。内核路由挂载改 `routePrefixFor()`：内置或「面板页在核心包里」的模块（`CORE_PANEL_IDS`：bili / douyin / heybox / multi-parser / qzone-social）无论怎么装都挂无前缀老路径；delivery-inbox 自带 panel.js，保持 `/ext/` 前缀。抖音 / B 站视图的 `s.history`、`shots` 另加空数组兜底；回归 `test/module-route-prefix.test.js` 钉住规则。**商店模块零改动**（dsh-qq-hub-mods 不用重发）。

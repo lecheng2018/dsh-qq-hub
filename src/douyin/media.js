@@ -38,24 +38,21 @@ export async function downloadVideo(v, opts = {}) {
   for (const url of urls) {
     // 换域名重试：抖音的直链会在 play / download 几个域名之间轮换
     const host = new URL(url).host
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), 60000)
     try {
-      const ctl = new AbortController()
-      const timer = setTimeout(() => ctl.abort(), 120000)
       let res
       try {
         res = await fetch(url, {
           signal: ctl.signal,
           headers: {
-            // 不带 Referer 大概率 403；抖音自己的域名最稳
+            // 不带 Referer 大概率 403；平台自身的域名最稳
             referer: opts.referer || 'https://www.douyin.com/',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            range: 'bytes=0-',
           },
         })
-      } finally {
-        // fetch 拒绝（连不上/被拒）也要清掉 abort 定时器：否则这 120s 里
-        // 事件循环被钉住，测试跑不退、生产进程延迟退出（M0 基线卡住根因）
-        clearTimeout(timer)
+      } catch (fetchErr) {
+        throw new Error(`${host} 无法连接: ${fetchErr.message}`)
       }
       if (!res.ok || !res.body) throw new Error(`${host} 返回 ${res.status}`)
 
@@ -65,7 +62,7 @@ export async function downloadVideo(v, opts = {}) {
 
       const tmp = out + '.part'
       try {
-        await pipeline(Readable.fromWeb(res.body), createWriteStream(tmp))
+        await pipeline(Readable.fromWeb(res.body), createWriteStream(tmp), { signal: ctl.signal })
         const size = statSync(tmp).size
         if (size > maxBytes) {
           rmSync(tmp, { force: true })
@@ -87,6 +84,9 @@ export async function downloadVideo(v, opts = {}) {
       lastError = error
       // 超限是确定性错误，换域名也没用
       if (/超过上限/.test(error.message)) throw error
+    } finally {
+      // 无论成功还是异常都要清掉 abort 定时器：避免钉住事件循环
+      clearTimeout(timer)
     }
   }
   throw new Error('视频下载失败：' + (lastError?.message || '所有地址都试过了'))
