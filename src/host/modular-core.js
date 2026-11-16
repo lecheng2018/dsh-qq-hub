@@ -400,9 +400,11 @@ export function createModularCore({
       const replyId = replyIdOf(member)
       if (!replyId) { out.push(member); continue }
       const quoted = await quotedInfo(replyId, chatKey)
+      const note = quoteNote(quoted)
       out.push({
         ...member,
-        segments: [...(member.segments || []), { type: 'text', data: { text: `\n${quoteNote(quoted)}` } }, ...quoted.media],
+        quoteNote: note,
+        segments: [...(member.segments || []), { type: 'text', data: { text: `\n${note}` } }, ...quoted.media],
       })
     }
     return out
@@ -687,6 +689,12 @@ export function createModularCore({
   function groupPromptContent(chatKey, members, previousTurnAt) {
     const gid = chatKey.slice(6)
     const buf = groups.buffer(gid)
+    for (const m of (members || [])) {
+      if (m?.quoteNote && m?.messageId) {
+        const hit = buf.findLast?.((x) => String(x.mid) === String(m.messageId))
+        if (hit) hit.quoteNote = m.quoteNote
+      }
+    }
     const fresh = buf.filter((x) => !x.fed).slice(-20)
     const older = buf.filter((x) => x.fed).slice(-8)
     // fed 不在这里标（缺陷：群缓冲静默丢消息）。旧版 `for (const x of buf) x.fed = true`
@@ -703,7 +711,13 @@ export function createModularCore({
   const safeNick = (v) => neutralizeInboundDsl(String(v ?? ''))
   const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${safeNick(x.nick || x.uid)}(${x.uid})`)
     // 群缓冲里的 x.text 是入站原文，同样必须中和（同 §4.3 防线；否则伪造标签从群聊路径进上下文）。
-    const line = (x) => `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${neutralizeInboundDsl(x.text) || '（图片/表情）'}`
+    // 引用说明内联在每条消息正文末尾，与发言人保持一致，避免剥离到末尾破坏编号映射（群聊回错人）。
+    const line = (x) => {
+      const text = neutralizeInboundDsl(x.text)
+      const quote = x.quoteNote ? ` ${neutralizeInboundDsl(x.quoteNote)}` : ''
+      const body = text ? `${text}${quote}` : (x.quoteNote ? neutralizeInboundDsl(x.quoteNote) : '（图片/表情）')
+      return `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${body}`
+    }
     const name = groupNames.get(gid) || gid
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
@@ -719,13 +733,12 @@ export function createModularCore({
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
       '若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。\n' +
-      '大多数时候直接说就行。只有想专门接其中某一条时才在那句话开头写 <reply:编号>，会以「引用回复」发出；一次最多引用一条。\n' +
+      '大多数时候直接说就行。只有想专门接上面方括号标出的某一条新消息时，才在那句话开头写 <reply:编号>（编号必须且只能是上面方括号里的数字，如 <reply:1>；消息中的「引用某人的消息」是群友的前情引用，不要当成编号），会以「引用回复」发出；一次最多引用一条。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
-    // 触发轮自身的图片与引用说明一并附上；reply 段已由 quoteNote 取代，不留下占位。
+    // 触发轮自身的图片一并附上；引用已由 quoteNote 内联到 line(x) 中，不脱出做孤立段落。
     // 没触发回合的那几条群消息带的图也在这里补：群缓冲里挂着 image 块，否则她只看得到
     // 「（图片/表情）」文字，而触发轮 members 已经没有原始段可拼（真机：群里看不懂表情包）。
     const extras = []
-    const quotes = []
     const seenMedia = new Set()
     let mediaCount = 0
     const addMedia = (block) => {
@@ -743,7 +756,6 @@ export function createModularCore({
       // 结果完全相同。保留它是为了「extras 这一路将来若接入别处原文时仍有兜底」，
       // 不是为了让某项测试变红。真正被断言锁住的是 :759（见 P1-d4/P1-d5）。
       else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: neutralizeInboundDsl(String(s.data.text || '')) })
-      else if (s?.type === 'text' && String(s.data?.text || '').includes('（引用 ')) quotes.push(String(s.data.text))
       else if (s?.type === 'json') extras.push({ type: 'text', text: neutralizeInboundDsl(cardText(s.data?.data)) })
       else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
       else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
@@ -756,7 +768,6 @@ export function createModularCore({
       if (!triggerMemberIds.has(String(x.mid || ''))) for (const block of x.media || []) addMedia(block)
       delete x.media
     }
-    if (quotes.length) extras.unshift({ type: 'text', text: quotes.join('\n') })
     const direct = fresh.filter((x) => x.direct)
     const directSenders = new Set(direct.map((x) => x.uid))
     const target = directSenders.size === 1 ? direct.at(-1) : null
@@ -985,6 +996,14 @@ export function createModularCore({
         }
       }
       const members = await hydrateQuotes(heardWithFiles, turn.chatKey)
+      if (inGroup) {
+        for (const member of members) {
+          if (member?.quoteNote) {
+            const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
+            if (hit) hit.quoteNote = member.quoteNote
+          }
+        }
+      }
       const previousTurnAt = turnAt(turn.chatKey)
       if (inGroup) {
         const gp = groupPromptContent(turn.chatKey, members, previousTurnAt)
@@ -1508,7 +1527,10 @@ export function createModularCore({
       if (replyId) {
         return quotedInfo(replyId, inbound.chatKey).then((quoted) => {
           const repliedToBot = Boolean(quoted?.ok && quoted.isBot)
-          if (buffered && repliedToBot) buffered.direct = true
+          if (buffered) {
+            if (repliedToBot) buffered.direct = true
+            if (quoted) buffered.quoteNote = quoteNote(quoted)
+          }
           return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, repliedToBot }))
         })
       }
