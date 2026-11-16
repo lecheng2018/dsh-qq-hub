@@ -5,6 +5,7 @@
 - **7 个内置模块整体移除**：闪传（`flash-transfer`）、群文件（`group-files`）、在线与已读（`online-status`）、社交动作（`social-actions`）、Ark 卡片（`ark-cards`）、AI 语音（`ai-voice`）、工作区文件（`workspace-files`）。这些能力依赖 SnowLuma / QQ 侧的扩展动作，在当前网关与 QQ 版本上已无法工作，却仍会在面板显示「在跑」，留着只会误导。
 - **面板**：删除「QQ 增强」标签页、系统分组导航入口与搜索别名；扩展页的内置模块分组「QQ 增强（SnowLuma 协议）」一并删除。内置功能标签页由 17 个减为 16 个。
 - **代码**：删除 `src/modules/<上述 7 个模块>/`、闪传能力层 `src/chat/flash-transfer.js`，以及 `test/` 下 6 个对应回归文件。消息解析仍保留 `flash_file` 段的文字占位，收到闪传不会变成空消息。
+- **保留**：`src/onebot/read-actions.js` 的只读白名单注册表（`registerReadActions` / `isReadAction`）留在原位，其它模块继续使用；移除的只是这 7 个模块自己的运行时登记。同一个 PR 里 P1 的「只读白名单迁出为注册表」属于共享基础设施，不在移除范围。
 - **归档**：上述实现、面板页与测试已转存到 [dsh-qq-hub-mods](https://github.com/lecheng2018/dsh-qq-hub-mods) 的 `modules/_qq-enhance/`。目录以下划线开头，不参与清单校验、打包与 registry 发布，待日后重新开发并验证可用网关后再拆成正式市场模块。
 - **升级影响**：聊天主链、发送出口、记忆与白名单都不受影响；旧配置里这 7 个模块的设置块不再被加载，`modules-data/` 与工作区里已下载的文件原样保留。
 
