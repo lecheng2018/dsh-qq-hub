@@ -22,7 +22,6 @@ import { Stickers } from '../views/stickers.js'
 import { Diary } from '../views/diary.js'
 import { SpeakUp } from '../views/speakup.js'
 import { Mood } from '../views/mood.js'
-import { Enhance } from '../views/enhance.js'
 import { LocalApi, Modules, ExtPage } from '../views/modules.js'
 import { Bili } from '../views/platforms/bili.js'
 import { Douyin } from '../views/platforms/douyin.js'
@@ -146,7 +145,6 @@ function QQHubPage() {
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
     stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
-    enhance: Enhance,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
   const tabDirty = (id) => {
