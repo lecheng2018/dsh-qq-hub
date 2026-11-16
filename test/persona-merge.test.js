@@ -84,3 +84,61 @@ test('normalizePersona：以 # 开头的临时占位行（如 #new...）绝不�
   assert.equal(c.persona.groups['333444555'], 'dafeiyu', '合法群号正常保留')
   assert.deepEqual(Object.keys(c.persona.groups), ['333444555'])
 })
+
+test('mergeFromPanel：group.overrides 局部更新不抹掉其它群，保留未修改字段', () => {
+  const cur = normalize({
+    group: {
+      interjectChance: 0.35,
+      overrides: {
+        '1001': { interjectChance: 0.4, minRelevance: 0.1 },
+        '1002': { interjectChance: 0.65 },
+        '1003': { interjectChance: 0 },
+      },
+    },
+  })
+
+  // 局部 PATCH：只更新 1002 的 minRelevance
+  const patch = {
+    group: {
+      overrides: {
+        '1002': { minRelevance: 0.1 },
+      },
+    },
+  }
+
+  const saved = mergeFromPanel(cur, patch)
+  // 1002 应该同时拥有原来的 interjectChance 和新 patch 的 minRelevance
+  assert.equal(saved.group.overrides['1002'].interjectChance, 0.65)
+  assert.equal(saved.group.overrides['1002'].minRelevance, 0.1)
+  // 1001 和 1003 绝不能丢失
+  assert.equal(saved.group.overrides['1001'].interjectChance, 0.4)
+  assert.equal(saved.group.overrides['1001'].minRelevance, 0.1)
+  assert.equal(saved.group.overrides['1003'].interjectChance, 0)
+})
+
+test('mergeFromPanel：group.overrides 完整表单保存支持删除群，同时保留群内部字段', () => {
+  const cur = normalize({
+    group: {
+      interjectChance: 0.35,
+      overrides: {
+        '1001': { interjectChance: 0.4, minRelevance: 0.1 },
+        '1002': { interjectChance: 0.65 },
+      },
+    },
+  })
+
+  // 表单全量保存：用户删除了 1001，保留 1002，修改了全局字段
+  const incoming = {
+    enabled: true,
+    group: {
+      interjectChance: 0.5,
+      overrides: {
+        '1002': { interjectChance: 0.8 },
+      },
+    },
+  }
+
+  const saved = mergeFromPanel(cur, incoming)
+  assert.equal(saved.group.overrides['1001'], undefined, '被移除的 1001 应当被删除')
+  assert.equal(saved.group.overrides['1002'].interjectChance, 0.8, '1002 概率更新')
+})
