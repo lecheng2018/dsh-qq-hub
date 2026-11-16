@@ -1,5 +1,11 @@
 # 更新记录
 
+## Unreleased · fix 群聊/私聊人设卡专属生效 + 群插话死锁 + overrides 保存覆盖
+
+- **按会话人设卡真正生效（真机反馈）**：提示词全局变量 `{{qq_hub_persona}}` 原先是零参闭包，只认全局 `current`；会话级通过 `sp.variable` 重写因 DSH 同 scope 重名报错被吞，导致群聊和私聊无论怎么设专卡，模型接收到的永远是全局卡。现 `resolvePersonaForContext` 接收组装上下文，通过 `context.agent.session.id` 反查精确会话域，动态输出该群聊/私聊配置的专属人设；装配层 `provide` 专卡保持跳过避免双卡打架。
+- **群插话话题门槛死锁解除**：原 `topicRelevance` 在未配置感兴趣话题词（`interests: []`）且无记忆直接命中时恒返回 0；在默认门槛 `minRelevance: 0.35` 下把所有普通闲聊 100% 阻断（理由「话题和她关系不大（相关度 0.00）」），导致设了再高的插话概率也根本得不到掷骰子机会。现未定义话题词表时返回基础相关度 0.35，基础插话概率正常生效；配置了话题词时依然按命中度加权与门槛过滤。
+- **`mergeFromPanel` 防 overrides 抹掉**：原实现粗暴 `next.group.overrides = incoming.group.overrides`，局部 PATCH 会直接抹除未传入的其它群以及群内部字段（如 `minRelevance`）。现改为区分整表表单与局部更新，对群内部属性进行字段级深度合并，保护既有配置不丢失。
+
 ## Unreleased · fix 线索判定稳健性 + 人设卡可观测
 - **出站思考剥离全覆盖**：排查发现 `sendText`/`sendSegments` 直发路径（模块 `api.sendText`、命令回复等）完全绕过 #147 清洗——现于 outbox（唯一物理出口）入口统一过 `sanitizeOutbound`（含代码块豁免与保护恢复），幂等；主链路二次清洗零副作用。
 
