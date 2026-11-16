@@ -4,6 +4,11 @@
 //   bili / douyin / heybox / multi-parser / qzone-social / delivery-inbox
 // 它们的实现库仍留在包内（src/bili、src/douyin、src/heybox、src/features/qzone-social.js、
 // src/modules/multi-parser/{parser,delivery}.js），供商店模块经 api.lib 引用。
+//
+// 已移除的模块（1.4.6 曾内置，2026-11-17 按主人要求整体移除）：
+//   flash-transfer / group-files / online-status / social-actions / ark-cards / ai-voice / workspace-files
+// 这些能力依赖网关/QQ 版本扩展动作，在当前版本无法工作；源码已归档到
+// dsh-qq-hub-mods 的 modules/_qq-enhance/（不发布），待日后重新开发。
 
 import stickers from './stickers/index.js'
 import voice from './voice/index.js'
@@ -23,28 +28,7 @@ import tokenBilling from './token-billing/index.js'
 import affectiveGraph from './affective-graph/index.js'
 import completeGuard from './complete-guard/index.js'
 import memoryPrivacy from './memory-privacy/index.js'
-import flashTransfer from './flash-transfer/index.js'
-import groupFiles from './group-files/index.js'
-import onlineStatus from './online-status/index.js'
-import socialActions from './social-actions/index.js'
-import arkCards from './ark-cards/index.js'
-import aiVoice from './ai-voice/index.js'
-import workspaceFiles from './workspace-files/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, speakup, purpose, profile, contacts,
   // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
-  tokenGuardian, tokenBilling, affectiveGraph, completeGuard, memoryPrivacy,
-  // 闪传（SnowLuma 专属）：入站清单进上下文；主人可下载到工作区、转发白名单会话
-  flashTransfer,
-  // 群文件盘：browse/download 只读工具；主人可开 manage（建夹/移动/转存/删除）
-  groupFiles,
-  // 在线与已读：已读上报（账号级防抖合并）+ 自定义在线状态
-  onlineStatus,
-  // 社交动作：温度联动的表情回应（可关）+ 精华/QZone 写扩展（仅主人）
-  socialActions,
-  // Ark 卡片：原生图文卡片 + 三级降级（分享卡 → 文字摘要）
-  arkCards,
-  // AI 语音：QQ 官方变声（/变声 命令触发，群聊专用），零成本 TTS 备选
-  aiVoice,
-  // 工作区文件：qq_write_file / qq_read_file——补上「写文件再传出去」的前半段
-  workspaceFiles]
+  tokenGuardian, tokenBilling, affectiveGraph, completeGuard, memoryPrivacy]
