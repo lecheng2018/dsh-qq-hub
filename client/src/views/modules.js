@@ -294,7 +294,6 @@ const EXT_GROUPS = [
   { id: 'platform', label: '平台', ids: ['bili', 'douyin', 'heybox', 'multi-parser'] },
   { id: 'memory', label: '记忆与主动', ids: ['memory', 'reflection', 'style', 'memory-privacy', 'speakup', 'purpose'] },
   { id: 'govern', label: '治理与工具', ids: ['token-guardian', 'token-billing', 'complete-guard', 'group-admin', 'qq-tools', 'profile', 'contacts', 'affective-graph'] },
-  { id: 'snowluma', label: 'QQ 增强（SnowLuma 协议）', ids: ['flash-transfer', 'group-files', 'online-status', 'social-actions', 'ark-cards', 'ai-voice', 'workspace-files'] },
 ]
 const EXT_OTHER = { id: 'other', label: '其他', ids: [] }
 // 核心页面不是模块：始终显示，不随模块开关变化
