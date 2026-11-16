@@ -34,10 +34,18 @@ export const DEFAULT_GROUP_POLICY = {
  * @param {number} [memoryScore] 记忆库对这段话题的命中强度（0~1，可选）
  */
 export function topicRelevance(recentTexts, interests, memoryScore = 0) {
+  const hasInterests = Array.isArray(interests) && interests.length > 0
+  const mem = Math.max(0, Math.min(1, Number(memoryScore) || 0))
   const txt = (recentTexts || []).join(' ')
   let hits = 0
-  for (const w of interests || []) if (w && txt.includes(w)) hits++
-  return Math.min(1, hits * 0.3 + Math.max(0, Math.min(1, memoryScore)) * 0.5)
+  if (hasInterests) {
+    for (const w of interests) if (w && txt.includes(w)) hits++
+  }
+  // 未配置任何感兴趣话题且无特定记忆加分时：没有定义话题词表约束，不把日常闲聊判为 0
+  // （避免与默认门槛 0.35 构成死锁扼杀所有群插话）；返回基础相关度 0.35，让基础概率生效。
+  // 配置了话题词时（哪怕只有一个词未命中）仍严格走下方计算，不放水。
+  if (!hasInterests && mem <= 0) return 0.35
+  return Math.min(1, hits * 0.3 + mem * 0.5)
 }
 
 /**
