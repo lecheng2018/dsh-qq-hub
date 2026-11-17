@@ -7,7 +7,13 @@ export const DEFAULT_GROUP_POLICY = {
   wakeWords: ['大肥鱼', '肥鱼'],
   interjectChance: 0.15, // 普通消息的基础插话概率（话题越相关越高，最高 80%）
   cooldownSec: 90, // 两次插话至少间隔
-  maxPerHour: 6, // 每群每小时插话上限
+  // 每小时**说话总条数**（不是「插话次数」）。
+  // 2026-11-17 改口径：以前这个数只数 interjectTimes，而每次插话成功还会白送
+  // engagedMaxReplies 条「连聊」额度、且连聊不吃任何上限 —— 名义设 6 的群实测每小时能说
+  // 22.5 条（6 × (1+3) 再打个摩擦折扣）。现在插话和连聊吃同一份令牌桶预算。
+  // 语义也从「滚动一小时硬顶」变成「长期速率」：允许最多 ⌈maxPerHour/3⌉ 条连发（一波聊起来的
+  // 余地），之后按 maxPerHour 的速率慢慢回补。这样既压住总量，又不会「前半程说光、后半程哑掉」。
+  maxPerHour: 20,
   quietHours: [1, 8], // [开始, 结束) 小时，静默时段不插话（必回不受影响）
   minRecentMessages: 3, // 最近 activeWindowSec 内至少有这么多条消息才算「群里在聊」
   activeWindowSec: 300,
@@ -87,6 +93,41 @@ export function inQuietHours(hour, quiet) {
 }
 
 /**
+ * 每小时发言额度：令牌桶，纯函数从「她最近说话的时刻」反推，不落新状态（重启/重放一致）。
+ *
+ * 为什么不是「最近一小时数够 N 条就拒」：那样额度是**先到先得**的 —— 活跃群在前半程
+ * 一口气把额度说光，后半程彻底哑掉。2026-11-17 实测（三段爆发 / 一小时）：
+ * 前 20 分钟说了 14 条（占 64%），第三段爆发（40~48 分）一句都说不了。
+ *
+ * 令牌桶把「总量」和「节奏」一起管：容量给一小波连聊的余地（⌈maxPerHour/3⌉ 条），
+ * 之后按 maxPerHour 的速率回补。既限住了每小时总量，又能接住「一阵猛聊」。
+ *
+ * @param {number[]} botReplyTimes 她在本群最近每次说话的时间戳（毫秒），已由 group-state 裁到 1 小时窗
+ * @param {number} now 现在（毫秒）
+ * @param {number} maxPerHour 每小时允许说的条数（0 = 不许主动说话）
+ * @returns {{level:number, cap:number, rate:number, allowed:boolean}} level = 当前可用额度（条）
+ */
+export function replyBudget(botReplyTimes, now, maxPerHour) {
+  const perHour = Number(maxPerHour)
+  const rate = Number.isFinite(perHour) && perHour > 0 ? perHour / 3600_000 : 0 // 每毫秒回补几条
+  if (!(rate > 0)) return { level: 0, cap: 0, rate: 0, allowed: false }
+  const cap = Math.max(1, Math.ceil(perHour / 3))
+  const times = (Array.isArray(botReplyTimes) ? botReplyTimes : [])
+    .filter((t) => Number.isFinite(t) && t <= now)
+    .sort((a, b) => a - b)
+  // 起点往前挪 cap / rate 毫秒：让「桶初始是满的」这个假设成立（没有历史时 level 正好等于 cap）
+  let prev = (times.length ? times[0] : now) - cap / rate
+  let level = cap
+  for (const t of times) {
+    level = Math.min(cap, level + (t - prev) * rate)
+    level = Math.max(0, level - 1)
+    prev = t
+  }
+  level = Math.min(cap, level + (now - prev) * rate)
+  return { level, cap, rate, allowed: level >= 1 }
+}
+
+/**
  * 决定这段群消息要不要回。
  * @param {object} p
  * @param {object} p.policy  policyFor() 的结果
@@ -125,28 +166,38 @@ export function decideGroupReply(p) {
   const rel = typeof p.relevance === 'number' ? p.relevance : 1
 
   if (!(pol.interjectChance > 0)) return { reply: false, mode: 'none', reason: '插话关着' }
+  // 每小时发言额度（令牌桶）：插话和连聊吃**同一份**预算。
+  // 以前 maxPerHour 只数 interjectTimes，而连聊既不计数也不受冷却/上限约束 ——
+  // 名义 6 的群实测每小时 22.5 条（2026-11-17 模拟，24 小时三段爆发）。
+  const budget = replyBudget(p.botReplyTimes, p.now, pol.maxPerHour)
+  if (!budget.allowed) {
+    const refill = budget.rate > 0 ? Math.ceil(1 / budget.rate / 1000) : 0
+    return { reply: false, mode: 'none', reason: `这小时说够了（额度 ${budget.level.toFixed(1)}/${budget.cap}，约 ${refill} 秒回一条），歇一会儿` }
+  }
   if (inQuietHours(p.hour, pol.quietHours)) return { reply: false, mode: 'none', reason: '静默时段' }
   const minRel = Number(pol.minRelevance) || 0
-  // 已经加入了这个话题：接着聊（每段看完再回，不受冷却和每小时上限限制）——
-  // 但**有预算**：连聊条数与入场时长双双是硬顶，到顶就离场。
-  // 没有这两道顶时，engaged 是自我续期的死循环：她每回一条都刷新「刚加入」，
+  // 已经加入了这个话题：接着聊（每段看完再回，不受冷却限制）——
+  // 但**有预算**：连聊条数与入场时长双双是硬顶，到顶就离场；
+  // 而且上面那道令牌桶也管着它（连聊不是免费额度）。
+  // 没有这些顶时，engaged 是自我续期的死循环：她每回一条都刷新「刚加入」，
   // 群里消息间隔只要小于窗口长度，她就永远在「起劲」，1% 摇号只管进门不管出去。
   if (p.engagedUntil && p.now < p.engagedUntil && rel >= minRel) {
-    const cap = Number(pol.engagedMaxReplies) || DEFAULT_GROUP_POLICY.engagedMaxReplies
-    const maxMs = Number(pol.engagedMaxMs) || DEFAULT_GROUP_POLICY.engagedMaxMs
+    // 0 必须真的等于 0：以前写 `Number(x) || 默认值`，配 0 会被兜回 3，永远关不掉这条通道。
+    const rawCap = Number(pol.engagedMaxReplies)
+    const cap = Number.isFinite(rawCap) && rawCap >= 0 ? rawCap : DEFAULT_GROUP_POLICY.engagedMaxReplies
+    const rawMs = Number(pol.engagedMaxMs)
+    const maxMs = Number.isFinite(rawMs) && rawMs >= 0 ? rawMs : DEFAULT_GROUP_POLICY.engagedMaxMs
     const used = Number(p.engagedReplies) || 0
     if (used >= cap) {
       return { reply: false, mode: 'none', reason: `这个话题已连着接了 ${used} 条，先退一步（再想聊要重新摇号）` }
     }
     const since = Number(p.engagedSince) || 0
-    if (since && p.now - since > maxMs) {
+    if (since && p.now - since >= maxMs) {
       return { reply: false, mode: 'none', reason: '这场聊得够久了，先退出来' }
     }
     return { reply: true, mode: 'engaged', reason: `正聊得起劲，接着说（相关度 ${rel.toFixed(2)}）` }
   }
   const times = p.interjectTimes || []
-  const lastHour = times.filter((t) => p.now - t < 3600_000).length
-  if (lastHour >= pol.maxPerHour) return { reply: false, mode: 'none', reason: '这小时插话够多了' }
   const last = times.length ? Math.max(...times) : 0
   if (p.now - last < pol.cooldownSec * 1000) return { reply: false, mode: 'none', reason: '插话冷却中' }
   const recent = (p.recentTimes || []).filter((t) => p.now - t < pol.activeWindowSec * 1000).length

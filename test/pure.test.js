@@ -94,12 +94,18 @@ test('群聊：空文本/纯媒体不主动开回合，直接 @ 或引用仍可'
   assert.equal(decideGroupReply(base({ text: '', repliedToBot: true })).mode, 'must')
 })
 
-test('群聊：插话受概率、冷却、上限、静默、冷群约束', () => {
+test('群聊：插话受概率、冷却、每小时额度、静默、冷群约束', () => {
   assert.equal(decideGroupReply(base({})).mode, 'interject')
   assert.equal(decideGroupReply(base({ rand: () => 0.5, relevance: 0.3 })).reply, false)
   assert.equal(decideGroupReply(base({ interjectTimes: [10_000_000 - 30_000] })).reason, '插话冷却中')
-  const six = [1, 2, 3, 4, 5, 6].map((i) => 10_000_000 - 100_000 * i - 200_000)
-  assert.equal(decideGroupReply(base({ interjectTimes: six })).reason, '这小时插话够多了')
+  // 每小时额度按「她实际说了几次」（botReplyTimes）算，不是「插话了几次」（interjectTimes）——
+  // 老口径只数插话，而每次插话还白送 engagedMaxReplies 条连聊，名义 6 的群实际能说 22.5 条/小时。
+  // 7 条挤在 90 秒里 = 默认额度容量（⌈20/3⌉）用光；仍低于 burst 刹车线（8 次 / 120 秒）
+  const spoke = Array.from({ length: 7 }, (_, i) => 10_000_000 - (6 - i) * 15_000)
+  assert.match(decideGroupReply(base({ botReplyTimes: spoke })).reason, /说够了/)
+  // 只「插过话」但没真说出来，不该扣额度（额度算的是她说出口的条数）
+  const interjected = [1, 2, 3, 4, 5, 6, 7].map((i) => 10_000_000 - 300_000 - 300_000 * i)
+  assert.equal(decideGroupReply(base({ interjectTimes: interjected })).mode, 'interject')
   assert.equal(decideGroupReply(base({ hour: 3 })).reason, '静默时段')
   assert.equal(decideGroupReply(base({ recentTimes: [1] })).reason, '群里没在聊')
 })
@@ -109,7 +115,8 @@ test('群聊：话题无关不插话，越相关越容易插，加入话题后�
   assert.equal(decideGroupReply(base({ relevance: 0.3, rand: () => 0.3 })).mode, 'interject')
   assert.equal(decideGroupReply(base({ relevance: 0.3, rand: () => 0.4 })).reply, false)
   assert.equal(decideGroupReply(base({ relevance: 0.9, rand: () => 0.65 })).mode, 'interject')
-  // 已经在聊这个话题：冷却和上限都不拦，每段都接（一段一回由攒消息保证）
+  // 已经在聊这个话题：冷却不拦，每段都接（一段一回由攒消息保证）——
+  // 但每小时额度照样管着它（连聊不是免费额度，见 group-reply-budget.test.js）
   const six = [1, 2, 3, 4, 5, 6].map((i) => 10_000_000 - 10_000 * i)
   assert.equal(decideGroupReply(base({ relevance: 0.5, engagedUntil: 10_100_000, interjectTimes: six, rand: () => 0.99 })).mode, 'engaged')
   // 话题跑偏了就不接着聊

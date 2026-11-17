@@ -70,7 +70,7 @@ function Group({ draft, setDraft }) {
         <FoldSection title="插话" defaultOpen desc="没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。">
           <Row label="插话概率" hint="每条普通消息触发插话的机会">{f.percent('group.interjectChance')}</Row>
           <Row label="冷却" hint="两次插话至少隔多久">{f.range('group.cooldownSec', 0, 600, 10, (v) => v + ' 秒')}</Row>
-          <Row label="每小时最多插话">{f.range('group.maxPerHour', 0, 30, 1, (v) => v + ' 次')}</Row>
+          <Row label="每小时最多说" hint="这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发">{f.range('group.maxPerHour', 0, 120, 1, (v) => v + ' 条')}</Row>
           <Row label="她感兴趣的话题" hint="群里在聊这些（或她记得相关的事）时更容易插话；一行一个">{f.list('group.interests', { placeholder: '白米饭\n游戏\n追剧' })}</Row>
           <Row label="话题相关度门槛" hint="和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机">{f.range('group.minRelevance', 0, 1, 0.05, (v) => (v === 0 ? '不看话题' : Math.round(v * 100) + '%'))}</Row>
           <Row label="群冷清时不插话" hint="最近几分钟内消息少于这个数就不插">
@@ -84,8 +84,13 @@ function Group({ draft, setDraft }) {
             <span className="ab-muted">点</span>
           </Row>
           <More label="加入话题之后怎么聊">
-            {'她被叫到或插上话以后算「加入了话题」：话题还和她相关、她 3 分钟内说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却和每小时上限限制；话题跑偏或者她选择不说话就退出。'}
+            {'她被叫到或插上话以后算「加入了话题」：话题还和她相关、她刚说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却限制 —— 但照样吃上面的每小时说话额度，不会白送。话题跑偏或者她选择不说话就退出。'}
           </More>
+          <Row label="连聊预算" hint="一次入场最多连着接几条 / 最多聊多久；填 0 = 关掉连聊通道（只靠插话）">
+            {f.range('group.engagedMaxReplies', 0, 10, 1, (v) => (v === 0 ? '关闭' : v + ' 条'))}
+            <span className="ab-muted">/</span>
+            {f.range('group.engagedMaxMs', 0, 30 * 60_000, 60_000, (v) => (v === 0 ? '关闭' : Math.round(v / 60_000) + ' 分钟'))}
+          </Row>
         </FoldSection>
 
         <FoldSection title="安全刹车" desc="只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。">
