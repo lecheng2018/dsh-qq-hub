@@ -13,6 +13,19 @@ export interface ChatLogEntry {
   text: string
 }
 
+/** 挂起线索（「说了但还没了结」的事）。状态机 active → extended → dormant → resolved。 */
+export interface ThreadRecord {
+  id: string
+  chatKey: string
+  type: 'temporary_leave' | 'promise' | 'question_pending' | 'topic_postponed'
+  summary: string
+  status: 'active' | 'extended' | 'dormant' | 'resolved'
+  createdAt: number
+  updatedAt: number
+  ttlMs?: number
+  pendingArchive?: boolean
+}
+
 export interface Chat {
   chatId: ChatId
   kind: 'private' | 'group' | 'system'
@@ -208,6 +221,14 @@ export interface Api {
     local: any
     groupRoles: any
     mutes: { muted(chatId: string): boolean; set(chatId: string, minutes: number): void; clear(chatId: string): void }
+    /**
+     * 挂起线索账本的只读视图（「还有什么事没结」）。写入走核心自己的接线。
+     * 核心没挂线时可能是 undefined，用之前先判空。
+     */
+    threads?: {
+      list(o?: { chatKey?: string; status?: string | string[]; limit?: number; since?: number }): ThreadRecord[]
+      stats(): { threads: number; active: number; extended: number; dormant: number; resolved: number; pendingArchive: number; capacity: number }
+    }
     logger: any
     ask(opts: any): Promise<string>
     listModels(): Promise<{ provider: string; model: string; name: string }[]>
