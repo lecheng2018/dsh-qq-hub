@@ -54,7 +54,7 @@ before(async () => {
     model: { vision: 'off' },
     imageGen: { enabled: true, ownerOnly: true, baseUrl: `http://127.0.0.1:${imageServer.address().port}/v1`, model: 'test-image' },
     voice: { enabled: false },
-    bridge: { http: true, token: 'imagegen-panel-admin-token' },
+    bridge: { http: true, token: 'imagegen-panel-admin-token' }, /* pii-scan:ignore */
   }))
   fake = createFakeDsh({
     brain: async ({ text, callTool }) => {

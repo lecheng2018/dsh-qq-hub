@@ -49,7 +49,7 @@ const grpEv = (gid, uid, text, mentioned = false) => ({
   post_type: 'message', message_type: 'group', sub_type: 'normal', self_id: 20000002,
   group_id: Number(gid), user_id: Number(uid), message_id: Math.floor(Math.random() * 1e9), time: Math.floor(Date.now() / 1000),
   sender: { user_id: Number(uid), nickname: 'u' + uid },
-  message: mentioned ? [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: ' ' + text } }] : [{ type: 'text', data: { text } }],
+  message: mentioned ? [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: ' ' + text } }] : [{ type: 'text', data: { text } }], /* pii-scan:ignore */
 })
 const privEv = (uid, text) => ({
   post_type: 'message', message_type: 'private', sub_type: 'friend', self_id: 20000002,

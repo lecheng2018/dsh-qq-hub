@@ -266,7 +266,7 @@ test('dryRun：语音和图片均由 Shared Outbox 记 cancelled，不能物理�
 test('身份闸：群聊含主人号码的文本不能物理发送', async () => {
   const cfg = config({ enabled: true, security: { identityGuard: { enabled: true, mode: 'block' } } })
   const { hub, sharedCalls, physicalCalls } = makeSharedHub(cfg)
-  await hub.deliver('group:777', '主人 QQ 10000001')
+  await hub.deliver('group:777', '主人 QQ 10000001') /* pii-scan:ignore */
   assert.deepEqual(sharedCalls, [])
   assert.deepEqual(physicalCalls, [])
 })
@@ -349,7 +349,7 @@ test('慢语音只阻塞同一聊天，其他聊天可并行投递', async () =>
 test('Shared Outbox 复核 send hook 改写的身份泄露并记 cancelled', async () => {
   const cfg = config({ enabled: true, security: { identityGuard: { enabled: true, mode: 'block' } } })
   const { hub, outbox, sharedCalls } = makeSharedHub(cfg, {
-    hooks: { send: async () => [{ type: 'text', data: { text: 'QQ 10000001' } }] },
+    hooks: { send: async () => [{ type: 'text', data: { text: 'QQ 10000001' } }] }, /* pii-scan:ignore */
   })
   await hub.deliver('group:777', '安全文本')
   assert.deepEqual(sharedCalls, [])

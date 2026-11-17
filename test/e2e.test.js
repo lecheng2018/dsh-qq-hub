@@ -142,7 +142,7 @@ before(async () => {
     qzoneSocial: { friendChance: 1, ownerChance: 1, intervalMin: 1440 },
     merge: { waitSec: 0.4, maxSec: 3, groupWaitSec: 0.4, groupMaxSec: 3 },
     files: { enabled: true, maxMB: 1, dirs: [] },
-    bridge: { http: true, token: 'e2e-panel-admin-token' },
+    bridge: { http: true, token: 'e2e-panel-admin-token' }, /* pii-scan:ignore */
   }))
   fake = createFakeDsh({ brain })
   const host = await import('../src/host.js')
@@ -828,7 +828,7 @@ test('生图：主人让她画图，调生图服务并把图发出去', async ()
     res.end(JSON.stringify({ data: [{ b64_json: png.toString('base64') }] }))
   })
   await new Promise((r) => srv.listen(0, '127.0.0.1', r))
-  await fake.call('/save', { imageGen: { enabled: true, baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, model: 'test-model', apiKey: 'img-key-123456', stylePrompt: '可爱风' } })
+  await fake.call('/save', { imageGen: { enabled: true, baseUrl: `http://127.0.0.1:${srv.address().port}/v1`, model: 'test-model', apiKey: 'img-key-123456', stylePrompt: '可爱风' } }) /* pii-scan:ignore */
   const n = sentTo('private', OWNER).length
   mock.push(priv(OWNER, text('画一只鲸鱼')))
   await until(() => sentTo('private', OWNER).slice(n).some((c) => c.params.message[0].type === 'image'), 10000)
@@ -857,7 +857,7 @@ test('生图工具结果：能看图时带 image 块，纯文本模型只给文�
     const before = drawTurn()
     await fake.call('/save', {
       model: { vision },
-      imageGen: { enabled: true, baseUrl, model: 'test-model', apiKey: 'img-key-123456', seeOwn },
+      imageGen: { enabled: true, baseUrl, model: 'test-model', apiKey: 'img-key-123456', seeOwn }, /* pii-scan:ignore */
     })
     mock.push(priv(OWNER, text('画一只鲸鱼')))
     await until(() => drawTurn() && drawTurn() !== before, 15000)

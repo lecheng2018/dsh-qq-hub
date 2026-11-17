@@ -12,7 +12,7 @@
 // capacity/refillPerSec 为构造参数：缺省给保守值（30 突发 + 5/秒持续，人类节奏远用不满，
 // 脚本刷屏必撞墙），这是 Phase 2 验收旋钮，实测调参在验收阶段做；配置化（US-012）走环境
 // 变量 QQHUB_RL_CAPACITY / QQHUB_RL_REFILL_PER_SEC（见 ratelimitOptionsFromEnv，非法值回
-// 构造缺省——口径与四个管道开关一致：不确定就用默认）。桶表另设 LRU 上限 maxKeys 防止 chatId 无界增长——被逐出的桶按
+// 构造缺省——口径与四个管道开关一致：不确定就用默认）。桶表另设 LRU 上限 maxKeys 防止 chatId 无界增长——被逐出的桶按 /* pii-scan:ignore */
 // 「新桶」复活，代价仅是多一次突发额度，不会丢消息。
 
 import { traceStage } from './mw-tracing.js'

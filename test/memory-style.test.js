@@ -30,8 +30,8 @@ const chat = { kind: 'private', userId: '10002', chatId: 'private:10002', nickna
 test('自动说话方式保留原数组契约并记录来源元数据', async (t) => {
   const store = fixture(t)
   await store.reflect(chat, '小张：今天有点累')
-  assert.deepEqual(store.styleOf('qq:10002'), ['短句回复'])
-  const meta = store.styleSourceOf('qq:10002')
+  assert.deepEqual(store.styleOf('qq:10002'), ['短句回复']) /* pii-scan:ignore */
+  const meta = store.styleSourceOf('qq:10002') /* pii-scan:ignore */
   assert.equal(meta.origin, 'derived')
   assert.equal(meta.sourceFingerprint.length, 64)
   assert.equal(typeof meta.sourceRev, 'number')
@@ -40,17 +40,17 @@ test('自动说话方式保留原数组契约并记录来源元数据', async (t
 test('reload 使自动风格失效，手工风格不受影响', async (t) => {
   const store = fixture(t)
   await store.reflect(chat, '小张：今天有点累')
-  store.setStyle('qq:10003', ['手工确认的说法'])
+  store.setStyle('qq:10003', ['手工确认的说法']) /* pii-scan:ignore */
   store.reload()
-  assert.equal(store.styleSourceOf('qq:10002').stale, true)
-  assert.deepEqual(store.styleOf('qq:10002'), [])
+  assert.equal(store.styleSourceOf('qq:10002').stale, true) /* pii-scan:ignore */
+  assert.deepEqual(store.styleOf('qq:10002'), []) /* pii-scan:ignore */
   assert.doesNotMatch(store.contextFor(chat), /短句回复/)
   assert.match(store.contextFor({ ...chat, userId: '10003', chatId: 'private:10003' }), /手工确认的说法/)
 })
 
 test('关闭 style 上下文不影响事实召回', (t) => {
   const store = fixture(t, { styleContext: false })
-  store.setStyle('qq:10002', ['不应由 memory 重复注入的说法'])
+  store.setStyle('qq:10002', ['不应由 memory 重复注入的说法']) /* pii-scan:ignore */
   store.add({ text: '小张喜欢冷萃咖啡', about: '10002', scope: 'private:10002' })
   assert.doesNotMatch(store.contextFor(chat), /不应由 memory 重复注入的说法/)
   assert.equal(store.recall('冷萃咖啡', { chat }).length, 1)
@@ -58,7 +58,7 @@ test('关闭 style 上下文不影响事实召回', (t) => {
 
 test('自我风格学习也记录输入指纹', async (t) => {
   const store = fixture(t, { modelOutput: '["少用长句"]' })
-  store.setStyle('qq:10002', ['短句', '爱叠字', '少用标点'])
+  store.setStyle('qq:10002', ['短句', '爱叠字', '少用标点']) /* pii-scan:ignore */
   await store.learnSelfStyle()
   assert.deepEqual(store.styleOf('self'), ['少用长句'])
   assert.equal(store.styleSourceOf('self').origin, 'derived')

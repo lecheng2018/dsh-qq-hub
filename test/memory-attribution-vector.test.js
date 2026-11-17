@@ -125,9 +125,9 @@ test('recallHint：面板 hintCount 生效（旧版读 cfg.memory 恒默认）',
 // ---- ⑥ 梦境归纳追加合并 ----
 test('梦境归纳：追加合并保留反思经验，不污染人名', () => {
   const { store } = makeStore()
-  store.setInsights('qq:10002', [{ id: 'r1', text: '小明相处经验：喜欢被夸', at: Date.now() }], '小明')
-  store.setDerivedInsights('qq:10002', [{ id: 'd1', text: '梦境归纳：小明爱喝可乐', at: Date.now() }], '', { sourceFingerprint: 'dream', merge: true })
-  const bucket = store.insights().find((b) => b.key === 'qq:10002')
+  store.setInsights('qq:10002', [{ id: 'r1', text: '小明相处经验：喜欢被夸', at: Date.now() }], '小明') /* pii-scan:ignore */
+  store.setDerivedInsights('qq:10002', [{ id: 'd1', text: '梦境归纳：小明爱喝可乐', at: Date.now() }], '', { sourceFingerprint: 'dream', merge: true }) /* pii-scan:ignore */
+  const bucket = store.insights().find((b) => b.key === 'qq:10002') /* pii-scan:ignore */
   assert.equal(bucket.name, '小明', '梦境不应把人名改成「梦境归纳」')
   const texts = bucket.list.map((x) => x.text)
   assert.ok(texts.includes('小明相处经验：喜欢被夸'), '反思经验应保留（旧版整桶覆盖）')
@@ -136,8 +136,8 @@ test('梦境归纳：追加合并保留反思经验，不污染人名', () => {
 
 test('梦境归纳：重复正文去重，不无限追加', () => {
   const { store } = makeStore()
-  store.setInsights('qq:10002', [{ id: 'r1', text: '小明爱喝可乐', at: Date.now() }], '小明')
-  store.setDerivedInsights('qq:10002', [{ id: 'd1', text: '小明爱喝可乐', at: Date.now() }], '', { merge: true })
-  const bucket = store.insights().find((b) => b.key === 'qq:10002')
+  store.setInsights('qq:10002', [{ id: 'r1', text: '小明爱喝可乐', at: Date.now() }], '小明') /* pii-scan:ignore */
+  store.setDerivedInsights('qq:10002', [{ id: 'd1', text: '小明爱喝可乐', at: Date.now() }], '', { merge: true }) /* pii-scan:ignore */
+  const bucket = store.insights().find((b) => b.key === 'qq:10002') /* pii-scan:ignore */
   assert.equal(bucket.list.filter((x) => x.text === '小明爱喝可乐').length, 1, '同正文只留一条')
 })

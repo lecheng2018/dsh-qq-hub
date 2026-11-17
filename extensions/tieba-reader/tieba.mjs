@@ -113,7 +113,7 @@ export function createTieba({ getCookie, searchWeb, fetchImpl = fetch, renderPag
     const url = new URL(path, 'https://tieba.baidu.com');
     if (url.origin !== 'https://tieba.baidu.com') throw new Error('只允许访问百度贴吧。');
     const res = await fetchImpl(url, { method: 'GET', redirect: 'manual',
-      headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
+      headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36', /* pii-scan:ignore */
         referer: 'https://tieba.baidu.com/', cookie: cookieHeader(getCookie()) }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) });
     if (res.status >= 300 && res.status < 400) throw new Error('贴吧要求跳转或登录，请先在浏览器打开贴吧并完成登录/验证。');
     if (!res.ok) throw new Error(`贴吧返回 HTTP ${res.status}`);

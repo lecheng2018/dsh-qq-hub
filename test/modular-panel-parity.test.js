@@ -10,7 +10,7 @@ import { createModularCore } from '../src/host/modular-core.js'
 const OWNER = '10000001'
 const BOT = '20000002'
 const OTHER = '30000003'
-const TOKEN = 'panel-parity-test-token'
+const TOKEN = 'panel-parity-test-token' /* pii-scan:ignore */
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function until(predicate, message) {

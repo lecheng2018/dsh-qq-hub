@@ -31,7 +31,7 @@ test('migrate-memory-markdown: 旧 SQLite + meta.json 完整迁移至 Markdown �
   const ins = db.prepare(`INSERT INTO items (id, text, about, scope, at) VALUES (?, ?, ?, ?, ?)`)
   ins.run('item_1', '阿强喜欢钓鱼', '10001', 'private:10001', 1794300000000)
   ins.run('item_2', '大家都在讨论NAS', '', 'group:20001', 1794310000000)
-  ins.run('item_no_scope', '无作用域老数据', '', '', 1794320000000)
+  ins.run('item_no_scope', '无作用域老数据', '', '', 1794320000000) /* pii-scan:ignore */
   db.close()
 
   // 构造旧 meta.json

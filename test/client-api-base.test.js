@@ -21,7 +21,7 @@ const bundle = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 test('直连端口（站点根）时前缀不变', () => {
   assert.equal(apiBaseFrom('http://127.0.0.1:13080/'), '/qq-hub/api')
   assert.equal(apiBaseFrom('http://127.0.0.1:13080/?token=abc'), '/qq-hub/api')
-  assert.equal(apiBaseFrom('http://192.168.1.9:13080/#/session/1'), '/qq-hub/api')
+  assert.equal(apiBaseFrom('http://192.168.1.9:13080/#/session/1'), '/qq-hub/api') /* pii-scan:ignore */
 })
 
 test('网关子路径挂载时前缀跟着挂载点走（飞牛 App 的 /app/Harness/dsh）', () => {

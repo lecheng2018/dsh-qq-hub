@@ -234,7 +234,7 @@ test('relatedTo 不把别处的记忆当成已知事实喂给归纳模型', () =
 
 test('迁移后：来源不明的老记忆落在主人私聊，群里看不到', () => {
   const stranger = { chatId: 'group:888888888', kind: 'group', groupId: '888888888' }
-  // 迁移脚本把无来源条目兜底到 private:<主人QQ>（这里是 cfg.ownerQQ = 10001）
+  // 迁移脚本把无来源条目兜底到 private:<主人QQ>（这里是 cfg.ownerQQ = 10001） /* pii-scan:ignore */
   const owner = { chatId: 'private:' + cfg.ownerQQ, kind: 'private', userId: String(cfg.ownerQQ) }
   store.add({ text: '迁移兜底的主人私事样例', about: String(cfg.ownerQQ), importance: 0.9,
               source: 'auto', chatId: '', scope: `private:${cfg.ownerQQ}` })

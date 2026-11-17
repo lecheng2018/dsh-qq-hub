@@ -72,7 +72,7 @@ test('真实实例梦境共性归纳：归纳出的经验条目成功持久化�
 
   const insights = store.insights()
   // 梦境经验按人物 key 追加合并（修复后不再整桶覆盖、不再把人名污染成「梦境归纳」）。
-  const dreamInsight = insights.find((item) => item.key === 'qq:10001')
+  const dreamInsight = insights.find((item) => item.key === 'qq:10001') /* pii-scan:ignore */
   assert.ok(dreamInsight, '应存在该人物的洞察桶')
   assert.ok(dreamInsight.list.length > 0, '归纳经验条目应持久化进 insights 列表')
   assert.notEqual(dreamInsight.name, '梦境归纳', '梦境不应污染人名')
