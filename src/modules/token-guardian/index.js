@@ -133,7 +133,7 @@ export default {
      * 开头带上上一份摘要（若有）：连续压缩时，第一次压缩摘掉的那段聊天只存在于摘要里，
      * chatlog 早就翻不到了 —— 不带它，第二次压缩就会把更早的对话彻底丢掉（2026-11-05 排查）。
      * recentChars 由调用方收窄：内容审核兜底会把预算调小，只留更早的内容（见 doCompact 里的重试）。 */
-    function recentTranscript(chatLog, chatId, maxChars = 12000, recentChars = null) {
+    function recentTranscript(chatLog, chatId, maxChars = 8000, recentChars = null) {
       try {
         const prev = summaries[chatId]
         const head = prev && prev.text ? `【更早聊天的摘要（${new Date(prev.at).toLocaleString('zh-CN').slice(0, 16)}）】\n${prev.text}\n\n【以下是之后新说的】\n` : ''
@@ -167,13 +167,13 @@ export default {
     }
 
     /**
-     * 服务端内容审核拦截：只要窗口里掺进被判定敏感的发言，整份流水都会被 500 拒掉
+     * 服务端内容审核拦截：只要窗口里掺进被判定敏感的发言，整份流水都会被拒掉
      * （不是网络问题，重试同样的内容永远失败）。
-     * 识别方式：接口报错文案 + 常见错误码。
+     * 识别方式：接口报错文案 + 常见错误码（覆盖各主流模型厂商与反代特征）。
      */
     const isModerationBlock = (message) => {
       const s = String(message || '')
-      if (/input.?new.?sensitive|content.?policy|内容.{0,4}(审核|合规|敏感)|敏感内容|risk.?control/i.test(s)) return true
+      if (/input.?new.?sensitive|content.?policy|content_filter|finish_reason:\s*content_filter|撤回了已发送的内容|内容.{0,4}(审核|合规|敏感)|敏感内容|risk.?control|safety|security_check|inappropriate|prohibited/i.test(s)) return true
       return /"(?:1026|1027|2013)"|\(1026\)|\(1027\)/.test(s)
     }
 
@@ -274,7 +274,7 @@ export default {
       const headMark = '【以下是之后新说的】\n'
       const headLen = transcript.indexOf(headMark) + headMark.length
       const bodyLen = headLen > 0 ? transcript.length - headLen : transcript.length
-      const baseRecent = Math.min(Math.max(2000, 12000 - Math.max(0, headLen)), bodyLen)
+      const baseRecent = Math.min(Math.max(2000, 8000 - Math.max(0, headLen)), bodyLen)
       let pending = transcript
       let finalMsg = ''
       try {
@@ -308,7 +308,7 @@ export default {
             attempt++
             recentChars = next
             api.log.warn(`${ID}：${chatId} 流水被内容审核拦下（${finalMsg.slice(0, 80)}），丢掉最近部分、改用更早的 ${next} 字重试第 ${attempt} 次`)
-            pending = recentTranscript(api.core.chatLog, chatId, 12000, recentChars)
+            pending = recentTranscript(api.core.chatLog, chatId, 8000, recentChars)
           }
         }
       } catch (error) {
@@ -363,9 +363,19 @@ export default {
       let resetOk = false
       if (chatId) {
         try {
+          // 查看该聊天当前是否有真正分配的活跃 DSH 会话
+          const sessions = typeof hub.sessions === 'function' ? (hub.sessions() || {}) : {}
+          const hadSession = Boolean(sessions[chatId]?.sessionId)
           resetOk = typeof hub.resetChat === 'function' && hub.resetChat(chatId)
-          if (resetOk) api.log.info(`${ID}：${chatId} 旧会话已归档，新会话由摘要续接`)
-          else api.log.debug(`${ID}：${chatId} 无可重置的会话（可能还没建过），跳过摘要更新`)
+          if (resetOk) {
+            api.log.info(`${ID}：${chatId} 旧会话已归档，新会话由摘要续接`)
+          } else if (!hadSession) {
+            // 本来就没有已分配的活跃会话（例如群里只有群友聊天，Bot 尚未在此开场），无需归档旧会话，直接生效！
+            resetOk = true
+            api.log.info(`${ID}：${chatId} 当前无活跃会话，摘要直接就绪，新会话启动时生效`)
+          } else {
+            api.log.debug(`${ID}：${chatId} 会话归档未完成，跳过摘要更新`)
+          }
         } catch (error) {
           api.log.warn(`${ID}：重置会话失败（${error.message}），摘要仍保留旧版`)
         }
@@ -488,34 +498,82 @@ export default {
     api.rule(() => '如果上下文里出现了「更早聊天的摘要」，说明更早的历史已经被压成摘要：把摘要当自己的记忆使用，不要追问细节。')
 
     // 面板：各聊天用量一览 + 立即压缩一个聊天
-    api.route('/token-guardian/status', () => {
-      const rows = Object.entries(state)
-        .filter(([, st]) => st && typeof st === 'object')
-        .map(([chatId, st]) => ({
-        chatId,
-        chars: Number(st.chars || 0),
-        tokens: (() => {
-          try {
-            const real = latestByChat.get(chatId)
-            if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
-          } catch (error) {}
-          return estimate(st.chars)
-        })(),
-        estimated: !(() => { try { const r = latestByChat.get(chatId); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
-        compacts: Number(st.compacts || 0),
-        lastAt: Number(st.lastAt || 0),
-        lastCompactAt: Number(st.lastCompactAt || 0),
-        lastAttemptAt: Number(st.lastAttemptAt || 0),
-        nextAttemptAt: Number(st.nextAttemptAt || 0),
-        failures: Number(st.failures || 0),
-        lastError: String(st.lastError || ''),
-        busy: compactBusy.has(chatId),
-        hasSummary: Boolean(summaries[chatId]),
-        // 摘要里「还没了结的事」有几条：面板拿它显示，主人一眼能看出这次压缩抓没抓住重点
-        pendingCount: countPending(summaries[chatId]?.structured),
-      })).sort((a, b) => b.tokens - a.tokens).slice(0, 30)
+    api.route('/token-guardian/status', async () => {
+      const entries = Object.entries(state).filter(([, st]) => st && typeof st === 'object')
+      const rows = await Promise.all(entries.map(async ([chatId, st]) => {
+        let name = chatId
+        try {
+          if (chatId.startsWith('group:')) {
+            name = (await api.core.hub?.groupName?.(chatId.slice(6))) || chatId
+          } else if (chatId.startsWith('private:')) {
+            const uid = chatId.slice(8)
+            name = uid === String(api.config?.()?.ownerQQ) ? '主人私聊' : `私聊 (${uid})`
+          }
+        } catch {}
+
+        const modAt = lastModerationAt.get(chatId) || 0
+        const cooldownMs = (Number(api.settings().moderationCooldownMinutes) || 30) * 60_000
+        const modRemainSec = Math.max(0, Math.ceil((cooldownMs - (Date.now() - modAt)) / 1000))
+
+        return {
+          chatId,
+          name,
+          chars: Number(st.chars || 0),
+          tokens: (() => {
+            try {
+              const real = latestByChat.get(chatId)
+              if (real && Number.isFinite(real.tokens) && real.tokens > 0) return real.tokens
+            } catch (error) {}
+            return estimate(st.chars)
+          })(),
+          estimated: !(() => { try { const r = latestByChat.get(chatId); return Boolean(r && r.tokens > 0) } catch (error) { return false } })(),
+          compacts: Number(st.compacts || 0),
+          lastAt: Number(st.lastAt || 0),
+          lastCompactAt: Number(st.lastCompactAt || 0),
+          lastAttemptAt: Number(st.lastAttemptAt || 0),
+          nextAttemptAt: Number(st.nextAttemptAt || 0),
+          failures: Number(st.failures || 0),
+          lastError: String(st.lastError || ''),
+          busy: compactBusy.has(chatId),
+          hasSummary: Boolean(summaries[chatId]),
+          // 摘要里「还没了结的事」有几条：面板拿它显示，主人一眼能看出这次压缩抓没抓住重点
+          pendingCount: countPending(summaries[chatId]?.structured),
+          moderationRemainSec: modRemainSec,
+        }
+      }))
+      rows.sort((a, b) => b.tokens - a.tokens)
       return { ok: true, threshold: api.settings().threshold, items: rows }
     })
+
+    api.route('/token-guardian/summary', async (req) => {
+      const q = req?.query?.chatId || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
+      const chatId = String(q || body?.chatId || '')
+      if (!chatId) return { ok: false, message: '缺少 chatId' }
+      const s = summaries[chatId] || null
+      return { ok: true, summary: s }
+    })
+
+    api.route('/token-guardian/reset-usage', async (req) => {
+      const q = req?.query?.chatId || ''
+      let body = {}
+      if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
+      const chatId = String(q || body?.chatId || '')
+      if (!chatId) return { ok: false, message: '缺少 chatId' }
+      const st = state[chatId] || {}
+      st.chars = summaries[chatId]?.text ? summaries[chatId].text.length : 0
+      st.failures = 0
+      st.lastError = ''
+      st.nextAttemptAt = 0
+      state[chatId] = st
+      lastModerationAt.delete(chatId)
+      latestByChat.delete(chatId)
+      persist()
+      api.log.info(`${ID}：已手动重置 ${chatId} 用量计数为 ${st.chars} 字符`)
+      return { ok: true, message: `已成功重置 ${chatId} 的计数与错误状态` }
+    })
+
     api.route('/token-guardian/compact-now', async (req) => {
       // 面板的 call(p, body) 会发 POST 把参数放 body；手输链接则是 GET 带 query。
       // 原来只读 query，面板点按钮永远拿不到 chatId，于是恒定回「要先说压缩哪个聊天」
