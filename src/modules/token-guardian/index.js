@@ -498,7 +498,7 @@ export default {
     api.rule(() => '如果上下文里出现了「更早聊天的摘要」，说明更早的历史已经被压成摘要：把摘要当自己的记忆使用，不要追问细节。')
 
     // 面板：各聊天用量一览 + 立即压缩一个聊天
-    api.route('/token-guardian/status', async () => {
+    const handleStatus = async () => {
       const entries = Object.entries(state).filter(([, st]) => st && typeof st === 'object')
       const rows = await Promise.all(entries.map(async ([chatId, st]) => {
         let name = chatId
@@ -543,9 +543,11 @@ export default {
       }))
       rows.sort((a, b) => b.tokens - a.tokens)
       return { ok: true, threshold: api.settings().threshold, items: rows }
-    })
+    }
+    api.route('/token-guardian/status', handleStatus)
+    api.route('/status', handleStatus)
 
-    api.route('/token-guardian/summary', async (req) => {
+    const handleSummary = async (req) => {
       const q = req?.query?.chatId || ''
       let body = {}
       if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
@@ -553,9 +555,11 @@ export default {
       if (!chatId) return { ok: false, message: '缺少 chatId' }
       const s = summaries[chatId] || null
       return { ok: true, summary: s }
-    })
+    }
+    api.route('/token-guardian/summary', handleSummary)
+    api.route('/summary', handleSummary)
 
-    api.route('/token-guardian/reset-usage', async (req) => {
+    const handleResetUsage = async (req) => {
       const q = req?.query?.chatId || ''
       let body = {}
       if (!q) { try { body = await api.core.http.body(req) } catch (error) { body = {} } }
@@ -572,9 +576,11 @@ export default {
       persist()
       api.log.info(`${ID}：已手动重置 ${chatId} 用量计数为 ${st.chars} 字符`)
       return { ok: true, message: `已成功重置 ${chatId} 的计数与错误状态` }
-    })
+    }
+    api.route('/token-guardian/reset-usage', handleResetUsage)
+    api.route('/reset-usage', handleResetUsage)
 
-    api.route('/token-guardian/compact-now', async (req) => {
+    const handleCompactNow = async (req) => {
       // 面板的 call(p, body) 会发 POST 把参数放 body；手输链接则是 GET 带 query。
       // 原来只读 query，面板点按钮永远拿不到 chatId，于是恒定回「要先说压缩哪个聊天」
       // （2026-11-04 主人反馈：手动点压一次也不行）。两边都要读。
@@ -587,7 +593,9 @@ export default {
       return r.ok
         ? { ok: true, message: `压缩好了（第 ${r.compacts} 次，摘要 ${r.chars} 字）` }
         : { ok: false, reason: r.reason, message: r.message || '这次没压成' }
-    })
+    }
+    api.route('/token-guardian/compact-now', handleCompactNow)
+    api.route('/compact-now', handleCompactNow)
 
     api.tool(({ chat }) => {
       if (!chat || chat.kind === 'system') return []

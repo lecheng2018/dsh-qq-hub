@@ -175,11 +175,26 @@ return function TokenGuardianPanel(props) {
 
   useEffect(() => { loadStatus() }, [])
 
+  const requestSafe = async (shortPath, fullPath) => {
+    let r = await call(shortPath)
+    if (!r || r.ok === false) {
+      r = await call(fullPath)
+    }
+    if (!r || r.ok === false) {
+      try {
+        const res = await fetch('/qq-hub/api' + fullPath)
+        if (res.ok) r = await res.json()
+      } catch {}
+    }
+    return r
+  }
+
   const handleCompact = async (chatId) => {
     setBusyChat(chatId)
     try {
-      const r = await call('/token-guardian/compact-now?chatId=' + encodeURIComponent(chatId))
-      props.toast && props.toast(r.message || (r.ok ? '压缩成功' : '未成功'), r.ok ? 'ok' : 'err')
+      const q = '?chatId=' + encodeURIComponent(chatId)
+      const r = await requestSafe('/compact-now' + q, '/token-guardian/compact-now?chatId=' + encodeURIComponent(chatId))
+      props.toast && props.toast((r && r.message) || (r && r.ok ? '压缩成功' : '未成功'), (r && r.ok) ? 'ok' : 'err')
       await loadStatus()
       if (expandedSummary[chatId]) {
         await toggleSummary(chatId, true)
@@ -191,8 +206,9 @@ return function TokenGuardianPanel(props) {
 
   const handleResetUsage = async (chatId) => {
     try {
-      const r = await call('/token-guardian/reset-usage?chatId=' + encodeURIComponent(chatId))
-      props.toast && props.toast(r.message || '重置成功', r.ok ? 'ok' : 'err')
+      const q = '?chatId=' + encodeURIComponent(chatId)
+      const r = await requestSafe('/reset-usage' + q, '/token-guardian/reset-usage?chatId=' + encodeURIComponent(chatId))
+      props.toast && props.toast((r && r.message) || '重置成功', (r && r.ok) ? 'ok' : 'err')
       await loadStatus()
     } catch (e) {
       props.toast && props.toast('重置失败', 'err')
@@ -206,11 +222,12 @@ return function TokenGuardianPanel(props) {
     }
     setLoadingSummary({ ...loadingSummary, [chatId]: true })
     try {
-      const r = await call('/token-guardian/summary?chatId=' + encodeURIComponent(chatId))
+      const q = '?chatId=' + encodeURIComponent(chatId)
+      const r = await requestSafe('/summary' + q, '/token-guardian/summary?chatId=' + encodeURIComponent(chatId))
       if (r && r.ok && r.summary) {
         setExpandedSummary({ ...expandedSummary, [chatId]: r.summary })
       } else {
-        props.toast && props.toast('该聊天暂无生效摘要', 'warn')
+        props.toast && props.toast((r && r.message) || '该聊天暂无生效摘要', 'warn')
       }
     } finally {
       setLoadingSummary({ ...loadingSummary, [chatId]: false })
