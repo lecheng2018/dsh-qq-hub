@@ -9,7 +9,7 @@ import { startMockOneBot } from './helpers/mock-onebot.js'
 
 const OWNER = '10000001'
 const BOT = '20000002'
-const TOKEN = 'panel-admin-test-secret'
+const TOKEN = 'panel-admin-test-secret' /* pii-scan:ignore */
 
 async function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'qqhub-admin-auth-'))

@@ -47,7 +47,7 @@ test('formatCardText: 结构化渲染卡片文本', () => {
 
 test('extractUrls: 识别真实复杂的各平台分享口令与短链 (抖音/小红书/微博/知乎/B站/贴吧/番茄)', () => {
   // 1. 抖音口令
-  const douyinCommand = '2.07 复制打开抖音，看看【天美工作室群TiMi的作品】到总裁室要走员工通道 # 谭谈交通 # 二仙桥 #... https://v.douyin.com/1tB92IqN3yM/ cnQ:/ 04/14 J@i.ca :7pm'
+  const douyinCommand = '2.07 复制打开抖音，看看【天美工作室群TiMi的作品】到总裁室要走员工通道 # 谭谈交通 # 二仙桥 #... https://v.douyin.com/1tB92IqN3yM/ cnQ:/ 04/14 J@i.ca :7pm' /* pii-scan:ignore */
   assert.deepEqual(extractUrls(douyinCommand), ['https://v.douyin.com/1tB92IqN3yM/'])
 
   // 2. 小红书口令（带表情、口令码、中文字符紧贴）

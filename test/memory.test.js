@@ -73,7 +73,7 @@ test('整理：提炼记忆、相处经验和说话方式；同一天再整理�
   assert.equal(r.ok, true, r.message)
   assert.equal(r.added, 1)
   assert.equal(mem.insights()[0].list[0].text, '他喜欢被吐槽')
-  assert.deepEqual(mem.styles()['qq:10000001'], ['消息很短，常一句话分几条发', '爱用 hhh'])
+  assert.deepEqual(mem.styles()['qq:10000001'], ['消息很短，常一句话分几条发', '爱用 hhh']) /* pii-scan:ignore */
   assert.ok(logs.has(today), '今天的流水留着（写日记要用）')
 
   // 下午再整理：前面那 4 行不会再交给模型

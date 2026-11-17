@@ -61,7 +61,7 @@ test('解析：接口里的视频 → 标题、分类、抖音的内容摘要、
   assert.equal(v.summary, '讲了一只猫学会开门的过程。')
   assert.deepEqual(v.chapters, ['开头', '学开门：猫试了三次'])
   assert.equal(site.normalizeAweme(aweme('7000000000000000002', { is_ads: true })), null)
-  assert.equal(site.normalizeAweme(aweme('7000000000000000003', { cell_room: {} })), null)
+  assert.equal(site.normalizeAweme(aweme('7000000000000000003', { cell_room: {} })), null) /* pii-scan:ignore */
   assert.equal(site.normalizeAweme({ desc: '没 id' }), null)
   // 没有 item_title 时用去掉话题的文案
   assert.equal(site.normalizeAweme(aweme('7000000000000000004', { item_title: '' })).title, '视频7000000000000000004的文案')
@@ -157,7 +157,7 @@ function setup({ decisions = [], cfgOver = {}, douyinOver = {}, siteOpts = {}, n
   const pushed = []
   const memory = { addEvent: (e) => events.push(e.text), add: (m) => events.push('记住:' + m.text) }
   const cfg = normalize({ enabled: true, dryRun: false, ownerQQ: '10000001', ...cfgOver, douyin: { enabled: true, perRun: 3, dwellMin: 3, dwellMax: 3, caps: { like: 30, comment: 1, share: 5 }, gate: { minWriteGapSec: 0, newAccountDays: 0 }, ...(owner ? { owner } : {}), ...douyinOver } })
-  const fs = fakeSite({ feed: [aweme('7000000000000000001'), aweme('7000000000000000002', { is_ads: true }), aweme('7000000000000000003'), aweme('7000000000000000004')], ...siteOpts })
+  const fs = fakeSite({ feed: [aweme('7000000000000000001'), aweme('7000000000000000002', { is_ads: true }), aweme('7000000000000000003'), aweme('7000000000000000004')], ...siteOpts }) /* pii-scan:ignore */
   const waits = []
   const owners = []
   const dy = duty.createDouyin({ getConfig: () => cfg, setOwner: (o) => { owners.push(o); cfg.douyin.owner = o }, hub, memory, log: { info() {}, warn() {}, debug() {} }, site: fs, wait: async (ms) => { waits.push(ms); onWait(ms) }, ...(now ? { now } : {}) })
@@ -172,7 +172,7 @@ test('刷一轮：一个个点开看，按视频 id 点赞 / 评论（不会点�
   ] })
   const r = await dy.run({ force: true })
   assert.equal(r.ok, true, r.message)
-  assert.deepEqual(fs.calls.watch, ['7000000000000000001', '7000000000000000003', '7000000000000000004'], '广告跳过，其余都真的点开看了')
+  assert.deepEqual(fs.calls.watch, ['7000000000000000001', '7000000000000000003', '7000000000000000004'], '广告跳过，其余都真的点开看了') /* pii-scan:ignore */
   assert.deepEqual(fs.calls.like, ['7000000000000000001', '7000000000000000004'], '点赞落在她说要赞的那个视频上')
   assert.deepEqual(fs.calls.comment, [['7000000000000000001', '猫猫会开门了']], '评论每天上限 1 条')
   assert.deepEqual(sent, [['private:10000001', '主人你看这个\nhttps://www.douyin.com/video/7000000000000000004']])
@@ -320,7 +320,7 @@ test('评论里真·@主人：她自己决定 @ 谁；手打的 @ 去掉；用 s
   assert.match(prompts[0], /最多 @ 1 次/)
   assert.deepEqual(fs.calls.comment, [
     ['7000000000000000001', '你快看这个猫', { secUid: 'MS4wOWNER', uid: '4182', nickname: '主人的新昵称' }],
-    ['7000000000000000003', '这个也想让你看'],
+    ['7000000000000000003', '这个也想让你看'], /* pii-scan:ignore */
     ['7000000000000000004', '普通评论'],
   ], '只 @ 了 1 次（上限 1），第二条照常评论但不 @；手打的「@主人」被去掉')
   const st = dy.state()
@@ -343,7 +343,7 @@ test('没核对主人抖音号 / 输入改过没重新核对：不提 @、不 @'
 test('@ 不上主人：这条评论不发（不发假 @），也不当成风控停手', async () => {
   const { dy, fs } = setup({ owner: OWNER, siteOpts: { mentionFails: true }, douyinOver: { caps: { like: 30, comment: 3, share: 5, atOwner: 3 } }, decisions: [{ i: 1, comment: '快看', at: true }, { i: 2, comment: '普通的' }] })
   await dy.run({ force: true })
-  assert.deepEqual(fs.calls.comment, [['7000000000000000003', '普通的']])
+  assert.deepEqual(fs.calls.comment, [['7000000000000000003', '普通的']]) /* pii-scan:ignore */
   const st = dy.state()
   assert.equal(st.pauseReason, '')
   assert.ok(st.history.some((x) => x.kind === 'error' && /没找到主人/.test(x.text)))
@@ -415,9 +415,9 @@ test('主人让她找视频：她一个都不分享也会自动挑一个（优�
   assert.equal(r.ok, true)
   assert.match(r.message, /别跟对方说「已经发了」/)
   assert.ok(await until(() => pushed.length), '刷完把结果送回聊天')
-  assert.deepEqual(fs.calls.share.map((x) => x[0]), ['7000000000000000003'], '挑了她点赞的那个')
+  assert.deepEqual(fs.calls.share.map((x) => x[0]), ['7000000000000000003'], '挑了她点赞的那个') /* pii-scan:ignore */
   assert.equal(pushed[0][0], 'private:10000001')
-  assert.match(pushed[0][1], /分享给主人的：《视频7000000000000000003》（发到了抖音私信）/)
+  assert.match(pushed[0][1], /分享给主人的：《视频7000000000000000003》（发到了抖音私信）/) /* pii-scan:ignore */
   assert.match(pushed[0][1], /别说没做到的事/)
 })
 

@@ -47,7 +47,7 @@ const navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ex
 const navOrder = (g, t) => { const i = g.tabs.indexOf(t.id); return i >= 0 ? i : g.tabs.length - (g.tabs.includes('logs') ? 1.5 : 0) }
 const NAV_ALIAS = {
   overview: '首页 状态', connect: 'qq 网关 snowluma onebot 登录 工作区', persona: '人设 性格 设定 头像', access: '主人 白名单 权限 群管 改资料',
-  group: '群聊 插话 合并', model: 'ai 大模型 视觉 思考强度', token: 'token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性', voice: '语音 tts 说话 音色 edge', stickers: '表情 小黄脸 gif 商城表情',
+  group: '群聊 插话 合并', model: 'ai 大模型 视觉 思考强度', token: 'token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性', voice: '语音 tts 说话 音色 edge', stickers: '表情 小黄脸 gif 商城表情', /* pii-scan:ignore */
   imagegen: '画图 图片', diary: '空间 说说 日记', speakup: '搭话 主动', memory: '记忆 档案 相处经验 黑话 蒸馏',
   bili: 'b站 bilibili 视频', douyin: '抖音 短视频 私信', heybox: '小黑盒 游戏 社区 资讯', multiParser: '内容解析 多平台 链接 解析 视频 图文 小红书 微博 知乎 贴吧 b站 抖音 微信', local: '本地 接口 sd sovits', modules: '扩展 模块 插件', logs: '日志 报错',
 }

@@ -19,7 +19,7 @@ test('style 消费 reflection 观察并记录来源，dispose 中止自我学习
   const memory = {
     insightsOf: () => [],
     styleOf: () => [],
-    styles: () => ({ 'qq:10002': ['短句', '爱叠字', '少用标点'] }),
+    styles: () => ({ 'qq:10002': ['短句', '爱叠字', '少用标点'] }), /* pii-scan:ignore */
     setDerivedStyle: (...args) => writes.push(args),
   }
   const service = styleModule.setup({
@@ -30,9 +30,9 @@ test('style 消费 reflection 观察并记录来源，dispose 中止自我学习
     context: () => {},
     on: (name, fn) => handlers.set(name, fn),
   })
-  handlers.get('style/observed')({ key: 'qq:10002', list: ['短句回复'], sourceFingerprint: 'a'.repeat(64) })
+  handlers.get('style/observed')({ key: 'qq:10002', list: ['短句回复'], sourceFingerprint: 'a'.repeat(64) }) /* pii-scan:ignore */
   assert.equal(writes.length, 1)
-  assert.equal(writes[0][0], 'qq:10002')
+  assert.equal(writes[0][0], 'qq:10002') /* pii-scan:ignore */
   assert.equal(writes[0][2].sourceFingerprint, 'a'.repeat(64))
 
   const pending = service.learnSelfStyle()

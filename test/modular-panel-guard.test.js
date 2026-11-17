@@ -29,7 +29,7 @@ import { createHttpKit } from '../src/host/http.js'
 test('hostNameOf：剥端口、认 IPv6 括号形态', () => {
   assert.equal(hostNameOf('127.0.0.1:8080'), '127.0.0.1')
   assert.equal(hostNameOf('localhost:3000'), 'localhost')
-  assert.equal(hostNameOf('192.168.1.5'), '192.168.1.5')
+  assert.equal(hostNameOf('192.168.1.5'), '192.168.1.5') /* pii-scan:ignore */
   assert.equal(hostNameOf('[::1]:8080'), '::1')
   assert.equal(hostNameOf('nas.example.com:5666'), 'nas.example.com')
   assert.equal(hostNameOf(''), '')
@@ -43,7 +43,7 @@ test('Host 白名单：回环/IP 字面量放行，域名默认拒绝，allowedH
 
   ok('localhost:5666')
   ok('127.0.0.1:5666')
-  ok('192.168.1.66:5666')
+  ok('192.168.1.66:5666') /* pii-scan:ignore */
   ok('[::1]:5666')
   no('evil.com:80')
   no('nas.example.com:5666') // 未登记的域名拒绝（rebinding 的 Host 就是攻击域名）
@@ -175,7 +175,7 @@ test('合法流程：回环 GET 只读、同源 POST 写路由、局域网 IP �
   assert.equal(saveCount, 1, '同源写请求产生副作用（合法面板流程不回归）')
 
   // 局域网 IP 直访（Host 是 IP 字面量）+ 无浏览器头（脚本客户端）→ 放行
-  const lan = await raw({ method: 'POST', path: '/save', host: `192.168.9.9:${port}`, body: '{}' })
+  const lan = await raw({ method: 'POST', path: '/save', host: `192.168.9.9:${port}`, body: '{}' }) /* pii-scan:ignore */
   assert.equal(lan.code, 200)
   assert.equal(saveCount, 2, '局域网 IP 直访不受影响')
 })

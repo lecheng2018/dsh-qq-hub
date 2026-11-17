@@ -69,7 +69,7 @@ const groupMsg = (text, { at = false } = {}) => ({
   post_type: 'message', message_type: 'group', sub_type: 'normal', group_id: 777,
   self_id: 20000002, user_id: 555, message_id: ++mid, time: Math.floor(Date.now() / 1000),
   sender: { user_id: 555, nickname: '甲' },
-  message: at ? [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: ` ${text}` } }] : [{ type: 'text', data: { text } }],
+  message: at ? [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: ` ${text}` } }] : [{ type: 'text', data: { text } }], /* pii-scan:ignore */
 })
 
 test('群缓冲：回合在模型消费前失败，消息不标 fed，下一轮重新喂入（不丢）', async () => {

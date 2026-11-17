@@ -84,7 +84,7 @@ before(async () => {
     voice: { engine: 'windows', autoChance: 0 }, stickers: { autoChance: 0 },
     merge: { waitSec: 0.2, maxSec: 2 },
     bili: { enabled: true },
-    bridge: { http: true, token: 'modules-panel-admin-token' },
+    bridge: { http: true, token: 'modules-panel-admin-token' }, /* pii-scan:ignore */
     modules: { bili: { enabled: false } },
     files: { enabled: true, maxMB: 5, dirs: [dataDir] },
   }))

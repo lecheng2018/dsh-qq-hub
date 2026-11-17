@@ -89,7 +89,7 @@ const groupMsg = ({ userId, nickname, text, replyId, at = false, mid = ++midSeq 
   sender: { user_id: userId, nickname },
   message: [
     ...(replyId ? [{ type: 'reply', data: { id: String(replyId) } }] : []),
-    ...(at ? [{ type: 'at', data: { qq: 20000002 } }] : []),
+    ...(at ? [{ type: 'at', data: { qq: 20000002 } }] : []), /* pii-scan:ignore */
     ...(text ? [{ type: 'text', data: { text: at ? ` ${text}` : text } }] : []),
   ],
 })

@@ -41,7 +41,7 @@ function decodeFrames(buf) {
   return { frames: out, rest: buf.subarray(i) }
 }
 
-export async function startMockOneBot({ selfId = '20000002', token = 'mock-token-abcdef', loginDelayMs = 0 } = {}) {
+export async function startMockOneBot({ selfId = '20000002', token = 'mock-token-abcdef', loginDelayMs = 0 } = {}) { /* pii-scan:ignore */
   // loginDelayMs：让 get_login_info 慢一点回，用来测「核对期间的消息不该丢」
   const waitLogin = async (action) => { if (action === 'get_login_info' && loginDelayMs) await new Promise((r) => setTimeout(r, loginDelayMs)) }
   const calls = []

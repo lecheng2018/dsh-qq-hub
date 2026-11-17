@@ -27,7 +27,7 @@ test('存一份：文件名带时间和提示词，扩展名按图片类型', ()
 
 test('按时间倒序、只给最近 N 张，N 夹在 1~50', () => {
   mk('20261028-010000-第一张.png')
-  mk('20261028-020000-第二张.png')
+  mk('20261028-020000-第二张.png') /* pii-scan:ignore */
   mk('20261028-030000-第三张.jpg')
   const all = listPaintings({ limit: 10 })
   assert.deepEqual(all.items.map((x) => x.prompt).slice(0, 3), ['第三张', '第二张', '第一张'])

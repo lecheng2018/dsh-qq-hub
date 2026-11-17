@@ -14,7 +14,7 @@ export const WEB_BASE = 'https://www.xiaoheihe.cn'
 
 const ALPHABET = 'AB45STUVWZEFGJ6CH01D237IXYPQRKLMN89'
 const HMAC_SALT = 'Z7mFG4tQp9Ws2LxB8H'
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36' /* pii-scan:ignore */
 
 // web 端通用参数（与真实请求一致）
 export const BASE_PARAMS = {
