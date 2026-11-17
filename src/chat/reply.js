@@ -330,7 +330,7 @@ function stripPromptEcho(text) {
 }
 
 /** 去掉出站中的工具协议残片和被复读的人设提示词；示例代码不参与检测。 */
-function sanitizeOutbound(text) {
+export function sanitizeOutbound(text) {
   const protectedText = protectExamples(text)
   const protectedJson = protectJsonExamples(protectedText.text)
   // 心智独白（v3.4 Phase 1）：<inner>…</inner> 只给状态机消费，绝不能混进 QQ。
