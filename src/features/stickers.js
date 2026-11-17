@@ -35,6 +35,48 @@ export function stickerPath(item) {
   return join(dir(), item.file)
 }
 
+// ---------------- 发送去重：别老发同一张 ----------------
+// 问题（2026-11-17 对照 MaiBot 的 emoji 选型复盘）：表情库再大，只要某个标签只有一张命中，
+// 她就会**反复发同一张** —— 这是最容易让人看出「这是个机器人」的机械感来源。
+// 两个补水：① 刚发过的降权（不清零，库里只有这一张时照样发得出去）；② 分数相近的候选一起抽样，
+// 而不是永远取最高分。
+// 注意：这套只作用于**自动配表情**（pickForReply）。matchSticker 保持确定性，
+// 因为 qq_edit_sticker 靠它定位要改名/删除的那一张，随机取值会删错。
+const RECENT_USE_WINDOW_MS = 30 * 60_000 // 半小时内发过的算「刚用过」
+const RECENT_USE_PENALTY = 0.65 // 刚发过时最多压掉 65% 的分
+const NEAR_TOP_WINDOW = 0.15 // 与最高分差在 15% 以内的一起参与抽样
+
+/** 这张表情「刚用过」的程度：0 = 没用过或已经凉了，1 = 刚发出去。 */
+export function recentUseDecay(item, now = Date.now()) {
+  const last = Number(item?.lastUsed) || 0
+  if (!last) return 0
+  const age = now - last
+  if (!(age >= 0) || age >= RECENT_USE_WINDOW_MS) return 0
+  return 1 - age / RECENT_USE_WINDOW_MS
+}
+
+/** 降权后仍然 > 0：刚发过只是「更难被挑中」，不是「不可能被挑中」。 */
+function recencyFactor(item, now) {
+  return 1 - RECENT_USE_PENALTY * recentUseDecay(item, now)
+}
+
+/** 单张表情对某个词的匹配分（matchSticker 与 pickForReply 共用，保证两条路径口径一致）。 */
+export function stickerScore(item, query) {
+  const q = String(query || '').trim()
+  if (!q || !item) return 0
+  let s = 0
+  for (const h of [item.name || '', ...(item.tags || [])]) {
+    if (!h) continue
+    if (h === q) s = Math.max(s, 10)
+    else if (h.includes(q) || q.includes(h)) s = Math.max(s, 6)
+    else {
+      const common = [...q].filter((c) => h.includes(c)).length
+      if (common >= 2) s = Math.max(s, common / Math.max(q.length, 1) * 4)
+    }
+  }
+  return s
+}
+
 /** 模糊匹配：备注 / 标签里包含关键词得分高；完全找不到返回 null。 */
 export function matchSticker(items, query) {
   const q = String(query || '').trim()
@@ -42,17 +84,7 @@ export function matchSticker(items, query) {
   let best = null
   let bestScore = 0
   for (const it of items) {
-    const hay = [it.name || '', ...(it.tags || [])]
-    let s = 0
-    for (const h of hay) {
-      if (!h) continue
-      if (h === q) s = Math.max(s, 10)
-      else if (h.includes(q) || q.includes(h)) s = Math.max(s, 6)
-      else {
-        const common = [...q].filter((c) => h.includes(c)).length
-        if (common >= 2) s = Math.max(s, common / Math.max(q.length, 1) * 4)
-      }
-    }
+    const s = stickerScore(it, q)
     if (s > bestScore || (s === bestScore && s > 0 && Math.random() < 0.5)) {
       best = it
       bestScore = s
@@ -61,22 +93,57 @@ export function matchSticker(items, query) {
   return bestScore >= 1.5 ? best : null
 }
 
-/** 自动配表情：先按回复里的词匹配，匹配不到随机挑一张。 */
-export function pickForReply(items, replyText) {
+/** 在「分数相近」的候选里按降权后的分做软最大化抽样；只有一个候选时直接返回它。 */
+function pickNearTop(candidates, now, rand) {
+  if (!candidates.length) return null
+  if (candidates.length === 1) return candidates[0].item
+  const top = Math.max(...candidates.map((c) => c.adjusted))
+  const near = candidates.filter((c) => c.adjusted >= top * (1 - NEAR_TOP_WINDOW))
+  if (near.length === 1) return near[0].item
+  // 指数化的权重：分差被放大，但仍然保留「次优也偶尔会被挑中」的余地
+  const weights = near.map((c) => Math.exp((c.adjusted - top) / Math.max(0.5, top * NEAR_TOP_WINDOW)))
+  const sum = weights.reduce((a, b) => a + b, 0)
+  let r = rand() * sum
+  for (let i = 0; i < near.length; i++) {
+    r -= weights[i]
+    if (r <= 0) return near[i].item
+  }
+  return near[near.length - 1].item
+}
+
+/**
+ * 自动配表情：先按回复里的词匹配，匹配不到随机挑一张。
+ * @param {{now?:number, rand?:()=>number}} [opts] 测试注入口：固定时钟与随机源
+ */
+export function pickForReply(items, replyText, opts = {}) {
   if (!items.length) return null
+  const now = Number(opts.now) || Date.now()
+  const rand = typeof opts.rand === 'function' ? opts.rand : Math.random
   const words = DEFAULT_TAGS.concat(items.flatMap((i) => i.tags || []))
+  const text = String(replyText ?? '')
   for (const w of words) {
-    if (w && String(replyText).includes(w)) {
-      const m = matchSticker(items, w)
-      if (m) return m
+    if (!w || !text.includes(w)) continue
+    // 同一个词可能命中多张：以前直接取最高分那张，等于「这个情绪永远配这一张」。
+    // 现在把够格的都收进来，用「刚用过的降权 + 相近分抽样」挑一张。
+    const candidates = []
+    for (const it of items) {
+      const score = stickerScore(it, w)
+      if (score < 1.5) continue
+      candidates.push({ item: it, adjusted: score * recencyFactor(it, now) })
     }
+    const hit = pickNearTop(candidates, now, rand)
+    if (hit) return hit
   }
   // 兜底随机挑时**只用有标签的**：库里有一批偷来的表情名字就叫「动画表情」、一个标签都没有，
   // 挑到它们等于发一张跟上下文毫无关系的图（匹配问题里最直接的观感损失）。
   // 都没标签才退回全库随机，至少还能发表情。
   const tagged = items.filter((i) => (i.tags || []).length || !/^(动画表情|表情|图片|贴纸)$/.test(String(i.name || '')))
   const pool = tagged.length ? tagged : items
-  return pool[Math.floor(Math.random() * pool.length)]
+  // 兜底没有语义信号，唯一能做的就是避开刚发过的：只要还有「冷的」，就只从冷的里挑。
+  // 全都刚发过（或库里就一两张）才退回全池 —— 宁可重复，也不能变成「没有表情可发」。
+  const cold = pool.filter((it) => recentUseDecay(it, now) === 0)
+  const from = cold.length ? cold : pool
+  return from[Math.floor(rand() * from.length)]
 }
 
 /** 超过上限时该清掉哪张：只看偷来的，最少被发过的里最老的那张。 */
