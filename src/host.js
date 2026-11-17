@@ -124,10 +124,36 @@ export function apply(ctx) {
   const rulesOpts = (kind) => (mods ? { off: mods.builtinOff(), extra: mods.rules(kind) } : {})
   // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
   const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
+
+  // 提示词变量：动态感知当前会话（群聊/私聊专属人设卡）
+  function resolvePersonaForContext(context) {
+    try {
+      const sid = context?.agent?.session?.id || context?.session?.id || context?.sessionId
+      if (sid && hub?.chatOfSession) {
+        const chatKey = hub.chatOfSession(sid)
+        if (chatKey) {
+          const parts = String(chatKey).split(':')
+          const chat = parts[0] === 'group'
+            ? { kind: 'group', groupId: parts[1], chatId: chatKey }
+            : { kind: 'private', userId: parts[1], chatId: chatKey }
+          const c = getConfig()
+          const want = personaIdFor(chat, c)
+          if (want) {
+            const p = readPersona(want)
+            if (p?.body) return rewrite('persona', p.body)
+          }
+        }
+      }
+    } catch (e) {
+      logger?.debug?.(`按会话解析人设变量失败：${e?.message || e}`)
+    }
+    return rewrite('persona', currentPersonaText(getConfig().persona.current))
+  }
+
   // 三个变量的取值函数抽出来复用：新核心按会话再注册一遍（热重载后宿主侧变量可能缺失，
   // 缺了就报 unknown prompt variable "{{qq_hub_rules_private}}" → 整轮直接 error）
   const promptVarText = {
-    qq_hub_persona: () => rewrite('persona', currentPersonaText(cfg.persona.current)),
+    qq_hub_persona: (context) => resolvePersonaForContext(context),
     qq_hub_rules_private: () => {
       const base = rewrite('rules', rulesText('private', cfg, rulesOpts('private')), 'private')
       // 危险命令确认开着时补一句：被拦下要如实告诉主人，别绕着写
@@ -443,6 +469,10 @@ export function apply(ctx) {
     listModels: models.listModels,
     defaultModel: () => defaultModel(ctx, { model: {} }),
     http: { body: readBody, raw: readRaw, query, send },
+    // 挂起线索账本的**只读**视图（list / stats）：模块能看「还有什么事没结」，
+    // 但写入仍走核心自己的 wiring（push/resolve/advance），避免模块把状态改坏。
+    // token-guardian 压缩时用它把「还没了结的事」并入摘要的 pending。
+    threads: threadLedger ? Object.freeze({ list: (o) => threadLedger.list(o), stats: () => threadLedger.stats() }) : undefined,
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { speakerLabel } from '../src/modules/token-guardian/summary-format.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SRC = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
@@ -25,8 +26,21 @@ test('面板按钮走 GET query，不再把 chatId 放 POST body', () => {
   )
 })
 
-test('摘要里能分清谁说的：chatlog 里 bot 的 who 是 bot 不是 self', () => {
-  assert.match(SRC, /r\.who === 'bot' \|\| r\.who === 'self'/, 'who 判断要认 bot')
+test('摘要里能分清谁说的：她自己叫「你」，其他人用真实群名片', () => {
+  // chatlog 里 bot 的 who 是 'bot' 不是 'self'：判错了摘要里全是「对方」，分不清哪句是她说的
+  assert.equal(speakerLabel({ who: 'bot' }), '你')
+  assert.equal(speakerLabel({ who: 'self' }), '你')
+  // 群聊里多人：2026-11-17 之前一律塌缩成「对方」，八个人糊成一个，
+  // 下一轮就把 A 的经历安到 B 头上（issue #2366 同源）
+  assert.equal(speakerLabel({ who: '洛书' }), '洛书')
+  assert.notEqual(speakerLabel({ who: '洛书' }), speakerLabel({ who: '落叶' }))
+  // 只有 QQ 号没有名片时没有可读性，退回「对方」
+  assert.equal(speakerLabel({ who: '3380533775' }), '对方')
+  assert.equal(speakerLabel({}), '对方')
+  // 名片里的换行/冒号不能把「名字：正文」的行结构弄垮
+  assert.doesNotMatch(speakerLabel({ who: 'a\nb:c：d' }), /[\n:：]/)
+  // 原文确实用 speakerLabel 拼每一行
+  assert.match(SRC, /rows\.push\(`\$\{speakerLabel\(r\)\}：\$\{r\.text\}`\)/)
 })
 
 test('框架层给模块的 req 挂上 query（否则 req?.query?.x 全是 undefined）', () => {

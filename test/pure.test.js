@@ -140,6 +140,9 @@ test('topicRelevance', async () => {
   assert.equal(topicRelevance(['今天天气不错', '中午吃啥'], ['白米饭', '天气']), 0.3)
   assert.equal(topicRelevance(['量子力学'], ['白米饭']), 0)
   assert.equal(topicRelevance(['量子力学'], ['白米饭'], 1), 0.5)
+  // 未配置任何话题词且无记忆时返回基础相关度 0.35（避免与默认门槛死锁）
+  assert.equal(topicRelevance(['随便聊两句'], []), 0.35)
+  assert.equal(topicRelevance(['随便聊两句'], null), 0.35)
 })
 
 test('群聊：按群覆盖策略', () => {
