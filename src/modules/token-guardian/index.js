@@ -14,6 +14,7 @@
 
 import { readJson, writeJson } from '../../core/store.js'
 import { resolveCharacterIdentity } from '../../persona/identity-context.js'
+import { buildSummaryPrompt, countPending, parseStructuredSummary, renderStructuredSummary, speakerLabel, threadLine } from './summary-format.js'
 
 const ID = 'token-guardian'
 
@@ -93,6 +94,24 @@ export default {
     const persist = () => { try { writeJson(stateFile(), state) } catch (error) { api.log.warn('保存状态失败：', error.message) } }
     const persistSummary = () => { try { writeJson(summaryFile(), summaries) } catch (error) { api.log.warn('保存摘要失败：', error.message) } }
 
+    /**
+     * 这个聊天里「还挂着」的线索（说要洗澡、答应了什么、问了没答的问题）。
+     * 直接喂给压缩模型让它并进 pending —— 而不是指望模型从流水账里自己重新发现一遍。
+     * 账本由核心的 thread-ledger 维护（S1 规则 + S2 语义判定），这里只读。
+     * 任何异常都返回空数组：拿不到线索顶多少一条提示，绝不能让压缩失败。
+     */
+    function openThreadLines(chatId) {
+      try {
+        const ledger = api.core?.threads
+        if (!ledger || typeof ledger.list !== 'function' || !chatId) return []
+        const list = ledger.list({ chatKey: chatId, status: 'unresolved', limit: 8 }) || []
+        return list.map(threadLine).filter(Boolean)
+      } catch (error) {
+        api.log.debug(`${ID}：读挂起线索失败（不影响压缩）：${error.message}`)
+        return []
+      }
+    }
+
     /** 一次会话大概占多少 token：中文 1 字≈1.4 token（DeepSeek tokenizer 实测 1.3~1.5），
      * 旧口径 chars/1.2 会低估三成（上下文 80k 按成 60k，压缩该触发不触发，2026-11-05 复盘）。 */
     const CHARS_TO_TOKEN = 1.4
@@ -127,7 +146,9 @@ export default {
           const list = chatLog.readDay(days[i]) || []
           // chatlog 里 bot 自己的 who 是 'bot'（不是 'self'）：判错了会让摘要里全是「对方」，
           // 分不清哪句是她说的，摘要质量直接废掉一半。
-          for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${(r.who === 'bot' || r.who === 'self') ? '你' : '对方'}：${r.text}`)
+          // 其他人用**真实群名片**（2026-11-17）：以前一律塌缩成「对方」，群聊里 8 个人全叫「对方」，
+          // 模型只能写出「对方说 A、对方又说 B」，下轮很容易把 A 的经历安到 B 头上（issue #2366 同源）。
+          for (const r of list) if (String(r.chatId) === String(chatId)) rows.push(`${speakerLabel(r)}：${r.text}`)
         }
         // 摘要头固定占预算，原文吃剩下的额度 —— 总输入仍然有上限，不会越压越大。
         // 注意是 slice(-n)（保留最近 n 字）但要 join 回原顺序：rows 是从最近一天往前收集的。
@@ -223,21 +244,25 @@ export default {
         askTimer.unref?.()
       })
       // 摘要口径对齐 dsh-compaction-basic 的 checkpoint 规则：旧摘要是 PRIOR checkpoint，
-      // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的；一段话，别列表。
+      // 要合并成一份，不是照抄；最后一条发言按原意保留；分清谁说的。
       // 摘要口径也得跟着卡走：换卡后摘要里不该再出现旧角色的名字。
-      const systemPrompt = `你是「${resolveCharacterIdentity(chatId, cfg).name}」的记忆整理助手。把下面的内容压缩成一份供后续对话参考的摘要：`
-        + '如果开头带【更早聊天的摘要】，那是上一份检查点：保留仍然成立的事实、丢掉已经过时的、把新内容并进去，输出**一份**合并后的摘要，不要照抄也不要分两截。'
-        + '保留人物、关系、约定、重要事实、正在聊的话题和她的态度；最后一条用户发言按原意保留，别只写成「聊了某事」；'
-        + '每句话写清是谁说的（用「你」和「对方」），分不清的就标「有人」；'
-        + '整段连贯的文字，不要 Markdown 列表、不要分节、不要小标题；不要评价、不要编造、不要加标题；'
-        // 必须显式给字数上限：模型实测会写 2400~3200 字，而代码在 summaryMaxChars 处硬裁
-        // （slice），裁出来正好断在句中间。让它自己收敛到限额内，而不是事后剪掉。
-        + `**全文控制在 ${cfg.summaryMaxChars} 字以内**，宁可只留仍然重要的事实，也不要写长被截断。`
+      //
+      // 2026-11-17 起改成「五类结构化 → 代码渲染回一段话」（见 summary-format.js）：
+      // 纯文本流水账最容易丢的就是「还没了结的事」和「说好的约定」，而它们恰恰是下一轮
+      // 开场最该接的。给模型五个槽位，丢不掉；注入时仍渲染成连贯口语，不破坏拟人感。
+      const systemPrompt = buildSummaryPrompt({
+        name: resolveCharacterIdentity(chatId, cfg).name,
+        maxChars: cfg.summaryMaxChars,
+        hasPrev: Boolean(summaries[chatId]?.text),
+        threadLines: openThreadLines(chatId),
+      })
       // maxTokens 是「思考 + 正文」的总预算（pi-ai 把思考算进 output）。摘要正文
       // 上限 summaryMaxChars 字（约 ×1.4 token），再给思考留一份余量，否则思考吃掉
       // 预算后正文被截断甚至为空 —— 截断摘要照样算成功，空回包则再触发 askModel
       // 整轮重试，合计超过看门狗（2026-11-11 实测群摘要 64 字断在句中）。
-      const maxTokens = Math.max(600, Math.min(2400, Math.round(cfg.summaryMaxChars * 1.4) + 320))
+      // 结构化输出还要多付一份 JSON 壳（字段名 + 引号 + 括号），渲染回来大约只剩八成长度，
+      // 所以这里按 ×1.7 给预算（原来是 ×1.4），否则 JSON 被截断会解析失败、白跑一趟。
+      const maxTokens = Math.max(600, Math.min(3000, Math.round(cfg.summaryMaxChars * 1.7) + 400))
       let attempt = 0
       // 审核兜底：每次把「新说的部分」预算砍掉 40%（摘要头和更早的内容保留），最多 3 次。
       // 两个数都是实测出来的（2026-11-12，7.4k 字的真实群流水）：
@@ -319,7 +344,14 @@ export default {
         if (compactControllers.get(chatId) === controller) compactControllers.delete(chatId)
       }
       if (disposed) return { ok: false, reason: 'disposed', message: '模块已停止' }
-      const body = String(text || '').trim().slice(0, cfg.summaryMaxChars)
+      // 结构化优先，解析不了就当纯文本用（fail-soft）：
+      // 摘要本身是锦上添花，绝不能因为模型没按格式返回就让整次压缩失败 ——
+      // 那等于把她对更早对话的记忆直接清空，比「摘要不够漂亮」严重得多。
+      const rawText = String(text || '').trim()
+      const structured = parseStructuredSummary(rawText)
+      const rendered = structured ? renderStructuredSummary(structured) : ''
+      const body = (rendered || rawText).slice(0, cfg.summaryMaxChars)
+      if (!rendered) api.log.info(`${ID}：${chatId} 摘要没按五类返回（或用不上），本次按纯文本落库`)
       if (!body) {
         noteFailure(sessionKey, '模型没给出可用的摘要')
         return { ok: false, reason: 'empty-summary', message: '模型没给出可用的摘要' }
@@ -357,7 +389,10 @@ export default {
           api.core.chatLog.append(chatId, 'bot', `【更早聊天的摘要（${new Date().toLocaleString('zh-CN').slice(0, 16)}）】\n${body}`)
         } catch (error) { api.log.debug(`${ID}：摘要写回聊天流水失败（不影响压缩）：`, error.message) }
       }
+      // structured 只是留档（面板排障、看这次到底有没有抓住「还没了结的事」）；
+      // 注入上下文的永远是 text（渲染后的一段话），别让 JSON 进她的嘴边。
       summaries[sessionKey] = { text: body, at: Date.now(), chatId }
+      if (structured) summaries[sessionKey].structured = structured
       persistSummary()
       const st = state[sessionKey] && typeof state[sessionKey] === 'object' ? state[sessionKey] : {}
       // chars 永远只存真实字符数；estimate() 是唯一的 token 换算点
@@ -476,6 +511,8 @@ export default {
         lastError: String(st.lastError || ''),
         busy: compactBusy.has(chatId),
         hasSummary: Boolean(summaries[chatId]),
+        // 摘要里「还没了结的事」有几条：面板拿它显示，主人一眼能看出这次压缩抓没抓住重点
+        pendingCount: countPending(summaries[chatId]?.structured),
       })).sort((a, b) => b.tokens - a.tokens).slice(0, 30)
       return { ok: true, threshold: api.settings().threshold, items: rows }
     })
