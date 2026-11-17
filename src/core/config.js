@@ -402,7 +402,13 @@ export function normalize(raw) {
   if (!isObj(g.fishGuard)) g.fishGuard = { enabled: true }
   g.fishGuard.enabled = bool(g.fishGuard.enabled, true)
   g.cooldownSec = num(g.cooldownSec, 90, 0, 86400)
-  g.maxPerHour = num(g.maxPerHour, 6, 0, 120)
+  // 每小时**说话总条数**（令牌桶速率，不是「插话次数」——口径见 group-policy 的说明）。
+  // 上限放到 200：老配置会按 (1+engagedMaxReplies) 折算一次，调整过的大值不该被夹掉。
+  g.maxPerHour = num(g.maxPerHour, DEFAULT_GROUP_POLICY.maxPerHour, 0, 200)
+  // 连聊预算：以前这两个键压根没归一化，0 会被 group-policy 的 `||` 兜回默认值。
+  // 现在 0 就是 0（关掉连聊通道），面板也暴露出来了。
+  g.engagedMaxReplies = num(g.engagedMaxReplies, DEFAULT_GROUP_POLICY.engagedMaxReplies, 0, 20)
+  g.engagedMaxMs = num(g.engagedMaxMs, DEFAULT_GROUP_POLICY.engagedMaxMs, 0, 3600000)
   g.minRecentMessages = num(g.minRecentMessages, 3, 0, 100)
   g.activeWindowSec = num(g.activeWindowSec, 300, 30, 86400)
   if (!Array.isArray(g.quietHours) || g.quietHours.length !== 2) g.quietHours = DEFAULT_GROUP_POLICY.quietHours
@@ -716,12 +722,40 @@ const FILE = () => dataDir('config.json')
 /** 在某次更新里新增、会替她公开发东西的功能。以后再加这类功能，把配置键名加到这里。 */
 export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili', 'douyin']
 
+/** group.maxPerHour 的语义版本。2 = 「每小时说话总条数」（令牌桶速率）；1/缺省 = 「每小时插话次数」。 */
+export const GROUP_BUDGET_VERSION = 2
+
+/**
+ * 一次性迁移：`maxPerHour` 的口径从「每小时插话次数」改成「每小时说话总条数」。
+ *
+ * 老口径下这个数只数 interjectTimes，而每次插话成功还会白送 engagedMaxReplies 条「连聊」，
+ * 所以真实上限是 `maxPerHour × (1 + engagedMaxReplies)`（实测 6 → 22.5 条/小时）。
+ * 新口径直接数总条数，按同一个系数折算一次，升级后观感不变 —— 用户自己调过的大值同样折算，
+ * 想再调低就去面板改（面板现在能看到连聊预算了）。
+ *
+ * 只折算一次：迁移完写 `budgetVersion`，以后不再碰用户的值。
+ */
+function migrateGroupBudget(raw) {
+  if (!isObj(raw?.group)) return raw
+  const g = raw.group
+  if (g.budgetVersion === GROUP_BUDGET_VERSION) return raw
+  const perHour = Number(g.maxPerHour)
+  if (Number.isFinite(perHour) && perHour > 0) {
+    const rawEngaged = Number(g.engagedMaxReplies)
+    const engaged = Number.isFinite(rawEngaged) && rawEngaged > 0 ? rawEngaged : 0
+    g.maxPerHour = Math.min(200, Math.round(perHour * (1 + engaged)))
+  }
+  g.budgetVersion = GROUP_BUDGET_VERSION
+  return raw
+}
+
 export function loadConfig() {
   const raw = readJson(FILE(), {})
   // 老配置（向导上线前就填好了两个号）直接算向导已完成
   if (raw && raw.setupDone === undefined && raw.botQQ && raw.ownerQQ) raw.setupDone = true
   // 更新插件后新增的、会公开发东西的功能：老用户先关着，等他们自己在面板里打开（新安装照常默认开）
   if (raw && raw.setupDone) for (const k of OPT_IN_ON_UPDATE) if (raw[k] === undefined) raw[k] = { enabled: false }
+  migrateGroupBudget(raw)
   return normalize(raw)
 }
 
