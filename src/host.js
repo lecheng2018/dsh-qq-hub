@@ -443,6 +443,10 @@ export function apply(ctx) {
     listModels: models.listModels,
     defaultModel: () => defaultModel(ctx, { model: {} }),
     http: { body: readBody, raw: readRaw, query, send },
+    // 挂起线索账本的**只读**视图（list / stats）：模块能看「还有什么事没结」，
+    // 但写入仍走核心自己的 wiring（push/resolve/advance），避免模块把状态改坏。
+    // token-guardian 压缩时用它把「还没了结的事」并入摘要的 pending。
+    threads: threadLedger ? Object.freeze({ list: (o) => threadLedger.list(o), stats: () => threadLedger.stats() }) : undefined,
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }

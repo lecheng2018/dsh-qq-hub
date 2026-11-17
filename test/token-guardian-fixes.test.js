@@ -9,6 +9,8 @@ import { readFileSync } from 'node:fs'
 
 const src = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8')
 const TG = src('src/modules/token-guardian/index.js')
+const summaryFmt = await import('../src/modules/token-guardian/summary-format.js')
+const { buildSummaryPrompt, renderStructuredSummary } = summaryFmt
 
 test('P0-1 压缩输入带上上一份摘要，原文吃剩下的预算', () => {
   assert.match(TG, /const prev = summaries\[chatId\]/, '先取旧摘要')
@@ -43,7 +45,15 @@ test('P2 空闲判定感知 in-flight：她正忙时不压', () => {
 })
 
 test('P2 摘要指令带合并约束（对齐 checkpoint 口径）', () => {
-  assert.match(TG, /保留仍然成立的事实、丢掉已经过时的/)
-  assert.match(TG, /最后一条用户发言按原意保留/)
-  assert.match(TG, /整段连贯的文字，不要 Markdown 列表/)
+  // 2026-11-17 起 prompt 由 summary-format.js 组装（五类结构化）：
+  // 合并口径只在「输入里带旧摘要」时才要求，所以按 hasPrev: true 取。
+  const merged = buildSummaryPrompt({ name: '豆包', maxChars: 900, hasPrev: true })
+  assert.match(merged, /保留仍然成立的事实、丢掉已经过时的/)
+  assert.match(merged, /最后一条用户发言按原意保留/)
+  // 「别输出列表」以前靠 prompt 叮嘱，现在由渲染函数保证：它只会拼出一段话。
+  const text = renderStructuredSummary({ topics: ['聊光猫'], pending: ['还欠三条信息'], agreements: ['私聊不外带'] })
+  assert.ok(text.length > 0)
+  for (const bad of ['- ', '* ', '##', '\n', 'topics', 'pending']) {
+    assert.ok(!text.includes(bad), `渲染后不该出现 ${JSON.stringify(bad)}`)
+  }
 })
