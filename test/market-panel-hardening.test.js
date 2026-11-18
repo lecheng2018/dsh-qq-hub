@@ -76,6 +76,14 @@ test('config：indexUrls 只收 https，过滤 http/其它协议', () => {
   assert.deepEqual(cfg.modules.market.indexUrls, ['https://ok/index.json', 'https://ok2/index.json'])
 })
 
+test('config：市场 HTTP 代理只收无凭据的代理 origin', () => {
+  const cfg = normalize({ modules: { market: { httpProxy: 'http://192.168.10.1:7890' } } })
+  assert.equal(cfg.modules.market.httpProxy, 'http://192.168.10.1:7890')
+  for (const bad of ['', 'ftp://proxy:21', 'http://user:pass@proxy:8080', 'http://proxy:8080/path', 'not-a-url']) {
+    assert.equal(normalize({ modules: { market: { httpProxy: bad } } }).modules.market.httpProxy, '')
+  }
+})
+
 // ---- ③ guard 模块路由 ----
 const guard = createPanelGuard({ getConfig: () => ({ security: { panel: { allowedHosts: [] } } }), log: null })
 const req = (method, url, headers = {}) => ({ method, url, headers: { host: '127.0.0.1:5666', ...headers } })

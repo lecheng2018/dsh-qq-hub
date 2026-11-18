@@ -398,9 +398,10 @@ var NAV_ALIAS = {
   access: "主人 白名单 权限 群管 改资料",
   group: "群聊 插话 合并",
   model: "ai 大模型 视觉 思考强度",
-  token: "token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性", /* pii-scan:ignore */
+  token: "token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性",
   voice: "语音 tts 说话 音色 edge",
   stickers: "表情 小黄脸 gif 商城表情",
+  /* pii-scan:ignore */
   imagegen: "画图 图片",
   diary: "空间 说说 日记",
   speakup: "搭话 主动",
@@ -2105,6 +2106,7 @@ function Market({ st, toast, reload }) {
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState("");
   const [prog, setProg] = useState(null);
+  const [httpProxy, setHttpProxy] = useState(st.config?.modules?.market?.httpProxy || "");
   const load = () => get("/modules/market").then(setData).catch(() => setData({ ok: false, message: "市场加载失败", list: [] }));
   useEffect(() => {
     load();
@@ -2122,6 +2124,16 @@ function Market({ st, toast, reload }) {
     reload();
     load();
     return r;
+  };
+  const saveProxy = async () => {
+    const wanted = httpProxy.trim();
+    const r = await post("/save", { modules: { market: { httpProxy: wanted } } });
+    const saved = r.config?.modules?.market?.httpProxy || "";
+    setHttpProxy(saved);
+    toast(wanted && !saved ? "代理地址不合法，已清空" : "市场代理已保存", wanted && !saved ? "err" : "ok");
+    reload();
+    setData(null);
+    await load();
   };
   const install = async (e, confirmReplace = false) => {
     setBusy(e.id);
@@ -2164,6 +2176,7 @@ function Market({ st, toast, reload }) {
       right: /* @__PURE__ */ h(Switch, { on: enabled, onChange: toggle })
     },
     !enabled ? /* @__PURE__ */ h("div", { className: "ab-note" }, "市场没开。打开右上角开关后刷新列表。") : null,
+    /* @__PURE__ */ h("div", { style: { marginBottom: 10 } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: 1 }, value: httpProxy, placeholder: "例如 http://192.168.10.1:7890，留空直连", onChange: (e) => setHttpProxy(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: saveProxy }, "保存代理"))),
     enabled && !data ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : null,
     enabled && data && !data.ok ? /* @__PURE__ */ h("div", { className: "ab-note err" }, data.message || "索引读不到", "（已装模块不受影响）") : null,
     enabled && data && data.ok ? /* @__PURE__ */ h(Fragment, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).map((e) => /* @__PURE__ */ h("div", { key: e.id, style: { padding: "8px 0", borderBottom: "1px solid var(--ab-line, rgba(127,127,127,.15))" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 8 } }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null, /* @__PURE__ */ h("span", { style: { flex: 1 } }), e.installed ? /* @__PURE__ */ h(Fragment, null, e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : null, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4 } }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）`].filter(Boolean).join(" · ")), e.sha256 ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2, wordBreak: "break-all" } }, "sha256: ", e.sha256, e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : "") : null, e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 4 } }, e.blocked) : null)), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
