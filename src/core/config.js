@@ -552,7 +552,7 @@ export function normalize(raw) {
   delete c.reply.llmSplit
   g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
-  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
+  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http', 'doubao', 'qwentts', 'mimo'].includes(c.voice.engine)) c.voice.engine = 'auto'
   // 通用 HTTP TTS：手改 config 写脏了也不能把请求发歪（语义移植上游）
   if (!c.voice.http || typeof c.voice.http !== 'object' || Array.isArray(c.voice.http)) c.voice.http = { urlTemplate: '', method: 'GET', headers: '', body: '' }
   c.voice.http.urlTemplate = String(c.voice.http.urlTemplate ?? '').trim()

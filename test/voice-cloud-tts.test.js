@@ -297,3 +297,14 @@ test('三个云端引擎的 API Key 都进了 SECRETS：面板拿不到明文，
   assert.equal(merged.voice.qwentts.apiKey, 'secret-qwen')
   assert.equal(merged.voice.mimo.apiKey, 'secret-mimo')
 })
+
+// ---------- 部署测试发现的问题回归：normalize 的引擎白名单要认新引擎 ----------
+
+test('normalize：voice.engine 白名单放行 doubao / qwentts / mimo（部署实测曾被打回 auto）', async () => {
+  const config = await import('../src/core/config.js')
+  for (const engine of ['doubao', 'qwentts', 'mimo']) {
+    const c = config.normalize({ voice: { engine } })
+    assert.equal(c.voice.engine, engine, engine)
+  }
+  assert.equal(config.normalize({ voice: { engine: 'unknown-engine' } }).voice.engine, 'auto', '未知引擎仍回 auto')
+})
