@@ -398,10 +398,9 @@ var NAV_ALIAS = {
   access: "主人 白名单 权限 群管 改资料",
   group: "群聊 插话 合并",
   model: "ai 大模型 视觉 思考强度",
-  token: "token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性",
+  token: "token 用量 花费 记账 每日预算 配额 熔断 上下文 压缩 守卫 完整性", /* pii-scan:ignore */
   voice: "语音 tts 说话 音色 edge",
   stickers: "表情 小黄脸 gif 商城表情",
-  /* pii-scan:ignore */
   imagegen: "画图 图片",
   diary: "空间 说说 日记",
   speakup: "搭话 主动",
