@@ -4,9 +4,9 @@
 // 管线：文字 → TTS → 文件路径。任何一步失败由调用方退回发文字。
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, statSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, readdirSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs'
 import { buildWav } from './wav.js'
-import { join, dirname } from 'node:path'
+import { join, dirname, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { dataDir } from '../core/store.js'
@@ -280,6 +280,299 @@ export async function httpSynth(text, c) {
   return saveAudio(buf, c.sampleRate || 24000)
 }
 
+// ---------- 云端 TTS：豆包语音 2.0 / 阿里百炼 qwen-tts / 小米 MiMo ----------
+// 语义移植上游社区模块（aurabot mods 的 voice / qwen-tts / aura-mimo，均 MIT），按本文件管线落地：
+// 都走「引擎失败 → 退回 edge-tts / Windows 语音」的老路，不会让她突然不会说话。
+// 配置都在 config.voice.doubao / voice.qwentts / voice.mimo，面板「语音」页填。
+
+/** 豆包语音 2.0（火山引擎）：POST 流式 NDJSON，data 字段是 base64 WAV 分片。 */
+export const DOUBAO_API = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional'
+
+/** 按关键词给这句话配一条语气指令（上游 voice 模块的 autoEmotion 规则，不参与计费）。 */
+const DOUBAO_EMOTION_RULES = [
+  [['哭', '难过', '伤心', '委屈', '失落', '心碎', '难受', '呜呜', '唉'], '用低落、难过、带一点鼻音的语气说这句话'],
+  [['生气', '气死', '烦死', '讨厌', '滚', '闭嘴', '过分', '凭什么', '怒了'], '用生气、急躁、带一点责备的语气说这句话'],
+  [['开心', '高兴', '太好了', '哈哈', '笑死', '棒', '嘿嘿', '耶', '爽'], '用开心、轻快、带笑意的语气说这句话'],
+  [['撒娇', '不要嘛', '人家', '抱抱', '哼', '好不好嘛', '陪我'], '用撒娇、软糯一点的语气说这句话'],
+  [['害怕', '恐怖', '吓死', '紧张', '慌了', '担心'], '用紧张、放轻、带一点害怕的语气说这句话'],
+  [['别怕', '没事的', '我在', '乖', '安慰', '心疼'], '用温柔、安慰、放慢一点的语气说这句话'],
+  [['温柔', '宠溺', '哄哄我', '轻声'], '用温柔、宠溺、放慢一点的语气说这句话'],
+  [['严肃', '冷静', '正经', '好好说'], '用冷静、平稳、认真的语气说这句话'],
+  [['惊讶', '真的假的', '居然', '不会吧', '卧槽', '哇'], '用惊讶、语调上扬的语气说这句话'],
+]
+
+/** 关键词命中最多的一条语气指令；没命中返回空串。 */
+export function inferDoubaoEmotion(text) {
+  const t = String(text || '')
+  let best = ''
+  let bestScore = 0
+  for (const [words, hint] of DOUBAO_EMOTION_RULES) {
+    let score = 0
+    for (const w of words) {
+      let i = 0
+      while ((i = t.indexOf(w, i)) !== -1) { score++; i += w.length }
+    }
+    if (score > bestScore) { best = hint; bestScore = score }
+  }
+  return best
+}
+
+/** 流式 WAV 的 RIFF/data 长度字段是 0xFFFFFFFF，回填真实长度，否则部分播放器读不出时长。 */
+export function fixStreamingWav(buf) {
+  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') return buf
+  buf.writeUInt32LE(buf.length - 8, 4)
+  const pos = buf.indexOf(Buffer.from('data'))
+  if (pos !== -1 && buf.length >= pos + 8) buf.writeUInt32LE(buf.length - pos - 8, pos + 4)
+  return buf
+}
+
+export async function doubaoSynth(text, c) {
+  const key = String(c.apiKey || '').trim()
+  if (!key) throw new Error('豆包语音还没填 API Key（火山引擎「豆包语音」控制台创建）')
+  const instructions = String(c.contextTexts || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+  if (c.autoEmotion !== false) {
+    const hint = inferDoubaoEmotion(text)
+    if (hint) instructions.push(hint)
+  }
+  const req = {
+    text,
+    speaker: String(c.speaker || 'S_1CmxEOek2').trim(),
+    audio_params: {
+      format: 'wav',
+      sample_rate: 24000,
+      speech_rate: Math.max(-50, Math.min(100, Math.round(Number(c.speechRate) || 0))),
+    },
+  }
+  if (instructions.length) req.context_texts = instructions
+  const timeoutMs = Math.max(5, Number(c.timeout) || 60) * 1000
+  const r = await fetch(String(c.endpoint || DOUBAO_API), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'X-Api-Key': key,
+      'X-Api-Resource-Id': String(c.resourceId || 'seed-icl-2.0'),
+      'X-Api-Connect-Id': randomUUID(),
+    },
+    body: JSON.stringify({ user: { uid: 'dsh-qq-hub' }, req_params: req }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const raw = await r.text()
+  if (!r.ok) {
+    const logid = r.headers.get('x-tt-logid') || ''
+    throw new Error(`豆包语音 HTTP ${r.status}：${raw.slice(0, 160)}${logid ? `（logid=${logid}）` : ''}`)
+  }
+  // 返回是逐行 JSON：{code, message?, data?}；code 非 0 记下来，data 是 base64 WAV 分片
+  const chunks = []
+  let message = ''
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim()
+    if (!s) continue
+    let item = null
+    try { item = JSON.parse(s) } catch { continue }
+    if (item.code !== 0 && item.code != null && !item.data) message = `code=${item.code} ${item.message || ''}`
+    if (item.data) chunks.push(Buffer.from(String(item.data), 'base64'))
+  }
+  const audio = Buffer.concat(chunks)
+  if (!audio.length) throw new Error(`豆包语音没返回音频${message ? `：${message}` : `：${raw.slice(0, 160)}`}`)
+  return saveAudio(fixStreamingWav(audio), 24000)
+}
+
+// ---- 阿里百炼 qwen-tts（DashScope SpeechSynthesizer）----
+
+/** 【语气】标记：『【撒娇】行吧』→ 拆出正文和语气描述；表里没有的标记原样保留。 */
+const QWEN_TONES = {
+  撒娇: '这一句在撒娇，声音软一点，尾音稍微拖一点点，别太用力。',
+  吐槽: '这一句在吐槽，语气随意、带点无语，别一字一顿，也别真的发火。',
+  困: '这一句很困，声音偏低、偏慢、含糊一点，像马上要睡着了。',
+  害羞: '这一句有点不好意思，声音小下去，说得比平时快一点。',
+  生气: '这一句有点火，语气冲一点，语速快一点。',
+  委屈: '这一句有点委屈，声音软下来，带一点闷。',
+  惊讶: '这一句在惊讶，语速快一点，语气往上扬。',
+  开心: '这一句很高兴，语气亮一点，往上扬。',
+  无语: '这一句很无语，语气平、慢，带一点叹气的感觉。',
+  认真: '这一句在认真说事，语气收敛，不撒娇。',
+  无奈: '这一句有点无奈，语气自然、轻轻叹口气。',
+  疑惑: '这一句有点疑惑，语气带一点好奇。',
+  卖萌: '这一句在卖萌，语气轻快可爱，不要太夸张。',
+}
+const QWEN_TONE_RE = /[【\[]([^】\]]{1,6})[】\]]/g
+
+export function parseQwenTone(text) {
+  const src = String(text || '')
+  let desc = ''
+  const clean = src.replace(QWEN_TONE_RE, (m, name) => {
+    const hint = QWEN_TONES[String(name).trim()]
+    if (hint) { desc = desc || hint; return ' ' }
+    return m
+  }).replace(/[ \t]{2,}/g, ' ').trim()
+  return { text: clean, instruction: desc }
+}
+
+/** 长文本按句末标点切成不超过 maxChars 的分段（单段超长按逗号切，再不行硬切）。 */
+export function splitQwenText(text, maxChars = 300) {
+  const src = String(text || '').replace(/\r\n/g, '\n').trim()
+  if (!src) return []
+  if (src.length <= maxChars) return [src]
+  const pieces = src.match(/[^。！？!?；;\n…]+[。！？!?；;\n…]*|[。！？!?；;\n…]+/g) || [src]
+  const out = []
+  let buf = ''
+  const push = () => { if (buf.trim()) out.push(buf.trim()); buf = '' }
+  for (const p of pieces) {
+    if ((buf + p).length <= maxChars) { buf += p; continue }
+    push()
+    if (p.length <= maxChars) { buf = p; continue }
+    const parts = p.match(/[^，,、：:]+[，,、：:]*/g) || [p]
+    for (const q of parts) {
+      if ((buf + q).length <= maxChars) { buf += q; continue }
+      push()
+      if (q.length <= maxChars) { buf = q; continue }
+      for (let i = 0; i < q.length; i += maxChars) {
+        const chunk = q.slice(i, i + maxChars)
+        if (chunk.length === maxChars) out.push(chunk)
+        else buf = chunk
+      }
+    }
+  }
+  push()
+  return out.length ? out : [src.slice(0, maxChars)]
+}
+
+function qwenBase(s) {
+  let u = String(s || '').trim() || 'https://dashscope.aliyuncs.com'
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u
+  try { const p = new URL(u); return `${p.protocol}//${p.host}` } catch { return 'https://dashscope.aliyuncs.com' }
+}
+
+/** 合成一段：返回音频 Buffer。百炼把音频放在 output.audio.url（24 小时有效），要再 GET 一次。 */
+async function qwenSegment(text, instruction, c) {
+  const url = `${qwenBase(c.baseUrl)}/api/v1/services/audio/tts/SpeechSynthesizer`
+  const input = { text, voice: String(c.voice || 'Cherry').trim(), format: 'wav', sample_rate: Number(c.sampleRate) || 24000 }
+  if (Number.isFinite(Number(c.seed)) && Number(c.seed) > 0) input.seed = Math.max(0, Math.min(65535, Math.round(Number(c.seed))))
+  if (Number(c.speechRate) > 0 && Number(c.speechRate) !== 1) input.rate = Number(c.speechRate)
+  if (instruction) input.instruction = instruction
+  const timeoutMs = Math.max(10000, Number(c.timeoutMs) || 30000)
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${String(c.apiKey || '').trim()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: String(c.model || 'qwen-audio-3.1-tts-flash').trim(), input, parameters: {} }),
+    signal: AbortSignal.timeout(timeoutMs),
+  })
+  const raw = await r.text()
+  if (!r.ok) {
+    const why = { 401: '百炼不认这个 API Key', 403: '这个 API Key 没有调语音的权限', 404: '接口地址不对（baseUrl 只填到域名）', 429: '调用太频繁被限流了' }[r.status] || `HTTP ${r.status}`
+    throw new Error(`百炼语音合成失败：${why}：${raw.slice(0, 120)}`)
+  }
+  let j
+  try { j = JSON.parse(raw) } catch { throw new Error('百炼语音返回的不是 JSON：' + raw.slice(0, 120)) }
+  const audioUrl = j?.output?.audio?.url
+  if (!audioUrl) throw new Error('百炼语音没返回音频地址：' + raw.slice(0, 160))
+  const a = await fetch(audioUrl, { signal: AbortSignal.timeout(timeoutMs) })
+  if (!a.ok) throw new Error(`下载合成好的音频失败（HTTP ${a.status}）`)
+  const buf = Buffer.from(await a.arrayBuffer())
+  if (buf.length < 1024) throw new Error(`拿到的音频太小（${buf.length} 字节），可能是空音频`)
+  return buf
+}
+
+function qwenParseWav(buf) {
+  if (buf.length < 12 || buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WAVE') return null
+  let off = 12
+  let fmt = null
+  let data = null
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4)
+    const size = buf.readUInt32LE(off + 4)
+    const start = off + 8
+    if (id === 'fmt ' && size >= 16 && start + 16 <= buf.length) fmt = { channels: buf.readUInt16LE(start + 2), rate: buf.readUInt32LE(start + 4), bits: buf.readUInt16LE(start + 14) }
+    else if (id === 'data') data = buf.subarray(start, Math.min(buf.length, start + size))
+    off = start + size + (size & 1)
+    if (size <= 0 || off > buf.length) break
+  }
+  if (!fmt || !data || !fmt.rate || !fmt.bits) return null
+  return { ...fmt, data }
+}
+
+/** 百炼返回的 WAV 头部 data 长度字段不可信，按真实数据重打包；多段按 PCM 拼成一个 WAV。 */
+function qwenConcatWav(bufs) {
+  const parsed = bufs.map((b) => qwenParseWav(b))
+  if (parsed.some((p) => !p)) return bufs.length === 1 ? bufs[0] : null
+  const first = parsed[0]
+  const same = parsed.every((p) => p.channels === first.channels && p.rate === first.rate && p.bits === first.bits)
+  if (!same) return null
+  const pcm = Buffer.concat(parsed.map((p) => p.data))
+  return buildWav(new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.length / 2)), first.rate)
+}
+
+export async function qwenSynth(text, c) {
+  const key = String(c.apiKey || '').trim()
+  if (!key) throw new Error('百炼语音还没填 API Key（阿里云百炼创建）')
+  const { text: clean, instruction: toneDesc } = parseQwenTone(text)
+  const base = String(c.instruction || '').trim()
+  const instruction = toneDesc ? (base ? `${base}${base.endsWith('。') ? '' : '。'}${toneDesc}` : toneDesc) : base
+  const maxChars = Math.min(300, Math.max(50, Number(c.maxCharsPerSegment) || 300))
+  const segs = splitQwenText(clean || text, maxChars)
+  const bufs = []
+  for (let i = 0; i < segs.length; i++) {
+    try {
+      bufs.push(await qwenSegment(segs[i], instruction, c))
+    } catch (error) {
+      throw new Error(segs.length > 1 ? `百炼语音第 ${i + 1}/${segs.length} 段合成失败——${error.message}` : error.message)
+    }
+  }
+  const merged = bufs.length === 1 ? bufs[0] : qwenConcatWav(bufs)
+  if (!merged || !merged.length) throw new Error('百炼语音分段格式不一致，拼不成完整音频')
+  return saveAudio(merged, Number(c.sampleRate) || 24000)
+}
+
+// ---- 小米 MiMo TTS（OpenAI 兼容 chat/completions，message.audio.data 是 base64 音频）----
+
+const MIMO_MIME = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.flac': 'audio/flac', '.ogg': 'audio/ogg' }
+
+export async function mimoSynth(text, c) {
+  const key = String(c.apiKey || '').trim()
+  if (!key) throw new Error('MiMo 语音还没填 API Key（小米 MiMo 开放平台创建，sk- 开头）')
+  const base = String(c.apiBase || 'https://api.xiaomimimo.com/v1').trim().replace(/\/+$/, '')
+  const model = String(c.model || 'mimo-v2.5-tts-voiceclone').trim()
+  const style = String(c.stylePrompt || '').trim()
+  const seed = String(c.seedText || '').trim()
+  const messages = []
+  let audioVoice = ''
+  if (model.toLowerCase().includes('voicedesign')) {
+    // 音色描述模型：不用参考音频，第一条 user 消息就是音色描述
+    messages.push({ role: 'user', content: style || seed || '自然亲切的中文女声，语速中等，情绪温柔' })
+    messages.push({ role: 'assistant', content: text })
+  } else {
+    // 声音复刻：参考音频（本机路径）转 data URI
+    const ref = String(c.refAudio || '').trim()
+    if (!ref || !existsSync(ref)) throw new Error('MiMo 复刻音色要先在「语音」页填参考音频路径（本机一段 mp3/wav，几秒到几十秒都行）')
+    const mime = MIMO_MIME[extname(ref).toLowerCase()] || 'audio/mpeg'
+    audioVoice = `data:${mime};base64,${readFileSync(ref).toString('base64')}`
+    if (seed) messages.push({ role: 'user', content: seed })
+    messages.push({ role: 'assistant', content: style ? `<style>${style}</style>${text}` : text })
+  }
+  const timeoutMs = Math.max(30, Number(c.timeout) || 180) * 1000
+  const payload = { model, messages, audio: { format: 'wav' } }
+  if (audioVoice) payload.audio.voice = audioVoice
+  let r
+  try {
+    r = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (e) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new Error(`MiMo 请求超时（${Math.round(timeoutMs / 1000)} 秒）：生成较慢，可把超时调大试试`)
+    throw new Error(`连不上 MiMo 接口（${base}）：${e?.message || e}`)
+  }
+  const bodyText = await r.text()
+  if (!r.ok) throw new Error(`MiMo HTTP ${r.status}：${bodyText.slice(0, 160)}`)
+  let data
+  try { data = JSON.parse(bodyText) } catch { throw new Error('MiMo 返回的不是 JSON：' + bodyText.slice(0, 160)) }
+  const b64 = data?.choices?.[0]?.message?.audio?.data
+  if (!b64) throw new Error('MiMo 没有返回音频内容：' + bodyText.slice(0, 160))
+  return saveAudio(Buffer.from(b64, 'base64'), 24000)
+}
+
 /** 说话语音的后处理：目前原样返回（语音条直接用 TTS 的声音）。 */
 export const voiceConverters = []
 
@@ -291,7 +584,7 @@ export async function textToSpeech(text, opt = {}, log) {
   if (!clean) throw new Error('没有要念的文字')
   let file = ''
   let engine = ''
-  const local = { cosyvoice: cosyvoiceSynth, gptsovits: gptsovitsSynth, http: httpSynth }[opt.engine]
+  const local = { cosyvoice: cosyvoiceSynth, gptsovits: gptsovitsSynth, http: httpSynth, doubao: doubaoSynth, qwentts: qwenSynth, mimo: mimoSynth }[opt.engine]
   if (local) {
     try {
       file = await local(clean, opt[opt.engine] || {})

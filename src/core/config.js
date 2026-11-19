@@ -107,13 +107,25 @@ const DEFAULTS_RAW = {
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
   voice: {
     enabled: true,
-    // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http = 指定引擎（失败都会退回 Windows 语音）
+    // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http /
+    // doubao / qwentts / mimo = 指定引擎（失败都会退回 edge-tts 或 Windows 语音）
     engine: 'auto',
     cosyvoice: { url: 'http://127.0.0.1:50000', mode: 'sft', spkId: '中文女', instruct: '', sampleRate: 22050 },
     gptsovits: { url: 'http://127.0.0.1:9880', refAudio: '', promptText: '', promptLang: 'zh', textLang: 'zh' },
     // 通用 HTTP TTS：GET 地址模板（{text} 替换成要念的话）；POST 时配请求头/请求体，
     // 可接火山豆包 / 阿里 / 讯飞这类要鉴权的云 TTS（JSON 里的 base64 音频自动解出）
     http: { urlTemplate: '', method: 'GET', headers: '', body: '' },
+    // 豆包语音 2.0（火山引擎，语义移植上游社区模块 voice）：X-Api-Key 鉴权，流式 NDJSON 返回 base64 WAV 分片
+    doubao: { apiKey: '', resourceId: 'seed-icl-2.0', speaker: 'S_1CmxEOek2', speechRate: 0, contextTexts: '', autoEmotion: true, timeout: 60 },
+    // 阿里百炼 qwen-tts（DashScope SpeechSynthesizer；语义移植上游 qwen-tts 模块）
+    qwentts: {
+      apiKey: '', baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry',
+      speechRate: 1.0, sampleRate: 24000, seed: 20261, maxCharsPerSegment: 300, timeoutMs: 30000,
+      instruction: '用日常聊天说话的语气，像在手机上随口跟朋友讲话，语速略快，不要播音腔。中文。',
+    },
+    // 小米 MiMo TTS（OpenAI 兼容 chat/completions；语义移植上游 aura-mimo 模块）：
+    // voiceclone 模型用参考音频（本机路径）克隆音色，voicedesign 模型用音色描述
+    mimo: { apiKey: '', apiBase: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts-voiceclone', stylePrompt: '', seedText: '', refAudio: '', timeout: 180 },
     voice: 'zh-CN-XiaoyiNeural',
     rate: '+0%',
     pitch: '+0Hz',
