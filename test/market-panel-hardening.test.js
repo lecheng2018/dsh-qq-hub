@@ -5,6 +5,7 @@
 // ④ readBody 请求体上限
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 const { createMarket } = await import('../src/core/market.js')
 const { normalize, publicConfig } = await import('../src/core/config.js')
@@ -74,6 +75,23 @@ test('config：精排密钥进 SECRETS，面板掩码且标记已设置', () => 
 test('config：indexUrls 只收 https，过滤 http/其它协议', () => {
   const cfg = normalize({ modules: { market: { indexUrls: ['https://ok/index.json', 'http://internal/index.json', 'ftp://x', 'https://ok2/index.json'] } } })
   assert.deepEqual(cfg.modules.market.indexUrls, ['https://ok/index.json', 'https://ok2/index.json'])
+})
+
+test('config：市场 HTTP 代理只收无凭据的代理 origin', () => {
+  const cfg = normalize({ modules: { market: { httpProxy: 'http://192.168.10.1:7890' } } })
+  assert.equal(cfg.modules.market.httpProxy, 'http://192.168.10.1:7890')
+  for (const bad of ['', 'ftp://proxy:21', 'http://user:pass@proxy:8080', 'http://proxy:8080/path', 'not-a-url']) {
+    assert.equal(normalize({ modules: { market: { httpProxy: bad } } }).modules.market.httpProxy, '')
+  }
+})
+
+test('市场面板：代理与加速源都有独立保存入口并提交对应配置', () => {
+  const source = readFileSync(new URL('../client/src/views/modules.js', import.meta.url), 'utf8')
+  assert.match(source, /modules: \{ market: \{ httpProxy: wanted \} \}/)
+  assert.match(source, /modules: \{ market: \{ indexUrls: wanted \} \}/)
+  assert.match(source, />保存代理</)
+  assert.match(source, />保存加速源</)
+  assert.match(source, /清空后保存可恢复默认双源/)
 })
 
 // ---- ③ guard 模块路由 ----

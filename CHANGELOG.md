@@ -1,5 +1,37 @@
 # 更新记录
 
+## Unreleased · fix 服务端 413「上下文或图片过大」把会话永久卡死：识别到就自动换新会话（2026-11-19）
+
+**现象（真机）**：某个 QQ 聊天里每一轮都失败，面板显示「本轮运行失败」，服务端原文是
+
+```
+413 {"code":"plugin_request_too_large","message":"本次对话上下文或图片过大：请求约 5.8 MiB，插件内存上限 64 MiB；请新建会话或减少图片后重试","type":"invalid_request_error"}
+```
+
+而且是**之后每一轮都失败**——重启插件、等一会儿都不管用，只有手动 `/reset` 能解。
+
+**根因**：这个 64 MiB 是 DeepSeek 服务端按**会话累计**的额度（历史上下文 + 图片字节都在里面），不是单次请求的独立额度。DSH 把 413 归类为 `INVALID_REQUEST`（明确不重试），agent-loop 以 `turn/end reason.kind === 'error'` 结束本轮，插件侧旧实现只是「如实失败、不发回复」，于是：
+
+- 旧会话一个字都没少，下一条消息照样重放同一份超限历史；
+- 又一次 413，又「如实失败」……形成一个用户完全无法自愈的死循环。
+
+**改法**（`src/host/modular-core.js`）：
+
+- 新增 `turnFailureLooksOversized(failure)` 判定，认三种口径：结构化 `status === 413`；`INVALID_REQUEST` + 服务端特征文案（`plugin_request_too_large` / 「上下文或图片过大」/「插件内存上限」）；无 code 但 message 里同时出现 413 与过大特征（兜底旧宿主只透传 message）。
+- 新增 `handleOversizedTurn()`：记 `oversizedChats` 标记 + 给聊天发一句人话提示（说明为什么这轮没回、下一条会重新开始、旧对话仍可找回）。
+- 接在**三个**失败落点上：主链 `turn/end` 的 `finishReply()` 非 completed 分支、`followup` 先于 `turn/end` 拒绝的分支（此处才有 `LlmError.failure` 的 status）、主动回合 `runPromptTurn` 的 `turn/end`（`notify: false`，后台任务不往聊天里灌提示）。
+- 真正的归档重建放在**下一条消息进入 `execute` / `runPromptTurn` 时**（与既有超时自愈 `timedOutChats` 同款时序）：不在回合失败路径里立刻归档，避免和事件监听收尾抢时序、也避免把用户正在面板里翻看的会话当场抽走。
+
+**为什么不顺手把图片删光就完事**：那是 `IMAGE_OFFLOAD_REQUIRED` 的路子（DSH 自己在请求超预算时抛、由 `@deepseek-ai/dsh-compaction-image-offload` 永久降级旧图后重试）。服务端这个 413 发生在**它自己算完账之后**，插件拿不到「删哪几张就够」的数量，且此刻请求已经发出去了；换会话是唯一确定能恢复的动作。
+
+**验证**：新增 `test/modular-oversize-auto-reset.test.js`（5 例，全部走真实入口 `dispatchLegacyEvent` / `runPromptTurn`）：
+
+1. `INVALID_REQUEST` + `status: 413` → 本轮不发回复、发提示、**下一条消息**换新会话且旧会话进归档；
+2. 只有服务端中文文案、没有结构化字段 → 同样命中（防宿主只透传 message）；
+3. 普通错误（`RATE_LIMIT` 429）→ **不**换会话、**不**发提示（不误伤正常失败重试路径）；
+4. 纯文本 `HTTP 413 … 上下文或图片过大`（无 code）→ 兜底命中；
+5. 主动回合路径同样自愈，且不往聊天里发提示。
+
 ## Unreleased · feat 图片进历史的预算：按会话累计，超出的新图不再进上下文（2026-11-19）
 
 **背景**：服务端对「会话累计上下文 + 图片字节」有硬上限（同一天的真机 413 `plugin_request_too_large`：请求约 5.8 MiB、插件内存上限 64 MiB）。图片块和文字不一样：**一旦进了历史，之后每一轮都会重新发一遍**，于是聊得越久、图越多，请求只涨不跌，最后撞上限。DSH 自己的 `dsh-compaction-image-offload` 只在「单次请求超过适配器预算」时才动手（默认 128 MiB / 量化 64 MiB），比服务端这个额度大得多，赶不上。
