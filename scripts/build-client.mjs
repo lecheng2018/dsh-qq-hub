@@ -43,9 +43,23 @@ function normalizeEol(code) {
  * 它用「/ ** 人物小档案」这条注释作为 Mood 的结束锚点，而 esbuild 会把源码注释剥掉。
  * 这里在打包后把锚点注释补回（只此一条；其余产物文本补丁已随 JSX 重构一并移除——
  * 纯函数类断言已改为直接读源码或 import 模块，不再依赖产物格式）。
+ *
+ * 另外补第二个锚点：`pii-scan:ignore` 豁免标记必须和它豁免的那一行**同一行**（扫描按行匹配），
+ * 而 nav 的别名表在源码里是一整行、esbuild 会把它拆成每个 key 一行，行尾注释因此漂到别的行去。
+ * 产物里手工贴标记 = 产物与构建结果不一致，CI 的「bundle 是否最新」门禁会红
+ * （2026-11-19：main 上 caf896b 就是这样红了一次，连带所有 PR 一起红）。
+ * 所以在构建阶段把它挂回 token 别名那一行，产物与源码从此自洽。
  */
 function postProcess(code) {
-  return code.replace(/\nfunction ProfilesList\(/, '\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesList(')
+  return code
+    .replace(/\nfunction ProfilesList\(/, '\n/** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */\nfunction ProfilesList(')
+    // 先摘掉所有**独占一行**的标记（esbuild 把源码行尾注释拆出去的结果），
+    // 再把它挂到真正被豁免的 token 别名那一行末尾。
+    .replace(/\n[ \t]*\/\*!? ?pii-scan:ignore ?\*\/[ \t]*(?=\n)/g, '')
+    .replace(
+      /([ \t]*token: "token 用量[^"\n]*",)/,
+      '$1 /* pii-scan:ignore */',
+    )
 }
 
 async function build() {
