@@ -518,7 +518,7 @@ export async function qwenSynth(text, c) {
       throw new Error(segs.length > 1 ? `百炼语音第 ${i + 1}/${segs.length} 段合成失败——${error.message}` : error.message)
     }
   }
-  const merged = bufs.length === 1 ? bufs[0] : qwenConcatWav(bufs)
+  const merged = qwenConcatWav(bufs)
   if (!merged || !merged.length) throw new Error('百炼语音分段格式不一致，拼不成完整音频')
   return saveAudio(merged, Number(c.sampleRate) || 24000)
 }
@@ -544,6 +544,7 @@ export async function mimoSynth(text, c) {
     // 声音复刻：参考音频（本机路径）转 data URI
     const ref = String(c.refAudio || '').trim()
     if (!ref || !existsSync(ref)) throw new Error('MiMo 复刻音色要先在「语音」页填参考音频路径（本机一段 mp3/wav，几秒到几十秒都行）')
+    if (statSync(ref).size > 15 * 1024 * 1024) throw new Error('参考音频太大（上限 15MB）：截一段几秒到几十秒的就够')
     const mime = MIMO_MIME[extname(ref).toLowerCase()] || 'audio/mpeg'
     audioVoice = `data:${mime};base64,${readFileSync(ref).toString('base64')}`
     if (seed) messages.push({ role: 'user', content: seed })

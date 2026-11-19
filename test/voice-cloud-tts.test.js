@@ -3,7 +3,7 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, openSync, writeSync, closeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -191,6 +191,22 @@ test('qwenSynth：长文本切两段 → 两次合成 → 拼成一个 WAV；模
   assert.equal(merged.length, 44 + 1200 + 1600)
 })
 
+test('qwenSynth：单段也重打包 WAV 头（百炼返回的 data 长度字段不可信）', async () => {
+  hits.length = 0
+  const wav = tinyWav(1200)
+  wav.writeUInt32LE(0x7fffff9b, 40) // 百炼真实返回里见过的坏 data 长度
+  let step = 0
+  respond = (res) => {
+    step++
+    if (step === 1) { res.writeHead(200); res.end(JSON.stringify({ output: { audio: { url: `${base}/one.wav` } } })) }
+    else { res.writeHead(200); res.end(wav) }
+  }
+  const file = await qwenSynth('一句话', { apiKey: 'sk-1', baseUrl: base })
+  const saved = readFileSync(file)
+  assert.equal(saved.readUInt32LE(40), saved.length - 44, 'data 长度按真实字节回填')
+  assert.equal(saved.readUInt32LE(4), saved.length - 8, 'RIFF 长度也回填')
+})
+
 test('qwenSynth：401 给人话报错；没填 Key 明确报错', async () => {
   hits.length = 0
   respond = (res) => { res.writeHead(401); res.end('{"code":"InvalidApiKey"}') }
@@ -246,4 +262,38 @@ test('mimoSynth：voicedesign 模型用音色描述，不带 audio.voice；参�
   assert.ok(existsSync(file))
   await assert.rejects(() => mimoSynth('你好', { apiKey: 'sk', model: 'mimo-v2.5-tts-voiceclone' }), /参考音频/)
   await assert.rejects(() => mimoSynth('你好', { apiKey: '', model: 'mimo-v2.5-tts-voiceclone', refAudio: '/x.wav' }), /API Key/)
+})
+
+test('mimoSynth：参考音频超过 15MB 拒绝（防整段音频塞进请求体）', async () => {
+  hits.length = 0
+  const big = join(dataDir, 'ref-big.wav')
+  const fd = openSync(big, 'w')
+  writeSync(fd, Buffer.alloc(15 * 1024 * 1024 + 1, 0x22))
+  closeSync(fd)
+  respond = () => { res.writeHead(200); res.end() }
+  await assert.rejects(() => mimoSynth('你好', { apiKey: 'sk', refAudio: big }), /太大/)
+  rmSync(big, { force: true })
+})
+
+// ---------- 密钥登记（掩码 + 留空保存保留原值）----------
+
+test('三个云端引擎的 API Key 都进了 SECRETS：面板拿不到明文，空保存不抹值', async () => {
+  const config = await import('../src/core/config.js')
+  const fake = structuredClone(config.DEFAULTS.voice)
+  fake.doubao.apiKey = 'secret-doubao'
+  fake.qwentts.apiKey = 'secret-qwen'
+  fake.mimo.apiKey = 'secret-mimo'
+  const full = config.normalize({ voice: fake })
+  const pub = config.publicConfig(full)
+  assert.equal(pub.voice.doubao.apiKey, '', '豆包 Key 不回传明文')
+  assert.equal(pub.voice.qwentts.apiKey, '', '百炼 Key 不回传明文')
+  assert.equal(pub.voice.mimo.apiKey, '', 'MiMo Key 不回传明文')
+  assert.equal(pub.voice.doubao.apiKeySet, true)
+  assert.equal(pub.voice.qwentts.apiKeySet, true)
+  assert.equal(pub.voice.mimo.apiKeySet, true)
+  // 面板空保存：原值保留
+  const merged = config.mergeFromPanel(full, { voice: { doubao: { apiKey: '' }, qwentts: { apiKey: '' }, mimo: { apiKey: '' } } })
+  assert.equal(merged.voice.doubao.apiKey, 'secret-doubao')
+  assert.equal(merged.voice.qwentts.apiKey, 'secret-qwen')
+  assert.equal(merged.voice.mimo.apiKey, 'secret-mimo')
 })

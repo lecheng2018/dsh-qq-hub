@@ -671,6 +671,10 @@ export function normalize(raw) {
 const SECRETS = [
   ['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'],
   ['imageGen', 'apiKey'],
+  // 语音引擎的云端凭据：豆包 / 百炼 / MiMo（掩码 + 留空保存保留原值，同 imageGen 口径）
+  ['voice', 'doubao', 'apiKey'],
+  ['voice', 'qwentts', 'apiKey'],
+  ['voice', 'mimo', 'apiKey'],
   ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'],
   ['heybox', 'cookie'], ['bridge', 'token'],
   ['multiParser', 'cookies', 'bilibili'],
