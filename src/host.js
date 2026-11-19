@@ -538,6 +538,7 @@ export function apply(ctx) {
     try { saveThreads() } catch { /* 线索账本收尾落盘失败不影响退出 */ }
     hub.disposeRecentMedia()
     mods.dispose()
+    try { Promise.resolve(market?.dispose?.()).catch((error) => log.warn('模块市场代理释放出错：', error.message)) } catch (error) { log.warn('模块市场代理释放出错：', error.message) }
     try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
     onebot.stop()
     snowluma.dispose()

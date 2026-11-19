@@ -199,6 +199,8 @@ function Market({ st, toast, reload }) {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState('')
   const [prog, setProg] = useState(null)
+  const [httpProxy, setHttpProxy] = useState(st.config?.modules?.market?.httpProxy || '')
+  const [indexText, setIndexText] = useState((st.config?.modules?.market?.indexUrls || []).join('\n'))
   const load = () => get('/modules/market').then(setData).catch(() => setData({ ok: false, message: '市场加载失败', list: [] }))
   useEffect(() => { load() }, [])
   useEffect(() => {
@@ -213,6 +215,28 @@ function Market({ st, toast, reload }) {
     reload()
     load()
     return r
+  }
+  const saveProxy = async () => {
+    const wanted = httpProxy.trim()
+    const r = await post('/save', { modules: { market: { httpProxy: wanted } } })
+    const saved = r.config?.modules?.market?.httpProxy || ''
+    setHttpProxy(saved)
+    toast(wanted && !saved ? '代理地址不合法，已清空' : '市场代理已保存', wanted && !saved ? 'err' : 'ok')
+    reload()
+    setData(null)
+    await load()
+  }
+  const saveSources = async () => {
+    const wanted = indexText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    const r = await post('/save', { modules: { market: { indexUrls: wanted } } })
+    const saved = r.config?.modules?.market?.indexUrls || []
+    setIndexText(saved.join('\n'))
+    const filtered = wanted.length !== saved.length
+    const message = filtered ? '含非 HTTPS 地址，已过滤；其余加速源已保存' : wanted.length ? '加速源已保存' : '已恢复默认索引源'
+    toast(message, filtered ? 'err' : 'ok')
+    reload()
+    setData(null)
+    await load()
   }
   const install = async (e, confirmReplace = false) => {
     setBusy(e.id)
@@ -243,6 +267,18 @@ function Market({ st, toast, reload }) {
       right={<Switch on={enabled} onChange={toggle} />}
     >
       {!enabled ? <div className="ab-note">市场没开。打开右上角开关后刷新列表。</div> : null}
+      <div style={{ marginBottom: 10 }}>
+        <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>索引/加速源：每行一个完整 HTTPS 索引地址，按顺序尝试；清空后保存可恢复默认双源。</div>
+        <textarea className="ab-textarea" rows={3} value={indexText} placeholder="例如 https://ghfast.top/https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json" onChange={(e) => setIndexText(e.target.value)} />
+        <div className="ab-flex" style={{ marginTop: 4, justifyContent: 'flex-end' }}><Btn small onClick={saveSources}>保存加速源</Btn></div>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。</div>
+        <div className="ab-flex">
+          <input className="ab-input" style={{ flex: 1 }} value={httpProxy} placeholder="例如 http://192.168.10.1:7890，留空直连" onChange={(e) => setHttpProxy(e.target.value)} />
+          <Btn small onClick={saveProxy}>保存代理</Btn>
+        </div>
+      </div>
       {enabled && !data ? <Empty icon="⏳" text="加载中…" /> : null}
       {enabled && data && !data.ok ? <div className="ab-note err">{data.message || '索引读不到'}（已装模块不受影响）</div> : null}
       {enabled && data && data.ok ? (

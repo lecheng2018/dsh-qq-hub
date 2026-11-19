@@ -124,9 +124,27 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
   let cache = null // { at, index, url }
   let busy = null
   let progress = null
+  let proxyAgent = null
+  let proxyAgentFor = ''
 
   const marketCfg = () => getConfig().modules?.market || {}
   const enabled = () => marketCfg().enabled === true
+
+  // 只给市场请求挂代理；不改全局 fetch/模型流量。代理实例按地址复用，关闭或换地址时释放。
+  async function request(url, options = {}) {
+    const proxy = String(marketCfg().httpProxy || '')
+    if (!proxy) {
+      if (proxyAgent) { const old = proxyAgent; proxyAgent = null; proxyAgentFor = ''; await old.close() }
+      return fetcher(url, options)
+    }
+    if (proxyAgentFor !== proxy) {
+      if (proxyAgent) await proxyAgent.close()
+      const { ProxyAgent } = await import('undici')
+      proxyAgent = new ProxyAgent(proxy)
+      proxyAgentFor = proxy
+    }
+    return fetcher(url, { ...options, dispatcher: proxyAgent })
+  }
 
   /** 索引源序：env 覆盖 > config.indexUrls > 默认双源。 */
   function indexUrls() {
@@ -152,7 +170,7 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
         const index = await withRetry(async () => {
           // SSRF 防护（缺陷：索引源可指向内网）：自定义 indexUrls 也须是公网地址。
           await validateUrl(url)
-          const r = await fetcher(url, { signal: AbortSignal.timeout(20_000), cache: 'no-store', redirect: 'manual' })
+          const r = await request(url, { signal: AbortSignal.timeout(20_000), cache: 'no-store', redirect: 'manual' })
           if (r.status >= 300 && r.status < 400) throw new Error('索引源发生重定向，已拒绝（防 SSRF）')
           if (!r.ok) throw new Error(`读不到模块索引（HTTP ${r.status}）`)
           return r.json()
@@ -212,7 +230,7 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
       let r
       for (let hop = 0; hop < 5; hop++) {
         await validateUrl(current)
-        r = await fetcher(current, { signal: AbortSignal.timeout(120_000), redirect: 'manual' })
+        r = await request(current, { signal: AbortSignal.timeout(120_000), redirect: 'manual' })
         if (r.status >= 300 && r.status < 400) {
           const loc = r.headers?.get?.('location')
           if (!loc) throw new Error('下载重定向缺少 Location')
@@ -345,5 +363,8 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
     return { ok: true, message: purge ? '卸载好了，数据和设置也清掉了' : '卸载好了，数据和设置还留着' }
   })
 
-  return { progress: () => progress, list, install, remove, source: readSource, enabled, loadIndex }
+  return {
+    progress: () => progress, list, install, remove, source: readSource, enabled, loadIndex,
+    dispose: async () => { if (proxyAgent) { const old = proxyAgent; proxyAgent = null; proxyAgentFor = ''; await old.close() } },
+  }
 }
