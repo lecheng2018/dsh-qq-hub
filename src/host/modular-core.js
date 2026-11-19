@@ -381,7 +381,67 @@ export function createModularCore({
     return true
   }
 
-  const admitContent = (content, context) => inboundVision.admit(content, context)
+  // ---------- 图片进历史的预算（按会话累计） ----------
+  // 服务端对「会话累计上下文 + 图片字节」有硬上限（真机 2026-11-19：413 plugin_request_too_large，
+  // 请求约 5.8 MiB、插件内存上限 64 MiB）。关键点：图片块一旦进历史，**之后每一轮都会重新发一遍**，
+  // 所以额度得按会话累加着算 —— 每轮重置等于没管。
+  //
+  // 额度用完后的新图不再进上下文，只留一句占位文字（不说「看不到」是骗人：确实没带进去）。
+  // 计数在 admit 之前累加（fail-closed）：admit 失败时那几张图也不会进历史，多算一点更安全。
+  //
+  // 已知边界：计数在内存里、按 sessionId 记；插件热重载/重启后从 0 重新算（历史里的图说不清大小）。
+  // 所以它只是「延缓增长」，兜底仍然是 413 自愈换会话。
+  const imageBudget = new Map() // sessionId → { images, bytes }
+  const IMAGE_BLOCK_DEFAULT_BYTES = 400 * 1024 // 只有 http(s) 地址、还没下载的图，按 400 KB 估
+  const imageBlockBytes = (block) => {
+    // 未下载的入站图分两种：已带 data（测试/本地已取字节）、url 是 base64://（内联）。两者都能算准；
+    // http(s) 地址此刻还没取字节，只能估 —— 真实字节由 inbound-images 下载后才知道，这里不追着改。
+    const encoded = typeof block?.data === 'string' && block.data
+      ? block.data
+      : typeof block?.url === 'string' && block.url.startsWith('base64://')
+        ? block.url.slice('base64://'.length)
+        : ''
+    if (encoded) return Math.ceil(encoded.length * 3 / 4)
+    const n = Number(block?.bytes)
+    return Number.isFinite(n) && n > 0 ? n : IMAGE_BLOCK_DEFAULT_BYTES
+  }
+  /** 按会话额度裁掉超出的图片块；返回裁剪后的内容与本次计入的用量。 */
+  function trimToImageBudget(content, sessionId, cfg) {
+    const budgetCfg = cfg?.imageBudget
+    if (!sessionId || budgetCfg?.enabled === false) return { content, added: { images: 0, bytes: 0 } }
+    if (!Array.isArray(content) || !content.some((b) => b?.type === 'image')) return { content, added: { images: 0, bytes: 0 } }
+    // 配置可能来自 normalize 之前（老配置文件 / 直接注入的 cfg）：缺字段时按默认额度来，
+    // 绝不能因为「没写 imageBudget」就当成 maxImages=0 把所有图都裁掉（那等于凭空关掉看图能力）。
+    const maxImages = budgetCfg?.maxImages === undefined ? 24 : Math.max(0, Number(budgetCfg.maxImages) || 0)
+    const maxMiB = budgetCfg?.maxMiB === undefined ? 12 : Math.max(0, Number(budgetCfg.maxMiB) || 0)
+    const maxBytes = maxMiB * 1024 * 1024
+    const used = imageBudget.get(sessionId) || { images: 0, bytes: 0 }
+    let images = used.images
+    let bytes = used.bytes
+    let dropped = 0
+    const kept = []
+    for (const block of content) {
+      if (block?.type !== 'image') { kept.push(block); continue }
+      const cost = imageBlockBytes(block)
+      // 已经超了就别再加；额度足够才收（同一轮里多张图按顺序收，先到先得）
+      if (images + 1 > maxImages || bytes + cost > maxBytes) { dropped++; continue }
+      images++
+      bytes += cost
+      kept.push(block)
+    }
+    const added = { images: images - used.images, bytes: bytes - used.bytes }
+    if (added.images > 0) imageBudget.set(sessionId, { images, bytes })
+    if (!dropped) return { content: kept, added }
+    kept.push({ type: 'text', text: `（这一轮有 ${dropped} 张图没带进上下文：本会话的图片额度用完了，只看得到文字。想让她看新图，可以让她重开一个会话。）` })
+    return { content: kept, added }
+  }
+  /** 让一个会话的图片额度归零（换会话/重置时调用）。 */
+  function resetImageBudget(sessionId) { if (sessionId) imageBudget.delete(String(sessionId)) }
+
+  const admitContent = async (content, context = {}) => {
+    const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
+    return inboundVision.admit(trimmed, context)
+  }
 
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
   const quotedInfo = (replyId, chatKey) => quotedMessages.get(replyId, chatKey)
@@ -803,6 +863,7 @@ export function createModularCore({
     activeChatBySessionId.delete(sid)
     selectedModels.delete(sid)
     slowNoticeSent.delete(sid)
+    resetImageBudget(sid) // 换会话 = 图片额度跟着归零（新会话历史里没有旧图）
     for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
   }
   function mountTools(agent, chatKey, sessionId) {
@@ -1080,7 +1141,7 @@ export function createModularCore({
           }
           const admittedSteer = await admitContent(steerContent, {
             nickname: inbound.sender?.nickname || inbound.sender?.userId,
-            hint: textOfSegments(inbound.segments), cfg: getConfig(),
+            hint: textOfSegments(inbound.segments), cfg: getConfig(), sessionId,
           })
           await agent.steer({ id: randomUUID(), role: 'user', content: admittedSteer, source: { kind: 'qq-hub' } })
         } finally {
@@ -1193,7 +1254,7 @@ export function createModularCore({
       //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
       const admitted = await admitContent(content, {
         nickname: chat.nickname || chat.userId,
-        hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(),
+        hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(), sessionId,
       })
       const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
       // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
