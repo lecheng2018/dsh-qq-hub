@@ -280,7 +280,7 @@ const DEFAULTS_RAW = {
   // useBuiltin：自己写了同名模块，但想先用回内置的
   modules: {
     // 模块市场（分发半套）：默认 OFF；indexUrls 按序 failover；installed 记账
-    market: { enabled: false, indexUrls: [], installed: {} },
+    market: { enabled: false, indexUrls: [], httpProxy: '', installed: {} },
   },
   safeMode: false, // 安全模式：自己写的模块一个都不加载（排查问题用）
   ext: {}, // 自己写的模块的设置：{ 模块id: {...} }
@@ -617,6 +617,12 @@ export function normalize(raw) {
   market.enabled = bool(market.enabled, false)
   // 索引源只收 https（缺陷：indexUrls 无协议白名单，可指向内网 http 服务）。
   market.indexUrls = Array.isArray(market.indexUrls) ? market.indexUrls.map((s) => String(s).trim()).filter((s) => /^https:\/\//i.test(s)).slice(0, 10) : []
+  // 市场专用 HTTP 代理：不接受凭据/路径/查询，避免公开面板回传代理账号密码。
+  try {
+    const proxy = new URL(String(market.httpProxy || '').trim())
+    market.httpProxy = ['http:', 'https:'].includes(proxy.protocol) && !proxy.username && !proxy.password && !proxy.search && !proxy.hash && proxy.pathname === '/'
+      ? proxy.origin : ''
+  } catch { market.httpProxy = '' }
   if (!isObj(market.installed)) market.installed = {}
   if (!isObj(c.ext)) c.ext = {}
   for (const k of Object.keys(c.ext)) if (!isObj(c.ext[k])) delete c.ext[k] // 传 null = 删掉这个模块的设置

@@ -52,6 +52,7 @@ import { createGroupState } from '../chat/group-state.js'
 import { readJson, writeJson } from '../core/store.js'
 import { policyFor, decideGroupReply, topicRelevance, withRoleWakeWords } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
+import { redact } from '../core/redact.js'
 import { decideGroupReplyWithAtmosphere, gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
 import { agoLabel, nowLine } from '../chat/clockline.js'
@@ -289,6 +290,7 @@ export function createModularCore({
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
+  const oversizedChats = new Set() // 服务端拒绝请求体过大（413/插件内存上限）；下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
@@ -946,6 +948,45 @@ export function createModularCore({
       segments: [{ type: 'text', data: { text: `刚才的回复超过 ${minutes} 分钟还没完成，我先停止等待了，这条旧回复不会再补发。你发下一条消息时我会重新开始。` } }],
     })).catch((error) => debug(`回合超时提示没发出去：${error?.message || error}`))
   }
+
+  // ---------- 413 / 请求体过大自愈 ----------
+  // DeepSeek 服务端对「会话累计上下文 + 图片字节」有一个按会话计的硬上限（真机 2026-11-19：
+  // 413 plugin_request_too_large「本次对话上下文或图片过大……插件内存上限 64 MiB」）。这不是
+  // 单次请求能靠删图救回的：旧会话的历史每轮都重放，超限后**之后每一轮都必然 413**，会话
+  // 永久卡死。DSH 把 413 归类为 INVALID_REQUEST（不重试），turn/end 落 error，本轮「不发」。
+  //
+  // 唯一可靠的恢复 = 换新会话（归档旧的，下一条消息自动新建）。与 handleTurnTimeout 同款模式：
+  // 这里只记标记 + 提示，真正 resetChat 在下一条消息进入 execute 时做（避免在回合失败路径里
+  // 立刻归档——此刻事件监听还没走完，且用户可能正在面板里翻这个会话）。
+  //
+  // 识别口径（宁可多识别不漏判，因为误伤代价只是多一次归档重建）：
+  //   · DSH 结构化失败码：turn/end reason.error.code === 'INVALID_REQUEST' 且 status === 413；
+  //   · 服务端错误文案特征：plugin_request_too_large / 「上下文或图片过大」 / 「插件内存上限」；
+  //   · 兜底：INVALID_REQUEST 且消息含 too large / 413（防服务端换措辞）。
+  // DSH 会话修复（repair.ts）合成的 turn/end 不带 error 细节（只有 kind），那类不是 413，天然不命中。
+  const OVERSIZE_MESSAGE_RE = /plugin_request_too_large|上下文或图片过大|插件内存上限|\b413\b|too\s+large/i
+  function turnFailureLooksOversized(failure) {
+    if (!failure || typeof failure !== 'object') return false
+    const code = String(failure.code || '')
+    const status = Number(failure.status) || 0
+    const message = String(failure.message || '')
+    if (status === 413) return true
+    if (code === 'INVALID_REQUEST' && OVERSIZE_MESSAGE_RE.test(message)) return true
+    // 某些路径（repair 合成 / 旧宿主）没有 status，只有 message：特征词唯一性足够强
+    if (!code && OVERSIZE_MESSAGE_RE.test(message) && /413|过大|too large|too_large/i.test(message)) return true
+    return false
+  }
+  /** 回合因请求体过大失败：记标记、提示用户；下一条消息进入时自动归档重建会话。 */
+  function handleOversizedTurn(chatKey, failure, { notify = true } = {}) {
+    oversizedChats.add(chatKey)
+    const detail = String(failure?.message || '').replace(/\s+/g, ' ').slice(0, 120)
+    log.warn(`回合因请求体过大被服务端拒绝（413/插件内存上限）：${chatKey}${detail ? '：' + redact(detail) : ''}；下一条消息将新建会话`)
+    if (!notify) return
+    Promise.resolve(outbox.request({
+      chatKey, sourceModuleId: 'core',
+      segments: [{ type: 'text', data: { text: '这个会话攒的上下文和图片太多，服务端拒绝了（超过 64 MiB 上限），这轮没法回。你发下一条消息时我会自动重新开始（旧对话会归档，可以随时找回）；图片类内容也会少带一些。' } }],
+    })).catch((error) => debug(`请求体过大提示没发出去：${error?.message || error}`))
+  }
   // ---------- US-015 · 关系信号自动喂料 ----------
   // 一轮回复**投递之后**才结算：关系信号是"这段对话怎么样"的结论，回复没发出去就不该记分。
   // 三层防护，任何一层失效都只影响记分，绝不影响回复投递：
@@ -1002,6 +1043,11 @@ export function createModularCore({
     },
     execute: async (turn, io) => {
       if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
+      // 上一轮因 413 / 请求体过大失败：归档旧会话重建。旧历史每轮重放必然再 413，只有换会话能救。
+      if (oversizedChats.delete(turn.chatKey)) {
+        resetChat(turn.chatKey)
+        log.info(`请求体过大自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+      }
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
       const { sessionId } = await sessionForChat(turn.chatKey)
@@ -1190,7 +1236,13 @@ export function createModularCore({
         finishReply = () => {
           if (!completion) return
           cleanupListener()
-          if (!completion.completed) { reject(new Error(`回合未正常结束：${completion.kind || '?'}`)); return }
+          if (!completion.completed) {
+            // 413 / 请求体过大：旧会话的历史每轮重放、之后必然继续失败 —— 记标记换新会话自愈，
+            // 而不是只「如实失败」后让这个聊天永久卡死（真机 2026-11-19：服务端按会话计的 64 MiB 上限）。
+            if (turnFailureLooksOversized(completion.failure)) handleOversizedTurn(turn.chatKey, completion.failure)
+            reject(new Error(`回合未正常结束：${completion.kind || '?'}`))
+            return
+          }
           resolve(completion.text)
         }
         off = dsh.on?.('session/event', (session, ev) => {
@@ -1209,7 +1261,7 @@ export function createModularCore({
           if (ev?.type === 'turn/end') {
             reportTurns.delete(turn.chatKey)
             const d = ev?.data || {}
-            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '' }
+            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '', failure: d.reason?.error || d.reason?.failure || null }
             if (followupDone) finishReply()
           }
         })
@@ -1254,6 +1306,9 @@ export function createModularCore({
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
         stopTyping()
         if (followupError.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
+        // followup 先于 turn/end 拒绝时（stream 非 200 起步即 413）：错误本身可能带 LlmError.failure
+        //（HTTP status / code）。turn/end 路径之外唯一能拿到 status 的地方，同样要走自愈标记。
+        if (turnFailureLooksOversized(followupError?.failure || followupError)) handleOversizedTurn(turn.chatKey, followupError?.failure || followupError)
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
       followupDone = true
@@ -1606,6 +1661,8 @@ export function createModularCore({
   async function runPromptTurn(chatKey, text) {
     return controller.runExclusive(chatKey, async () => {
       if (timedOutChats.delete(chatKey)) resetChat(chatKey)
+      // 与主链同款：上次 413 失败的标记在下次进入时归档重建（后台任务也走同一份会话映射）。
+      if (oversizedChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
       const ctrl = ctxGet('sessionController')
       const resolved = await ctrl?.resolveAgent?.(sessionId)
@@ -1631,7 +1688,13 @@ export function createModularCore({
             reportTurns.delete(chatKey)
             const d = ev.data || {}
             cleanup()
-            if (d.reason?.kind !== 'completed') { reject(new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`)); return }
+            if (d.reason?.kind !== 'completed') {
+              // 与主链同款：413 / 请求体过大也要自愈（后台会话同样会攒图攒上下文）。
+              // 主动任务没有人盯着看，notify=false：不往聊天里发提示（这轮本来就不投递）。
+              if (turnFailureLooksOversized(d.reason?.error || d.reason?.failure || null)) handleOversizedTurn(chatKey, d.reason?.error || d.reason?.failure, { notify: false })
+              reject(new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`))
+              return
+            }
             resolve(lastTurn === d.turn ? String(lastText || '') : '')
           }
         })

@@ -75,6 +75,26 @@ before(async () => {
 })
 after(() => rmSync(root, { recursive: true, force: true }))
 
+test('市场 HTTP 代理：索引与安装包共用专用 dispatcher，不影响全局 fetch', async () => {
+  const p = pack('proxy-mod', '1.0.0')
+  const calls = []
+  const fetcher = async (url, options = {}) => {
+    calls.push({ url, options })
+    if (url.endsWith('index.json')) return { ok: true, json: async () => ({ schema: 1, assetsBase: 'https://x/', modules: [p.entry], revoked: [] }) }
+    return { ok: true, arrayBuffer: async () => p.buf }
+  }
+  const { m } = setup([p], {
+    cfg: { modules: { market: { enabled: true, httpProxy: 'http://192.168.10.1:7890' } } },
+    fetcher,
+  })
+  const result = await m.install('proxy-mod')
+  assert.equal(result.ok, true, result.message + '；请求：' + calls.map((call) => call.url).join(', '))
+  assert.equal(calls.length, 2)
+  assert.ok(calls.every((call) => call.options.dispatcher), '索引和安装包都必须走市场代理')
+  assert.equal(calls[0].options.dispatcher, calls[1].options.dispatcher, '代理实例应复用')
+  await m.dispose()
+})
+
 // ---------------- zip 安全矩阵（R1） ----------------
 
 test('readZip：合法包（deflate + store）解出原文', () => {
