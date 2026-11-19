@@ -64,6 +64,12 @@ const DEFAULTS_RAW = {
   // 把看到的内容转成文字交给主模型。主模型自己就能看图时不走这条路。
   // provider/model 留空 = 没配；只比较「同一个模型」还是「不同模型」，不做任何能力猜测。
   visionHelper: { enabled: false, provider: '', model: '', maxImages: 4, maxChars: 600, keepOriginal: true },
+  // 会话轮换：一个聊天用太久就自动归档重开。
+  // 为什么需要：服务端按**会话**累计上下文（真机 413 plugin_request_too_large：请求约 5.8 MiB、
+  // 插件内存上限 64 MiB），纯文字长谈也会慢慢顶到上限；DSH 的上下文压缩管的是 token 窗口，
+  // 管不到服务端那种按字节的会话额度。阈值同时看「回合数」和「会话年龄」，任一到了就换
+  //（填 0 = 该项不启用；只留一项就是单条件轮换）。
+  sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 },
@@ -362,6 +368,11 @@ export function normalize(raw) {
   c.visionHelper.maxImages = Math.round(num(c.visionHelper.maxImages, 4, 1, 8))
   c.visionHelper.maxChars = Math.round(num(c.visionHelper.maxChars, 600, 100, 2000))
   c.visionHelper.keepOriginal = bool(c.visionHelper.keepOriginal, true)
+  // 会话轮换：0 = 该项不启用；年龄留小数（排障/测试要能设成几十秒）
+  if (!isObj(c.sessionRotation)) c.sessionRotation = {}
+  c.sessionRotation.enabled = bool(c.sessionRotation.enabled, true)
+  c.sessionRotation.maxTurns = Math.round(num(c.sessionRotation.maxTurns, 300, 0, 100000))
+  c.sessionRotation.maxAgeHours = num(c.sessionRotation.maxAgeHours, 168, 0, 8760)
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)

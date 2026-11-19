@@ -288,6 +288,7 @@ export function createModularCore({
   const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
+  const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
@@ -527,6 +528,21 @@ export function createModularCore({
     }
     return [chatKey, { ...entry, personaId: persona.personaId }]
   }))
+  /** 这个会话该不该退休：回合数或年龄任一超过阈值就算该换（填 0 的那一项不参与判定）。 */
+  function sessionRetired(entry, cfg) {
+    const rot = cfg?.sessionRotation
+    if (!rot || rot.enabled === false) return ''
+    const turns = sessionTurns.get(String(entry.sessionId)) || 0
+    const maxTurns = Number(rot.maxTurns) || 0
+    if (maxTurns > 0 && turns >= maxTurns) return `${turns} 轮（上限 ${maxTurns}）`
+    const maxAgeMs = (Number(rot.maxAgeHours) || 0) * 3600_000
+    const createdAt = Number(entry.createdAt) || 0
+    if (maxAgeMs > 0 && createdAt > 0 && Date.now() - createdAt >= maxAgeMs) {
+      return `会话已 ${Math.round((Date.now() - createdAt) / 3600_000)} 小时（上限 ${Math.round(maxAgeMs / 3600_000)} 小时）`
+    }
+    return ''
+  }
+
   async function sessionForChat(chatKey) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const entry = await registry.sessionFor(chatKey)
@@ -536,7 +552,19 @@ export function createModularCore({
         persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
         sessionPersonas.set(chatKey, persona)
       }
-      if (persona.personaId === currentPersona(chatKey)) return entry
+      if (persona.personaId === currentPersona(chatKey)) {
+        // 会话轮换：用太久/聊太多轮就归档重开。判在 sessionForChat 里是因为它是**每一轮的唯一入口**
+        // （execute 与 runPromptTurn 都过这里），放别处会漏掉主动回合。
+        // 放在人设判定之后：人设不对本来就该换，不必再谈退休。
+        const retired = sessionRetired(entry, getConfig())
+        if (retired) {
+          log.info(`会话轮换：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 已用 ${retired}，归档重开`)
+          resetChat(chatKey)
+          continue
+        }
+        sessionTurns.set(String(entry.sessionId), (sessionTurns.get(String(entry.sessionId)) || 0) + 1)
+        return entry
+      }
       resetChat(chatKey)
     }
     throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
@@ -803,6 +831,7 @@ export function createModularCore({
     activeChatBySessionId.delete(sid)
     selectedModels.delete(sid)
     slowNoticeSent.delete(sid)
+    sessionTurns.delete(sid)
     for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
   }
   function mountTools(agent, chatKey, sessionId) {
