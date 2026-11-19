@@ -75,5 +75,8 @@
   },
   "overrides": {
     "minimatch": "^11.0.1"
+  },
+  "dependencies": {
+    "undici": "^7.29.1"
   }
 }
