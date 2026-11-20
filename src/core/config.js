@@ -75,6 +75,17 @@ const DEFAULTS_RAW = {
   // 图片块一旦进历史，之后每一轮都会重新发一遍，所以额度必须**按会话**累加着算，
   // 而不是每轮重置。额度用完后的新图只留一句占位文字，不再进上下文。
   imageBudget: { enabled: true, maxImages: 24, maxMiB: 12 },
+  // 共享浏览器（抖音/小红书/红果/贴吧这些要开网页的模块共用一套）。
+  // 一个浏览器进程、每模块一个标签页、任务串行：可用内存本来就小，多开必炸。
+  // chromePath 留空 = 先用插件自带的（install:browser 装的那份），再找系统里的 Edge/Chrome/Chromium。
+  browser: {
+    enabled: true,
+    chromePath: '', // 留空 = 自动找
+    headless: false, // 默认有头（抖音/小红书会拦无头）；没桌面时靠自带 Xvfb 撑
+    maxConcurrent: 2, // 同时最多几个模块在用浏览器
+    idleMinutes: 10, // 没人用这么久就关掉浏览器（0 = 不自动关）
+    minFreeMB: 600, // 可用内存低于这个值就不启动（0 = 不检查）
+  },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 },
@@ -395,6 +406,14 @@ export function normalize(raw) {
   c.imageBudget.enabled = bool(c.imageBudget.enabled, true)
   c.imageBudget.maxImages = Math.round(num(c.imageBudget.maxImages, 24, 0, 200))
   c.imageBudget.maxMiB = Math.round(num(c.imageBudget.maxMiB, 12, 0, 128))
+  // 共享浏览器：并发与内存水位都有上下界，别让面板填出「同时开 50 个」这种值
+  if (!isObj(c.browser)) c.browser = {}
+  c.browser.enabled = bool(c.browser.enabled, true)
+  c.browser.chromePath = String(c.browser.chromePath || '').trim()
+  c.browser.headless = bool(c.browser.headless, false)
+  c.browser.maxConcurrent = Math.round(num(c.browser.maxConcurrent, 2, 1, 4))
+  c.browser.idleMinutes = Math.round(num(c.browser.idleMinutes, 10, 0, 240))
+  c.browser.minFreeMB = Math.round(num(c.browser.minFreeMB, 600, 0, 8192))
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)

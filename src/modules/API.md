@@ -158,6 +158,7 @@ export default {
 | `api.use('memory')` | 拿到某个模块**现在**的导出；模块没在跑返回 `null`。不要在 setup 里拿了存着，用的时候再拿（对方可能被关掉、被替换） |
 | `api.lazy('memory')` | 一个代理，每次访问都去找当时在跑的那个模块：`const memory = api.lazy('memory'); memory.add?.({...})`（模块没在跑时属性是 undefined，所以用 `?.`） |
 | `api.has('memory')` | 某个模块在不在跑 |
+| `api.browser()` | **共享浏览器**（刷抖音 / 小红书 / 贴吧这类要开网页的模块用）。返回宿主那一个浏览器服务，全模块共用：一个浏览器进程、一个模块一个标签页、同一时刻只有一个任务在跑。**不要在 setup 里存着**，用的时候现取；面板没开或宿主关了这个功能时返回 `null`。用法见下面「用浏览器」 |
 | `api.core` | 插件核心，见下 |
 | `api.dsh` | DSH 给插件的 `ctx`：`api.dsh.get('服务名')` 能拿到 DSH 的任何服务（`llm`、`speechToText`、`tools`……） |
 | `api.lib('features/memory.js')` | 插件里任何一个源码文件导出的全部东西（见「内部源码」） |
@@ -182,6 +183,65 @@ export default {
 | `getConfig()` / `setConfig(cfg)` | 同 `api.config` / 整份替换配置 |
 | `logger` | 插件的日志器（`logger.child('名字')` 拿一个分类） |
 | `root` | 插件自己的安装目录 |
+
+## 用浏览器
+
+要开网页的模块（刷抖音、看小红书、读贴吧……）**共用同一套浏览器**，不要自己去起进程：
+一台机器上同时开好几个浏览器很容易把内存吃光，而且每个模块各自登录、各自占端口，很快就打架。
+
+```js
+export default {
+  id: 'my-site',
+  name: '逛某站',
+  version: '0.1.0',
+  api: 1,
+  setup(api) {
+    api.tool(({ chat }) => [api.defineTool({
+      name: 'mysite_read',
+      description: '打开某站的帖子看看',
+      properties: { url: { type: 'string', description: '帖子地址' } },
+      required: ['url'],
+      execute: async ({ url }) => {
+        const svc = api.browser()
+        if (!svc) return { ok: false, message: '共享浏览器没开（面板「浏览器」里打开总开关）' }
+        const lease = await svc.acquire('my-site')   // 参数是你的模块 id
+        try {
+          await lease.goto(url)
+          await lease.waitFor('.post-content')
+          const page = await lease.content()          // { html, url, title }
+          return { ok: true, title: page.title, text: page.html.slice(0, 4000) }
+        } finally {
+          lease.release()                             // 一定要释放，否则别的模块一直等着
+        }
+      },
+    })])
+  },
+}
+```
+
+`lease` 能做的事：
+
+| | |
+|---|---|
+| `goto(url, { waitMs })` | 打开网址（会过**站点白名单**，不在名单里的直接拒绝） |
+| `content()` | 拿整页 HTML / 标题 / 当前地址 |
+| `evaluate(js)` | 在页面里跑一段 JS，拿回结果 |
+| `waitFor(selector, { timeoutMs })` | 等某个元素出现，返回它的位置 |
+| `press(selector)` / `click(x, y)` | 点元素 / 按坐标点 |
+| `type(text)` / `clearFocused()` / `pressEnter()` | 打字、清空输入框、回车 |
+| `waitResponse(正则)` | 等某个接口返回（确认「真点成功了」用） |
+| `screenshot({ clip })` | 截图，返回 `data:image/png;base64,...` |
+| `cookies()` / `setCookies(list)` / `clearCookies(origin)` | 读 / 写 / 清登录信息 |
+| `show(true/false)` | 把窗口挪进屏幕给人看（**没有桌面的机器上看不见，会返回一句说明**） |
+| `release()` | 还回去（重复调用不要紧） |
+
+几条规矩：
+
+- **一个模块同一时刻只能拿一个租约**；浏览器正忙时会立刻报「忙」，不会排队——你隔一会儿重试就行。
+- 租约有**超时**（默认 3 分钟），到点自动收回，不会把整台浏览器锁死。
+- 每个模块有自己的**独立标签页**，长期留着（下次打开更快，登录态也在）。
+- **登录信息按网站分开存**，不会串。要登录时让主人扫码/在 VNC 里操作，别去猜密码。
+- 能访问哪些网站由**站点白名单**管，白名单为空时一个都打不开（这是故意的）。
 
 ## 事件
 

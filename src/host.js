@@ -46,6 +46,7 @@ import { defaultModel, askModel } from './core/llm.js'
 import { parseCommand, runCommand, createMutes } from './chat/commands.js'
 import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas, personaIdFor } from './persona/personas.js'
 import { createModules, API_VERSION } from './core/modules.js'
+import { createBrowserService } from './browser/index.js'
 import { createMarket } from './core/market.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
@@ -94,6 +95,7 @@ export function apply(ctx) {
   let bridge = null
   let hub = null // 当前核心的冻结 facade，在 modular core 成功后创建；失败时不存在旧实例可回退
   let dangerGuard = null // 危险命令确认（security.dangerConfirm 开着才生效）
+  let browser = null // 共享浏览器（模块真要用时才启动，见 src/browser/）
   const getConfig = () => cfg
   const chatLogStore = createChatLog({ getConfig, log: logger.child('chat-log') })
   const chatLog = createChatLogApi(chatLogStore)
@@ -478,6 +480,24 @@ export function apply(ctx) {
   }
   // 模块只获得当前服务的冻结发送桥，所有媒体共用 Shared Outbox。
   core.hub = Object.freeze(createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), unified: true }))
+  // 共享浏览器：抖音 / 小红书 / 红果 / 贴吧这些要开网页的模块**共用**一套。
+  // 一个进程 + 每模块一个标签页 + 任务串行：这台机器可用内存本来就不多，多开必炸。
+  // 这里只创建对象，**不启动任何进程**；模块真的 acquire() 时才拉起 Xvfb 和浏览器。
+  if (cfg.browser?.enabled !== false) {
+    browser = createBrowserService({
+      root: dataDir('browser'),
+      log: logger.child('浏览器'),
+      getConfig,
+      policies: {
+        douyin: ['douyin.com', 'iesdouyin.com', 'douyinpic.com', 'douyinvod.com'],
+        'tieba-reader': ['tieba.baidu.com', 'passport.baidu.com', 'wappass.baidu.com', 'baidu.com'],
+        xhs: ['xiaohongshu.com', 'xhscdn.com', 'xhslink.com'],
+        hongguo: ['hongguo.com', 'hgsnss.com'],
+        kanzhibo: ['douyin.com', 'iesdouyin.com', 'douyinpic.com', 'douyinvod.com'],
+      },
+    })
+    core.browser = browser
+  }
   mods = createModules({ ctx, core, getConfig, setConfig, logger, version: VERSION, builtins: BUILTINS })
   // 模块市场「分发半套」：默认 OFF（config.modules.market.enabled），索引多源 failover
   market = createMarket({ mods, getConfig, setConfig, log: logger.child('模块市场'), version: VERSION, builtinDir: join(ROOT, 'src', 'modules') })
@@ -538,6 +558,11 @@ export function apply(ctx) {
     try { saveThreads() } catch { /* 线索账本收尾落盘失败不影响退出 */ }
     hub.disposeRecentMedia()
     mods.dispose()
+    // 共享浏览器：先让模块停完（上面的 mods.dispose），再关浏览器和虚拟屏。
+    // 必须 await —— 不等的话 Chrome/Xvfb 会变成孤儿进程一直占着内存。
+    try {
+      Promise.resolve(browser?.dispose?.()).catch((error) => log.warn('关闭共享浏览器出错：', error.message))
+    } catch (error) { log.warn('关闭共享浏览器出错：', error.message) }
     try { Promise.resolve(market?.dispose?.()).catch((error) => log.warn('模块市场代理释放出错：', error.message)) } catch (error) { log.warn('模块市场代理释放出错：', error.message) }
     try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
     onebot.stop()

@@ -40,10 +40,15 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait } = {}) {
+export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, browser: browserService, now = Date.now, wait } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
-  const site = injected || createSite({ browser: createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log }), log })
+  const site = injected || createSite({ browser: createBrowser({
+    service: browserService,
+    profileDir: dataDir('douyin', 'edge-profile'), // 只有老宿主（没有共享浏览器）才用得上
+    browserPath: () => cfg().browserPath,
+    log,
+  }), log })
   const file = () => dataDir('douyin.json')
   const load = () => {
     const raw = readJson(file(), emptyState)
