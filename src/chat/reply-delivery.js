@@ -239,7 +239,40 @@ export function createReplyDelivery({
     // 一段只有一个人明确 @ / 引用她时，第一条回复引用并 @ 那个人；多人同时叫她不猜。
     // 模型明确选了引用编号时尊重它，不再自动引用另一条。
     const refs = inGroup ? (opts.refs || groups.refs(chatId.slice(6))) : {}
+    // <reply:…> 的取值三选一：编号 / 昵称 / QQ 号（模型写哪个都行）。这里统一解析成
+    // refs 里那一条；解析不出来（写了不存在的名字、坏标签）就当没写引用，照常发。
+    // 真机根因：行内出现「↳转述自某人」时，模型常常把「谁说的」和「被转述的人」搞混，
+    // 让它按昵称/QQ 号直接指名比让它数编号可靠得多。
+    const resolveRef = (token) => {
+      const want = String(token ?? '').trim()
+      if (!want) return null
+      if (refs[want]) return refs[want]
+      const lower = want.toLowerCase()
+      // 昵称：同一个昵称在一段里可能有多条，取**最后**一条（模型想回的是这个人最近那句）。
+      let byNick = null
+      // QQ 号：直接对 uid；对上就取该人最后一条。
+      let byUid = null
+      for (const key of Object.keys(refs)) {
+        const ref = refs[key]
+        if (!ref) continue
+        const uid = String(ref.uid ?? '')
+        const nick = String(ref.nick ?? '')
+        if (uid && uid === want) byUid = ref
+        else if (nick && (nick === want || nick.toLowerCase() === lower)) byNick = ref
+      }
+      return byUid || byNick
+    }
+    // 「模型点了名」这件事按 replyTo 是否存在判定：写错的引用也照样算它点过名——
+    // 于是它按普通消息发出去，绝不再退回 autoReply 挂到「本轮唯一 @ 她的人」身上
+    // （那是另一种挂错人）。注意不要把对不上的 replyTo 删掉：下游合并/分条按它判断
+    // 哪个气泡带引用，删了会让「引用句」在合并时被拆散（见 group-deliver-order 回归）。
     const explicit = items.some((item) => item.replyTo)
+    const resolvedRef = (item) => {
+      if (!item.replyTo) return null
+      const hit = resolveRef(item.replyTo)
+      if (!hit) log.debug(`${chatId}：引用的「${item.replyTo}」对不上群里的人，按普通消息发`)
+      return hit
+    }
     const sendable = (item) => item.kind === 'mixed' ? item.parts.some(sendable) : item.kind === 'text' || item.kind === 'voice' || item.kind === 'image' || (item.kind === 'sticker' && cfg.stickers?.enabled && Boolean(item.value && typeof item.value === 'object' ? item.value : stickers.match(item.value)))
     // 仿真打字律动：多条气泡时按「思考 + 逐字击键 + 呼吸间隙」拉长间隔。
     // 关闭开关或算不出来（条目非法）时退回既有的固定公式，行为与旧版一致。
@@ -266,10 +299,10 @@ export function createReplyDelivery({
     const deliveredParts = []
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
-      const selected = it.replyTo ? refs[it.replyTo] : (!explicit && i === firstSendable ? opts.autoReply : null)
+      const selected = it.replyTo ? resolvedRef(it) : (!explicit && i === firstSendable ? opts.autoReply : null)
       const replyId = selected?.mid
       const userId = selected && opts.autoReply?.uid === selected.uid ? selected.uid : undefined
-      if (it.replyTo && !replyId) log.debug(`${chatId}：引用的编号 ${it.replyTo} 对不上，正常发`)
+      if (it.replyTo && !replyId) log.debug(`${chatId}：引用的「${it.replyTo}」对不上，正常发`)
       // 每个分支都拿到返回值：真对象 = 网关确认；null = 没发出去（含「无内容可发」的空跳过，
       // 那种情况本来就极少，按「未确认」计也更诚实）。
       let receipt = null
