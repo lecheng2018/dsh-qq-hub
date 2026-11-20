@@ -179,6 +179,28 @@ export function createSite({ browser, log }) {
     return parseComments(await api('/aweme/v1/web/comment/list/', { aweme_id: id, cursor: 0, count: 20, item_type: 0 }))
   }
 
+  /** 读某条评论的回复列表（评论区接着聊用）：从旧到新 [{id, uid, nickname, text, replyId, at, likes}]。 */
+  function parseReplies(json, max = 20) {
+    return (json?.comments || [])
+      .map((c) => ({
+        id: String(c.cid || ''),
+        uid: String(c.user?.uid || ''),
+        nickname: clean(c.user?.nickname, 40),
+        text: clean(c.text, 300),
+        replyId: String(c.reply_id || ''),
+        replyToReplyId: String(c.reply_to_reply_id || ''),
+        at: num(c.create_time) * 1000,
+        likes: num(c.digg_count),
+      }))
+      .filter((c) => c.id && c.text)
+      .sort((a, b) => a.at - b.at)
+      .slice(-max)
+  }
+
+  async function replies(id, commentId, { cursor = 0, count = 20 } = {}) {
+    return parseReplies(await api('/aweme/v1/web/comment/list/reply/', { item_id: id, comment_id: commentId, cursor, count, item_type: 0 }), count)
+  }
+
   /** 现在有没有验证码；有就返回原因。 */
   const verify = () => b.evaluate(VERIFY_PROBE).catch(() => '')
 
@@ -503,6 +525,21 @@ export function createSite({ browser, log }) {
     return list
   }
 
+  /**
+   * 给一个已经核对过的人发一条纯文字私信：先按 uid 打开会话（列表里没有就从主页发起），再发。
+   * 和 dms() 分开是为了让调用方看清「这是发给谁的」，不会误发到当前打开的会话里。
+   * text 为空直接拒绝；返回 sendDm() 的结果（不确定时抛 code=dm_uncertain）。
+   * （上游 2.3.8「评论区接着聊」用的就是这个形状。）
+   */
+  async function dm(uid, text, { secUid = '' } = {}) {
+    const want = String(uid || '')
+    const say = String(text ?? '').trim()
+    if (!want) throw new Error('要发给谁？没有核对过对方的抖音 uid')
+    if (!say) throw new Error('私信内容是空的')
+    await openChat(want, { secUid })
+    return sendDm(say)
+  }
+
   /** 在当前打开的会话里发一条私信：清空输入框、打字、回车（页面在后台时按键照样送得到），等私信接口发送成功。 */
   async function sendDm(text) {
     const ok = await b.evaluate(`(() => {
@@ -642,5 +679,5 @@ export function createSite({ browser, log }) {
     return { ok: true, loggedIn: false, shot: await loginShot() }
   }
 
-  return { ensure, self, user, profileOf, findByDouyinId, feed, detail, comments, verify, watch, like, comment, share, dms, sendDm, screenshot: () => b.screenshot().catch(() => ''), loginStart, loginPoll, show: (v) => b.show(v), connected: () => b.connected() }
+  return { ensure, self, user, profileOf, findByDouyinId, feed, detail, comments, replies, verify, watch, like, comment, share, dms, dm, sendDm, screenshot: () => b.screenshot().catch(() => ''), loginStart, loginPoll, show: (v) => b.show(v), connected: () => b.connected() }
 }

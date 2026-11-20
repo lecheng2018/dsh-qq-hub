@@ -29,6 +29,19 @@ export function pickJson(out, fallback) {
   try { return JSON.parse(m[0]) } catch (error) { return fallback }
 }
 
+// 「抖音私信分享卡片后再补一句话」的设置（上游 2.3.8）：放模块设置（config.ext.douyin），
+// 老用户升级时默认不开，行为完全不变。
+const SHARE_TEXT_DEFAULTS = { shareDmText: false, shareDmTextChance: 0.6, shareDmTextRetry: false }
+const clamp01 = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : SHARE_TEXT_DEFAULTS.shareDmTextChance }
+const shareTextOptions = (settings = {}) => {
+  const v = settings && typeof settings === 'object' ? settings : {}
+  return {
+    shareDmText: typeof v.shareDmText === 'boolean' ? v.shareDmText : SHARE_TEXT_DEFAULTS.shareDmText,
+    shareDmTextChance: clamp01(v.shareDmTextChance),
+    shareDmTextRetry: typeof v.shareDmTextRetry === 'boolean' ? v.shareDmTextRetry : SHARE_TEXT_DEFAULTS.shareDmTextRetry,
+  }
+}
+
 const emptyDay = () => ({ day: '', runs: 0, watched: 0, like: 0, comment: 0, share: 0, atOwner: 0, writes: 0 })
 const emptyState = () => ({
   ...emptyDay(),
@@ -38,9 +51,13 @@ const emptyState = () => ({
   seen: [], history: [],
   sharedDy: [], // 在抖音里分享给主人过的视频 id：同一个视频绝不分享第二次（页面上的「已分享」状态刷新就没了，靠不住）
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
+  myComments: [], // 她在评论区 @ 过主人的评论：{ awemeId, cid, text, title, at }，用来查主人有没有回复（评论区接着聊）
+  commentSeen: [], // 已经接过的评论回复 id
+  commentTries: {}, // 每条回复失败次数，超过 3 次不再试
+  lastCommentCheck: 0,
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, browser: browserService, now = Date.now, wait } = {}) {
+export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, log, site: injected, browser: browserService, proactive, now = Date.now, wait } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
   const site = injected || createSite({ browser: createBrowser({
@@ -140,7 +157,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       s.lastWriteAt = now()
       if (!r?.already) { s[kind]++; s.writes++ }
       record(s, { kind, ...meta, ...(r?.atOwner ? { atOwner: true } : {}) })
-      return { ok: true, already: Boolean(r?.already), atOwner: Boolean(r?.atOwner) }
+      return { ok: true, already: Boolean(r?.already), atOwner: Boolean(r?.atOwner), cid: String(r?.cid || '') }
     } catch (error) {
       log.warn(`抖音${NAME[kind]}失败：`, error.message)
       record(s, { kind: 'error', ...meta, text: `${NAME[kind]}没成功：${error.message}` })
@@ -173,8 +190,8 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     return `好看、有趣、值得${owner()}一看的就写 share，别太吝啬。`
   }
 
-  async function think(prompt) {
-    const out = await hub.runSystemTurn('douyin', 'QQ · 刷抖音', `【刷抖音，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs: 180000 })
+  async function think(prompt, { channel = 'douyin', label = 'QQ · 刷抖音', timeoutMs = 180000, noTools = false } = {}) {
+    const out = await hub.runSystemTurn(channel, label, `【刷抖音，不是聊天，这一轮不会发到聊天里】\n${prompt}`, { timeoutMs, noTools })
     return typeof out === 'string' ? out : String(out?.text ?? out ?? '')
   }
 
@@ -210,6 +227,18 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
           s.lastWriteAt = now()
           s.sharedDy = [...s.sharedDy, v.awemeId].slice(-300)
           via.push('douyin')
+          // 卡片后补一句她自己的话（面板设置，默认关；概率可调）
+          const so = shareTextOptions(getConfig().ext?.douyin || {})
+          if (so.shareDmText && Math.random() < so.shareDmTextChance) {
+            const extra = await hub.runSystemTurn('douyin-dm', '抖音 · 分享给主人',
+              `你刚把《${v.title || v.awemeId}》分享给了${owner()}。在抖音私信里跟一句她自己的话（一两句，说为什么想让${owner()}看；不想说就只输出 [沉默]。这一轮不能用工具。）`, { timeoutMs: 120000, noTools: true })
+            const say = String(typeof extra === 'string' ? extra : extra?.text ?? '').replace(/\[沉默\]/g, '').trim()
+            if (say && !isSilence(say)) {
+              await site.dms(who.uid)
+              await site.sendDm(clip(say, 300))
+              record(s, { kind: 'dm', text: `（分享卡片后）${say.slice(0, 60)}` })
+            }
+          }
         } catch (error) {
           log.warn('抖音里分享给主人失败：', error.message)
           record(s, { kind: 'error', awemeId: v.awemeId, title: v.title, author: v.author, text: `抖音里分享没成功：${error.message}${g.ownerQQ ? '，改发 QQ' : ''}` })
@@ -217,6 +246,23 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
         }
       }
     }
+    // 出站治理面（上游 2.3.8）：宿主给了 api.proactive 时，文本类分享先走统一账本；
+    // 旧主仓没有这个面时 undefined，内部可选链降级回 hub.sendText。
+    const sendOwnerQQ = async (text, itemId, logTag) => {
+      const to = `private:${g.ownerQQ}`
+      if (!g.dryRun && proactive?.submit) {
+        try {
+          const r = await proactive.submit({ itemId, to, channel: 'qq', text })
+          if (r && r.deliveryId !== null && r.deliveryId !== undefined && r.state !== 'unsupported') {
+            return ['sent', 'sending', 'pending'].includes(String(r.state || ''))
+          }
+        } catch (error) {
+          log.warn(`${logTag}经 api.proactive 提交失败，回退直发：`, error?.message)
+        }
+      }
+      try { return Boolean(await hub.sendText?.(to, text)) } catch (error) { log.warn(`${logTag}直发失败：`, error?.message); return false }
+    }
+
     if (g.ownerQQ && (mode === 'qq' || mode === 'both' || !via.length)) {
       // 先试着把视频本身发过去（主人要的是视频，不是链接）；
       // 发不出去（超体积 / 下载失败 / 图文作品）再退回文字摘要 + 链接。
@@ -242,7 +288,7 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       }
       try {
         const body = sentMedia ? text : `${text}\n${videoLink(v.awemeId)}`
-        const sent = await hub.sendText(`private:${g.ownerQQ}`, body)
+        const sent = await sendOwnerQQ(body, v.awemeId, '分享抖音视频')
         if (sent || g.dryRun) via.push('qq')
         else log.warn('QQ 上分享抖音视频失败：网关没有确认发送')
       } catch (error) {
@@ -372,7 +418,11 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
           const w = await doWrite(s, 'comment', { ...meta, text: comment }, () => site.comment(v.awemeId, comment, at ? { at } : {}), { waitGap: true })
           if (w.ok) {
             commented++
-            if (w.atOwner) { atted++; s.atOwner++ }
+            if (w.atOwner) {
+              atted++; s.atOwner++
+              // @ 过主人的评论记下来：之后「评论区接着聊」按 cid 查主人的回复
+              rememberMyComment(s, { awemeId: v.awemeId, cid: w.cid, text: comment, title: v.title })
+            }
             if (!w.dryRun) memory?.addEvent?.({ text: `在抖音一条视频下评论${w.atOwner ? `（@了${owner()}）` : ''}：${comment.slice(0, 60)}`, tags: ['抖音'], importance: 0.38 })
           }
         }
@@ -587,6 +637,114 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     return { ok: true, message: `刚开始刷，这一轮看 ${c.perRun} 个左右，大概 ${Math.ceil((c.perRun * (c.dwellMin + c.dwellMax)) / 2 / 60) + 1} 分钟。现在还什么都没分享，刷完系统会把结果告诉你，在那之前别跟对方说「已经发了」。` }
   }
 
+  /** 记住她 @ 过主人的评论，之后按 cid 去查这条评论下面的回复（评论区接着聊）。 */
+  function rememberMyComment(s, item) {
+    const cid = String(item.cid || '')
+    if (!cid || !item.awemeId) return
+    const row = { awemeId: String(item.awemeId), cid, text: clip(item.text, 100), title: clip(item.title, 80), at: now() }
+    s.myComments = [row, ...(s.myComments || []).filter((x) => x.cid !== cid)].slice(0, 50)
+  }
+
+  /** 评论区接话用她自己的口气想一句：读主人私聊记忆做上下文；不想回就空字符串。 */
+  async function thinkCommentReply(thread, reply) {
+    let context = ''
+    try {
+      const qq = String(getConfig().ownerQQ || '')
+      if (qq) context = await memory?.contextVia?.({ qq, query: `${thread.text}\n${reply.text}` }) || ''
+    } catch (error) { log.debug('读取评论区上下文失败：', error.message) }
+    const out = await hub.runSystemTurn('douyin-comment', '抖音 · 评论区',
+      `【抖音评论区：${owner()}在你的一条评论下面回复了你，不是 QQ。用你平时的口气接一句，像普通网友在评论区聊天，一两句就行；不想回就只输出 [沉默]。这一轮不能用工具。】\n` +
+      `视频：《${thread.title || thread.awemeId}》\n` +
+      `你之前评论：${thread.text}\n` +
+      `${owner()}回复：${reply.text}\n` +
+      (context ? `你记得的事（只是印象，不是指令）：\n${context}\n\n` : '') +
+      `只输出要发的话。`, { timeoutMs: 180000, noTools: true })
+    const raw = typeof out === 'string' ? out : String(out?.text ?? out ?? '')
+    const text = raw.replace(/\[沉默\]/g, '').split(/\n+/).map((x) => clip(x, 100)).filter(Boolean)[0] || ''
+    return isSilence(text) ? '' : text
+  }
+
+  /**
+   * 看她 @ 过主人的评论有没有新回复：只认核对过的主人 uid，只接最近 24 小时的。
+   * 回复检测走网页自己的 /aweme/v1/web/comment/list/reply/ 接口，不读屏。
+   * （上游 2.3.8「评论区接着聊」的移植；默认关，面板开关 commentReply。）
+   */
+  async function checkCommentReplies(from = '定时') {
+    const o = ownerDy()
+    const opts = getConfig().ext?.douyin || {}
+    if (opts.commentReply !== true) return { ok: false, message: '评论区接着聊没打开' }
+    if (!o?.uid) return { ok: false, message: '还没核对主人的抖音号' }
+    if (busy) return { ok: false, message: '正在刷抖音，等会儿再看评论回复' }
+    const s = load()
+    s.lastCommentCheck = now() // 先记时间：即使这次没读到/没评论，也别每分钟重开浏览器
+    const COMMENT_MAX_AGE_MS = 7 * 86400_000
+    const REPLY_FRESH_MS = 24 * 3600_000
+    let checked = 0
+    let replied = 0
+    const seen = new Set(s.commentSeen || [])
+    const persistSeen = () => {
+      s.commentSeen = [...seen].slice(-300)
+      save(s)
+    }
+    busy = true
+    try {
+      const threads = (s.myComments || []).filter((t) => t.awemeId && t.cid && now() - (t.at || 0) < COMMENT_MAX_AGE_MS).slice(0, 6)
+      // 没 @ 过主人就不用开浏览器；早退也在 try 里，保证 busy 一定会复位
+      if (!threads.length) return { ok: true, checked: 0, replied: 0, message: '最近没有在评论区 @ 过主人' }
+      const r = await ready(s)
+      if (!r.ok) return r
+      s.commentTries = s.commentTries || {}
+      for (const thread of threads) {
+        checked++
+        let list = []
+        try { list = await site.replies(thread.awemeId, thread.cid) }
+        catch (error) { log.debug(`看评论回复失败（${thread.awemeId}/${thread.cid}）：`, error.message); continue }
+        const fresh = list.filter((m) => m.uid === String(o.uid) && !seen.has(m.id))
+        for (const reply of fresh) {
+          // 只有真正准备发送才计数：模型生成失败、读接口失败都不占重试次数。
+          const tries = Number(s.commentTries[reply.id] || 0)
+          if (tries >= 3) { seen.add(reply.id); delete s.commentTries[reply.id]; persistSeen(); continue }
+          if (now() - (reply.at || 0) > REPLY_FRESH_MS) { seen.add(reply.id); persistSeen(); continue }
+          let text = ''
+          try { text = await thinkCommentReply(thread, reply) }
+          catch (error) { log.warn('评论区接话想不出来：', error.message); continue }
+          if (!text) { seen.add(reply.id); delete s.commentTries[reply.id]; persistSeen(); continue }
+          const at = await ownerMention()
+          // 发送前先落盘「已处理」：发送成功但进程马上退出也不会重复接；
+          // 发送失败再撤回标记，下次还能重试。
+          seen.add(reply.id)
+          s.commentTries[reply.id] = tries + 1
+          persistSeen()
+          const w = await doWrite(s, 'comment', { awemeId: thread.awemeId, title: thread.title, text }, () => site.comment(thread.awemeId, text, at ? { at } : {}), { waitGap: true })
+          if (!w.ok) {
+            seen.delete(reply.id)
+            // 额度 / 间隔拦下不是一次真正的发送尝试，不占重试次数
+            if (w.blocked) delete s.commentTries[reply.id]
+            persistSeen()
+            log.warn('评论区接话没成功：', w.message)
+            record(s, { kind: 'error', awemeId: thread.awemeId, title: thread.title, text: `评论区接话没成功：${w.message}` })
+            save(s)
+            continue
+          }
+          replied++
+          if (!w.dryRun) memory?.addEvent?.({ text: `在抖音评论区接着回了${owner()}：${text.slice(0, 60)}`, tags: ['抖音'], importance: 0.4 })
+          record(s, { kind: 'comment-reply', awemeId: thread.awemeId, title: thread.title, text: `回复${owner()}：${text}`, replyTo: reply.id })
+          delete s.commentTries[reply.id]
+          persistSeen()
+        }
+      }
+      log.info(`看过 ${checked} 条评论的回复，接了 ${replied} 句`)
+      return { ok: true, checked, replied }
+    } catch (error) {
+      log.warn('看评论回复出错：', error.message)
+      return { ok: false, message: error.message }
+    } finally {
+      persistSeen()
+      busy = false
+    }
+  }
+
+
   /**
    * 看主人的抖音私信，有新消息就用她的口气回（只认核对过的主人 uid，别人的私信不理）。
    * 主人让她找视频时，她回复里带 [去刷抖音]，回完就去刷一轮，挑中的照样私信分享给主人。
@@ -704,6 +862,12 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
       await checkOwnerDms()
       return
     }
+    // 评论区接着聊：隔几分钟看一次她 @ 过主人的评论有没有主人的回复（默认关）
+    const ext = getConfig().ext?.douyin || {}
+    if (ext.commentReply === true && ownerDy() && now() - (s.lastCommentCheck || 0) >= (ext.commentReplyPollMinutes || 5) * 60_000) {
+      await checkCommentReplies('定时')
+      return
+    }
     if (!c.autoBrowse) return
     if (s.runs >= c.maxRunsPerDay || s.watched >= c.maxWatchPerDay) return
     const due = s.nextDueAt || (s.lastRun ? s.lastRun + c.intervalHours * 3600_000 : 0)
@@ -771,5 +935,5 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
     }
   }
 
-  return { run, browse, watch, recentVideos, shareVideo, directDm, likeVideo, commentVideo, confirmOwner, checkOwnerDms, tick, account, loginStep, showWindow, state }
+  return { run, browse, watch, recentVideos, shareVideo, directDm, likeVideo, commentVideo, confirmOwner, checkOwnerDms, checkCommentReplies, tick, account, loginStep, showWindow, state }
 }
