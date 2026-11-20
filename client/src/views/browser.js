@@ -1,5 +1,7 @@
-import { useState, useEffect, h } from '../core/react.js'
-import { Card, Row, Btn, Seg, Empty } from '../ui/primitives.js'
+import { useState, useEffect, Fragment, h } from '../core/react.js'
+// 注意：`<>...</>` 片段语法编译成 h(Fragment, …)，必须显式 import Fragment，
+// 否则运行时抛「Fragment is not defined」，整页白屏。
+import { Card, Row, Btn, Empty } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { get, post } from '../core/http.js'
 
