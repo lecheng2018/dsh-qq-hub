@@ -40,10 +40,15 @@ const emptyState = () => ({
   dmSeen: [], dmInit: false, lastDmCheck: 0, // 主人抖音私信：看过的消息 id；第一次看时旧消息只记下不回
 })
 
-export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, now = Date.now, wait } = {}) {
+export function createDouyin({ getConfig, setOwner, hub, memory, log, site: injected, browser: browserService, now = Date.now, wait } = {}) {
   const cfg = () => getConfig().douyin
   const sleep = wait || ((ms) => new Promise((r) => setTimeout(r, ms)))
-  const site = injected || createSite({ browser: createBrowser({ profileDir: dataDir('douyin', 'edge-profile'), browserPath: () => cfg().browserPath, log }), log })
+  const site = injected || createSite({ browser: createBrowser({
+    service: browserService,
+    profileDir: dataDir('douyin', 'edge-profile'), // 只有老宿主（没有共享浏览器）才用得上
+    browserPath: () => cfg().browserPath,
+    log,
+  }), log })
   const file = () => dataDir('douyin.json')
   const load = () => {
     const raw = readJson(file(), emptyState)
@@ -745,7 +750,10 @@ export function createDouyin({ getConfig, setOwner, hub, memory, log, site: inje
   async function showWindow(visible) {
     const r = await site.ensure()
     if (!r.ok) return r
-    await site.show(Boolean(visible))
+    // 看浏览器怎么回：共享层在没有桌面的机器上会明说「虚拟屏看不见，要用 VNC」，
+    // 这里不能把它盖成 ok:true —— 否则主人以为窗口已经挪出来，在那儿等一个永远不会出现的画面。
+    const shown = await site.show(Boolean(visible))
+    if (shown && shown.ok === false) return shown
     return { ok: true, message: visible ? '浏览器窗口挪到屏幕上了，处理完点「收起窗口」' : '窗口收起来了' }
   }
 

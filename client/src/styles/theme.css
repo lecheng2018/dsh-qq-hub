@@ -59,7 +59,10 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 
 /* ---------------- 布局 ---------------- */
 .ab-wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px }
-.ab-grid { display: grid; gap: 12px }
+/* 单列轨道必须写成 minmax(0, 1fr)：裸 1fr 的最小值是 min-content，卡片里任何不可收缩的
+ * 内容（扩展页紧凑行的 nowrap 描述、长路径、sha256……）都会把轨道顶到内容宽，
+ * 整页跟着横向溢（真机 2026-11-21：系统 → 扩展页 393px 视口下轨道被撑到 1344px）。 */
+.ab-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) }
 /* 网格轨道用 min(Npx, 100%) 而不是裸 Npx：窄屏（<320px 内容宽）时轨道能收到容器宽，
  * 否则 1fr 的隐式 min-content 会把整条轨道顶出视口、页面出现横向滚动（真机 2026-11-15） */
 .ab-g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)) }
@@ -453,7 +456,7 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
   .ab-row .ab-label { flex: none; padding-top: 0 }
   .ab-row .ab-label small { max-width: none }
   .ab-row .ab-ctl { max-width: none }
-  .ab-g2 { grid-template-columns: 1fr }
+  .ab-g2 { grid-template-columns: minmax(0, 1fr) }
   .ab-card { padding: 14px }
   .ab-input, .ab-select, .ab-textarea, .ab-sel-btn { font-size: 16px }
   .ab-btn { min-height: 36px }
