@@ -95,6 +95,15 @@ function Douyin({ draft, setDraft, toast }) {
         more={'这条流程仍需实际环境验证。只在「主动搭话」里设的醒着时间内回。'}
       >
         <Row label="回你的抖音私信">{f.sw('douyin.ownerDm')}</Row>
+        <Row label="评论区接着聊" hint="她在评论里 @ 过你、你回复那条评论之后，她会看到并用自己的口气接一句（新评论里真 @ 你）。默认关。">
+          {f.sw('douyin.commentReply')}
+        </Row>
+        <Row label="多久看一次评论回复">
+          {f.num('douyin.commentReplyPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
+        </Row>
+        <Row label="分享卡片后补一句" hint="抖音私信里发完视频卡片，再跟一句她自己想说的话（有概率触发，默认关）">
+          {f.sw('douyin.shareDmText')}
+        </Row>
         <Row label="多久看一次">
           {f.num('douyin.dmPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
           <Btn small onClick={act('/douyin/dms', 'dms')} disabled={!!busy}>{busy === 'dms' ? '正在看…' : '现在看一次'}</Btn>
