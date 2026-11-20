@@ -77,6 +77,11 @@ jobs:
           TAG="v${VERSION}"
           SKIP=false
 
+          if [[ "${GITHUB_REF}" == refs/tags/* ]] && [ "${GITHUB_REF_NAME}" != "${TAG}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 package.json version ${VERSION} 不一致（期望 ${TAG}）"
+            exit 1
+          fi
+
           git fetch --tags --force || true
 
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then

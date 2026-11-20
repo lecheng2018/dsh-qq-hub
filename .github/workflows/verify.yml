@@ -22,7 +22,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extensions/tieba-reader/package-lock.json
 
       - name: Install Root Test Dependencies
         run: npm ci
@@ -43,5 +47,37 @@ jobs:
       - name: Run All Tests
         run: npm run test:all
 
+      - name: Run Deterministic Benchmark
+        run: npm run benchmark -- --output artifacts/benchmark.json
+
+      - name: Upload Benchmark Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-node-22.13.0
+          path: artifacts/benchmark.json
+          if-no-files-found: error
+
       - name: Check Package Contents
         run: npm run pack:check
+
+      - name: Smoke Test Packed Package
+        run: npm run smoke:pack
+
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install Root Test Dependencies
+        run: npm ci
+
+      - name: Smoke Test Packed Package
+        run: npm run smoke:pack

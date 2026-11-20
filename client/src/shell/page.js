@@ -15,6 +15,7 @@ import { Connect } from '../views/connect.js'
 import { Persona } from '../views/persona.js'
 import { Access } from '../views/access.js'
 import { Group } from '../views/group.js'
+import { Browser } from '../views/browser.js'
 import { Model } from '../views/model.js'
 import { Token } from '../views/token.js'
 import { Voice } from '../views/voice.js'
@@ -144,7 +145,7 @@ function QQHubPage() {
   const curTab = tabs.find((t) => t.id === tab) || tabs[0]
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
+    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, browser: Browser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
   const tabDirty = (id) => {

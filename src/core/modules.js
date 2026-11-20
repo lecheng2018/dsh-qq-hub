@@ -253,6 +253,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       core,
       dsh: ctx,
       lib,
+      // 共享浏览器：返回**宿主那个单例**（不能走 api.lib，那会新建一个实例，各模块就连到不同的浏览器了）。
+      // 宿主没开浏览器功能时返回 null，模块要自己判断。
+      browser: () => core.browser || null,
       // ---- 往插件里加东西 ----
       tool: (builder) => { rec.tools.push(builder); return () => remove(rec.tools, builder) },
       defineTool,

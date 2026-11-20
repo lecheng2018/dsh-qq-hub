@@ -1,5 +1,17 @@
 # 更新记录
 
+## Unreleased · fix 系统 → 扩展页手机端横向溢出：单列网格轨道改成可收缩（2026-11-21）
+
+**现象（真机）**：手机上打开「系统 → 扩展」，整页能左右拖动，卡片比屏幕宽出好几倍（393px 视口下卡片实际宽 1344px，多出来的两屏全是空白），要横向拖着才能看到右侧的开关。
+
+**根因**：不是某张卡片写死了宽度，而是 `.ab-grid` 的单列轨道用了裸 `1fr`。`1fr` 的最小值是 min-content，而扩展页「内置模块」分组用的是紧凑行——描述为了只露一行，写的是 `white-space: nowrap` + 省略号，那串 nowrap 文本的最小内容宽约 1264px；于是整条轨道被顶到 1344px，网格里所有卡片跟着变宽。同一个坑 11-15 在 `.ab-g2` 上踩过一次（裸 `Npx` 轨道），当时只改了带 `ab-g2/ab-g4` 修饰的那些页，没管默认的单列 `.ab-grid`。
+
+**改法**：`.ab-grid` 默认轨道写死 `minmax(0, 1fr)`（网格的最小值可以被压到 0，nowrap 内容就地溢出并在卡片内被裁掉，不再撑宽布局）；窄屏媒体查询里 `.ab-g2 { grid-template-columns: 1fr }` 同样改成 `minmax(0, 1fr)`，避免小屏退回同一个坑。
+
+**改动文件**：`client/src/styles/theme.css`、重建的 `client/client.js`。
+
+**回归**：新增 `test/client-layout-css.test.js`，钉住「默认单列轨道必须 `minmax(0, 1fr)`」「窄屏段不能出现裸 `1fr`」「产物与源码同步」。真机等价验证：用 Chromium 在 320/360/393/414 四个宽度下逐页扫 20 个内置标签页 + 8 个模块自有页面，标签栏之外零溢出（修前扩展页 `documentElement.scrollWidth` 1358、`.ab-root.scrollWidth` 1358，修后等于视口宽）；卡片内部仅有 16 处 nowrap 文本按设计省略号截断。
+
 ## Unreleased · chore(build): 面板产物同源检查挪到本地 —— `check:client` + pre-push 钩子（2026-11-20）
 
 **现象**：`f1e6100`（#186，只改了 `scripts/build-client.mjs` 的 `postProcess`）与 `bd7f993`（#183）连红两道 Verify，报的都是「`client/client.js` 与 `client/src` 不同步：1 insertion / 2 deletions」。门禁本身没错——错在**只有 push 之后才看得见**：`npm test` 会先现场构建产物，本地全绿，CI 才红，白等一轮。
