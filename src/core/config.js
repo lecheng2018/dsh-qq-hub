@@ -70,6 +70,11 @@ const DEFAULTS_RAW = {
   // 管不到服务端那种按字节的会话额度。阈值同时看「回合数」和「会话年龄」，任一到了就换
   //（填 0 = 该项不启用；只留一项就是单条件轮换）。
   sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 },
+  // 图片进历史的预算（每个会话）：服务端对「会话累计上下文 + 图片」有硬上限
+  //（真机 413 plugin_request_too_large：请求约 5.8 MiB / 插件内存上限 64 MiB）。
+  // 图片块一旦进历史，之后每一轮都会重新发一遍，所以额度必须**按会话**累加着算，
+  // 而不是每轮重置。额度用完后的新图只留一句占位文字，不再进上下文。
+  imageBudget: { enabled: true, maxImages: 24, maxMiB: 12 },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 },
@@ -113,13 +118,25 @@ const DEFAULTS_RAW = {
   // 按群头衔不回：勾选的群里，专属头衔正好是 title 的成员（一般是别的机器人）说话、戳她都不理。没勾群就不起作用
   voice: {
     enabled: true,
-    // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http = 指定引擎（失败都会退回 Windows 语音）
+    // auto = 先 edge-tts，不行用 Windows 语音；edge / windows / cosyvoice / gptsovits / http /
+    // doubao / qwentts / mimo = 指定引擎（失败都会退回 edge-tts 或 Windows 语音）
     engine: 'auto',
     cosyvoice: { url: 'http://127.0.0.1:50000', mode: 'sft', spkId: '中文女', instruct: '', sampleRate: 22050 },
     gptsovits: { url: 'http://127.0.0.1:9880', refAudio: '', promptText: '', promptLang: 'zh', textLang: 'zh' },
     // 通用 HTTP TTS：GET 地址模板（{text} 替换成要念的话）；POST 时配请求头/请求体，
     // 可接火山豆包 / 阿里 / 讯飞这类要鉴权的云 TTS（JSON 里的 base64 音频自动解出）
     http: { urlTemplate: '', method: 'GET', headers: '', body: '' },
+    // 豆包语音 2.0（火山引擎，语义移植上游社区模块 voice）：X-Api-Key 鉴权，流式 NDJSON 返回 base64 WAV 分片
+    doubao: { apiKey: '', resourceId: 'seed-icl-2.0', speaker: 'S_1CmxEOek2', speechRate: 0, contextTexts: '', autoEmotion: true, timeout: 60 },
+    // 阿里百炼 qwen-tts（DashScope SpeechSynthesizer；语义移植上游 qwen-tts 模块）
+    qwentts: {
+      apiKey: '', baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry',
+      speechRate: 1.0, sampleRate: 24000, seed: 20261, maxCharsPerSegment: 300, timeoutMs: 30000,
+      instruction: '用日常聊天说话的语气，像在手机上随口跟朋友讲话，语速略快，不要播音腔。中文。',
+    },
+    // 小米 MiMo TTS（OpenAI 兼容 chat/completions；语义移植上游 aura-mimo 模块）：
+    // voiceclone 模型用参考音频（本机路径）克隆音色，voicedesign 模型用音色描述
+    mimo: { apiKey: '', apiBase: 'https://api.xiaomimimo.com/v1', model: 'mimo-v2.5-tts-voiceclone', stylePrompt: '', seedText: '', refAudio: '', timeout: 180 },
     voice: 'zh-CN-XiaoyiNeural',
     rate: '+0%',
     pitch: '+0Hz',
@@ -373,6 +390,11 @@ export function normalize(raw) {
   c.sessionRotation.enabled = bool(c.sessionRotation.enabled, true)
   c.sessionRotation.maxTurns = Math.round(num(c.sessionRotation.maxTurns, 300, 0, 100000))
   c.sessionRotation.maxAgeHours = num(c.sessionRotation.maxAgeHours, 168, 0, 8760)
+  // 图片进历史的预算：张数与字节都设上下界，面板填出离谱值也不会把会话一次性撑爆
+  if (!isObj(c.imageBudget)) c.imageBudget = {}
+  c.imageBudget.enabled = bool(c.imageBudget.enabled, true)
+  c.imageBudget.maxImages = Math.round(num(c.imageBudget.maxImages, 24, 0, 200))
+  c.imageBudget.maxMiB = Math.round(num(c.imageBudget.maxMiB, 12, 0, 128))
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
@@ -551,7 +573,7 @@ export function normalize(raw) {
   delete c.reply.llmSplit
   g.burstMax = num(g.burstMax, 8, 1, 50)
   g.burstWindowSec = num(g.burstWindowSec, 120, 10, 3600)
-  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http'].includes(c.voice.engine)) c.voice.engine = 'auto'
+  if (!['auto', 'edge', 'windows', 'cosyvoice', 'gptsovits', 'http', 'doubao', 'qwentts', 'mimo'].includes(c.voice.engine)) c.voice.engine = 'auto'
   // 通用 HTTP TTS：手改 config 写脏了也不能把请求发歪（语义移植上游）
   if (!c.voice.http || typeof c.voice.http !== 'object' || Array.isArray(c.voice.http)) c.voice.http = { urlTemplate: '', method: 'GET', headers: '', body: '' }
   c.voice.http.urlTemplate = String(c.voice.http.urlTemplate ?? '').trim()
@@ -670,6 +692,10 @@ export function normalize(raw) {
 const SECRETS = [
   ['snowluma', 'webuiPassword'], ['snowluma', 'httpToken'], ['snowluma', 'wsToken'],
   ['imageGen', 'apiKey'],
+  // 语音引擎的云端凭据：豆包 / 百炼 / MiMo（掩码 + 留空保存保留原值，同 imageGen 口径）
+  ['voice', 'doubao', 'apiKey'],
+  ['voice', 'qwentts', 'apiKey'],
+  ['voice', 'mimo', 'apiKey'],
   ['bili', 'cookie'], ['bili', 'sessdata'], ['bili', 'biliJct'],
   ['heybox', 'cookie'], ['bridge', 'token'],
   ['multiParser', 'cookies', 'bilibili'],

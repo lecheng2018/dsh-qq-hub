@@ -17,9 +17,19 @@ test('共享视觉服务直接使用 describeWithHelper，不在核心重复造�
 })
 
 test('当前核心把私聊和群聊内容统一交给共享视觉服务', () => {
-  assert.match(core, /const admitContent = \(content, context\) => inboundVision\.admit\(content, context\)/)
+  // 核心只有一处把内容交给共享视觉服务（inboundVision.admit），群/私聊两条路都走它。
+  // 中间多了一层「图片进历史的预算」闸（feat/image-history-budget）：超额度时先裁图再交给
+  // 共享服务 —— 断言因此从「一行箭头函数」改成「包装函数里仍然只调一次 admit」，
+  // 语义不变：核心不自己实现登记/降级，只决定「这一轮带几张图进去」。
+  assert.match(core, /const admitContent = async \(content, context = \{\}\) =>/)
+  assert.equal((core.match(/inboundVision\.admit\(/g) || []).length, 1, '核心只允许一处调用共享视觉服务')
+  assert.match(core, /inboundVision\.admit\(trimmed, context\)/)
+  assert.match(core, /trimToImageBudget\(/)
   assert.match(core, /const admitted = await admitContent\(content,/)
   assert.match(core, /const admittedSteer = await admitContent\(steerContent,/)
+  // 两条路都要带 sessionId：图片额度是按会话累加的，缺了就等于没管
+  assert.match(core, /const admitted = await admitContent\(content,[\s\S]{0,240}sessionId,/)
+  assert.match(core, /const admittedSteer = await admitContent\(steerContent,[\s\S]{0,240}sessionId,/)
 })
 
 test('视觉服务返回的内容块进入当前回合，不走旧 imageTextFor 旁路', () => {
