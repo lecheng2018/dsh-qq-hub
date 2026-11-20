@@ -68,6 +68,7 @@ import { registerPurposeRoutes } from './host/panel/routes-purpose.js'
 import { registerGatewayRoutes } from './host/panel/routes-gateway.js'
 import { registerPersonaRoutes } from './host/panel/routes-persona.js'
 import { registerModulesRoutes } from './host/panel/routes-modules.js'
+import { registerBrowserRoutes } from './host/panel/routes-browser.js'
 import { registerMiscRoutes } from './host/panel/routes-misc.js'
 
 export const name = 'qq-hub'
@@ -613,6 +614,7 @@ registerPersonaRoutes({
     getConfig,
     hub, mods, market, openFolder,
   })
+  registerBrowserRoutes({ route, readBody, browser, getConfig, logger, openFolder })
   registerMiscRoutes({
     route, readBody, query, send,
     ctx, getConfig,

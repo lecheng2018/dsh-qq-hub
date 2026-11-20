@@ -76,6 +76,11 @@ const SIDE_EFFECT_PATHS = new Set([
   '/modules/tool',         // :83 真执行工具（可能落 onebot 操作）
   '/modules/market/install', // 市场安装：下载并执行进程内代码（仅主人面板 POST）
   '/modules/market/remove',  // 市场卸载：删模块目录（purge 连数据）
+  // routes-browser.js
+  '/browser/install',      // 下载 deb 并解包（写插件数据目录、起子进程）
+  '/browser/shutdown',     // 关掉浏览器与虚拟显示
+  '/browser/vnc',          // 起/停 x11vnc
+  '/browser/open-folder',  // spawn explorer
   // routes-misc.js
   '/local/open',           // :30 spawn explorer
   '/local/test',           // :31 跑本地 tts/image 脚本、产文件

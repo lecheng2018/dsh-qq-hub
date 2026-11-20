@@ -82,6 +82,7 @@ const DEFAULTS_RAW = {
     enabled: true,
     chromePath: '', // 留空 = 自动找
     headless: false, // 默认有头（抖音/小红书会拦无头）；没桌面时靠自带 Xvfb 撑
+    chrome: true, // 装的时候优先官方 Chrome（视频编解码更全）；false = 直接用 Debian chromium
     maxConcurrent: 2, // 同时最多几个模块在用浏览器
     idleMinutes: 10, // 没人用这么久就关掉浏览器（0 = 不自动关）
     minFreeMB: 600, // 可用内存低于这个值就不启动（0 = 不检查）
@@ -411,6 +412,7 @@ export function normalize(raw) {
   c.browser.enabled = bool(c.browser.enabled, true)
   c.browser.chromePath = String(c.browser.chromePath || '').trim()
   c.browser.headless = bool(c.browser.headless, false)
+  c.browser.chrome = bool(c.browser.chrome, true)
   c.browser.maxConcurrent = Math.round(num(c.browser.maxConcurrent, 2, 1, 4))
   c.browser.idleMinutes = Math.round(num(c.browser.idleMinutes, 10, 0, 240))
   c.browser.minFreeMB = Math.round(num(c.browser.minFreeMB, 600, 0, 8192))

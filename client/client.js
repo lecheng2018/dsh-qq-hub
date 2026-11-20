@@ -38,7 +38,7 @@ module.exports = __toCommonJS(entry_exports);
 
 // client/src/core/react.js
 var React = require("react");
-var { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React;
+var { useState, useEffect, useRef, useCallback, useMemo, Fragment: Fragment2 } = React;
 var h = React.createElement;
 
 // client/src/ui/icons.js
@@ -359,6 +359,7 @@ var TABS = [
   { id: "douyin", label: "抖音", flag: "douyin.enabled" },
   { id: "heybox", label: "小黑盒", flag: "heybox.enabled" },
   { id: "multiParser", label: "内容解析", flag: "multiParser.enabled" },
+  { id: "browser", label: "浏览器", flag: "browser.enabled" },
   { id: "local", label: "本地接口" },
   { id: "modules", label: "扩展" },
   { id: "logs", label: "日志" }
@@ -383,7 +384,7 @@ var NAV_GROUPS = [
   { id: "self", label: "人设", icon: "M12 12.5a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5zM4.5 20.5c.9-3.6 3.9-5.5 7.5-5.5s6.6 1.9 7.5 5.5", tabs: ["persona", "group", "speakup", "memory"] },
   { id: "express", label: "表达", icon: "M20.5 11.5a8 8 0 0 1-11.7 7.1L4 20l1.4-4.4A8 8 0 1 1 20.5 11.5zM9 13.2s1.1 1.5 3 1.5 3-1.5 3-1.5M9.5 9.6h.01M14.5 9.6h.01", tabs: ["voice", "stickers", "imagegen"] },
   { id: "platform", label: "平台", icon: "M3.5 6.5h17v11h-17zM10.5 9.8v4.4l3.8-2.2z", tabs: ["diary", "bili", "douyin", "heybox", "multiParser"] },
-  { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "model", "token", "access", "local", "modules", "logs"] }
+  { id: "system", label: "系统", icon: "M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1M15 5v4M9 10v4M17 15v4", tabs: ["connect", "model", "token", "access", "browser", "local", "modules", "logs"] }
 ];
 var PLATFORM_EXT = /逛|刷|B站|抖音|小红书|闲鱼|淘宝|微博|知乎|贴吧|快手|触站|小黑盒/;
 var navGroupOf = (t) => NAV_GROUPS.find((g) => g.tabs.includes(t.id)) || (t.ext && PLATFORM_EXT.test(t.label) ? NAV_GROUPS[3] : NAV_GROUPS[4]);
@@ -428,6 +429,7 @@ var TAB_KEYS = {
   douyin: ["douyin"],
   heybox: ["heybox"],
   multiParser: ["multiParser"],
+  browser: ["browser"],
   local: ["local"]
 };
 
@@ -484,7 +486,7 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
     go(t.id);
   };
   const tabBtn = (t) => /* @__PURE__ */ h("button", { key: t.id, type: "button", role: "tab", "aria-selected": cur.id === t.id, className: cx("ab-tab", cur.id === t.id && "on"), onClick: () => go(t.id) }, t.label, mark(t));
-  return /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("nav", { className: "ab-nav", ref: box, "aria-label": "QQ Hub 功能" }, /* @__PURE__ */ h("div", { className: "ab-nav-top" }, /* @__PURE__ */ h("div", { className: "ab-nav-groups", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => /* @__PURE__ */ h(
+  return /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h("nav", { className: "ab-nav", ref: box, "aria-label": "QQ Hub 功能" }, /* @__PURE__ */ h("div", { className: "ab-nav-top" }, /* @__PURE__ */ h("div", { className: "ab-nav-groups", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => /* @__PURE__ */ h(
     "button",
     {
       key: g.id,
@@ -649,7 +651,7 @@ function UpdateNotes({ st, toast }) {
     }
     setNotes(null);
   };
-  return /* @__PURE__ */ h(Fragment, null, notes ? /* @__PURE__ */ h("div", { className: "ab-note" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("b", null, "已更新到 v", st.version), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: dismiss }, "知道了")), /* @__PURE__ */ h("div", { style: { whiteSpace: "pre-wrap", marginTop: 6 } }, notes)) : null, upd && upd.newer ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "有新版本 v", upd.latest), "（现在是 v", upd.current, "）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h("code", { style: { flex: "1 1 300px", fontSize: 11.5, wordBreak: "break-all" } }, upd.command), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
+  return /* @__PURE__ */ h(Fragment2, null, notes ? /* @__PURE__ */ h("div", { className: "ab-note" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("b", null, "已更新到 v", st.version), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: dismiss }, "知道了")), /* @__PURE__ */ h("div", { style: { whiteSpace: "pre-wrap", marginTop: 6 } }, notes)) : null, upd && upd.newer ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "有新版本 v", upd.latest), "（现在是 v", upd.current, "）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h("code", { style: { flex: "1 1 300px", fontSize: 11.5, wordBreak: "break-all" } }, upd.command), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
     try {
       navigator.clipboard.writeText(upd.command);
       toast("复制好了", "ok");
@@ -818,7 +820,7 @@ function GatewayChoice({ draft, setDraft }) {
   );
 }
 function OneBotFields({ draft, f }) {
-  return /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "WebSocket 地址", hint: "正向 WebSocket（OneBot v11），收消息靠它，必填。DSH 在容器里的话，要填容器能访问到的地址" }, f.text("snowluma.wsUrl", { size: "wide", placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "WebSocket 令牌", hint: "对方设了 access_token 就填，没设留空" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "没有就留空" })), /* @__PURE__ */ h(Row, { label: "HTTP 地址", hint: "可选。填了就用 HTTP 调接口，不填就都走 WebSocket" }, f.text("snowluma.httpUrl", { size: "wide", placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "没有就留空" })));
+  return /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "WebSocket 地址", hint: "正向 WebSocket（OneBot v11），收消息靠它，必填。DSH 在容器里的话，要填容器能访问到的地址" }, f.text("snowluma.wsUrl", { size: "wide", placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "WebSocket 令牌", hint: "对方设了 access_token 就填，没设留空" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "没有就留空" })), /* @__PURE__ */ h(Row, { label: "HTTP 地址", hint: "可选。填了就用 HTTP 调接口，不填就都走 WebSocket" }, f.text("snowluma.httpUrl", { size: "wide", placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "没有就留空" })));
 }
 var STATE_TEXT = { connected: "已连上", connecting: "连接中", disconnected: "断开了，正在重连", stopped: "没启动（总开关关着）", unconfigured: "还没配置" };
 function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
@@ -1439,6 +1441,102 @@ function Group({ draft, setDraft }) {
   } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
 }
 
+// client/src/views/browser.js
+var fmtMB = (n) => n >= 1024 ? (n / 1024).toFixed(1) + " GB" : Math.round(n) + " MB";
+function InstallCard({ st, busy, onInstall, onRefresh, onOpen }) {
+  if (!st) return /* @__PURE__ */ h(Card, { title: "浏览器" }, /* @__PURE__ */ h(Empty, { icon: "⏳", text: "读取中…" }));
+  if (st.installed) {
+    const info = st.info || {};
+    return /* @__PURE__ */ h(
+      Card,
+      {
+        title: "浏览器已装好",
+        desc: `${info.kind === "chrome" ? "官方 Chrome" : "Debian Chromium"}　占用 ${fmtMB(info.sizeMB || 0)}`,
+        right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onOpen }, "打开目录")
+      },
+      /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { wordBreak: "break-all" } }, info.browser),
+      /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "装在这台机器上，只有插件自己用；没动系统里的东西。")
+    );
+  }
+  if (st.job?.state === "running") {
+    return /* @__PURE__ */ h(Card, { title: "正在装…", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onRefresh }, "刷新") }, /* @__PURE__ */ h("div", { className: "ab-muted" }, "要下几百兆，几分钟很正常。装完这张卡片会自己刷新，不用一直盯着。"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, st.job.message));
+  }
+  const failed2 = st.job?.state === "failed";
+  return /* @__PURE__ */ h(
+    Card,
+    {
+      title: failed2 ? "装失败了" : "还没装浏览器",
+      desc: "刷抖音、小红书、贴吧这类要开网页的功能，得先有一个浏览器。",
+      right: /* @__PURE__ */ h(Btn, { kind: "primary", onClick: onInstall, disabled: busy }, busy ? "开始了…" : "安装")
+    },
+    /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "会下到插件的数据目录里，", /* @__PURE__ */ h("b", null, "不需要管理员权限"), "，也不动系统里的东西。 优先装官方 Chrome（视频编解码更全），下不动就退回 Debian 的 chromium。"),
+    failed2 ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 8 } }, st.job.message || st.missing) : null,
+    !failed2 && st.missing ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, st.missing) : null
+  );
+}
+function LiveCard({ st, onShutdown, onVnc, busy }) {
+  const live = st?.live;
+  if (!live) return null;
+  const running = live.state === "ready";
+  return /* @__PURE__ */ h(
+    Card,
+    {
+      title: "运行状态",
+      desc: running ? "浏览器正在跑（多个模块共用这一个进程）" : "现在没在跑。下次要用时会自动起来。",
+      right: running ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onShutdown, disabled: busy }, "立刻关掉") : null
+    },
+    /* @__PURE__ */ h(Row, { label: "状态" }, /* @__PURE__ */ h("span", null, running ? "运行中" : "休眠"), live.browser ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 8 } }, live.browser) : null),
+    running ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "显示" }, live.displayOwned ? /* @__PURE__ */ h("span", null, "虚拟屏 ", live.display, "（没有桌面，看不见）") : /* @__PURE__ */ h("span", null, live.display || "系统显示")), /* @__PURE__ */ h(Row, { label: "标签页" }, /* @__PURE__ */ h("span", null, live.tabs, " 个")), /* @__PURE__ */ h(Row, { label: "正在用" }, live.active.length ? /* @__PURE__ */ h("span", null, live.active.join("、")) : /* @__PURE__ */ h("span", { className: "ab-muted" }, "没人用"))) : null,
+    /* @__PURE__ */ h(Row, { label: "可用内存" }, /* @__PURE__ */ h("span", { className: live.freeMB >= 0 && live.freeMB < 600 ? "ab-warn" : "" }, live.freeMB >= 0 ? fmtMB(live.freeMB) : "未知")),
+    live.displayOwned ? /* @__PURE__ */ h(Row, { label: "看画面", hint: "虚拟屏没人看得见，要用 VNC 连过来" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => onVnc("start"), disabled: busy }, "开 VNC"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => onVnc("stop"), disabled: busy }, "关"), live.vnc?.running ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 8 } }, "已开，端口 ", live.vnc.port) : null) : null
+  );
+}
+function Browser({ draft, setDraft, toast }) {
+  const f = useField(draft, setDraft);
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = async () => {
+    const r = await get("/browser/status").catch(() => null);
+    setSt(r && r.ok ? r : null);
+  };
+  useEffect(() => {
+    load();
+  }, []);
+  useEffect(() => {
+    if (st?.job?.state !== "running") return;
+    const t = setInterval(load, 3e3);
+    return () => clearInterval(t);
+  }, [st?.job?.state]);
+  const act = async (path, body, okText) => {
+    setBusy(true);
+    try {
+      const r = await post(path, body).catch(() => ({ ok: false, message: "请求失败" }));
+      toast(r.message || (r.ok ? okText : "没成功"), r.ok ? "ok" : "err");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(
+    InstallCard,
+    {
+      st,
+      busy,
+      onInstall: () => act("/browser/install", {}, "开始安装"),
+      onRefresh: load,
+      onOpen: () => act("/browser/open-folder", {}, "打开了")
+    }
+  ), /* @__PURE__ */ h(
+    LiveCard,
+    {
+      st,
+      busy,
+      onShutdown: () => act("/browser/shutdown", {}, "已关闭"),
+      onVnc: (action) => act("/browser/vnc", { action }, "好")
+    }
+  ), /* @__PURE__ */ h(Card, { title: "设置", desc: "一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。" }, /* @__PURE__ */ h(Row, { label: "总开关", hint: "关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）" }, f.switch("browser.enabled")), /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 用装好的那份；也可以填系统里已有的 Chrome / Edge 完整路径" }, f.text("browser.chromePath", { size: "wide", placeholder: "留空自动找" })), /* @__PURE__ */ h(Row, { label: "同时用几个", hint: "默认 2。机器内存小就调到 1，超了会立刻报忙而不是排队" }, f.num("browser.maxConcurrent", { min: 1, max: 4 })), /* @__PURE__ */ h(Row, { label: "没人用多久就关", hint: "默认 10 分钟。0 = 一直开着（不推荐，会一直占内存）" }, f.num("browser.idleMinutes", { min: 0, max: 240 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")), /* @__PURE__ */ h(Row, { label: "内存低于多少就不开", hint: "默认 600 MB。可用内存不够时不启动，免得把整机拖垮" }, f.num("browser.minFreeMB", { min: 0, max: 8192 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "无头模式", hint: "默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容" }, f.switch("browser.headless")), /* @__PURE__ */ h(Row, { label: "优先官方 Chrome", hint: "开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）" }, f.switch("browser.chrome"))));
+}
+
 // client/src/views/model.js
 var key = (m) => m.provider + "::" + m.model;
 var val = (s) => s && s.provider && s.model ? s.provider + "::" + s.model : "";
@@ -1629,7 +1727,7 @@ function Voice({ st, draft, setDraft, toast, reload }) {
       { value: "http", label: "其他 HTTP 接口", desc: "任意返回音频的地址" },
       { value: "windows", label: "Windows 自带", desc: "离线可用，机械感重一些" }
     ])),
-    ["auto", "edge"].includes(draft.voice.engine) ? /* @__PURE__ */ h(Fragment, null, !st.voice.edgeInstalled ? /* @__PURE__ */ h(Row, { label: "edge-tts", hint: "装在插件自己的 Python 环境里，不影响系统" }, /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+    ["auto", "edge"].includes(draft.voice.engine) ? /* @__PURE__ */ h(Fragment2, null, !st.voice.edgeInstalled ? /* @__PURE__ */ h(Row, { label: "edge-tts", hint: "装在插件自己的 Python 环境里，不影响系统" }, /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       toast("正在安装，可能要一两分钟…");
       const r = await post("/voice/install");
       toast(r.message);
@@ -1658,19 +1756,19 @@ function Voice({ st, draft, setDraft, toast, reload }) {
         onChange: (v) => setDraft(setPath(draft, "voice.pitch", pitchText(v)))
       }
     ))) : null,
-    draft.voice.engine === "cosyvoice" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "CosyVoice 自带 runtime/python/fastapi/server.py" }, f.text("voice.cosyvoice.url", { size: "wide", placeholder: "http://127.0.0.1:50000" })), /* @__PURE__ */ h(Row, { label: "模式" }, f.select("voice.cosyvoice.mode", [{ value: "sft", label: "预置音色（sft）" }, { value: "instruct", label: "带语气指令（instruct）" }], { width: 220 })), /* @__PURE__ */ h(Row, { label: "音色 ID", hint: "例如 中文女、中文男" }, f.text("voice.cosyvoice.spkId")), draft.voice.cosyvoice.mode === "instruct" ? /* @__PURE__ */ h(Row, { label: "语气指令", hint: "例如：用甜美撒娇的语气说" }, f.text("voice.cosyvoice.instruct", { size: "wide" })) : null, /* @__PURE__ */ h(Row, { label: "采样率", hint: "CosyVoice 1 是 22050，CosyVoice 2 是 24000" }, f.select("voice.cosyvoice.sampleRate", [{ value: 22050, label: "22050 Hz" }, { value: 24e3, label: "24000 Hz" }], { width: 160 }))) : null,
-    draft.voice.engine === "gptsovits" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "GPT-SoVITS 的 api_v2.py" }, f.text("voice.gptsovits.url", { size: "wide", placeholder: "http://127.0.0.1:9880" })), /* @__PURE__ */ h(Row, { label: "参考音频路径", hint: "服务那台电脑上的路径" }, f.text("voice.gptsovits.refAudio", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "参考音频的文字" }, f.text("voice.gptsovits.promptText", { size: "wide" }))) : null,
-    draft.voice.engine === "doubao" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "火山引擎「豆包语音」控制台创建，请求头 X-Api-Key；只存本机，不会显示出来" }, f.text("voice.doubao.apiKey", { type: "password", placeholder: draft.voice.doubao.apiKeySet ? "已保存（不改就留空）" : "还没有填" })), /* @__PURE__ */ h(Row, { label: "资源 ID", hint: "复刻音色只能用 seed-icl-2.0，用错会报 55000000" }, f.select("voice.doubao.resourceId", [{ value: "seed-icl-2.0", label: "声音复刻 2.0" }, { value: "seed-tts-2.0", label: "预置音色 2.0" }], { width: 200 })), /* @__PURE__ */ h(Row, { label: "音色 Speaker", hint: "复刻音色 ID；预置 2.0 音色以 _uranus_bigtts 结尾" }, f.text("voice.doubao.speaker", { size: "wide", placeholder: "S_1CmxEOek2" })), /* @__PURE__ */ h(Row, { label: "固定语气指令", hint: "一行一条，例如「用温柔、放慢一点的语气说这句话」；留空不加" }, f.area("voice.doubao.contextTexts", { rows: 3 })), /* @__PURE__ */ h(Row, { label: "按文字自动配语气", hint: "按关键词自动追加语气指令（开心/生气/撒娇…），不参与计费" }, f.sw("voice.doubao.autoEmotion")), /* @__PURE__ */ h(Row, { label: "语速", hint: "-50~100，默认 0；觉得快就调 -10 到 -20" }, f.text("voice.doubao.speechRate", { size: "narrow" }))) : null,
-    draft.voice.engine === "qwentts" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "阿里云百炼（DashScope）创建；只存本机，不会显示出来" }, f.text("voice.qwentts.apiKey", { type: "password", placeholder: draft.voice.qwentts.apiKeySet ? "已保存（不改就留空）" : "sk-…" })), /* @__PURE__ */ h(Row, { label: "接口地址", hint: "只填到域名，路径自动拼" }, f.text("voice.qwentts.baseUrl", { size: "wide", placeholder: "https://dashscope.aliyuncs.com" })), /* @__PURE__ */ h(Row, { label: "模型", hint: "百炼语音模型名" }, f.text("voice.qwentts.model", { placeholder: "qwen-audio-3.1-tts-flash" })), /* @__PURE__ */ h(Row, { label: "音色", hint: "官方中文女声兜底是 Cherry" }, f.text("voice.qwentts.voice", { placeholder: "Cherry" })), /* @__PURE__ */ h(Row, { label: "语气基底", hint: "每次合成都带上；正文里的【撒娇】【吐槽】等标记会转成临时语气指令" }, f.area("voice.qwentts.instruction", { rows: 2 })), /* @__PURE__ */ h(Row, { label: "分段上限", hint: "长文本按句末标点切成不超过这个字数的分段，逐段合成后拼成一条" }, f.text("voice.qwentts.maxCharsPerSegment", { size: "narrow" })), /* @__PURE__ */ h(Row, { label: "采样率" }, f.select("voice.qwentts.sampleRate", [{ value: 24e3, label: "24000 Hz" }, { value: 22050, label: "22050 Hz" }, { value: 16e3, label: "16000 Hz" }], { width: 160 }))) : null,
-    draft.voice.engine === "mimo" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "小米 MiMo 开放平台创建，sk- 开头；只存本机，不会显示出来" }, f.text("voice.mimo.apiKey", { type: "password", placeholder: draft.voice.mimo.apiKeySet ? "已保存（不改就留空）" : "sk-…" })), /* @__PURE__ */ h(Row, { label: "API 地址", hint: "一般不用改，要以 /v1 结尾" }, f.text("voice.mimo.apiBase", { size: "wide", placeholder: "https://api.xiaomimimo.com/v1" })), /* @__PURE__ */ h(Row, { label: "模型", hint: "voiceclone 用参考音频克隆；voicedesign 用下面的风格描述" }, f.text("voice.mimo.model", { placeholder: "mimo-v2.5-tts-voiceclone" })), /* @__PURE__ */ h(Row, { label: "参考音频路径", hint: "这台电脑上的一段 mp3/wav（几秒到几十秒都行）；voicedesign 模型不需要" }, f.text("voice.mimo.refAudio", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "风格描述", hint: "例如：元气一点的少女音，语速稍快" }, f.text("voice.mimo.stylePrompt", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "种子文本", hint: "参考音频里说的那句话（复刻模型可选，能更像）" }, f.text("voice.mimo.seedText", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "超时（秒）", hint: "MiMo 生成较慢，默认 180" }, f.text("voice.mimo.timeout", { size: "narrow" }))) : null,
-    draft.voice.engine === "http" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "请求方式", hint: "GET 把 {text} 拼进地址；POST 配请求头和请求体（可接火山豆包等云 TTS）" }, f.select("voice.http.method", [{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }], { width: 120 }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
+    draft.voice.engine === "cosyvoice" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "CosyVoice 自带 runtime/python/fastapi/server.py" }, f.text("voice.cosyvoice.url", { size: "wide", placeholder: "http://127.0.0.1:50000" })), /* @__PURE__ */ h(Row, { label: "模式" }, f.select("voice.cosyvoice.mode", [{ value: "sft", label: "预置音色（sft）" }, { value: "instruct", label: "带语气指令（instruct）" }], { width: 220 })), /* @__PURE__ */ h(Row, { label: "音色 ID", hint: "例如 中文女、中文男" }, f.text("voice.cosyvoice.spkId")), draft.voice.cosyvoice.mode === "instruct" ? /* @__PURE__ */ h(Row, { label: "语气指令", hint: "例如：用甜美撒娇的语气说" }, f.text("voice.cosyvoice.instruct", { size: "wide" })) : null, /* @__PURE__ */ h(Row, { label: "采样率", hint: "CosyVoice 1 是 22050，CosyVoice 2 是 24000" }, f.select("voice.cosyvoice.sampleRate", [{ value: 22050, label: "22050 Hz" }, { value: 24e3, label: "24000 Hz" }], { width: 160 }))) : null,
+    draft.voice.engine === "gptsovits" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "GPT-SoVITS 的 api_v2.py" }, f.text("voice.gptsovits.url", { size: "wide", placeholder: "http://127.0.0.1:9880" })), /* @__PURE__ */ h(Row, { label: "参考音频路径", hint: "服务那台电脑上的路径" }, f.text("voice.gptsovits.refAudio", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "参考音频的文字" }, f.text("voice.gptsovits.promptText", { size: "wide" }))) : null,
+    draft.voice.engine === "doubao" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "火山引擎「豆包语音」控制台创建，请求头 X-Api-Key；只存本机，不会显示出来" }, f.text("voice.doubao.apiKey", { type: "password", placeholder: draft.voice.doubao.apiKeySet ? "已保存（不改就留空）" : "还没有填" })), /* @__PURE__ */ h(Row, { label: "资源 ID", hint: "复刻音色只能用 seed-icl-2.0，用错会报 55000000" }, f.select("voice.doubao.resourceId", [{ value: "seed-icl-2.0", label: "声音复刻 2.0" }, { value: "seed-tts-2.0", label: "预置音色 2.0" }], { width: 200 })), /* @__PURE__ */ h(Row, { label: "音色 Speaker", hint: "复刻音色 ID；预置 2.0 音色以 _uranus_bigtts 结尾" }, f.text("voice.doubao.speaker", { size: "wide", placeholder: "S_1CmxEOek2" })), /* @__PURE__ */ h(Row, { label: "固定语气指令", hint: "一行一条，例如「用温柔、放慢一点的语气说这句话」；留空不加" }, f.area("voice.doubao.contextTexts", { rows: 3 })), /* @__PURE__ */ h(Row, { label: "按文字自动配语气", hint: "按关键词自动追加语气指令（开心/生气/撒娇…），不参与计费" }, f.sw("voice.doubao.autoEmotion")), /* @__PURE__ */ h(Row, { label: "语速", hint: "-50~100，默认 0；觉得快就调 -10 到 -20" }, f.text("voice.doubao.speechRate", { size: "narrow" }))) : null,
+    draft.voice.engine === "qwentts" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "阿里云百炼（DashScope）创建；只存本机，不会显示出来" }, f.text("voice.qwentts.apiKey", { type: "password", placeholder: draft.voice.qwentts.apiKeySet ? "已保存（不改就留空）" : "sk-…" })), /* @__PURE__ */ h(Row, { label: "接口地址", hint: "只填到域名，路径自动拼" }, f.text("voice.qwentts.baseUrl", { size: "wide", placeholder: "https://dashscope.aliyuncs.com" })), /* @__PURE__ */ h(Row, { label: "模型", hint: "百炼语音模型名" }, f.text("voice.qwentts.model", { placeholder: "qwen-audio-3.1-tts-flash" })), /* @__PURE__ */ h(Row, { label: "音色", hint: "官方中文女声兜底是 Cherry" }, f.text("voice.qwentts.voice", { placeholder: "Cherry" })), /* @__PURE__ */ h(Row, { label: "语气基底", hint: "每次合成都带上；正文里的【撒娇】【吐槽】等标记会转成临时语气指令" }, f.area("voice.qwentts.instruction", { rows: 2 })), /* @__PURE__ */ h(Row, { label: "分段上限", hint: "长文本按句末标点切成不超过这个字数的分段，逐段合成后拼成一条" }, f.text("voice.qwentts.maxCharsPerSegment", { size: "narrow" })), /* @__PURE__ */ h(Row, { label: "采样率" }, f.select("voice.qwentts.sampleRate", [{ value: 24e3, label: "24000 Hz" }, { value: 22050, label: "22050 Hz" }, { value: 16e3, label: "16000 Hz" }], { width: 160 }))) : null,
+    draft.voice.engine === "mimo" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "API Key", hint: "小米 MiMo 开放平台创建，sk- 开头；只存本机，不会显示出来" }, f.text("voice.mimo.apiKey", { type: "password", placeholder: draft.voice.mimo.apiKeySet ? "已保存（不改就留空）" : "sk-…" })), /* @__PURE__ */ h(Row, { label: "API 地址", hint: "一般不用改，要以 /v1 结尾" }, f.text("voice.mimo.apiBase", { size: "wide", placeholder: "https://api.xiaomimimo.com/v1" })), /* @__PURE__ */ h(Row, { label: "模型", hint: "voiceclone 用参考音频克隆；voicedesign 用下面的风格描述" }, f.text("voice.mimo.model", { placeholder: "mimo-v2.5-tts-voiceclone" })), /* @__PURE__ */ h(Row, { label: "参考音频路径", hint: "这台电脑上的一段 mp3/wav（几秒到几十秒都行）；voicedesign 模型不需要" }, f.text("voice.mimo.refAudio", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "风格描述", hint: "例如：元气一点的少女音，语速稍快" }, f.text("voice.mimo.stylePrompt", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "种子文本", hint: "参考音频里说的那句话（复刻模型可选，能更像）" }, f.text("voice.mimo.seedText", { size: "wide" })), /* @__PURE__ */ h(Row, { label: "超时（秒）", hint: "MiMo 生成较慢，默认 180" }, f.text("voice.mimo.timeout", { size: "narrow" }))) : null,
+    draft.voice.engine === "http" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "请求方式", hint: "GET 把 {text} 拼进地址；POST 配请求头和请求体（可接火山豆包等云 TTS）" }, f.select("voice.http.method", [{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }], { width: 120 }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
       let d = setPath(draft, "voice.http.urlTemplate", "https://openspeech.bytedance.com/api/v1/tts");
       d = setPath(d, "voice.http.method", "POST");
       d = setPath(d, "voice.http.headers", "Authorization: Bearer;TOKEN_HERE");
       d = setPath(d, "voice.http.body", '{"app":{"appid":"APPID_HERE","token":"TOKEN_HERE","cluster":"volcano_tts"},"user":{"uid":"dsh-qq-hub"},"audio":{"voice_type":"VOICE_TYPE_HERE","encoding":"mp3","speed_ratio":1.0},"request":{"reqid":"{reqid}","text":"{text}","operation":"query"}}');
       setDraft(d);
       toast("已填入豆包模板：把 APPID_HERE / TOKEN_HERE / VOICE_TYPE_HERE 换成你在火山引擎开通的值，保存后试听");
-    } }, "豆包预设")), /* @__PURE__ */ h(Row, { label: "地址模板", hint: draft.voice.http.method === "POST" ? "POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON" : "{text} 会换成要念的话，返回 wav/mp3" }, f.text("voice.http.urlTemplate", { size: "wide", placeholder: "http://127.0.0.1:8000/tts?text={text}" })), draft.voice.http.method === "POST" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "请求头", hint: "一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON" }, f.area("voice.http.headers", { rows: 3, placeholder: "Authorization: Bearer;你的token" })), /* @__PURE__ */ h(Row, { label: "请求体", hint: "{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID" }, f.area("voice.http.body", { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}' }))) : null) : null,
+    } }, "豆包预设")), /* @__PURE__ */ h(Row, { label: "地址模板", hint: draft.voice.http.method === "POST" ? "POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON" : "{text} 会换成要念的话，返回 wav/mp3" }, f.text("voice.http.urlTemplate", { size: "wide", placeholder: "http://127.0.0.1:8000/tts?text={text}" })), draft.voice.http.method === "POST" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(Row, { label: "请求头", hint: "一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON" }, f.area("voice.http.headers", { rows: 3, placeholder: "Authorization: Bearer;你的token" })), /* @__PURE__ */ h(Row, { label: "请求体", hint: "{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID" }, f.area("voice.http.body", { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}' }))) : null) : null,
     /* @__PURE__ */ h(Row, { label: "短回复变语音的概率" }, f.percent("voice.autoChance")),
     /* @__PURE__ */ h(Row, { label: "多短算短回复" }, f.range("voice.autoMaxChars", 10, 200, 5, (v) => v + " 字")),
     /* @__PURE__ */ h(Row, { label: "试听", hint: "先保存设置再试听" }, /* @__PURE__ */ h("input", { className: "ab-input", value: txt, onChange: (e) => setTxt(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
@@ -2101,7 +2199,7 @@ function Simulate({ toast }) {
     setTout(r);
   };
   const sentList = (sent) => sent && sent.length ? /* @__PURE__ */ h("div", { className: "ab-code" }, sent.map((s) => "→ " + s.chatId + "：" + s.text).join("\n")) : /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 6 } }, "没有发出任何消息");
-  return /* @__PURE__ */ h(Card, { title: "模拟测试", desc: "不上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "展开") }, open ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(More, { label: "哪些副作用是真的" }, "模块直接调 api.onebot 的操作（比如禁言、发空间）是真的会执行的；会改设置的内置命令不执行。"), /* @__PURE__ */ h(Row, { label: "假装是", hint: "谁在说话、在哪儿说" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Seg, { value: as, options: [{ value: "owner", label: "主人" }, { value: "other", label: "别人" }], onChange: setAs }), /* @__PURE__ */ h(Seg, { value: kind, options: [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }], onChange: setKind }))), /* @__PURE__ */ h(Row, { label: "发一条消息", hint: "看哪个模块接管、命令回什么（/开头是命令）" }, /* @__PURE__ */ h("input", { className: "ab-input", value: text, placeholder: "比如：早安，或 /weather 北京", onChange: (e) => setText(e.target.value) })), /* @__PURE__ */ h(Row, { label: "她的回复", hint: "可选：假设她这样回，看经过各个模块改写后最后发出去什么（可以用 ||| 分条、<voice>…</voice>）" }, /* @__PURE__ */ h("input", { className: "ab-input", value: reply, placeholder: "比如：早呀|||今天也要加油", onChange: (e) => setReply(e.target.value) })), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !text.trim() && !reply.trim(), onClick: run }, "模拟")), out ? /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, out.steps.map((s, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-small" }, "· ", s)), sentList(out.sent)) : null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "调用工具"), tools.length ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "工具", hint: cur ? cur.description : "" }, /* @__PURE__ */ h(Select, { value: tool, options: tools.map((t) => ({ value: t.name, label: t.name })), onChange: (v) => {
+  return /* @__PURE__ */ h(Card, { title: "模拟测试", desc: "不上 QQ 就能试模块：这里发出去的消息只截下来显示，不会真发到 QQ。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "展开") }, open ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h(More, { label: "哪些副作用是真的" }, "模块直接调 api.onebot 的操作（比如禁言、发空间）是真的会执行的；会改设置的内置命令不执行。"), /* @__PURE__ */ h(Row, { label: "假装是", hint: "谁在说话、在哪儿说" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Seg, { value: as, options: [{ value: "owner", label: "主人" }, { value: "other", label: "别人" }], onChange: setAs }), /* @__PURE__ */ h(Seg, { value: kind, options: [{ value: "private", label: "私聊" }, { value: "group", label: "群聊" }], onChange: setKind }))), /* @__PURE__ */ h(Row, { label: "发一条消息", hint: "看哪个模块接管、命令回什么（/开头是命令）" }, /* @__PURE__ */ h("input", { className: "ab-input", value: text, placeholder: "比如：早安，或 /weather 北京", onChange: (e) => setText(e.target.value) })), /* @__PURE__ */ h(Row, { label: "她的回复", hint: "可选：假设她这样回，看经过各个模块改写后最后发出去什么（可以用 ||| 分条、<voice>…</voice>）" }, /* @__PURE__ */ h("input", { className: "ab-input", value: reply, placeholder: "比如：早呀|||今天也要加油", onChange: (e) => setReply(e.target.value) })), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !text.trim() && !reply.trim(), onClick: run }, "模拟")), out ? /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, out.steps.map((s, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-small" }, "· ", s)), sentList(out.sent)) : null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "调用工具"), tools.length ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "工具", hint: cur ? cur.description : "" }, /* @__PURE__ */ h(Select, { value: tool, options: tools.map((t) => ({ value: t.name, label: t.name })), onChange: (v) => {
     setTool(v);
     setArgs("{}");
     setTout(null);
@@ -2198,7 +2296,7 @@ function Market({ st, toast, reload }) {
     /* @__PURE__ */ h("div", { style: { marginBottom: 10 } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: 1 }, value: httpProxy, placeholder: "例如 http://192.168.10.1:7890，留空直连", onChange: (e) => setHttpProxy(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: saveProxy }, "保存代理"))),
     enabled && !data ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : null,
     enabled && data && !data.ok ? /* @__PURE__ */ h("div", { className: "ab-note err" }, data.message || "索引读不到", "（已装模块不受影响）") : null,
-    enabled && data && data.ok ? /* @__PURE__ */ h(Fragment, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).map((e) => /* @__PURE__ */ h("div", { key: e.id, style: { padding: "8px 0", borderBottom: "1px solid var(--ab-line, rgba(127,127,127,.15))" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 8 } }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null, /* @__PURE__ */ h("span", { style: { flex: 1 } }), e.installed ? /* @__PURE__ */ h(Fragment, null, e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : null, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4 } }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）`].filter(Boolean).join(" · ")), e.sha256 ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2, wordBreak: "break-all" } }, "sha256: ", e.sha256, e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : "") : null, e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 4 } }, e.blocked) : null)), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+    enabled && data && data.ok ? /* @__PURE__ */ h(Fragment2, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).map((e) => /* @__PURE__ */ h("div", { key: e.id, style: { padding: "8px 0", borderBottom: "1px solid var(--ab-line, rgba(127,127,127,.15))" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 8 } }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null, /* @__PURE__ */ h("span", { style: { flex: 1 } }), e.installed ? /* @__PURE__ */ h(Fragment2, null, e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : null, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4 } }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）`].filter(Boolean).join(" · ")), e.sha256 ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2, wordBreak: "break-all" } }, "sha256: ", e.sha256, e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : "") : null, e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 4 } }, e.blocked) : null)), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
       setData(null);
       await load();
     } }, "刷新列表"), data.source ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "索引源：", data.source) : null)) : null
@@ -2636,7 +2734,7 @@ function MemoryImport({ toast, onDone }) {
     setText("");
     onDone();
   };
-  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "导入旧档案"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "以前写过的设定、聊天笔记、别的机器人的记忆文件，贴进来或上传。她会挑出值得记的，你勾选后再存；和已有记忆重复的会自动去掉。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: readFile }, "选择文件"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy || !text.trim(), onClick: scan }, busy ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在挑…") : "挑出值得记的"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, text ? text.length + " 字" : "")), cands ? cands.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 10 } }, "没挑出新的可记的东西（或者都已经记过了）。") : /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h("div", { className: "ab-list" }, cands.map((c, i) => /* @__PURE__ */ h("label", { key: i, className: "ab-li", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: "var(--ab-sea)", marginTop: 3 } }), /* @__PURE__ */ h("div", { className: "body" }, c.aboutName ? /* @__PURE__ */ h("b", null, "[", c.aboutName, "] ") : null, c.text, c.importance >= 0.8 ? " ★" : "")))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "private", onChange: () => setScope("private"), style: { accentColor: "var(--ab-sea)" } }), " 只在她的私聊里想起（默认）"), /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer", marginLeft: 12 } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "global", onChange: () => setScope("global"), style: { accentColor: "var(--ab-sea)" } }), " 所有聊天都能想起（她自己的设定选这个）")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: commit, disabled: !Object.values(pick).some(Boolean) }, "存进记忆库（", Object.values(pick).filter(Boolean).length, " 条）"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setCands(null) }, "取消"))) : null);
+  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "导入旧档案"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "以前写过的设定、聊天笔记、别的机器人的记忆文件，贴进来或上传。她会挑出值得记的，你勾选后再存；和已有记忆重复的会自动去掉。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: readFile }, "选择文件"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy || !text.trim(), onClick: scan }, busy ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在挑…") : "挑出值得记的"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, text ? text.length + " 字" : "")), cands ? cands.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 10 } }, "没挑出新的可记的东西（或者都已经记过了）。") : /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h("div", { className: "ab-list" }, cands.map((c, i) => /* @__PURE__ */ h("label", { key: i, className: "ab-li", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: "var(--ab-sea)", marginTop: 3 } }), /* @__PURE__ */ h("div", { className: "body" }, c.aboutName ? /* @__PURE__ */ h("b", null, "[", c.aboutName, "] ") : null, c.text, c.importance >= 0.8 ? " ★" : "")))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "private", onChange: () => setScope("private"), style: { accentColor: "var(--ab-sea)" } }), " 只在她的私聊里想起（默认）"), /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer", marginLeft: 12 } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "global", onChange: () => setScope("global"), style: { accentColor: "var(--ab-sea)" } }), " 所有聊天都能想起（她自己的设定选这个）")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: commit, disabled: !Object.values(pick).some(Boolean) }, "存进记忆库（", Object.values(pick).filter(Boolean).length, " 条）"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setCands(null) }, "取消"))) : null);
 }
 function StyleEditor({ k, label, list, toast, onSaved }) {
   const [text, setText] = useState(list.join("\n"));
@@ -2666,7 +2764,7 @@ function InsightRow({ p, toast, onSaved, style }) {
     const r = await post("/insights/save", { key: p.key, list: text.split("\n") });
     toast(r.message, "ok");
     onSaved();
-  } }, "保存") : null, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "编辑")), open ? /* @__PURE__ */ h(Fragment, null, p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+  } }, "保存") : null, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "编辑")), open ? /* @__PURE__ */ h(Fragment2, null, p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
     if (window.confirm("删掉这条相处经验？\n\n" + x.text.slice(0, 60))) delOne(i);
   } }, "删")))) : null, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 70, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条经验" }), /* @__PURE__ */ h(StyleEditor, { k: p.key, label: "说话方式", list: style || [], toast, onSaved })) : null);
 }
@@ -2790,7 +2888,7 @@ function Bili({ draft, setDraft, toast }) {
     Card,
     {
       title: "她刷过什么",
-      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/bili/replies", "replies"), disabled: !!busy }, busy === "replies" ? "正在看…" : "看看有没有人回她"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/bili/run", "run"), disabled: !!busy }, busy === "run" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在刷…") : "现在刷一轮"))
+      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/bili/replies", "replies"), disabled: !!busy }, busy === "replies" ? "正在看…" : "看看有没有人回她"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/bili/run", "run"), disabled: !!busy }, busy === "run" ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在刷…") : "现在刷一轮"))
     },
     s && s.pauseReason ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginBottom: 8 } }, "今天先不发评论和回复了：", s.pauseReason, "（明天自动恢复；Cookie 过期的话重新复制一份填上）") : null,
     s ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "今天自动刷了 ", s.runs, " 轮 · 评论 ", s.comments, " 条 · 回复 ", s.replies, " 条", s.lastRun ? " · 上次 " + timeAgo(s.lastRun) : "", "（手动刷不占次数）") : null,
@@ -2905,7 +3003,7 @@ function Douyin({ draft, setDraft, toast }) {
     Card,
     {
       title: "她刷过什么",
-      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: load }, "刷新"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/run", "run"), disabled: !!busy || Boolean(s && s.busy) }, s && s.busy ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在刷…") : "现在刷一轮"))
+      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: load }, "刷新"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/run", "run"), disabled: !!busy || Boolean(s && s.busy) }, s && s.busy ? /* @__PURE__ */ h(Fragment2, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在刷…") : "现在刷一轮"))
     },
     s && s.pauseReason ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginBottom: 8 } }, "今天先不点赞评论了：", s.pauseReason, "。要验证的话点上面「显示浏览器窗口」处理，明天自动恢复。") : null,
     s ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "今天自动刷了 " + s.runs + " 轮 · 看了 " + s.watched + " · 赞 " + s.like + "/" + caps.like + " · 评 " + s.comment + "/" + caps.comment + " · 分享 " + s.share + "/" + caps.share + (s.atOwner ? " · @你 " + s.atOwner + "/" + caps.atOwner : ""), s.newAccount ? "（新号，上限减半）" : "", s.lastRun ? " · 上次 " + timeAgo(s.lastRun) : "", s.lastSkipReason ? " · 上次没刷成：" + s.lastSkipReason : "") : null,
@@ -3578,6 +3676,7 @@ function QQHubPage() {
     douyin: Douyin,
     heybox: Heybox,
     multiParser: MultiParser,
+    browser: Browser,
     token: Token,
     local: LocalApi,
     modules: Modules,
