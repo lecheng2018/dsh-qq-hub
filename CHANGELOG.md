@@ -1,5 +1,21 @@
 # 更新记录
 
+## Unreleased · chore(build): 面板产物同源检查挪到本地 —— `check:client` + pre-push 钩子（2026-11-20）
+
+**现象**：`f1e6100`（#186，只改了 `scripts/build-client.mjs` 的 `postProcess`）与 `bd7f993`（#183）连红两道 Verify，报的都是「`client/client.js` 与 `client/src` 不同步：1 insertion / 2 deletions」。门禁本身没错——错在**只有 push 之后才看得见**：`npm test` 会先现场构建产物，本地全绿，CI 才红，白等一轮。
+
+**改法**（三处，逻辑只有一份）：
+
+1. `scripts/build-client.mjs` 新增 `--check`：构建到内存后与磁盘产物逐字节比对，一致打印大小、不一致打印**第一处差异行**（磁盘值 / 构建值）并 exit 1，**不落盘**（改前那次门禁会顺手把产物写脏）。
+2. `npm run check:client` 就是 `--check`；`.githooks/pre-push` 调它，push 前拦下；`npm ci` 经 `prepare` → `npm run setup:hooks` 自动把 `core.hooksPath` 指向 `.githooks`（不在 git 检出里则静默跳过）。
+3. `verify` 工作流那道门禁改用同一份 `npm run check:client`，并从测试之后**前移到测试之前** fail fast。
+
+**验证**：
+
+- 当前树：`✅ client/client.js 与构建结果一致（293.2 KB）`，exit 0；
+- 在 `bd7f993` 上跑 `--check`：exit 1，报 `最先在第 401 行不同`，`- token: "…完整性",` / `+ token: "…完整性", /* pii-scan:ignore */`，且 `git status` 里 `client/client.js` 保持未改；
+- 拿 `bd7f993` 往临时裸库真推一次：被 `pre-push` 拦下，远端一个 ref 都没收到；干净树上同一钩子 exit 0。
+
 ## Unreleased · fix 服务端 413「上下文或图片过大」把会话永久卡死：识别到就自动换新会话（2026-11-19）
 
 **现象（真机）**：某个 QQ 聊天里每一轮都失败，面板显示「本轮运行失败」，服务端原文是

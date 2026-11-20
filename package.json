@@ -19,7 +19,10 @@
     "test:extensions": "npm run --prefix extensions/tieba-reader test",
     "test:all": "npm test && npm run test:extensions",
     "lint": "eslint src",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "check:client": "node scripts/build-client.mjs --check",
+    "setup:hooks": "node scripts/setup-hooks.mjs",
+    "prepare": "node scripts/setup-hooks.mjs"
   },
   "dsh": {
     "bundle": {
