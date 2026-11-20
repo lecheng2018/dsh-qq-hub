@@ -12,6 +12,7 @@ import { ensureDisplay, findXvfb } from './display.js'
 import { connectCdp, installRequestGuard } from './cdp.js'
 import { findChrome, launchBrowser } from './process.js'
 import { libDirsUnder as libDirsOf } from './install.js'
+import { startVnc as defaultVncStarter } from './vnc.js'
 import { createPolicy, DENY_ALL } from './policy.js'
 import { createTabPool } from './tabs.js'
 import { getCookies, setCookies, clearOrigin } from './cookies.js'
@@ -53,6 +54,7 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
   const findXvfbFn = deps.findXvfb || findXvfb
   const memAvailableFn = deps.memAvailable || memAvailableMB
   const createPoolFn = deps.createTabPool || createTabPool
+  const vncStartFn = deps.vncStarter || defaultVncStarter
   const cfg = () => getConfig()?.browser || {}
   const stateFile = () => join(root, 'browser-state.json')
   const profileDir = () => join(root, 'profile')
@@ -411,7 +413,7 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
       tabs: pool?.size?.() || 0,
       active,
       freeMB: memAvailableFn(),
-      vnc: vnc ? { port: vnc.port, running: true } : { running: false },
+      vnc: vnc ? { running: true, port: vnc.port, password: vnc.password, lan: vnc.lan } : { running: false },
     }
   }
 
@@ -449,14 +451,29 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
       vnc = null
       return { running: false }
     }
-    if (!display?.owned) {
+    // 浏览器还没被任何模块拉起时 display 是 null —— 别误报成「真实显示」
+    if (!display) {
+      return { running: false, message: '浏览器还没跑起来。先让某个网页模块用一次（或打开它），再回来开 VNC' }
+    }
+    if (!display.owned) {
       return { running: false, message: '当前用的是真实显示，直接看屏幕就行，不用 VNC' }
     }
-    if (!vncStarter) return { running: false, message: '这个环境没有 VNC 组件' }
     if (vnc) return { running: true, port: vnc.port, message: 'VNC 已经在跑' }
-    const started = await vncStarter({ display: display.display, root, log })
-    vnc = started
-    return { running: true, port: started.port, message: `用 VNC 客户端连 NAS 的 ${started.port} 端口就能看见浏览器` }
+    const lan = Boolean(cfg().vncLan)
+    try {
+      vnc = await vncStartFn({ root, display: display.display, log, lan })
+    } catch (error) {
+      return { running: false, message: String(error?.message || error) }
+    }
+    return {
+      running: true,
+      port: vnc.port,
+      password: vnc.password,
+      lan: vnc.lan,
+      message: vnc.lan
+        ? `VNC 已开：连 <NAS地址>:${vnc.port}，密码 ${vnc.password}`
+        : `VNC 已开（只允许本机）：先做隧道 ssh -L ${vnc.port}:127.0.0.1:${vnc.port} <NAS>，再连 127.0.0.1:${vnc.port}，密码 ${vnc.password}`,
+    }
   }
 
   /** 浏览器被外部杀掉时，标记成需要重启，别让状态假 ready。 */

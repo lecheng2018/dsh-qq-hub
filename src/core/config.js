@@ -86,6 +86,7 @@ const DEFAULTS_RAW = {
     maxConcurrent: 2, // 同时最多几个模块在用浏览器
     idleMinutes: 10, // 没人用这么久就关掉浏览器（0 = 不自动关）
     minFreeMB: 600, // 可用内存低于这个值就不启动（0 = 不检查）
+    vncLan: false, // 远程看画面是否开给局域网（默认只绑本机；要跨机器看得自己开，且有密码）
   },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
@@ -416,6 +417,7 @@ export function normalize(raw) {
   c.browser.maxConcurrent = Math.round(num(c.browser.maxConcurrent, 2, 1, 4))
   c.browser.idleMinutes = Math.round(num(c.browser.idleMinutes, 10, 0, 240))
   c.browser.minFreeMB = Math.round(num(c.browser.minFreeMB, 600, 0, 8192))
+  c.browser.vncLan = bool(c.browser.vncLan, false)
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)

@@ -123,6 +123,12 @@ export function libDirsUnder(root) {
   return dirs
 }
 
+/** 在某个目录里找指定名字的真 ELF（跳过壳脚本）。 */
+function findElfIn(dir, name) {
+  const p = join(dir, name)
+  return existsSync(p) && isElf(p) ? p : ''
+}
+
 /** 在解包目录里找真正的浏览器 ELF（跳过壳脚本）。 */
 export function findBrowserElf(dir) {
   const wanted = ['chrome', 'chromium', 'msedge']
@@ -179,6 +185,11 @@ export function verifyInstalled(root) {
   if (!m?.browser || !existsSync(m.browser)) return { ok: false, reason: '还没装' }
   const libs = missingLibs(m.browser, m.libDirs || [])
   if (libs.length) return { ok: false, reason: `缺库：${libs.join(', ')}`, libs }
+  // VNC 是后加进安装清单的：早先装过的机器上没有它。
+  // 这里必须一起查，否则会一直说「已经装好了」，主人永远补不上远程看画面。
+  if (!m.vnc || !existsSync(m.vnc)) {
+    return { ok: false, reason: '缺远程看画面组件（x11vnc），重跑一次 install:browser 会补上', needVnc: true, manifest: m }
+  }
   return { ok: true, manifest: m }
 }
 
@@ -215,8 +226,10 @@ export async function installBrowser({ root, browser = 'auto', log, smoke = true
   mkdirSync(cacheDir(root), { recursive: true, mode: 0o700 })
 
   // ---- 1) 虚拟显示：xvfb + xserver-common ----
-  const pkgs = ['xvfb', 'xserver-common']
-  say('准备虚拟显示（xvfb）…')
+  // x11vnc 顺带装上：无桌面时主人要靠它看见浏览器去完成验证，单独再跑一次安装很折腾。
+  // 只有 1 MB 出头。
+  const pkgs = ['xvfb', 'xserver-common', 'x11vnc']
+  say('准备虚拟显示（xvfb）和远程看画面（x11vnc）…')
 
   // ---- 2) 浏览器：优先官方 Chrome（编解码器更全），下不动退回 Debian chromium ----
   let chromeDeb = ''
@@ -281,10 +294,12 @@ export async function installBrowser({ root, browser = 'auto', log, smoke = true
   }
 
   // ---- 6) 冒烟：真起一次 ----
+  const vncElf = findElfIn(join(sys, 'usr', 'bin'), 'x11vnc')
   const manifest = {
     browser: elf,
     kind: chromeDeb ? 'chrome' : 'chromium',
     libDirs,
+    vnc: vncElf,
     root,
     installedAt: new Date().toISOString(),
   }

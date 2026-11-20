@@ -74,11 +74,24 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
         <span className={live.freeMB >= 0 && live.freeMB < 600 ? 'ab-warn' : ''}>{live.freeMB >= 0 ? fmtMB(live.freeMB) : '未知'}</span>
       </Row>
       {live.displayOwned ? (
-        <Row label="看画面" hint="虚拟屏没人看得见，要用 VNC 连过来">
-          <Btn small onClick={() => onVnc('start')} disabled={busy}>开 VNC</Btn>
-          <Btn small kind="ghost" onClick={() => onVnc('stop')} disabled={busy}>关</Btn>
-          {live.vnc?.running ? <span className="ab-muted ab-small" style={{ marginLeft: 8 }}>已开，端口 {live.vnc.port}</span> : null}
-        </Row>
+        <>
+          <Row label="看画面" hint="虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点">
+            <Btn small onClick={() => onVnc('start')} disabled={busy || live.vnc?.running}>开 VNC</Btn>
+            <Btn small kind="ghost" onClick={() => onVnc('stop')} disabled={busy || !live.vnc?.running}>关</Btn>
+          </Row>
+          {live.vnc?.running ? (
+            <Row label="连接方式">
+              <div className="ab-small">
+                <div>端口 <b>{live.vnc.port}</b>　密码 <b>{live.vnc.password}</b></div>
+                <div className="ab-muted" style={{ marginTop: 4 }}>
+                  {live.vnc.lan
+                    ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。`
+                    : `只允许本机连：先做隧道 ssh -L ${live.vnc.port}:127.0.0.1:${live.vnc.port} 用户@NAS，再连 127.0.0.1:${live.vnc.port}。`}
+                </div>
+              </div>
+            </Row>
+          ) : null}
+        </>
       ) : null}
     </Card>
   )
@@ -145,6 +158,9 @@ export function Browser({ draft, setDraft, toast }) {
         </Row>
         <Row label="优先官方 Chrome" hint="开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）">
           {f.sw('browser.chrome')}
+        </Row>
+        <Row label="VNC 开给局域网" hint="默认关：VNC 只绑本机，跨机器看要先做 SSH 隧道。打开后局域网能直接连（有随机密码），但浏览器等于敞开，验完记得关">
+          {f.sw('browser.vncLan')}
         </Row>
       </Card>
     </>
