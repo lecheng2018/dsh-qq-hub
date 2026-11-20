@@ -32,6 +32,32 @@
 4. 纯文本 `HTTP 413 … 上下文或图片过大`（无 code）→ 兜底命中；
 5. 主动回合路径同样自愈，且不往聊天里发提示。
 
+## Unreleased · feat 会话轮换：一个聊天用太久/聊太多轮就自动归档重开（2026-11-19）
+
+**背景**：服务端对「会话累计上下文」有硬上限（真机 413 `plugin_request_too_large`：请求约 5.8 MiB、插件内存上限 64 MiB）。DSH 的上下文压缩管的是 **token 窗口**，管不到服务端这种按**会话**计的字节额度；而插件此前只在「换人设 / 换权限档位」时才换会话，一个聊天可以无限长——于是「隔几天再说一句」也会因为历史一直攒着而撞上限。
+
+**改法**（`src/core/config.js` + `src/host/modular-core.js`）：
+
+- 新增配置 `sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 }`：
+  - `maxTurns`：这个会话跑够多少回合就换（默认 300 轮，日常打字大概够用好几周）；
+  - `maxAgeHours`：从建会话算起超过多少小时就换（默认 168 = 7 天）；
+  - 任一条件到了就换，填 `0` 表示该项不参与判定；`enabled: false` 整个关掉。
+  - `normalize` 带上下界（回合数 0~100000、年龄 0~8760 小时，允许小数便于排障）。
+- 判定落在 `sessionForChat()`：它是**每一轮的唯一入口**（`execute` 与 `runPromptTurn` 都过这里），放在别处会漏掉主动回合/后台任务。
+- 轮换走既有的 `resetChat()`：旧会话归档（DSH 侧栏还能找回）、映射立刻失效、下一条消息自动开新会话；人设、权限档位、图片额度一并跟着重置。
+- 顺序放在人设判定之后：人设不对本来就该换，不必再谈退休。
+- 对用户是**静默**的（不往 QQ 发提示）——和现在「换人设会悄悄换会话」同一套行为；日志里有 `会话轮换：<chat> 的会话 <id> 已用 N 轮（上限 M），归档重开` 一行可查。
+
+**验证**：新增 `test/modular-session-rotation.test.js`（5 例，走真实入口 `dispatchLegacyEvent` / `runPromptTurn`）：
+
+1. 回合数：`maxTurns=2` 时前 2 轮同一会话，第 3 轮换到新会话且旧会话进归档；
+2. 年龄：`maxAgeHours` 设到极小 → 下一轮因超龄换新会话（证明「聊得少但放太久」也会换）；
+3. `enabled=false`：连跑 3 轮始终同一会话、零归档（面板能退）；
+4. 主动回合（`runPromptTurn`）走同一处判定（否则后台任务会把老会话一直用下去）；
+5. 配置默认值与上下界（负值夹到 0 = 该条件不启用）。
+
+另为保持 `test/persona-switch-reset.test.js` 的语义断言（它锁「人设不一致就 resetChat」这一形状），`sessionForChat` 里的人设分支改回 `if (persona.personaId === currentPersona(chatKey)) { …; return }` + 末尾 `resetChat(chatKey)`——行为等价，只是把轮换判定放进「人设正确」那一支里。
+
 ## Unreleased · feat 图片进历史的预算：按会话累计，超出的新图不再进上下文（2026-11-19）
 
 **背景**：服务端对「会话累计上下文 + 图片字节」有硬上限（同一天的真机 413 `plugin_request_too_large`：请求约 5.8 MiB、插件内存上限 64 MiB）。图片块和文字不一样：**一旦进了历史，之后每一轮都会重新发一遍**，于是聊得越久、图越多，请求只涨不跌，最后撞上限。DSH 自己的 `dsh-compaction-image-offload` 只在「单次请求超过适配器预算」时才动手（默认 128 MiB / 量化 64 MiB），比服务端这个额度大得多，赶不上。
