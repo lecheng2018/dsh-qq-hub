@@ -64,6 +64,11 @@ const DEFAULTS_RAW = {
   // 把看到的内容转成文字交给主模型。主模型自己就能看图时不走这条路。
   // provider/model 留空 = 没配；只比较「同一个模型」还是「不同模型」，不做任何能力猜测。
   visionHelper: { enabled: false, provider: '', model: '', maxImages: 4, maxChars: 600, keepOriginal: true },
+  // 图片进历史的预算（每个会话）：服务端对「会话累计上下文 + 图片」有硬上限
+  //（真机 413 plugin_request_too_large：请求约 5.8 MiB / 插件内存上限 64 MiB）。
+  // 图片块一旦进历史，之后每一轮都会重新发一遍，所以额度必须**按会话**累加着算，
+  // 而不是每轮重置。额度用完后的新图只留一句占位文字，不再进上下文。
+  imageBudget: { enabled: true, maxImages: 24, maxMiB: 12 },
   // 按聊天选模型（主人在面板「模型」页设）：私聊 QQ 号 > 群号 > 所有私聊 / 所有群默认 > 上面的全局模型；没写的一级退到下一级
   chatModels: { privateDefault: { provider: '', model: '', reasoningEffort: '' }, groupDefault: { provider: '', model: '', reasoningEffort: '' }, privates: {}, groups: {} },
   merge: { enabled: true, waitSec: 2.5, maxSec: 8, groupWaitSec: 5, groupMaxSec: 15 },
@@ -374,6 +379,11 @@ export function normalize(raw) {
   c.visionHelper.maxImages = Math.round(num(c.visionHelper.maxImages, 4, 1, 8))
   c.visionHelper.maxChars = Math.round(num(c.visionHelper.maxChars, 600, 100, 2000))
   c.visionHelper.keepOriginal = bool(c.visionHelper.keepOriginal, true)
+  // 图片进历史的预算：张数与字节都设上下界，面板填出离谱值也不会把会话一次性撑爆
+  if (!isObj(c.imageBudget)) c.imageBudget = {}
+  c.imageBudget.enabled = bool(c.imageBudget.enabled, true)
+  c.imageBudget.maxImages = Math.round(num(c.imageBudget.maxImages, 24, 0, 200))
+  c.imageBudget.maxMiB = Math.round(num(c.imageBudget.maxMiB, 12, 0, 128))
   c.setupDone = bool(c.setupDone, false)
   c.ownerLevel = LEVELS.includes(c.ownerLevel) ? c.ownerLevel : 'full'
   c.longTasks = bool(c.longTasks, false)
