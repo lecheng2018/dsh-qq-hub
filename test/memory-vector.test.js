@@ -207,7 +207,10 @@ test('向量通道：未配置时全部短路', async () => {
 
 // ---------------- umask 077 落盘权限 ----------------
 
-test('umask 077 下 writeTextAtomic / writeJson 仍落成 0o644（fnOS 部署现实）', () => {
+test('umask 077 下 writeTextAtomic / writeJson 仍落成 0o644（fnOS 部署现实）', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows 文件权限模型不暴露 POSIX umask mode bits')
+  }
   const old = process.umask(0o077)
   try {
     const f1 = join(dir, 'perm1.md')

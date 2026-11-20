@@ -14,3 +14,6 @@ dsh-qq-hub-*.tgz
 
 # Mimosa 安全钩子的本地扫描状态(会话级工具产物,不入库)
 .mimosa/
+
+# 本地/CI 性能基准输出，不入库
+artifacts/
