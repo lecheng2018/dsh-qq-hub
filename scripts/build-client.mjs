@@ -1,11 +1,17 @@
 import * as esbuild from 'esbuild'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ENTRY = join(ROOT, 'client/src/entry.js')
 const OUTFILE = join(ROOT, 'client/client.js')
+
+// --check：只比对、不落盘（`npm run check:client`）。
+// 存在的理由：产物和源码不同步时，`npm test` 会现场构建、测试照样全绿，只有 push 之后的
+// Verify 门禁会红（2026-11-19 的 f1e6100 / bd7f993 就是这么红的：脚本改了、产物没重新提交）。
+// 这里给出同一份判断，供 CI 与本地 pre-push 钩子（.githooks/pre-push）共用。
+const isCheck = process.argv.includes('--check')
 
 const BANNER = `// QQ Hub · 网页半边：侧栏「自动化任务」下面的「QQ Hub」入口 + 整页面板（顶部标签切换功能）。
 // 只读写宿主半边的 /qq-hub/api/* 接口，不直接碰会话和 QQ。
@@ -62,8 +68,47 @@ function postProcess(code) {
     )
 }
 
+/**
+ * 比对「磁盘上的产物」和「现场构建的结果」，一致才算过关。
+ * 不一致时打印第一处差异（够定位就行，完整 diff 让用户自己 `git diff -- client/client.js` 看），
+ * 以 exit 1 结束——CI 里 `::error::` 会变成一条注解。
+ */
+function check(processed) {
+  let current = ''
+  try {
+    current = readFileSync(OUTFILE, 'utf8')
+  } catch {
+    // 产物还没生成：下面按「完全不一致」报。
+  }
+
+  if (current === processed) {
+    console.log(`✅ client/client.js 与构建结果一致（${(processed.length / 1024).toFixed(1)} KB）`)
+    return
+  }
+
+  if (!current) {
+    console.error('::error::client/client.js 缺失：请在本地运行 npm run build:client 并提交产物')
+    process.exitCode = 1
+    return
+  }
+
+  const disk = current.split('\n')
+  const built = processed.split('\n')
+  let line = 0
+  while (line < disk.length && line < built.length && disk[line] === built[line]) line++
+  const clip = (s) => (s === undefined ? '(文件已结束)' : s.length > 200 ? `${s.slice(0, 200)}…` : s)
+
+  console.error('::error::client/client.js 与 client/src 不同步：请在本地运行 npm run build:client 并提交产物')
+  console.error(`最先在第 ${line + 1} 行不同（磁盘 ${disk.length} 行 / 构建 ${built.length} 行）：`)
+  console.error(`  - ${clip(disk[line])}`)
+  console.error(`  + ${clip(built[line])}`)
+  console.error('确认无误后运行 `npm run build:client`，把重新生成的 client/client.js 一起提交。')
+  process.exitCode = 1
+}
+
 async function build() {
   const isWatch = process.argv.includes('--watch')
+  if (isWatch && isCheck) throw new Error('--check 与 --watch 不能同时使用：检测模式只比对、不落盘')
 
   const buildOptions = {
     entryPoints: [ENTRY],
@@ -108,6 +153,10 @@ async function build() {
     const result = await esbuild.build(buildOptions)
     const code = result.outputFiles[0].text
     const processed = postProcess(normalizeEol(code))
+    if (isCheck) {
+      check(processed)
+      return
+    }
     writeFileSync(OUTFILE, processed, 'utf8')
     console.log(`✅ Built client/client.js successfully (${(processed.length / 1024).toFixed(1)} KB)`)
   }

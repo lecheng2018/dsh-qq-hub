@@ -311,6 +311,14 @@ npm run pack:check
 
 `npm run test:all` 会先构建面板产物再运行主套件与扩展测试；`verify` 工作流另有产物新鲜度门禁（提交的 `client/client.js` 必须与构建一致）。
 
+这份产物检查在本地也能单独跑，而且**只比对、不落盘**：
+
+```bash
+npm run check:client   # 退出码非 0 = 产物与 client/src 不同步，跑 npm run build:client 后一起提交
+```
+
+`npm ci` 会自动执行 `npm run setup:hooks`，把仓库内的 `.githooks/` 挂成本地钩子；其中的 `pre-push` 用同一条 `check:client` 在 push 之前就拦下「改了源码忘了重新提交产物」（紧急情况 `git push --no-verify` 可跳过，CI 仍会拦）。
+
 ### 文档入口
 
 - 用户：[使用手册](docs/USER-MANUAL.md)、[配置参考](docs/CONFIGURATION.md)
