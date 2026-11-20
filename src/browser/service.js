@@ -11,6 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { ensureDisplay, findXvfb } from './display.js'
 import { connectCdp, installRequestGuard } from './cdp.js'
 import { findChrome, launchBrowser } from './process.js'
+import { libDirsUnder as libDirsOf } from './install.js'
 import { createPolicy, DENY_ALL } from './policy.js'
 import { createTabPool } from './tabs.js'
 import { getCookies, setCookies, clearOrigin } from './cookies.js'
@@ -115,6 +116,8 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
           display: display.display,
           displayOwned: display.owned,
           headless: Boolean(c.headless),
+          // 用户态装的那份把依赖库解开在自己目录里，启动时要指过去
+          extraLibPath: libDirsOf(root),
           log,
         })
         pool = createPoolFn({ port: proc.port, log })

@@ -40,6 +40,12 @@ const SYSTEM_CANDIDATES = [
 export function findChrome(explicit = '', root = '', existsImpl) {
   const exists = existsImpl || ((p) => { try { return existsSync(p) } catch { return false } })
   if (explicit) return exists(explicit) ? explicit : ''
+  // 安装器（install:browser）装的那份优先：里面记的是**真 ELF**，
+  // 不是 Debian 那种壳脚本（壳脚本 ldd 永远「零缺失」，看不出真问题）。
+  try {
+    const m = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
+    if (m?.browser && exists(m.browser)) return m.browser
+  } catch {}
   const bundled = [
     root && join(root, 'chrome', 'opt', 'google', 'chrome', 'google-chrome'),
     root && join(root, 'chrome', 'opt', 'microsoft', 'msedge', 'msedge'),
@@ -141,7 +147,7 @@ export function reclaimOrphan({ profileDir, stateFile, log }) {
  */
 export async function launchBrowser({
   profileDir, stateFile, bin, display, displayOwned = false,
-  headless = false, windowSize = '1280,860', extraArgs = [], log,
+  headless = false, windowSize = '1280,860', extraArgs = [], extraLibPath = [], log,
 }) {
   if (!bin) throw new Error('找不到浏览器可执行文件')
   mkdirSync(profileDir, { recursive: true, mode: 0o700 })
@@ -170,10 +176,14 @@ export async function launchBrowser({
     'about:blank',
   ]
 
+  // 用户态装的那份浏览器把依赖库解在自己的目录里，得指过去（libopenh264 这类）
+  const libPath = [...(Array.isArray(extraLibPath) ? extraLibPath : []), process.env.LD_LIBRARY_PATH || '']
+    .filter(Boolean).join(':')
+
   const child = spawn(bin, args, {
     stdio: ['ignore', 'ignore', 'pipe'],
     detached: true,
-    env: { ...process.env, DISPLAY: display || '' },
+    env: { ...process.env, DISPLAY: display || '', ...(libPath ? { LD_LIBRARY_PATH: libPath } : {}) },
   })
 
   // stderr 收着但只留最后几 KB：启动失败时要能给出真实原因，而不是一律报「资料目录被占用」

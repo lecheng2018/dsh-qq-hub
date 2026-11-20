@@ -20,7 +20,9 @@ const XSOCK_DIR = '/tmp/.X11-unix'
 /** 在几个常见位置找 Xvfb：先用插件自带（用户态解包），再找系统的。 */
 export function findXvfb(root = '') {
   const candidates = [
-    root && join(root, 'xvfb', 'usr', 'bin', 'Xvfb'),
+    // 用户态装的那份：所有包合并成一棵树（root/sys 就是前缀）
+    root && join(root, 'sys', 'usr', 'bin', 'Xvfb'),
+    root && join(root, 'xvfb', 'usr', 'bin', 'Xvfb'), // 早期一包一目录的布局
     '/usr/bin/Xvfb',
     '/usr/local/bin/Xvfb',
   ].filter(Boolean)

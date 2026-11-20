@@ -15,3 +15,4 @@ export { createPolicy, DENY_ALL, isPrivateHost, isLiteralIp, hostMatches } from 
 export { findChrome } from './process.js'
 export { findXvfb, canConnectX } from './display.js'
 export { parseCookieString } from './cookies.js'
+export { installBrowser, verifyInstalled, installedInfo, findBrowserElf, missingLibs, libDirsUnder } from './install.js'
