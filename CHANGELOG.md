@@ -22,6 +22,8 @@
 2. `npm run check:client` 就是 `--check`；`.githooks/pre-push` 调它，push 前拦下；`npm ci` 经 `prepare` → `npm run setup:hooks` 自动把 `core.hooksPath` 指向 `.githooks`（不在 git 检出里则静默跳过）。
 3. `verify` 工作流那道门禁改用同一份 `npm run check:client`，并从测试之后**前移到测试之前** fail fast。
 
+**合并 main 后补的一处修复**：`scripts/setup-hooks.mjs` 原来把状态提示打到 **stdout**，而它由 `prepare` 调用——CI 的 npm 10（node 22.13.0）会把 prepare 的 stdout 混进 `npm pack --json`，`scripts/smoke-pack.mjs` 的 `JSON.parse` 当场崩（`SyntaxError: Unexpected token 'g', "git hooks "... is not valid JSON`）。分支单独的 Verify 没有 `smoke:pack` 步骤所以一直没暴露，main 加上这一步之后才撞出来。现全部提示改走 stderr，并加 `test/setup-hooks-silent-stdout.test.js` 钉住「stdout 必须为空」。
+
 **验证**：
 
 - 当前树：`✅ client/client.js 与构建结果一致（293.2 KB）`，exit 0；

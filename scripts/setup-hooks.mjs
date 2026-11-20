@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 if (!existsSync(join(ROOT, '.git'))) {
-  console.log('跳过 git hooks 安装：当前目录不是 git 检出（.git 不存在）')
+  console.error('跳过 git hooks 安装：当前目录不是 git 检出（.git 不存在）')
   process.exit(0)
 }
 
@@ -25,15 +25,15 @@ try {
   if (read.status !== 0 && read.status !== 1) throw new Error((read.stderr || '').trim() || 'git config 读取失败')
   const previous = (read.stdout || '').trim()
   if (previous === '.githooks') {
-    console.log('git hooks 已指向 .githooks')
+    console.error('git hooks 已指向 .githooks')
   } else {
     execFileSync('git', ['config', '--local', 'core.hooksPath', '.githooks'], { cwd: ROOT })
-    console.log(
+    console.error(
       previous
         ? `git hooks 由 ${previous} 改为 .githooks（pre-push 拦面板产物不同步）`
         : 'git hooks 已指向 .githooks（pre-push 拦面板产物不同步）',
     )
   }
 } catch (err) {
-  console.log(`跳过 git hooks 安装：${err.message.split('\n')[0]}`)
+  console.error(`跳过 git hooks 安装：${err.message.split('\n')[0]}`)
 }
