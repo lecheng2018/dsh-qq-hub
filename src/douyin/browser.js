@@ -1,12 +1,20 @@
-// 抖音专用浏览器：独立用户资料目录的 Edge / Chrome，经 CDP（Node 自带 WebSocket）控制。
-// 只管「开 / 连 / 点 / 打字 / 截图 / 等接口返回」这些通用动作，抖音相关的都在 site.js。
-// 不用无头模式：抖音会拦无头浏览器（页面一直「加载中」）。Linux 没桌面就配 Xvfb。
+// 抖音专用浏览器：现在只是共享浏览器层（src/browser/）的**适配层**。
+//
+// 以前这里自己管「起 Edge/Chrome、连 CDP、挑标签页、关进程」，现在这些全在共享层：
+// 同一个浏览器进程由抖音、贴吧、小红书共用，一个模块一个标签页，任务串行。
+// 这里只保留抖音自己的那点事：挑抖音标签页、读端口文件（老测试还要用）。
+//
+// 为什么不直接删掉这些纯函数：test/douyin.test.js 锁着它们的行为，而且面板上的
+// 「浏览器路径」「资料目录」这些旧配置还得能读。
 
 import { createServer } from 'node:net'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { connectCdp, getJson } from '../browser/cdp.js'
+
+export { connectCdp }
 
 const CANDIDATES = [
   process.env.EDGE_PATH,
@@ -41,17 +49,17 @@ export function freePort() {
   })
 }
 
-/** 资料目录里记下的调试端口（我们启动时自己写的；DSH 重启后靠它接回已经开着的窗口）。 */
+/** 资料目录里记下的调试端口（老的专用浏览器启动时自己写的）。 */
 export function readPortFile(profileDir, read = readFileSync) {
   try {
     const n = Number(String(read(join(profileDir, 'DevToolsActivePort'), 'utf8')).split(/\r?\n/)[0].trim())
     return Number.isInteger(n) && n > 0 && n < 65536 ? n : 0
-  } catch (error) {
+  } catch {
     return 0
   }
 }
 
-/** 从标签页列表里挑要用的那个：优先抖音页，没有就第一个普通页。其余抖音页一并返回，好关掉（多点几次面板不会越攒越多）。 */
+/** 从标签页列表里挑要用的那个：优先抖音页，没有就第一个普通页。 */
 export function pickPage(targets) {
   const pages = (targets || []).filter((t) => t.type === 'page' && t.webSocketDebuggerUrl)
   const douyin = pages.filter((t) => /^https:\/\/[^/]*douyin\.com/.test(t.url || ''))
@@ -59,68 +67,17 @@ export function pickPage(targets) {
   return { page, extra: douyin.slice(1) }
 }
 
-async function getJson(url, ms = 5000) {
-  const r = await fetch(url, { signal: AbortSignal.timeout(ms) })
-  if (!r.ok) throw new Error(`${url} → ${r.status}`)
-  return r.json()
-}
-
-/** 一条 CDP 连接：send 发命令，on 收事件。 */
-export function connectCdp(wsUrl, { WS = globalThis.WebSocket } = {}) {
-  if (!WS) throw new Error('当前 Node 没有 WebSocket（要 Node 22 以上）')
-  const sock = new WS(wsUrl)
-  let nextId = 1
-  let closed = false
-  const pending = new Map()
-  const listeners = new Map()
-  sock.addEventListener('message', (ev) => {
-    let msg
-    try { msg = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString()) } catch (error) { return }
-    if (msg.id != null && pending.has(msg.id)) {
-      const p = pending.get(msg.id)
-      pending.delete(msg.id)
-      if (msg.error) p.reject(new Error(msg.error.message || 'CDP 出错'))
-      else p.resolve(msg.result || {})
-    } else if (msg.method) {
-      for (const fn of listeners.get(msg.method) || []) try { fn(msg.params || {}) } catch (error) {}
-    }
-  })
-  sock.addEventListener('close', () => {
-    closed = true
-    for (const p of pending.values()) p.reject(new Error('浏览器连接断了'))
-    pending.clear()
-  })
-  const ready = new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('连不上浏览器调试端口')), 10000)
-    sock.addEventListener('open', () => { clearTimeout(t); resolve() })
-    sock.addEventListener('error', () => { clearTimeout(t); reject(new Error('连不上浏览器调试端口')) })
-  })
-  return {
-    ready,
-    get closed() { return closed },
-    send(method, params = {}, ms = 30000) {
-      if (closed) return Promise.reject(new Error('浏览器连接断了'))
-      const id = nextId++
-      return new Promise((resolve, reject) => {
-        const t = setTimeout(() => { pending.delete(id); reject(new Error(`浏览器没响应（${method}）`)) }, ms)
-        pending.set(id, { resolve: (v) => { clearTimeout(t); resolve(v) }, reject: (e) => { clearTimeout(t); reject(e) } })
-        sock.send(JSON.stringify({ id, method, params }))
-      })
-    },
-    on(method, fn) {
-      if (!listeners.has(method)) listeners.set(method, new Set())
-      listeners.get(method).add(fn)
-      return () => listeners.get(method)?.delete(fn)
-    },
-    close() { try { sock.close() } catch (error) {} },
-  }
-}
-
 /**
- * 专用浏览器。open() 才会真的启动 / 连接；只读状态的地方不要调它（打开面板不该弹窗口）。
+ * **降级路径**：老宿主（没有 api.browser 的版本）上的抖音还得自己起浏览器。
+ *
+ * 这条路径只在 `createBrowser()` 没拿到共享服务时才走：
+ *   - 自己起一个专用 Chrome（放在 profileDir 里），窗口挪到屏幕外
+ *   - 不与其他模块共享，也不管 Xvfb
+ * 新宿主上永远走共享层，这条路不会启用。
+ *
  * @param {{profileDir:string, browserPath?:()=>string, log?:object}} o
  */
-export function createBrowser({ profileDir, browserPath = () => '', log } = {}) {
+export function createLegacyBrowser({ profileDir, browserPath = () => '', log } = {}) {
   let cdp = null
   let opening = null
 
@@ -332,4 +289,95 @@ export function createBrowser({ profileDir, browserPath = () => '', log } = {}) 
   }
 
   return { open, connected, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close }
+}
+
+/**
+ * 抖音要用的浏览器对象。
+ *
+ * 两道：
+ *   - 有共享服务（新宿主）→ 从共享层拿**租约**，动作转发过去。全模块共用一个浏览器进程。
+ *   - 没有共享服务（老宿主）→ 退回 `createLegacyBrowser`，自己起一个专用浏览器。
+ *
+ * 对外方法名一个没改 —— site.js 里 29 处 b.evaluate 之类完全不用动。
+ *
+ * @param {{
+ *   service?: object | null,   // api.browser() 的返回值
+ *   moduleId?: string,         // 租约登记用的模块 id
+ *   profileDir?: string,       // 降级路径放资料目录用
+ *   browserPath?: () => string,
+ *   log?: object,
+ * }} o
+ */
+export function createBrowser({ service, moduleId = 'douyin', profileDir, browserPath, log } = {}) {
+  if (service) return createLeaseBrowser({ service, moduleId, browserPath, log })
+  if (!profileDir) {
+    // 直说了比抛一个看不懂的 TypeError 好
+    return {
+      open: async () => ({ ok: false, message: '没有共享浏览器，也没有资料目录——这台插件的版本可能太旧' }),
+      connected: () => false,
+      close() {},
+    }
+  }
+  log?.debug?.('没有共享浏览器服务，退回抖音自带的专用浏览器')
+  return createLegacyBrowser({ profileDir, browserPath: browserPath || (() => ''), log })
+}
+
+/**
+ * 走共享层的那一支：把动作转给租约。
+ * @param {{ service: object, moduleId: string, browserPath?: () => string, log?: object }} o
+ */
+function createLeaseBrowser({ service, moduleId, browserPath, log }) {
+  let lease = null
+  let opening = null
+  let hinted = false
+
+  const connected = () => Boolean(lease && !lease.released)
+
+  function need() {
+    if (!connected()) throw new Error('浏览器没连上')
+    return lease
+  }
+
+  async function open() {
+    if (connected()) return { ok: true }
+    if (opening) return opening
+    opening = (async () => {
+      // 老配置项还在用的话提示一次：路径现在统一在「浏览器」设置里
+      try {
+        const old = browserPath?.()
+        if (old && !hinted) {
+          hinted = true
+          log?.warn?.('抖音设置里的「浏览器路径」已经不用了，改成在「浏览器」页统一设置')
+        }
+      } catch {}
+      try {
+        lease = await service.acquire(moduleId)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, message: error?.message || '浏览器起不来' }
+      }
+    })().finally(() => { opening = null })
+    return opening
+  }
+
+  return {
+    open,
+    connected,
+    evaluate: (expression, ms) => need().evaluate(expression, { timeoutMs: ms }),
+    goto: (url, ms) => need().goto(url, { waitMs: ms }),
+    waitFor: (selector, ms) => need().waitFor(selector, { timeoutMs: ms }),
+    click: (x, y) => need().click(x, y),
+    press: (selector) => need().press(selector),
+    type: (text) => need().type(text),
+    clearFocused: () => need().clearFocused(),
+    pressEnter: () => need().pressEnter(),
+    waitResponse: (urlRe, ms) => need().waitResponse(urlRe, { timeoutMs: ms }),
+    screenshot: (clip) => need().screenshot({ clip }),
+    show: (visible) => need().show(visible),
+    /** 只释放租约，不停浏览器 —— 别的模块可能还在用。 */
+    close() {
+      try { lease?.release?.() } catch {}
+      lease = null
+    },
+  }
 }
