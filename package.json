@@ -18,7 +18,9 @@
     "test": "node scripts/build-client.mjs && node --test \"test/**/*.test.js\"",
     "test:extensions": "npm run --prefix extensions/tieba-reader test",
     "test:all": "npm test && npm run test:extensions",
-    "lint": "eslint src",
+    "lint": "eslint src scripts/*.mjs",
+    "benchmark": "node scripts/benchmark-replay.mjs",
+    "smoke:pack": "node scripts/smoke-pack.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "dsh": {
@@ -54,6 +56,9 @@
     "assets",
     "cordis.patch.yml",
     "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs/DEVELOPMENT.md",
     "docs/USER-MANUAL.md",
     "docs/CONFIGURATION.md",
     "LICENSE",
