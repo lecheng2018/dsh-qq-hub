@@ -126,7 +126,7 @@ export function Browser({ draft, setDraft, toast }) {
       />
       <Card title="设置" desc="一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。">
         <Row label="总开关" hint="关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）">
-          {f.switch('browser.enabled')}
+          {f.sw('browser.enabled')}
         </Row>
         <Row label="浏览器路径" hint="留空 = 用装好的那份；也可以填系统里已有的 Chrome / Edge 完整路径">
           {f.text('browser.chromePath', { size: 'wide', placeholder: '留空自动找' })}
@@ -141,10 +141,10 @@ export function Browser({ draft, setDraft, toast }) {
           {f.num('browser.minFreeMB', { min: 0, max: 8192 })}<span className="ab-muted">MB</span>
         </Row>
         <Row label="无头模式" hint="默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容">
-          {f.switch('browser.headless')}
+          {f.sw('browser.headless')}
         </Row>
         <Row label="优先官方 Chrome" hint="开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）">
-          {f.switch('browser.chrome')}
+          {f.sw('browser.chrome')}
         </Row>
       </Card>
     </>
