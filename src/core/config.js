@@ -532,6 +532,12 @@ export function normalize(raw) {
   d.browserPath = String(d.browserPath || '').trim()
   d.shareTo = ['douyin', 'qq', 'both'].includes(d.shareTo) ? d.shareTo : 'douyin'
   d.ownerDm = bool(d.ownerDm, true)
+  // 评论区接着聊（上游 2.3.8）：默认关，行为与升级前完全一致
+  d.commentReply = bool(d.commentReply, false)
+  d.commentReplyPollMinutes = Math.round(num(d.commentReplyPollMinutes, 5, 1, 60))
+  // 分享卡片后补一句：默认关
+  d.shareDmText = bool(d.shareDmText, false)
+  d.shareDmTextChance = num(d.shareDmTextChance, 0.6, 0, 1)
   d.dmPollMinutes = num(d.dmPollMinutes, 3, 1, 60)
   d.shareBias = ['stingy', 'normal', 'proactive'].includes(d.shareBias) ? d.shareBias : d.shareBias === 'off' ? 'stingy' : 'proactive'
   if (!isObj(d.caps)) d.caps = {}
