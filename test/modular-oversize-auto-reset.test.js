@@ -185,3 +185,52 @@ test('413 自愈：主动回合（runPromptTurn）同样命中且不往聊天里
     assert.ok((dshRaw.workspaces.archived || []).includes('sess-1'), '旧会话已归档')
   } finally { await core.dispose() }
 })
+
+test('413 自愈：pi-ai 把 plugin_request_too_large 误判成 CONTEXT_WINDOW_EXCEEDED 时也要命中', async () => {
+  // 真机 2026-11-20：pi-ai 路由下，dsh-llm-pi-ai 的 isContextOverflow() 用
+  // /request_too_large/i 匹配错误文案，而 `plugin_request_too_large` 正好含这个子串，
+  // 于是 code 被标成 CONTEXT_WINDOW_EXCEEDED（且 pi-ai 路径不填 status）。
+  // 旧口径要求 INVALID_REQUEST 或 status===413，两个都不匹配 → 自愈失效、会话连挂 6 轮。
+  const dshRaw = scriptedFakeDsh({ script: [
+    [{ type: 'turn/end', data: { reason: { kind: 'error', error: {
+      code: 'CONTEXT_WINDOW_EXCEEDED',
+      message: '413: {"code":"plugin_request_too_large","message":"本次对话上下文或图片过大：请求约 5.3 MiB，插件内存上限 64 MiB；请新建会话或减少图片后重试","type":"invalid_request_error"}',
+    } } } }],
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '新会话的回复' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, sent } = mkCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
+    await sleep(300)
+    assert.ok(sent.includes('send_private_msg'), '发一句人话提示（这轮确实没回）')
+    await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
+    await sleep(300)
+    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', 'code 是 CONTEXT_WINDOW_EXCEEDED 也要换会话')
+    assert.ok((dshRaw.workspaces.archived || []).includes('sess-1'), '旧会话已归档')
+  } finally { await core.dispose() }
+})
+
+test('413 自愈：真·上下文窗口超限（无请求体过大文案）不被误判成换会话', async () => {
+  const dshRaw = scriptedFakeDsh({ script: [
+    [{ type: 'turn/end', data: { reason: { kind: 'error', error: {
+      code: 'CONTEXT_WINDOW_EXCEEDED',
+      message: "prompt is too long: 213462 tokens > 200000 maximum",
+    } } } }],
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '还是同一会话' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core } = mkCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
+    await sleep(300)
+    await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
+    await sleep(300)
+    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '真 token 超限走压缩重试，不该被当成字节超限换会话')
+    assert.deepEqual(dshRaw.workspaces.archived || [], [])
+  } finally { await core.dispose() }
+})

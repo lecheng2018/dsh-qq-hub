@@ -12,6 +12,47 @@
 
 **回归**：新增 `test/client-layout-css.test.js`，钉住「默认单列轨道必须 `minmax(0, 1fr)`」「窄屏段不能出现裸 `1fr`」「产物与源码同步」。真机等价验证：用 Chromium 在 320/360/393/414 四个宽度下逐页扫 20 个内置标签页 + 8 个模块自有页面，标签栏之外零溢出（修前扩展页 `documentElement.scrollWidth` 1358、`.ab-root.scrollWidth` 1358，修后等于视口宽）；卡片内部仅有 16 处 nowrap 文本按设计省略号截断。
 
+## Unreleased · chore(build): 面板产物同源检查挪到本地 —— `check:client` + pre-push 钩子（2026-11-20）
+
+**现象**：`f1e6100`（#186，只改了 `scripts/build-client.mjs` 的 `postProcess`）与 `bd7f993`（#183）连红两道 Verify，报的都是「`client/client.js` 与 `client/src` 不同步：1 insertion / 2 deletions」。门禁本身没错——错在**只有 push 之后才看得见**：`npm test` 会先现场构建产物，本地全绿，CI 才红，白等一轮。
+
+**改法**（三处，逻辑只有一份）：
+
+1. `scripts/build-client.mjs` 新增 `--check`：构建到内存后与磁盘产物逐字节比对，一致打印大小、不一致打印**第一处差异行**（磁盘值 / 构建值）并 exit 1，**不落盘**（改前那次门禁会顺手把产物写脏）。
+2. `npm run check:client` 就是 `--check`；`.githooks/pre-push` 调它，push 前拦下；`npm ci` 经 `prepare` → `npm run setup:hooks` 自动把 `core.hooksPath` 指向 `.githooks`（不在 git 检出里则静默跳过）。
+3. `verify` 工作流那道门禁改用同一份 `npm run check:client`，并从测试之后**前移到测试之前** fail fast。
+
+**合并 main 后补的一处修复**：`scripts/setup-hooks.mjs` 原来把状态提示打到 **stdout**，而它由 `prepare` 调用——CI 的 npm 10（node 22.13.0）会把 prepare 的 stdout 混进 `npm pack --json`，`scripts/smoke-pack.mjs` 的 `JSON.parse` 当场崩（`SyntaxError: Unexpected token 'g', "git hooks "... is not valid JSON`）。分支单独的 Verify 没有 `smoke:pack` 步骤所以一直没暴露，main 加上这一步之后才撞出来。现全部提示改走 stderr，并加 `test/setup-hooks-silent-stdout.test.js` 钉住「stdout 必须为空」。
+
+**验证**：
+
+- 当前树：`✅ client/client.js 与构建结果一致（293.2 KB）`，exit 0；
+- 在 `bd7f993` 上跑 `--check`：exit 1，报 `最先在第 401 行不同`，`- token: "…完整性",` / `+ token: "…完整性", /* pii-scan:ignore */`，且 `git status` 里 `client/client.js` 保持未改；
+- 拿 `bd7f993` 往临时裸库真推一次：被 `pre-push` 拦下，远端一个 ref 都没收到；干净树上同一钩子 exit 0。
+
+## Unreleased · fix 413 自愈被上游误判绕过：pi-ai 路由下连挂 6 轮仍不换会话（2026-11-20）
+
+**现象（真机）**：某个群从 12:45 到 13:01 连续 6 轮「本轮运行失败 413 …请求约 5.x MiB，插件内存上限 64 MiB」，**修复过 413 自愈却没生效**，会话一直卡在同一个超限历史里。
+
+**根因（三层，逐层都有日志实证）**：
+
+1. 该聊天走的不是 DeepSeek 官方适配器，而是 **pi-ai 适配器**（第三方 OpenAI 兼容路由）；
+2. `dsh-llm-pi-ai` 的 `isContextOverflow()` 里有一条给 Anthropic 用的 `/request_too_large/i`，而服务端返回的 code 是 **`plugin_request_too_large`** —— **正好含这个子串**，于是被判成「上下文窗口超限」，`turn/end` 的 `reason.error.code` 变成 `CONTEXT_WINDOW_EXCEEDED`，且 pi-ai 路径**不填 `status`**；
+3. 我们的自愈判定旧口径要求 `status === 413` 或 `code === 'INVALID_REQUEST'`，两个都不满足 → 一次都没触发。
+
+顺带被这个误判坑到的还有 `dsh-compaction-basic`：它见 `CONTEXT_WINDOW_EXCEEDED` 就压缩重试——**但压缩请求本身也要把同一份超大历史发给模型算摘要，所以它同样 413**。真机日志里 `compaction/end` 的 `error` 字段就是同一条 413 原文；每次压缩 0.4~1.6 秒，主请求 + 压缩两趟，每轮失败耗时 0.9~3.0 秒。
+
+净效果是**空转**：一次注定失败的额外模型调用，摘要算不出来、历史字节一个没少，还把「其实该换会话」这件事拖到下一条消息。
+
+**改法**（`src/host/modular-core.js` 的 `turnFailureLooksOversized`）：改成**文案优先**——只要 message 出现请求体过大的强特征词（`plugin_request_too_large` / `request_too_large` / `context_too_large` / `请求体过大` / `上下文或图片过大` / `插件内存上限` / `request body too large` / `payload too large`），就认定是字节超限，**不看 code、不看 status**。这些词只可能来自「发出去的东西太大」，不会出现在真·token 超限的文案里，所以不误伤。
+
+**验证**：新增 2 例（`test/modular-oversize-auto-reset.test.js`，共 7 例）：
+
+1. `code: CONTEXT_WINDOW_EXCEEDED` + `plugin_request_too_large` 文案 + 无 status → 命中，下一条消息换新会话、旧会话进归档；
+2. 真·token 超限（`prompt is too long: 213462 tokens > 200000 maximum`）→ **不**换会话、**不**归档（该走压缩重试）。
+
+全量 `2407` 项测试通过（`2403` 过 / `4` 跳过）。
+
 ## Unreleased · fix 服务端 413「上下文或图片过大」把会话永久卡死：识别到就自动换新会话（2026-11-19）
 
 **现象（真机）**：某个 QQ 聊天里每一轮都失败，面板显示「本轮运行失败」，服务端原文是
