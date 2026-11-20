@@ -30,6 +30,29 @@
 - 在 `bd7f993` 上跑 `--check`：exit 1，报 `最先在第 401 行不同`，`- token: "…完整性",` / `+ token: "…完整性", /* pii-scan:ignore */`，且 `git status` 里 `client/client.js` 保持未改；
 - 拿 `bd7f993` 往临时裸库真推一次：被 `pre-push` 拦下，远端一个 ref 都没收到；干净树上同一钩子 exit 0。
 
+## Unreleased · fix 413 自愈被上游误判绕过：pi-ai 路由下连挂 6 轮仍不换会话（2026-11-20）
+
+**现象（真机）**：某个群从 12:45 到 13:01 连续 6 轮「本轮运行失败 413 …请求约 5.x MiB，插件内存上限 64 MiB」，**修复过 413 自愈却没生效**，会话一直卡在同一个超限历史里。
+
+**根因（三层，逐层都有日志实证）**：
+
+1. 该聊天走的不是 DeepSeek 官方适配器，而是 **pi-ai 适配器**（第三方 OpenAI 兼容路由）；
+2. `dsh-llm-pi-ai` 的 `isContextOverflow()` 里有一条给 Anthropic 用的 `/request_too_large/i`，而服务端返回的 code 是 **`plugin_request_too_large`** —— **正好含这个子串**，于是被判成「上下文窗口超限」，`turn/end` 的 `reason.error.code` 变成 `CONTEXT_WINDOW_EXCEEDED`，且 pi-ai 路径**不填 `status`**；
+3. 我们的自愈判定旧口径要求 `status === 413` 或 `code === 'INVALID_REQUEST'`，两个都不满足 → 一次都没触发。
+
+顺带被这个误判坑到的还有 `dsh-compaction-basic`：它见 `CONTEXT_WINDOW_EXCEEDED` 就压缩重试——**但压缩请求本身也要把同一份超大历史发给模型算摘要，所以它同样 413**。真机日志里 `compaction/end` 的 `error` 字段就是同一条 413 原文；每次压缩 0.4~1.6 秒，主请求 + 压缩两趟，每轮失败耗时 0.9~3.0 秒。
+
+净效果是**空转**：一次注定失败的额外模型调用，摘要算不出来、历史字节一个没少，还把「其实该换会话」这件事拖到下一条消息。
+
+**改法**（`src/host/modular-core.js` 的 `turnFailureLooksOversized`）：改成**文案优先**——只要 message 出现请求体过大的强特征词（`plugin_request_too_large` / `request_too_large` / `context_too_large` / `请求体过大` / `上下文或图片过大` / `插件内存上限` / `request body too large` / `payload too large`），就认定是字节超限，**不看 code、不看 status**。这些词只可能来自「发出去的东西太大」，不会出现在真·token 超限的文案里，所以不误伤。
+
+**验证**：新增 2 例（`test/modular-oversize-auto-reset.test.js`，共 7 例）：
+
+1. `code: CONTEXT_WINDOW_EXCEEDED` + `plugin_request_too_large` 文案 + 无 status → 命中，下一条消息换新会话、旧会话进归档；
+2. 真·token 超限（`prompt is too long: 213462 tokens > 200000 maximum`）→ **不**换会话、**不**归档（该走压缩重试）。
+
+全量 `2407` 项测试通过（`2403` 过 / `4` 跳过）。
+
 ## Unreleased · fix 服务端 413「上下文或图片过大」把会话永久卡死：识别到就自动换新会话（2026-11-19）
 
 **现象（真机）**：某个 QQ 聊天里每一轮都失败，面板显示「本轮运行失败」，服务端原文是
