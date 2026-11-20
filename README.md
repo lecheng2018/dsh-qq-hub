@@ -301,19 +301,24 @@ node scripts/migrate-memory-markdown.js "/实际的数据目录/dsh-qq-hub"
 
 ## 开发与验证
 
-项目使用 Node.js 原生测试框架，无需额外测试框架。
+项目使用 Node.js 原生测试框架，无需额外测试框架。完整开发环境、接口稳定性边界、贡献流程、基准测试和安全纪律见[开发指南](docs/DEVELOPMENT.md)与[贡献指南](CONTRIBUTING.md)。
 
 ```bash
+npm ci
 npm ci --prefix extensions/tieba-reader
+npm run lint
 npm run test:all
+npm run benchmark
+npm run smoke:pack
 npm run pack:check
 ```
 
-`npm run test:all` 会先构建面板产物再运行主套件与扩展测试；`verify` 工作流另有产物新鲜度门禁（提交的 `client/client.js` 必须与构建一致）。
+面板源码在 `client/src/`；改动后运行 `npm run build:client` 并提交同步后的 `client/client.js`。Verify 工作流会检查构建产物、运行合成基准并以独立临时 consumer 安装 tarball。普通 CI 不连接真实 QQ。
 
 ### 文档入口
 
 - 用户：[使用手册](docs/USER-MANUAL.md)、[配置参考](docs/CONFIGURATION.md)
+- 开发者：[开发指南](docs/DEVELOPMENT.md)、[贡献指南](CONTRIBUTING.md)、[安全策略](SECURITY.md)
 - 模块作者：[模块 API](src/modules/API.md)
 - 维护者：[功能与测试矩阵](docs/refactor/feature-matrix.md)、[新核心验证台账](docs/refactor/new-core-parity-ledger.md)、[重构文档目录](docs/refactor/handoff.md)
 - 发布历史：[CHANGELOG.md](CHANGELOG.md)
