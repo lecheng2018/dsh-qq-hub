@@ -199,8 +199,8 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
         checkUrl(url)
         const loaded = new Promise((resolve) => {
           const off = cdp.on('Page.loadEventFired', () => { off(); resolve() })
+          // 不能 unref：goto 在等这个计时器（页面不触发 load 时靠它到点返回）
           const t = setTimeout(() => { off(); resolve() }, waitMs)
-          t.unref?.()
         })
         await cdp.send('Page.navigate', { url })
         await loaded
@@ -305,8 +305,8 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
             try { json = JSON.parse(b?.base64Encoded ? Buffer.from(b.body, 'base64').toString() : b?.body) } catch {}
             done({ ...ids.get(p.requestId), json })
           })
+          // 不能 unref：waitResponse 在等它
           const t = setTimeout(() => done(null), ms)
-          t.unref?.()
         })
       },
 

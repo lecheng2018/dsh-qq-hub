@@ -59,8 +59,8 @@ export function connectCdp(wsUrl, { WS = globalThis.WebSocket, timeoutMs = 10000
   })
 
   const ready = new Promise((resolve, reject) => {
+    // 不能 unref：这个计时器是 ready 这条 Promise 唯一的失败出口
     const t = setTimeout(() => reject(new Error('连不上浏览器调试端口')), timeoutMs)
-    t.unref?.()
     sock.addEventListener('open', () => { clearTimeout(t); resolve() })
     sock.addEventListener('error', () => { clearTimeout(t); reject(new Error('连不上浏览器调试端口')) })
   })
@@ -72,8 +72,8 @@ export function connectCdp(wsUrl, { WS = globalThis.WebSocket, timeoutMs = 10000
       if (closed) return Promise.reject(new Error('浏览器连接断了'))
       const id = nextId++
       return new Promise((resolve, reject) => {
+        // 不能 unref：send() 在等这个计时器
         const t = setTimeout(() => { pending.delete(id); reject(new Error(`浏览器没响应（${method}）`)) }, ms)
-        t.unref?.()
         pending.set(id, {
           resolve: (v) => { clearTimeout(t); resolve(v) },
           reject: (e) => { clearTimeout(t); reject(e) },

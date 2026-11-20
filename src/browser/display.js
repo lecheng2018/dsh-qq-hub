@@ -40,8 +40,8 @@ export function canConnectX(display, timeoutMs = 1000) {
     const sock = net.connect(path)
     sock.once('connect', () => finish(true))
     sock.once('error', () => finish(false))
+    // 不能 unref：canConnectX 的 Promise 靠它收口
     const t = setTimeout(() => finish(false), timeoutMs)
-    t.unref?.()
   })
 }
 
