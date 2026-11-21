@@ -1940,6 +1940,41 @@ var AUDIENCE_OPTIONS = [
   { value: "self", label: "仅自己可见" }
 ];
 var AUDIENCE_LABEL = Object.fromEntries(AUDIENCE_OPTIONS.map((o) => [o.value, o.label]));
+function DiarySources({ draft, setDraft }) {
+  const picked = new Set((draft.diary.includeChats || []).map(String));
+  const [known, setKnown] = useState(null);
+  useEffect(() => {
+    get("/panel/chats").then((r) => {
+      if (r.ok) setKnown(r.chats || []);
+    }).catch(() => setKnown([]));
+  }, []);
+  const nameOf = (cid) => {
+    const hit = (known || []).find((c) => String(c.chatId) === cid);
+    if (!hit) return cid;
+    const raw = String(hit.name || "").replace(/^QQ 群 · /, "");
+    return raw && raw !== hit.id ? `${raw}（${cid}）` : cid;
+  };
+  const candidates = Array.from(/* @__PURE__ */ new Set([
+    ...(draft.allow.groups || []).map((g) => `group:${g}`),
+    ...(known || []).map((c) => String(c.chatId)),
+    ...picked
+  ])).sort();
+  const toggle = (cid) => {
+    const next = new Set(picked);
+    if (next.has(cid)) next.delete(cid);
+    else next.add(cid);
+    setDraft(setPath(draft, "diary.includeChats", Array.from(next)));
+  };
+  return /* @__PURE__ */ h(
+    Row,
+    {
+      label: "素材来源",
+      hint: "勾选哪些聊天的内容可以进日记素材。不勾选 = 日记只写她自己的事（今天画了什么、在想什么），不引用任何聊天记录。配图同理：她自己画的永远可用，别人会话里收的表情要在对应聊天勾选后才会被配上。"
+    },
+    candidates.length ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { flexWrap: "wrap" } }, candidates.map((cid) => /* @__PURE__ */ h("button", { key: cid, type: "button", className: cx("ab-chip", picked.has(cid) && "on"), onClick: () => toggle(cid) }, (picked.has(cid) ? "✓ " : "") + nameOf(cid)))) : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "还没有聊过天的会话；先在「权限」页把群加进白名单。"),
+    picked.size === 0 ? /* @__PURE__ */ h("div", { className: "ab-note ab-small", style: { marginTop: 6 } }, "当前不引用任何聊天：日记只写她自己的事。") : null
+  );
+}
 function DiaryAudience({ draft, setDraft, toast }) {
   const mode = draft.diary.visibility;
   const partial = mode === "selected" || mode === "excluded";
@@ -2001,6 +2036,7 @@ function Diary({ st, draft, setDraft, toast }) {
     /* @__PURE__ */ h(Row, { label: "两篇至少隔" }, f.num("diary.minGapMinutes", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
     /* @__PURE__ */ h(Row, { label: "字数" }, f.num("diary.minChars", { min: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.num("diary.maxChars", { min: 20 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
     /* @__PURE__ */ h(Row, { label: "日记配图", hint: "开着时每篇会从「今天她画的图 / 今天收的表情包」里挑一张配上去；没有合适的就只发文字" }, f.sw("diary.attachImage")),
+    /* @__PURE__ */ h(DiarySources, { draft, setDraft }),
     /* @__PURE__ */ h(DiaryAudience, { draft, setDraft, toast })
   ), /* @__PURE__ */ h(
     Card,

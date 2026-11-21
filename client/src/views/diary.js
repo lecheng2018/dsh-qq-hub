@@ -1,7 +1,7 @@
 import { useState, useEffect, Fragment, h } from '../core/react.js'
 import { Card, Row, Btn, Select, Empty, ModOff, More } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
-import { setPath, timeAgo } from '../core/utils.js'
+import { setPath, timeAgo, cx } from '../core/utils.js'
 import { get, post } from '../core/http.js'
 import { modOn } from '../domain/nav.js'
 
@@ -13,6 +13,56 @@ const AUDIENCE_OPTIONS = [
   { value: 'self', label: '仅自己可见' },
 ]
 const AUDIENCE_LABEL = Object.fromEntries(AUDIENCE_OPTIONS.map((o) => [o.value, o.label]))
+
+/**
+ * 日记素材来源：逐个会话显式授权（审计 S07）。
+ * 过去无条件下「所有非 system 会话」的当天流水都进素材，私聊内容会被改写成
+ * 第一人称说说发到空间。现在默认空 = 只写她自己的事，勾选才引用。
+ */
+function DiarySources({ draft, setDraft }) {
+  const picked = new Set((draft.diary.includeChats || []).map(String))
+  const [known, setKnown] = useState(null)
+  useEffect(() => {
+    get('/panel/chats').then((r) => { if (r.ok) setKnown(r.chats || []) }).catch(() => setKnown([]))
+  }, [])
+  // 候选：白名单群 + 聊过天的会话（含私聊）。名字能取到就显示名字。
+  const nameOf = (cid) => {
+    const hit = (known || []).find((c) => String(c.chatId) === cid)
+    if (!hit) return cid
+    const raw = String(hit.name || '').replace(/^QQ 群 · /, '')
+    return raw && raw !== hit.id ? `${raw}（${cid}）` : cid
+  }
+  const candidates = Array.from(new Set([
+    ...(draft.allow.groups || []).map((g) => `group:${g}`),
+    ...(known || []).map((c) => String(c.chatId)),
+    ...picked,
+  ])).sort()
+  const toggle = (cid) => {
+    const next = new Set(picked)
+    if (next.has(cid)) next.delete(cid)
+    else next.add(cid)
+    setDraft(setPath(draft, 'diary.includeChats', Array.from(next)))
+  }
+  return (
+    <Row
+      label="素材来源"
+      hint="勾选哪些聊天的内容可以进日记素材。不勾选 = 日记只写她自己的事（今天画了什么、在想什么），不引用任何聊天记录。配图同理：她自己画的永远可用，别人会话里收的表情要在对应聊天勾选后才会被配上。"
+    >
+      {candidates.length
+        ? <div className="ab-flex" style={{ flexWrap: 'wrap' }}>
+          {candidates.map((cid) => (
+            <button key={cid} type="button" className={cx('ab-chip', picked.has(cid) && 'on')} onClick={() => toggle(cid)}>
+              {(picked.has(cid) ? '✓ ' : '') + nameOf(cid)}
+            </button>
+          ))}
+        </div>
+        : <span className="ab-muted ab-small">还没有聊过天的会话；先在「权限」页把群加进白名单。</span>}
+      {picked.size === 0
+        ? <div className="ab-note ab-small" style={{ marginTop: 6 }}>当前不引用任何聊天：日记只写她自己的事。</div>
+        : null}
+    </Row>
+  )
+}
 
 /** 可见范围：固定范围存进配置；部分好友再配一份 QQ 名单。 */
 function DiaryAudience({ draft, setDraft, toast }) {
@@ -85,6 +135,7 @@ function Diary({ st, draft, setDraft, toast }) {
         <Row label="两篇至少隔">{f.num('diary.minGapMinutes', { min: 0 })}<span className="ab-muted">分钟</span></Row>
         <Row label="字数">{f.num('diary.minChars', { min: 10 })}<span className="ab-muted">到</span>{f.num('diary.maxChars', { min: 20 })}<span className="ab-muted">字</span></Row>
         <Row label="日记配图" hint="开着时每篇会从「今天她画的图 / 今天收的表情包」里挑一张配上去；没有合适的就只发文字">{f.sw('diary.attachImage')}</Row>
+        <DiarySources draft={draft} setDraft={setDraft} />
         <DiaryAudience draft={draft} setDraft={setDraft} toast={toast} />
       </Card>
       <Card
