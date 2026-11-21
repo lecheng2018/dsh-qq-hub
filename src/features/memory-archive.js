@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
 import { openMemoryFiles } from './memory-files.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
-import { visibleScopes } from './memory-scope.js'
+import { visibleScopes, isValidScope } from './memory-scope.js'
 import { createVectorChannel, fuseRrf } from './memory-vector.js'
 import { createReranker } from './memory-rerank.js'
 
@@ -288,6 +288,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
+    // 写入侧的作用域白名单（审计 S08 后续）：作用域是隔离的物理单位，但它由调用方给的字符串决定。
+    // 工具层已经挡了一道，这里是兜底——任何绕过工具（总线、模块、面板命令）的调用都过不去，
+    // 免得「模型传 private:<主人QQ> 就往主人私聊里写」这类跨作用域投毒再开一条路。
+    if (!isValidScope(finalScope)) {
+      return { ok: false, message: `作用域不合法：${finalScope}（只接受 global / private:<QQ> / group:<群号>）` }
+    }
 
     // 判定主观自传轨：明确声明主观 kind，或 selfView/perspective，或显式传了 personaId
     const isSubjective = Boolean(
