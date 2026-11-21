@@ -116,6 +116,8 @@ export function createTokenLedger(options = {}) {
   const baseBudget = opts.budget
   const initialBudget = normalizeBudget(baseBudget)
   let dateKey = opts.today === undefined ? todayKey() : assertDateKey(opts.today)
+  /** 是否「钉住日期」模式（构造时显式给了 today）：测试/运维用，不跟真实时钟滚动。 */
+  const pinned = opts.today !== undefined
   let budget = initialBudget.total
   let ownerShare = initialBudget.ownerShare
   /** chatKey -> 当日上限 */
@@ -127,8 +129,29 @@ export function createTokenLedger(options = {}) {
   /** 最近一次 allocate 落在哪一天（'' 表示这个实例还没分配过）。 */
   let allocatedDay = ''
 
+  /**
+   * 「这次调用算哪一天」。
+   *
+   * 优先级：显式传入 > 固定模式（构造时给了 `today`）> 真实今天。
+   *
+   * 为什么必须区分（真机 2026-11-21 定位，比预期严重）：
+   * 旧实现不传日期时返回 `dateKey` 本身，而 `dateKey` 只有 allocate/record/resetDaily
+   * 收到「新日期」才会前进。生产里 token-billing 三个入口（启动 allocate、
+   * session/usage 的 record、每分钟维护）**全都不带日期**，于是：
+   *   ① record() 里 `currentDate() === dateKey` → rollTo 直接 return，跨日不清用量；
+   *   ② day 永远停在创建那天，`hasAllocation(day)` 恒为 true；
+   *   ③ 上限与用量都被沿用到「新的一天」 → 一旦某天烧完，
+   *      第二天起 remaining 恒为 0、isExhausted 恒为 true，**主动搭话永久熔断**，
+   *      只有手动点「重置」才恢复（日志从 11-14 起每天 00:00:xx 起就刷
+   *      「Token 配额已用完」，而前一天实际只烧了很小一部分）。
+   * 让「今天」由时钟决定，rollTo/hasAllocation 才真正生效。
+   *
+   * `today` 是测试与运维用的「把账本钉在某一天」开关：给了它就保持旧语义
+   * （不传日期 = 钉住的那天，靠显式 dateKey 人工翻页），否则跟真实时钟走。
+   */
   function currentDate(optsIn) {
-    return optsIn && optsIn.dateKey !== undefined ? assertDateKey(optsIn.dateKey) : dateKey
+    if (optsIn && optsIn.dateKey !== undefined) return assertDateKey(optsIn.dateKey)
+    return pinned ? dateKey : todayKey()
   }
 
   /** 跨日自动滚动：换日即清空当日用量，权重与分配沿用。 */
