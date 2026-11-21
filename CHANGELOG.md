@@ -1,5 +1,19 @@
 # 更新记录
 
+## Unreleased · fix 断线补收整批被拒：历史消息缺 `post_type`/`self_id`（2026-11-21）
+
+**现象（真机 01:34）**：日志每收到一个数据包就刷一行
+
+```
+事件无法成键/不支持：legacy 适配器只处理 message/message_sent/poke，收到 (无 post_type)
+```
+
+**根因**：`get_group_msg_history` / `get_friend_msg_history` 返回的是**消息对象**，不是 OneBot 事件——没有 `post_type`，也没有 `self_id`（拿网关实测确认）。`triggerBackfill` 把 `it.event` 原样丢给 `dispatchBackfill` → `safeAdapt` → 适配层按事件形状严格校验（fail-closed，不猜），于是**整批补收全部被拒**，断线期间错过的消息一条也进不来。
+
+**改法**：网关层出站前补形状——`asInboundEvent()` 只补 `post_type='message'`、`self_id=botQQ`、缺省 `message_type`（按有无 `group_id` 推），语义字段一律不动；实时链与 legacy hub 分支共用同一个函数。
+
+**测试**：`test/modular-backfill-legacy.test.js` 新增两条回归（私聊 + 群聊），断言补收事件带 `post_type`/`self_id` 且能被真实适配器成键（`private:100` / `group:900`），而不是被拒收。
+
 ## Unreleased · fix 系统 → 扩展页手机端横向溢出：单列网格轨道改成可收缩（2026-11-21）
 
 **现象（真机）**：手机上打开「系统 → 扩展」，整页能左右拖动，卡片比屏幕宽出好几倍（393px 视口下卡片实际宽 1344px，多出来的两屏全是空白），要横向拖着才能看到右侧的开关。

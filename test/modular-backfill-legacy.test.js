@@ -22,6 +22,7 @@ import { join } from 'node:path'
 
 import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, isCommandLike, plainTextOf, backfillNoticeBlock } from '../src/chat/backfill.js'
 import { createGateway } from '../src/host/gateway.js'
+import { legacyEventToNormalized } from '../src/chat/adapters/legacy-inbound.js'
 
 // ---------- 纯库层 ----------
 
@@ -283,4 +284,58 @@ test('新核心补收：gateway 把真实断线时长和消息年龄一并传递
   assert.ok(call, '普通补收消息应进入新核心')
   assert.equal(call.meta?.gapMs, gapMs)
   assert.ok(call.meta?.earliestAgeMs > 0)
+})
+
+test('接线回归（真机 2026-11-21 01:34）：历史消息本身没有 post_type/self_id，投喂前必须补成合法事件形状', async () => {
+  // get_group_msg_history / get_friend_msg_history 返回的是「消息对象」：无 post_type、无 self_id。
+  // 适配层按事件严格校验（fail-closed 不猜），漏补就会整批被拒：
+  //   「legacy 适配器只处理 message/message_sent/poke，收到 (无 post_type)」
+  historyFor = privateHistory
+  const { gw } = makeGateway()
+  await pokeAndSettle(gw)
+
+  const delivered = hubCalls.find((x) => x.event.message_id === 101)
+  assert.ok(delivered, '普通消息应被投递')
+  assert.equal(delivered.event.post_type, 'message', '补收事件必须带 post_type')
+  assert.equal(String(delivered.event.self_id), '555', '补收事件必须带 self_id（网关侧历史不带）')
+  // 用真实适配器验收：整条链的入站契约必须能被接受并成键
+  const inbound = legacyEventToNormalized(delivered.event, { selfId: delivered.event.self_id, source: 'backfill' })
+  assert.equal(inbound.chatKey, 'private:100', '能成键（而非被适配层拒收）')
+  assert.equal(inbound.source, 'backfill', '来源仍是 backfill')
+})
+
+test('接线回归：群历史补收同样补形状（group 键、self_id 一并补齐）', async () => {
+  historyFor = (kind) => (kind === 'group'
+    ? [{ message_id: 501, time: (NOW - 60_000) / 1000, group_id: 900, message_type: 'group', user_id: 100, message: [{ type: 'text', data: { text: '群里的普通消息' } }] }]
+    : [])
+  const cfgPatch = (cfg) => { cfg.allow = { groups: ['900'], private: [] }; return cfg }
+  const groupHubCalls = []
+  const hub = {
+    onMessage: async (event, opts) => { groupHubCalls.push({ event, opts }) },
+    sendText: async () => {},
+  }
+  process.env.AURABOT_DATA_DIR = workDir
+  writeFileSync(join(workDir, 'upstream-seen.json'), JSON.stringify({ lastPacketAt: Date.now() - 300_000 }))
+  const gw = createGateway({
+    getConfig: () => cfgPatch({
+      botQQ: '555',
+      ownerQQ: '100',
+      backfill: { enabled: true, gapMs: 60_000, settleMs: 10, maxAgeMinutes: 360, maxPerConversation: 50, lookbackMs: 60_000 },
+      allow: { groups: ['900'], private: [] },
+    }),
+    snowluma: { confirmLogin: async () => true },
+    endpoint: () => ({ httpUrl, wsUrl: '', httpToken: '', wsToken: '' }),
+    logger: { child: () => ({ info() {}, warn() {}, debug() {}, error() {} }) },
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+    getHub: () => hub,
+    getMods: () => null,
+    getModularCore: () => null,
+    getDangerGuard: () => null,
+    dispatch: () => {},
+  })
+  await gw.triggerBackfill({ since: NOW - 300_000, gapMs: 300_000 })
+  const delivered = groupHubCalls.find((x) => x.event.message_id === 501)
+  assert.ok(delivered, '群补收消息应被投递')
+  const inbound = legacyEventToNormalized(delivered.event, { selfId: delivered.event.self_id, source: 'backfill' })
+  assert.equal(inbound.chatKey, 'group:900', '群聊成 group 键')
 })
