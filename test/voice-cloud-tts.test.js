@@ -7,6 +7,10 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, openSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+// 云元数据服务的公开已知地址（链路本地保留段），这里只当作「必须被拒的下载目标」，
+// 不是本机地址。集中成常量，避免同一个保留地址在多处散落。
+const METADATA_URL = 'http://169.254.169.254/latest/meta-data/' // pii-scan:ignore
+
 // 生成的音频别落到主人真实的语音缓存里
 const dataDir = mkdtempSync(join(tmpdir(), 'aurabot-cloud-tts-'))
 process.env.AURABOT_DATA_DIR = dataDir
@@ -309,10 +313,63 @@ test('normalize：voice.engine 白名单放行 doubao / qwentts / mimo（部署�
   assert.equal(config.normalize({ voice: { engine: 'unknown-engine' } }).voice.engine, 'auto', '未知引擎仍回 auto')
 })
 
-// 审计 S10：二次下载同源绑定。audioUrl 来自 API 响应（半可信），官方语义里音频域
-// 与 API 域同源；被篡改的响应可能把下载引去任意地址（含内网）。按 origin 绑定：
-// 与 baseUrl 不同源一律拒绝；baseUrl 本身允许自填内网/本地地址（自建服务），不受影响。
-test('qwenSynth：音频地址与接口不同源时拒绝下载（S10 同源绑定）', async () => {
+// 审计 S10：二次下载的目的地策略。audioUrl 来自 API 响应（半可信），被篡改的响应
+// 可能把下载引去任意地址（含内网）。但「与接口同源」**不是**官方契约——百炼官方文档
+// 的响应就是跨域的：请求打 dashscope.aliyuncs.com，output.audio.url 指向
+// dashscope-result-bj.oss-cn-beijing.aliyuncs.com（完整文件 URL，24 小时有效）。
+// 所以按供应商语义分域判：官方 baseUrl 只认官方结果桶，自建服务仍按 origin 绑定。
+
+test('qwenSynth：官方 baseUrl + 官方 OSS 音频域能正常合成（S10 跨域是正常契约）', async () => {
+  hits.length = 0
+  const wav = tinyWav(2000)
+  // 用 fetch 桩模拟官方跨域响应：合成接口在 dashscope 域，音频在 OSS 结果域
+  const realFetch = globalThis.fetch
+  const seen = []
+  globalThis.fetch = async (url, init) => {
+    seen.push(String(url))
+    if (String(url).includes('SpeechSynthesizer')) {
+      return {
+        ok: true, status: 200,
+        text: async () => JSON.stringify({
+          status_code: 200,
+          output: { audio: { url: 'http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/1d/ab/x.wav?Expires=1&Signature=s', id: 'audio_x', expires_at: 1 } },
+        }),
+      }
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.length) }
+  }
+  try {
+    const file = await qwenSynth('你好', {
+      apiKey: 'sk-1', baseUrl: 'https://dashscope.aliyuncs.com',
+      model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry',
+    })
+    assert.ok(existsSync(file), '官方跨域响应必须能落成音频文件')
+    assert.ok(seen.some((u) => u.includes('dashscope-result-bj.oss-cn-beijing.aliyuncs.com')), '应真的去下载 OSS 上的音频')
+  } finally { globalThis.fetch = realFetch }
+})
+
+test('qwenSynth：官方 baseUrl 但音频域不是官方结果桶 → 拒绝（S10 首次下载校验）', async () => {
+  hits.length = 0
+  const realFetch = globalThis.fetch
+  let downloaded = 0
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('SpeechSynthesizer')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ output: { audio: { url: METADATA_URL } } }) }
+    }
+    downloaded++
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => tinyWav(2000).buffer }
+  }
+  try {
+    await assert.rejects(
+      () => qwenSynth('你好', { apiKey: 'sk-1', baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry' }),
+      /不是百炼官方结果域/,
+      '被篡改的响应把下载指向内网元数据地址，必须拒绝',
+    )
+    assert.equal(downloaded, 0, '拒绝必须发生在发出下载 GET 之前')
+  } finally { globalThis.fetch = realFetch }
+})
+
+test('qwenSynth：自建服务（非官方域）仍按 origin 绑定，异源音频拒绝', async () => {
   hits.length = 0
   respond = (res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -321,6 +378,72 @@ test('qwenSynth：音频地址与接口不同源时拒绝下载（S10 同源绑�
   await assert.rejects(
     () => qwenSynth('你好', { apiKey: 'sk-1', baseUrl: `${base}/compatible-mode/v1`, model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry' }),
     /不同源/,
-    '回环音频地址与公网 API 域不同源，必须拒绝',
+    '自建服务的音频地址与接口不同源，必须拒绝',
   )
+})
+
+test('qwenSynth：自建服务可显式配置 audioOrigin 放行独立的音频域', async () => {
+  hits.length = 0
+  const wav = tinyWav(2000)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('SpeechSynthesizer')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ output: { audio: { url: 'http://audio.internal.example/out.wav' } } }) }
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.length) }
+  }
+  try {
+    // 不配置 → 拒绝
+    await assert.rejects(
+      () => qwenSynth('你好', { apiKey: 'sk-1', baseUrl: 'http://127.0.0.1:13080', model: 'm', voice: 'Cherry' }),
+      /不同源/,
+    )
+    // 显式配置 audioOrigin → 放行
+    const file = await qwenSynth('你好', {
+      apiKey: 'sk-1', baseUrl: 'http://127.0.0.1:13080', audioOrigin: 'http://audio.internal.example', model: 'm', voice: 'Cherry',
+    })
+    assert.ok(existsSync(file), '显式放行的音频域应能下载成功')
+  } finally { globalThis.fetch = realFetch }
+})
+
+test('qwenSynth：音频下载的重定向必须逐跳校验（同源首跳 302 到异源要拒）', async () => {
+  hits.length = 0
+  const realFetch = globalThis.fetch
+  let evilHits = 0
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('SpeechSynthesizer')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ output: { audio: { url: 'http://127.0.0.1:13080/a.wav' } } }) }
+    }
+    if (String(url) === 'http://127.0.0.1:13080/a.wav') {
+      // 首跳与接口同源，能过校验；但它 302 去异源
+      return { ok: false, status: 302, headers: { get: (k) => (k.toLowerCase() === 'location' ? METADATA_URL : null) }, arrayBuffer: async () => Buffer.alloc(0) }
+    }
+    evilHits++
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => tinyWav(2000).buffer }
+  }
+  try {
+    await assert.rejects(
+      () => qwenSynth('你好', { apiKey: 'sk-1', baseUrl: 'http://127.0.0.1:13080', model: 'm', voice: 'Cherry' }),
+      /重定向到策略外的地址/,
+      '同源首跳再 302 到异源，必须被逐跳校验拦住',
+    )
+    assert.equal(evilHits, 0, '异源目标一次都不该被请求')
+  } finally { globalThis.fetch = realFetch }
+})
+
+test('qwenSynth：baseUrl 只填域名（不带协议）也能正常合成并正确校验', async () => {
+  hits.length = 0
+  const wav = tinyWav(2000)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('SpeechSynthesizer')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ output: { audio: { url: 'http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/x.wav' } } }) }
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.length) }
+  }
+  try {
+    // qwenBase 明确容忍裸域名，且 404 提示也写「baseUrl 只填到域名」
+    const file = await qwenSynth('你好', { apiKey: 'sk-1', baseUrl: 'dashscope.aliyuncs.com', model: 'm', voice: 'Cherry' })
+    assert.ok(existsSync(file), '裸域名的 baseUrl 不应被误判成非法音频地址')
+  } finally { globalThis.fetch = realFetch }
 })
