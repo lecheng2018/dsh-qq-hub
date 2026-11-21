@@ -431,35 +431,44 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     }
   }
 
+  const stopping = new Set()
   function stop(id, { quiet = false, cascade = true } = {}) {
     const rec = live.get(id)
     if (!rec) return false
-    // 审计 Q03：依赖倒伏 —— 依赖者必须跟着停，不能只靠 sync() 下一轮「碰巧」不启动它。
-    // 依赖者在 setup 里往往已经把服务抓成闭包（reflection/style 抓 api.use('memory')），
-    // 主库一停，它们手里的引用就指向一个已失效的实现；此时留着它们跑只会静默出错。
-    // 先把依赖者停干净，再停本体，顺序保证依赖者看到的仍是「依赖正在消失」而不是「已消失」。
-    if (cascade) {
-      const provided = new Set(rec.def.provides || [])
-      if (provided.size) {
-        for (const [otherId, otherRec] of [...live]) {
-          if (otherId === id) continue
-          const needs = otherRec.def.requires || []
-          if (!needs.some((cap) => provided.has(cap))) continue
-          log.info(`模块「${otherRec.def.name || otherId}」依赖「${rec.def.name || id}」，一并停下`)
-          stop(otherId, { quiet, cascade: true })
+    if (stopping.has(id)) return false
+    stopping.add(id)
+    try {
+      // 审计 Q03：依赖倒伏 —— 依赖者必须跟着停，不能只靠 sync() 下一轮「碰巧」不启动它。
+      // 依赖者在 setup 里往往已经把服务抓成闭包（reflection/style 抓 api.use('memory')），
+      // 主库一停，它们手里的引用就指向一个已失效的实现；此时留着它们跑只会静默出错。
+      // 先把依赖者停干净，再停本体，顺序保证依赖者看到的仍是「依赖正在消失」而不是「已消失」。
+      // 审计 P2：防环 —— 如果模块互相 requires/provides 声明依赖，级联递归会导致栈溢出。
+      // 在递归前登记 stopping 集合，跳过正在停止中的模块，避免无限递归。
+      if (cascade) {
+        const provided = new Set(rec.def.provides || [])
+        if (provided.size) {
+          for (const [otherId, otherRec] of [...live]) {
+            if (otherId === id || stopping.has(otherId)) continue
+            const needs = otherRec.def.requires || []
+            if (!needs.some((cap) => provided.has(cap))) continue
+            log.info(`模块「${otherRec.def.name || otherId}」依赖「${rec.def.name || id}」，一并停下`)
+            stop(otherId, { quiet, cascade: true })
+          }
         }
       }
+      live.delete(id)
+      health.set(id, 'disabled')
+      generation++ // 模块被停掉/替换：工具清单或实例变了，下一轮重挂
+      for (const off of rec.offs.reverse()) { try { off() } catch (error) {} }
+      try { rec.exports?.dispose?.() } catch (error) {}
+      for (const [path, r] of routes) if (r.id === id) routes.delete(path)
+      for (const [ev, list] of listeners) listeners.set(ev, list.filter((x) => x.id !== id))
+      if (rec.dshTools.length) core.bridge?.refresh()
+      if (!quiet) { log.info(`模块「${rec.def.name || id}」已停下`); emit('module/stop', id) }
+      return true
+    } finally {
+      stopping.delete(id)
     }
-    live.delete(id)
-    health.set(id, 'disabled')
-    generation++ // 模块被停掉/替换：工具清单或实例变了，下一轮重挂
-    for (const off of rec.offs.reverse()) { try { off() } catch (error) {} }
-    try { rec.exports?.dispose?.() } catch (error) {}
-    for (const [path, r] of routes) if (r.id === id) routes.delete(path)
-    for (const [ev, list] of listeners) listeners.set(ev, list.filter((x) => x.id !== id))
-    if (rec.dshTools.length) core.bridge?.refresh()
-    if (!quiet) { log.info(`模块「${rec.def.name || id}」已停下`); emit('module/stop', id) }
-    return true
   }
 
   /** 加载一个自己写的模块（按修改时间重新 import，改了就是新的）。 */
@@ -491,6 +500,12 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       ({ def, stamp } = await importUser(u))
       const why = checkDef(def, u.id)
       if (why) throw new Error(why)
+      if (def?.requiresGUI) {
+        const detector = new EnvironmentDetector()
+        let gui = false
+        try { gui = typeof detector.getDisplayServer === 'function' ? detector.getDisplayServer() !== 'headless' : !detector.isFnOS() } catch { gui = !detector.isFnOS() }
+        if (!gui) throw new Error('需要 GUI，当前环境没有（剪枝，entrypoint 零执行）')
+      }
     } catch (error) {
       errors.set(u.id, { message: String(error.message || error).slice(0, 800), at: Date.now(), source: 'user', fallback: builtinDefs.has(u.id) })
       log.warn(`模块「${u.id}」加载失败：`, error.message)
