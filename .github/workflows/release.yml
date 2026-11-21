@@ -63,10 +63,10 @@ jobs:
       - name: Run Test Suite
         run: npm run test:all
 
-      # 显式构建，别只依赖 `npm test` 里串的 build-client（package.json 的 prepack 是同一道兜底）
-      - name: Build Client Bundle
-        run: npm run build:client
-
+      # 审计 Q20：client 构建在一次运行里曾经发生三次——test:all 串的
+      # build-client、这里的显式步骤、npm pack 触发的 prepack。三次都是幂等重复，
+      # 删掉显式步骤；pack 的产物一致性由 prepack 兜底，产物是否"忘了提交"由
+      # verify.yml 的 check:client（--check 只比对不落盘）守住——那道检查不能删。
       - name: Check Package Contents
         run: npm run pack:check
 
