@@ -34,7 +34,15 @@ export const userDir = () => dataDir('modules')
 
 /** 内部源码全部按「相对 src 的路径」开放出来：lib('features/memory.js') → 那个文件导出的全部东西。 */
 const libCache = new Map()
-export async function loadLib() {
+/**
+ * 预加载插件内部模块，供用户模块经 lib() 引用。
+ *
+ * @param {{debug?: Function}} [log] 可选日志器。必须由调用方显式传入：
+ *   本函数是**模块级导出**，模块作用域里没有 createModules 内部的 log，
+ *   直接引用会 ReferenceError（实测：panel.js 含 JSX 必然 import 失败，
+ *   catch 分支里的日志语句把整个 boot 炸掉，模块一个都起不来）。
+ */
+export async function loadLib(log = null) {
   if (libCache.size) return libCache
   const files = []
   const walk = (d) => {
@@ -47,7 +55,10 @@ export async function loadLib() {
   walk(SRC)
   for (const f of files) {
     const key = relative(SRC, f).split(sep).join('/')
-    try { libCache.set(key, await import(pathToFileURL(f).href)) } catch (error) {}
+    // 审计 Q19：这里过去是空 catch——内部文件缺失/语法错只能等到 lib() 被调时才暴露。
+    // 补一行 debug（不动语义：单个文件挂了照样跳过）。注意 panel.js 含 JSX，
+    // 在这里 import 必然失败，属于预期内的跳过，不该升级成 warn。
+    try { libCache.set(key, await import(pathToFileURL(f).href)) } catch (error) { log?.debug?.(`lib 跳过（非 ES 模块或语法不支持）：${key}：${error?.message || error}`) }
   }
   return libCache
 }
@@ -194,6 +205,11 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   // 模块每次（重）启动都递增一次「代际」：hub 用它判断会话里挂的工具是不是旧模块实例的闭包。
   let generation = 0
   let userSeen = new Map() // id → { dir, file, stamp }
+  // 审计 Q19：最近一次 boot/sync 扫描到的用户模块清单，供面板 status() 复用，
+  // 避免 /modules 每次轮询再全量 readdir+statSync 一遍。
+  // 必须声明在函数体顶部：boot() 可能在构造期就被调用，若声明在其下方，
+  // rememberUsers 赋值会撞 let 的暂时性死区（TDZ）——实测就是这么把模块全炸掉的。
+  let panelUsers = null
   let watching = null
   // 1.4.0-beta.4：mood / song 内置模块已移除。发现老 fork 目录只提醒，不自动删（用户资产）。
   const retiredWarned = new Set()
@@ -468,6 +484,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   /** 插件加载时：内置模块同步启动（被替换 / 关掉的跳过），自己写的随后异步加载。 */
   function boot() {
     const users = isUserOn() ? scanUser() : []
+    rememberUsers(users)
 
     warnRetiredForks(users)
     // M2-F：装载前先过一遍能力声明计划（requires/conflicts/provides/requiresGUI/apiVersion）。
@@ -484,7 +501,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     }
     for (const def of plan.load) if (wanted(def.id, users) === 'builtin') startSync(def)
     return (async () => {
-      await loadLib()
+      await loadLib(log)
       const g = { lib, src: pathToFileURL(SRC).href, version, apiVersion: API_VERSION, modules: publicHandle }
       globalThis.qqHub = g
       if (!globalThis.aurabot) globalThis.aurabot = g // 兼容更早 fork 出去的用户模块（它们引用 globalThis.aurabot）
@@ -501,6 +518,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     if (syncing) return syncing
     syncing = (async () => {
       const users = isUserOn() ? scanUser() : []
+      rememberUsers(users)
 
       warnRetiredForks(users)
       const ids = new Set([...builtinDefs.keys(), ...users.map((u) => u.id), ...live.keys()])
@@ -642,8 +660,20 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   }
 
   // ---------- 面板 ----------
+  // 审计 Q19：面板 /state 每 5 秒拉一次 /modules，status() 里又直接 scanUser()
+  // 做一遍全量 readdir+statSync——而 sync() 每 3 秒已经扫过同一个目录，稳态下
+  // 等于多扫一倍。复用 sync/boot 刚扫出的结果。
+  //
+  // 为什么不用 TTL 缓存：最初试过 1.5s TTL，立刻被 modules.test.js 打回
+  // （写入模块目录后立刻读 status 拿到旧列表）——status() 不只是展示，
+  // 测试与面板都依赖它反映最新目录。复用 sync 的结果不引入独立于目录状态的陈旧窗口。
+  /** 供 boot/sync 调用：把这次扫描结果留给面板复用。 */
+  function rememberUsers(users) { panelUsers = users }
+
   function status() {
-    const users = isUserOn() ? scanUser() : scanUser().map((u) => ({ ...u, safe: true }))
+    // 还没扫过（极早期调用）才自己扫一次；之后一律复用。
+    const scan = (panelUsers && isUserOn()) ? panelUsers : scanUser()
+    const users = isUserOn() ? scan : scan.map((u) => ({ ...u, safe: true }))
 
     warnRetiredForks(users)
     // 文件夹刚删掉、还没来得及停的模块也列出来（下一轮检查就停）
