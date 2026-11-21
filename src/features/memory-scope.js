@@ -25,6 +25,23 @@ export function isVisible(item, chat) {
   return visibleScopes(chat).includes(scope)
 }
 
+/** 这个字符串是一个合法的作用域吗？
+ *
+ *  白名单：只有 global / private:<id> / group:<id> 三种形状。空串表示「由调用方按聊天推」，
+ *  不算非法（主库 add 会自己兜底成 private:<主人>）。
+ *  为什么要这道闸（审计 S08 后续）：作用域是隔离的物理单位，但它过去完全由调用方给的字符串决定——
+ *  remember_scoped 的工具 schema 写了 enum，运行时却没人校验，模型（或被群消息诱导的模型）
+ *  传 private:<主人QQ> 就能把伪造事实写进主人的私聊记忆，主人私聊召回时当成自己知道的事。
+ *  写入侧的合法值只能由代码决定，不能由模型决定。
+ */
+export function isValidScope(scope) {
+  const raw = String(scope ?? '').trim()
+  if (!raw) return true
+  if (raw === 'global') return true
+  const m = /^(private|group):(.+)$/.exec(raw)
+  return Boolean(m && m[2].trim())
+}
+
 /** 当前聊天记下的记忆应该落到哪个作用域？ */
 export function scopeOf(chat) {
   if (!chat || chat.kind === 'system') return 'global'

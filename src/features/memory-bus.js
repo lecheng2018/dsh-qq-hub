@@ -17,7 +17,7 @@
 // 底下仍然是 features/memory.js 那一套（它的去重/清晰度/遗忘/SQLite 都比这里强）。
 // 以后真要加新轨道（比如向量库），在 createMemoryStore 后面加实现、总线分发，调用方一行不改。
 
-import { visibleScopes, isVisible, scopeOf } from './memory-scope.js'
+import { visibleScopes, isVisible, scopeOf, isValidScope } from './memory-scope.js'
 
 export { visibleScopes, isVisible, scopeOf }
 
@@ -33,6 +33,14 @@ export function createMemoryBus({ store, log } = {}) {
   const debug = (msg, err) => { try { logOf()?.debug?.(msg, err?.message || err) } catch {} }
 
   if (!store) warn('记忆总线：主记忆库没有挂上（memory 模块没在跑？），所有写入会明确失败')
+
+  /** 作用域白名单（审计 S08 后续）：总线是所有写入的统一入口，先在这里挡掉非法作用域，
+   *  错误信息能直接指回调用方；主库 add 里还有一道兜底，绕过总线直连 store 的也跑不掉。 */
+  const badScope = (scope) => {
+    const want = String(scope || '').trim()
+    if (!want || isValidScope(want)) return null
+    return { ok: false, message: `作用域不合法：${want}（只接受 global / private:<QQ> / group:<群号>）` }
+  }
 
   const requireStore = (verb) => {
     if (store && typeof store.add === 'function') return store
@@ -58,6 +66,8 @@ export function createMemoryBus({ store, log } = {}) {
   function add(o = {}) {
     const st = requireStore('add')
     if (!st) return { ok: false, message: '主记忆库没在跑' }
+    const scopeErr = badScope(o.scope)
+    if (scopeErr) return scopeErr
     return st.add({
       text: o.text,
       about: o.about || '',
@@ -90,6 +100,8 @@ export function createMemoryBus({ store, log } = {}) {
   function addEvent(o = {}) {
     const st = requireStore('addEvent')
     if (!st) return { ok: false, message: '主记忆库没在跑' }
+    const scopeErr = badScope(o.scope)
+    if (scopeErr) return scopeErr
     return st.addEvent({
       text: o.text,
       about: o.about || '',
