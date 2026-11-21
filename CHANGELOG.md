@@ -1,5 +1,20 @@
 # 更新记录
 
+## Unreleased · fix Token 配额跨日永久熔断：账本日期冻结在烧完那天（2026-11-21）
+
+**现象（真机）**：日志从每天 00:00:xx 起整日刷 `Token 配额已用完 → 主动搭话熔断（剩余 0）`，而账本快照里当天额度明明没动过。11-14 起天天如此，主动搭话事实上永久失效，只有手动点「重置」才恢复到当天深夜。
+
+**根因**：账本的 `dateKey` 只有 `allocate` / `record` / `resetDaily` 显式收到「新日期」才会前进，而生产三个入口（启动分配、session/usage 记账、每分钟巡检）**全都不带日期**、`ensureAllocated` 又拿 `snapshot().dateKey` 当「今天」跟自己的分配记录比对——两个陈旧值永远相等，于是：
+① `record()` 里 `currentDate() === dateKey` → `rollTo` 直接 return，跨日不清用量；
+② 巡检看到「日期没变」→ 永不重新分配；
+③ 旧日的上限 + 旧日的用量被沿用 → 某天烧完，之后每天 `remaining` 恒 0、`isExhausted` 恒 true。
+
+**改法**：两处都以**真实时钟**为「今天」——
+- `token-ledger.js`：`currentDate()` 在未显式传日期且未钉住（构造没传 `today`）时返回 `todayKey()`，`record` / `isExhausted` / `remaining` 自动跨日翻页；`today` 显式传入仍保持「钉住」语义（测试/运维用）。
+- `token-billing/index.js`：巡检改用 `todayKey()` 为基准，发现账本日期漂移（跨日/恢复残留）即强制重分配，`allocate` 显式带当天 `dateKey`。
+
+**测试**：`token-ledger-startup.test.js` 的「缺陷 C」用例改按新机制钉回归（账本被人为钉回旧日 → 巡检拉回真实今天并完成分配）；五个 token 套件 45/45 全绿，全量 `npm test` 2427 pass / 0 fail。
+
 ## Unreleased · fix 断线补收整批被拒：历史消息缺 `post_type`/`self_id`（2026-11-21）
 
 **现象（真机 01:34）**：日志每收到一个数据包就刷一行

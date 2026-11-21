@@ -51,19 +51,25 @@ export default {
     // 关键：record() 只对「已分配配额的 chatKey」入账，未 allocate 时 limit=0 会直接
     // 返回 refused/no-quota，账本永远是 0 —— 那样熔断条件永远不成立。
     // 所以每天第一次记账前先把当期会话分配一次（allocate 幂等，重复调用只刷新分配表）。
-    let allocatedDay = ''
     let allocatedSig = '' // `${day}|${total}|${share}`——设置变化时立即重新分配（已用保留，剩余按新上限重算）
     // 脏标记必须声明在 ensureAllocated 之前：它内部会置 dirty=true。
     // 放在后面虽然当前调用时机安全（都在声明之后才调），但那是靠调用顺序兜着的
     // 隐性 TDZ 风险 —— 谁把 ensureAllocated 提前一次调用就炸。
     let dirty = false
     function ensureAllocated(cfg, { force = false } = {}) {
+      // 「今天」必须取时钟，不能取 snapshot().dateKey —— 后者是账本**当前落在哪天**，
+      // 只有 allocate/record 才会推进它。拿它跟「上次分配日」比，两个陈旧值永远相等，
+      // 巡检会一直提前 return：跨日既不重新分配、也不触发 rollTo，旧那天的上限和用量
+      // 被永久沿用 —— 烧完一次就**每天 00:00 起永久熔断**（真机 2026-11-21 实锤，
+      // 11-14 起日志每天 00:00:xx 刷「配额已用完」，而前一天额度根本没用完）。
+      // 正确姿势：以真实今天为基准，发现账本日期漂移（跨日 / 恢复残留）就强制重分配。
+      const day = todayKey()
       const snap = defaultLedger.snapshot()
-      const day = String(snap?.dateKey || '')
+      const ledgerDay = String(snap?.dateKey || '')
       const s = api.settings ? api.settings() : {}
       const budget = budgetFromSettings(s)
       const sig = `${day}|${budget.total}|${budget.ownerShare}`
-      if (!force && day === allocatedDay && sig === allocatedSig) return
+      if (!force && ledgerDay === day && snap?.allocated === true && sig === allocatedSig) return
       // 主人私聊 + 白名单群：这两类才分主动生活流配额（计划书 §八.2 的口径）。
       const chats = []
       const ownerQQ = String(cfg?.ownerQQ || '')
@@ -71,8 +77,8 @@ export default {
       for (const g of (cfg?.allow?.groups || [])) chats.push({ chatKey: `group:${g}`, whitelisted: true })
       try {
         // allocate 只重算限额、不清已用——改设置后剩余 = 新上限 − 已用，即时生效。
-        defaultLedger.allocate(chats, budget)
-        allocatedDay = day
+        // 显式带 dateKey：分配日以时钟为准，不随账本漂移（漂移正是这里要修的）。
+        defaultLedger.allocate(chats, budget, { dateKey: day })
         allocatedSig = sig
         dirty = true
       } catch (error) {
@@ -106,7 +112,7 @@ export default {
     // 那段时间里 isExhausted 看到的是空账本。现在 setup 就跑一遍，配额始终是就绪的。
     try {
       if (defaultLedger.restore(readJson(usageFile(), null))) {
-        allocatedDay = String(defaultLedger.snapshot()?.dateKey || '')
+        // 恢复成功即可：账本自己的 dateKey 就是「上次分配日」，巡检靠它发现漂移。
       }
     } catch (error) {
       api.log?.warn?.('Token 用量恢复失败（按空账本启动）：', error?.message || error)
