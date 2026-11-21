@@ -104,7 +104,14 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
 - 反例：「在B站看了《选硬盘搭RAID建Docker》这个视频」` +
         (related.length ? '\n每条新事实先和「已经记得的事」比一比：全新的写 "op":"add"；是对某条旧记忆的补充或更准确的说法，写 "op":"update"、"id" 填那条的编号、"text" 写合并后的完整说法；和某条旧记忆矛盾、说明那条已经过时（比如以前喜欢现在不喜欢了、换了工作、搬家了、分手了），写 "op":"outdated"、"id" 填旧的编号、"text" 写现在的新事实。拿不准是不是矛盾就当 add；已经记得、没有新信息的不要输出。' : '') +
         `只输出 JSON 数组，最多输出 ${attempt === 0 ? MEMORY_EXTRACTION_ENTRY_TARGET : 4} 条最重要的新事实，例如 [{"op":"add","text":"小明不吃香菜，上次点菜挑了十分钟，点外卖记得问他","about":"小明","about_qq":"12345","importance":0.6,"tags":["口味"]}]，tags 可选、最多两个短词，没有值得记的就输出 []。` + (attempt === 0 ? '' : '\n上一次输出被截断或不是合法 JSON。请根据同一段聊天重新作答，只输出闭合的 JSON 数组，最多 4 条，不要解释。'),
-        text: (related.length ? `已经记得的事：\n${related.map((item) => `#${item.id} [${whenText(item.at)}] ${item.aboutName ? '[' + item.aboutName + '] ' : ''}${item.text}`).join('\n')}\n\n` : '') + transcript,
+        text: (related.length ? `【参考：已经记得的事】\n${related.map((item) => `#${item.id} [${whenText(item.at)}] ${item.aboutName ? '[' + item.aboutName + '] ' : ''}${item.text}`).join('\n')}\n\n` : '') +
+          `【待提取的聊天记录流水】\n${transcript}\n\n` +
+          `【任务核心指令（切勿忽略）】\n` +
+          `请注意：以上聊天记录仅作为分析提取事实的原料，切勿以群友或助手身份续写/回复聊天内容！\n` +
+          `你必须严格按照要求只输出合法的 JSON 数组（以 [ 开头、以 ] 结尾），最多 ${attempt === 0 ? MEMORY_EXTRACTION_ENTRY_TARGET : 4} 条新事实。\n` +
+          `若本段聊天为闲聊、寒暄或没有值得长期记住的信息，必须直接输出 []。\n` +
+          `绝对不要输出任何分析过程、问候、开场白或 markdown 解释文本！` +
+          (attempt === 0 ? '' : '\n上一次输出未返回合法 JSON 数组。本次必须且只能输出闭合的 JSON 数组，最多 4 条，不要解释。'),
         maxTokens: memoryExtractionMaxTokens(transcript, attempt),
         temperature: 0.2,
         signal: genSignal?.signal,

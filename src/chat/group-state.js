@@ -16,7 +16,7 @@ const ENGAGE_MS = 3 * 60_000 // 说了话算加入话题，持续 3 分钟
 
 export function createGroupState({ storage, log } = {}) {
   const buf = new Map() // groupId → [{ t, uid, nick, text, at, mid, direct, replyId, media?, quote?, fed?, ... }]
-  const refs = new Map() // groupId → { 编号: { mid, uid } }  上一段提示词里的编号，引用回复用
+  const refs = new Map() // groupId → { 编号: { mid, uid, nick } }  上一段提示词里的编号，引用回复用
   // groupId → { until, since, replies }：话题加入的截止时间、入场时刻、连聊条数。
   const engaged = new Map()
   // 真机刷屏根因复盘（2026-11-14）：旧版值只有 until，且 noteSpokeInGroup 每次说话都把
@@ -111,6 +111,7 @@ export function createGroupState({ storage, log } = {}) {
     },
 
     // ---- 引用编号表 ----
+    /** 这个群上一段提示词里的引用表：`{ 编号: { mid, uid, nick } }`。 */
     refs (gid) {
       return refs.get(String(gid)) || {}
     },

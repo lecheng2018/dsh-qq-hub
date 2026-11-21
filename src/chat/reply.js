@@ -6,6 +6,8 @@
 //   - `<sticker:标签>` 发一张表情（可写 `<sticker:标签></sticker>`）
 //   - `<poke>` = 戳一戳对方
 //   - `<reply:编号>` 写在某句前面 = 这句以「引用回复」发出（群聊里引用提示词中带编号的那条消息）
+//     （也接受昵称 / QQ 号：`<reply:初恋>`、`<reply:900000014>`——模型不必记数字，
+//      行内出现「↳转述…」时按名字引用真正说话的人，比算编号不容易挂错人）
 //   - `<report>…</report>` 包住的内容是「数据报告」：只洗 Markdown、整段发出，不按聊天分条
 //     （1.3.48。忘了写标记但这一轮调过内容型工具时，hub 会兜底整段发，见 CONTENT_TOOLS）
 //   - `<inner>…</inner>` 是心智独白（【意图】【闭环】【情感】【备忘】）：只给状态机消费，
@@ -409,7 +411,9 @@ export function parseReply(text, rules = {}) {
     const part = bubble.trim()
     if (!part) continue
     // 依次切出 reply / voice / sticker / markdown 图片，其余是文字
-    const re = /<poke\s*\/?>|<reply:\s*(\d+)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
+    // <reply:…> 的取值可以是编号、昵称或 QQ 号（`<reply:1>` / `<reply:初恋>` / `<reply:900000014>`）；
+    // 具体能不能对上人由投递层查 refs 决定——对不上就当没写引用、照常发（见 reply-delivery）。
+    const re = /<poke\s*\/?>|<reply:\s*([^<>|\n]{1,40}?)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
     let last = 0
     let m
     while ((m = re.exec(part)) !== null) {

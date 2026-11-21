@@ -569,16 +569,16 @@ test('引用消息：私聊能看到被引用的内容；引用她自己时标�
     await until(() => fake.turns.slice(before).some((t) => /上周说的那件事/.test(String(t.userText))), 15000)
     const t1 = fake.turns.slice(before).find((t) => /上周说的那件事/.test(String(t.userText)))
     // 主人在引用里只标「主人」，不带号码（2026-11-04 修：群里不许报主人身份）
-    assert.match(String(t1.userText), /引用 主人 的消息/)
+    assert.match(String(t1.userText), /↳ 转述 主人 的话/)
     // 私聊正文里带号码是正常的（私聊只有主人）；这里只要求「引用那一段」不带号码
-    const quotePart = String(t1.userText).split('引用')[1] || ''
+    const quotePart = String(t1.userText).split('↳ 转述')[1] || ''
     assert.equal(quotePart.includes('10000001'), false, '引用的标注里不该带主人号码')
 
     before = fake.turns.length
     mock.push(priv(OWNER, [{ type: 'reply', data: { id: '7002' } }, ...text('你还记得吗')]))
     await until(() => fake.turns.slice(before).some((t) => /我说过的晚安/.test(String(t.userText))), 15000)
     const t2 = fake.turns.slice(before).find((t) => /我说过的晚安/.test(String(t.userText)))
-    assert.match(String(t2.userText), /引用 你 的消息/, '引用的是她自己，要标成「你」')
+    assert.match(String(t2.userText), /↳ 转述 你 的话/, '引用的是她自己，要标成「你」')
   } finally {
     delete mock.state.messages
   }
@@ -593,7 +593,7 @@ test('引用消息：群聊里也能看到被引用的内容', async () => {
     mock.push(grp('557', OWNER, [{ type: 'reply', data: { id: '7101' } }, ...text('你看这个')], '主人'))
     await until(() => fake.turns.slice(before).some((t) => /昨晚那把打得好/.test(String(t.userText))), 20000)
     const t = fake.turns.slice(before).find((t) => /昨晚那把打得好/.test(String(t.userText)))
-    assert.match(String(t.userText), /引用 小明\(999\) 的消息/, '群提示词里要带引用说明')
+    assert.match(String(t.userText), /↳ 转述 小明\(999\) 的话：「昨晚那把打得好」/, '群提示词里要带引用说明（独立 ↳ 转述 行）')
   } finally {
     delete mock.state.messages
   }
@@ -646,7 +646,7 @@ test('引用消息：get_msg 只回空 url + 裸文件名时，从消息历史�
     await until(() => fake.turns.slice(before).some((t) => t.images >= 1), 20000)
     const t = fake.turns.slice(before).find((x) => x.images >= 1)
     assert.ok(t.images >= 1, '历史里的图片地址要补上，表情包才算真的看到')
-    assert.match(String(t.userText), /引用 你 的消息/, '她自己的表情包标成「你」')
+    assert.match(String(t.userText), /↳ 转述 你 的话/, '她自己的表情包标成「你」')
   } finally {
     delete mock.state.messages
     delete mock.state.history

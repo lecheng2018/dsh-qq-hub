@@ -248,7 +248,7 @@ test('wantsVoice：明确要语音才算', async () => {
   for (const t of ['晚安', '你的语音好好听', '不要语音', '刚才那条语音是啥']) assert.equal(wantsVoice(t), false, t)
 })
 
-test('引用回复：<reply:编号> 挂到下一条气泡上，一轮最多一条，写坏的标签去掉', async () => {
+test('引用回复：<reply:…> 挂到下一条气泡上，一轮最多一条；编号/昵称/QQ号都收，对不上人在投递层丢弃', async () => {
   const { parseReply } = await import('../src/chat/reply.js')
   assert.deepEqual(parseReply('<reply:3>粮收到 省着花\n刷视频那摊我少刷两条').items, [
     { kind: 'text', value: '粮收到 省着花', replyTo: '3' },
@@ -256,7 +256,12 @@ test('引用回复：<reply:编号> 挂到下一条气泡上，一轮最多一�
   ])
   assert.equal(parseReply('哈哈\n<reply:2>你说的那个|||<reply:5>还有这个').items.filter((i) => i.replyTo).length, 1)
   assert.equal(parseReply('<reply:1><sticker:开心>').items[0].replyTo, '1')
-  assert.deepEqual(parseReply('<reply:x>坏标签').items, [{ kind: 'text', value: '坏标签' }])
+  // 昵称 / QQ 号写法：解析层原样记住 token，能不能对上人由 reply-delivery 的 resolveRef 判定
+  assert.equal(parseReply('<reply:初恋>行吧 画你的').items[0].replyTo, '初恋')
+  assert.equal(parseReply('<reply:900000014>说的就是你').items[0].replyTo, '900000014')
+  // 空标签仍然是坏标签，不挂引用；写了不存在的名字也留在解析层（投递层查不到人就照常发）
+  assert.deepEqual(parseReply('<reply:>坏标签').items, [{ kind: 'text', value: '坏标签' }])
+  assert.deepEqual(parseReply('<reply:x>坏标签').items, [{ kind: 'text', value: '坏标签', replyTo: 'x' }])
   assert.equal(parseReply('正常说话').items[0].replyTo, undefined)
 })
 

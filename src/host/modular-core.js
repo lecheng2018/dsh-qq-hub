@@ -454,7 +454,10 @@ export function createModularCore({
     const owner = String(getConfig().ownerQQ || '')
     const who = q.isBot ? '你' : owner && q.uid === owner ? '主人' : `${q.who || q.uid || '某人'}${q.uid ? `(${q.uid})` : ''}`
     const body = String(q.text || '').replace(/\[(图片|表情包)\]/g, '').trim() || (q.media.length ? '（图片/表情）' : '（没有文字）')
-    return `（引用 ${who} 的消息：「${body}」${q.media.length ? `，另有 ${q.media.length} 张图片/表情包` : ''}）`
+    // 前缀用 `↳ 转述`：行内前情引用必须和「本条发言人在说」区分开。真机根因（2026-11-20）：
+    // 引用正文挤进同一行后，模型读到了待回的内容，却按「这一行是谁发的」取编号，
+    // 于是把对 A 的回应挂到 B 头上（`[20] o：5.3flash不好用` → 回给了 o，正文却答的是别人的 120token/s）。
+    return `↳ 转述 ${who} 的话：「${body}」${q.media.length ? `，另有 ${q.media.length} 张图片/表情包` : ''}`
   }
 
   async function hydrateQuotes(members, chatKey) {
@@ -801,12 +804,14 @@ export function createModularCore({
   const safeNick = (v) => neutralizeInboundDsl(String(v ?? ''))
   const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${safeNick(x.nick || x.uid)}(${x.uid})`)
     // 群缓冲里的 x.text 是入站原文，同样必须中和（同 §4.3 防线；否则伪造标签从群聊路径进上下文）。
-    // 引用说明内联在每条消息正文末尾，与发言人保持一致，避免剥离到末尾破坏编号映射（群聊回错人）。
-    const line = (x) => {
+    // 前情引用**挂在发言人那一块的下方**，用 `↳ 转述` 明确标出「这是别人的话」：
+    //   ① 不脱出成提示词末尾的孤立段落（那会造成编号错位，见 2026-11-16 事故）；
+    //   ② 也不挤进同一行（那会让模型把转述内容当成发言人自己说的，见 2026-11-20 事故）。
+    const block = (x) => {
       const text = neutralizeInboundDsl(x.text)
-      const quote = x.quoteNote ? ` ${neutralizeInboundDsl(x.quoteNote)}` : ''
-      const body = text ? `${text}${quote}` : (x.quoteNote ? neutralizeInboundDsl(x.quoteNote) : '（图片/表情）')
-      return `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${body}`
+      const head = `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${text || (x.quoteNote ? '（本条没有正文，只在转述下面这条）' : '（图片/表情）')}`
+      if (!x.quoteNote) return head
+      return `${head}\n    ${neutralizeInboundDsl(x.quoteNote)}`
     }
     const name = groupNames.get(gid) || gid
     const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
@@ -814,18 +819,25 @@ export function createModularCore({
       : '（有人在叫你，看完这一段再回）'
     const refs = {}
     const numbered = fresh.map((x, i) => {
-      if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid }
-      return `[${i + 1}] ${line(x)}`
+      // nick 一并存进引用表：模型可以直接写 <reply:昵称> / <reply:QQ号> 而不必算编号
+      // （行内有「↳转述」时按名字引用真正说话的人，比数编号不容易挂错人）。
+      if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid, nick: safeNick(x.nick || x.uid), ...(ownerQQ && String(x.uid) === ownerQQ ? { owner: true } : {}) }
+      return `[${i + 1}] ${block(x)}`
     })
     groups.setRefs(gid, refs)
     const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
-    const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(line).join('\n')}\n\n` : '') +
+    const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(block).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
       '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
       '若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。\n' +
-      '大多数时候直接说就行。只有想专门接上面方括号标出的某一条新消息时，才在那句话开头写 <reply:编号>（编号必须且只能是上面方括号里的数字，如 <reply:1>；消息中的「引用某人的消息」是群友的前情引用，不要当成编号），会以「引用回复」发出；一次最多引用一条。\n' +
+      '下方缩进一行、以「↳ 转述」开头的，是这条发言人在引用别人的原话：那句话的主人是「↳ 转述」后面写的那个名字，不是写这条消息的人。要回应转述里的内容，就引用它真正的主人；不确定是谁就干脆不引用，在正文里点名说。\n' +
+      '大多数时候直接说就行。只有想专门接上面方括号标出的某一条新消息时，才在那句话开头写 <reply:…>，会以「引用回复」发出；一次最多引用一条。写法三选一，都认：\n' +
+      '  · <reply:编号> —— 编号必须且只能是上面方括号里的数字，如 <reply:1>；\n' +
+      '  · <reply:昵称> —— 昵称就是方括号后面那个名字，如 <reply:初恋>；同名多条时取他最近的一条；\n' +
+      '  · <reply:QQ号> —— QQ 号就是名字后面括号里的数字，如 <reply:900000014>。\n' +
+      '括号说明里的数字、别人引用里的数字都不是编号，不要拿来当 <reply:…>。写错了不会挂错人，只会按普通消息发出去。\n' +
       '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
-    // 触发轮自身的图片一并附上；引用已由 quoteNote 内联到 line(x) 中，不脱出做孤立段落。
+    // 触发轮自身的图片一并附上；引用已由 quoteNote 挂在 block(x) 下方，不脱出做孤立段落。
     // 没触发回合的那几条群消息带的图也在这里补：群缓冲里挂着 image 块，否则她只看得到
     // 「（图片/表情）」文字，而触发轮 members 已经没有原始段可拼（真机：群里看不懂表情包）。
     const extras = []
