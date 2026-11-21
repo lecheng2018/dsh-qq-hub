@@ -257,6 +257,11 @@ export function createReplyDelivery({
     }
     const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
+    // 试运行 / 总开关关闭：outbox 在出队时会把这些请求判成 cancelled 而不是 failed。
+    // 两者语义不同 —— 「有意不发」不是「发失败」。这里先记下来，逐条回执循环里
+    // 把这类结果排除在 failed 之外，否则试运行会满屏「全部没有拿到回执」的假告警，
+    // 而且台账里会积一批 failed（审计 Q06 的分支不能把这种情况算成故障）。
+    const dryRun = Boolean(opts.simulate) || cfg.dryRun === true || cfg.enabled === false
     // 逐条气泡如实记账（缺陷：轮次级谎报）。
     // outbound 的发送方法成功时返回 OneBot 的原始回执、失败时返回 null（它自己已经把
     // unknown/failed 写进台账了）。过去这里把返回值直接丢掉，于是「3 条里挂了 2 条」
@@ -295,7 +300,10 @@ export function createReplyDelivery({
           for (const part of (it.kind === 'mixed' ? it.parts : [it])) {
             deliveredParts.push(part.kind === 'text' || part.kind === 'voice' ? part.value : `[${part.kind}]`)
           }
-        } else unconfirmed += 1
+        } else if (!dryRun) {
+          // 只有「本该发却拿不到回执」才算未确认；试运行/关闸是 cancelled，不算失败。
+          unconfirmed += 1
+        }
       }
       if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
     }
@@ -312,9 +320,11 @@ export function createReplyDelivery({
     // 主人最近收到、插话配额）。过去这里无条件刷新，于是「网关全拒」也会让她在
     // 面板上显得刚说过话。
     const state = attempted === 0 ? 'skipped'
-      : delivered === 0 ? 'failed'
-        : unconfirmed > 0 ? 'partial'
-          : 'sent'
+      // 试运行/关闸：请求被 outbox 判成 cancelled，属于「有意不发」，不报 failed。
+      : dryRun && delivered === 0 ? 'skipped'
+        : delivered === 0 ? 'failed'
+          : unconfirmed > 0 ? 'partial'
+            : 'sent'
     const wasSent = state === 'sent' || state === 'partial'
     if (wasSent && inGroup) {
       const gid = chatId.slice(6)
