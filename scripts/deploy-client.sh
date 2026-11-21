@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# ⚠️ 已废弃（审计 Q21，2026-11-21 实测）——用 scripts/deploy-package.sh 整包部署。
+#
+# 本脚本的手工 FILES 清单已严重漂移：host.js 直接 import 的 45 个文件里 24 个不在
+# 清单上（含 core/modules.js、core/store.js、security/danger.js 这类缺了就起不来的
+# 核心；browser 全家更是报告 Q21 点名的漏网）。逐个补文件治标不治本——每次重构
+# host.js 都会再漂。deploy-package.sh 从 npm pack 出整包，清单与 package.json
+# 自动对齐，原子切换、失败回滚。
+#
+# 保留本文件仅为历史参考，不要再执行。
+#
+# —— 以下为原脚本（未改动）——
 # 把本仓库的改动部署到 DSH 线上运行目录。
 # 该目录属 Harness，普通账号不可写，必须 sudo 执行。
 set -euo pipefail
