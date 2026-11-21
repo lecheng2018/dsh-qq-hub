@@ -105,3 +105,112 @@ test('S13 · 只删其中一条时，剩余条目的向量保留（差集不误�
     '删一条后应剩一条向量',
   )
 })
+
+// ---------------- 复核补充：停用后不得重发、部分失败不得丢更新 ----------------
+
+const { createVectorChannel, embedKeyOf } = await import('../src/features/memory-vector.js')
+const { createHash } = await import('node:crypto')
+const sha16 = (s) => createHash('sha1').update(String(s), 'utf8').digest('hex').slice(0, 16)
+
+const item = (id, text) => ({ id, text, tags: [] })
+/** 语义：alpha→维0 / beta→维1 / 其它→维2，便于判断磁盘上存的是哪个语义。 */
+const vecOf = (t) => Array(64).fill(0).map((_, i) => (t.includes('alpha') ? i === 0 : t.includes('beta') ? i === 1 : i === 2) ? 1 : 0)
+
+function makeChannel(dir, { failOn = () => false, batch = 1, flushDebounceMs = 5, gate } = {}) {
+  const cfg = { memory: { embeddings: { enabled: true, url: 'https://emb.example', model: 'm', dim: 64, batch } } }
+  const calls = []
+  const fetchImpl = async (url, opt) => {
+    const input = JSON.parse(opt.body).input
+    calls.push(input)
+    if (gate) await gate
+    if (input.some((t) => failOn(t))) throw new Error('embedding 端点失败')
+    return { ok: true, json: async () => ({ data: input.map((t) => ({ embedding: vecOf(t) })) }) }
+  }
+  const vec = createVectorChannel({
+    memoryDir: dir, getConfig: () => cfg, fetchImpl,
+    log: { warn() {}, info() {}, debug() {} }, flushDebounceMs,
+  })
+  return { vec, calls }
+}
+
+const vecFileOf = (dir, scope) => createScopeVectorFile(join(dir, scopeToVecFilePath(scope)), 64, { log: { warn() {} } })
+
+test('S13 · 停用后在途请求失败，不会再安排重试（不会把记忆正文重发出去）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vec-dispose-'))
+  try {
+    let release
+    const gate = new Promise((r) => { release = r })
+    const { vec, calls } = makeChannel(dir, { flushDebounceMs: 15000, gate })
+    vec.queueScope('private:10001', [item('a', 'alpha 主人的正文')])
+    const inflight = vec.flush()        // 请求发出并挂住
+    await new Promise((r) => setTimeout(r, 30))
+    assert.equal(calls.length, 1, '应有一次在途请求')
+
+    vec.dispose()                        // 停用
+    release()                            // 迟到的失败
+    await inflight.catch(() => {})
+    assert.equal(vec.status().pending, 0, '停用后不应留下待重试队列')
+
+    // 等过整个防抖窗口：停用后不得再有任何请求
+    await new Promise((r) => setTimeout(r, 60))
+    assert.equal(calls.length, 1, `停用后不得再发请求，实际 ${calls.length} 次`)
+    assert.equal(vec.enabled(), false, '停用后 enabled() 必须是 false')
+    assert.equal(await vec.embedQuery('alpha 查询'), null, '停用后查询也不该打 embedding')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('S13 · 分批中断（前批成功、后批失败）时，成功的那部分仍会落盘', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vec-transaction-'))
+  const scope = 'group:777'
+  try {
+    let fail = true
+    const { vec } = makeChannel(dir, { failOn: (t) => fail && t.includes('gamma') })
+    const A_OLD = item('A', 'alpha 旧说法')
+    const A_NEW = item('A', 'alpha 新说法')
+    const B = item('B', 'beta 对照')
+    const C = item('C', 'gamma 会失败')
+
+    vec.queueScope(scope, [A_OLD, B])
+    await vec.flush()
+    const reader = vecFileOf(dir, scope)
+    assert.equal(reader.load().get('A').hash, sha16(embedKeyOf(A_OLD)), '初始应是旧语义')
+
+    // 同一快照：A 改语义（先成功）+ C 新增（后失败），batch=1
+    vec.queueScope(scope, [A_NEW, B, C])
+    await vec.flush()
+
+    // 成功后 C 被删掉 → 新快照只剩 A_NEW/B；端点已恢复
+    fail = false
+    vec.queueScope(scope, [A_NEW, B])
+    await vec.flush()
+
+    const disk = vecFileOf(dir, scope).load()
+    assert.equal(
+      disk.get('A').hash, sha16(embedKeyOf(A_NEW)),
+      'A 的新语义必须落盘：部分成功不能被后续快照覆盖掉（旧实现会停在旧 hash）',
+    )
+    assert.equal(disk.get('A').vec[0], 1, '磁盘上 A 的向量应已是新语义（alpha 维）')
+    assert.equal(disk.has('C'), false, '失败的 C 最终不应留在磁盘上')
+    assert.equal(vec.status().pending, 0, '全部消化完后不应有 pending')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('S13 · 失败回填仍保留「摘除」语义：重试成功时死向量不会复活', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vec-prune-retry-'))
+  const scope = 'group:888'
+  try {
+    let fail = true
+    const { vec } = makeChannel(dir, { failOn: (t) => fail && t.includes('beta') })
+    vec.queueScope(scope, [item('A', 'alpha 活着'), item('B', 'beta 先失败')])
+    await vec.flush()
+    assert.equal(vec.status().pending, 1, '失败的那批应留在重试队列')
+
+    fail = false
+    // 下一次快照只保留 A（B 被删）——重试成功后磁盘上不该有 B
+    vec.queueScope(scope, [item('A', 'alpha 活着')])
+    await vec.flush()
+    const disk = vecFileOf(dir, scope).load()
+    assert.equal(disk.has('B'), false, '已删条目的向量不能在重试后复活')
+    assert.equal(disk.has('A'), true, '存活条目应保留')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
