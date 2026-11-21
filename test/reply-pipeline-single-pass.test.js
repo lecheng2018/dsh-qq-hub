@@ -202,6 +202,18 @@ test('Q06 · 零尝试（整轮无可发条目）：不产生任何已发副作�
   assert.deepEqual(logged, [])
 })
 
+test('Q06 · 总开关关闭（dryRun/disabled）不得报 failed，只能报 skipped', async () => {
+  // 真实场景：outbox 在出队时把 dryRun/关闸判成 state:'cancelled'，sendText 于是返回 null。
+  // 若把它当失败，试运行会满屏「全部没有拿到回执」的假告警，台账也积一批 failed。
+  const { delivery } = fixture({
+    config: makeConfig({ dryRun: true }),
+    overrides: { textReceipt: null },
+  })
+  const result = await delivery.deliverNow('group:7', '试运行的话')
+  assert.equal(result.delivered, 0)
+  assert.equal(result.state, 'skipped', `有意不发不是失败，实际 ${result.state}`)
+})
+
 test('Q06 · 试运行不产生已发副作用', async () => {
   const { delivery, activities, deliveredEvents, groupCalls } = fixture()
   const result = await delivery.deliverNow('group:7', '试运行的话', { simulate: true })
