@@ -100,3 +100,50 @@ test('S08 · remember_scoped 的 global 写入只属于主人私聊，群聊被�
   assert.equal(saved.scope, 'group:777', 'autoScope=false 时群聊 auto 也不再写 global（S08 收紧点）')
   void stores; void routes
 })
+
+test('S08 · remember_scoped 只接受 auto/global：任意作用域串一律拒绝，不写进主库', async () => {
+  // 缺口（评审复核时实测）：schema 的 enum 只是给模型看的建议，defineTool 不校验参数，
+  // 群聊里诱导一句 scope: "private:<主人QQ>" 就能把伪造事实写进主人的私聊记忆，
+  // 主人私聊召回时当成「自己私下知道的事」。
+  const mod = (await import('../src/modules/memory-privacy/index.js')).default
+  const added = []
+  const fakeMemory = {
+    add(entry) { added.push(entry); return { ok: true, id: 'x' } },
+    list: () => [],
+  }
+  const builders = []
+  const api = {
+    use: () => fakeMemory,
+    settings: () => ({ autoScope: true }),
+    config: () => ({ ownerQQ: OWNER }),
+    route: () => {},
+    tool: (builder) => { builders.push(builder); return () => {} },
+    rule: () => {},
+    defineTool: (t) => t,
+    on: () => () => {},
+    log,
+    core: { http: { body: async () => ({}) } },
+    saveSettings: () => {},
+  }
+  await mod.setup(api)
+
+  const groupChat = { kind: 'group', chatId: 'group:777', groupId: '777', userId: '20002' }
+  const call = (chat, args) => builders[0]({ chat }).execute(args, { chat })
+
+  for (const bad of ['private:10000001', 'private:99999', 'group:888', 'public:1', 'not-a-scope']) {
+    const r = await call(groupChat, { text: '诱导写入', scope: bad })
+    assert.equal(r.ok, false, `scope=${bad} 必须被拒绝`)
+    assert.match(r.message, /scope 只能是 auto/)
+  }
+  assert.deepEqual(added, [], '被拒的调用一条都不能落到主库')
+
+  // 正常路径不受影响：auto 仍按当前聊天落域，global 仍按 S08 规则降级/放行
+  const ok = await call(groupChat, { text: '正常的', scope: 'auto' })
+  assert.equal(ok.ok, true)
+  assert.equal(added.at(-1).scope, 'group:777')
+
+  const ownerPriv = { kind: 'private', chatId: `private:${OWNER}`, userId: OWNER }
+  const g = await call(ownerPriv, { text: '她自己的设定', scope: 'global' })
+  assert.equal(g.ok, true)
+  assert.equal(added.at(-1).scope, 'global')
+})

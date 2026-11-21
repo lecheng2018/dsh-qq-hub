@@ -105,6 +105,13 @@ export default {
         execute: async ({ text, scope, importance }) => {
           const liveMem = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
           if (!liveMem?.add) return { ok: false, message: '主记忆库没在跑' }
+          // 作用域白名单：schema 里的 enum 只是给模型看的建议，运行时不校验（defineTool 不验参数）。
+          // 不挡住的话，群聊里诱导一句 scope: "private:<主人QQ>"，这条伪造事实就写进主人的私聊记忆，
+          // 主人私聊召回时当成「自己私下知道的事」。写入哪个作用域只能由代码按当前聊天决定。
+          const scopeWanted = String(scope ?? '').trim()
+          if (scopeWanted && scopeWanted !== 'auto' && scopeWanted !== 'global') {
+            return { ok: false, message: `scope 只能是 auto（按当前聊天）或 global（所有聊天都能用）；收到「${scopeWanted}」` }
+          }
           // 审计 S08：global（跨会话可见）的**写入**只允许主人私聊。
           // 过去任何被 ACL 放行的会话——包括群聊——都能把一条记忆写进 global，
           // 之后所有会话无条件可见：诱导一次就等于向全部会话扩散。
