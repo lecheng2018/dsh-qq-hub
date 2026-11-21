@@ -374,10 +374,10 @@ test('#3 表情：从 QQ 收藏导入（已有的跳过、不再往 QQ 里加一
   const fav = [fakePng(200, 200, 1), fakePng(200, 200, 2)].map((b) => 'base64://' + b.toString('base64'))
   mock.state.favorites = fav
   const adds = mock.calls.filter((c) => c.action === 'add_custom_face').length
-  const r = (await fake.call('/sticker/import-qq')).json()
+  const r = (await fake.call('/sticker/import-qq', {})).json()
   assert.equal(r.ok, true, r.message)
   assert.equal(r.added, 2)
-  assert.equal((await fake.call('/sticker/import-qq')).json().existed, 2, '第二次全是已有的')
+  assert.equal((await fake.call('/sticker/import-qq', {})).json().existed, 2, '第二次全是已有的')
   assert.equal(mock.calls.filter((c) => c.action === 'add_custom_face').length, adds, '没往 QQ 收藏里重复加')
   const lib = (await fake.call('/stickers')).json().items
   assert.equal(lib.filter((i) => i.from === 'qq').length, 2)
