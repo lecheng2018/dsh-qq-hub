@@ -291,6 +291,7 @@ export function createModularCore({
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
   const oversizedChats = new Set() // 服务端拒绝请求体过大（413/插件内存上限）；下一条消息到来再归档重建
+  const archivedChats = new Set() // 回合被 DSH 归档门拒绝（blocked）；下一条消息到来再换新会话（真机 2026-11-21）
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
@@ -605,6 +606,34 @@ export function createModularCore({
     return ''
   }
 
+  /**
+   * 这个会话是不是已经被 DSH 归档了。
+   *
+   * DSH 有一个常驻、关不掉的 `archived-session-gate`（dsh-api-session-controller）：
+   * 对已归档会话的**每一步**返回 `{ kind: 'reject' }`，agent-loop 随即把回合落成
+   * `turn/end reason.kind === 'blocked'` —— 一个模型调用都不会发生。
+   *
+   * 本插件此前从不问这件事：映射里存着的 sessionId 一旦在 DSH 侧被归档（用户手动归档/
+   * 批量归档/第三方插件），之后每一轮都必然 blocked，而且 blocked 不命中超时自愈也不命中
+   * 413 自愈，于是这个聊天**永久卡死**（真机 2026-11-21：群 249729644 连续 5 轮 blocked，
+   * 会话日志里 turn/start 与 turn/end 之间没有 step/start）。
+   *
+   * 归档是「侧栏里藏起来」而不是删除：会话文件还在，随时能找回。所以这里只做**分流**——
+   * 已归档 → 映射作废、开新会话，旧会话原样留在归档里可检索。
+   * @param {string} sessionId 待查会话。
+   * @returns {boolean} 是否已归档。
+   */
+  function isSessionArchived(sessionId) {
+    const sid = String(sessionId || '')
+    if (!sid) return false
+    try {
+      const reg = ctxGet('workspaceRegistry')
+      const ids = reg?.archivedSessionIds
+      if (!ids) return false
+      return typeof ids.includes === 'function' ? ids.includes(sid) : Array.from(ids).includes(sid)
+    } catch { return false } // 查不到就当没归档，绝不因为探测失败而误换会话
+  }
+
   async function sessionForChat(chatKey) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const entry = await registry.sessionFor(chatKey)
@@ -613,6 +642,13 @@ export function createModularCore({
       if (!persona || persona.sessionId !== entry.sessionId) {
         persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
         sessionPersonas.set(chatKey, persona)
+      }
+      // 归档判定放在人设/轮换之前：已归档的会话不管用得多新，**根本跑不了回合**，
+      // 换不换人设都没有意义（而且不先救这一条，下面的人设分支也会一直 continue 到抛异常）。
+      if (isSessionArchived(entry.sessionId)) {
+        log.info(`会话已被 DSH 归档：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 跑不了回合，重开新会话`)
+        resetChat(chatKey)
+        continue
       }
       if (persona.personaId === currentPersona(chatKey)) {
         // 会话轮换：用太久/聊太多轮就归档重开。判在 sessionForChat 里是因为它是**每一轮的唯一入口**
@@ -1065,6 +1101,17 @@ export function createModularCore({
       segments: [{ type: 'text', data: { text: '这个会话攒的上下文和图片太多，服务端拒绝了（超过 64 MiB 上限），这轮没法回。你发下一条消息时我会自动重新开始（旧对话会归档，可以随时找回）；图片类内容也会少带一些。' } }],
     })).catch((error) => debug(`请求体过大提示没发出去：${error?.message || error}`))
   }
+  /**
+   * 回合被 DSH 归档门拒绝（`turn/end` 的 kind 是 `blocked`）：记标记，下一条消息进来时换新会话。
+   *
+   * `blocked` 没有 error 细节（不是模型错误、不是 413），所以不能靠 failure 判定，
+   * 只能认 kind。它比 413 更"干净"：服务端一次都没被调用，纯粹是宿主拒绝在已归档会话上开步骤。
+   * @param {string} chatKey 聊天键。
+   */
+  function handleArchivedTurn(chatKey) {
+    archivedChats.add(chatKey)
+    log.warn(`回合被宿主归档门拦下（blocked）：${chatKey} 的会话已归档，下一条消息将换新会话`)
+  }
   // ---------- US-015 · 关系信号自动喂料 ----------
   // 一轮回复**投递之后**才结算：关系信号是"这段对话怎么样"的结论，回复没发出去就不该记分。
   // 三层防护，任何一层失效都只影响记分，绝不影响回复投递：
@@ -1125,6 +1172,11 @@ export function createModularCore({
       if (oversizedChats.delete(turn.chatKey)) {
         resetChat(turn.chatKey)
         log.info(`请求体过大自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+      }
+      // 上一轮被 DSH 归档门拦成 blocked：映射还指着已归档会话，不换就每轮都被拦。
+      if (archivedChats.delete(turn.chatKey)) {
+        resetChat(turn.chatKey)
+        log.info(`归档自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
       }
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
@@ -1318,6 +1370,11 @@ export function createModularCore({
             // 413 / 请求体过大：旧会话的历史每轮重放、之后必然继续失败 —— 记标记换新会话自愈，
             // 而不是只「如实失败」后让这个聊天永久卡死（真机 2026-11-19：服务端按会话计的 64 MiB 上限）。
             if (turnFailureLooksOversized(completion.failure)) handleOversizedTurn(turn.chatKey, completion.failure)
+            // `blocked` = DSH 归档门在 pre-step 就把这一回合拒了（一个模型调用都没发生）。
+            // 光记一条 warn 不够：映射还指着那个已归档会话，下一轮同样 blocked —— 必须换会话。
+            // 这里只记标记，真正 resetChat 放在下一次进入 execute 时做（与超时/413 同款时序：
+            // 此刻监听器还没走完，立刻归档容易和宿主自己的事件处理打架）。
+            if (completion.kind === 'blocked') handleArchivedTurn(turn.chatKey)
             reject(new Error(`回合未正常结束：${completion.kind || '?'}`))
             return
           }
@@ -1741,6 +1798,8 @@ export function createModularCore({
       if (timedOutChats.delete(chatKey)) resetChat(chatKey)
       // 与主链同款：上次 413 失败的标记在下次进入时归档重建（后台任务也走同一份会话映射）。
       if (oversizedChats.delete(chatKey)) resetChat(chatKey)
+      // 与主链同款：上次被归档门拦成 blocked 也换新会话（主动任务共用同一份映射）。
+      if (archivedChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
       const ctrl = ctxGet('sessionController')
       const resolved = await ctrl?.resolveAgent?.(sessionId)
