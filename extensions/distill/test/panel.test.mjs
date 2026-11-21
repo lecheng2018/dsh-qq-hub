@@ -69,3 +69,50 @@ test('distill panel: 能够正常实例化并输出符合移动端规范的虚�
   assert.ok(json.includes('distill-status-badge active'), '必须渲染移动端折行状态徽章')
   assert.ok(!json.includes('display":"inline-flex'), '不得再使用内联 inline-flex 作为群状态指示条')
 })
+
+test('distill panel: 支持渲染全局公共底座与分层作用域徽章', () => {
+  let stateIndex = 0
+  const stateValues = [
+    false, // loading
+    [
+      { groupId: 'global', groupName: '🌐 全局共享语感底座 (所有群继承)', isGlobal: true, isLiveActive: true, activeCount: 3 },
+      { groupId: '10001', groupName: '测试群', isGlobal: false, isLiveActive: true, activeCount: 1, inheritedCount: 3 }
+    ],
+    '10001', // selectedGroup
+    [
+      { id: 'r1', situation: '测试', style: '回复', count: 3, isGlobal: true, scope: 'global' },
+      { id: 'r2', situation: '本地测试', style: '本地风格', count: 4, isGlobal: false, scope: '10001' }
+    ], // activeRules
+    [] // candidateRules
+  ]
+  const React = {
+    useState: (init) => {
+      const idx = stateIndex++
+      const val = idx < stateValues.length ? stateValues[idx] : (typeof init === 'function' ? init() : init)
+      return [val, () => {}]
+    },
+    useEffect: () => {},
+  }
+  const h = (type, props, ...children) => ({
+    type,
+    props: props || {},
+    children: children.flat(Infinity).filter(x => x !== null && x !== undefined && x !== false)
+  })
+  const ui = {
+    Card: 'Card',
+    Btn: 'Btn',
+    Empty: 'Empty',
+    Select: 'Select',
+    Row: 'Row',
+  }
+  const call = async () => ({ ok: true })
+
+  const PanelComp = new Function('React', 'h', 'ui', 'call', panelSrc)(React, h, ui, call)
+  const tree = PanelComp({ toast: () => {} })
+  const json = JSON.stringify(tree)
+
+  assert.ok(json.includes('distill-scope-badge global'), '必须渲染全局共享徽章')
+  assert.ok(json.includes('distill-scope-badge local'), '必须渲染本群专属徽章')
+  assert.ok(json.includes('转为本群'), '必须提供转为本群专属的流转按钮')
+  assert.ok(json.includes('设为全局'), '必须提供设为全局共享的流转按钮')
+})

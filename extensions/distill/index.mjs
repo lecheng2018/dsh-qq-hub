@@ -15,6 +15,7 @@ export default {
   tab: 'distill',
   defaults: {
     enabled: true,
+    globalSharing: true,    // 全局共享语感底座（各群提炼互通汇聚，新群免冷启动）
     batchSize: 15,
     maxCapacity: 100,
     minPromotionCount: 3,   // 准入门槛：至少出现3次或锁定的规则才允许实际生效
@@ -23,6 +24,7 @@ export default {
   },
   settings: [
     { key: 'enabled', label: '启用群友蒸馏', type: 'switch' },
+    { key: 'globalSharing', label: '全局共享语感底座（各群提炼互通汇聚，新群免冷启动）', type: 'switch' },
     { key: 'minPromotionCount', label: '正式生效门槛（群友使用频次 ≥）', type: 'number', min: 2, max: 10 },
     { key: 'batchSize', label: '实时分析触发阈值（条）', type: 'number', min: 10, max: 50 },
     { key: 'maxCapacity', label: '每群规则库上限', type: 'number', min: 30, max: 500 },
@@ -118,8 +120,10 @@ export default {
 
         if (cleaned.length > 0) {
           const cap = api.settings().maxCapacity || 100
-          store.addRules(groupId, cleaned, cap)
-          api.log.info(`[群友蒸馏] 群 ${groupId} 提炼合并 ${cleaned.length} 条口癖规则`)
+          const shareGlobal = api.settings().globalSharing !== false
+          const targetScope = shareGlobal ? 'global' : groupId
+          store.addRules(targetScope, cleaned, cap, { originGroup: groupId })
+          api.log.info(`[群友蒸馏] 从群 ${groupId} 提炼合并 ${cleaned.length} 条口癖规则${shareGlobal ? '至全局公共底座' : '至专属群库'}`)
         }
         return cleaned.length
       } catch (err) {
@@ -141,7 +145,8 @@ export default {
       if (!chat || chat.kind !== 'group' || !isGroupActive(chat.groupId)) return ''
 
       const minCount = Number(api.settings().minPromotionCount) || 3
-      const activeRules = store.getActiveRules(chat.groupId, minCount)
+      const includeGlobal = api.settings().globalSharing !== false
+      const activeRules = store.getActiveRules(chat.groupId, minCount, { includeGlobal })
       if (!activeRules.length) return ''
 
       const recentLines = recentChatCache.get(chat.groupId) || []
@@ -158,7 +163,7 @@ export default {
       }
 
       const hints = matched.map(r => {
-        const sit = r.situation.replace(/^(?:当|在)?/g, '').replace(/(?:时|的时候)$/g, '')
+        const sit = r.situation.replace(/^(?:当|在|聊到|遇到|说到)?/g, '').replace(/(?:时|的时候)$/g, '')
         const tone = cleanStyleText(r.style)
         return `聊到「${sit}」时群友常带的语调：${tone}`
       }).join('；')
@@ -172,6 +177,8 @@ export default {
     })
 
     // 面板后端路由
+    const readBody = async (req) => (api.core?.http?.body ? api.core.http.body(req) : (req?.body || req || {}))
+
     api.route('/status', async () => {
       const storeGroups = new Set(store.getAllGroupIds())
       for (const gid of buffers.keys()) {
@@ -183,11 +190,29 @@ export default {
       }
 
       const minCount = Number(api.settings().minPromotionCount) || 3
-      const allGroupIds = Array.from(storeGroups)
-      const list = await Promise.all(allGroupIds.map(async (gid) => {
-        const raw = store.getRawRules(gid)
-        const active = store.getActiveRules(gid, minCount)
-        const candidates = store.getCandidateRules(gid, minCount)
+      const shareGlobal = api.settings().globalSharing !== false
+
+      const globalRaw = store.getRawRules('global')
+      const globalActive = store.getActiveRules('global', minCount, { includeGlobal: false })
+      const globalCandidates = store.getCandidateRules('global', minCount, { includeGlobal: false })
+      const globalItem = {
+        groupId: 'global',
+        groupName: '🌐 全局共享语感底座 (所有群继承)',
+        isGlobal: true,
+        isLiveActive: shareGlobal,
+        totalCount: globalRaw.length,
+        activeCount: globalActive.length,
+        candidateCount: globalCandidates.length,
+        lockedCount: globalRaw.filter(r => r.locked).length,
+        bufferCount: 0,
+        historyCount: 0,
+      }
+
+      const regularGroupIds = Array.from(storeGroups).filter(gid => gid !== 'global')
+      const list = await Promise.all(regularGroupIds.map(async (gid) => {
+        const raw = store.getRawRules(gid, { includeGlobal: false })
+        const active = store.getActiveRules(gid, minCount, { includeGlobal: false })
+        const candidates = store.getCandidateRules(gid, minCount, { includeGlobal: false })
         const buf = buffers.get(gid) || []
         const hStat = historyStats.find(h => h.groupId === gid)
         let groupName = gid
@@ -198,8 +223,10 @@ export default {
           groupId: gid,
           groupName,
           isLiveActive: isGroupActive(gid),
+          isGlobal: false,
           totalCount: raw.length,
           activeCount: active.length,
+          inheritedCount: shareGlobal ? globalActive.length : 0,
           candidateCount: candidates.length,
           lockedCount: raw.filter(r => r.locked).length,
           bufferCount: buf.length,
@@ -211,7 +238,7 @@ export default {
         if (a.isLiveActive !== b.isLiveActive) return a.isLiveActive ? -1 : 1
         return (b.activeCount * 1000 + b.historyCount) - (a.activeCount * 1000 + a.historyCount)
       })
-      return { ok: true, list, settings: api.settings() }
+      return { ok: true, list: [globalItem, ...list], settings: api.settings() }
     })
 
     api.route('/rules', async (req) => {
@@ -219,10 +246,17 @@ export default {
       const gid = q.groupId || new URL(req.url, 'http://localhost').searchParams.get('groupId')
       if (!gid) return { ok: false, message: '缺少 groupId' }
       const minCount = Number(api.settings().minPromotionCount) || 3
-      const activeRules = store.getActiveRules(gid, minCount)
-      const candidateRules = store.getCandidateRules(gid, minCount)
+      const shareGlobal = api.settings().globalSharing !== false
+      const isGlobal = gid === 'global'
+      const includeGlobal = !isGlobal && shareGlobal
+
+      const activeRules = store.getActiveRules(gid, minCount, { includeGlobal })
+      const candidateRules = store.getCandidateRules(gid, minCount, { includeGlobal })
       return {
         ok: true,
+        groupId: gid,
+        isGlobal,
+        globalSharing: shareGlobal,
         activeRules,
         candidateRules,
         minCount,
@@ -230,84 +264,102 @@ export default {
       }
     })
 
+    api.route('/scope-rule', async (req) => {
+      const body = await readBody(req)
+      const { fromScope, toScope, ruleId } = body || {}
+      if (!fromScope || !toScope || !ruleId) return { ok: false, message: '参数不足' }
+      const success = store.scopeRule(fromScope, toScope, ruleId)
+      return { ok: success, message: success ? '规则作用域已调整' : '规则流转失败' }
+    })
+
     api.route('/promote', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      const { ruleId } = body || {}
+      if (!scope || !ruleId) return { ok: false, message: '参数不足' }
       const minCount = Number(api.settings().minPromotionCount) || 3
-      const success = store.promoteCandidate(groupId, ruleId, minCount)
+      const success = store.promoteCandidate(scope, ruleId, minCount)
       return { ok: success }
     })
 
     api.route('/prune-noise', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
-      const minCount = Number(api.settings().minPromotionCount) || 3
-      const pruned = store.pruneNoise(groupId, 2)
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      if (!scope) return { ok: false, message: '缺少 groupId 或 scope' }
+      const pruned = store.pruneNoise(scope, 2)
       return { ok: true, pruned, message: `已清理 ${pruned} 条单次出现的偶发噪点` }
     })
 
     api.route('/consolidate', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
-      const reduced = store.consolidate(groupId)
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      if (!scope) return { ok: false, message: '缺少 groupId 或 scope' }
+      const reduced = store.consolidate(scope)
       return { ok: true, reduced, message: `近义规则聚类完成，精简了 ${reduced} 条重复规则` }
     })
 
     api.route('/toggle-lock', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
-      const locked = store.toggleLock(groupId, ruleId)
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      const { ruleId } = body || {}
+      if (!scope || !ruleId) return { ok: false, message: '参数不足' }
+      const locked = store.toggleLock(scope, ruleId)
       return { ok: true, locked }
     })
 
     api.route('/delete-rule', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
-      store.deleteRule(groupId, ruleId)
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      const { ruleId } = body || {}
+      if (!scope || !ruleId) return { ok: false, message: '参数不足' }
+      store.deleteRule(scope, ruleId)
       return { ok: true }
     })
 
     api.route('/add-manual', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, situation, style } = body || {}
-      if (!groupId || !situation || !style) return { ok: false, message: '情境和风格均不能为空' }
-      store.addManualRule(groupId, { situation, style })
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      const { situation, style } = body || {}
+      if (!scope || !situation || !style) return { ok: false, message: '情境和风格均不能为空' }
+      store.addManualRule(scope, { situation, style })
       return { ok: true }
     })
 
     api.route('/clear-all', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
-      store.clearRules(groupId)
+      const body = await readBody(req)
+      const scope = body?.scope || body?.groupId
+      if (!scope) return { ok: false, message: '缺少 groupId 或 scope' }
+      store.clearRules(scope)
       return { ok: true }
     })
 
     api.route('/trigger-now', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
-      const buf = buffers.get(groupId) || []
+      const body = await readBody(req)
+      const gid = body?.scope || body?.groupId
+      if (!gid) return { ok: false, message: '缺少 groupId' }
+      if (gid === 'global') {
+        return { ok: false, message: '全局公共库由各群实时提炼自动汇聚，请选择具体群聊来触发缓存提炼' }
+      }
+      const buf = buffers.get(gid) || []
       if (buf.length < 2) {
         return { ok: false, message: `当前实时消息缓存仅 ${buf.length} 条，不足以提炼（建议等待群友发言或使用上方「从历史聊天提炼」）` }
       }
       const lines = buf.splice(0, buf.length)
-      const count = await runDistillLines(groupId, lines)
+      const count = await runDistillLines(gid, lines)
       return { ok: true, message: `已提炼 ${lines.length} 条实时发言，获得 ${count} 条新规则` }
     })
 
     api.route('/distill-history', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, days = 3, sampleSize = 35 } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      const body = await readBody(req)
+      const gid = body?.scope || body?.groupId
+      const { days = 3, sampleSize = 35 } = body || {}
+      if (!gid) return { ok: false, message: '缺少 groupId' }
+      if (gid === 'global') {
+        return { ok: false, message: '全局公共底座无需直接抽样，请选择具体群聊，提炼时将自动汇入全局底座' }
+      }
 
       const botQQ = api.config?.()?.botQQ || ''
-      const lines = sampleGroupHistory(chatLogDir, groupId, {
+      const lines = sampleGroupHistory(chatLogDir, gid, {
         days: Number(days) || 3,
         sampleSize: Math.min(60, Math.max(10, Number(sampleSize) || 35)),
         botQQ,
@@ -317,7 +369,7 @@ export default {
         return { ok: false, message: `该群在指定时段内的有效群友发言仅 ${lines.length} 条，不足以提炼（至少需 5 条）` }
       }
 
-      const count = await runDistillLines(groupId, lines)
+      const count = await runDistillLines(gid, lines)
       return {
         ok: true,
         message: count > 0 
@@ -330,12 +382,14 @@ export default {
 
     // 模拟测试回复效果接口（沙盒验证）
     api.route('/simulate', async (req) => {
-      const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
-      const { groupId, userText } = body || {}
-      if (!groupId || !userText?.trim()) return { ok: false, message: '缺少 groupId 或测试内容' }
+      const body = await readBody(req)
+      const gid = body?.scope || body?.groupId
+      const { userText } = body || {}
+      if (!gid || !userText?.trim()) return { ok: false, message: '缺少 groupId 或测试内容' }
 
       const minCount = Number(api.settings().minPromotionCount) || 3
-      const activeRules = store.getActiveRules(groupId, minCount)
+      const includeGlobal = gid !== 'global' && api.settings().globalSharing !== false
+      const activeRules = store.getActiveRules(gid, minCount, { includeGlobal })
       const maxRules = Number(api.settings().maxInjectedRules) || 2
       const matched = store.matchRelevantRules(activeRules, userText, maxRules)
 

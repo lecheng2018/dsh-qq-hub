@@ -85,6 +85,26 @@ const STYLE_INJECTION = `
   align-items: center;
   min-width: 0;
 }
+.distill-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.distill-scope-badge.global {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--ab-accent, #2563eb);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+}
+.distill-scope-badge.local {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--ab-success, #059669);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
 .distill-rule-item {
   display: flex;
   flex-direction: column;
@@ -337,8 +357,9 @@ return function DistillPanel({ toast }) {
     }
   }, [selectedGroup])
 
-  const handleToggleLock = async (ruleId) => {
-    const res = await call('/toggle-lock', { groupId: selectedGroup, ruleId })
+  const handleToggleLock = async (scope, ruleId) => {
+    const targetScope = scope || selectedGroup
+    const res = await call('/toggle-lock', { groupId: targetScope, ruleId })
     if (res && res.ok) {
       await loadRules(selectedGroup)
       await loadStatus()
@@ -346,8 +367,9 @@ return function DistillPanel({ toast }) {
     }
   }
 
-  const handlePromote = async (ruleId) => {
-    const res = await call('/promote', { groupId: selectedGroup, ruleId })
+  const handlePromote = async (scope, ruleId) => {
+    const targetScope = scope || selectedGroup
+    const res = await call('/promote', { groupId: targetScope, ruleId })
     if (res && res.ok) {
       await loadRules(selectedGroup)
       await loadStatus()
@@ -355,12 +377,28 @@ return function DistillPanel({ toast }) {
     }
   }
 
-  const handleDelete = async (ruleId) => {
-    const res = await call('/delete-rule', { groupId: selectedGroup, ruleId })
+  const handleDelete = async (scope, ruleId) => {
+    const targetScope = scope || selectedGroup
+    const res = await call('/delete-rule', { groupId: targetScope, ruleId })
     if (res && res.ok) {
       await loadRules(selectedGroup)
       await loadStatus()
       toast && toast('已删除')
+    }
+  }
+
+  const handleScopeRule = async (fromScope, toScope, ruleId, label) => {
+    try {
+      const res = await call('/scope-rule', { fromScope, toScope, ruleId })
+      if (res && res.ok) {
+        toast && toast(label || '规则作用域已更新', 'ok')
+        await loadRules(selectedGroup)
+        await loadStatus()
+      } else {
+        toast && toast(res?.message || '操作失败', 'err')
+      }
+    } catch (e) {
+      toast && toast(e.message || '网络异常', 'err')
     }
   }
 
@@ -495,28 +533,41 @@ return function DistillPanel({ toast }) {
       groups.length === 0
         ? h(Empty, { icon: '💬', text: '本地暂无聊天记录，在群里聊几句或等待消息同步后出现。' })
         : h('div', null,
-            h(Row, { label: '选择群聊' },
+            h(Row, { label: '选择语感库 / 群聊' },
               h(Select, {
                 value: selectedGroup,
                 width: '100%',
                 onChange: (val) => setSelectedGroup(val),
                 options: groups.map(g => ({
                   value: g.groupId,
-                  label: `${g.isLiveActive ? '🟢 [实时生效]' : '⚪ [未开启实时]'} ${g.groupName || g.groupId} (${g.groupId}) — 生效 ${g.activeCount || 0} 条`
+                  label: g.isGlobal
+                    ? `🌐 ${g.groupName || '全局共享语感底座'} — 正式生效 ${g.activeCount || 0} 条`
+                    : `${g.isLiveActive ? '🟢 [实时生效]' : '⚪ [未开启实时]'} ${g.groupName || g.groupId} (${g.groupId}) — 专属 ${g.activeCount || 0} 条${g.inheritedCount ? ` (继承全局 ${g.inheritedCount} 条)` : ''}`
                 }))
               })
             ),
             curGroupInfo && h('div', { className: 'distill-meta-bar' },
               h('div', { className: 'distill-status-banner' },
-                curGroupInfo.isLiveActive
-                  ? h('div', { className: 'distill-status-badge active' }, '🟢 该群当前处于实时生效中（日常聊天自动缓冲提炼，并在回复时按需注入）')
-                  : h('div', { className: 'distill-status-badge inactive' }, '⚪ 该群未开启实时生效（上方「指定生效群号」未包含此群；日常聊天不监听不注入，仅供查看与历史提炼）')
+                curGroupInfo.isGlobal
+                  ? h('div', { className: 'distill-status-badge active' }, '🌐 全局共享公共底座：汇聚跨群提炼与公用口癖习惯。各群默认自动继承此底座，新群进群即拥有基础语感，免冷启动。')
+                  : curGroupInfo.isLiveActive
+                    ? h('div', { className: 'distill-status-badge active' }, '🟢 该群处于实时生效中（日常聊天自动缓冲提炼并沉淀至全局，回复时按需注入）')
+                    : h('div', { className: 'distill-status-badge inactive' }, '⚪ 该群未开启实时生效（上方「指定生效群号」未包含此群；日常聊天不监听不注入，仅供查看与历史提炼）')
               ),
               h('div', { className: 'distill-meta-stats' },
-                h('span', null, '🔥 生效：', h('b', { style: { color: 'var(--ab-accent, #2563eb)' } }, curGroupInfo.activeCount || 0)),
-                h('span', null, '⏳ 候选：', h('b', null, curGroupInfo.candidateCount || 0)),
-                h('span', null, '🔒 锁定：', h('b', null, curGroupInfo.lockedCount || 0)),
-                h('span', null, '待提炼缓存：', h('b', null, curGroupInfo.bufferCount || 0))
+                curGroupInfo.isGlobal
+                  ? [
+                      h('span', { key: 'act' }, '🔥 全局生效：', h('b', { style: { color: 'var(--ab-accent, #2563eb)' } }, curGroupInfo.activeCount || 0)),
+                      h('span', { key: 'cand' }, '⏳ 观察候选：', h('b', null, curGroupInfo.candidateCount || 0)),
+                      h('span', { key: 'lock' }, '🔒 锁定防淘：', h('b', null, curGroupInfo.lockedCount || 0))
+                    ]
+                  : [
+                      h('span', { key: 'act' }, '🔥 本群专属：', h('b', { style: { color: 'var(--ab-accent, #2563eb)' } }, curGroupInfo.activeCount || 0)),
+                      curGroupInfo.inheritedCount ? h('span', { key: 'inh' }, '🌐 继承全局：', h('b', { style: { color: 'var(--ab-accent, #2563eb)' } }, curGroupInfo.inheritedCount)) : null,
+                      h('span', { key: 'cand' }, '⏳ 候选：', h('b', null, curGroupInfo.candidateCount || 0)),
+                      h('span', { key: 'lock' }, '🔒 锁定：', h('b', null, curGroupInfo.lockedCount || 0)),
+                      h('span', { key: 'buf' }, '待提炼缓存：', h('b', null, curGroupInfo.bufferCount || 0))
+                    ]
               ),
               h('div', { className: 'distill-meta-actions' },
                 h(Btn, {
@@ -531,7 +582,7 @@ return function DistillPanel({ toast }) {
                   title: '删除只出现过 1 次的未锁定偶发噪点',
                   onClick: handlePruneNoise
                 }, '🧹 清理噪点'),
-                h(Btn, {
+                !curGroupInfo.isGlobal && h(Btn, {
                   small: true,
                   disabled: triggering || historyMining,
                   onClick: handleTriggerRealtime
@@ -542,41 +593,52 @@ return function DistillPanel({ toast }) {
     ),
 
     // 从本地历史聊天记录批量提炼卡片
-    selectedGroup && h(Card, {
-      title: '从本地历史聊天记录提炼',
-      desc: '利用本地 chatlog 留存的大量发言流水批量提炼，自动按语义合并同义口癖。'
-    },
-      h('div', { className: 'distill-history-grid' },
-        h(Row, { label: '历史时段' },
-          h(Select, {
-            value: historyDays,
-            width: 140,
-            onChange: (val) => setHistoryDays(val),
-            options: [
-              { value: '1', label: '最近 1 天' },
-              { value: '3', label: '最近 3 天' },
-              { value: '7', label: '最近 7 天 / 全部' },
-            ]
-          })
-        ),
-        h(Row, { label: '抽样规模' },
-          h(Select, {
-            value: sampleSize,
-            width: 140,
-            onChange: (val) => setSampleSize(val),
-            options: [
-              { value: '25', label: '25 组精炼样本' },
-              { value: '35', label: '35 组标准样本' },
-              { value: '50', label: '50 组大样本' },
-            ]
-          })
-        ),
-        h('div', { className: 'distill-history-action' },
-          h(Btn, {
-            kind: 'primary',
-            disabled: historyMining || triggering || (curGroupInfo && curGroupInfo.historyCount < 5),
-            onClick: handleDistillHistory
-          }, historyMining ? '正在从历史记录提炼…' : '🚀 开始从历史提炼')
+    selectedGroup && (
+      curGroupInfo?.isGlobal ? (
+        h(Card, {
+          title: '从本地历史聊天记录提炼',
+          desc: '全局公共底座无需直接抽样。请在上方选择具体群聊（如主群）执行「从历史提炼」，提炼后的优质规则会自动沉淀至全局公共底座供所有群共享。'
+        },
+          h('div', { className: 'ab-note' }, '💡 提示：在上方下拉菜单中切换至任意具体群聊，即可抽样该群的历史聊天进行提炼。')
+        )
+      ) : (
+        h(Card, {
+          title: '从本地历史聊天记录提炼',
+          desc: '利用本地 chatlog 留存的大量发言流水批量提炼，自动按语义合并同义口癖。'
+        },
+          h('div', { className: 'distill-history-grid' },
+            h(Row, { label: '历史时段' },
+              h(Select, {
+                value: historyDays,
+                width: 140,
+                onChange: (val) => setHistoryDays(val),
+                options: [
+                  { value: '1', label: '最近 1 天' },
+                  { value: '3', label: '最近 3 天' },
+                  { value: '7', label: '最近 7 天 / 全部' },
+                ]
+              })
+            ),
+            h(Row, { label: '抽样规模' },
+              h(Select, {
+                value: sampleSize,
+                width: 140,
+                onChange: (val) => setSampleSize(val),
+                options: [
+                  { value: '25', label: '25 组精炼样本' },
+                  { value: '35', label: '35 组标准样本' },
+                  { value: '50', label: '50 组大样本' },
+                ]
+              })
+            ),
+            h('div', { className: 'distill-history-action' },
+              h(Btn, {
+                kind: 'primary',
+                disabled: historyMining || triggering || (curGroupInfo && curGroupInfo.historyCount < 5),
+                onClick: handleDistillHistory
+              }, historyMining ? '正在从历史记录提炼…' : '🚀 开始从历史提炼')
+            )
+          )
         )
       )
     ),
@@ -658,8 +720,16 @@ return function DistillPanel({ toast }) {
                 className: 'distill-rule-item' + (r.locked ? ' locked' : '')
               },
                 h('div', { className: 'distill-rule-body' },
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+                    r.isGlobal
+                      ? h('span', { className: 'distill-scope-badge global' }, '🌐 全局共享')
+                      : h('span', { className: 'distill-scope-badge local' }, '🔒 本群专属'),
+                    r.sourceGroups && r.sourceGroups.length > 0 && h('span', { className: 'ab-muted', style: { fontSize: 11 } },
+                      `来源群: ${r.sourceGroups.join(', ')}`
+                    )
+                  ),
                   h('div', { style: { fontWeight: 600, fontSize: 13.5, marginBottom: 3 } },
-                    '当 ', h('span', { style: { color: 'var(--ab-accent, #2563eb)' } }, r.situation.replace(/时$/, '')),
+                    '当 ', h('span', { style: { color: r.isGlobal ? 'var(--ab-accent, #2563eb)' : 'var(--ab-success, #059669)' } }, r.situation.replace(/时$/, '')),
                     ' 时：'
                   ),
                   h('div', { style: { fontSize: 13, color: 'var(--ab-text, #111827)' } }, r.style)
@@ -669,13 +739,26 @@ return function DistillPanel({ toast }) {
                     `群友使用 ${r.count || 1} 次${r.injectedCount ? ` · 已注入 ${r.injectedCount} 次` : ''}${r.lastInjectedAt ? ` (${ago(r.lastInjectedAt)})` : ''}`
                   ),
                   h('div', { className: 'distill-rule-btns' },
+                    selectedGroup !== 'global' && (
+                      r.isGlobal
+                        ? h(Btn, {
+                            small: true,
+                            title: '将此全局规则复制为本群专属规则，后续可针对本群个性化修改',
+                            onClick: () => handleScopeRule('global', selectedGroup, r.id, '已复制为本群专属规则')
+                          }, '🔒 转为本群')
+                        : h(Btn, {
+                            small: true,
+                            title: '将本群专属规则设为全局共享底座，所有群聊均可继承使用',
+                            onClick: () => handleScopeRule(selectedGroup, 'global', r.id, '已设为全局共享规则')
+                          }, '🌐 设为全局')
+                    ),
                     h(Btn, {
                       small: true,
-                      onClick: () => handleToggleLock(r.id)
+                      onClick: () => handleToggleLock(r.scope || selectedGroup, r.id)
                     }, r.locked ? '🔒 已锁' : '🔓 锁定'),
                     h(Btn, {
                       small: true,
-                      onClick: () => handleDelete(r.id)
+                      onClick: () => handleDelete(r.scope || selectedGroup, r.id)
                     }, '删除')
                   )
                 )
@@ -693,6 +776,14 @@ return function DistillPanel({ toast }) {
                 className: 'distill-rule-item candidate'
               },
                 h('div', { className: 'distill-rule-body' },
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 } },
+                    r.isGlobal
+                      ? h('span', { className: 'distill-scope-badge global' }, '🌐 全局候选')
+                      : h('span', { className: 'distill-scope-badge local' }, '🔒 本群候选'),
+                    r.sourceGroups && r.sourceGroups.length > 0 && h('span', { className: 'ab-muted', style: { fontSize: 11 } },
+                      `来源群: ${r.sourceGroups.join(', ')}`
+                    )
+                  ),
                   h('div', { style: { fontWeight: 600, fontSize: 13.5, marginBottom: 3 } },
                     '当 ', h('span', { style: { color: 'var(--ab-text-secondary, #4b5563)' } }, r.situation.replace(/时$/, '')),
                     ' 时：'
@@ -708,11 +799,24 @@ return function DistillPanel({ toast }) {
                       small: true,
                       kind: 'primary',
                       title: '手动将此表达转正为正式生效规则',
-                      onClick: () => handlePromote(r.id)
+                      onClick: () => handlePromote(r.scope || selectedGroup, r.id)
                     }, '⭐ 转正并锁定'),
+                    selectedGroup !== 'global' && (
+                      r.isGlobal
+                        ? h(Btn, {
+                            small: true,
+                            title: '转为本群专属候选',
+                            onClick: () => handleScopeRule('global', selectedGroup, r.id, '已转为本群专属候选')
+                          }, '🔒 转为本群')
+                        : h(Btn, {
+                            small: true,
+                            title: '设为全局共享候选',
+                            onClick: () => handleScopeRule(selectedGroup, 'global', r.id, '已设为全局候选')
+                          }, '🌐 设为全局')
+                    ),
                     h(Btn, {
                       small: true,
-                      onClick: () => handleDelete(r.id)
+                      onClick: () => handleDelete(r.scope || selectedGroup, r.id)
                     }, '丢弃')
                   )
                 )
@@ -723,13 +827,15 @@ return function DistillPanel({ toast }) {
 
     // 手工录入卡片
     selectedGroup && h(Card, {
-      title: '手动录入群梗/口癖',
-      desc: '如果你想让 Bot 快速学会群里的某个特定梗或说话习惯，可以直接在此录入（直接转正生效并锁定）。'
+      title: curGroupInfo?.isGlobal ? '手动录入全局通用口癖' : '手动录入群梗/口癖',
+      desc: curGroupInfo?.isGlobal
+        ? '在此录入的规则将沉淀至全局共享语感底座，所有群聊默认自动继承（直接生效并锁定）。'
+        : '在此录入的规则为当前群专属规则，仅在本群生效（直接生效并锁定）。'
     },
       h('div', { className: 'distill-form-row' },
         h('input', {
           className: 'ab-input wide',
-          placeholder: '适用情境（如：聊到抽卡爆死时）',
+          placeholder: curGroupInfo?.isGlobal ? '适用情境（如：聊到开源项目或新功能时）' : '适用情境（如：聊到抽卡爆死时）',
           value: newSit,
           onChange: (e) => setNewSit(e.target.value)
         }),
@@ -742,7 +848,7 @@ return function DistillPanel({ toast }) {
         h(Btn, {
           disabled: adding,
           onClick: handleAddManual
-        }, adding ? '添加中…' : '添加并转正')
+        }, adding ? '添加中…' : (curGroupInfo?.isGlobal ? '录入全局底座' : '添加并转正'))
       )
     )
   )
