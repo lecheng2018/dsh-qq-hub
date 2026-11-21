@@ -42,7 +42,7 @@ jobs:
     # tag 触发必定发版；push main 触发时再检测「这个提交是否已有同版本 tag」做幂等
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
