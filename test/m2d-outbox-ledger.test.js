@@ -208,7 +208,7 @@ test('outbox：媒体/多段投递原样透传（segments 不改写），群聊�
   const outbox = createOutbox({ send: gw.send })
   const media = [
     { type: 'text', data: { text: '看图' } },
-    { type: 'image', data: { url: 'https://x/y.png' } },
+    { type: 'image', data: { url: 'https://93.184.216.34/y.png' } },
     { type: 'record', data: { file: 'base64://xx' } },
   ]
   const r = await outbox.request({ chatKey: 'group:77', sourceModuleId: 'multi-parser', segments: media })

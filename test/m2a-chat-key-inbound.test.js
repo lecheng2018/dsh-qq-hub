@@ -150,7 +150,7 @@ test('引用 / @ / 媒体段：结构化承载，textOf 只拼 text', () => {
       { type: 'reply', data: { id: '999' } },
       { type: 'at', data: { qq: '20000002' } },
       { type: 'text', data: { text: ' 看这张 ' } },
-      { type: 'image', data: { url: 'https://x/y.png' } },
+      { type: 'image', data: { url: 'https://93.184.216.34/y.png' } },
       { type: 'face', data: { id: '12' } },
     ],
   }))

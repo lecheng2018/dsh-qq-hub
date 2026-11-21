@@ -441,17 +441,31 @@ test('真机缺陷 1：followup 消息完整形状 {id, role, content, source.ki
 // 注意：只拦图片 URL，其余流量必须透传——OneBot 客户端也走 globalThis.fetch，全接管会误伤发送。
 const stubImageFetch = (imageImpl) => {
   const orig = globalThis.fetch
-  globalThis.fetch = async (url, opt) => (String(url).includes('x/y.png') ? imageImpl(url, opt) : orig(url, opt))
+  globalThis.fetch = async (url, opt) => (String(url).includes('93.184.216.34/y.png') ? imageImpl(url, opt) : orig(url, opt))
   return () => { globalThis.fetch = orig }
 }
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8])
-const PNG_OK = async () => ({ ok: true, arrayBuffer: async () => PNG_BYTES.buffer.slice(PNG_BYTES.byteOffset, PNG_BYTES.byteOffset + PNG_BYTES.length) })
+// 下载现在统一走 core/net.js 的 fetchImage（审计 S02：逐跳 public-only + 流式上限），
+// 它读的是标准 Response 形状（status / ok / headers.get / body.getReader），
+// 不再是 arrayBuffer() 一把梭。桩要按这个形状给，否则「成功」路径会走进异常分支。
+const responseOf = (bytes, { status = 200 } = {}) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  headers: { get: (k) => (String(k).toLowerCase() === 'content-length' ? String(bytes.length) : null) },
+  body: {
+    getReader: () => {
+      let sent = false
+      return { read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array(bytes) })), cancel: () => {} }
+    },
+  },
+})
+const PNG_OK = async () => responseOf(PNG_BYTES)
 
 test('真机缺陷 10：图片下载成功 → base64 登记为附件，image 块带 attachment 进会话', async () => {
   const restore = stubImageFetch(PNG_OK)
   const { core, dsh, mock } = await fixture()
   try {
-    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://93.184.216.34/y.png' } }] }))
     await waitSettled(core, 400)
     assert.equal(dsh.turns.length, 1)
     assert.ok(dsh.turns[0].contentTypes.includes('image'), '登记成功的 image 块保留（fake admitPromptContent 会换成 attachment 形状）')
@@ -464,7 +478,7 @@ test('真机缺陷 10：下载失败 → 降级文字（下载文案），image 
   const restore = stubImageFetch(async () => { throw new Error('connect ECONNREFUSED') })
   const { core, dsh, mock } = await fixture({ brain: async ({ text }) => text.includes('没能把它下载下来') ? '图我收不到，描述一下？' : '嗯' })
   try {
-    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://93.184.216.34/y.png' } }] }))
     await waitSettled(core, 400)
     assert.equal(dsh.turns[0].contentTypes.includes('image'), false, '毒化防线：任何 image 块不得进历史')
     assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它下载下来/)
@@ -476,7 +490,7 @@ test('真机缺陷 2（回归口径更新）：下载成功但登记失败 → �
   const restore = stubImageFetch(PNG_OK)
   const { core, dsh, mock } = await fixture({ admitImages: false, brain: async ({ text }) => text.includes('没能把它登记成附件') ? '你描述一下图吧' : '嗯' })
   try {
-    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://x/y.png' } }] }))
+    await core.dispatchLegacyEvent(msgEv({ message: [{ type: 'text', data: { text: '看这张' } }, { type: 'image', data: { url: 'https://93.184.216.34/y.png' } }] }))
     await waitSettled(core, 400)
     assert.equal(dsh.turns[0].contentTypes.includes('image'), false)
     assert.match(dsh.turns[0].userText, /看这张[\s\S]*没能把它登记成附件/)
