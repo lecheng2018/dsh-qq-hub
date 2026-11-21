@@ -1281,9 +1281,14 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const before = s.items.length
     s.items = s.items.filter((m) => String(m.scope || '') !== want)
     const items = before - s.items.length
+    // 和单条 remove() 同一口径：喂出派生档案的事实被删掉，档案必须标记 stale。
+    // 整分区清空时该作用域下所有派生档案的来源都已不在了，按作用域整体失效
+    // （staleProfilesIn 的 qq 传空＝不按人过滤，手动画像照旧不动）。
+    // 漏了这一步，清空接口报成功，profileOf()/contextFor() 还会拿已删事实投喂上下文。
+    const staleProfiles = items ? staleProfilesIn(s, '', want) : 0
     s.rev = (s.rev || 0) + 1
     save(s)
-    return { ok: true, items }
+    return { ok: true, items, staleProfiles }
   }
 
   /** 按作用域清空人物小档案（面板「人物档案」分区的「清空本分区」）。 */

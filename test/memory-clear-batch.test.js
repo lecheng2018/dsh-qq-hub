@@ -65,3 +65,77 @@ test('Q09 · 主库关闭时批量清除如实失败，不再谎报已清空', a
   assert.equal(r.ok, false, '关库后必须如实失败')
   assert.match(r.message, /已关闭/)
 })
+
+// ---- 清空必须连带让派生档案失效（Q09 回归） ----
+// 单条 remove() 早就会调 staleProfilesIn，批量清空一开始漏了它：清空报成功，
+// profileOf()/contextFor() 还拿已删事实投喂上下文。
+
+const OWNER = '10000001'
+const SCOPE = 'private:10000001'
+const CHAT = { kind: 'private', userId: OWNER, chatId: 'private:10000001' }
+const FACTS = ['主人养了一只叫年糕的猫', '主人讨厌香菜', '主人周末常去爬香山'] // buildProfile 少于 3 条不写档案
+
+/** 带假模型流的主库：让 buildProfile 走生产代码路径生成真正的派生档案（origin: 'derived'）。 */
+async function mkStoreWithDerivedProfile() {
+  process.env.AURABOT_DATA_DIR = mkdtempSync(join(tmpdir(), 'qqhub-clear-'))
+  const { createMemoryStore } = await import('../src/features/memory.js')
+  const mem = createMemoryStore({
+    dsh: { llm: { stream: async function* () { yield { type: 'text-delta', text: '主人养了一只叫年糕的猫，讨厌香菜' } } } },
+    getConfig: () => ({ ownerQQ: OWNER, model: { provider: 'test', model: 'm' }, memory: { enabled: true, recallCount: 4 } }),
+    log,
+  })
+  for (const text of FACTS) mem.add({ text, about: OWNER, aboutName: '主人', scope: SCOPE })
+  assert.equal(await mem.buildProfile(OWNER, SCOPE), true)
+  const prof = mem.profiles().find((p) => p.scope === SCOPE)
+  assert.equal(prof.origin, 'derived', '前置条件：档案必须是派生档案')
+  assert.match(mem.contextFor(CHAT), /年糕/, '前置条件：清空前上下文里带着这些事实')
+  return { mem }
+}
+
+test('Q09 回归 · 批量清空作用域后派生档案失效，profileOf/contextFor 不再返回已删事实', async () => {
+  const { mem } = await mkStoreWithDerivedProfile()
+
+  const r = mem.clearScopeEntries(SCOPE)
+  assert.equal(r.ok, true)
+  assert.equal(r.items, FACTS.length)
+  assert.equal(r.staleProfiles, 1, '该作用域下的派生档案应被标记 stale')
+
+  assert.equal(mem.profiles().find((p) => p.scope === SCOPE).stale, true)
+  assert.equal(mem.profileOf(OWNER, SCOPE), null, '已失效的档案不能再被取出来')
+  assert.doesNotMatch(mem.contextFor(CHAT), /年糕|香菜/, '上下文不能再出现已删除的事实')
+})
+
+test('Q09 回归 · 生产路由 /memory-privacy/clear-main 清空后不再注入已删事实', async () => {
+  const { mem } = await mkStoreWithDerivedProfile()
+  const routes = await mountPrivacyModule(mem)
+
+  const r = await routes['/memory-privacy/clear-main']({ query: { scope: SCOPE } })
+  assert.equal(r.ok, true)
+  assert.match(r.message, /已清空 3 条/)
+
+  assert.equal(mem.profileOf(OWNER, SCOPE), null, '面板清空后档案必须失效')
+  assert.doesNotMatch(mem.contextFor(CHAT), /年糕|香菜/, '面板清空后上下文不能再出现已删除的事实')
+})
+
+/** 用假 api 把 memory-privacy 模块的 setup 跑起来，拿到它注册的真实路由处理函数。 */
+async function mountPrivacyModule(mem) {
+  const routes = {}
+  const noop = () => {}
+  const api = {
+    use: (name) => (name === 'memory' ? mem : null),
+    route: (path, handler) => { routes[path] = handler },
+    settings: () => ({}),
+    config: () => ({ ownerQQ: OWNER }),
+    log,
+    tool: noop,
+    rule: noop,
+    on: noop,
+    saveSettings: noop,
+    defineTool: (def) => def,
+    core: { http: { body: async () => ({}) } },
+  }
+  const { default: mod } = await import('../src/modules/memory-privacy/index.js')
+  mod.setup(api)
+  assert.equal(typeof routes['/memory-privacy/clear-main'], 'function')
+  return routes
+}
