@@ -329,9 +329,25 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
     return t ? { ...t, members: undefined, cancelSignal: undefined, _abort: undefined, _completion: undefined } : null
   }
 
-  /** 等待指定回合到终态；结果保留成功值或失败原因，不额外制造未处理拒绝。 */
+  /**
+   * 等待指定回合到终态；结果保留成功值或失败原因，不额外制造未处理拒绝。
+   *
+   * 审计补充（2026-11-21，CI 暴露）：合流窗口的定时器是 `unref()` 的 —— 那是对的，
+   * 不该为了等一次合流去撑住进程退出。但它的直接后果是：`await waitForTurn()` 期间
+   * 如果事件循环里**没有别的 ref 句柄**，Node 会判定「事件循环已排空」，
+   * 于是这个 await 永远等不到、并报 `Promise resolution is still pending but the
+   * event loop has already resolved`（failureType: cancelledByParent）。
+   *
+   * 加一个短保活定时器：有人真的在等，就保证这几个 tick 内事件循环不空，
+   * 让合流窗口能跑完；回合落定后立刻清掉，不拖慢进程退出。
+   * 保活窗口不必很长 —— 它只覆盖「合流定时器从排队到触发」这段。
+   */
   function waitForTurn(turnId) {
-    return turns.get(turnId)?._completion?.promise || Promise.resolve(null)
+    const completion = turns.get(turnId)?._completion?.promise
+    if (!completion) return Promise.resolve(null)
+    // 已被托住（有 ref 句柄）时这个定时器是多余但无害的；它自身不 unref。
+    const keepAlive = setInterval(() => {}, 50)
+    return completion.finally(() => clearInterval(keepAlive))
   }
 
   /** 是否有窗口在收成员（测试视图）。 */
