@@ -524,12 +524,25 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     })
   }
 
-  /** 把计划里被跳过的模块如实登记进 health（面板据此显示「为什么没跑」）。 */
+  /**
+   * 把计划里被跳过的模块如实登记进 health（面板据此显示「为什么没跑」）。
+   *
+   * 只在**原因变化**时打日志：sync() 每 3 秒跑一次，同一个「缺依赖能力」若无条件
+   * 打印，实测一分钟能刷十几行，把真正有用的日志冲掉（实机部署时立刻出现）。
+   */
+  const lastSkipReason = new Map()
   function recordSkipped(plan, skipReasonLabel = '配置开关关闭') {
+    const seen = new Set()
     for (const skip of plan.skipped) {
-      if (skip.reason !== skipReasonLabel) log.info(`模块「${skip.id}」未装载：${skip.reason}`)
+      seen.add(skip.id)
       health.set(skip.id, skip.reason?.startsWith('定义不合法') || skip.reason?.includes('失败') ? 'failed' : 'disabled', skip.reason)
+      if (skip.reason === skipReasonLabel) continue // 「配置开关关闭」是正常态，不必每次都报
+      if (lastSkipReason.get(skip.id) === skip.reason) continue // 原因没变，不重复刷
+      lastSkipReason.set(skip.id, skip.reason)
+      log.info(`模块「${skip.id}」未装载：${skip.reason}`)
     }
+    // 不再被跳过的模块（恢复运行 / 被删除）：清掉记录，下次真出问题还能再报一次
+    for (const id of [...lastSkipReason.keys()]) if (!seen.has(id)) lastSkipReason.delete(id)
     return plan
   }
 
