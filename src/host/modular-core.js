@@ -1889,7 +1889,10 @@ export function createModularCore({
     return Object.entries(registry.snapshot()).map(([chatId, entry]) => {
       const kind = chatId.startsWith('group:') ? 'group' : 'private'
       const id = chatId.slice(kind.length + 1)
-      return { chatId, kind, id, name: kind === 'group' ? `QQ 群 · ${groupNames.get(id) || id}` : chatId, lastAt: Number(entry.lastTurnAt || entry.createdAt || 0) }
+      // rawName：不带「QQ 群 · 」前缀的纯群名（查不到为空串）。审计 Q13 之前前端
+      // 为了拿群名去请求一个已删除的 /groups/titles 路由；现在统一从这里取。
+      const rawName = kind === 'group' ? String(groupNames.get(id) || '') : ''
+      return { chatId, kind, id, name: kind === 'group' ? `QQ 群 · ${groupNames.get(id) || id}` : chatId, rawName, lastAt: Number(entry.lastTurnAt || entry.createdAt || 0) }
     }).sort((a, b) => b.lastAt - a.lastAt)
   }
 

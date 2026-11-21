@@ -210,10 +210,13 @@ function OwnerBrief({ draft, setDraft }) {
   const ob = draft.group.ownerBrief || { enabled: false, lines: 12, groups: [] }
   const groups = (draft.allow.groups || []).map(String)
   const [info, setInfo] = useState(null)
-  useEffect(() => { get('/groups/titles').then((r) => { if (r.ok) setInfo(r) }).catch(() => {}) }, [])
+  // 审计 Q13：/groups/titles 路由已在 1.3.48 删除，这里却还在请求（失败静默、
+  // 群名永远退回群号）。改用现存的 /panel/chats：它带 rawName（纯群名，可能为空，
+  // 只含「聊过天」的群；没聊过的群本来就没有缓存名，降级显示群号与旧行为一致）。
+  useEffect(() => { get('/panel/chats').then((r) => { if (r.ok) setInfo(r) }).catch(() => {}) }, [])
   const nameOf = (gid) => {
-    const g = ((info && info.groups) || []).find((x) => x.groupId === gid)
-    return g && g.name && g.name !== gid ? g.name : ''
+    const g = ((info && info.chats) || []).find((x) => x.kind === 'group' && String(x.id) === String(gid))
+    return g && g.rawName ? g.rawName : ''
   }
   const on = (gid) => (ob.groups || []).includes(gid)
   const toggle = (gid) => setDraft(setPath(draft, 'group.ownerBrief.groups', on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...(ob.groups || []), gid]))
