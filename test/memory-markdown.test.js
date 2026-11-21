@@ -4,6 +4,8 @@ import {
   parseMarkdownArchive,
   serializeMarkdownArchive,
   MEMORY_FORMAT,
+  MEMORY_FORMAT_V1,
+  SUPPORTED_FORMATS,
 } from '../src/features/memory-markdown.js'
 
 test('memory-markdown: 规范样本能正确解析且字段完整', () => {
@@ -40,7 +42,12 @@ scope: private:10001
 `
 
   const parsed = parseMarkdownArchive(sample, { expectedScope: 'private:10001' })
-  assert.equal(parsed.meta.format, MEMORY_FORMAT)
+  // 审计 S13：MEMORY_FORMAT 现指最新格式（v2），本样本是 v1 文档。
+  // 这里要断言的是「样本按它声明的版本被正确解析」，而不是「等于最新版」。
+  // v1 仍在支持列表里，老文件不会被拒（也不被重新解释）。
+  assert.equal(parsed.meta.format, MEMORY_FORMAT_V1)
+  assert.ok(SUPPORTED_FORMATS.has(parsed.meta.format), 'v1 必须仍在支持列表')
+  assert.equal(MEMORY_FORMAT, 'qqhub-memory-v2', '新写默认 v2')
   assert.equal(parsed.meta.scope, 'private:10001')
   assert.equal(parsed.entries.length, 2)
 
