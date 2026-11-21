@@ -270,7 +270,9 @@ test('总开关关掉时完全不动作（连裁剪都不做）', async () => {
   const { ledger } = ledgerWithArchive()
   const observer = observerOf({ ledger, cfg: { threads: { enabled: false } }, now: () => 1_000_000 })
   const stat = await observer.recordTurn({ chatKey: KEY, userText: '我去洗澡了' })
-  assert.deepEqual(stat, { produced: 0, pushed: 0, pruned: 0, failed: 0 })
+  // judgeTimedOut 是 2026-11-21 新增的可观测字段（因超时丢了几轮线索），
+  // 总开关关着时它必然为 0 —— 一起钉住，免得以后又漏掉这个字段的语义。
+  assert.deepEqual(stat, { produced: 0, pushed: 0, pruned: 0, failed: 0, judgeTimedOut: 0 })
   assert.equal(ledger.list({ chatKey: KEY }).length, 0)
 })
 
@@ -303,7 +305,9 @@ test('配置默认值：threads 开着、群里不跑 S2、超时与裁剪间隔
   assert.equal(cfg.threads.enabled, true)
   assert.equal(cfg.threads.judge, true)
   assert.equal(cfg.threads.judgeInGroups, false)
-  assert.equal(cfg.threads.judgeTimeoutMs, 15000)
+  // 2026-11-21 实机：15 秒太紧（模型稍慢/路由冷却时必然超时，静默丢线索），
+  // 同仓其他模型请求是 120s/150s/600s，这里提到 30 秒。
+  assert.equal(cfg.threads.judgeTimeoutMs, 30000)
   assert.equal(cfg.threads.pruneIntervalMs, 60000)
   // 越界夹值
   const clamped = normalize({ threads: { judgeTimeoutMs: 9e9, pruneIntervalMs: 1 } })

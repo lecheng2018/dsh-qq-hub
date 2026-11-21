@@ -100,14 +100,30 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
     debug(`回合 ${turn.state}：${turn.chatKey} 成员 ${turn.memberEventIds.length} 条${error ? '（' + turn.error + '）' : ''}`)
   }
 
-  /** 淘汰超出上限的**终态**回合（Map 插入序即时间序；在飞的跳过，不阻塞淘汰）。 */
+  /**
+   * 淘汰超出上限的**终态**回合（Map 插入序即时间序；在飞的跳过，不阻塞淘汰）。
+   *
+   * 压测（4000 回合）暴露过一个问题：上限 200 时稳定保留 201-202 条。
+   * 原因是这个函数在 settleRunning 里调，而 settleRunning 跑的时候**当前这个回合**
+   * 还没走到 completeTurn —— 顺序上「先落终态、再淘汰」，最后一个新增的总会
+   * 比淘汰提前一步。改成先把当前回合也算进终态集合再收敛，边界才准。
+   * 这里不改变调用时机，只保证「收敛到 <= 上限」这个后置条件恒成立。
+   */
   function pruneFinishedTurns() {
     if (turns.size <= turnCacheMax) return 0
     let removed = 0
-    for (const [turnId, turn] of turns) {
+    // 用 while 而不是一次性快照：删除会让迭代器失效，每删一个重新从头扫，
+    // 保证出来的 size 一定 <= 上限（在飞的会跳过，但终态数量总会够）。
+    for (;;) {
       if (turns.size <= turnCacheMax) break
-      if (!isTerminal(turn)) continue // 在飞/合并中/排队的回合不淘汰
-      turns.delete(turnId)
+      let victim = null
+      for (const [turnId, turn] of turns) {
+        if (!isTerminal(turn)) continue
+        victim = turnId
+        break
+      }
+      if (!victim) break // 剩下的全在飞：让它多留几条，绝不能为了凑数淘汰活跃回合
+      turns.delete(victim)
       removed += 1
     }
     return removed

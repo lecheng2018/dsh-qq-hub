@@ -70,6 +70,29 @@ test('超时 → fail-open 返回 []（有超时上限，不会挂住投递链�
   assert.deepEqual(rows, [])
   assert.ok(Date.now() - started < 3000, '必须真的按超时收手')
   assert.ok(DEFAULT_TIMEOUT_MS > 0 && DEFAULT_TIMEOUT_MS <= 60_000, '默认超时是有界的')
+  // 2026-11-21 实机：15 秒在模型稍慢/路由冷却时必然失败，而失败是静默丢线索。
+  // 同仓其他模型请求是 120s/150s/600s，这里取 30s —— 低于 15s 视为回归。
+  assert.ok(DEFAULT_TIMEOUT_MS >= 30_000, `默认超时不该低于 30 秒（当前 ${DEFAULT_TIMEOUT_MS}）`)
+})
+
+test('超时错误带可观测标记（上层能单独统计「因超时丢了几轮线索」）', async () => {
+  // 直接打底层超时包装：超时必须是可识别的 tag，而不是与其他失败混在一起的普通 Error。
+  const { runWithTimeout } = await import('../src/chat/thread-judge.js')
+  assert.equal(typeof runWithTimeout, 'function', 'runWithTimeout 应对外可见，便于断言超时语义')
+  let caught = null
+  try {
+    await runWithTimeout(() => new Promise(() => {}), 50)
+  } catch (error) { caught = error }
+  assert.ok(caught, '必须抛出')
+  assert.equal(caught.judgeTimedOut, true, '超时必须打上 judgeTimedOut 标记')
+  assert.equal(caught.judgeTimeoutMs, 50, '要带上实际生效的超时值，便于排查配置')
+  assert.match(caught.message, /线索判定超过/)
+})
+
+test('配置默认值与判定层默认超时一致（两处不许漂）', async () => {
+  const { normalize } = await import('../src/core/config.js')
+  const cfg = normalize({})
+  assert.equal(cfg.threads.judgeTimeoutMs, DEFAULT_TIMEOUT_MS, 'config 默认值必须与 thread-judge 的 DEFAULT_TIMEOUT_MS 相同')
 })
 
 test('没模型 / dsh 是空壳 → fail-open 返回 []', async () => {
