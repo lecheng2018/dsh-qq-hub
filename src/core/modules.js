@@ -360,10 +360,18 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     return rec ? rec.exports : null
   }
 
-  // ---------- 启动 / 停止 ----------
-  async function start(def, source, extra = {}) {
+  /**
+   * 审计 Q08：启动前处理只写一份，异步 start 与同步 startSync 共用。
+   *
+   * 过去这两件事只写在 start() 里，startSync() 全跳过：
+   *   ① 密码字段登记（registerSecretField）—— 内置语音的 cloudAsrApiKey 声明成
+   *      type:'password'，但冷启动走同步路径，于是它从未被登记，面板会明文回显
+   *      （这正是审计 S06 的一部分，不是两件事）；
+   *   ② 默认值补齐 —— 面板表单在冷启动后拿不到默认值。
+   * 「同步 / 异步」只应决定「要不要等 setup」，不该决定「要不要做启动前处理」。
+   */
+  function prepareStart(def) {
     const id = def.id
-    const rec = { id, def, source, exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now(), ...extra }
     // 设置里的密码字段不回传给面板
     for (const f of def.settings || []) if (f && f.type === 'password' && f.key) registerSecretField(['ext', id, f.key])
     // 设置的默认值补进配置（面板表单直接有值可改；已经填过的不动）
@@ -372,6 +380,13 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const missing = Object.keys(def.defaults).filter((k) => !(k in cur))
       if (missing.length) setConfig({ ...getConfig(), ext: { ...getConfig().ext, [id]: { ...Object.fromEntries(missing.map((k) => [k, def.defaults[k]])), ...cur } } })
     }
+  }
+
+  // ---------- 启动 / 停止 ----------
+  async function start(def, source, extra = {}) {
+    const id = def.id
+    const rec = { id, def, source, exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now(), ...extra }
+    prepareStart(def)
     live.set(id, rec)
     errors.delete(id)
     generation++ // 新实例：会话里的工具要在下一轮重挂（issue #73）
@@ -395,6 +410,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   function startSync(def) {
     const id = def.id
     const rec = { id, def, source: 'builtin', exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now() }
+    // 审计 Q08：同步路径也要做启动前处理（密码登记、默认值补齐），差异只允许是「不等 setup」。
+    prepareStart(def)
     live.set(id, rec)
     generation++ // 内置模块（重）启动也换代际：会话里的工具要在下一轮重挂
     if (errors.get(id)?.source !== 'user') errors.delete(id) // 替换版的报错留着给面板看
@@ -403,6 +420,9 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       if (r && typeof r.then === 'function') throw new Error('内置模块的 setup 要同步返回')
       rec.exports = r ?? {}
       health.set(id, 'enabled')
+      // 审计 Q08：异步路径一直都 emit('module/start')，同步路径漏了 —— 监听者在冷启动时
+      // 收不到「内置模块已就绪」，只能靠探测。两条路径的事件契约应一致。
+      emit('module/start', id)
     } catch (error) {
       stop(id, { quiet: true })
       errors.set(id, { message: String(error.message || error).slice(0, 800), at: Date.now(), source: 'builtin' })
@@ -411,9 +431,25 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     }
   }
 
-  function stop(id, { quiet = false } = {}) {
+  function stop(id, { quiet = false, cascade = true } = {}) {
     const rec = live.get(id)
     if (!rec) return false
+    // 审计 Q03：依赖倒伏 —— 依赖者必须跟着停，不能只靠 sync() 下一轮「碰巧」不启动它。
+    // 依赖者在 setup 里往往已经把服务抓成闭包（reflection/style 抓 api.use('memory')），
+    // 主库一停，它们手里的引用就指向一个已失效的实现；此时留着它们跑只会静默出错。
+    // 先把依赖者停干净，再停本体，顺序保证依赖者看到的仍是「依赖正在消失」而不是「已消失」。
+    if (cascade) {
+      const provided = new Set(rec.def.provides || [])
+      if (provided.size) {
+        for (const [otherId, otherRec] of [...live]) {
+          if (otherId === id) continue
+          const needs = otherRec.def.requires || []
+          if (!needs.some((cap) => provided.has(cap))) continue
+          log.info(`模块「${otherRec.def.name || otherId}」依赖「${rec.def.name || id}」，一并停下`)
+          stop(otherId, { quiet, cascade: true })
+        }
+      }
+    }
     live.delete(id)
     health.set(id, 'disabled')
     generation++ // 模块被停掉/替换：工具清单或实例变了，下一轮重挂
@@ -481,24 +517,45 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     return builtinDefs.has(id) ? 'builtin' : null
   }
 
+  /**
+   * 审计 Q03：能力计划（requires/conflicts/provides/requiresGUI/apiVersion）必须**只有一份**，
+   * 并且 boot / sync / reload / 市场安装后都复用它。
+   *
+   * 过去只在 boot() 里跑一次 planModules，紧接着 sync() 又完全按 wanted() 直接启动 ——
+   * 计划在启动一瞬就被绕开了。典型后果：关掉 memory 后，依赖 memory-store 的
+   * reflection / style 先被计划正确跳过，随后又被 sync() 拉起来，而它们的 setup 里
+   * 捕获的是「当前那个记忆服务」，于是拿着一个缺失的服务继续跑。
+   *
+   * GUI 位改用真实的显示服务探测（environment-detector.getDisplayServer），
+   * 不再用 !isFnOS() 冒充 —— 普通无头 Linux 不该被判成有 GUI（审计 Q12 同源）。
+   */
+  function planNow(users) {
+    const detector = new EnvironmentDetector()
+    let gui = false
+    try { gui = typeof detector.getDisplayServer === 'function' ? detector.getDisplayServer() !== 'headless' : !detector.isFnOS() } catch { gui = !detector.isFnOS() }
+    return planModules({
+      defs: builtins,
+      enabledOf: (id) => wanted(id, users) !== null,
+      runtime: { gui, apiVersion: API_VERSION },
+    })
+  }
+
+  /** 把计划里被跳过的模块如实登记进 health（面板据此显示「为什么没跑」）。 */
+  function recordSkipped(plan, skipReasonLabel = '配置开关关闭') {
+    for (const skip of plan.skipped) {
+      if (skip.reason !== skipReasonLabel) log.info(`模块「${skip.id}」未装载：${skip.reason}`)
+      health.set(skip.id, skip.reason?.startsWith('定义不合法') || skip.reason?.includes('失败') ? 'failed' : 'disabled', skip.reason)
+    }
+    return plan
+  }
+
   /** 插件加载时：内置模块同步启动（被替换 / 关掉的跳过），自己写的随后异步加载。 */
   function boot() {
     const users = isUserOn() ? scanUser() : []
     rememberUsers(users)
 
     warnRetiredForks(users)
-    // M2-F：装载前先过一遍能力声明计划（requires/conflicts/provides/requiresGUI/apiVersion）。
-    // enabledOf 仍以 wanted() 为唯一开关权威；当前内置模块都没有能力声明，计划零改变（行为红线）。
-    const detector = new EnvironmentDetector()
-    const plan = planModules({
-      defs: builtins,
-      enabledOf: (id) => wanted(id, users) !== null,
-      runtime: { gui: !detector.isFnOS(), apiVersion: API_VERSION },
-    })
-    for (const skip of plan.skipped) {
-      if (skip.reason !== '配置开关关闭') log.info(`模块「${skip.id}」未装载：${skip.reason}`)
-      health.set(skip.id, skip.reason?.startsWith('定义不合法') || skip.reason?.includes('失败') ? 'failed' : 'disabled', skip.reason)
-    }
+    const plan = recordSkipped(planNow(users))
     for (const def of plan.load) if (wanted(def.id, users) === 'builtin') startSync(def)
     return (async () => {
       await loadLib(log)
@@ -521,6 +578,12 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       rememberUsers(users)
 
       warnRetiredForks(users)
+      // 审计 Q03：与 boot 用同一份能力计划，内置模块只启动 plan.load 里的那些。
+      // 这样「依赖被关掉 → 依赖者跳过」在每一次同步（含 reload、市场安装后）都成立，
+      // 而不是只在冷启动那一瞬成立。
+      const plan = planNow(users)
+      const planned = new Set(plan.load.map((d) => d.id))
+      recordSkipped(plan)
       const ids = new Set([...builtinDefs.keys(), ...users.map((u) => u.id), ...live.keys()])
       for (const id of ids) {
         const want = wanted(id, users)
@@ -531,6 +594,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
           if (rec && rec.source === 'builtin') continue
           if (rec) stop(id)
           if (errors.get(id)?.source === 'builtin' && !rec) continue // 内置的启动失败过，别每 3 秒重试
+          if (!planned.has(id)) continue // 计划判它不该跑（缺依赖/冲突/无 GUI），别再绕过计划启动
           startSync(builtinDefs.get(id))
           continue
         }
@@ -542,8 +606,10 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         if (rec) stop(id, { quiet: true })
         if (seen && changed) log.info(`模块「${id}」文件改了，重新加载`)
         const ok = await startUser(u)
-        // 替换版加载失败：先用回内置的，免得这项功能直接没了
-        if (!ok && builtinDefs.has(id)) {
+        // 替换版加载失败：先用回内置的，免得这项功能直接没了。
+        // 审计 Q03：回退同样要过能力计划 —— 用户模块顶掉一个内置模块时，若那个内置模块
+        // 本该因缺依赖/无 GUI 被剪枝，回退不能又把它放出来。
+        if (!ok && builtinDefs.has(id) && planned.has(id)) {
           startSync(builtinDefs.get(id))
           const back = live.get(id)
           if (back) { back.fallback = true; log.warn(`模块「${id}」：你的版本没加载成功，先用内置的`) }
