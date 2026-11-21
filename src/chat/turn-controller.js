@@ -26,7 +26,14 @@ const DEFAULT_MERGE = Object.freeze({ waitMs: 2500, maxMs: 8000, groupWaitMs: 50
  * @param {{waitMs?:number, maxMs?:number, groupWaitMs?:number, groupMaxMs?:number}} [o.merge] 合流窗口参数
  * @param {() => number} [o.now] 时间注入（测试用）
  */
-export function createTurnController({ execute, merge = {}, log, maxQueue = 50 } = {}) {
+// 审计 Q05：终态回合的保留上限。
+// 过去 turns 只增不减：每轮都把整包入站数据（members 里是结构化原始事件、媒体块）
+// 永久留在内存里，队列上限只约束待执行任务、不约束已完成回合。长时间运行的实例
+// 会稳定地涨。改成「活跃记录 + 有上限的终态窗口」：完成后剥离正文，超出上限按
+// 插入序淘汰最老的终态回合（在飞的永不淘汰）。
+const TURN_CACHE_MAX = 200
+
+export function createTurnController({ execute, merge = {}, log, maxQueue = 50, turnCacheMax = TURN_CACHE_MAX } = {}) {
   if (typeof execute !== 'function') throw new TypeError('execute 必须是函数')
   const m = { ...DEFAULT_MERGE, ...merge }
   const scheduler = createTurnScheduler({ maxQueue })
@@ -84,7 +91,26 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     if (l) {
       for (const s of l.pendingSteers) cancelled || error ? s.reject(error || new Error('回合已取消')) : s.resolve()
     }
+    // 审计 Q05：终态回合不再保留整包入站数据。
+    // members 里是结构化的原始事件（含媒体块），只对 merging/running 有用；
+    // 终态之后留着它们既不诊断（getTurn 本来就剥掉）也不回收，纯粹是内存泄漏。
+    // memberEventIds 保留：它是「这一轮由哪几条消息组成」的诊断依据，且只是字符串。
+    turn.members = undefined
+    pruneFinishedTurns()
     debug(`回合 ${turn.state}：${turn.chatKey} 成员 ${turn.memberEventIds.length} 条${error ? '（' + turn.error + '）' : ''}`)
+  }
+
+  /** 淘汰超出上限的**终态**回合（Map 插入序即时间序；在飞的跳过，不阻塞淘汰）。 */
+  function pruneFinishedTurns() {
+    if (turns.size <= turnCacheMax) return 0
+    let removed = 0
+    for (const [turnId, turn] of turns) {
+      if (turns.size <= turnCacheMax) break
+      if (!isTerminal(turn)) continue // 在飞/合并中/排队的回合不淘汰
+      turns.delete(turnId)
+      removed += 1
+    }
+    return removed
   }
 
   function completeTurn(turn, outcome) {

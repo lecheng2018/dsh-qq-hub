@@ -203,7 +203,9 @@ test('系统会话超时会及时返回，晚到的回复不会发到 QQ', async
   const start = Date.now()
   await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '慢慢想', { timeoutMs: 50 }), /等太久/)
   assert.ok(Date.now() - start < 1500)
-  await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 50 }), /上一轮还没结束/)
+  // 审计 Q04 改口径：超时即释放槽位，同名任务不再「上一轮还没结束」。
+  // 过去这条断言把缺陷当成契约锁住了（要等一个可能永远不来的 turn/end）。
+  await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 50 }), /等太久/)
   // key：同一个模块的多种后台用途各走一条会话（避免不同用途的提示词互相污染）。
   // 上面那条还挂着没结束，这里换 key 必须能立刻跑起来——不再撞「上一轮还没结束」。
   const before = fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0)
