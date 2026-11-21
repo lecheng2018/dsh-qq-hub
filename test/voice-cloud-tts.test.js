@@ -308,3 +308,19 @@ test('normalize：voice.engine 白名单放行 doubao / qwentts / mimo（部署�
   }
   assert.equal(config.normalize({ voice: { engine: 'unknown-engine' } }).voice.engine, 'auto', '未知引擎仍回 auto')
 })
+
+// 审计 S10：二次下载同源绑定。audioUrl 来自 API 响应（半可信），官方语义里音频域
+// 与 API 域同源；被篡改的响应可能把下载引去任意地址（含内网）。按 origin 绑定：
+// 与 baseUrl 不同源一律拒绝；baseUrl 本身允许自填内网/本地地址（自建服务），不受影响。
+test('qwenSynth：音频地址与接口不同源时拒绝下载（S10 同源绑定）', async () => {
+  hits.length = 0
+  respond = (res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ output: { audio: { url: 'http://127.0.0.1:9/x.wav' } } }))
+  }
+  await assert.rejects(
+    () => qwenSynth('你好', { apiKey: 'sk-1', baseUrl: `${base}/compatible-mode/v1`, model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry' }),
+    /不同源/,
+    '回环音频地址与公网 API 域不同源，必须拒绝',
+  )
+})

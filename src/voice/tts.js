@@ -466,6 +466,19 @@ async function qwenSegment(text, instruction, c) {
   try { j = JSON.parse(raw) } catch { throw new Error('百炼语音返回的不是 JSON：' + raw.slice(0, 120)) }
   const audioUrl = j?.output?.audio?.url
   if (!audioUrl) throw new Error('百炼语音没返回音频地址：' + raw.slice(0, 160))
+  // 审计 S10：二次下载做**同源绑定**——audioUrl 来自 API 响应 JSON，是半可信输入；
+  // 供应商返回被篡改/被劫持时，可能把我们带去任意地址（包括内网）。官方语义里
+  // 音频域与 API 域同源（dashscope），这里按 origin 绑定：与 baseUrl 不同源一律拒绝。
+  // 不用 assertPublicUrl：baseUrl 本身允许主人自填内网/本地地址（自建兼容服务），
+  // 同源绑定既挡住「响应把下载引去别处」，又不影响合法的自建部署与测试回环。
+  try {
+    const audioHost = new URL(audioUrl).host
+    const apiHost = new URL(c.baseUrl).host
+    if (audioHost !== apiHost) throw new Error(`音频地址与接口不同源（${audioHost} ≠ ${apiHost}），已拒绝下载`)
+  } catch (error) {
+    if (error?.message?.includes('不同源')) throw error
+    throw new Error(`音频地址不是合法 URL：${String(audioUrl).slice(0, 80)}`)
+  }
   const a = await fetch(audioUrl, { signal: AbortSignal.timeout(timeoutMs) })
   if (!a.ok) throw new Error(`下载合成好的音频失败（HTTP ${a.status}）`)
   const buf = Buffer.from(await a.arrayBuffer())
