@@ -321,6 +321,38 @@ test('flush() 等到观察链收尾（fire-and-forget 有确定终点）', async
   assert.ok(ledger.peek(KEY, { now: 1_000_000 }), 'flush 之后账本已经写完')
 })
 
+test('默认 judgeThreads 超时时，生产观察器能正确观测到 judgeTimedOut 统计与告警', async () => {
+  const { ledger } = ledgerWithArchive()
+  const dsh = {
+    get: (n) => (n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo() { throw new Error('adapter 不支持查询') },
+      async *stream(params, opts) {
+        // 模拟慢思考超时挂起
+        await new Promise((resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(opts.signal.reason || new Error('Aborted')))
+          const t = setTimeout(resolve, 5000)
+          t.unref?.()
+        })
+        yield { type: 'text-delta', text: '[]' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    },
+  }
+  const warns = []
+  const observer = createThreadObserver({
+    dsh,
+    getConfig: () => ({ model: { provider: 'p', model: 'm' }, threads: { enabled: true, judge: true, judgeTimeoutMs: 20 } }),
+    ledger,
+    log: { info() {}, debug() {}, warn: (m) => warns.push(String(m)) },
+    now: () => 1_000_000,
+    pruneIntervalMs: 0,
+  })
+  const stat = await observer.recordTurn({ chatKey: KEY, userText: '今天天气真好' })
+  assert.equal(stat.judgeTimedOut, 1, '超时必须正确计入 judgeTimedOut')
+  assert.ok(warns.some((w) => w.includes('线索慢思考超时')), `警告日志中必须包含超时提示：${JSON.stringify(warns)}`)
+})
+
 test('配置默认值：threads 开着、群里不跑 S2、超时与裁剪间隔有界', () => {
   const cfg = normalize({})
   assert.equal(cfg.threads.enabled, true)
