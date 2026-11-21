@@ -1,4 +1,4 @@
-import { segmentBytes } from '../core/net.js'
+import { segmentBytes, fetchImage } from '../core/net.js'
 import { mimeOf } from './inbound.js'
 
 const MAX_BYTES = 8 * 1024 * 1024
@@ -11,16 +11,15 @@ export function createInboundImages({ onebot, dsh, log } = {}) {
     return { data: buf.toString('base64'), mediaType }
   }
 
+  // 审计 S02：广告位式的 `fetch(url)` 换成统一出口 fetchImage。
+  // 过去这里裸 fetch：允许自动跳转、在完整 arrayBuffer() 之后才查大小 —— 网关给的
+  // 半可信地址可以把我们带去内网（SSRF），也能用一个不限长的响应把内存吃光。
+  // fetchImage 已经做过 assertPublicUrl（逐跳）、redirect:'manual'、流式累计上限即取消，
+  // 这里只是复用它，不另起一套策略（两套策略迟早会漂）。
   async function admitBytes(url) {
-    let buf
-    if (url.startsWith('base64://')) buf = Buffer.from(url.slice(9), 'base64')
-    else if (/^https?:\/\//i.test(url)) {
-      const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      buf = Buffer.from(await response.arrayBuffer())
-    } else throw new Error('不是可下载的 http(s)/base64 地址')
+    const maxBytes = 10 * 1024 * 1024
+    const buf = await fetchImage(url, { maxBytes, timeoutMs: 15000 })
     if (!buf.length) throw new Error('下载到 0 字节')
-    if (buf.length > 10 * 1024 * 1024) throw new Error(`图片太大（${Math.round(buf.length / 1024)}KB）`)
     const mediaType = mimeOf(buf)
     return { data: buf.toString('base64'), mediaType }
   }
