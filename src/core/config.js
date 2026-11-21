@@ -738,13 +738,32 @@ const SECRETS = [
   // 未生效（memory 是该机制首个使用者，疑似模块实例隔离问题，待查），静态清单双保险：
   // 掩码（publicConfig）与「留空保存保留原值」（mergeFromPanel）都依赖这份清单。
   ['ext', 'memory', 'vectorApiKey'],
+  // 审计 S06：动态登记还有一处结构性缺口 —— 内置模块走 startSync 时根本不登记
+  // （已在 modules.js 的 prepareStart 修掉）。这里再补静态双保险，覆盖「登记失效」这个
+  // 尚未查清的情形：云端 ASR 的 key 与配置文件里的 memory.embeddings.apiKey。
+  ['ext', 'voice', 'cloudAsrApiKey'],
+  ['memory', 'embeddings', 'apiKey'],
   // 精排 API Key（#146）同口径进静态清单（缺陷：rerankApiKey 漏进 SECRETS，明文回传面板）。
   ['ext', 'memory', 'rerankApiKey'],
 ]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
 export function registerSecretField(path) { extraSecrets.set(path.join('\u0000'), path) }
-const allSecrets = () => [...SECRETS, ...extraSecrets.values()]
+// 审计 S06：静态清单与模块登记可能指向同一路径（例如内置语音的 cloudAsrApiKey
+// 既在 SECRETS 静态兜底、又被 registerSecretField 登记）。重复处理同一个路径会让
+// 第二个循环读到已被置空的字段，把 `<k>Set` 覆盖回 false —— 面板显示「没填」，而
+// 实际存着值。按路径去重：同一路径只处理一次。
+const allSecrets = () => {
+  const seen = new Set()
+  const out = []
+  for (const path of [...SECRETS, ...extraSecrets.values()]) {
+    const key = path.join('\u0000')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(path)
+  }
+  return out
+}
 const parentOf = (obj, path, create) => {
   let cur = obj
   for (const k of path.slice(0, -1)) {
