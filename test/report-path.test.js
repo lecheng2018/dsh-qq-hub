@@ -39,15 +39,19 @@ test('第二层：forceReport 规则下，报告段内部不再被句读拆碎',
   assert.match(out[1], /一共五条资讯.*整段走/s, '长段整条保留')
 })
 
-test('第二层接线：当前核心监听 tool/call，turn/end 清掉，记忆工具不算', () => {
+test('第二层接线：内容型工具清单只在一处，且标记是回合作用域', () => {
   const core = src('src/host/modular-core.js')
-  assert.match(core, /ev\?\.type === 'tool\/call'/)
-  assert.match(core, /reportTurns\.set\(/)
-  assert.match(core, /reportTurns\.delete\(/, '只管一轮')
-  assert.match(core, /\/\^\(bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
+  // 清单集中成 CONTENT_TOOL_RE（审计 Q02：过去同一正则漂在两个监听器里）
+  assert.match(core, /CONTENT_TOOL_RE\s*=\s*\/\^\(bili_watch\|heybox_\(feed\|watch\|hot\)\|douyin_\(watch\|recent\|browse\)/)
   assert.ok(!/\|recall_memory\)/.test(core), '记忆工具不在内容清单里')
+  assert.match(core, /turnReportHit\.hit = true/, 'tool/call 时打在本轮对象上')
+  // 标记必须是回合作用域：不能有一个跨回合的 Map（那正是「turn/end 删掉、投递读不到」的根因）
+  assert.ok(!/reportTurns\.set\(/.test(core), '不允许跨回合 Map 存标记')
+  assert.ok(!/reportTurns\.delete\(/.test(core), '不允许在 turn/end 清标记')
+  // 投递层只认调用方传进来的 forceReport 一条通路
   const delivery = src('src/chat/reply-delivery.js')
-  assert.match(delivery, /opts\.forceReport \|\| reportTurns\.get\(chatId\)/, '第三处：deliver 的规则注入')
+  assert.match(delivery, /if \(opts\.forceReport\) rules\.forceReport = true/, '规则注入只认 opts.forceReport')
+  assert.ok(!/reportTurns\.get\(/.test(delivery), '投递层不得自己持有跨回合状态')
 })
 
 test('第三层保留：没标记没工具但输出像报表，structuredReport 照样整段发', () => {

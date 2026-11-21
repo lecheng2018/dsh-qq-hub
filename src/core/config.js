@@ -270,7 +270,7 @@ const DEFAULTS_RAW = {
   memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'], embeddings: { enabled: false, url: '', apiKey: '', model: 'BAAI/bge-m3', dim: 1024, timeoutMs: 8000, batch: 16, maxChars: 200 } }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空。embeddings：向量通道（1.4.4），默认关 —— 填一个 OpenAI 兼容的 /embeddings 端点（如 SiliconFlow BAAI/bge-m3）并 enabled: true 才启用语义召回
   // 挂起线索（US-019）：S1 规则层永远跑（零成本）；S2 慢思考每轮多一次小模型调用，
   // 所以默认只在私聊跑，群里关掉（群里每人一句就一次模型调用，成本压不住）。
-  threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 15000, pruneIntervalMs: 60000 },
+  threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 30000, pruneIntervalMs: 60000 },
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
     enabled: false,              // 模块总开关，默认关
@@ -584,7 +584,7 @@ export function normalize(raw) {
   c.threads.enabled = bool(c.threads.enabled, true)
   c.threads.judge = bool(c.threads.judge, true)
   c.threads.judgeInGroups = bool(c.threads.judgeInGroups, false)
-  c.threads.judgeTimeoutMs = Math.round(num(c.threads.judgeTimeoutMs, 15000, 1000, 60000))
+  c.threads.judgeTimeoutMs = Math.round(num(c.threads.judgeTimeoutMs, 30000, 1000, 60000))
   c.threads.pruneIntervalMs = Math.round(num(c.threads.pruneIntervalMs, 60000, 5000, 3600000))
   g.interests = (Array.isArray(g.interests) ? g.interests : String(g.interests || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.minRelevance = num(g.minRelevance, 0.25, 0, 1)
@@ -738,13 +738,32 @@ const SECRETS = [
   // 未生效（memory 是该机制首个使用者，疑似模块实例隔离问题，待查），静态清单双保险：
   // 掩码（publicConfig）与「留空保存保留原值」（mergeFromPanel）都依赖这份清单。
   ['ext', 'memory', 'vectorApiKey'],
+  // 审计 S06：动态登记还有一处结构性缺口 —— 内置模块走 startSync 时根本不登记
+  // （已在 modules.js 的 prepareStart 修掉）。这里再补静态双保险，覆盖「登记失效」这个
+  // 尚未查清的情形：云端 ASR 的 key 与配置文件里的 memory.embeddings.apiKey。
+  ['ext', 'voice', 'cloudAsrApiKey'],
+  ['memory', 'embeddings', 'apiKey'],
   // 精排 API Key（#146）同口径进静态清单（缺陷：rerankApiKey 漏进 SECRETS，明文回传面板）。
   ['ext', 'memory', 'rerankApiKey'],
 ]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
 export function registerSecretField(path) { extraSecrets.set(path.join('\u0000'), path) }
-const allSecrets = () => [...SECRETS, ...extraSecrets.values()]
+// 审计 S06：静态清单与模块登记可能指向同一路径（例如内置语音的 cloudAsrApiKey
+// 既在 SECRETS 静态兜底、又被 registerSecretField 登记）。重复处理同一个路径会让
+// 第二个循环读到已被置空的字段，把 `<k>Set` 覆盖回 false —— 面板显示「没填」，而
+// 实际存着值。按路径去重：同一路径只处理一次。
+const allSecrets = () => {
+  const seen = new Set()
+  const out = []
+  for (const path of [...SECRETS, ...extraSecrets.values()]) {
+    const key = path.join('\u0000')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(path)
+  }
+  return out
+}
 const parentOf = (obj, path, create) => {
   let cur = obj
   for (const k of path.slice(0, -1)) {
@@ -821,6 +840,27 @@ function migrateGroupBudget(raw) {
   return raw
 }
 
+/**
+ * 线索判定超时一次性迁移：把老配置里显式存的 15000 换成新的 30000。
+ *
+ * 为什么需要迁移：normalize 只补默认值，**不覆盖用户已有的值** —— 那是正确的
+ * （不能篡改用户配置），但代价是「改了默认值，存量安装永远拿不到」。
+ * 2026-11-21 实机就是这个现象：代码默认已是 30000，面板读出来仍是 15000。
+ *
+ * 只折算一次（与 migrateGroupBudget 同法）：迁移完写 `timeoutVersion`，
+ * 以后用户在面板里改成任何值都不再碰 —— 包括他们主动改回 15 秒。
+ */
+export const THREAD_TIMEOUT_VERSION = 1
+export function migrateThreadTimeout(raw) {
+  if (!isObj(raw?.threads)) return raw
+  const t = raw.threads
+  if (t.timeoutVersion === THREAD_TIMEOUT_VERSION) return raw
+  // 只有「原封不动停在旧默认值」的才升级；用户自己调过的（比如 8000 或 45000）保持原样。
+  if (Number(t.judgeTimeoutMs) === 15000) t.judgeTimeoutMs = 30000
+  t.timeoutVersion = THREAD_TIMEOUT_VERSION
+  return raw
+}
+
 export function loadConfig() {
   const raw = readJson(FILE(), {})
   // 老配置（向导上线前就填好了两个号）直接算向导已完成
@@ -828,6 +868,7 @@ export function loadConfig() {
   // 更新插件后新增的、会公开发东西的功能：老用户先关着，等他们自己在面板里打开（新安装照常默认开）
   if (raw && raw.setupDone) for (const k of OPT_IN_ON_UPDATE) if (raw[k] === undefined) raw[k] = { enabled: false }
   migrateGroupBudget(raw)
+  migrateThreadTimeout(raw)
   return normalize(raw)
 }
 

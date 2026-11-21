@@ -11,7 +11,7 @@ export { calculateTypingCadence }
 // 一轮回复的业务编排：拆条、群聊合并、富媒体与同会话投递顺序。
 // 物理发送由注入的发送函数进入统一 Outbox，本模块不持有网关。
 export function createReplyDelivery({
-  getConfig, log, hooks, reportTurns, groups, stickers, interaction,
+  getConfig, log, hooks, groups, stickers, interaction,
   sendText, sendVoice, sendSticker, sendImage, sendMixed, pokeBack,
   logChat, onActivity, onDelivered, outbox, isCaptured, sleep, threadLedger, deliveryContext = new AsyncLocalStorage(),
   // 随机源统一注入（缺陷：随机源不一致）：短回复变语音、补表情、打字律动三处过去各调
@@ -90,7 +90,12 @@ export function createReplyDelivery({
     const rules = replyRules(cfg, inGroup, random)
     // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
     // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
-    if (opts.forceReport || reportTurns.get(chatId)) rules.forceReport = true
+    //
+    // 审计 Q02：标记只从 opts.forceReport 来（由调用方按回合传入）。
+    // 过去这里还兜一个聊天作用域的 Map 查询：那个 Map 在 turn/end 就被清掉，
+    // 而投递发生在 turn/end 之后 —— 这条兜底从未生效过，还留下了
+    // 「上一轮的标记污染下一轮」的跨回合泄漏。删掉，只留一条通路。
+    if (opts.forceReport) rules.forceReport = true
     // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
     // US-006 · 四态收尾：只收紧不放宽。maxBubbles 取更小值；CLOSED 时本轮直接不说话。
     // 位置很关键 —— 必须在 replyRules 之后（否则被重算覆盖），在语音转换之前
@@ -128,7 +133,8 @@ export function createReplyDelivery({
     if (r.silent) {
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groups.leaveTopic(chatId.slice(6)) // 不想聊就退出这个话题
-      return
+      // 静默也是一个回合终态：调用方要能区分「她选择不说」与「编排挂了」。
+      return { missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state: 'silent', replyRaw: text, innerMeta: extractAndStripInnerMonologue(String(text || '')).inner || null }
     }
     let items = r.items
     // 对方明确要语音、她却只打了字：整段改成语音发（模型偶尔会忘，这里兜底）
@@ -145,11 +151,11 @@ export function createReplyDelivery({
     // US-019 · 顺承前情 → 挂起线索闭环：从本轮 <inner> 读【顺承前情】标记与闭环信号。
     // 命中的线索才 resolve，没标记的只按拓扑往后挪一格（用户换话题绝不误闭环）。
     // threadLedger 由宿主注入，adaptThreadLedger 把它适配成 peek/resolve/advance 契约。
+    const innerMeta = extractAndStripInnerMonologue(String(text || '')).inner || null
     try {
       const adapted = threadLedger ? adaptThreadLedger(threadLedger) : null
       if (adapted) {
-        const innerMeta = extractAndStripInnerMonologue(String(text || '')).inner || {}
-        const innerRaw = String(innerMeta.raw || '')
+        const innerRaw = String(innerMeta?.raw || '')
         // 直接把 inner 原文交给 applyThreadContinuation —— 它内部自己用 parseInnerClosure
         // 重新解析，不需要我们预处理。之前为了绕开「inner.closure 默认是 continue」而
         // 删除 raw 里的 `closure: continue` 字面量是错的：那会把模型**显式**写的
@@ -284,6 +290,11 @@ export function createReplyDelivery({
     }
     const firstSendable = items.findIndex(sendable)
     const missedAt = [] // 写了 @ 却没对上群里人的名字
+    // 试运行 / 总开关关闭：outbox 在出队时会把这些请求判成 cancelled 而不是 failed。
+    // 两者语义不同 —— 「有意不发」不是「发失败」。这里先记下来，逐条回执循环里
+    // 把这类结果排除在 failed 之外，否则试运行会满屏「全部没有拿到回执」的假告警，
+    // 而且台账里会积一批 failed（审计 Q06 的分支不能把这种情况算成故障）。
+    const dryRun = Boolean(opts.simulate) || cfg.dryRun === true || cfg.enabled === false
     // 逐条气泡如实记账（缺陷：轮次级谎报）。
     // outbound 的发送方法成功时返回 OneBot 的原始回执、失败时返回 null（它自己已经把
     // unknown/failed 写进台账了）。过去这里把返回值直接丢掉，于是「3 条里挂了 2 条」
@@ -322,12 +333,33 @@ export function createReplyDelivery({
           for (const part of (it.kind === 'mixed' ? it.parts : [it])) {
             deliveredParts.push(part.kind === 'text' || part.kind === 'voice' ? part.value : `[${part.kind}]`)
           }
-        } else unconfirmed += 1
+        } else if (!dryRun) {
+          // 只有「本该发却拿不到回执」才算未确认；试运行/关闸是 cancelled，不算失败。
+          unconfirmed += 1
+        }
       }
       if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
     }
+    // 试运行 / 被捕获：什么都没真发，但编排结果（条目计划）仍然要交给调用方——
+    // 面板预览、试运行日志、测试都靠它，不能因为「没发」就把计划丢了。
+    // simulate / captured 仍然返回条目数组（既有契约：面板「模拟」与 6 个回归测试都按数组用）。
     if (opts.simulate) return items
-    if (inGroup) {
+    // 三态如实上报（缺陷：零尝试也曾记 sent）。
+    //   skipped：这一轮根本没有可发条目（空回复、全是控制条目）—— 没发就是没发；
+    //   failed ：有可发条目，但一条回执都没拿到；
+    //   partial：拿到一部分回执；
+    //   sent   ：可发条目全部拿到回执。
+    // 关键点：**只有真发出去的状态才允许产生「已发」的副状态**（群活跃、出站事件、
+    // 主人最近收到、插话配额）。过去这里无条件刷新，于是「网关全拒」也会让她在
+    // 面板上显得刚说过话。
+    const state = attempted === 0 ? 'skipped'
+      // 试运行/关闸：请求被 outbox 判成 cancelled，属于「有意不发」，不报 failed。
+      : dryRun && delivered === 0 ? 'skipped'
+        : delivered === 0 ? 'failed'
+          : unconfirmed > 0 ? 'partial'
+            : 'sent'
+    const wasSent = state === 'sent' || state === 'partial'
+    if (wasSent && inGroup) {
       const gid = chatId.slice(6)
       groups.noteSpeak(gid)
       // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算（真机刷屏根因：
@@ -343,12 +375,16 @@ export function createReplyDelivery({
     if (!opts.own && said) interaction.queueAside(chatId, said)
     // 有气泡没拿到回执就必须让调用方知道（不是致命错误：剩下的已经发出去了，
     // 也不该重发——那会重复说话）。调用方据此把 turn 记成部分送达而不是 sent。
-    if (unconfirmed > 0) {
+    if (unconfirmed > 0 && attempted > 0) {
       log.warn(`${chatId}：本轮 ${attempted} 条气泡里有 ${unconfirmed} 条没拿到网关回执（已发出的不回滚、不重发）`)
     }
-    onDelivered?.({ chatId, items, cfg })
-    onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
-    return { missedAt, attempted, delivered, failedCount: unconfirmed }
+    // 副状态只跟随「真的说出去了」：这两条分别是 presence（主人最近收到什么）
+    // 与联动事件流（别的 AI 看到她说的话）。零尝试/全失败都不该写。
+    if (wasSent) {
+      onDelivered?.({ chatId, items, cfg })
+      onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
+    }
+    return { missedAt, attempted, delivered, failedCount: unconfirmed, items, state, replyRaw: text, innerMeta }
   }
 
   /**
