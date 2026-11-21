@@ -121,6 +121,29 @@ const SIDE_EFFECT_PATHS = new Set([
   '/voice/asr-last',              // 触发识别（计费）
   '/voice/install',               // 安装 Python 包（派生进程，报告点名）
   '/voice/test',                  // 触发合成（计费）
+  // ── 审计 S04 复核补齐：上面那批只覆盖了「报告点名 + 一眼能看出写操作」的 22 条，
+  // 模块里其余写接口仍是缺口。逐条核对 handler 与面板调用方后补齐（面板对这些
+  // 全部走 POST；以下都是「无 body 的跨站 GET 可直达 handler」的写/计费入口）。
+  '/voice/asr-test',              // :85 跑 TTS+ASR 自检（计费；面板 POST）
+  '/memory/add',                  // :138 写记忆
+  '/memory/update',               // :142 改记忆
+  '/memory/delete',               // :146 删记忆
+  '/memory/reassign-owner',       // :151 批量搬记忆（换号迁移）
+  '/memory/restore',              // :164 恢复已失效条目
+  '/memory/import/commit',        // :183 批量导入写库
+  '/memory/extract',              // :209 触发记忆提炼（模型计费）
+  '/memory/reload',               // :128 重载档案
+  '/memory/vector/backfill',      // :159 批量 embed（外部计费调用）
+  '/profiles/save',               // :166 写人物小档案
+  '/profiles/rebuild',            // :171 按记忆重写小档案（模型计费）
+  '/profiles/delete',             // :204 删小档案
+  '/insights/save',               // :193 写相处经验
+  '/insights/delete',             // :199 删相处经验
+  '/qzone/delete',                // diary:69 删说说（对外删除 + onebot 调用）
+  '/sticker/delete',              // stickers:196 删表情（QQ 收藏里也删）
+  '/purpose/fire',                // purpose:78 跑一轮目的引擎（可能真的发消息）
+  '/speakup/fire',                // speakup:64 主动搭话（模型计费 + 私聊投递）
+  '/reset-usage',                 // token-guardian:581 重置用量（与 /token-guardian/reset-usage 同一 handler 的短别名）
 ])
 
 /** 从 Host 头里剥出主机名（处理 '127.0.0.1:8080' 与 '[::1]:8080' 两种形态）。 */

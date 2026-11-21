@@ -22,11 +22,50 @@ const WRITE_ROUTES = [
   '/memory-privacy/set-override',
   '/token-usage/reset',
   '/token-guardian/reset-usage',
+  '/token-guardian/compact-now',
+  '/compact-now',
+  '/reset-usage',
+  '/speakup/fire',
+  '/purpose/fire',
   '/voice/install',
+  '/voice/asr-test',
   '/diary/run',
+  '/qzone/delete',
   '/image/gallery/delete',
   '/style/save',
+  // 复核补齐：这些 handler 都会写持久状态 / 删数据 / 触发模型计费，
+  // 过去只在「无 body 的跨站 GET」下部分可直达，清单里一条都没有。
+  '/memory/add',
+  '/memory/update',
+  '/memory/delete',
+  '/memory/restore',
+  '/memory/import/commit',
+  '/memory/reassign-owner',
+  '/memory/extract',
+  '/memory/reload',
+  '/memory/vector/backfill',
+  '/profiles/save',
+  '/profiles/delete',
+  '/profiles/rebuild',
+  '/insights/save',
+  '/insights/delete',
+  '/sticker/delete',
 ]
+
+test('S04 · 清单里的每条写接口都真的被判为副作用路径（防止加了枚举没加清单）', () => {
+  for (const path of WRITE_ROUTES) {
+    const r = guard.check(req('GET', `/qq-hub/api${path}`))
+    assert.equal(r.ok, false, `${path} 的 GET 必须被拒`)
+    assert.equal(r.code, 405, `${path} 的 GET 应是 405 方法约束，实际 ${r.code}`)
+  }
+})
+
+test('S04 · 短别名与同 handler 的重复注册路径一视同仁（/reset-usage 不能漏）', () => {
+  // token-guardian 把同一个 handler 注册了长短两条路径，只收长名等于留了后门
+  for (const path of ['/reset-usage', '/token-guardian/reset-usage', '/compact-now', '/token-guardian/compact-now']) {
+    assert.equal(guard.check(req('GET', `/qq-hub/api${path}`)).code, 405, `${path} 必须 405`)
+  }
+})
 
 test('S04 · 模块写接口的 GET 一律 405（跨站 <img>/顶层链接/prefetch 触发不了）', () => {
   for (const path of WRITE_ROUTES) {
