@@ -90,9 +90,11 @@ return function MemoryPrivacyPanel(props) {
         ? h(Btn, { small: true, disabled: busy === 'ov:' + scope, onClick: () => setOverride(scope, opened ? '' : 'open') },
             opened ? '恢复隔离' : '不隔离')
         : null,
-      confirming === 'cm:' + scope
+      // 确认态也要带 kind：同一 scope 的记忆行和档案行并排时，只点了其中一行，
+      // 另一行不该跟着变成「确认清空」（点错就清掉了另一种 kind）。
+      confirming === 'cm:' + kind + ':' + scope
         ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope, kind) } }, '确认清空')
-        : h(Btn, { small: true, onClick: () => setConfirming('cm:' + scope) }, '清空本分区'),
+        : h(Btn, { small: true, onClick: () => setConfirming('cm:' + kind + ':' + scope) }, '清空本分区'),
     )
   }
 
