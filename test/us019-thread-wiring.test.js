@@ -276,6 +276,27 @@ test('总开关关掉时完全不动作（连裁剪都不做）', async () => {
   assert.equal(ledger.list({ chatKey: KEY }).length, 0)
 })
 
+test('老配置迁移：停在旧默认值 15000 的升到 30000，用户调过的不动', async () => {
+  const { migrateThreadTimeout, THREAD_TIMEOUT_VERSION } = await import('../src/core/config.js')
+
+  // 原封不动停在旧默认值 → 升级
+  const a = migrateThreadTimeout({ threads: { judgeTimeoutMs: 15000 } })
+  assert.equal(a.threads.judgeTimeoutMs, 30000)
+  assert.equal(a.threads.timeoutVersion, THREAD_TIMEOUT_VERSION)
+
+  // 用户自己调过的（更小的、更大的）一律保留 —— 迁移不是「强制拉齐」
+  assert.equal(migrateThreadTimeout({ threads: { judgeTimeoutMs: 8000 } }).threads.judgeTimeoutMs, 8000)
+  assert.equal(migrateThreadTimeout({ threads: { judgeTimeoutMs: 45000 } }).threads.judgeTimeoutMs, 45000)
+
+  // 已经迁移过：即使现在是 15000 也不再碰（用户主动改回来的情况）
+  const done = { threads: { judgeTimeoutMs: 15000, timeoutVersion: THREAD_TIMEOUT_VERSION } }
+  assert.equal(migrateThreadTimeout(done).threads.judgeTimeoutMs, 15000)
+
+  // 没有 threads 段：不炸
+  assert.deepEqual(migrateThreadTimeout({}), {})
+  assert.deepEqual(migrateThreadTimeout(null), null)
+})
+
 test('非法 chatKey / 空 chatKey 一律不崩（fail-open）', async () => {
   const { ledger } = ledgerWithArchive()
   const observer = observerOf({ ledger, now: () => 1_000_000 })

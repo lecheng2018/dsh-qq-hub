@@ -864,6 +864,27 @@ function migrateGroupBudget(raw) {
   return raw
 }
 
+/**
+ * 线索判定超时一次性迁移：把老配置里显式存的 15000 换成新的 30000。
+ *
+ * 为什么需要迁移：normalize 只补默认值，**不覆盖用户已有的值** —— 那是正确的
+ * （不能篡改用户配置），但代价是「改了默认值，存量安装永远拿不到」。
+ * 2026-11-21 实机就是这个现象：代码默认已是 30000，面板读出来仍是 15000。
+ *
+ * 只折算一次（与 migrateGroupBudget 同法）：迁移完写 `timeoutVersion`，
+ * 以后用户在面板里改成任何值都不再碰 —— 包括他们主动改回 15 秒。
+ */
+export const THREAD_TIMEOUT_VERSION = 1
+export function migrateThreadTimeout(raw) {
+  if (!isObj(raw?.threads)) return raw
+  const t = raw.threads
+  if (t.timeoutVersion === THREAD_TIMEOUT_VERSION) return raw
+  // 只有「原封不动停在旧默认值」的才升级；用户自己调过的（比如 8000 或 45000）保持原样。
+  if (Number(t.judgeTimeoutMs) === 15000) t.judgeTimeoutMs = 30000
+  t.timeoutVersion = THREAD_TIMEOUT_VERSION
+  return raw
+}
+
 export function loadConfig() {
   const raw = readJson(FILE(), {})
   // 老配置（向导上线前就填好了两个号）直接算向导已完成
@@ -871,6 +892,7 @@ export function loadConfig() {
   // 更新插件后新增的、会公开发东西的功能：老用户先关着，等他们自己在面板里打开（新安装照常默认开）
   if (raw && raw.setupDone) for (const k of OPT_IN_ON_UPDATE) if (raw[k] === undefined) raw[k] = { enabled: false }
   migrateGroupBudget(raw)
+  migrateThreadTimeout(raw)
   return normalize(raw)
 }
 
