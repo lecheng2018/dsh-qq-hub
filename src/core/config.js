@@ -757,6 +757,13 @@ const SECRETS = [
   ['ext', 'memory', 'vectorApiKey'],
   // 精排 API Key（#146）同口径进静态清单（缺陷：rerankApiKey 漏进 SECRETS，明文回传面板）。
   ['ext', 'memory', 'rerankApiKey'],
+  // 审计 S06：通用 HTTP TTS 的请求头与请求体是自由文本字段，但实际用法就是塞
+  // 「Authorization: Bearer …」这类凭据（面板模板与 hint 都这么引导）。凭据不应
+  // 明文回传面板——走与 apiKey 同一套机制：回显置空 + <k>Set 标记 +
+  // 「留空保存保留原值」（mergeFromPanel 通用逻辑已覆盖）。用户要看原文去
+  // config.json；面板里重新粘贴/选模板即可整体替换。
+  ['voice', 'http', 'headers'],
+  ['voice', 'http', 'body'],
 ]
 // 扩展模块设置里的密码类字段（模块加载时登记）：['ext', 模块id, 字段]
 const extraSecrets = new Map()
