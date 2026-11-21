@@ -103,3 +103,31 @@ test('S01 · 不存在的本机路径也不泄露"文件存在与否"', async ()
     assert.ok(existsSync(real), '文件本身不应被删除或改写')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('P2 · 显式传 allowLocal: true 或通过模块发送桥发送本机图片继续可用', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mod-img-'))
+  try {
+    const pngPath = join(dir, 'test.png')
+    writeFileSync(pngPath, Buffer.from('FAKE-PNG-DATA'))
+    const { outbound, sent } = outboundFixture()
+
+    // 1. outbound.sendImage 显式传 allowLocal: true 可以发送
+    const directResult = await outbound.sendImage('private:1', pngPath, null, null, { allowLocal: true })
+    assert.ok(directResult, '显式 allowLocal 应返回回执')
+    assert.equal(sent.length, 1)
+    assert.match(sent[0].segments[0].data.file, /^base64:\/\//)
+
+    // 2. 经过 createModuleSendBridge 模块通道调用
+    const { createModuleSendBridge } = await import('../src/host/module-send-bridge.js')
+    const bridgeSent = []
+    const bridgeOutbox = {
+      request: async (req) => { bridgeSent.push(req); return { state: 'sent', gatewayMessageId: 2 } },
+    }
+    const bridgeHub = {
+      sendImage: (chatId, src, replyId, userId, opts) => outbound.sendImage(chatId, src, replyId, userId, { allowLocal: true, ...opts }),
+    }
+    const bridge = createModuleSendBridge({ hub: bridgeHub, outbox: bridgeOutbox, log, unified: false })
+    const bridgeResult = await bridge.sendImage('private:1', pngPath)
+    assert.ok(bridgeResult, '模块桥接 sendImage 必须成功')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

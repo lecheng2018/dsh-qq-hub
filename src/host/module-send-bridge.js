@@ -88,7 +88,7 @@ export function createModuleSendBridge({ hub, outbox, log, unified = false }) {
   }
 
   const outboundWraps = {
-    sendImage: wrapOutbound('sendImage', 'imagegen'),
+    sendImage: (chatId, src, replyId, userId, opts) => wrapOutbound('sendImage', 'imagegen')(chatId, src, replyId, userId, { allowLocal: true, ...opts }),
     sendSticker: wrapOutbound('sendSticker', 'stickers'),
     sendFile: wrapOutbound('sendFile', 'qq-tools'),
     sendVoice: wrapOutbound('sendVoice', 'voice'),

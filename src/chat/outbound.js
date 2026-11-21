@@ -136,10 +136,11 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
    */
   const modelImageSrcAllowed = (src) => /^https?:\/\//i.test(src) || src.startsWith('base64://')
 
-  async function sendImage(chatId, src, replyId, userId) {
+  async function sendImage(chatId, src, replyId, userId, opts = {}) {
     try {
-      if (!modelImageSrcAllowed(String(src))) throw new Error('模型回复里的图片只支持 http(s) 或 base64 地址')
-      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024 })
+      const allowLocal = opts?.allowLocal === true
+      if (!allowLocal && !modelImageSrcAllowed(String(src))) throw new Error('模型回复里的图片只支持 http(s) 或 base64 地址')
+      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024, allowLocal })
       return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${String(src).slice(-40)}`)
     } catch (error) {
       log.warn('图片发不出去：', error.message)
