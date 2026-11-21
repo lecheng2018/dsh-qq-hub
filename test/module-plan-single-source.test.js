@@ -182,3 +182,38 @@ test('Q03 · 定义不合法 / apiVersion 超版的模块被计划剪枝且登�
     assert.ok(!running.includes('broken'), '定义不合法的模块不得运行')
   } finally { await mods.dispose(); cleanup() }
 })
+
+test('P2 · 依赖倒伏防环：互相声明依赖的用户模块在切安全模式停止时不栈溢出，且全部干净停下', async () => {
+  const prevEnv = process.env.DSH_QQ_HUB_DATA_DIR
+  const tempDir = mkdtempSync(join(tmpdir(), 'qqhub-p2-cycle-'))
+  process.env.DSH_QQ_HUB_DATA_DIR = tempDir
+  try {
+    const modADir = join(tempDir, 'modules', 'mod-a')
+    const modBDir = join(tempDir, 'modules', 'mod-b')
+    mkdirSync(modADir, { recursive: true })
+    mkdirSync(modBDir, { recursive: true })
+    writeFileSync(join(modADir, 'index.mjs'), `export default { id: 'mod-a', name: 'A', version: '1.0.0', api: 1, provides: ['cap-a'], requires: ['cap-b'], setup() { return {} } }`)
+    writeFileSync(join(modBDir, 'index.mjs'), `export default { id: 'mod-b', name: 'B', version: '1.0.0', api: 1, provides: ['cap-b'], requires: ['cap-a'], setup() { return {} } }`)
+
+    const h = harness({ builtins: [] })
+    const { mods, cleanup } = h
+    try {
+      await mods.sync()
+      let running = mods.status().filter((m) => m.running).map((m) => m.id)
+      assert.deepEqual(running.sort(), ['mod-a', 'mod-b'])
+
+      // 切安全模式（safeMode: true），触发停止
+      h.setCfg({ ...h.getCfg(), safeMode: true })
+      await mods.sync()
+      running = mods.status().filter((m) => m.running).map((m) => m.id)
+      assert.deepEqual(running, [], '环形依赖双方必须都干净停下')
+    } finally {
+      await mods.dispose()
+      cleanup()
+    }
+  } finally {
+    if (prevEnv) process.env.DSH_QQ_HUB_DATA_DIR = prevEnv
+    else delete process.env.DSH_QQ_HUB_DATA_DIR
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
