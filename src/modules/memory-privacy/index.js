@@ -43,7 +43,7 @@ export default {
     { key: 'enabled', label: '启用记忆分层', type: 'switch', hint: '关掉就只有原来的 BM25 记忆，不额外加分层内容' },
     { key: 'maxItems', label: '每次最多带几条', type: 'number', min: 0, max: 12, step: 1, hint: '0~12，填 0 等于不投喂分层记忆' },
     { key: 'maxChars', label: '内容长度上限', type: 'number', min: 100, max: 2000, step: 50, hint: '100~2000' },
-    { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '开（默认）：私聊记成 private、群聊记成 group。关掉后新记忆一律写进 global —— 任何聊天都能读到，等于放弃隔离，慎用' },
+    { key: 'autoScope', label: '自动按聊天作用域', type: 'switch', hint: '开（默认）：私聊记成 private、群聊记成 group。关掉后主人私聊的新记忆写进 global（任何聊天都能读）；群聊/其它私聊无论开关都只写自己的会话作用域 —— global 的写入只属于主人私聊' },
     { key: 'previewPrivate', label: '面板预览私聊分区', type: 'switch', hint: '打开后面板能看到私聊记忆原文（调试用；面板只有你能开）' },
     { key: 'globalFallback', label: 'global 兜底条数', type: 'number', min: 0, max: 12, step: 1, hint: '分层记忆不够时补几条 global（0=不补，默认不补）' },
   ],
@@ -105,9 +105,24 @@ export default {
         execute: async ({ text, scope, importance }) => {
           const liveMem = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
           if (!liveMem?.add) return { ok: false, message: '主记忆库没在跑' }
-          const finalScope = !scope || scope === 'auto'
-            ? (api.settings().autoScope ? scopeOf(chat) : 'global')
-            : scope
+          // 审计 S08：global（跨会话可见）的**写入**只允许主人私聊。
+          // 过去任何被 ACL 放行的会话——包括群聊——都能把一条记忆写进 global，
+          // 之后所有会话无条件可见：诱导一次就等于向全部会话扩散。
+          // 现在：主人私聊 → 按原语义（autoScope 关时写 global）；其它会话 →
+          // 一律降级为本会话作用域，并在返回里如实说明，不让模型以为写成了 global。
+          const ownerQQ = String(api.config().ownerQQ || '')
+          const isOwnerPrivate = chat?.kind === 'private' && ownerQQ && String(chat?.userId) === ownerQQ
+          let demotedToChatScope = false
+          let finalScope
+          if (!scope || scope === 'auto') {
+            finalScope = api.settings().autoScope ? scopeOf(chat) : 'global'
+          } else {
+            finalScope = scope
+          }
+          if (finalScope === 'global' && !isOwnerPrivate) {
+            finalScope = scopeOf(chat)
+            demotedToChatScope = true
+          }
           try {
             // 走总线（1.3.48）：所有记忆写入口收拢到 features/memory-bus.js
             const r = liveMem.add({
@@ -118,6 +133,9 @@ export default {
               scope: finalScope,
             })
             if (r && r.ok === false) return r
+            if (demotedToChatScope) {
+              return { ok: true, demoted: true, message: `已记到当前会话（${finalScope}）；global 只有主人在私聊里能写，这里不会跨会话可见` }
+            }
             return { ok: true, message: `记住了（${finalScope}）` }
           } catch (error) {
             return { ok: false, message: error.message }
@@ -148,23 +166,29 @@ export default {
       const items = (memory && typeof memory.list === 'function' ? memory.list() : []).filter((m) => !scope || String(m.scope || 'global') === scope).map(mask)
       return { ok: true, preview, items }
     })
-    // 主记忆库按作用域清空（同样二次确认在前端做）
+    // 主记忆库按作用域清空（同样二次确认在前端做）。
+    // 审计 Q09：过去不区分「记忆条目」与「人物档案」—— 两个分区共用这一个接口，
+    // 而它只遍历 memory.list() 删记忆点，人物档案一条都不会被清（面板却报「已清空」）。
+    // 现在按 kind 分流；批量删除下移到主库（一次 filter 一次 save），并如实返回删除数。
     api.route('/memory-privacy/clear-main', async (req) => {
       const q = req?.query?.scope || ''
       let body = {}
       if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
       const scope = String(q || body?.scope || '')
       if (!scope) return { ok: false, message: '要先说清哪个分区' }
+      const kind = String(body?.kind || req?.query?.kind || 'memory')
       const memory = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
       if (!memory?.list) return { ok: false, message: '主记忆库没在跑' }
-      let n = 0
-      for (const m of memory.list() || []) {
-        // 软删（invalidAt）的一并清掉：用户点的是「彻底清空」，面板的已失效分区还挂着它们
-        if (String(m.scope || '') === scope) {
-          try { memory.remove(m.id); n += 1 } catch (error) {}
-        }
+      if (kind === 'profiles') {
+        if (typeof memory.clearProfilesInScope !== 'function') return { ok: false, message: '主记忆库版本太旧，没有按分区清档案的能力' }
+        const r = memory.clearProfilesInScope(scope)
+        if (!r.ok) return r
+        return { ok: true, message: `已清空 ${r.profiles} 份人物档案（${scope}）`, profiles: r.profiles }
       }
-      return { ok: true, message: `主记忆库已清空 ${n} 条（${scope}）` }
+      if (typeof memory.clearScopeEntries !== 'function') return { ok: false, message: '主记忆库版本太旧，没有按分区批量清空的能力' }
+      const r = memory.clearScopeEntries(scope)
+      if (!r.ok) return r
+      return { ok: true, message: `已清空 ${r.items} 条记忆（${scope}）`, items: r.items }
     })
     // 单会话隔离开关：scope → open（不隔离）/隔离（默认）。存进模块 settings。
     api.route('/memory-privacy/set-override', async (req) => {
