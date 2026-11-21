@@ -14,6 +14,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const log = { info() {}, warn() {}, debug() {} }
+const OWNER = '10000001'
 
 
 async function mkStore() {
