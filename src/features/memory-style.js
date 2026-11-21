@@ -37,7 +37,7 @@ export function createMemoryStyle({
           cfg: getConfig(),
           // 语感沉淀是全局的，用全局那张卡的名字；换卡后不该继续以旧名字的口吻学说话。
           system: `你是「${characterName('', getConfig())}」。下面是你和不同的人聊天时注意到的说话习惯，以及你自己已经养成的说法。挑出你和大家聊久了、自然会被带上的说话方式（口头禅、语气词、发消息的节奏），保持你原本的性格，不超过 6 条，每条不超过 20 字。只输出 JSON 数组。` + (personaGuard() ? ' 注意：下面这些人设硬性规则优先级最高，学到的说法不得与它冲突：' + personaGuard() : ''),
-          text: `已经养成的：\n${current.map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}`,
+          text: `已经养成的：\n${current.map((x) => '- ' + x).join('\n') || '（还没有）'}\n\n大家的说话习惯：\n${pool.map((x) => '- ' + x).join('\n')}\n\n【任务要求】挑出自然被带上的说话方式，严格只输出合法的 JSON 数组（形如 ["...", "..."]），不超过 6 条，不要输出任何解释说明。`,
           maxTokens: 800,
           temperature: 0.3,
           signal: genSignal?.signal,

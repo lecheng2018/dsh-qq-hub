@@ -8,7 +8,7 @@ import { scanHistoryGroups, sampleGroupHistory } from './history-miner.mjs'
 export default {
   id: 'distill',
   name: '群友蒸馏（测试版）',
-  version: '1.0.0-beta.2',
+  version: '1.0.0-beta.4',
   api: 1,
   description: '【测试版】移植 MaiBot 语感提炼机制，高信噪比提取群友接话习惯与口癖，设置频次门槛，绝不强行加戏。',
   panel: 'panel.js',
@@ -18,7 +18,7 @@ export default {
     batchSize: 15,
     maxCapacity: 100,
     minPromotionCount: 3,   // 准入门槛：至少出现3次或锁定的规则才允许实际生效
-    maxInjectedRules: 2,    // 命中时最多参考几条
+    maxInjectedRules: 1,    // 命中时最多参考1条，杜绝注意力过载与刻意造句
     activeGroups: '',
   },
   settings: [
@@ -128,7 +128,15 @@ export default {
       }
     }
 
-    // 上下文注入：严格遵守门槛与精准命中，绝不强行加戏
+    function cleanStyleText(style) {
+      if (!style) return ''
+      return String(style)
+        .replace(/^(?:调侃)?(?:使用|用|说|回复|直接抛出|短句直说|直给短句)\s*/g, '')
+        .replace(/(?:的反转句式|的超短句|句式|短句)$/g, '')
+        .trim()
+    }
+
+    // 上下文注入：严格遵守门槛与精准命中，杜绝强行句式与小学生造句
     api.context(({ chat }) => {
       if (!chat || chat.kind !== 'group' || !isGroupActive(chat.groupId)) return ''
 
@@ -140,7 +148,8 @@ export default {
       const recentText = recentLines.map(m => m.text).join(' ')
       if (!recentText) return ''
 
-      const maxRules = Number(api.settings().maxInjectedRules) || 2
+      // 默认单次最多参考 1 条，避免强行给模型套多个紧箍咒
+      const maxRules = Math.max(1, Math.min(Number(api.settings().maxInjectedRules) || 1, 2))
       const matched = store.matchRelevantRules(activeRules, recentText, maxRules)
 
       // 核心原则：绝不强行加戏！没有明确命中具体情境时，保持 Bot 自在松弛，一条都不注入
@@ -149,16 +158,17 @@ export default {
       }
 
       const hints = matched.map(r => {
-        const sit = r.situation.replace(/时$/, '')
-        return `当${sit}时，可以像群友一样这样说：${r.style}`
+        const sit = r.situation.replace(/^(?:当|在)?/g, '').replace(/(?:时|的时候)$/g, '')
+        const tone = cleanStyleText(r.style)
+        return `聊到「${sit}」时群友常带的语调：${tone}`
       }).join('；')
 
       try {
         store.recordRuleUsage(chat.groupId, matched.map(r => r.id))
-        api.log.info(`[群友蒸馏] 为群 ${chat.groupId} 精准命中并注入语感: ${hints}`)
+        api.log.info(`[群友蒸馏] 为群 ${chat.groupId} 命中语感参考: ${hints}`)
       } catch {}
 
-      return `（当前群聊语感参考：${hints}。保持自身原本身份设定，自然带一点群友常说的调调即可，切勿生搬硬套模板或冒充他人经历。）`
+      return `（群内氛围小贴士：${hints}。仅供感受说话节奏与松弛感，按你自己的性格自然说话即可，严禁生硬套用或背诵模板。）`
     })
 
     // 面板后端路由

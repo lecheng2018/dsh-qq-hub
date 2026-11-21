@@ -1,7 +1,14 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const STOPWORDS = new Set(['情境', '口癖', '表达', '使用', '时候', '情况', '别人', '自己', '经常', '习惯'])
+const STOPWORDS = new Set([
+  '情境', '口癖', '表达', '使用', '时候', '情况', '别人', '自己', '经常', '习惯',
+  '遇到', '发生', '看到', '发现', '表示', '说明', '提出', '建议', '开始', '继续',
+  '觉得', '如果', '怎么', '这样', '那样', '这个', '那个', '一个', '一下', '有点',
+  '真的', '确实', '好像', '其实', '大家', '有人', '群友', '我们', '你们', '他们',
+  '什么', '为什么', '怎么会', '可以', '可能', '就是', '不是', '还是', '直接', '然后',
+  '很多', '一些', '所有'
+])
 
 /**
  * 中文关键词/2-gram 分词提取（用于情境与语境的灵活语义匹配）
@@ -274,24 +281,31 @@ export function createDistillStore(dataDir) {
 
     /**
      * 精准匹配当前对话语境：
-     * 严格检查关键词重合度（得分必须 >= 2，至少命中一个情境核心词）
+     * 严格检查非虚词情境实词重合度
      * 绝不盲目兜底！未命中时返回 []，保持 Bot 原本说话风格
      */
-    matchRelevantRules(rules, contextText, limit = 2) {
+    matchRelevantRules(rules, contextText, limit = 1) {
       if (!rules.length || !contextText) return []
       const scored = []
 
       for (const rule of rules) {
         let score = 0
         const sitKeywords = extractKeywords(rule.situation)
+        let hitSitCount = 0
         for (const k of sitKeywords) {
-          if (contextText.includes(k)) score += 2
+          if (contextText.includes(k)) {
+            score += 2
+            hitSitCount++
+          }
         }
+        // 门槛：必须至少命中一个实质情境词（拒绝零情境匹配）
+        if (hitSitCount < 1) continue
+
         const styleKeywords = extractKeywords(rule.style)
         for (const k of styleKeywords) {
           if (contextText.includes(k)) score += 1
         }
-        // 门槛：至少命中一个情境核心词（score >= 2）
+
         if (score >= 2) {
           scored.push({ rule, score })
         }

@@ -13,6 +13,19 @@ const STYLE_INJECTION = `
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  max-width: 100%;
+}
+.distill-panel-root * {
+  box-sizing: border-box;
+}
+.distill-panel-root .ab-sel {
+  max-width: 100%;
+  min-width: 0;
+}
+.distill-panel-root .ab-row .ab-ctl {
+  width: 100%;
+  min-width: 0;
 }
 .distill-meta-bar {
   display: flex;
@@ -26,18 +39,51 @@ const STYLE_INJECTION = `
   border: 1px solid var(--ab-line, #e5e7eb);
   font-size: 13px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.distill-status-banner {
+  width: 100%;
+  display: flex;
+  margin-bottom: 2px;
+  min-width: 0;
+}
+.distill-status-badge {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
+  min-width: 0;
+}
+.distill-status-badge.active {
+  font-weight: 600;
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--ab-success, #16a34a);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.distill-status-badge.inactive {
+  background: var(--ab-surface, #f3f4f6);
+  color: var(--ab-muted, #6b7280);
+  border: 1px solid var(--ab-line, #e5e7eb);
 }
 .distill-meta-stats {
   display: flex;
   gap: 14px;
   align-items: center;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .distill-meta-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
 }
 .distill-rule-item {
   display: flex;
@@ -49,6 +95,10 @@ const STYLE_INJECTION = `
   background: var(--ab-card, #ffffff);
   box-shadow: 0 1px 2px rgba(0,0,0,0.03);
   transition: border-color .15s, background .15s;
+  min-width: 0;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .distill-rule-item.locked {
   background: var(--ab-subtle-accent, rgba(37,99,235,0.04));
@@ -68,22 +118,65 @@ const STYLE_INJECTION = `
   padding-top: 8px;
   margin-top: 2px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .distill-rule-btns {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .distill-form-row {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 .distill-history-grid {
   display: flex;
   gap: 16px;
   align-items: flex-end;
   flex-wrap: wrap;
+  min-width: 0;
+}
+.distill-history-action {
+  margin-left: auto;
+  margin-bottom: 2px;
+}
+.distill-tab-btns {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.distill-tab-btns .ab-btn {
+  min-width: 0;
+}
+.distill-sim-result {
+  padding: 12px 14px;
+  background: var(--ab-surface, #f9fafb);
+  border-radius: 6px;
+  border: 1px solid var(--ab-line, #e5e7eb);
+  font-size: 13px;
+  line-height: 1.6;
+  min-width: 0;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+.distill-sim-tag {
+  display: inline-block;
+  margin: 2px 4px;
+  padding: 2px 8px;
+  background: var(--ab-subtle-accent, #eff6ff);
+  color: var(--ab-accent, #2563eb);
+  border-radius: 4px;
+  border: 1px solid var(--ab-accent-line, #bfdbfe);
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 @media (max-width: 720px) {
   .distill-meta-bar {
@@ -94,27 +187,49 @@ const STYLE_INJECTION = `
   }
   .distill-meta-stats {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+    width: 100%;
+  }
+  .distill-meta-stats span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .distill-meta-actions {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
     width: 100%;
   }
   .distill-meta-actions .ab-btn {
     width: 100%;
     justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    padding: 6px 6px;
+    font-size: 12px;
+  }
+  .distill-meta-actions .ab-btn:last-child {
+    grid-column: span 2;
   }
   .distill-history-grid {
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
   }
+  .distill-history-action {
+    margin-left: 0 !important;
+    width: 100%;
+    margin-top: 4px;
+  }
   .distill-history-grid .ab-btn {
     width: 100%;
     justify-content: center;
+    min-width: 0;
   }
   .distill-form-row {
     flex-direction: column;
@@ -124,6 +239,10 @@ const STYLE_INJECTION = `
   .distill-form-row .ab-input,
   .distill-form-row .ab-btn {
     width: 100% !important;
+    min-width: 0;
+  }
+  .distill-form-row .ab-btn {
+    justify-content: center;
   }
   .distill-rule-footer {
     flex-direction: column;
@@ -135,12 +254,20 @@ const STYLE_INJECTION = `
     width: 100%;
   }
   .distill-tab-btns {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
     width: 100%;
   }
   .distill-tab-btns .ab-btn {
-    flex: 1;
+    width: 100%;
     justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    padding: 6px 4px;
+    font-size: 12px;
   }
 }
 `
@@ -380,35 +507,10 @@ return function DistillPanel({ toast }) {
               })
             ),
             curGroupInfo && h('div', { className: 'distill-meta-bar' },
-              h('div', { style: { width: '100%', display: 'flex', alignItems: 'center', marginBottom: 2 } },
+              h('div', { className: 'distill-status-banner' },
                 curGroupInfo.isLiveActive
-                  ? h('span', {
-                      style: {
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        padding: '3px 10px',
-                        borderRadius: 4,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        background: 'rgba(34, 197, 94, 0.12)',
-                        color: 'var(--ab-success, #16a34a)',
-                        border: '1px solid rgba(34, 197, 94, 0.25)'
-                      }
-                    }, '🟢 该群当前处于实时生效中（日常聊天自动缓冲提炼，并在回复时按需注入）')
-                  : h('span', {
-                      style: {
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        padding: '3px 10px',
-                        borderRadius: 4,
-                        fontSize: 12,
-                        background: 'var(--ab-surface, #f3f4f6)',
-                        color: 'var(--ab-muted, #6b7280)',
-                        border: '1px solid var(--ab-line, #e5e7eb)'
-                      }
-                    }, '⚪ 该群未开启实时生效（上方「指定生效群号」未包含此群；日常聊天不监听不注入，仅供查看与历史提炼）')
+                  ? h('div', { className: 'distill-status-badge active' }, '🟢 该群当前处于实时生效中（日常聊天自动缓冲提炼，并在回复时按需注入）')
+                  : h('div', { className: 'distill-status-badge inactive' }, '⚪ 该群未开启实时生效（上方「指定生效群号」未包含此群；日常聊天不监听不注入，仅供查看与历史提炼）')
               ),
               h('div', { className: 'distill-meta-stats' },
                 h('span', null, '🔥 生效：', h('b', { style: { color: 'var(--ab-accent, #2563eb)' } }, curGroupInfo.activeCount || 0)),
@@ -469,7 +571,7 @@ return function DistillPanel({ toast }) {
             ]
           })
         ),
-        h('div', { style: { marginLeft: 'auto', marginBottom: 2 } },
+        h('div', { className: 'distill-history-action' },
           h(Btn, {
             kind: 'primary',
             disabled: historyMining || triggering || (curGroupInfo && curGroupInfo.historyCount < 5),
@@ -497,34 +599,17 @@ return function DistillPanel({ toast }) {
           onClick: handleSimulate
         }, simulating ? '模拟中…' : '发送模拟测试')
       ),
-      simResult && h('div', {
-        style: {
-          padding: '12px 14px',
-          background: 'var(--ab-surface, #f9fafb)',
-          borderRadius: 6,
-          border: '1px solid var(--ab-line, #e5e7eb)',
-          fontSize: 13,
-          lineHeight: 1.6
-        }
-      },
+      simResult && h('div', { className: 'distill-sim-result' },
         h('div', { style: { marginBottom: 8 } },
           h('span', { style: { fontWeight: 600 } }, '🎯 命中结果：'),
           simResult.hit && simResult.matchedRules && simResult.matchedRules.length > 0
             ? simResult.matchedRules.map(r => h('span', {
                 key: r.id,
-                style: {
-                  display: 'inline-block',
-                  margin: '2px 4px',
-                  padding: '2px 8px',
-                  background: 'var(--ab-subtle-accent, #eff6ff)',
-                  color: 'var(--ab-accent, #2563eb)',
-                  borderRadius: 4,
-                  border: '1px solid var(--ab-accent-line, #bfdbfe)'
-                }
+                className: 'distill-sim-tag'
               }, `当 ${r.situation.replace(/时$/, '')} 时：${r.style} (出现 ${r.count} 次)`))
             : h('span', { className: 'ab-muted' }, '🍃 未触发特定情境（严格不注入规则，Bot 保持原生性格自然回答，绝不尬梗）')
         ),
-        simResult.stylePrompt && h('div', { style: { marginBottom: 8, color: 'var(--ab-muted, #6b7280)', fontSize: 12 } },
+        simResult.stylePrompt && h('div', { style: { marginBottom: 8, color: 'var(--ab-muted, #6b7280)', fontSize: 12, wordBreak: 'break-word' } },
           h('b', null, '📝 注入的语感提示：'),
           h('span', null, simResult.stylePrompt)
         ),
@@ -534,13 +619,14 @@ return function DistillPanel({ toast }) {
             padding: '10px 12px',
             background: 'var(--ab-card, #ffffff)',
             borderRadius: 6,
-            borderLeft: '4px solid ' + (simResult.hit ? 'var(--ab-accent, #2563eb)' : 'var(--ab-line, #9ca3af)')
+            borderLeft: '4px solid ' + (simResult.hit ? 'var(--ab-accent, #2563eb)' : 'var(--ab-line, #9ca3af)'),
+            wordBreak: 'break-word'
           }
         },
           h('div', { style: { fontSize: 12, color: 'var(--ab-muted, #6b7280)', marginBottom: 4 } },
             simResult.hit ? '💬 Bot 注入群友口癖后的回复：' : '💬 Bot 原生回复（未带规则）：'
           ),
-          h('div', { style: { fontSize: 14, whiteSpace: 'pre-wrap' } }, simResult.reply)
+          h('div', { className: 'distill-sim-reply' }, simResult.reply)
         )
       )
     ),
@@ -550,7 +636,7 @@ return function DistillPanel({ toast }) {
       title: '群友语感规则管理',
       desc: `门槛机制：提炼出的规则初始处于观察池，群友累计使用 ≥${minCount} 次或手动点击【⭐ 转正】后才会实际生效。`
     },
-      h('div', { className: 'distill-tab-btns', style: { gap: 8, marginBottom: 14 } },
+      h('div', { className: 'distill-tab-btns' },
         h(Btn, {
           small: true,
           kind: ruleTab === 'active' ? 'primary' : 'default',
@@ -571,7 +657,7 @@ return function DistillPanel({ toast }) {
                 key: r.id,
                 className: 'distill-rule-item' + (r.locked ? ' locked' : '')
               },
-                h('div', null,
+                h('div', { className: 'distill-rule-body' },
                   h('div', { style: { fontWeight: 600, fontSize: 13.5, marginBottom: 3 } },
                     '当 ', h('span', { style: { color: 'var(--ab-accent, #2563eb)' } }, r.situation.replace(/时$/, '')),
                     ' 时：'
@@ -606,7 +692,7 @@ return function DistillPanel({ toast }) {
                 key: r.id,
                 className: 'distill-rule-item candidate'
               },
-                h('div', null,
+                h('div', { className: 'distill-rule-body' },
                   h('div', { style: { fontWeight: 600, fontSize: 13.5, marginBottom: 3 } },
                     '当 ', h('span', { style: { color: 'var(--ab-text-secondary, #4b5563)' } }, r.situation.replace(/时$/, '')),
                     ' 时：'
