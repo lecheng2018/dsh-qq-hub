@@ -34,6 +34,21 @@ export function createGateway({
   const seenIds = createSeenMessageIds()
   let backfilling = false
 
+  /**
+   * `get_group_msg_history` / `get_friend_msg_history` 返回的是**消息对象**，不是 OneBot 事件：
+   * 没有 `post_type`，也没有 `self_id`（真机 2026-11-21 01:34 实测确认）。
+   * 入站适配层按事件形状严格校验（fail-closed，不猜），直接投喂会让整批补收被拒：
+   * 「legacy 适配器只处理 message/message_sent/poke，收到 (无 post_type)」。
+   * 历史消息本身就是已收到的普通消息，补齐这两项即符合 v11 事件形状；不改任何语义字段。
+   */
+  function asInboundEvent(message, botQQ) {
+    const ev = { ...message }
+    if (!ev.post_type) ev.post_type = 'message'
+    if (ev.self_id == null) ev.self_id = botQQ
+    if (!ev.message_type) ev.message_type = ev.group_id != null ? 'group' : 'private'
+    return ev
+  }
+
   async function triggerBackfill({ since, gapMs }) {
     if (backfilling || getConfig().backfill?.enabled === false) return
     backfilling = true
@@ -67,8 +82,9 @@ export function createGateway({
             // 新核心 M2-A 起由 NormalizedInbound.source + 时间戳承接「落上下文」语义。
             if (it.tooOld) { log.debug(`[backfill] 群 ${gid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             const mc = getModularCore?.()
-            if (mc) await mc.dispatchBackfill(it.event, { gapMs, earliestAgeMs: it.ageMs })
-            else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+            const ev = asInboundEvent(it.event, botQQ)
+            if (mc) await mc.dispatchBackfill(ev, { gapMs, earliestAgeMs: it.ageMs })
+            else await getHub().onMessage(ev, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
           log.debug(`[backfill] 拉取群 ${gid} 历史失败:`, e.message)
@@ -98,8 +114,9 @@ export function createGateway({
             // M1-B：同上，过旧消息不唤醒
             if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             const mc = getModularCore?.()
-            if (mc) await mc.dispatchBackfill(it.event, { gapMs, earliestAgeMs: it.ageMs })
-            else await getHub().onMessage(it.event, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
+            const ev = asInboundEvent(it.event, botQQ)
+            if (mc) await mc.dispatchBackfill(ev, { gapMs, earliestAgeMs: it.ageMs })
+            else await getHub().onMessage(ev, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
           log.debug(`[backfill] 拉取私聊 ${uid} 历史失败:`, e.message)
