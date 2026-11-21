@@ -120,10 +120,27 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     return result
   }
 
+  /**
+   * 审计 S01：模型回复里的图片来源不能直接当成本机路径去读。
+   *
+   * reply.js 把 `![](…)` 解析成 image 条目，reply-delivery 把它送到这里。
+   * 过去这里 `allowLocal: true`，而 net.js 的本地分支只做「像不像绝对路径」的判断 ——
+   * 于是模型只要输出 `![](/etc/passwd)` 或 `![](C:\\…)`，宿主就会把这个文件读成
+   * base64 发到 QQ。绕过了普通文件工具的目录白名单，而且读发生在投递之前。
+   *
+   * 现实可行的边界：模型回复里只允许 http(s) 与 base64。
+   *   · 本机文件要么来自扩展/模块的显式调用（那里自己传 allowLocal），
+   *   · 要么来自入站媒体的缓存句柄——都不经过这条「模型文本」通路。
+   * 这条规则牺牲的是「让模型直接指定本机图片路径」这一个用法；它本来也不该存在：
+   * 模型没有办法知道自己机器上有哪些图，真需要发本机图，走的是模块/工具的通路。
+   */
+  const modelImageSrcAllowed = (src) => /^https?:\/\//i.test(src) || src.startsWith('base64://')
+
   async function sendImage(chatId, src, replyId, userId) {
     try {
-      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024, allowLocal: true })
-      return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${src.slice(-40)}`)
+      if (!modelImageSrcAllowed(String(src))) throw new Error('模型回复里的图片只支持 http(s) 或 base64 地址')
+      const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024 })
+      return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${String(src).slice(-40)}`)
     } catch (error) {
       log.warn('图片发不出去：', error.message)
       return null
@@ -139,7 +156,8 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         segs.push(...prepared.segs)
       } else if (part.kind === 'image') {
         try {
-          const buf = await fetchImage(part.value, { maxBytes: 10 * 1024 * 1024, allowLocal: true })
+          if (!modelImageSrcAllowed(String(part.value))) throw new Error('模型回复里的图片只支持 http(s) 或 base64 地址')
+          const buf = await fetchImage(part.value, { maxBytes: 10 * 1024 * 1024 })
           segs.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } })
         } catch (error) { log.warn('图片发不出去：', error.message) }
       } else if (part.kind === 'voice') {
