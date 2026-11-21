@@ -6,7 +6,18 @@
 //   3. 提取与保留正文、来源与依据（evidence）、修订说明（history）以及必要的元数据标记。
 //   4. 0、false、空字符串等假值绝不用 || 错换成默认值。
 
-export const MEMORY_FORMAT = 'qqhub-memory-v1'
+// 审计 S13：v1 的序列化只转义 `<!-- qqhub:entry -->` 一种标记，而解析器还把
+// `### xxx`（条目标题）与 `#### 来源与依据` / `#### 修订说明`（区段分隔）当结构。
+// 于是正文里出现这些行时，往返后会**位移或丢内容**（实测：正文若以 `### 饮食偏好`
+// 开头，该行被吃成 title；正文里出现 `#### 来源与依据`，其后内容整体搬进 evidence，
+// 正文被截断）。记忆是长期事实源，这类静默损坏无法接受。
+//
+// v2 在写侧转义所有「会被误认为结构」的行首标记，读侧只在 format=v2 时反转义。
+// v1 老文件按原样解析（**行为完全不变**），避免存量文件被重新解释成另一份内容；
+// 下一次写盘会自动升级成 v2。
+export const MEMORY_FORMAT_V1 = 'qqhub-memory-v1'
+export const MEMORY_FORMAT = 'qqhub-memory-v2'
+export const SUPPORTED_FORMATS = new Set([MEMORY_FORMAT_V1, MEMORY_FORMAT])
 
 const ENTRY_START_RE = /^<!--\s*qqhub:entry\s+(\{.*?\})\s*-->$/
 const ENTRY_END_RE = /^<!--\s*\/qqhub:entry\s*-->$/
@@ -24,6 +35,28 @@ function escapeEntryMarkers(text) {
 function unescapeEntryMarkers(text) {
   return String(text || '').replace(/^<!--\u200B\s*qqhub:entry/gm, '<!-- qqhub:entry')
     .replace(/^<!--\u200B\s*\/qqhub:entry\s*-->/gm, '<!-- /qqhub:entry -->')
+}
+
+// v2：把「行首 ### / ####」也当结构标记转义（插入零宽空格，肉眼不可见，
+// 解析时不匹配 ^#{3,4}\s，因此不会被当成标题/区段分隔）。
+const STRUCT_LINE_RE = /^(#{3,4})(\s)/gm
+function escapeStructLines(text) {
+  return String(text || '').replace(STRUCT_LINE_RE, '$1\u200B$2')
+}
+function unescapeStructLines(text) {
+  return String(text || '').replace(/^(#{3,4})\u200B(\s)/gm, '$1$2')
+}
+
+/** 按格式版本做「正文 → 落盘文本」的转义。v1 保持原样（只转义 entry 标记）。 */
+function escapeForFormat(text, format) {
+  const base = escapeEntryMarkers(text)
+  return format === MEMORY_FORMAT ? escapeStructLines(base) : base
+}
+
+/** 按格式版本做「落盘文本 → 正文」的反转义。 */
+function unescapeForFormat(text, format) {
+  const base = unescapeEntryMarkers(text)
+  return format === MEMORY_FORMAT ? unescapeStructLines(base) : base
 }
 
 /**
@@ -55,8 +88,8 @@ function parseFrontmatter(lines) {
     meta[key] = val
   }
 
-  if (meta.format !== MEMORY_FORMAT) {
-    throw new Error(`不支持的记忆格式版本: "${meta.format || ''}"（当前只支持 ${MEMORY_FORMAT}）`)
+  if (!SUPPORTED_FORMATS.has(meta.format)) {
+    throw new Error(`不支持的记忆格式版本: "${meta.format || ''}"（当前支持 ${[...SUPPORTED_FORMATS].join(' / ')}）`)
   }
   if (!meta.scope) {
     throw new Error('frontmatter 头部缺少 scope 声明')
@@ -68,7 +101,7 @@ function parseFrontmatter(lines) {
 /**
  * 解析单个 entry 块的正文与子章节
  */
-function parseEntryBody(lines) {
+function parseEntryBody(lines, format = MEMORY_FORMAT_V1) {
   let title = ''
   const contentLines = []
   const evidenceLines = []
@@ -103,9 +136,9 @@ function parseEntryBody(lines) {
     }
   }
 
-  const text = unescapeEntryMarkers(contentLines.join('\n')).trim()
-  const evidence = unescapeEntryMarkers(evidenceLines.join('\n')).trim()
-  const revision = unescapeEntryMarkers(revisionLines.join('\n')).trim()
+  const text = unescapeForFormat(contentLines.join('\n'), format).trim()
+  const evidence = unescapeForFormat(evidenceLines.join('\n'), format).trim()
+  const revision = unescapeForFormat(revisionLines.join('\n'), format).trim()
 
   return { title, text, evidence, revision }
 }
@@ -117,6 +150,39 @@ function parseEntryBody(lines) {
  * @param {string} [options.expectedScope] 期望的作用域（若指定且与文档头不符则报错）
  * @returns {{ meta: { format: string, scope: string, [key: string]: string }, entries: object[], prologue: string }}
  */
+/**
+ * 审计 S13：比对「解析回来的条目」与「写入前的条目」，返回内容字段的差异列表。
+ *
+ * 抽成纯函数是为了可测：往返破坏（内容被搬进 evidence、正文被截断、条目消失）
+ * 必须在写盘前被拦住，而这条护栏本身也需要能被验证。
+ *
+ * 比对口径刻意**忽略首尾空白**：序列化对正文做 trim 是既有设计（不 trim 会让
+ * 每条记忆都拖着聊天原文的空行），属已知且无害的差异。
+ *
+ * @param {{id:any}[]} parsedEntries 解析结果
+ * @param {{id:any}[]} sourceEntries 写入前的条目
+ * @returns {string[]} 差异描述（空数组 = 无损）
+ */
+export function diffRoundTrip(parsedEntries, sourceEntries) {
+  const problems = []
+  const byId = new Map((parsedEntries || []).map((e) => [String(e.id), e]))
+  const norm = (v) => String(v ?? '').trim()
+  const brief = (v) => (v.length > 60 ? `${v.slice(0, 60)}…` : v)
+  for (const src of sourceEntries || []) {
+    const id = String(src.id)
+    const got = byId.get(id)
+    if (!got) { problems.push(`条目 ${id} 往返后消失`); continue }
+    for (const field of ['text', 'evidence', 'revision', 'title']) {
+      const want = norm(src[field])
+      const have = norm(got[field])
+      if (want !== have) {
+        problems.push(`条目 ${id} 的 ${field} 往返不一致：写入前「${brief(want)}」→ 解析后「${brief(have)}」`)
+      }
+    }
+  }
+  return problems
+}
+
 export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
   const raw = String(markdownRaw || '').replace(/^\uFEFF/, '')
   const lines = raw.split(/\r?\n/)
@@ -166,7 +232,7 @@ export function parseMarkdownArchive(markdownRaw, { expectedScope = '' } = {}) {
       if (!inEntry) {
         throw new Error(`解析错误（行 ${i + 1}）：遇到未配对的 entry 闭合标记 <!-- /qqhub:entry -->`)
       }
-      const { title, text, evidence, revision } = parseEntryBody(entryLines)
+      const { title, text, evidence, revision } = parseEntryBody(entryLines, meta.format)
       const item = {
         ...entryMeta,
         kind: entryMeta.kind || 'fact',
@@ -295,13 +361,13 @@ export function serializeMarkdownArchive({ meta = {}, entries = [], prologue = '
       out.push(`### ${String(e.title).trim()}`, '')
     }
     if (e.text && String(e.text).trim()) {
-      out.push(escapeEntryMarkers(String(e.text).trim()), '')
+      out.push(escapeForFormat(String(e.text).trim(), format), '')
     }
     if (e.evidence && String(e.evidence).trim()) {
-      out.push('#### 来源与依据', '', escapeEntryMarkers(String(e.evidence).trim()), '')
+      out.push('#### 来源与依据', '', escapeForFormat(String(e.evidence).trim(), format), '')
     }
     if (e.revision && String(e.revision).trim()) {
-      out.push('#### 修订说明', '', escapeEntryMarkers(String(e.revision).trim()), '')
+      out.push('#### 修订说明', '', escapeForFormat(String(e.revision).trim(), format), '')
     }
     out.push('<!-- /qqhub:entry -->')
     return out.join('\n')
