@@ -277,7 +277,7 @@ const DEFAULTS_RAW = {
   memory: { enabled: true, recallCount: 6, hintCount: 8, hintMaxChars: 600, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'], embeddings: { enabled: false, url: '', apiKey: '', model: 'BAAI/bge-m3', dim: 1024, timeoutMs: 8000, batch: 16, maxChars: 200 } }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空。embeddings：向量通道（1.4.4），默认关 —— 填一个 OpenAI 兼容的 /embeddings 端点（如 SiliconFlow BAAI/bge-m3）并 enabled: true 才启用语义召回
   // 挂起线索（US-019）：S1 规则层永远跑（零成本）；S2 慢思考每轮多一次小模型调用，
   // 所以默认只在私聊跑，群里关掉（群里每人一句就一次模型调用，成本压不住）。
-  threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 15000, pruneIntervalMs: 60000 },
+  threads: { enabled: true, judge: true, judgeInGroups: false, judgeTimeoutMs: 30000, pruneIntervalMs: 60000 },
   // 多平台内容解析器（移植自 astrbot_plugin_multi_parser）
   multiParser: {
     enabled: false,              // 模块总开关，默认关
@@ -598,7 +598,7 @@ export function normalize(raw) {
   c.threads.enabled = bool(c.threads.enabled, true)
   c.threads.judge = bool(c.threads.judge, true)
   c.threads.judgeInGroups = bool(c.threads.judgeInGroups, false)
-  c.threads.judgeTimeoutMs = Math.round(num(c.threads.judgeTimeoutMs, 15000, 1000, 60000))
+  c.threads.judgeTimeoutMs = Math.round(num(c.threads.judgeTimeoutMs, 30000, 1000, 60000))
   c.threads.pruneIntervalMs = Math.round(num(c.threads.pruneIntervalMs, 60000, 5000, 3600000))
   g.interests = (Array.isArray(g.interests) ? g.interests : String(g.interests || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.minRelevance = num(g.minRelevance, 0.25, 0, 1)
