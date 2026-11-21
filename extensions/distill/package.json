@@ -1,6 +1,6 @@
 {
   "name": "qqhub-module-distill",
-  "version": "1.0.0-beta.4",
+  "version": "1.0.0-beta.2",
   "description": "QQ Hub 群友蒸馏模块：移植 MaiBot 语感提炼机制，高信噪比提取群友接话习惯与口癖",
   "type": "module",
   "main": "index.mjs",
