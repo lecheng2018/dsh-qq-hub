@@ -195,6 +195,7 @@ export function sanitizeJudgedThreads(entries, corpus, { max = MAX_JUDGED_THREAD
 export async function judgeThreads({
   dsh, cfg, chatKey, recentText, now, deps, log,
   maxTokens = DEFAULT_MAX_TOKENS, timeoutMs = DEFAULT_TIMEOUT_MS,
+  onTimedOut,
 } = {}) {
   void now
   const corpus = String(recentText ?? '').trim().slice(-MAX_RECENT_CHARS)
@@ -216,8 +217,17 @@ export async function judgeThreads({
       timeoutMs,
     )
   } catch (error) {
-    warn(`线索判定跳过（模型不可用）：${chatKey || '?'} ${error?.message || error}`)
-    return []
+    const timedOut = error?.judgeTimedOut === true
+    if (timedOut) {
+      try { onTimedOut?.(error) } catch {}
+    }
+    warn(`线索判定跳过（模型不可用${timedOut ? '·超时' : ''}）：${chatKey || '?'} ${error?.message || error}`)
+    const empty = []
+    if (timedOut) {
+      Object.defineProperty(empty, 'judgeTimedOut', { value: true, enumerable: false, configurable: true })
+      Object.defineProperty(empty, 'judgeTimeoutMs', { value: error.judgeTimeoutMs, enumerable: false, configurable: true })
+    }
+    return empty
   }
 
   try {

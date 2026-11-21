@@ -185,7 +185,9 @@ export function createThreadObserver({
         const rows = await judge({
           dsh, cfg, chatKey, recentText: recent, now: at, log,
           timeoutMs: Number(cfg?.threads?.judgeTimeoutMs) || undefined,
+          onTimedOut: () => { stat.judgeTimedOut = 1 },
         })
+        if (rows?.judgeTimedOut) stat.judgeTimedOut = 1
         slow = withTtl(chatKey, rows)
       } catch (error) {
         // judgeThreads 自己已经 fail-open；这里再兜一层，防止注入实现抛出来打断整轮。
