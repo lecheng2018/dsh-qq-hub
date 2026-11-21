@@ -151,9 +151,19 @@ export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pic
     return syncingHistory
   }
 
-  function todayExcerpt(maxLines = 60) {
+  /**
+   * 当天日记素材：只取**显式授权**的会话。
+   *
+   * 审计 S07：过去这里只排除 system 会话，等于把主人私聊 + 所有白名单群混成
+   * 一份 60 行摘要交给模型，再以第一人称公开发到空间——私聊内容会被改写外泄。
+   * 现在必须由 includeChats 逐个会话授权；没授权就不引用任何聊天内容
+   * （日记仍会写，只是只写她自己的事）。
+   */
+  function todayExcerpt(includeChats, maxLines = 60) {
+    const allow = new Set((Array.isArray(includeChats) ? includeChats : []).map((x) => String(x)))
+    if (!allow.size) return ''
     const lines = (chatLog?.readDay?.(dayKey()) ?? hub.chatLogOf(dayKey()))
-      .filter((l) => !String(l.chatId).startsWith('system:'))
+      .filter((l) => allow.has(String(l.chatId)))
       .slice(-maxLines)
       .map((l) => `${new Date(l.t).toTimeString().slice(0, 5)} ${l.who === 'bot' ? '我' : l.who}：${l.text}`)
     return lines.join('\n')
@@ -168,7 +178,7 @@ export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pic
       // 名单/范围不合法就别让模型白写一篇再失败
       try { resolveAudience(getConfig(), visibility) } catch (error) { return { ok: false, message: error.message } }
       const now = new Date()
-      const excerpt = todayExcerpt()
+      const excerpt = todayExcerpt(cfg.includeChats)
       const prompt = [
         `【写空间日记】现在是 ${now.getMonth() + 1} 月 ${now.getDate()} 日 ${now.toTimeString().slice(0, 5)}。`,
         excerpt ? `今天你在 QQ 上的聊天片段（「我」是你自己）：\n${excerpt}` : '今天还没怎么聊天。',
