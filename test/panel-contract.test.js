@@ -55,8 +55,10 @@ test('面板视图只调用 useField 真正提供的方法', () => {
 // 商店模块（dsh-qq-hub-mods）自己 api.route 的路径前缀；主仓库静态看不到。
 const MODULE_PREFIXES = [
   '/bili', '/douyin', '/heybox', '/multi-parser', '/qzone/social',
-  '/groups/titles', '/deliveries', '/tophub', '/rss-reader', '/mijia',
+  '/deliveries', '/tophub', '/rss-reader', '/mijia',
 ]
+// 别再把主仓库已删除的路由塞回白名单（审计 Q13）：'/groups/titles' 曾在这里，
+// 把面板里那条死调用盖了整整几个版本，契约检查形同虚设。商店模块前缀才配豁免。
 
 // ---------- 2. 前端路径 vs 后端注册 ----------
 

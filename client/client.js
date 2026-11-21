@@ -1329,14 +1329,14 @@ function OwnerBrief({ draft, setDraft }) {
   const groups = (draft.allow.groups || []).map(String);
   const [info, setInfo] = useState(null);
   useEffect(() => {
-    get("/groups/titles").then((r) => {
-      if (r.ok) setInfo(r);
+    get("/panel/chats").then((r) => {
+      if (r && r.ok) setInfo(r);
     }).catch(() => {
     });
   }, []);
   const nameOf = (gid) => {
-    const g = (info && info.groups || []).find((x) => x.groupId === gid);
-    return g && g.name && g.name !== gid ? g.name : "";
+    const c = (info && info.chats || []).find((x) => x.kind === "group" && String(x.id) === String(gid));
+    return c && c.rawName || "";
   };
   const on = (gid) => (ob.groups || []).includes(gid);
   const toggle = (gid) => setDraft(setPath(draft, "group.ownerBrief.groups", on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...ob.groups || [], gid]));
