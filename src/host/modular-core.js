@@ -43,7 +43,7 @@ import { parseMessageEvent, cardText, neutralizeInboundDsl } from '../chat/inbou
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
-import { parseReply, replyRules, wantsVoice } from '../chat/reply.js'
+import { wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
@@ -277,10 +277,13 @@ export function createModularCore({
   const participants = createTurnParticipants({ getConfig, chatOfSession: chatKeyOfSession })
   const presence = createPresence()
   const capture = createCapture()
+  // 内容型工具（查资料的）：这一轮调过它们就按「报告」排版，不被拆碎（1.3.48 第二层兜底）。
+  // 记忆型工具（recall_memory 等）刻意不在其中。集中成一处常量，免得正则漂在两个监听器里。
+  const CONTENT_TOOL_RE = /^(bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/
+
   const faces = createFaces({ onebot, log })
   const sentIds = new Set()
   let selfId = ''
-  const reportTurns = new Map()
   const pairCalmUntil = new Map()
   const pairCalmSweep = (now) => {
     if (pairCalmUntil.size < 50) return
@@ -737,7 +740,9 @@ export function createModularCore({
   const outboundFiles = createOutboundFiles({ getConfig, log, outbox, sendSegments: outbound.sendSegments, captureOnly: capture.captureOnly, onStats: bump, deliveryContext })
   const replyDelivery = createReplyDelivery({
     deliveryContext,
-    getConfig, log, hooks: moduleHooks, reportTurns, groups, stickers,
+    // 审计 Q02：不再注入 reportTurns —— 报告标记改为随回合传 forceReport，
+    // 投递层不需要（也不该）自己持有跨回合状态。
+    getConfig, log, hooks: moduleHooks, groups, stickers,
     interaction,
     // US-019：线索账本注入回复链路，用来处理 <inner> 里的【顺承前情】与闭环信号
     ...(threadLedger ? { threadLedger } : {}),
@@ -1307,6 +1312,11 @@ export function createModularCore({
       let followupDone = false
       let completion = null
       let finishReply = () => {}
+      // 审计 Q02：报告兜底标记改为**回合作用域**。
+      // 过去是 `reportTurns: Map<chatId, true>`：tool/call 时 set，turn/end 时 delete，
+      // 而投递发生 turn/end 之后 —— 于是兜底规则一次都没生效过。改成随这轮对象活到底，
+      // 顺带消掉「上一轮的快照污染下一轮」这个跨回合泄漏。
+      const turnReportHit = { hit: false }
       const cleanupListener = () => { try { off?.() } catch {} off = null }
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
@@ -1325,8 +1335,8 @@ export function createModularCore({
         }
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call' && /^(bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/.test(String(ev?.data?.name || ''))) {
-            reportTurns.set(turn.chatKey, true)
+          if (ev?.type === 'tool/call' && CONTENT_TOOL_RE.test(String(ev?.data?.name || ''))) {
+            turnReportHit.hit = true
             return
           }
           if (ev?.type === 'assistant/message') {
@@ -1337,7 +1347,7 @@ export function createModularCore({
             return
           }
           if (ev?.type === 'turn/end') {
-            reportTurns.delete(turn.chatKey)
+            // 不在这里清标记：投递发生在本事件之后，标记必须活到 forceReport 被读取那一刻。
             const d = ev?.data || {}
             completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '', failure: d.reason?.error || d.reason?.failure || null }
             if (followupDone) finishReply()
@@ -1414,33 +1424,35 @@ export function createModularCore({
 
       // 6. 出站后处理（真机报告 6：不处理后处理链时 `|||` 字面外发）：
       //    stripReasoning、按 ||| 分气泡（maxBubbles 上限由 replyRules 收敛）、[沉默] 不说话——与 legacy 同一函数。
+      //
+      // 审计 Q01：这里**不再**自己跑一遍 reply / reply:items 钩子与 parseReply。
+      // 过去两处各跑一次（本函数 + reply-delivery.deliverNow），有状态或非幂等的扩展会重复
+      // 执行；而且第一次解析出的 replyItems 只喂给了线索账本，线索看到的内容可能不是实际
+      // 发出的内容。现在唯一的执行点就是 deliver()，它把「实际发出的条目」作为 items 交回来。
       if (!reply) return null
-      if (typeof moduleHooks?.reply === 'function') {
-        const next = await moduleHooks.reply(String(reply), { chatId: turn.chatKey, userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
-        if (next == null) return null
-        reply = String(next)
-      }
-      const cfgOut = getConfig()
-      const parsed = parseReply(reply, replyRules(cfgOut, turn.chatKey.startsWith('group:')))
-      if (parsed.silent) return null
-      let replyItems = parsed.items
-      if (typeof moduleHooks?.items === 'function') {
-        const next = await moduleHooks.items(replyItems, { chatId: turn.chatKey, text: String(reply), userText: textOfSegments(io.members.flatMap((m) => m.segments || [])) })
-        if (next == null) return null
-        replyItems = next
-      }
+      // 这一轮真正进模型的用户原话：投递、线索、关系信号三处都用同一份（不再各算一次）。
+      const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       try {
         const delivered = await replyDelivery.deliver(turn.chatKey, reply, {
           own: true,
           topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
-          userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
-          wantVoice: wantsVoice(textOfSegments(io.members.flatMap((m) => m.segments || []))),
+          userText: turnUserText,
+          wantVoice: wantsVoice(turnUserText),
           autoReply,
           refs: inGroup ? groups.refs(chat.groupId) : {},
+          // 审计 Q02：报告兜底标记随**回合**传进来，不再走一个「聊天天键」的 Map
+          // （那个 Map 在 turn/end 就被删掉，而投递发生在其后，规则永远读不到它）。
+          forceReport: turnReportHit.hit,
         })
-        if (inGroup) {
+        // 她选择沉默 / 模块拦下：与旧的 parsed.silent、next==null 语义一致，整轮不投递。
+        if (!delivered) return null
+        if (delivered.state === 'silent') return null
+        // 插话配额只跟随「真的说出去了」（审计 Q06）：全失败/零尝试不再计一次插话。
+        if (inGroup && (delivered.state === 'sent' || delivered.state === 'partial')) {
           try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
         }
+        // 线索账本用投递层回报的实际条目，避免「线索看到的内容 ≠ 实际发出去的内容」。
+        const replyItems = Array.isArray(delivered.items) ? delivered.items : []
         // US-019 · 轮末挖线索：这一轮**已经投递完**（applyThreadContinuation 跑过）才入账。
         // fire-and-forget：S2 是一次额外的小模型调用，绝不能让它在投递链路上等
         // （等 = 用户已经看到回复了，可这一轮的 turn 还不算结束，调度槽被白占）。
@@ -1464,7 +1476,6 @@ export function createModularCore({
 
         // US-015 · 回复已投递，才结算这一轮的关系信号（失败只记 debug，绝不影响投递结果）。
         // 文本口径 = 这一轮真正进模型的用户原话 + 她的回复；recentContext 是同一聊天域的最近几轮。
-        const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
         feedAffectiveSignals({
           chatKey: turn.chatKey,
           userText: turnUserText,
@@ -1473,16 +1484,19 @@ export function createModularCore({
           now: Date.now(),
         })
         noteRecentTurn(turn.chatKey, turnUserText, String(reply || ''))
-        // 如实上报（缺陷：轮次级谎报）。过去这里无条件写 state:'sent'，
-        // 于是「3 条气泡挂了 2 条」与「全成功」在调用方看来完全一样，台账里的
-        // unknown/failed 也没人读得到。现在按 reply-delivery 的气泡级回执区分：
-        //   · 全部拿到网关回执 → sent
-        //   · 有气泡没拿到回执 → partial（已经发出去的不重发，避免重复说话）
-        // attempted 为 0 的情况（整轮没有任何可发条目）保持 sent，与旧行为一致。
+        // 如实上报（缺陷：轮次级谎报）。终态由投递层给出，这里不再自己反推：
+        //   · sent    —— 可发条目全部拿到网关回执
+        //   · partial —— 有气泡没拿到回执（已发出的不重发，避免重复说话）
+        //   · failed  —— 有可发条目但一条回执都没拿到
+        //   · skipped —— 整轮没有可发条目
+        // 审计 Q06 修掉了旧行为里「attempted 为 0 也算 sent」：那会让「没说出口」
+        // 在台账和面板上显示成「说过」。
         const failed = Number(delivered?.failedCount) || 0
-        const state = failed > 0 ? 'partial' : 'sent'
-        if (failed > 0) {
-          log.warn(`${turn.chatKey}：本轮投递归属 ${state}（${delivered?.delivered ?? '?'}/${delivered?.attempted ?? '?'} 条拿到回执）`)
+        const state = delivered?.state || (failed > 0 ? 'partial' : 'sent')
+        if (state === 'partial') {
+          log.warn(`${turn.chatKey}：本轮投递归属 partial（${delivered?.delivered ?? '?'}/${delivered?.attempted ?? '?'} 条拿到回执）`)
+        } else if (state === 'failed') {
+          log.warn(`${turn.chatKey}：本轮 ${delivered?.attempted ?? '?'} 条气泡全部没有拿到网关回执`)
         }
         return { state, via: 'reply-delivery', failedCount: failed, attempted: delivered?.attempted, delivered: delivered?.delivered }
       } catch (error) {
@@ -1753,17 +1767,15 @@ export function createModularCore({
         let lastText = ''
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call' && /^(bili_watch|heybox_(feed|watch|hot)|douyin_(watch|recent|browse)|qq_draw_image)$/.test(String(ev?.data?.name || ''))) {
-            reportTurns.set(chatKey, true)
-            return
-          }
+          // 主动回合只生成文本、由调用方自行投递，这里不设报告标记：
+          // 过去在这里 set 一个没人读的 Map 条目，纯属误导（投递走的是调用方那一次 deliver）。
+          if (ev?.type === 'tool/call') return
           if (ev?.type === 'assistant/message') {
             const d = ev.data || {}
             if (d.interrupted) return
             const value = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
             if (value) { lastTurn = d.turn; lastText = value }
           } else if (ev?.type === 'turn/end') {
-            reportTurns.delete(chatKey)
             const d = ev.data || {}
             cleanup()
             if (d.reason?.kind !== 'completed') {
