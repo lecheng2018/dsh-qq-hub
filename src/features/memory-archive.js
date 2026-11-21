@@ -1265,6 +1265,45 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return { scope, items, profile, insights, style }
   }
 
+  /**
+   * 审计 Q09：按作用域**批量**清空记忆条目（含软删 invalidAt 的），一次 save。
+   *
+   * 过去面板的「清空本分区」是前端循环逐条 memory.remove(id)：每条都全量 save 一次
+   * （N 条 = N 次写盘 + N 次索引失效），且 remove 的返回值没人看——主库关着时
+   * 每条都静默失败，面板却报「已清空 N 条」。这里改成 store 层一次 filter + 一次 save，
+   * 返回真实删除数。
+   */
+  function clearScopeEntries(scope) {
+    if (status === 'closed') return { ok: false, items: 0, message: '记忆模块已关闭' }
+    const want = String(scope || '').trim()
+    if (!want) return { ok: false, items: 0, message: '要先说清哪个分区' }
+    const s = load()
+    const before = s.items.length
+    s.items = s.items.filter((m) => String(m.scope || '') !== want)
+    const items = before - s.items.length
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return { ok: true, items }
+  }
+
+  /** 按作用域清空人物小档案（面板「人物档案」分区的「清空本分区」）。 */
+  function clearProfilesInScope(scope) {
+    if (status === 'closed') return { ok: false, profiles: 0, message: '记忆模块已关闭' }
+    const want = String(scope || '').trim()
+    if (!want) return { ok: false, profiles: 0, message: '要先说清哪个分区' }
+    const s = load()
+    const before = Object.keys(s.profiles || {}).length
+    for (const k of Object.keys(s.profiles || {})) {
+      const p = s.profiles[k]
+      const pScope = p?.scope || (k.includes('@') ? k.slice(k.lastIndexOf('@') + 1) : 'global')
+      if (pScope === want) delete s.profiles[k]
+    }
+    const profiles = before - Object.keys(s.profiles || {}).length
+    s.rev = (s.rev || 0) + 1
+    save(s)
+    return { ok: true, profiles }
+  }
+
   const learning = extend?.({
     dsh, getConfig, hub, chatLog, log, personaText,
     isActive: () => status === 'active', createGenerationSignal, generationOf,
@@ -1282,7 +1321,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vectorBackfill: (items) => vec.backfill(items),
     rerankStatus: rerankStatusSafe,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, clearScopeEntries, clearProfilesInScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
     profiles: () => {
       const s = load()

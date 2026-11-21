@@ -43,10 +43,10 @@ return function MemoryPrivacyPanel(props) {
     } catch (error) { setViewItems([]) }
   }
   // 1.3.48：只剩主库一条路（本模块自己的 scoped.json 已删）。
-  const clearScope = async (scope) => {
-    setBusy('clear:' + scope)
+  const clearScope = async (scope, kind = 'memory') => {
+    setBusy('clear:' + kind + ':' + scope)
     try {
-      const r = await call('/memory-privacy/clear-main', { scope })
+      const r = await call('/memory-privacy/clear-main', { scope, kind })
       toast(r.message || (r.ok ? '清空了' : '没成功'), r.ok ? 'ok' : 'err')
       await load()
     } finally { setBusy('') }
@@ -80,7 +80,7 @@ return function MemoryPrivacyPanel(props) {
   const ScopeRow = ({ scope, n, kind = 'memory' }) => {
     const isGlobal = scope === 'global'
     const opened = (d.overrides || {})[scope] === 'open'
-    const key = scope
+    const key = kind + ':' + scope // 记忆与档案两行可能同 scope，React key 不能撞
     return h('div', { key, style: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' } },
       h('span', { className: 'ab-small', style: { flex: 1, minWidth: 160 } },
         label(scope), ' ', h('b', null, n + ' 条'),
@@ -91,7 +91,7 @@ return function MemoryPrivacyPanel(props) {
             opened ? '恢复隔离' : '不隔离')
         : null,
       confirming === 'cm:' + scope
-        ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope) } }, '确认清空')
+        ? h(Btn, { small: true, onClick: () => { setConfirming(''); clearScope(scope, kind) } }, '确认清空')
         : h(Btn, { small: true, onClick: () => setConfirming('cm:' + scope) }, '清空本分区'),
     )
   }
