@@ -94,6 +94,33 @@ const SIDE_EFFECT_PATHS = new Set([
   '/avatar/upload',        // :109 writeFileSync 换头像
   '/avatar/reset',         // :119 unlinkSync 删头像
   '/avatar/sync-qq',       // :123 set_qq_avatar 改 QQ 头像
+  // ── 审计 S04：内置模块的路由与面板路由同前缀（routePrefixFor 对内置模块返回 ''），
+  // 过去这份清单只收面板路由，模块的写接口一个都没进来 —— 跨站 <img>/顶层链接的 GET
+  // 能直接触发它们：清空记忆分区、重置用量、安装组件、触发日记对外发布。
+  // 逐条按「写持久状态 / 删数据 / 派生进程或下载 / 对外发布 / 触发计费」收进来
+  // （与上面面板条目同一口径）；面板前端对这些全部走 POST，合法流程不受影响。
+  '/affective/bump',              // 写情感状态
+  '/compact-now',                 // token-guardian 立即压缩（触发模型调用＝计费）
+  '/token-guardian/compact-now',  // 同上（模块内注册路径）
+  '/token-guardian/reset-usage',  // 重置用量
+  '/token-usage/reset',           // 重置用量（报告点名）
+  '/diary/run',                   // 对外发布说说（高危）
+  '/image/codex/cancel',          // 写任务态
+  '/image/codex/complete',        // 写登录/任务态
+  '/image/codex/login',           // 发起登录（可能拉起浏览器）
+  '/image/codex/logout',          // 写登录态
+  '/image/gallery/delete',        // 删数据
+  '/image/open-folder',           // 派生进程（打开文件夹）
+  '/memory-privacy/clear-main',   // 删记忆/档案数据（报告点名）
+  '/memory-privacy/set-override', // 写隔离开关（报告点名）
+  '/sticker/import-qq',           // 从 QQ 拉取导入（写库＋网络）
+  '/sticker/rename',              // 写状态
+  '/sticker/upload',              // 上传写库
+  '/style/save',                  // 写说话方式
+  '/voice/asr-prepare',           // 下载 200MB 模型
+  '/voice/asr-last',              // 触发识别（计费）
+  '/voice/install',               // 安装 Python 包（派生进程，报告点名）
+  '/voice/test',                  // 触发合成（计费）
 ])
 
 /** 从 Host 头里剥出主机名（处理 '127.0.0.1:8080' 与 '[::1]:8080' 两种形态）。 */
