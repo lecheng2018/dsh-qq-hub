@@ -224,3 +224,19 @@ test('Q06 · 试运行不产生已发副作用', async () => {
   assert.deepEqual(activities, [])
   assert.deepEqual(deliveredEvents, [])
 })
+
+test('P2 · 投递层返回钩子改写后的 replyRaw 与 innerMeta，下游消费改写后的内容', async () => {
+  const config = makeConfig()
+  const delivery = createReplyDelivery({
+    getConfig: () => config,
+    log,
+    hooks: {
+      reply: async (text) => text.replace(/<inner>[\s\S]*?<\/inner>/, '').replace('原始回答', '改写后的回答'),
+    },
+    sendText: async () => ({ message_id: 1 }),
+    interaction: { queueAside() {} },
+  })
+  const res = await delivery.deliverNow('private:9', '<inner>【备忘】明天发你链接\n</inner>原始回答', { own: true })
+  assert.equal(res.replyRaw, '改写后的回答')
+  assert.equal(res.innerMeta.memo, '')
+})

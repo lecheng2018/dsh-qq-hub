@@ -1522,6 +1522,8 @@ export function createModularCore({
         }
         // 线索账本用投递层回报的实际条目，避免「线索看到的内容 ≠ 实际发出去的内容」。
         const replyItems = Array.isArray(delivered.items) ? delivered.items : []
+        const effectiveReply = typeof delivered?.replyRaw === 'string' ? delivered.replyRaw : String(reply || '')
+        const effectiveInnerMeta = delivered?.innerMeta || null
         // US-019 · 轮末挖线索：这一轮**已经投递完**（applyThreadContinuation 跑过）才入账。
         // fire-and-forget：S2 是一次额外的小模型调用，绝不能让它在投递链路上等
         // （等 = 用户已经看到回复了，可这一轮的 turn 还不算结束，调度槽被白占）。
@@ -1534,7 +1536,8 @@ export function createModularCore({
             threadObserver.recordTurn({
               chatKey: turn.chatKey,
               userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
-              replyRaw: String(reply || ''),
+              replyRaw: effectiveReply,
+              innerMeta: effectiveInnerMeta,
               replyText: sentText,
               recentText: [String(participants.prevTextOf(String(sessionId)) || ''), textOfSegments(io.members.flatMap((m) => m.segments || []))].filter(Boolean).join('\n'),
             }).catch(() => {})
@@ -1548,11 +1551,11 @@ export function createModularCore({
         feedAffectiveSignals({
           chatKey: turn.chatKey,
           userText: turnUserText,
-          botText: String(reply || ''),
+          botText: effectiveReply,
           recentContext: recentContextOf(turn.chatKey),
           now: Date.now(),
         })
-        noteRecentTurn(turn.chatKey, turnUserText, String(reply || ''))
+        noteRecentTurn(turn.chatKey, turnUserText, effectiveReply)
         // 如实上报（缺陷：轮次级谎报）。终态由投递层给出，这里不再自己反推：
         //   · sent    —— 可发条目全部拿到网关回执
         //   · partial —— 有气泡没拿到回执（已发出的不重发，避免重复说话）

@@ -134,7 +134,7 @@ export function createReplyDelivery({
       log.info(`${chatId}：她选择不说话`)
       if (chatId.startsWith('group:')) groups.leaveTopic(chatId.slice(6)) // 不想聊就退出这个话题
       // 静默也是一个回合终态：调用方要能区分「她选择不说」与「编排挂了」。
-      return { missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state: 'silent' }
+      return { missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state: 'silent', replyRaw: text, innerMeta: extractAndStripInnerMonologue(String(text || '')).inner || null }
     }
     let items = r.items
     // 对方明确要语音、她却只打了字：整段改成语音发（模型偶尔会忘，这里兜底）
@@ -151,11 +151,11 @@ export function createReplyDelivery({
     // US-019 · 顺承前情 → 挂起线索闭环：从本轮 <inner> 读【顺承前情】标记与闭环信号。
     // 命中的线索才 resolve，没标记的只按拓扑往后挪一格（用户换话题绝不误闭环）。
     // threadLedger 由宿主注入，adaptThreadLedger 把它适配成 peek/resolve/advance 契约。
+    const innerMeta = extractAndStripInnerMonologue(String(text || '')).inner || null
     try {
       const adapted = threadLedger ? adaptThreadLedger(threadLedger) : null
       if (adapted) {
-        const innerMeta = extractAndStripInnerMonologue(String(text || '')).inner || {}
-        const innerRaw = String(innerMeta.raw || '')
+        const innerRaw = String(innerMeta?.raw || '')
         // 直接把 inner 原文交给 applyThreadContinuation —— 它内部自己用 parseInnerClosure
         // 重新解析，不需要我们预处理。之前为了绕开「inner.closure 默认是 continue」而
         // 删除 raw 里的 `closure: continue` 字面量是错的：那会把模型**显式**写的
@@ -384,7 +384,7 @@ export function createReplyDelivery({
       onDelivered?.({ chatId, items, cfg })
       onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
     }
-    return { missedAt, attempted, delivered, failedCount: unconfirmed, items, state }
+    return { missedAt, attempted, delivered, failedCount: unconfirmed, items, state, replyRaw: text, innerMeta }
   }
 
   /**
