@@ -1,14 +1,26 @@
 #!/bin/sh
-# pre-push：把 Verify 工作流的「产物同源」门禁挪到本地，push 之前就红。
+# pre-push：本地兜底门禁，push 之前就红。
 #
-# 背景：client/client.js 是 esbuild 产物、和 client/src 一起入库。改了 src（或改了
-# scripts/build-client.mjs 的 postProcess）却忘记重新提交产物时，`npm test` 会现场构建、
-# 测试照样全绿，只有 CI 会红——2026-11-19 的 f1e6100 / bd7f993 就是这样红的。
+# 两道检查，串行执行，任一不过就拦下（exit 1）：
 #
-# 检查逻辑与 CI 完全同源：scripts/build-client.mjs --check（只比对、不落盘）。
-# 紧急情况下可 `git push --no-verify` 跳过，但 CI 仍会拦。
+#   ① PII / 密钥门禁 —— 扫描本次要离开本机的内容（待推送提交 + 工作区改动）。
+#      来自 pii-guard 技能；扫描器启动前会先跑自检，因为一个坏掉的扫描器
+#      仍然会打印「未发现敏感信息 ✓」，只看结果看不出这种事。
 #
+#   ② 面板产物同源 —— client/client.js 是 esbuild 产物、和 client/src 一起入库。
+#      改了 src（或改了 scripts/build-client.mjs 的 postProcess）却忘记重新提交
+#      产物时，`npm test` 会现场构建、测试照样全绿，只有 CI 会红 ——
+#      2026-11-19 的 f1e6100 / bd7f993 就是这样红的。
+#      检查逻辑与 CI 完全同源：scripts/build-client.mjs --check（只比对、不落盘）。
+#
+# 顺序说明：PII 先跑。它更便宜，而且一旦要拦，没必要先花几十秒去构建比对。
+#
+# 紧急情况下可 `git push --no-verify` 跳过，但 CI 仍会拦产物同源问题。
 # 启用方式：npm run setup:hooks（`npm ci` 也会自动执行一次）。
+#
+# ── 历史 ──────────────────────────────────────────────────────────────────
+# 本文件原来只有 ②。2026-11-21 把 ① 合进来时保留了 ② 的原文与注释 ——
+# 直接覆盖会删掉产物同源这道防线，那修的是真实发生过的事故，不能丢。
 
 # 钩子本身不需要 stdin/stdout 交互，直接吃掉 push 传进来的 ref 信息。
 set -eu
@@ -16,6 +28,68 @@ set -eu
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 
+# ---------------------------------------------------------------------------
+# ① PII / 密钥门禁
+# ---------------------------------------------------------------------------
+# 扫描器位置可用 PII_SCAN 覆盖；找不到就跳过这一道（不阻断 push，因为这是
+# 本机便利工具而非仓库依赖 —— 但会明确提示，免得以为它跑过了）。
+PII_SCAN="${PII_SCAN:-/vol2/@appshare/Harness/.dsh/skills/pii-guard/scripts/pii_scan.py}"
+PII_SELFTEST="${PII_SELFTEST:-$(dirname "$PII_SCAN")/selftest.py}"
+PII_PYTHON="${PII_PYTHON:-python3}"
+
+if [ -f "$PII_SCAN" ]; then
+  # 自检前置：扫描器本身坏了的时候，它会给出「干净」的假结论。
+  if [ -f "$PII_SELFTEST" ] && [ "${PII_SKIP_SELFTEST:-0}" != "1" ]; then
+    if ! "$PII_PYTHON" -I "$PII_SELFTEST" >/tmp/pii-selftest.out 2>&1; then
+      echo "" >&2
+      echo "pre-push: PII 扫描器自检未通过，已拦下这次 push。" >&2
+      echo "  一个坏掉的扫描器会给出「干净」的假结论，所以这里宁可拦下。" >&2
+      sed 's/^/  /' /tmp/pii-selftest.out >&2
+      exit 1
+    fi
+  fi
+  echo "pre-push: PII 扫描本次要推送的内容……" >&2
+  # 一次性读入 stdin（push 传进来的 ref 行），再喂给扫描逻辑；
+  # 不加 --no-worktree：工作区里已跟踪的改动也会被这次 push 带走。
+  if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    echo "pre-push: 当前目录不是 git 仓库，无法确定待推送范围，已拦下。" >&2
+    exit 1
+  fi
+  pii_fail=0
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$local_sha" in
+      0000000000*) continue ;;          # 删除远端分支，无内容可扫
+    esac
+    if printf '%s' "$remote_sha" | grep -q '^0*$'; then
+      base=$(git rev-parse --verify -q origin/main 2>/dev/null \
+          || git rev-parse --verify -q origin/master 2>/dev/null \
+          || git rev-parse --verify -q main 2>/dev/null \
+          || git rev-parse --verify -q master 2>/dev/null)
+      if [ -n "$base" ]; then
+        mb=$(git merge-base "$base" "$local_sha" 2>/dev/null || echo "$base")
+        range="--range ${mb}..${local_sha}"
+      else
+        range="--tree"
+      fi
+    else
+      range="--range ${remote_sha}..${local_sha}"
+    fi
+    if ! "$PII_PYTHON" -I "$PII_SCAN" git $range; then pii_fail=1; fi
+  done
+  if [ "$pii_fail" -ne 0 ]; then
+    echo "" >&2
+    echo "pre-push: 检测到疑似私人信息/密钥，已拦下这次 push。" >&2
+    echo "  请先脱敏；确认为假数据的测试行可用行内标记 pii-scan:ignore" >&2
+    echo "  （仅豁免 LOW/MEDIUM，HIGH 始终要人工处理）。" >&2
+    exit 1
+  fi
+else
+  echo "pre-push: 未找到 PII 扫描器 $PII_SCAN，跳过这一道（可用 PII_SCAN 指定）。" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# ② 面板产物同源（原有检查，保持不变）
+# ---------------------------------------------------------------------------
 if [ ! -d node_modules ]; then
   echo "pre-push: 缺少 node_modules，跳过面板产物同源检查（先 npm ci）" >&2
   exit 0
