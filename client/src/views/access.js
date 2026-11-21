@@ -210,10 +210,12 @@ function OwnerBrief({ draft, setDraft }) {
   const ob = draft.group.ownerBrief || { enabled: false, lines: 12, groups: [] }
   const groups = (draft.allow.groups || []).map(String)
   const [info, setInfo] = useState(null)
-  useEffect(() => { get('/groups/titles').then((r) => { if (r.ok) setInfo(r) }).catch(() => {}) }, [])
+  // 群名统一走 /panel/chats（审计 Q13）：/groups/titles 随 title-filter 一起下线了，
+  // 旧代码的失败被 catch 静默吞掉，群名永远退回群号，功能坏了也没人发现。
+  useEffect(() => { get('/panel/chats').then((r) => { if (r && r.ok) setInfo(r) }).catch(() => {}) }, [])
   const nameOf = (gid) => {
-    const g = ((info && info.groups) || []).find((x) => x.groupId === gid)
-    return g && g.name && g.name !== gid ? g.name : ''
+    const c = ((info && info.chats) || []).find((x) => x.kind === 'group' && String(x.id) === String(gid))
+    return (c && c.rawName) || '' // rawName 是不带「QQ 群 · 」前缀的纯群名；没聊过天的群拿不到，退回群号
   }
   const on = (gid) => (ob.groups || []).includes(gid)
   const toggle = (gid) => setDraft(setPath(draft, 'group.ownerBrief.groups', on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...(ob.groups || []), gid]))
