@@ -143,7 +143,7 @@ const DEFAULTS_RAW = {
     doubao: { apiKey: '', resourceId: 'seed-icl-2.0', speaker: 'S_1CmxEOek2', speechRate: 0, contextTexts: '', autoEmotion: true, timeout: 60 },
     // 阿里百炼 qwen-tts（DashScope SpeechSynthesizer；语义移植上游 qwen-tts 模块）
     qwentts: {
-      apiKey: '', baseUrl: 'https://dashscope.aliyuncs.com', model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry',
+      apiKey: '', baseUrl: 'https://dashscope.aliyuncs.com', audioOrigin: '', model: 'qwen-audio-3.1-tts-flash', voice: 'Cherry',
       speechRate: 1.0, sampleRate: 24000, seed: 20261, maxCharsPerSegment: 300, timeoutMs: 30000,
       instruction: '用日常聊天说话的语气，像在手机上随口跟朋友讲话，语速略快，不要播音腔。中文。',
     },
@@ -621,6 +621,9 @@ export function normalize(raw) {
   }
   c.voice.http.headers = headerText(c.voice.http.headers)
   c.voice.http.body = bodyText(c.voice.http.body)
+  // 百炼音频域（审计 S10）：官方 baseUrl 走内置的官方结果桶策略，这个字段只给自建/
+  // 兼容服务用——它们常把音频放另一个域（如独立的静态存储）。留空则不额外放行。
+  c.voice.qwentts.audioOrigin = String(c.voice.qwentts.audioOrigin ?? '').trim()
   c.voice.cosyvoice.sampleRate = num(c.voice.cosyvoice.sampleRate, 22050, 8000, 48000)
   if (!['sft', 'instruct'].includes(c.voice.cosyvoice.mode)) c.voice.cosyvoice.mode = 'sft'
   // edge-tts 的语速 / 音调：只认 ±N% 和 ±NHz，写着玩的回落默认值，超范围的夹回来。
