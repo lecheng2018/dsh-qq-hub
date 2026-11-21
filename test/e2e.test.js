@@ -203,9 +203,21 @@ test('系统会话超时会及时返回，晚到的回复不会发到 QQ', async
   const start = Date.now()
   await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '慢慢想', { timeoutMs: 50 }), /等太久/)
   assert.ok(Date.now() - start < 1500)
-  // 审计 Q04 改口径：超时即释放槽位，同名任务不再「上一轮还没结束」。
-  // 过去这条断言把缺陷当成契约锁住了（要等一个可能永远不来的 turn/end）。
-  await assert.rejects(api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 50 }), /等太久/)
+  const sessionsAfterTimeout = fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0)
+  // 审计 P1 改口径：旧断言（同名重试也报 /等太久/）锁住的其实是缺陷——
+  // 超时只释放了槽位，却继续复用那个底层还卡着的会话，于是重试排在它后面等超时，
+  // 而且旧任务迟到的回复会被新监听当成重试的结果兑现。
+  // 现在超时即废弃该会话映射：同名重试开一条隔离的新会话，自己立刻拿到回答，
+  // 绝不等旧会话（旧会话那一轮还要睡 2.5 秒）。
+  const retryStart = Date.now()
+  const retried = await api.hub.runSystemTurn('timeout-test', '超时测试', '下一轮', { timeoutMs: 4000 })
+  assert.equal(typeof retried, 'string', '重试要拿到自己的回答')
+  assert.ok(Date.now() - retryStart < 1500, `重试不该排在旧会话队列后面（实际 ${Date.now() - retryStart}ms）`)
+  assert.equal(
+    fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0),
+    sessionsAfterTimeout + 1,
+    '超时后重试必须另开一条隔离会话，不能复用那个还卡着的',
+  )
   // key：同一个模块的多种后台用途各走一条会话（避免不同用途的提示词互相污染）。
   // 上面那条还挂着没结束，这里换 key 必须能立刻跑起来——不再撞「上一轮还没结束」。
   const before = fake.workspaces.reduce((n, w) => n + w.sessionIds.length, 0)
