@@ -148,7 +148,7 @@ test('restore：结构非法一律拒收，不写坏账', () => {
 // 单独一个文件放模块接线更清楚，但这里复用 token-ledger 的隔离实例开销太小、
 // 且要验证的正是「账本语义 + 模块 setup」这条链路，放一起读起来更完整。
 import tokenBilling from '../src/modules/token-billing/index.js'
-import { defaultLedger, tokenLedgerResetDaily } from '../src/chat/token-ledger.js'
+import { defaultLedger, tokenLedgerResetDaily, todayKey } from '../src/chat/token-ledger.js'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -241,14 +241,18 @@ test('缺陷 C：落盘文件里的跨日快照会被拒收（重启当天不清
 })
 
 test('缺陷 C：每分钟巡检会重新分配（跨日立刻生效）', (t) => {
-  tokenLedgerResetDaily('1999-01-01')
+  // 分配日以真实时钟为准（ensureAllocated 用 todayKey()）：账本日期一旦漂移
+  // （跨日 / 恢复残留），巡检必须把它拉回真实今天并完成当日分配，
+  // 而不是沿用旧日的上限和用量 —— 旧实现拿账本自己的日期当「今天」，
+  // 两个陈旧值永远相等，烧完一次就每天 00:00 起永久熔断（真机 2026-11-21）。
   const api = billingApi(t, { ownerQQ: '1000' })
   tokenBilling.setup(api)
-  assert.equal(defaultLedger.hasAllocation('1999-01-01'), true)
-  // 翻页到另一天：巡检时应当重新分配，而不是沿用旧日状态
+  assert.equal(defaultLedger.snapshot().dateKey, todayKey(), '启动即落在真实今天')
+  // 人为把账本钉回旧日（模拟跨日漂移/恢复残留），巡检应当纠回
   tokenLedgerResetDaily('1999-01-02')
-  assert.equal(defaultLedger.hasAllocation('1999-01-02'), false)
+  assert.equal(defaultLedger.snapshot().dateKey, '1999-01-02')
   api.runTimers()
-  assert.equal(defaultLedger.hasAllocation('1999-01-02'), true, '巡检应完成当日分配')
+  assert.equal(defaultLedger.snapshot().dateKey, todayKey(), '巡检应把账本拉回真实今天')
+  assert.equal(defaultLedger.hasAllocation(todayKey()), true, '巡检应完成当日分配')
   assert.equal(defaultLedger.isExhausted('private:1000'), false)
 })
