@@ -3,6 +3,7 @@
 // 重复 deliveryId、不同聊天顺序、媒体上传、dispose；无伪造 message_id；已 sent 不重放。
 
 import test from 'node:test'
+import { mediaUrl } from './helpers/fake-media.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -208,7 +209,7 @@ test('outbox：媒体/多段投递原样透传（segments 不改写），群聊�
   const outbox = createOutbox({ send: gw.send })
   const media = [
     { type: 'text', data: { text: '看图' } },
-    { type: 'image', data: { url: 'https://93.184.216.34/y.png' } },
+    { type: 'image', data: { url: mediaUrl('y.png') } },
     { type: 'record', data: { file: 'base64://xx' } },
   ]
   const r = await outbox.request({ chatKey: 'group:77', sourceModuleId: 'multi-parser', segments: media })
