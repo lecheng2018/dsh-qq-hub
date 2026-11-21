@@ -2032,6 +2032,7 @@ export function createModularCore({
     proactiveMuteState: (chatId, now) => replyDelivery.proactiveMuteState(chatId, now),
     isProactivelyMuted: (chatId, now) => replyDelivery.isProactivelyMuted(chatId, now),
     ...outbound,
+    sendImage: (chatId, src, replyId, userId, opts) => outbound.sendImage(chatId, src, replyId, userId, { allowLocal: true, ...opts }),
     ...outboundFiles,
     pushToSession: (chat, content) => runPromptTurn(chat.chatId, (content || []).map((block) => block.text || '').join('\n')),
     onSessionEvent: participants.onSessionEvent,

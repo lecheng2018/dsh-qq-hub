@@ -319,7 +319,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         ? core.hub.reply(msg, String(text ?? ''), id)
         : core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
       isOwner: (userId) => String(userId) === String(getConfig().ownerQQ),
-      sendImage: (chatId, src) => core.hub.sendImage(String(chatId), src),
+      sendImage: (chatId, src, ...rest) => core.hub.sendImage(String(chatId), src, rest[0], rest[1], { allowLocal: true, ...rest[2] }),
       sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),
       // 发任意文件（文档 / 压缩包 / 音频 / 视频……）：本机绝对路径，或网关能取到的网址 / base64://
       sendFile: (chatId, file, name) => core.hub.sendFile(String(chatId), file, name),
