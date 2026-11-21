@@ -16,10 +16,24 @@ export function registerBrowserRoutes({ route, readBody, browser, getConfig, log
   // 安装状态：idle | running | failed | done
   let job = { state: 'idle', message: '', startedAt: 0, result: null }
 
+  // 审计 Q18：/browser/status 的 installedInfo（递归 statSync 计目录大小）与
+  // verifyInstalled（对浏览器二进制跑一次 ldd）都是重探测，过去每次轮询都全量跑。
+  // 加 10s TTL 缓存；安装任务结束（done/failed）时立即失效——装完面板要看到新状态。
+  let probeCache = { at: 0, root: '', info: null, verdict: null }
+  const PROBE_TTL_MS = 10_000
+  function invalidateProbe() { probeCache = { at: 0, root: '', info: null, verdict: null } }
+
   route('/browser/status', async () => {
     const root = rootOf()
-    const info = installedInfo(root)
-    const verdict = verifyInstalled(root)
+    let info, verdict
+    const cacheFresh = probeCache.root === root && Date.now() - probeCache.at < PROBE_TTL_MS
+    if (cacheFresh) {
+      ;({ info, verdict } = probeCache)
+    } else {
+      info = installedInfo(root)
+      verdict = verifyInstalled(root)
+      probeCache = { at: Date.now(), root, info, verdict }
+    }
     const live = browser ? browser.status() : null
     return {
       ok: true,
@@ -46,6 +60,7 @@ export function registerBrowserRoutes({ route, readBody, browser, getConfig, log
     // 不 await：让面板能立刻拿到「已开始」，之后轮询 /browser/status
     installBrowser({ root, browser: kind, log })
       .then((r) => {
+        invalidateProbe() // 审计 Q18：装完立刻失效探测缓存，面板下一次轮询看到新状态
         job = { state: r.ok ? 'done' : 'failed', message: r.ok ? '装好了' : (r.message || '失败'), startedAt: job.startedAt, result: r }
         if (r.ok) log?.info?.(`装好了：${r.browser}`)
       })
