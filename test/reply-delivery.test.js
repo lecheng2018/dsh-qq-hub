@@ -207,3 +207,40 @@ test('随机源透传律动：固定 random 下气泡间隔可复现', async () 
   assert.ok(first.length > 0 && first.every((w) => w > 0), '律动开启应产生正的等待')
   assert.deepEqual(second, first, '同一 random 序列 → 律动间隔完全一致（随机源已透传）')
 })
+
+test('引用目标解析：<reply:…> 收编号/昵称/QQ号；对不上人时照常发，绝不挂错人', async () => {
+  const refs = {
+    1: { mid: '501', uid: '111', nick: '初恋' },
+    2: { mid: '502', uid: '222', nick: '洛书' },
+    3: { mid: '503', uid: '111', nick: '初恋' },
+  }
+  // 编号
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:7', '<reply:2>回你', { refs })
+    assert.equal(sent[0].replyId, '502', '编号 2 应解析到洛书那条')
+  }
+  // 昵称：同名多条取最后一条
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:7', '<reply:初恋>回你', { refs })
+    assert.equal(sent[0].replyId, '503', '同名多条时取最近一条')
+  }
+  // QQ 号
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:7', '<reply:222>回你', { refs })
+    assert.equal(sent[0].replyId, '502', 'QQ 号应解析到该人最近一条')
+  }
+  // 对不上人：不引用，照常发（不能退回 autoReply 挂到别人身上）
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:7', '<reply:查无此人>回你', {
+      refs,
+      autoReply: { mid: '502', uid: '222' },
+    })
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0].replyId, undefined, '写错的引用不能悄悄转嫁给 autoReply 那个人')
+    assert.equal(sent[0].text, '回你')
+  }
+})
