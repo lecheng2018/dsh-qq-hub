@@ -61,14 +61,16 @@ test('超时及时返回并释放占用：下一轮立刻能跑，迟到结果�
   const { service, complete } = fixture()
   await assert.rejects(service.run('alpha', '后台甲', '慢慢想', { timeoutMs: 10 }), /等太久了/)
 
-  // 关键差异：同名任务必须能立刻开下一轮，而不是继续报忙。
+  // 关键差异：同名任务必须能立刻开下一轮（在隔离的新会话 session-2 中），而不是继续报忙。
   const next = service.run('alpha', '后台甲', '下一轮', { timeoutMs: 1000 })
   await tick()
-  complete('session-1', '下一轮的正文', 2)
-  assert.equal(await next, '下一轮的正文')
 
-  // 迟到的那条 turn/end 到得再晚，也不得把结果串到新回合上（代际隔离）
-  complete('session-1', '迟到的正文', 1)
+  // 模拟竞态：重试已经开始后，旧任务（session-1）先产生 assistant/message 和 turn/end
+  complete('session-1', '迟到的旧答案', 1)
+
+  // 旧任务的事件不得兑现新请求，新请求仍在等待 session-2
+  complete('session-2', '下一轮的正文', 1)
+  assert.equal(await next, '下一轮的正文')
   await service.dispose()
 })
 

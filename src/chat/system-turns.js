@@ -80,10 +80,11 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
       if (typeof off !== 'function') { finish(reject, new Error('DSH 没有 session/event 流')); return }
       timer = setTimeout(() => {
         expired = true
-        // 审计 Q04：过去这里只 reject，"释放 running / 摘监听 / 清定时器"要等一个
-        // 可能永远不来的 turn/end —— 同名任务于是持续报「上一轮还没结束」。
-        // 现在超时本身就是一个终态出口：立刻释放槽位，迟到的 turn/end 由
-        // `if (expired)` 早退丢弃（见上方 onEvent）。
+        // 审计 P1：旧任务在底层可能仍在运行。如果不清理 sessions 映射，重试会复用同一个 session；
+        // 随后旧任务产生的 assistant/message 与 turn/end 会被新重试的监听捕获，导致旧答案兑现新请求。
+        // 因此超时必须废弃该 session 映射，让下一次请求创建隔离的新会话。
+        sessions.delete(key)
+        try { Promise.resolve(archiveSession?.(sessionId)).catch((error) => log?.debug?.(`归档超时系统会话失败：${error?.message || error}`)) } catch (error) { log?.debug?.(`归档超时系统会话失败：${error?.message || error}`) }
         state.cleanup()
         reject(new Error('等太久了'))
       }, Math.max(1, Number(timeoutMs) || 180000))
