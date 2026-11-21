@@ -23,7 +23,7 @@ import { createReranker } from './memory-rerank.js'
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend, vectorFlushDebounceMs, vectorFetchImpl }) {
   /** 当前激活的人设 id（主观条目只对同人设可见；客观事实恒可见）。 */
   const activePersonaId = () => String(getConfig()?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
   /** 读取侧隔离：主观自传按人设过滤，客观事实跨人设共享。 */
@@ -113,6 +113,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       return c
     },
     log,
+    flushDebounceMs: vectorFlushDebounceMs,
+    fetchImpl: vectorFetchImpl,
   })
   const vecStatusSafe = () => { try { return vec.status() } catch { return { enabled: false } } }
   // Cross-encoder 精排（1.4.4）：RRF 之后的可选第二级排序，配置门控默认关。
@@ -140,6 +142,13 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (pendingHitUpdates.size) save(load())
   }
 
+  // 上次 save 时条目覆盖的作用域集合（含 invalidAt 条目——它们仍在主库，向量侧由
+  // 对账摘除死向量，而不是整个 scope 消失）。启动时按当前存量初始化一次：
+  // 启动前残留的空 scope 不追溯（向量文件里若有孤儿，等下次该 scope 有写动作时对账）。
+  let prevVectorScopes = new Set(
+    (() => { try { return (load().items || []).map((m) => String(m.scope || '').trim()).filter(Boolean) } catch { return [] } })(),
+  )
+
   const save = (s) => {
     if (status === 'closed') throw new Error('主记忆库已关闭')
     for (const [id, delta] of pendingHitUpdates) {
@@ -155,15 +164,25 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     try {
       if (vec.enabled()) {
         const byScope = new Map()
+        const currentScopes = new Set()
         for (const m of s.items) {
-          if (m.invalidAt) continue
           const sc = String(m.scope || '').trim()
           if (!sc) continue
+          currentScopes.add(sc)
+          if (m.invalidAt) continue // 死条目不入队：flush 对账会顺手把旧向量摘掉
           const list = byScope.get(sc) || []
           list.push(m)
           byScope.set(sc, list)
         }
         for (const [sc, list] of byScope) vec.queueScope(sc, list)
+        // 审计 S13：作用域**被删空**时也要对账——过去 byScope 只来自现存条目，
+        // 清空/删除后该作用域不再出现，flush 永远不会碰它的向量文件，
+        // 已删正文的旧向量就留在磁盘上继续参与召回（向量死区）。
+        // 用「上次保存时的 scope 集合 − 本次集合」找消失者，入队空对账（全摘除）。
+        for (const gone of prevVectorScopes) {
+          if (!currentScopes.has(gone)) vec.queueScope(gone, [])
+        }
+        prevVectorScopes = currentScopes
       }
     } catch (error) { log?.debug?.('向量入队失败：' + (error && error.message)) }
     pendingHitUpdates.clear()

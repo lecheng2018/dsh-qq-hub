@@ -203,7 +203,9 @@ export function createScopeVectorFile(filePath, dim, { log = console } = {}) {
 
 // ---------------- 通道编排 ----------------
 
-export function createVectorChannel({ memoryDir, getConfig, log = console, fetchImpl, now = Date.now } = {}) {
+// flushDebounceMs 可注入：测试要观察「保存 → 对账落盘」的最终效果，15s 防抖
+// 会让用例挂太久；生产默认不变。
+export function createVectorChannel({ memoryDir, getConfig, log = console, fetchImpl, now = Date.now, flushDebounceMs = FLUSH_DEBOUNCE_MS } = {}) {
   const cfgOf = () => normalizeEmbeddingConfig(getConfig && getConfig()?.memory)
   let lastWarn = 0
   const warnOnce = (msg) => {
@@ -231,7 +233,12 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
   /** save() 后调用：整个作用域对账入队（防抖后批量 embed 缺失/变更条目、摘除已死条目的向量）。 */
   function queueScope(scope, items) {
     if (!enabled()) return
-    const pend = dirty.get(scope) || new Map()
+    // 审计 S13 附带：这里的语义是「整作用域对账快照」——每次调用都是该 scope 的
+    // **全量**存活清单（save() 传现存条目；清空时传空数组=全摘除）。
+    // 过去复用 dirty 里已有的 Map 且只增不减：连续两次 remove（第二次删空作用域、
+    // 传空数组）时，第一次留下的 key 仍在，空对账退化成部分对账，死向量残留。
+    // 改为每次新建 pend 覆盖。
+    const pend = new Map()
     for (const m of items || []) {
       if (!m || m.invalidAt) continue // 死条目不入队；flush 时对账会顺手把旧向量摘掉
       pend.set(String(m.id), embedKeyOf(m))
@@ -245,7 +252,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     flushTimer = setTimeout(() => {
       flushTimer = null
       flush().catch(() => {})
-    }, FLUSH_DEBOUNCE_MS)
+    }, Math.max(0, Number(flushDebounceMs) || 0))
     flushTimer.unref?.()
   }
 
@@ -291,6 +298,11 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
       }
     } finally {
       flushing = false
+      // 审计 S13 附带：flush 飞行期间入队的 scope 会被上面的 flushing 卫语句
+      // 直接 return 掉——dirty 里留着数据、却没有任何定时器再去碰它，要等
+      // 下一次任意 save 才有机会 flush。连续两次 remove（第二次删空作用域）
+      // 正好踩中：空对账被吞，死向量残留。finally 里补一次调度兜底。
+      if (dirty.size) scheduleFlush()
     }
     return embedded
   }
