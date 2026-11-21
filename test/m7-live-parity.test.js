@@ -8,6 +8,7 @@
 // 当前状态见 docs/refactor/new-core-parity-ledger.md。
 
 import test from 'node:test'
+import { FAKE_MEDIA_HOST, isFakeMediaUrl, mediaUrl } from './helpers/fake-media.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -64,7 +65,7 @@ const groupEv = (text = '在吗') => ({
 })
 
 /** 图片 URL 秒回 PNG 字节（同 m4 真机缺陷 10 的桩）；不桩的话新核的 15s 下载超时会拖死等待窗口。 */
-function stubPngFetch(urls = ['93.184.216.34/y.png']) {
+function stubPngFetch(urls = [mediaUrl('y.png')]) {
   const orig = globalThis.fetch
   globalThis.fetch = async (url, opt) => urls.some((part) => String(url).includes(part))
     ? {
@@ -111,7 +112,7 @@ test('偷表情接线：collectInboundStickers 收到 (chatKey, segments, userId
   })
   const restore = stubPngFetch()
   try {
-    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'image', data: { url: 'https://93.184.216.34/y.png' } }] }))
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'image', data: { url: mediaUrl('y.png') } }] }))
     await sleep(600)
     assert.ok(got.some(([, types]) => types.includes('image')), `未收集：${JSON.stringify(got)}`)
   } finally { restore(); await core.dispose(); await mock.close() }
@@ -130,7 +131,7 @@ test('统计与 recentMedia：入站 received、出站 sent、媒体段登记（
   })
   const restore = stubPngFetch()
   try {
-    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '看这张图' } }, { type: 'image', data: { url: 'https://93.184.216.34/y.png' } }] }))
+    await core.dispatchLegacyEvent(privEv({ message: [{ type: 'text', data: { text: '看这张图' } }, { type: 'image', data: { url: mediaUrl('y.png') } }] }))
     await sleep(700)
     assert.ok(stats.includes('received'), 'received 计数缺失')
     assert.ok(stats.includes('sent'), 'sent 计数缺失')
@@ -753,13 +754,13 @@ test('会话 reset：旧 session 的上下文、人格和工具缓存被回收',
 // 真机 2026-11-12：群里先发图、再 @ 她问「没看到表情包吗」，新核只把缓冲里的
 // 「（图片/表情）」文字交给模型，触发轮 members 又没有图，于是她回复「具体啥样看不到」。
 test('群聊补图：群闸放过的图片随下一段上下文登记成附件', async () => {
-  const restore = stubPngFetch(['93.184.216.34/sticker.png'])
+  const restore = stubPngFetch([mediaUrl('sticker.png')])
   const { core, dsh, mock } = await fixture({ brain: async () => '看到表情了' })
   try {
     // 纯图没有 @/唤醒词，群闸不触发回合；图必须留在群缓冲里。
     await core.dispatchLegacyEvent({
       ...groupEv(''), message_id: 818101,
-      message: [{ type: 'image', data: { url: 'https://93.184.216.34/sticker.png', sub_type: 1, summary: '[动画表情]' } }],
+      message: [{ type: 'image', data: { url: mediaUrl('sticker.png'), sub_type: 1, summary: '[动画表情]' } }],
     })
     await sleep(400)
     assert.equal(dsh.turns.length, 0, '纯图表情不该单独触发群回合')
@@ -776,14 +777,14 @@ test('群聊补图：群闸放过的图片随下一段上下文登记成附件',
 })
 
 test('群聊纯媒体：活跃/engaged 都不自行开回合，直接 @ 仍可带图回', async () => {
-  const restore = stubPngFetch(['93.184.216.34/gate.png'])
+  const restore = stubPngFetch([mediaUrl('gate.png')])
   const { core, dsh, mock } = await fixture({
     brain: async () => '看到图了',
     cfgOver: { group: { interjectChance: 1, minRecentMessages: 0, minRelevance: 0, quietHours: [], fishGuard: { enabled: false } } },
   })
   const imageOnly = (id) => ({
     ...groupEv(''), message_id: id,
-    message: [{ type: 'image', data: { url: 'https://93.184.216.34/gate.png', sub_type: 1 } }],
+    message: [{ type: 'image', data: { url: mediaUrl('gate.png'), sub_type: 1 } }],
   })
   try {
     // 活跃群 + 100% 插话：旧逻辑会在这里错误地开回合。
@@ -795,7 +796,7 @@ test('群聊纯媒体：活跃/engaged 都不自行开回合，直接 @ 仍可�
       ...groupEv(''), message_id: 818202,
       message: [
         { type: 'at', data: { qq: Number(BOT) } },
-        { type: 'image', data: { url: 'https://93.184.216.34/gate.png', sub_type: 1 } },
+        { type: 'image', data: { url: mediaUrl('gate.png'), sub_type: 1 } },
       ],
     })
     await sleep(700)
@@ -810,13 +811,13 @@ test('群聊纯媒体：活跃/engaged 都不自行开回合，直接 @ 仍可�
 })
 
 test('群聊补图：触发轮自带图片时按地址去重，最多 4 张', async () => {
-  const restore = stubPngFetch(['93.184.216.34/a.png', '93.184.216.34/b.png', '93.184.216.34/c.png', '93.184.216.34/d.png', '93.184.216.34/e.png'])
+  const restore = stubPngFetch(['a.png', 'b.png', 'c.png', 'd.png', 'e.png'].map(mediaUrl))
   const { core, dsh, mock } = await fixture()
   try {
     for (let i = 0; i < 5; i++) {
       await core.dispatchLegacyEvent({
         ...groupEv(''), message_id: 819100 + i,
-        message: [{ type: 'image', data: { url: `https://93.184.216.34/${'abcde'[i]}.png`, sub_type: 1 } }],
+        message: [{ type: 'image', data: { url: mediaUrl(`${'abcde'[i]}.png`), sub_type: 1 } }],
       })
     }
     await sleep(400)
@@ -826,7 +827,7 @@ test('群聊补图：触发轮自带图片时按地址去重，最多 4 张', as
       message: [
         { type: 'at', data: { qq: Number(BOT) } },
         { type: 'text', data: { text: ' 看看这些' } },
-        { type: 'image', data: { url: 'https://93.184.216.34/a.png', sub_type: 1 } },
+        { type: 'image', data: { url: mediaUrl('a.png'), sub_type: 1 } },
       ],
     })
     await sleep(700)
