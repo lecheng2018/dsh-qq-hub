@@ -18,7 +18,7 @@ test('抖音：想法/知识条目带出处标题，且想法条目是 ephemeral
     // 出处化：看了《标题》，她的想法：…
     assert.match(src, new RegExp('看了《\\$\\{srcTitle\\}》，她的想法'), f + ' 想法条目要带出处')
     assert.match(src, /（来自《\$\{srcTitle\}》）/, f + ' 知识条目要带出处')
-    assert.match(src, /slice\(0, 30\)/, f + ' 标题截 30 字')
+    assert.ok(src.includes('slice(0, 30)') || src.includes('clip(v.title, 30)'), f + ' 标题截 30 字')
     assert.match(src, /ephemeral: true/, f + ' 想法条目 ephemeral（快速淡出）')
     // 不许出现旧的「刷到了点东西」无主形态（注释里复盘提及可以，实际 addEvent 的模板串不许）
     const badLines = src.split('\n').filter((l) => l.includes('addEvent') && l.includes('刷到了点东西'))

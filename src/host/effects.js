@@ -24,7 +24,7 @@ export function createHostEffects({
   const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
 
   // ---------- 通用工具审批流 (approval/request) ----------
-  // 接入 DSH 官方 approval seam：当模型调用敏感工具触发审批时，向主人 QQ 发送审批卡（支持 TOTP 权限锁）
+  // 接入 DSH 官方 approval seam：当模型调用敏感工具触发审批时，向主人 QQ 发送审批卡
   function installApprovalFlow() {
     ctx.effect(() => {
       let off = null

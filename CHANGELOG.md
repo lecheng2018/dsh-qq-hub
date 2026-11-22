@@ -23,6 +23,33 @@
 **验证**：插件 `node --test "test/**/*.test.js"` 2527 pass / 0 fail；模块仓库 `scripts/test.mjs` 328 pass / 0 fail，
 `quality.mjs`、`check.mjs` 通过。
 
+## Unreleased · fix 思考内容泄进群：`[Previous reasoning]` 块被原样发出（2026-11-22）
+
+**现象（真机 20:38，群聊）**：两条纯推理气泡发进群——
+
+```
+[Previous reasoning]
+对方先试探我是不是机器人，按规矩不自证不辩解，随手打发。…
+回两条极短的：
+对甲：你猜
+对乙：炸吧 归你
+[/Previous reasoning]
+```
+
+群友当场 @ 她「怎么把思考泄露出来了」；同一轮的下一条 `text` 块还把 `[/Previous reasoning]` 和正文 `<reply:…>` 拼在了同一段里，被当成一条气泡发出去。`deliveries.json` 里两条 `text` 段可确证。
+
+**根因**：反代（`openai-completions` 协议，`reasoning_content` 回灌）把**上一轮**推理写进了这一轮的正文 `text` 块，标记是 `[Previous reasoning]`。出站清洗只认紧邻关键词的 `[reasoning]`／`【思考】`，`Previous` 这个前缀让开关闭两条规则都匹配不上；`stripToolOutput` 又不处理方括号，于是 `sanitizeOutbound` 原样放行，`parseReply` 按句末标点把推理切成两条气泡。
+
+**改法**（`src/chat/reply.js`）：显式推理块的正则抽成 `REASON_OPEN` / `REASON_OPEN_STRICT` / `REASON_CLOSE`，前缀（`previous` / `prior` / `last` / `earlier` / `above` / `上一轮` / `此前` / `前面`）可选，中英关键词 + 全角半角括号都认。规则放在 `stripUnmarkedThinking`（`protectExamples` 保护区之内），围栏代码/行内代码里的示例天然豁免。
+
+误伤边界刻意收紧两处：
+- 未闭合只在**整段开头**命中「明确的推理标记」时删到结尾，否则正文里正常出现的「[分析]这个方案可行」会被整段吞掉；
+- 落单标记只删「带前缀的开标记」和「闭合标记」，裸 `[分析]` / `[思考]`（如「看看[分析]这段」）原样保留。
+
+**测试**：`test/reply-strip-unmarked-thinking.test.js` 新增五条回归——泄露形状（断言两条气泡且推理指纹零残留）、五种标记写法（大小写/全角/中英前缀）、整轮只有推理时沉默、未闭合删到结尾、裸方括号误伤边界。全量 `npm test` 2463 pass / 0 fail。
+
+**未覆盖**：这是出站兜底，不修反代回灌本身。同类文本换成无任何括号的段落式推理仍会漏出；根治要在入站侧只取 `content`、忽略 `reasoning_content` 的回填。
+
 ## Unreleased · fix 空间日记按会话授权素材、默认仅自己可见（审计 S07）
 
 **现象**：日记素材过去取「当天所有非 system 会话」的流水混成一份摘要交给模型，

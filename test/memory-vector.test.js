@@ -65,15 +65,32 @@ test('createEmbedder：批量切分 + L2 归一 + 结构校验', async () => {
   assert.ok(Math.abs(out[0][0] - 0.6) < 1e-6 && Math.abs(out[0][1] - 0.8) < 1e-6)
 })
 
-test('createEmbedder：HTTP 失败与维度不符都要抛（调用方吞错退回 BM25）', async () => {
+test('createEmbedder：HTTP 失败与维度不符都要抛（调用方吞错退回 BM25，透传响应错误）', async () => {
   const emb = createEmbedder(normalizeEmbeddingConfig({ embeddings: { enabled: true, url: 'https://x', dim: 64 } }), {
-    fetchImpl: () => Promise.resolve({ ok: false, status: 503, json: async () => ({}) }),
+    fetchImpl: () => Promise.resolve({ ok: false, status: 400, text: async () => '{"code":20015,"message":"Invalid"}' }),
   })
-  await assert.rejects(() => emb.embed(['a']), /HTTP 503/)
+  await assert.rejects(() => emb.embed(['a']), /HTTP 400: \{"code":20015/)
   const emb2 = createEmbedder(normalizeEmbeddingConfig({ embeddings: { enabled: true, url: 'https://x', dim: 64 } }), {
     fetchImpl: () => Promise.resolve({ ok: true, json: async () => ({ data: [{ embedding: [1, 2] }] }) }),
   })
   await assert.rejects(() => emb2.embed(['a']), /维度不符/)
+})
+
+test('createEmbedder：孤立代理项与 emoji 截断安全规整为 well-formed', async () => {
+  let captured = null
+  const emb = createEmbedder(normalizeEmbeddingConfig({ embeddings: { enabled: true, url: 'https://x', dim: 64, maxChars: 5 } }), {
+    fetchImpl: (url, opt) => {
+      captured = JSON.parse(opt.body).input
+      return Promise.resolve({ ok: true, json: async () => ({ data: captured.map(() => ({ embedding: Array(64).fill(0) })) }) })
+    },
+  })
+  // 传入含有孤立代理项的字符串和长度刚好截断 emoji 的字符串
+  await emb.embed(['abc\ud83ddef', '1234😭'])
+  assert.ok(captured)
+  assert.equal(captured[0].isWellFormed(), true)
+  assert.equal(captured[1].isWellFormed(), true)
+  // '1234😭' 限制 5 字符，Unicode code point 截断后为 '1234' 或完整包含，不会留半个代理项
+  assert.equal(captured[1].includes('\ud83d') && !captured[1].includes('\ude2d'), false)
 })
 
 // ---------------- 向量文件 ----------------

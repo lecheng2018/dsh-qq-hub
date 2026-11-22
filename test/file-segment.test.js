@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { parseMessageEvent } from '../src/chat/inbound.js'
 import { fileSegmentBytes } from '../src/core/net.js'
-import { inboundFileBlocks, readInboundFiles } from '../src/chat/inbound-files.js'
+import { inboundFileBlocks, inboundFileMaxBytes, readInboundFiles } from '../src/chat/inbound-files.js'
 
 const evt = (segs, extra = {}) => ({
   message_type: 'private', user_id: '111', self_id: '999',
@@ -80,4 +80,31 @@ test('小于 1KB 的文件不会显示成 0KB', async () => {
   const text = inboundFileBlocks(got, '主人')[0].text
   assert.match(text, /<1KB/)
   assert.doesNotMatch(text, /0KB/)
+})
+
+test('入站文件上限跟随 files.maxMB，不再写死 20MB（主人发的 37MB 包能取下来）', async () => {
+  const seg = {
+    type: 'file',
+    data: { file_name: 'SG350H测试版1.0.0及刷机教程.zip', file_size: 37 * 1024 * 1024, base64: 'base64://AAE=' },
+  }
+  // 旧行为：20MB 硬上限，挡在下载前，模型只能看到「没取下来」
+  const old = await readInboundFiles({ kind: 'private', userId: '111', files: [seg] }, { workspaceDir: '/tmp', maxBytes: 20 * 1024 * 1024 })
+  assert.equal(old[0].kind, 'failed')
+  assert.match(old[0].reason, /文件太大/)
+
+  // panel 里 files.maxMB = 100 换算出来的上限：能落盘，并把路径交给她
+  const got = await readInboundFiles({ kind: 'private', userId: '111', files: [seg] }, { workspaceDir: '/tmp', maxBytes: inboundFileMaxBytes({ files: { maxMB: 100 } }) })
+  assert.equal(got[0].kind, 'file')
+  assert.equal(got[0].name, 'SG350H测试版1.0.0及刷机教程.zip')
+  assert.match(got[0].path, /qq-inbox\//)
+  assert.match(inboundFileBlocks(got, '主人')[0].text, /已经存在/)
+})
+
+test('files.maxMB 换算成字节：缺省 50MB、非法值回落、超过 256MB 收硬顶', () => {
+  assert.equal(inboundFileMaxBytes({ files: { maxMB: 100 } }), 100 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes(undefined), 50 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes({ files: {} }), 50 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes({ files: { maxMB: 0 } }), 50 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes({ files: { maxMB: 'abc' } }), 50 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes({ files: { maxMB: 9999 } }), 256 * 1024 * 1024)
 })
