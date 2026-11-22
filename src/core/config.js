@@ -36,7 +36,10 @@ const DEFAULTS_RAW = {
   workspacePerChat: false, // 每个聊天单独建工作区（会多出很多工作区，默认关；跨聊天隔离靠会话作用域，不靠目录）, // QQ 会话放在哪个文件夹（DSH 里的「QQ Hub」工作区）；留空 = 默认（用户目录下 Aurabot\\qq-chats）
   // 发文件（#52）：默认开但限制很多——她只能把 QQ 工作区（workspaceDir）和 dirs 里列的目录中的文件当文件发出去；
   // 单个文件有大小上限；只有主人私聊里能触发（可以发给白名单里的人和群）。日志里会记下发了什么。
-  files: { enabled: true, maxMB: 50, dirs: [] },
+  // 收文件：别人发来的文件会下载到 QQ 工作区的 qq-inbox，inboundMaxMB 是单个文件的上限。
+  // 上下行分开是两个数：出站只把路径丢给网关（几乎不占内存），入站要整包读进 Buffer，
+  // 一条消息最多 3 个文件，所以入站口径必须比出站紧。
+  files: { enabled: true, maxMB: 50, inboundMaxMB: 50, dirs: [] },
   // 危险命令确认（可选保护，默认关）：她在私聊里执行删根目录/格式化/关机/下载后直接执行等
   // 终端命令前，先发 QQ 私聊问主人，回复「确认」才执行；超时或「取消」就拦下。
   security: {
@@ -455,6 +458,10 @@ export function normalize(raw) {
     .map((s) => String(s).trim().toLowerCase()).filter(Boolean).slice(0, 20)
   c.files.enabled = bool(c.files.enabled, true)
   c.files.maxMB = num(c.files.maxMB, 50, 1, 2048)
+  // 入站上限与 inboundFileMaxBytes() 的硬顶对齐（256MB），别让面板能填出换算时会被悄悄截断的值。
+  // 0 / 空串当作「没配」而不是「1MB」：手改配置时留个 0 不该把所有收文件都挡死。
+  const inboundMaxMB = Number(c.files.inboundMaxMB)
+  c.files.inboundMaxMB = num(inboundMaxMB > 0 ? inboundMaxMB : undefined, 50, 1, 256)
   c.files.dirs = (Array.isArray(c.files.dirs) ? c.files.dirs : String(c.files.dirs || '').split(/[\n,，;；]+/))
     .map((s) => String(s).trim()).filter((s) => /^([a-zA-Z]:[\\/]|\/)/.test(s)).slice(0, 20)
   const g = c.group

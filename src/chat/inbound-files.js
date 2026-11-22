@@ -15,10 +15,13 @@ function inboxPath(dir, ext) {
   return file
 }
 
-/** 入站单文件上限（字节）：跟随面板里的 files.maxMB，和出站发文件同一个开关。
+/** 入站单文件上限（字节）：优先面板的 files.inboundMaxMB；老配置没有这个键时回落到
+ *  files.maxMB（#222 之前就是这一个数管上下行），再没有就 50MB。
  *  硬顶 256MB —— 整包是读进 Buffer 的，一条消息最多取 3 个，再大就把插件内存打爆了。 */
 export function inboundFileMaxBytes(cfg) {
-  return Math.min(256, Math.max(1, Number(cfg?.files?.maxMB) || 50)) * 1024 * 1024
+  const files = cfg?.files || {}
+  const mb = Number(files.inboundMaxMB ?? files.maxMB)
+  return Math.min(256, Math.max(1, Number.isFinite(mb) && mb > 0 ? mb : 50)) * 1024 * 1024
 }
 
 // maxBytes 由调用方按配置传入（modular-core 传 inboundFileMaxBytes(config)）；

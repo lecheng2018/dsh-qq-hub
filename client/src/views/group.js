@@ -140,11 +140,15 @@ function Group({ draft, setDraft }) {
         </FoldSection>
       </Card>
 
-      <Card title="安全与文件" desc="发文件与危险命令确认。平时用不到的话保持默认即可。">
+      <Card title="安全与文件" desc="收发文件与危险命令确认。平时用不到的话保持默认即可。">
         <FoldSection title="发文件" right={f.sw('files.enabled')} desc="打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。">
           <Row label="单个文件最大">{f.num('files.maxMB', { min: 1, max: 2048 })}<span className="ab-muted">MB</span></Row>
           <Row label="额外允许的目录" hint="一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的">{f.list('files.dirs', { placeholder: 'D:\\Aurabot\\要发的文件' })}</Row>
           <div className="ab-muted ab-small" style={{ marginTop: 4 }}>限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。</div>
+        </FoldSection>
+        <FoldSection title="收文件" desc="别人发来的文件，她会下载到 QQ 工作区的 qq-inbox 目录，再把路径告诉她（要看得用工具读）。这里管的是单个文件的大小上限。">
+          <Row label="单个文件最大" hint="文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB">{f.num('files.inboundMaxMB', { min: 1, max: 256 })}<span className="ab-muted">MB</span></Row>
+          <div className="ab-muted ab-small" style={{ marginTop: 4 }}>超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。</div>
         </FoldSection>
         <FoldSection title="危险命令确认" right={f.sw('security.dangerConfirm')} desc="她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。">
           <div className="ab-muted ab-small">拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。</div>
