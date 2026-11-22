@@ -65,6 +65,7 @@ export function registerBrowserRoutes({ route, readBody, browser, getConfig, log
         if (r.ok) log?.info?.(`装好了：${r.browser}`)
       })
       .catch((error) => {
+        invalidateProbe()
         job = { state: 'failed', message: String(error?.message || error), startedAt: job.startedAt, result: null }
       })
     return { ok: true, message: '开始安装（下包可能要几分钟），装完这张卡片会自己刷新' }
