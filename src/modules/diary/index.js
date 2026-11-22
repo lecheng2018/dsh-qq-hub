@@ -18,7 +18,8 @@ export default {
     const memory = api.lazy('memory')
     const qzone = createQzone({
       getConfig: api.config, onebot, hub, chatLog, log: api.log,
-      pickImage: () => pickDiaryImage(),
+      // 审计 S07：配图只允许「她自己的画作」或「来源会话已授权的表情」
+      pickImage: () => pickDiaryImage({ allowedChats: api.config().diary?.includeChats || [] }),
       // 写过的空间日记也进记忆库：以后聊到相关的事，她会想起自己那天写过什么
       onDiary: (text) => memory.add?.({ text: `我在 QQ 空间写过：${text}`, importance: 0.55, tags: ['空间日记'], source: 'diary' }),
     })

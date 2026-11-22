@@ -179,8 +179,15 @@ const DEFAULTS_RAW = {
     attachImage: true, // 写日记时配一张图（优先今天她画的，其次今天收的表情包）
     minChars: 60,
     maxChars: 140,
-    visibility: 'all', // all | friends | selected | self | excluded，和 QQ 空间自身的可见范围一致
+    // 审计 S07：默认「仅自己可见」。日记素材可能来自多个会话（见 includeChats），
+    // 出厂就公开等于把私聊内容默认推到好友圈。
+    visibility: 'self', // all | friends | selected | self | excluded，和 QQ 空间自身的可见范围一致
     audienceQQs: '', // selected / excluded 时可见（或不可见）的好友 QQ 号，换行或逗号分隔
+    // 审计 S07：哪些会话的聊天内容允许进入日记素材。空数组 = 不引用任何聊天，
+    // 日记只写她自己的事（今天画了什么、在想什么）。
+    // 过去无条件把「所有非 system 会话」的当天流水混成一份摘要交给模型，
+    // 于是私聊内容会被改写成第一人称说说发到空间。
+    includeChats: [],
   },
   // 本地接口：数据目录 local/ 里的脚本接管这几项（文件要在、开关要开）
   local: { tts: false, image: false, asr: false },
@@ -488,8 +495,15 @@ export function normalize(raw) {
   c.diary.attachImage = bool(c.diary.attachImage, true)
   c.diary.minChars = num(c.diary.minChars, 60, 10, 500)
   c.diary.maxChars = num(c.diary.maxChars, 140, 20, 1000)
-  c.diary.visibility = DIARY_AUDIENCES.includes(c.diary.visibility) ? c.diary.visibility : 'all'
+  c.diary.visibility = DIARY_AUDIENCES.includes(c.diary.visibility) ? c.diary.visibility : 'self'
   c.diary.audienceQQs = qqList(c.diary.audienceQQs).slice(0, 200).join('\n')
+  // 审计 S07：只接受合法 chatId，去重、限 100 条。非法项直接丢弃（不让脏配置
+  // 变成「匹配不到任何会话」以外的行为）。
+  c.diary.includeChats = [...new Set(
+    (Array.isArray(c.diary.includeChats) ? c.diary.includeChats : [])
+      .map((x) => String(x || '').trim())
+      .filter((x) => /^(private|group):\d+$/.test(x)),
+  )].slice(0, 100)
   c.speakUp.idleMinutes = num(c.speakUp.idleMinutes, 40, 5, 1440)
   c.speakUp.nudge = bool(c.speakUp.nudge, true)
   c.speakUp.minIntervalMinutes = num(c.speakUp.minIntervalMinutes, 90, 5, 1440)
