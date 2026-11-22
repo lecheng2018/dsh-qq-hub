@@ -447,3 +447,23 @@ test('qwenSynth：baseUrl 只填域名（不带协议）也能正常合成并正
     assert.ok(existsSync(file), '裸域名的 baseUrl 不应被误判成非法音频地址')
   } finally { globalThis.fetch = realFetch }
 })
+
+// 审计 S06：voice.http.headers/body 实际用法就是塞凭据（面板模板与 hint 都这么
+// 引导），不能明文回传面板。进 SECRETS 清单后走既有机制：回显置空 + Set 标记 +
+// 留空保存保留原值。urlTemplate 不是凭据，不受影响。
+test('S06：voice.http.headers/body 不再明文回显，留空保存保留原值', async () => {
+  const { normalize, publicConfig, mergeFromPanel } = await import('../src/core/config.js')
+  const current = normalize({ voice: { http: { headers: 'Authorization: Bearer;REAL', body: '{"t":"REAL"}', urlTemplate: 'https://t/x' } } })
+  const pub = publicConfig(current)
+  assert.equal(pub.voice.http.headers, '', 'headers 不得回显原文')
+  assert.equal(pub.voice.http.body, '', 'body 不得回显原文')
+  assert.equal(pub.voice.http.headersSet, true)
+  assert.equal(pub.voice.http.bodySet, true)
+  assert.equal(pub.voice.http.urlTemplate, 'https://t/x', 'urlTemplate 不是凭据，正常回显')
+
+  const next = mergeFromPanel(current, { voice: { http: { headers: '', body: '' } } })
+  assert.equal(next.voice.http.headers, 'Authorization: Bearer;REAL', '留空保存保留原值')
+  assert.equal(next.voice.http.body, '{"t":"REAL"}')
+  const replaced = mergeFromPanel(current, { voice: { http: { headers: 'Authorization: Bearer;NEW' } } })
+  assert.equal(replaced.voice.http.headers, 'Authorization: Bearer;NEW', '整段重填则覆盖')
+})
