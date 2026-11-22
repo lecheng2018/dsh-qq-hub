@@ -58,7 +58,7 @@ import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, nor
 import { agoLabel, nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
-import { readInboundFiles, inboundFileBlocks } from '../chat/inbound-files.js'
+import { readInboundFiles, inboundFileBlocks, inboundFileMaxBytes } from '../chat/inbound-files.js'
 import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
@@ -1031,13 +1031,17 @@ export function createModularCore({
   }
   async function hydrateInboundFiles(members, chatKey) {
     const out = []
+    // 入站单文件上限跟随面板里的 files.maxMB（和出站发文件同一个开关，默认 50MB）。
+    // 原先这里吃 readInboundFiles 写死的 20MB 默认值，而面板只调得到出站，于是主人发个
+    // 37MB 的包会被直接挡在下载前（2026-11-22 实测：「文件太大了（37MB > 20MB）」）。
+    const inboundMaxBytes = inboundFileMaxBytes(getConfig())
     for (const member of members) {
       const fileSegments = (member.segments || []).filter((segment) => segment?.type === 'file')
       if (!fileSegments.length) { out.push(member); continue }
       const memberChat = chatViewFor(chatKey, [member])
       const files = await readInboundFiles({
         kind: memberChat.kind, userId: memberChat.userId, groupId: memberChat.groupId, files: fileSegments,
-      }, { onebot, workspaceDir: workspaceDirOf(getConfig()), log })
+      }, { onebot, workspaceDir: workspaceDirOf(getConfig()), log, maxBytes: inboundMaxBytes })
       if (files.length) log.info(`${chatKey} 收到 ${files.length} 个文件：` + files.map((file) => file.name).join('、'))
       out.push({
         ...member,
