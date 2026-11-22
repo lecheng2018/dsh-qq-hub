@@ -214,6 +214,9 @@ const DEFAULTS_RAW = {
     ffmpegPath: '', // 留空从 PATH 查找
     shotChance: 0.35, // 刷完发截图给主人；0 = 不自动发
     shotLibrary: 300,
+    // 单独给 B 站选一个模型（需要商店 B 站模块 1.2.0+）：刷 B 站的后台回合 + 看画面都用它。
+    // 留空 = 跟随全局模型（老行为）。provider/model 两个都填才算数，见 modules/bili 的 biliModelOf。
+    model: { provider: '', model: '', reasoningEffort: '' },
   },
   // 刷抖音：专用浏览器（独立登录资料，不碰你平时的浏览器），经 CDP 控制。浏览 / 点赞 / 评论 / 分享各项权限在 profilePerms.douyin*。
   douyin: {
@@ -534,6 +537,12 @@ export function normalize(raw) {
   b.maxCommentsPerDay = num(b.maxCommentsPerDay, 3, 0, 50)
   b.maxRepliesPerDay = num(b.maxRepliesPerDay, 6, 0, 100)
   b.keywords = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[\n,，]+/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)
+  // 单独选的模型：两个字段都填才算数；坏数据一律当「跟随全局」。
+  if (!isObj(b.model)) b.model = {}
+  b.model.provider = String(b.model.provider || '').trim()
+  b.model.model = String(b.model.model || '').trim()
+  b.model.reasoningEffort = ['low', 'high', 'max', ''].includes(b.model.reasoningEffort) ? b.model.reasoningEffort : ''
+  if (!b.model.provider || !b.model.model) b.model.provider = b.model.model = ''
   const d = c.douyin
   d.enabled = bool(d.enabled, false)
   d.autoBrowse = bool(d.autoBrowse, true)
