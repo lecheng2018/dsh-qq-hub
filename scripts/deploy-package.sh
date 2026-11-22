@@ -28,7 +28,10 @@ DST_ROOT="${QQHUB_DEPLOY_DST:?要设 QQHUB_DEPLOY_DST（目标插件目录，如
 [ -d "$(dirname "$DST_ROOT")" ] || { echo "目标父目录不存在：$(dirname "$DST_ROOT")" >&2; exit 1; }
 
 STAMP=$(date +%Y%m%d-%H%M%S)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/qqhub-deploy-$STAMP-XXXXXX")
+DST_PARENT=$(dirname "$DST_ROOT")
+# 优先在目标父目录建临时工作区以确保处于同一文件系统（真正的原子 rename 切换）；
+# 若父目录不可写则回退到 TMPDIR
+WORK=$(mktemp -d "$DST_PARENT/.qqhub-deploy-$STAMP-XXXXXX" 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/qqhub-deploy-$STAMP-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 echo "== 工作目录：$WORK"
 
