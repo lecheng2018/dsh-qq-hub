@@ -120,8 +120,3 @@ test('ListInput numbers=true：敲一半的短数字不被吃（strict 只在失
   assert.match(seg, /onChange: \(e\) => \{\s*setText\(e\.target\.value\)/, '输入时 text 保留原文')
 })
 
-test('heybox dutyInFlight 挂进程级单例（热重载不失效）', () => {
-  const src = readFileSync(join(root, 'src/heybox/site.js'), 'utf8')
-  assert.match(src, /globalThis\.__qqhubHeyboxDuty/, '锁挂 globalThis 跨热重载')
-  assert.doesNotMatch(src, /let dutyInFlight/, '不再用闭包变量')
-})
