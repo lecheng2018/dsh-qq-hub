@@ -37,6 +37,10 @@ export function formatApprovalCard(entry) {
 
   parts.push(`\n✅ 回复「同意」放行（或 yes / y）\n❌ 回复「拒绝」拦下（或 no / n）`)
   parts.push(`有多条待办时带上编号，例如「同意 #${entry.id}」（60 秒内有效）`)
+  // 审计 S09：过去只校验「回复者是不是主人」，不校验在哪个会话回复——主人在群里
+  // 回「同意」也会放行，等于把高危操作的批准权开放给了群消息链路。
+  // 现在绑定发卡私聊，文案先把去处写清楚。
+  parts.push(`（请在审批卡所在的这个私聊里回复；在群里回复不会生效）`)
   return parts.join('\n')
 }
 
@@ -152,6 +156,13 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
     const owner = typeof ownerQQ === 'function' ? String(ownerQQ()) : String(ownerQQ || '')
     // fail-closed（缺陷：ownerQQ 空值时跳过校验）：未配置主人或发送者不是主人都不消费。
     if (!owner || String(userId) !== owner) {
+      return false
+    }
+    // 审计 S09：审批必须绑定发卡私聊。卡片固定投到 private:<主人>，批复也必须
+    // 出自同一个会话——主人在群里回「同意」不再放行。这里刻意**不回任何提示**：
+    // 在群里提示「请在私聊回复」本身就会向群成员泄露「存在待审批的高危操作」。
+    if (String(chatId || '') !== `private:${owner}`) {
+      log?.debug?.(`[approvals] 拒绝非发卡私聊的审批指令（chatId=${String(chatId || '')}）`)
       return false
     }
 

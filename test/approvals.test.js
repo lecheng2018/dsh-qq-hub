@@ -140,3 +140,43 @@ test('createApprovalRegistry: 权限锁锁定时阻止放行并提示解锁', as
   assert.equal(handledAgain, true)
   assert.equal(registry.count(), 0) // 放行成功
 })
+
+// 审计 S09：审批批复必须绑定发卡私聊。
+// 过去 handleReply 只校验「回复者是不是主人」，主人在群里回「同意」也会放行
+// 高危操作——等于把批准权开放给群消息链路。现在：非 private:<主人> 的会话
+// 一律不消费（刻意不回提示，避免向群成员泄露「存在待审批高危操作」）。
+test('S09: 主人在群里回复审批指令不放行，私聊回复才生效', async () => {
+  const sent = []
+  const ownerQQ = '10001'
+  const registry = createApprovalRegistry({
+    deliver: async (chatId, text) => { sent.push({ chatId, text }) },
+    ownerQQ: () => ownerQQ,
+    timeoutMs: 1000,
+  })
+
+  const reqPromise = registry.request({
+    toolName: 'bash',
+    reason: '重启服务',
+    arguments: { command: 'systemctl restart nginx' },
+  }, { chatId: 'private:10001', sessionId: 'sess-1' })
+
+  const id = parseInt(sent[0].text.match(/#(\d+)/)[1], 10)
+
+  // 主人在白名单群里回复 → 不消费、不放行、也不产生任何群内提示（防泄露）
+  const inGroup = registry.handleReply(`同意 #${id}`, ownerQQ, 'group:777')
+  assert.equal(inGroup, false, '群聊回复不得消费审批指令')
+  assert.equal(registry.count(), 1, '审批仍挂起')
+  assert.equal(sent.length, 1, '不得在群里回任何提示（会泄露待审批的存在）')
+
+  // 同一条指令在发卡私聊里回复 → 正常放行
+  const inPrivate = registry.handleReply(`同意 #${id}`, ownerQQ, 'private:10001')
+  assert.equal(inPrivate, true)
+  const outcome = await reqPromise
+  assert.equal(outcome, 'allowed-once')
+})
+
+test('S09: 卡片文案写明「请在私聊里回复」，群里回复无效有据可循', () => {
+  const card = formatApprovalCard({ id: 1, toolName: 'bash', command: 'ls' })
+  assert.match(card, /私聊里回复/)
+  assert.match(card, /在群里回复不会生效/)
+})
