@@ -53,24 +53,7 @@ const NAV_ALIAS = {
   bili: 'b站 bilibili 视频', douyin: '抖音 短视频 私信', heybox: '小黑盒 游戏 社区 资讯', multiParser: '内容解析 多平台 链接 解析 视频 图文 小红书 微博 知乎 贴吧 b站 抖音 微信', local: '本地 接口 sd sovits', modules: '扩展 模块 插件', logs: '日志 报错',
 }
 
-export const TAB_KEYS = {
-  connect: ['snowluma', 'botQQ'],
-  access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'],
-  group: ['group', 'merge', 'reply'],
-  model: ['model', 'chatModels'],
-  voice: ['voice'],
-  stickers: ['stickers'],
-  imagegen: ['imageGen'],
-  diary: ['diary', 'qzoneSocial'],
-  speakup: ['speakUp'],
-  memory: ['memory'],
-  bili: ['bili'],
-  douyin: ['douyin'],
-  heybox: ['heybox'],
-  multiParser: ['multiParser'],
-  browser: ['browser'],
-  local: ['local']
-}
+export { TAB_KEYS } from './tab-keys.js'
 
 export {
   TABS, TAB_MODS, modOn, NAV_GROUPS, PLATFORM_EXT, navGroupOf, navOrder, NAV_ALIAS
