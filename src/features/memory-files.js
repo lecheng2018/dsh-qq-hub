@@ -21,7 +21,7 @@ import {
 } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { renameWithRetry, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
-import { parseMarkdownArchive, serializeMarkdownArchive, MEMORY_FORMAT } from './memory-markdown.js'
+import { parseMarkdownArchive, serializeMarkdownArchive, diffRoundTrip, MEMORY_FORMAT } from './memory-markdown.js'
 
 export const MAX_SCOPE_FILE_BYTES = 2 * 1024 * 1024 // 2 MiB 单文件硬守卫
 
@@ -315,6 +315,27 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     }
   }
 
+
+  /**
+   * 审计 S13：写盘前做一次「往返自检」——序列化后再解析回来，逐条比对内容字段。
+   *
+   * 过去这里只 `parseMarkdownArchive(rawText)` 确认「能解析」，不对账字段：正文里
+   * 出现结构行时内容会被搬走甚至整段消失，而写盘照常成功，读回来才发现记忆少了。
+   * 记忆是长期事实源，这种静默损坏比报错严重得多。
+   *
+   * 比对逻辑放在 memory-markdown 的 diffRoundTrip（纯函数、可单测）；
+   * 这里只负责在发现差异时拒绝写入。
+   */
+  function assertRoundTrip(parsed, entries, scope) {
+    const problems = diffRoundTrip(parsed.entries, entries)
+    if (!problems.length) return
+    throw new Error(
+      `记忆档案往返自检失败（作用域 ${scope}），已阻止写入以免丢失内容：`
+      + problems.slice(0, 5).join('；')
+      + (problems.length > 5 ? `；另 ${problems.length - 5} 条` : ''),
+    )
+  }
+
   function prepareScopeDocument(scope, entries, prologue = '') {
     const file = join(memoryDir, scopeToFilePath(scope))
     if (brokenScopes.has(file)) throw new Error(`记忆档案损坏: ${file}；请修复后重载档案`)
@@ -327,7 +348,11 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     if (rawText && Buffer.byteLength(rawText, 'utf8') > MAX_SCOPE_FILE_BYTES) {
       throw new Error(`记忆档案超限: 作用域 ${scope} 大小超过 ${MAX_SCOPE_FILE_BYTES / 1024 / 1024} MiB 上限，已阻止写入`)
     }
-    if (rawText) parseMarkdownArchive(rawText, { expectedScope: scope })
+    if (rawText) {
+      const parsed = parseMarkdownArchive(rawText, { expectedScope: scope })
+      // 审计 S13：不再只确认「能解析」，而是确认「能原样还原」。
+      assertRoundTrip(parsed, entries, scope)
+    }
     return { scope, file, rawText, entries, prologue }
   }
 
