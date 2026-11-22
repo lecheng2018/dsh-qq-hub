@@ -180,3 +180,67 @@ test('S09: 卡片文案写明「请在私聊里回复」，群里回复无效有
   assert.match(card, /私聊里回复/)
   assert.match(card, /在群里回复不会生效/)
 })
+
+// ---------------- 审计跟进（2026-11-22 实机）：日志语义 ----------------
+// 过去作用域校验排在 parseApprovalCommand 之前，于是主人在群里说的**任何**话都会打一条
+// 「拒绝非发卡私聊的审批指令」。实机 8 条该日志里只有 1 条是真的审批指令（13:54 的「确认」），
+// 其余是「你是什么模型？」「上面有个打广告的」「这不撤回」这些普通聊天 —— 排查审批问题时
+// 全是假信号。修法是把解析与 pending 判定提到作用域校验之前，只有「真指令 + 真有待审批」
+// 才轮到那条日志。
+
+/** 收 debug 日志的假 log。 */
+function logSink() {
+  const lines = []
+  return { lines, log: { debug: (m) => lines.push(String(m)), info() {}, warn() {}, error() {} } }
+}
+
+test('日志语义：主人在群里的普通聊天不再被记成「拒绝审批指令」', () => {
+  const { lines, log } = logSink()
+  const registry = createApprovalRegistry({ deliver: async () => {}, ownerQQ: () => '10001', timeoutMs: 1000, log })
+
+  const ordinary = ['你是什么模型？', '上面有个打广告的', '这不撤回', '', ' ', '在吗', '好的']
+  for (const text of ordinary) {
+    const handled = registry.handleReply(text, '10001', 'group:777')
+    assert.equal(handled, false, `普通聊天「${text}」不得被消费`)
+  }
+  assert.deepEqual(lines, [], `普通聊天不得产生任何审批日志，实际：${JSON.stringify(lines)}`)
+})
+
+test('日志语义：没有待审批在等时，审批词也不打日志', () => {
+  const { lines, log } = logSink()
+  const registry = createApprovalRegistry({ deliver: async () => {}, ownerQQ: () => '10001', timeoutMs: 1000, log })
+
+  // registry.count() === 0：没有任何待审批项
+  const handled = registry.handleReply('同意', '10001', 'group:777')
+  assert.equal(handled, false, '没有待审批时不消费')
+  assert.deepEqual(lines, [], `空 pending 不应打日志，实际：${JSON.stringify(lines)}`)
+})
+
+test('日志语义：真审批指令 + 有待审批 + 非发卡私聊 → 才打那条日志，且带上下文', async () => {
+  const { lines, log } = logSink()
+  const registry = createApprovalRegistry({
+    deliver: async () => {}, ownerQQ: () => '10001', timeoutMs: 50, log,
+  })
+  const req = registry.request({
+    toolName: 'bash', reason: '测试', arguments: { command: 'systemctl restart nginx' },
+  }, { chatId: 'private:10001', sessionId: 'sess-1' })
+  req.catch(() => {}) // 超时会 reject，别留未处理拒绝
+
+  const handled = registry.handleReply('同意', '10001', 'group:777')
+  assert.equal(handled, false, '群聊回复仍不放行（S09 安全边界不变）')
+  assert.equal(registry.count(), 1, '审批仍挂起')
+  assert.equal(lines.length, 1, `只应打一条日志，实际 ${lines.length}：${JSON.stringify(lines)}`)
+  assert.match(lines[0], /拒绝非发卡私聊的审批指令/)
+  assert.match(lines[0], /group:777/, '日志要带会话，便于排查')
+  assert.match(lines[0], /待审批 1 条/, '日志要说明当时确实有挂起项')
+  assert.match(lines[0], /approve/, '日志要说明被判定成什么动作')
+})
+
+test('日志语义：非主人发言一律静默（fail-closed 且不打日志）', () => {
+  const { lines, log } = logSink()
+  const registry = createApprovalRegistry({ deliver: async () => {}, ownerQQ: () => '10001', timeoutMs: 1000, log })
+  for (const [text, uid, chat] of [['同意', '20002', 'group:777'], ['同意', '20002', 'private:10001'], ['同意', '', 'private:10001']]) {
+    assert.equal(registry.handleReply(text, uid, chat), false)
+  }
+  assert.deepEqual(lines, [], '非主人发言不得产生审批日志')
+})

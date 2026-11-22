@@ -158,18 +158,27 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
     if (!owner || String(userId) !== owner) {
       return false
     }
-    // 审计 S09：审批必须绑定发卡私聊。卡片固定投到 private:<主人>，批复也必须
-    // 出自同一个会话——主人在群里回「同意」不再放行。这里刻意**不回任何提示**：
-    // 在群里提示「请在私聊回复」本身就会向群成员泄露「存在待审批的高危操作」。
-    if (String(chatId || '') !== `private:${owner}`) {
-      log?.debug?.(`[approvals] 拒绝非发卡私聊的审批指令（chatId=${String(chatId || '')}）`)
-      return false
-    }
 
+    // 先判「这到底是不是一条审批指令」，再判会话作用域（审计跟进，2026-11-22 实机）。
+    // 过去作用域校验排在解析之前，于是主人在群里说的**任何**话——「你是什么模型？」
+    // 「上面有个打广告的」——都会打一条「拒绝非发卡私聊的审批指令」。那句话根本不是
+    // 审批指令，日志却把它记成一次审批尝试，排查审批问题时会当成假信号（实机 8 条该日志
+    // 里只有 1 条是真的审批指令）。顺序倒过来：非审批指令、以及没有待审批在等时，直接
+    // 安静放行，只有「确实是审批指令 + 确实有挂起项」才轮到作用域判定与这条日志。
+    //
+    // 返回值语义不变：三处 early return 仍都是 false（不消费，交回正常聊天流程）。
     const parsed = parseApprovalCommand(text)
     if (!parsed) return false
 
     if (pending.size === 0) {
+      return false
+    }
+
+    // 审计 S09：审批必须绑定发卡私聊。卡片固定投到 private:<主人>，批复也必须
+    // 出自同一个会话——主人在群里回「同意」不再放行。这里刻意**不回任何提示**：
+    // 在群里提示「请在私聊回复」本身就会向群成员泄露「存在待审批的高危操作」。
+    if (String(chatId || '') !== `private:${owner}`) {
+      log?.debug?.(`[approvals] 拒绝非发卡私聊的审批指令（chatId=${String(chatId || '')}，待审批 ${pending.size} 条，动作 ${parsed.action}）`)
       return false
     }
 
