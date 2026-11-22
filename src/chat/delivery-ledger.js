@@ -24,6 +24,11 @@ function auditSegments(input) {
   let contentChars = 0
   let remaining = ENQUEUE_CONTENT_KEEP_CHARS
   let contentTruncated = false
+  // 审计 S12：过去这两个语义共用 contentTruncated 一个旗标——「媒体被摘要化」与
+  // 「文本超长被预截」，而 7 天衰减的豁免条件恰恰是 contentTruncated，于是**含媒体的
+  // 记录永远不衰减正文**（媒体虽然已是摘要，文本部分却全量留到永久）。拆开：
+  let mediaStripped = false       // 媒体段被替换成 sha256/字节数摘要（不豁免衰减）
+  let textPreTruncated = false    // 入队时文本超出 KEEP_CHARS 被预截（豁免衰减，幂等无增益）
   for (const seg of segments) {
     for (const key of ['file', 'url', 'base64']) {
       const value = seg.data[key]
@@ -36,6 +41,7 @@ function auditSegments(input) {
       seg.data.mediaDigest = { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, encoding: 'base64' }
       delete seg.data[key]
       contentTruncated = true
+      mediaStripped = true
     }
     if (seg.type !== 'text' || typeof seg.data.text !== 'string') continue
     const text = seg.data.text
@@ -45,13 +51,20 @@ function auditSegments(input) {
     if (kept.length !== text.length) {
       seg.data.text = kept
       contentTruncated = true
+      textPreTruncated = true
     }
   }
-  return { segments, contentChars, contentTruncated }
+  return { segments, contentChars, contentTruncated, mediaStripped, textPreTruncated }
 }
 
 function trimTerminalContent(rec, now) {
-  if (!['sent', 'cancelled'].includes(rec.state) || rec.contentTruncated) return rec
+  // 审计 S12：豁免只针对「入队时文本已预截」（再裁无增益）；媒体剥离**不再豁免**——
+  // 过去混用旗标导致含媒体的记录正文永不衰减。旧落盘数据只有 contentTruncated：
+  // 无法区分两种来源，为兼容旧语义（含媒体老记录不衰减），仍按旧旗标豁免；
+  // 新记录写 mediaStripped/textPreTruncated，媒体记录从此正常衰减。
+  if (!['sent', 'cancelled'].includes(rec.state)) return rec
+  if (rec.mediaStripped === undefined && rec.contentTruncated) return rec
+  if (rec.textPreTruncated) return rec
   const createdAt = Number(rec.createdAt)
   if (!Number.isFinite(createdAt) || now - createdAt < CONTENT_RETENTION_MS) return rec
   let remaining = CONTENT_KEEP_CHARS
@@ -71,7 +84,7 @@ function trimTerminalContent(rec, now) {
     return changed ? { ...seg, data: { ...seg.data, text: kept } } : seg
   })
   if (!changed) return rec
-  return { ...rec, segments, contentTruncated: true, contentOriginalChars: originalChars }
+  return { ...rec, segments, contentTruncated: true, mediaStripped: rec.mediaStripped, textPreTruncated: true, contentOriginalChars: originalChars }
 }
 
 function validLedgerDocument(value) {
@@ -151,6 +164,8 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
           if (audit.contentTruncated) {
             rec.segments = audit.segments
             rec.contentTruncated = true
+            if (audit.mediaStripped) rec.mediaStripped = true
+            if (audit.textPreTruncated) rec.textPreTruncated = true
             recovered = true
           }
         }
@@ -208,6 +223,8 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
       segments: audit.segments,
       contentChars: audit.contentChars,
       ...(audit.contentTruncated ? { contentTruncated: true } : {}),
+      ...(audit.mediaStripped ? { mediaStripped: true } : {}),
+      ...(audit.textPreTruncated ? { textPreTruncated: true } : {}),
       // PR-1 直通投递：审计可读的备注与动作名（msg 模式 action 缺省 = send_*_msg 由 chatKey 推）
       ...(note ? { note: String(note) } : {}),
       ...(action ? { action: String(action) } : {}),
