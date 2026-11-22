@@ -94,6 +94,56 @@ const SIDE_EFFECT_PATHS = new Set([
   '/avatar/upload',        // :109 writeFileSync 换头像
   '/avatar/reset',         // :119 unlinkSync 删头像
   '/avatar/sync-qq',       // :123 set_qq_avatar 改 QQ 头像
+  // ── 审计 S04：内置模块的路由与面板路由同前缀（routePrefixFor 对内置模块返回 ''），
+  // 过去这份清单只收面板路由，模块的写接口一个都没进来 —— 跨站 <img>/顶层链接的 GET
+  // 能直接触发它们：清空记忆分区、重置用量、安装组件、触发日记对外发布。
+  // 逐条按「写持久状态 / 删数据 / 派生进程或下载 / 对外发布 / 触发计费」收进来
+  // （与上面面板条目同一口径）；面板前端对这些全部走 POST，合法流程不受影响。
+  '/affective/bump',              // 写情感状态
+  '/compact-now',                 // token-guardian 立即压缩（触发模型调用＝计费）
+  '/token-guardian/compact-now',  // 同上（模块内注册路径）
+  '/token-guardian/reset-usage',  // 重置用量
+  '/token-usage/reset',           // 重置用量（报告点名）
+  '/diary/run',                   // 对外发布说说（高危）
+  '/image/codex/cancel',          // 写任务态
+  '/image/codex/complete',        // 写登录/任务态
+  '/image/codex/login',           // 发起登录（可能拉起浏览器）
+  '/image/codex/logout',          // 写登录态
+  '/image/gallery/delete',        // 删数据
+  '/image/open-folder',           // 派生进程（打开文件夹）
+  '/memory-privacy/clear-main',   // 删记忆/档案数据（报告点名）
+  '/memory-privacy/set-override', // 写隔离开关（报告点名）
+  '/sticker/import-qq',           // 从 QQ 拉取导入（写库＋网络）
+  '/sticker/rename',              // 写状态
+  '/sticker/upload',              // 上传写库
+  '/style/save',                  // 写说话方式
+  '/voice/asr-prepare',           // 下载 200MB 模型
+  '/voice/asr-last',              // 触发识别（计费）
+  '/voice/install',               // 安装 Python 包（派生进程，报告点名）
+  '/voice/test',                  // 触发合成（计费）
+  // ── 审计 S04 复核补齐：上面那批只覆盖了「报告点名 + 一眼能看出写操作」的 22 条，
+  // 模块里其余写接口仍是缺口。逐条核对 handler 与面板调用方后补齐（面板对这些
+  // 全部走 POST；以下都是「无 body 的跨站 GET 可直达 handler」的写/计费入口）。
+  '/voice/asr-test',              // :85 跑 TTS+ASR 自检（计费；面板 POST）
+  '/memory/add',                  // :138 写记忆
+  '/memory/update',               // :142 改记忆
+  '/memory/delete',               // :146 删记忆
+  '/memory/reassign-owner',       // :151 批量搬记忆（换号迁移）
+  '/memory/restore',              // :164 恢复已失效条目
+  '/memory/import/commit',        // :183 批量导入写库
+  '/memory/extract',              // :209 触发记忆提炼（模型计费）
+  '/memory/reload',               // :128 重载档案
+  '/memory/vector/backfill',      // :159 批量 embed（外部计费调用）
+  '/profiles/save',               // :166 写人物小档案
+  '/profiles/rebuild',            // :171 按记忆重写小档案（模型计费）
+  '/profiles/delete',             // :204 删小档案
+  '/insights/save',               // :193 写相处经验
+  '/insights/delete',             // :199 删相处经验
+  '/qzone/delete',                // diary:69 删说说（对外删除 + onebot 调用）
+  '/sticker/delete',              // stickers:196 删表情（QQ 收藏里也删）
+  '/purpose/fire',                // purpose:78 跑一轮目的引擎（可能真的发消息）
+  '/speakup/fire',                // speakup:64 主动搭话（模型计费 + 私聊投递）
+  '/reset-usage',                 // token-guardian:581 重置用量（与 /token-guardian/reset-usage 同一 handler 的短别名）
 ])
 
 /** 从 Host 头里剥出主机名（处理 '127.0.0.1:8080' 与 '[::1]:8080' 两种形态）。 */

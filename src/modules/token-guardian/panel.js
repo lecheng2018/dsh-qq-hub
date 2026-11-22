@@ -175,14 +175,25 @@ return function TokenGuardianPanel(props) {
 
   useEffect(() => { loadStatus() }, [])
 
-  const requestSafe = async (shortPath, fullPath) => {
-    let r = await call(shortPath)
+  // 写接口（压缩 / 重置用量）必须走 POST：guard 的 SIDE_EFFECT_PATHS 对它们做了
+  // GET 类方法约束，带 query 的 GET 会在进 handler 之前就被 405 拦掉。
+  // 只读的摘要仍走 GET（body === undefined 即 GET，与 client 的 call(p, body) 同口径）。
+  // 原来的短路径/完整路径三连发全是 GET，'压一次'/'重置' 按钮点了只会拿到 405。
+  const requestSafe = async (shortPath, fullPath, body) => {
+    const fire = (p) => (body === undefined ? call(p) : call(p, body))
+    let r = await fire(shortPath)
     if (!r || r.ok === false) {
-      r = await call(fullPath)
+      r = await fire(fullPath)
     }
     if (!r || r.ok === false) {
       try {
-        const res = await fetch('/qq-hub/api' + fullPath)
+        const res = body === undefined
+          ? await fetch('/qq-hub/api' + fullPath)
+          : await fetch('/qq-hub/api' + fullPath, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          })
         if (res.ok) r = await res.json()
       } catch {}
     }
@@ -192,8 +203,7 @@ return function TokenGuardianPanel(props) {
   const handleCompact = async (chatId) => {
     setBusyChat(chatId)
     try {
-      const q = '?chatId=' + encodeURIComponent(chatId)
-      const r = await requestSafe('/compact-now' + q, '/token-guardian/compact-now?chatId=' + encodeURIComponent(chatId))
+      const r = await requestSafe('/compact-now', '/token-guardian/compact-now', { chatId })
       props.toast && props.toast((r && r.message) || (r && r.ok ? '压缩成功' : '未成功'), (r && r.ok) ? 'ok' : 'err')
       await loadStatus()
       if (expandedSummary[chatId]) {
@@ -206,8 +216,7 @@ return function TokenGuardianPanel(props) {
 
   const handleResetUsage = async (chatId) => {
     try {
-      const q = '?chatId=' + encodeURIComponent(chatId)
-      const r = await requestSafe('/reset-usage' + q, '/token-guardian/reset-usage?chatId=' + encodeURIComponent(chatId))
+      const r = await requestSafe('/reset-usage', '/token-guardian/reset-usage', { chatId })
       props.toast && props.toast((r && r.message) || '重置成功', (r && r.ok) ? 'ok' : 'err')
       await loadStatus()
     } catch (e) {
