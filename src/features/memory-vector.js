@@ -203,8 +203,15 @@ export function createScopeVectorFile(filePath, dim, { log = console } = {}) {
 
 // ---------------- 通道编排 ----------------
 
-export function createVectorChannel({ memoryDir, getConfig, log = console, fetchImpl, now = Date.now } = {}) {
+// flushDebounceMs 可注入：测试要观察「保存 → 对账落盘」的最终效果，15s 防抖
+// 会让用例挂太久；生产默认不变。
+export function createVectorChannel({ memoryDir, getConfig, log = console, fetchImpl, now = Date.now, flushDebounceMs = FLUSH_DEBOUNCE_MS } = {}) {
   const cfgOf = () => normalizeEmbeddingConfig(getConfig && getConfig()?.memory)
+  // 审计 S13 复核：停用是**不可逆**状态。过去 dispose() 只清 timer/dirty，在途请求
+  // 迟到的失败处理、以及 finally 里补的调度都不看它——停用后还能把旧 pending 写回
+  // dirty，再安排一次 flush，把记忆正文重新提交到 embedding 端点。
+  // 所有入队/落盘入口统一看这个闸。
+  let disposed = false
   let lastWarn = 0
   const warnOnce = (msg) => {
     const t = now()
@@ -226,12 +233,17 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
   let flushTimer = null
   let flushing = false
 
-  const enabled = () => Boolean(cfgOf())
+  const enabled = () => !disposed && Boolean(cfgOf())
 
   /** save() 后调用：整个作用域对账入队（防抖后批量 embed 缺失/变更条目、摘除已死条目的向量）。 */
   function queueScope(scope, items) {
-    if (!enabled()) return
-    const pend = dirty.get(scope) || new Map()
+    if (disposed || !enabled()) return
+    // 审计 S13 附带：这里的语义是「整作用域对账快照」——每次调用都是该 scope 的
+    // **全量**存活清单（save() 传现存条目；清空时传空数组=全摘除）。
+    // 过去复用 dirty 里已有的 Map 且只增不减：连续两次 remove（第二次删空作用域、
+    // 传空数组）时，第一次留下的 key 仍在，空对账退化成部分对账，死向量残留。
+    // 改为每次新建 pend 覆盖。
+    const pend = new Map()
     for (const m of items || []) {
       if (!m || m.invalidAt) continue // 死条目不入队；flush 时对账会顺手把旧向量摘掉
       pend.set(String(m.id), embedKeyOf(m))
@@ -241,28 +253,37 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
   }
 
   function scheduleFlush() {
-    if (flushTimer) return
+    if (disposed || flushTimer) return
     flushTimer = setTimeout(() => {
       flushTimer = null
       flush().catch(() => {})
-    }, FLUSH_DEBOUNCE_MS)
+    }, Math.max(0, Number(flushDebounceMs) || 0))
     flushTimer.unref?.()
   }
 
   async function flush() {
     const cfg = cfgOf()
     const emb = cfg ? createEmbedder(cfg, { fetchImpl, log }) : null
-    if (!cfg || !emb || flushing || !dirty.size) return 0
+    // 停用后不再发起任何 embedding 请求（包括被 finally 重新调度的这一轮）
+    if (disposed || !cfg || !emb || flushing || !dirty.size) return 0
     flushing = true
     let embedded = 0
     try {
       const batches = [...dirty]
       dirty.clear()
       for (const [scope, pend] of batches) {
+        // 中止后（停用/期间被 dispose）不再碰这个 scope，pending 已经由 dispose 清空
+        if (disposed) break
         try {
           const file = fileOf(scope)
           if (!file) continue
-          const map = file.load()
+          // 审计 S13 复核：**事务化**。file.load() 返回的是模块内缓存的同一个 Map，
+          // 过去直接在它上面 pruned / set 再分批 await —— 一旦中途某批失败，
+          // 前面成功的批已经改在这个共享缓存里，磁盘却没写；随后 save() 的新快照
+          // 覆盖 dirty，下一次 flush 看到「缓存已是最新」（need/pruned 均 0）直接
+          // 跳过 file.save()，于是那部分成功永远落不了盘，旧向量一直留在磁盘上。
+          // 现在所有改动都做在私有副本上，全部批次成功后才提交缓存与磁盘。
+          const map = new Map(file.load())
           // 对账：只留还活着的条目（被遗忘/清空/搬走作用域的自动摘除向量）。
           // 只能有这一个摘除循环并如实计 pruned：旧版前面还有一个先删尽死 id 的循环，
           // 使这里 pruned 恒 0 → 纯摘除的 flush 命中下方 continue 永不 save，
@@ -275,15 +296,22 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
             if (!cur || cur.hash !== sha16(key)) need.push({ id, key })
           }
           if (!need.length && !pruned) continue // 没有新增/变更/摘除就不重写文件
+          let committed = 0
           for (let i = 0; i < need.length; i += cfg.batch) {
             const chunk = need.slice(i, i + cfg.batch)
             const vecs = await emb.embed(chunk.map((x) => x.key))
+            if (disposed) throw new Error('向量通道已停用')
             chunk.forEach((x, j) => map.set(x.id, { vec: vecs[j], hash: sha16(x.key) }))
-            embedded += chunk.length
+            committed += chunk.length
           }
+          // 全部批次成功：写盘，并把整份结果提交回共享缓存
           file.save(map)
+          embedded += committed
         } catch (error) {
+          if (disposed) break // 停用导致的失败不重排、不回填，也不再发请求
           warnOnce(`flush 失败（退回纯 BM25，稍后重试）：${error.message}`)
+          // 回填时也要保留「本次快照要求摘除」的语义：只回填存活条目，
+          // 这样下一次 flush 的对账仍会摘掉已死的向量。
           const back = dirty.get(scope) || new Map()
           for (const [id, key] of pend) if (!back.has(id)) back.set(id, key)
           dirty.set(scope, back)
@@ -291,6 +319,11 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
       }
     } finally {
       flushing = false
+      // 审计 S13 附带：flush 飞行期间入队的 scope 会被上面的 flushing 卫语句
+      // 直接 return 掉——dirty 里留着数据、却没有任何定时器再去碰它，要等
+      // 下一次任意 save 才有机会 flush。连续两次 remove（第二次删空作用域）
+      // 正好踩中：空对账被吞，死向量残留。finally 里补一次调度兜底。
+      if (!disposed && dirty.size) scheduleFlush()
     }
     return embedded
   }
@@ -298,6 +331,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
   const qCache = new Map() // sha16(query) -> { vec, at }
   /** 查询向量（带 5 分钟 TTL 缓存）。timeoutMs 是独立于 HTTP 超时的兜底 —— 召回路径等不起。 */
   async function embedQuery(text, { timeoutMs = 3000 } = {}) {
+    if (disposed) return null
     const cfg = cfgOf()
     const emb = cfg ? createEmbedder(cfg, { fetchImpl, log }) : null
     if (!cfg || !emb) return null
@@ -336,6 +370,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
 
   /** 面板手动触发：把传入条目按 scope 分组强推入队（只补缺失/文本变更的；要全量重建先删 vectors.bin）。 */
   async function backfill(items) {
+    if (disposed) return { ok: false, message: '向量通道已停用' }
     if (!enabled()) return { ok: false, message: '向量通道未启用：面板「记忆」页模块设置或 memory.embeddings' }
     const byScope = new Map()
     for (const m of items || []) {
@@ -367,7 +402,9 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     return { enabled: true, model: cfg.model, dim: cfg.dim, scopes, vectors, pending: dirty.size }
   }
 
+  /** 关闭通道（同步且幂等）。置 disposed 后所有入口都不再发请求、不再写盘。 */
   function dispose() {
+    disposed = true
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
     dirty.clear()
     qCache.clear()
