@@ -13,6 +13,7 @@ import { guardOutbound } from '../chat/identity-guard.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const link = (bvid) => `https://www.bilibili.com/video/${bvid}`
+const clip = (s, n) => Array.from(String(s || '').toWellFormed()).slice(0, n).join('')
 /** 从模型输出里取 JSON（对象或数组），取不到返回 fallback。 */
 export function pickJson(out, fallback) {
   const s = String(out || '')
@@ -235,10 +236,10 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
         // 出处带标题（1.3.55）：1.3.40 去流水化矫枉过正——「在B站刷到了点东西」连看了什么都不剩，
         // 两周后她自己和主人都对不上「这条想法说的是哪个视频」。折中：标题只作出处（截 30 字），
         // 不写 UP主/播放量/分区那些真流水；正文仍是她的判断。
-        const srcTitle = String(v.title || '').slice(0, 30)
-        if (feeling) memory?.addEvent?.({ text: `看了《${srcTitle}》，她的想法：${feeling.slice(0, 60)}`, tags: ['B站', '想法'], importance: 0.3, ephemeral: true })
+        const srcTitle = clip(v.title, 30)
+        if (feeling) memory?.addEvent?.({ text: `看了《${srcTitle}》，她的想法：${clip(feeling, 60)}`, tags: ['B站', '想法'], importance: 0.3, ephemeral: true })
         // 她自己写下的结论才算知识，值得长期留；tag 打上「知识」，注入时能分出来。
-        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: `（来自《${srcTitle}》）${String(d.remember).slice(0, 180)}`, tags: ['B站', '知识'], importance: 0.55, source: 'event' })
+        if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: `（来自《${srcTitle}》）${clip(d.remember, 180)}`, tags: ['B站', '知识'], importance: 0.55, source: 'event' })
         const comment = String(d.comment || '').trim()
         if (comment && !isSilence(comment) && commented < commentLeft && canPost(s)) {
           try {
@@ -251,7 +252,7 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
               await api.postComment(v.aid, comment.slice(0, 200))
               commented++
               s.comments++
-              memory?.addEvent?.({ text: `在B站一条视频下评论过：${comment.slice(0, 60)}`, tags: ['B站'], importance: 0.38 })
+              memory?.addEvent?.({ text: `在B站一条视频下评论过：${clip(comment, 60)}`, tags: ['B站'], importance: 0.38 })
               record(s, { kind: 'comment', title: v.title, bvid: v.bvid, text: comment })
             } else {
               log.info('这条评论因包含账号标识没有发出去')
@@ -341,7 +342,7 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
             await api.postComment(x.oid, `回复 @${x.name} :${reply}`.slice(0, 200), { root: x.root, parent: x.parent })
             s.replies++
             n++
-            memory?.addEvent?.({ text: `在B站回复了 ${x.name}：${reply.slice(0, 50)}`, tags: ['B站'], importance: 0.35 })
+            memory?.addEvent?.({ text: `在B站回复了 ${x.name}：${clip(reply, 50)}`, tags: ['B站'], importance: 0.35 })
             record(s, { kind: 'reply', title: x.title, text: `${x.name}：${x.text} → ${reply}` })
           }
         } catch (error) {
@@ -379,7 +380,7 @@ export function createBili({ getConfig, hub, chatLog, memory, log, dsh, api: inj
     if (getConfig().dryRun) return { ok: true, message: `试运行：本来要在《${w.title}》下评论：${message}` }
     if (!guard(String(message).slice(0, 200))) return { ok: false, message: '这条评论里有账号标识，不能发到 B 站（账号信息不外传）' }
     await api.postComment(w.aid, String(message).slice(0, 200))
-    memory?.addEvent?.({ text: `在B站一条视频下评论过：${String(message).slice(0, 60)}`, tags: ['B站'], importance: 0.4 })
+    memory?.addEvent?.({ text: `在B站一条视频下评论过：${clip(message, 60)}`, tags: ['B站'], importance: 0.4 })
     const s = load(); record(s, { kind: 'comment', title: w.title, bvid: w.bvid, text: message }); save(s)
     return { ok: true, message: `评论发出去了（《${w.title}》）` }
   }

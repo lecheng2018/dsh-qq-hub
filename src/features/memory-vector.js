@@ -75,7 +75,7 @@ export function createEmbedder(cfg, { fetchImpl = globalThis.fetch, log = consol
   if (!cfg) return null
   async function embed(texts) {
     if (!texts || !texts.length) return []
-    const clipped = texts.map((t) => String(t || '').slice(0, cfg.maxChars))
+    const clipped = texts.map((t) => Array.from(String(t || '').toWellFormed()).slice(0, cfg.maxChars).join(''))
     const out = []
     for (let i = 0; i < clipped.length; i += cfg.batch) {
       const chunk = clipped.slice(i, i + cfg.batch)
@@ -85,7 +85,10 @@ export function createEmbedder(cfg, { fetchImpl = globalThis.fetch, log = consol
         body: JSON.stringify({ model: cfg.model, input: chunk, encoding_format: 'float' }),
         signal: AbortSignal.timeout(cfg.timeoutMs),
       })
-      if (!res.ok) throw new Error(`embeddings HTTP ${res.status}`)
+      if (!res.ok) {
+        const body = await (typeof res.text === 'function' ? res.text() : Promise.resolve('')).catch(() => '')
+        throw new Error(`embeddings HTTP ${res.status}${body ? `: ${String(body).slice(0, 160)}` : ''}`)
+      }
       const data = await res.json()
       const rows = Array.isArray(data?.data) ? data.data : null
       if (!rows || rows.length !== chunk.length) throw new Error('embeddings 返回结构不符合预期')

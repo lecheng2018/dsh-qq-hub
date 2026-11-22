@@ -402,8 +402,8 @@ export function createDouyin({ getConfig, getSettings, setOwner, hub, memory, lo
         const feeling = clip(d.feeling, 80)
         // 出处带标题（1.3.55，与 B站同口径）：标题截 30 字只作出处，正文仍是她的判断；
         // 抖音侧顺带把 ephemeral 补上（1.3.52 只改了 B站，这里漏了）。
-        const srcTitle = String(v.title || '').slice(0, 30)
-        if (feeling) memory?.addEvent?.({ text: `看了《${srcTitle}》，她的想法：${String(feeling).slice(0, 60)}`, tags: ['抖音', '想法'], importance: 0.3, ephemeral: true })
+        const srcTitle = clip(v.title, 30)
+        if (feeling) memory?.addEvent?.({ text: `看了《${srcTitle}》，她的想法：${clip(feeling, 60)}`, tags: ['抖音', '想法'], importance: 0.3, ephemeral: true })
         if (d.remember && !isSilence(d.remember)) memory?.add?.({ text: `（来自《${srcTitle}》）${clip(d.remember, 180)}`, tags: ['抖音'], importance: 0.5, source: 'event' })
         record(s, { kind: 'watch', ...meta, text: feeling })
 
