@@ -18,12 +18,26 @@ test('压缩路由同时接受 query 和 POST body 的 chatId', () => {
   assert.match(SRC, /api\.core\.http\.body\(req\)/, 'query 没有再读 body（面板 call(p,body) 走 POST）')
 })
 
-test('面板按钮走 GET query，不再把 chatId 放 POST body', () => {
-  assert.match(PANEL, /compact-now\?chatId=/, '按钮要把 chatId 拼进 query')
-  assert.equal(
-    /call\('\/token-guardian\/compact-now', \{ chatId/.test(PANEL), false,
-    '不能再传第二个参数（那会发 POST，后端读不到）',
+test('面板按钮走 POST 把 chatId 放 body（guard 对写接口有 GET 方法约束）', () => {
+  // 审计 S04：压缩是写接口（触发模型调用＝计费），进了 SIDE_EFFECT_PATHS，
+  // 带 query 的 GET 会在进 handler 之前被 guard 405 掉。所以面板必须发 POST。
+  assert.match(
+    PANEL,
+    /requestSafe\('\/compact-now', '\/token-guardian\/compact-now', \{ chatId \}\)/,
+    '压缩按钮要 POST，chatId 放 body',
   )
+  assert.match(
+    PANEL,
+    /requestSafe\('\/reset-usage', '\/token-guardian\/reset-usage', \{ chatId \}\)/,
+    '重置用量按钮同样要走 POST',
+  )
+  // 不能再退回「把 chatId 拼进 query 的 GET」——那正是被 405 的形态
+  assert.equal(
+    /compact-now\?chatId=/.test(PANEL), false,
+    '不能再用 compact-now?chatId= 的 GET 形态（会被 guard 405）',
+  )
+  // 只读的摘要仍走 GET，不受方法约束影响
+  assert.match(PANEL, /requestSafe\('\/summary' \+ q, '\/token-guardian\/summary\?chatId='/, '摘要仍走 GET')
 })
 
 test('摘要里能分清谁说的：她自己叫「你」，其他人用真实群名片', () => {
