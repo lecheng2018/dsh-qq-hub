@@ -11,8 +11,7 @@ test('formatApprovalCard: 审批卡内容格式化', () => {
     id: 1,
     toolName: 'bash',
     command: 'rm -rf /var/cache/apt',
-    reason: '释放磁盘空间',
-    locked: false
+    reason: '释放磁盘空间'
   })
 
   assert.match(card, /📋 待审批操作 #1/)
@@ -108,37 +107,6 @@ test('createApprovalRegistry: 非主人发审批指令被忽略', async () => {
 
   const outcome = await reqPromise
   assert.equal(outcome, 'rejected')
-})
-
-test('createApprovalRegistry: 权限锁锁定时阻止放行并提示解锁', async () => {
-  const sent = []
-  const ownerQQ = '10001'
-  let locked = true
-  const registry = createApprovalRegistry({
-    deliver: async (chatId, text) => {
-      sent.push({ chatId, text })
-    },
-    ownerQQ: () => ownerQQ,
-    securityLock: () => ({ locked }),
-    timeoutMs: 1000
-  })
-
-  registry.request({
-    toolName: 'bash',
-    reason: '测试权限锁'
-  }, { chatId: 'private:10001', sessionId: 'sess-1' })
-
-  // 主人回复「通过 #3」（审计后不再支持无编号自动选中，防止「可以/ok」宽匹配误批）
-  const handled = registry.handleReply('通过 #3', ownerQQ, 'private:10001')
-  assert.equal(handled, true) // 消费了消息
-  assert.equal(registry.count(), 1) // 并没有被放行，依然挂起
-  assert.match(sent[1].text, /权限锁当前处于锁定状态/)
-
-  // 主人输入口令解锁了权限锁
-  locked = false
-  const handledAgain = registry.handleReply('通过 #3', ownerQQ, 'private:10001')
-  assert.equal(handledAgain, true)
-  assert.equal(registry.count(), 0) // 放行成功
 })
 
 // 审计 S09：审批批复必须绑定发卡私聊。

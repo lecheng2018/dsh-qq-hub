@@ -3,8 +3,7 @@
 // 当模型需要执行高权限或敏感工具时（DSH approval/request waterfall）：
 // 1. 生成带编号（#1, #2...）的审批卡推送给主人私聊；
 // 2. 挂起工具执行等待主人审批决策；
-// 3. 校验主人身份与 security-lock（权限锁）；
-// 4. 解析「通过 #编号」或「拒绝 #编号」，返回 'allowed-once' 或 'rejected'。
+// 3. 解析「通过 #编号」或「拒绝 #编号」，返回 'allowed-once' 或 'rejected'。
 
 import { redact } from '../core/redact.js'
 
@@ -29,10 +28,6 @@ export function formatApprovalCard(entry) {
 
   if (entry.reason) {
     parts.push(`❓ 原因：${String(entry.reason).trim()}`)
-  }
-
-  if (entry.locked) {
-    parts.push(`🔒 提示：当前权限锁处于锁定状态，回复前请先发 /unlock 输入动态口令。`)
   }
 
   parts.push(`\n✅ 回复「同意」放行（或 yes / y）\n❌ 回复「拒绝」拦下（或 no / n）`)
@@ -72,7 +67,7 @@ export function parseApprovalCommand(text) {
 /**
  * 创建审批管理器
  */
-export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeoutMs = 60_000, log } = {}) {
+export function createApprovalRegistry({ deliver, ownerQQ, timeoutMs = 60_000, log } = {}) {
   // id (number) → { id, toolName, reason, command, args, resolve, timer, createdAt, sessionId, chatId }
   const pending = new Map()
 
@@ -91,9 +86,6 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
       return 'rejected'
     }
 
-    const lockState = typeof securityLock === 'function' ? securityLock() : null
-    const locked = Boolean(lockState && lockState.locked)
-
     const entry = {
       id,
       toolName: req.toolName || 'unknown',
@@ -103,7 +95,6 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
       callId: req.callId,
       sessionId,
       chatId: targetChat,
-      locked,
       createdAt: Date.now()
     }
 
@@ -203,17 +194,6 @@ export function createApprovalRegistry({ deliver, ownerQQ, securityLock, timeout
         deliver(chatId, `⚠️ 当前有多条待审批：${lines}。请带上编号，例如「同意 #${[...pending.keys()][0]}」`).catch(() => {})
       }
       return true
-    }
-
-    // 检查权限锁
-    if (parsed.action === 'approve') {
-      const lockState = typeof securityLock === 'function' ? securityLock() : null
-      if (lockState && lockState.locked) {
-        if (typeof deliver === 'function') {
-          deliver(chatId, `🔒 权限锁当前处于锁定状态！请在私聊中输入 /unlock 完成动态口令验证后再审批。`).catch(() => {})
-        }
-        return true
-      }
     }
 
     pending.delete(target.id)
