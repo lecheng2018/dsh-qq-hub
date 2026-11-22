@@ -23,7 +23,7 @@ jobs:
         # 2026-11-21：主测试从 22.13.0 提到 24，与开发机（24.22.3）对齐。
         # 起因：PR #201 在 22.13.0 上报 cancelledByParent、本地 24 全绿，
         # 判断成本被版本差异放大了。老版本的支持面由下面的 compatibility job 守住。
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22.13.0
           cache: npm
