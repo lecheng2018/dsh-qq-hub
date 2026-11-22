@@ -128,8 +128,8 @@ function Voice({ st, draft, setDraft, toast, reload }) {
             <Row label="地址模板" hint={draft.voice.http.method === 'POST' ? 'POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON' : '{text} 会换成要念的话，返回 wav/mp3'}>{f.text('voice.http.urlTemplate', { size: 'wide', placeholder: 'http://127.0.0.1:8000/tts?text={text}' })}</Row>
             {draft.voice.http.method === 'POST' ? (
               <Fragment>
-                <Row label="请求头" hint="一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON">{f.area('voice.http.headers', { rows: 3, placeholder: 'Authorization: Bearer;你的token' })}</Row>
-                <Row label="请求体" hint="{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID">{f.area('voice.http.body', { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}' })}</Row>
+                <Row label="请求头" hint="一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON。含凭据，保存后面板不再回显原文（留空保存保留原值，整段重填则覆盖）；要看原文去 config.json">{f.area('voice.http.headers', { rows: 3, placeholder: 'Authorization: Bearer;你的token（重新粘贴整段即可替换）' })}</Row>
+                <Row label="请求体" hint="{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID">{f.area('voice.http.body', { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}（同请求头：保存后不回显，留空保留原值）' })}</Row>
               </Fragment>
             ) : null}
           </Fragment>
