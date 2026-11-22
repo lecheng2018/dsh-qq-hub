@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { parseMessageEvent } from '../src/chat/inbound.js'
 import { fileSegmentBytes } from '../src/core/net.js'
 import { inboundFileBlocks, inboundFileMaxBytes, readInboundFiles } from '../src/chat/inbound-files.js'
+import { normalize } from '../src/core/config.js'
 
 const evt = (segs, extra = {}) => ({
   message_type: 'private', user_id: '111', self_id: '999',
@@ -100,11 +101,32 @@ test('入站文件上限跟随 files.maxMB，不再写死 20MB（主人发的 37
   assert.match(inboundFileBlocks(got, '主人')[0].text, /已经存在/)
 })
 
-test('files.maxMB 换算成字节：缺省 50MB、非法值回落、超过 256MB 收硬顶', () => {
+test('收文件上限优先取 files.inboundMaxMB，老配置没这个键才回落 files.maxMB', () => {
+  // 上下行分开配：出站 200、入站 30，各走各的
+  assert.equal(inboundFileMaxBytes({ files: { inboundMaxMB: 30, maxMB: 200 } }), 30 * 1024 * 1024)
+  // 老配置（只有 maxMB）：沿用，行为不突变
   assert.equal(inboundFileMaxBytes({ files: { maxMB: 100 } }), 100 * 1024 * 1024)
   assert.equal(inboundFileMaxBytes(undefined), 50 * 1024 * 1024)
   assert.equal(inboundFileMaxBytes({ files: {} }), 50 * 1024 * 1024)
+  // 非法值一律回落到 50MB，不会被 ?/|| 的坑吃成 NaN 或 0
+  assert.equal(inboundFileMaxBytes({ files: { inboundMaxMB: 0, maxMB: 200 } }), 50 * 1024 * 1024)
+  assert.equal(inboundFileMaxBytes({ files: { inboundMaxMB: 'abc' } }), 50 * 1024 * 1024)
   assert.equal(inboundFileMaxBytes({ files: { maxMB: 0 } }), 50 * 1024 * 1024)
   assert.equal(inboundFileMaxBytes({ files: { maxMB: 'abc' } }), 50 * 1024 * 1024)
+  // 硬顶 256MB
+  assert.equal(inboundFileMaxBytes({ files: { inboundMaxMB: 9999 } }), 256 * 1024 * 1024)
   assert.equal(inboundFileMaxBytes({ files: { maxMB: 9999 } }), 256 * 1024 * 1024)
+})
+
+test('files.inboundMaxMB 归一化：默认 50、1~256 之外收回区间、与 files.maxMB 互不影响', () => {
+  const n = normalize({ files: { maxMB: 200, inboundMaxMB: 30 } })
+  assert.equal(n.files.maxMB, 200)
+  assert.equal(n.files.inboundMaxMB, 30)
+  // 老配置没有 inboundMaxMB：给默认 50，不跟着 maxMB 变成 200
+  assert.equal(normalize({ files: { maxMB: 200 } }).files.inboundMaxMB, 50)
+  assert.equal(normalize({ files: {} }).files.inboundMaxMB, 50)
+  assert.equal(normalize({ files: { inboundMaxMB: 0 } }).files.inboundMaxMB, 50)
+  assert.equal(normalize({ files: { inboundMaxMB: 'abc' } }).files.inboundMaxMB, 50)
+  // 与 inboundFileMaxBytes 的硬顶对齐，面板填不出「会被悄悄截断」的值
+  assert.equal(normalize({ files: { inboundMaxMB: 9999 } }).files.inboundMaxMB, 256)
 })

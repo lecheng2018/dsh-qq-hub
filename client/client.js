@@ -340,6 +340,26 @@ var TabBoundary = class extends React.Component {
   }
 };
 
+// client/src/domain/tab-keys.js
+var TAB_KEYS = {
+  connect: ["snowluma", "botQQ", "workspaceDir"],
+  access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
+  group: ["group", "merge", "reply", "files", "security"],
+  model: ["model", "chatModels"],
+  voice: ["voice"],
+  stickers: ["stickers"],
+  imagegen: ["imageGen"],
+  diary: ["diary", "qzoneSocial"],
+  speakup: ["speakUp"],
+  memory: ["memory"],
+  bili: ["bili"],
+  douyin: ["douyin"],
+  heybox: ["heybox"],
+  multiParser: ["multiParser"],
+  browser: ["browser"],
+  local: ["local"]
+};
+
 // client/src/domain/nav.js
 var TABS = [
   { id: "overview", label: "概览" },
@@ -413,24 +433,6 @@ var NAV_ALIAS = {
   local: "本地 接口 sd sovits",
   modules: "扩展 模块 插件",
   logs: "日志 报错"
-};
-var TAB_KEYS = {
-  connect: ["snowluma", "botQQ"],
-  access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
-  group: ["group", "merge", "reply"],
-  model: ["model", "chatModels"],
-  voice: ["voice"],
-  stickers: ["stickers"],
-  imagegen: ["imageGen"],
-  diary: ["diary", "qzoneSocial"],
-  speakup: ["speakUp"],
-  memory: ["memory"],
-  bili: ["bili"],
-  douyin: ["douyin"],
-  heybox: ["heybox"],
-  multiParser: ["multiParser"],
-  browser: ["browser"],
-  local: ["local"]
 };
 
 // client/src/shell/nav-bar.js
@@ -1438,7 +1440,7 @@ function Group({ draft, setDraft }) {
   )), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
     setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
     setNewGid("");
-  } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
+  } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "收发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "收文件", desc: "别人发来的文件，她会下载到 QQ 工作区的 qq-inbox 目录，再把路径告诉她（要看得用工具读）。这里管的是单个文件的大小上限。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大", hint: "文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB" }, f.num("files.inboundMaxMB", { min: 1, max: 256 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
 }
 
 // client/src/views/browser.js
