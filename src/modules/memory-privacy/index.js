@@ -148,23 +148,29 @@ export default {
       const items = (memory && typeof memory.list === 'function' ? memory.list() : []).filter((m) => !scope || String(m.scope || 'global') === scope).map(mask)
       return { ok: true, preview, items }
     })
-    // 主记忆库按作用域清空（同样二次确认在前端做）
+    // 主记忆库按作用域清空（同样二次确认在前端做）。
+    // 审计 Q09：过去不区分「记忆条目」与「人物档案」—— 两个分区共用这一个接口，
+    // 而它只遍历 memory.list() 删记忆点，人物档案一条都不会被清（面板却报「已清空」）。
+    // 现在按 kind 分流；批量删除下移到主库（一次 filter 一次 save），并如实返回删除数。
     api.route('/memory-privacy/clear-main', async (req) => {
       const q = req?.query?.scope || ''
       let body = {}
       if (!q) { try { body = await api.core.http.body(req) } catch (error) {} }
       const scope = String(q || body?.scope || '')
       if (!scope) return { ok: false, message: '要先说清哪个分区' }
+      const kind = String(body?.kind || req?.query?.kind || 'memory')
       const memory = api.use('memory') || globalThis.qqHub?.modules?.use('memory')
       if (!memory?.list) return { ok: false, message: '主记忆库没在跑' }
-      let n = 0
-      for (const m of memory.list() || []) {
-        // 软删（invalidAt）的一并清掉：用户点的是「彻底清空」，面板的已失效分区还挂着它们
-        if (String(m.scope || '') === scope) {
-          try { memory.remove(m.id); n += 1 } catch (error) {}
-        }
+      if (kind === 'profiles') {
+        if (typeof memory.clearProfilesInScope !== 'function') return { ok: false, message: '主记忆库版本太旧，没有按分区清档案的能力' }
+        const r = memory.clearProfilesInScope(scope)
+        if (!r.ok) return r
+        return { ok: true, message: `已清空 ${r.profiles} 份人物档案（${scope}）`, profiles: r.profiles }
       }
-      return { ok: true, message: `主记忆库已清空 ${n} 条（${scope}）` }
+      if (typeof memory.clearScopeEntries !== 'function') return { ok: false, message: '主记忆库版本太旧，没有按分区批量清空的能力' }
+      const r = memory.clearScopeEntries(scope)
+      if (!r.ok) return r
+      return { ok: true, message: `已清空 ${r.items} 条记忆（${scope}）`, items: r.items }
     })
     // 单会话隔离开关：scope → open（不隔离）/隔离（默认）。存进模块 settings。
     api.route('/memory-privacy/set-override', async (req) => {
