@@ -32,6 +32,9 @@ export function createPanelOverview({
 
   async function overview() {
     const cfg = getConfig()
+    // 审计 Q18：探测（detect + running）在函数顶部做**一次**，往下传。
+    // 过去 connectionProblem() 里会再 detect()/running() 一遍——前端每 5 秒拉一次
+    // /state，网关不健康时每次请求都是双份探测（running 还要打一次 HTTP 状态查询）。
     const inst = snowluma.detect()
     const running = inst.installed ? await snowluma.running() : false
     let login = null
@@ -49,7 +52,7 @@ export function createPanelOverview({
       version: VERSION,
       apiVersion: API_VERSION,
       config: publicConfig(cfg),
-      onebot: { state: gatewayState.onebotState, login, endpoint: { httpUrl: endpoint().httpUrl, wsUrl: endpoint().wsUrl }, problem: gatewayState.onebotState === 'connected' && gatewayState.loginOk ? '' : await connectionProblem() },
+      onebot: { state: gatewayState.onebotState, login, endpoint: { httpUrl: endpoint().httpUrl, wsUrl: endpoint().wsUrl }, problem: gatewayState.onebotState === 'connected' && gatewayState.loginOk ? '' : await connectionProblem({ inst, running }) },
       snowluma: { ...inst, running, consented: await consented(running), owns: snowluma.ownsProcess, lastAttach: snowluma.lastAttach, downloadPage: DOWNLOAD_PAGE, webui: snowluma.webuiUrl() },
       stats: hub.stats(),
       stickers: { count: stickers.library().items.length },
@@ -103,7 +106,12 @@ export function createPanelOverview({
   }
 
   /** 连不上 QQ 网关时，按顺序找卡在哪一步，给一句人话。 */
-  async function connectionProblem() {
+  /**
+   * 连不上 QQ 网关时，按顺序找卡在哪一步，给一句人话。
+   * @param {{inst?: object, running?: boolean}} [probed] overview() 顶部已探测的
+   *   SnowLuma 快照——传入则复用，不再重复 detect()/running()（审计 Q18）。
+   */
+  async function connectionProblem(probed = {}) {
     const cfg = getConfig()
     if (!cfg.enabled) return '总开关关着（右上角），打开后才会连'
     if (!cfg.botQQ) return '还没填机器人 QQ 号'
@@ -113,9 +121,10 @@ export function createPanelOverview({
       if (gatewayState.wrongAccount) return `连上的是 ${gatewayState.wrongAccount}，不是机器人号 ${cfg.botQQ}，已经断开：让你的 OneBot 服务登录机器人号，再点「重新连接」`
       return `连 ${ep.wsUrl || ep.httpUrl} 没连上：确认你的 OneBot 服务开着、地址和 token 填对了（Docker 里的话，地址要用 DSH 能访问到的主机名 / 端口）`
     }
-    const inst = snowluma.detect()
+    const inst = probed.inst || snowluma.detect()
     if (!inst.installed && !(cfg.snowluma.wsUrl || cfg.snowluma.httpUrl)) return 'SnowLuma 没装好：' + inst.reason
-    if (inst.installed && !(await snowluma.running())) return 'SnowLuma 没在运行：点上面的「启动」'
+    const running = probed.running !== undefined ? probed.running : (inst.installed ? await snowluma.running() : false)
+    if (inst.installed && !running) return 'SnowLuma 没在运行：点上面的「启动」'
     if (snowluma.lowIntegrity) return 'SnowLuma 以「低完整性」运行，看不到 QQ 进程（多半是解压在了下载目录这类带安全标签的地方）：把它重新解压到一个普通目录（比如 D:\\SnowLuma），在「连接」页改好目录再启动'
     const ep = endpoint()
     if (!ep.wsUrl && !ep.httpUrl) return 'SnowLuma 还没给机器人号开 OneBot 端口，也就是机器人号还没接入：确认机器人号的 QQ 已经登录，再点「接入机器人号」'
