@@ -528,3 +528,39 @@ test('ledger 崩溃恢复：queued 标 cancelled 并落盘，sending 仍恢复 u
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// 审计 S12：过去「媒体被摘要化」与「文本被预截」共用 contentTruncated 一个旗标，
+// 而 7 天衰减的豁免条件恰是它——含媒体的记录正文永不衰减。拆成 mediaStripped /
+// textPreTruncated 后：媒体剥离不再豁免衰减；入队时已预截的才豁免（幂等无增益）。
+// 旧落盘数据（只有 contentTruncated）保持旧语义不衰减，兼容期不回写历史。
+test('ledger：含媒体的记录 7 天后正文照常衰减（S12 旗标拆分）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ledger-decay-'))
+  const file = join(dir, 'deliveries.json')
+  try {
+    const now = Date.now()
+    const old = now - 8 * 24 * 60 * 60 * 1000 // 8 天前
+    const mediaText = { version: 1, deliveries: [
+      { deliveryId: 'm-old-sent', chatKey: 'private:1', state: 'sent', createdAt: old,
+        segments: [{ type: 'text', data: { text: '媒体记录的正文'.repeat(30) } }], mediaStripped: true, gatewayMessageId: 'gw-m' },
+      { deliveryId: 't-old-sent', chatKey: 'private:1', state: 'sent', createdAt: old,
+        segments: [{ type: 'text', data: { text: '预截记录的正文'.repeat(30) } }], textPreTruncated: true, gatewayMessageId: 'gw-t' },
+      { deliveryId: 'legacy-old-sent', chatKey: 'private:1', state: 'sent', createdAt: old,
+        segments: [{ type: 'text', data: { text: '旧格式记录的正文'.repeat(30) } }], contentTruncated: true, gatewayMessageId: 'gw-l' },
+    ] }
+    writeFileSync(file, JSON.stringify(mediaText))
+    const book = createDeliveryLedger({ file })
+    book.enqueue({ deliveryId: 'trigger', chatKey: 'private:1', segments: segs('x') })
+    const saved = JSON.parse(readFileSync(file, 'utf8'))
+    const byId = new Map(saved.deliveries.map((item) => [item.deliveryId, item]))
+    // 新语义：媒体剥离不豁免 → 正文衰减
+    assert.equal(byId.get('m-old-sent').segments[0].data.text.length, 200, '媒体记录 7 天后应裁正文')
+    // 预截豁免保留（幂等无增益）
+    assert.equal(byId.get('t-old-sent').segments[0].data.text.length, 210, '预截记录不衰减（保持原长 210）')
+    // 旧格式兼容：只有 contentTruncated 的老记录维持「不衰减」旧语义
+    assert.equal(byId.get('legacy-old-sent').segments[0].data.text.length, 240, '旧格式记录按旧语义豁免（原文 240）')
+    // 元数据保留
+    assert.equal(byId.get('m-old-sent').gatewayMessageId, 'gw-m')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
