@@ -54,3 +54,54 @@ test('stripUnmarkedThinking 导出函数直接可用：重叠区间不损坏文�
   assert.equal(stripUnmarkedThinking('【思考】（思考：内心）【/思考】尾'), '尾')
   assert.equal(stripUnmarkedThinking(''), '')
 })
+
+// 回归：线上事故 2026-11-22（群聊消息泄露内部推理）。
+// 反代/上游把**上一轮**推理原样回灌进这一轮的正文 text 块，标记写成
+// `[Previous reasoning]…[/Previous reasoning]`。关键词前面多一个 `Previous`，
+// 旧的显式块规则（只认紧邻关键词）一条都没匹配上，整段推理被 parseReply 拆成两条
+// 气泡发进群，被群友当场发现。
+// 夹具用合成内容：只复刻标记结构与「推理段 + 正文段」的拼接形状，不含任何真实昵称或号码。
+const LEAKED_SHAPE = '[Previous reasoning]\n'
+  + '对方先试探我是不是机器人，按规矩不自证不辩解，随手打发；另一人引用我上一句玩谐音梗，顺着接就行。\n\n'
+  + '回两条极短的：\n- 对甲：你猜\n- 对乙：炸吧 归你\n'
+  + '[/Previous reasoning]\n\n'
+  + '<reply:甲>你猜\n\n<reply:乙>炸吧 归你'
+
+test('回归：反代回灌的 [Previous reasoning] 块不发出，只留正文', () => {
+  assert.deepEqual(textsOf(LEAKED_SHAPE), ['你猜', '炸吧 归你'])
+  // 推理原文里的任何指纹都不能残留在出站气泡里
+  const all = textsOf(LEAKED_SHAPE).join('\n')
+  for (const leak of ['Previous reasoning', '不自证不辩解', '回两条极短的', '谐音梗']) {
+    assert.equal(all.includes(leak), false, `不能残留推理内容：${leak}`)
+  }
+})
+
+test('[Previous reasoning] 标记的各种写法都认（大小写／全角／中英前缀）', () => {
+  const body = '正文在此'
+  for (const marker of [
+    ['[Previous reasoning]', '[/Previous reasoning]'],
+    ['[previous thinking]', '[/previous thinking]'],
+    ['【上一轮思考】', '【/上一轮思考】'],
+    ['[Previous reasoning]', '[/reasoning]'],
+    ['[分析]', '[/分析]'],
+  ]) {
+    const raw = `${marker[0]}内部推理不能让群友看见${marker[1]}${body}`
+    assert.deepEqual(textsOf(raw), [body], `标记 ${marker[0]} 未被识别`)
+  }
+})
+
+test('只有 [Previous reasoning] 而没有正文时整轮沉默', () => {
+  assert.equal(parseReply('[Previous reasoning]只有推理[/Previous reasoning]').silent, true)
+})
+
+test('未闭合的 [Previous reasoning]（截断在开头）删到结尾，不残留半段推理', () => {
+  assert.deepEqual(textsOf('[Previous reasoning]推理到一半被截断\n还有第二行'), [])
+})
+
+test('裸方括号不算推理标记（误伤边界）：正文里的 [分析] / [思考] 原样保留', () => {
+  // 收紧口径：只有带前缀（[Previous reasoning]）或闭合标记才无条件删；裸 [分析] 可能是正常文字。
+  // 直接断言清洗函数（不经过气泡切分），避免把「分条」和「清洗」两件事混在一个断言里。
+  for (const text of ['[分析]这个方案可行。', '看看[分析]这段', '我[思考]了一下', '[1] 第一点\n[2] 第二点']) {
+    assert.equal(stripUnmarkedThinking(text), text)
+  }
+})
