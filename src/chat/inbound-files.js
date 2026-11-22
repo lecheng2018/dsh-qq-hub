@@ -15,7 +15,15 @@ function inboxPath(dir, ext) {
   return file
 }
 
-export async function readInboundFiles(msg, { onebot, workspaceDir, log, maxBytes = 20 * 1024 * 1024 } = {}) {
+/** 入站单文件上限（字节）：跟随面板里的 files.maxMB，和出站发文件同一个开关。
+ *  硬顶 256MB —— 整包是读进 Buffer 的，一条消息最多取 3 个，再大就把插件内存打爆了。 */
+export function inboundFileMaxBytes(cfg) {
+  return Math.min(256, Math.max(1, Number(cfg?.files?.maxMB) || 50)) * 1024 * 1024
+}
+
+// maxBytes 由调用方按配置传入（modular-core 传 inboundFileMaxBytes(config)）；
+// 这里的 50MB 只是没传参数时的兜底，别再把它当成写死的固定上限。
+export async function readInboundFiles(msg, { onebot, workspaceDir, log, maxBytes = inboundFileMaxBytes(null) } = {}) {
   const out = []
   const files = Array.isArray(msg.files) ? msg.files : []
   const dir = join(workspaceDir, 'qq-inbox')
