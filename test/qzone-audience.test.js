@@ -75,10 +75,10 @@ test('名单解析：去重、支持中英文逗号分号和空白', () => {
   assert.deepEqual(parseAudienceQQs(['10001', '10001', ' 10002 ']), [10001, 10002])
 })
 
-test('配置归一化：保留五种范围，其余回落 all，并清洗名单', () => {
+test('配置归一化：保留五种范围，其余回落 self（审计 S07 fail-closed），并清洗名单', () => {
   assert.equal(normalize({ diary: { visibility: 'excluded' } }).diary.visibility, 'excluded')
   assert.equal(normalize({ diary: { visibility: 'friends' } }).diary.visibility, 'friends')
-  assert.equal(normalize({ diary: { visibility: 'nonsense' } }).diary.visibility, 'all')
+  assert.equal(normalize({ diary: { visibility: 'nonsense' } }).diary.visibility, 'self')
   const c = normalize({ diary: { visibility: 'selected', audienceQQs: '10001，10002\n10001' } })
   assert.equal(c.diary.audienceQQs, '10001\n10002')
 })
