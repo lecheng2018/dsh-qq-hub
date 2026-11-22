@@ -29,6 +29,21 @@ export function stripReasoning(text) {
   return s
 }
 
+/** 推理块的方括号标记：`[Previous reasoning]` / `【思考】` / `[analysis]` 这类。
+ * 线上事故 2026-11-22：反代把**上一轮**推理回灌进正文的 text 块，标记写成
+ * `[Previous reasoning]…[/Previous reasoning]`——关键词前面多出一个 Previous，
+ * 只认紧邻关键词的旧规则一条都匹配不上，整段推理原样发进群。
+ * 前缀（previous / prior / 上一轮 / 此前…）可选，中英 + 全角半角括号都认。 */
+const REASON_PREFIX = String.raw`(?:previous|prior|last|earlier|above|上\s*一?\s*次|上\s*一?\s*轮|此前|前面)`
+const REASON_WORD = String.raw`(?:reasoning|thinking|thought|analysis|思考过程|思考|分析|推理)`
+/** 开标记：`[Previous reasoning]`、`【思考】`、`[analysis]`。 */
+const REASON_OPEN = String.raw`[[【]\s*(?:` + REASON_PREFIX + String.raw`\s*)?` + REASON_WORD + String.raw`\s*[\]】]`
+/** 明确是推理的开标记：带前缀的（`[Previous reasoning]`），或全角「【思考】」这类中文写法。
+ *  半角裸 `[分析]` 可能是正常文字（「[分析]这个方案可行」），不在此列。 */
+const REASON_OPEN_STRICT = String.raw`(?:[[【]\s*` + REASON_PREFIX + String.raw`\s*` + REASON_WORD + String.raw`\s*[\]】]|【\s*` + REASON_WORD + String.raw`\s*】)`
+/** 闭合标记：`[/Previous reasoning]`、`【/思考】`。 */
+const REASON_CLOSE = String.raw`[[【]\s*\/\s*(?:` + REASON_PREFIX + String.raw`\s*)?` + REASON_WORD + String.raw`\s*[\]】]`
+
 /** 无标记思考残片的保守清洗（语义移植上游 PR #348）：只删明确的思考标签/括号段、
  * 带元信息的标签行、「最终回答」前的推理开场、「用户说…」推理开头段。
  * 在 sanitizeOutbound 的保护区内调用：围栏代码/行内代码已被 protectExamples 换成占位符，天然豁免。
@@ -39,8 +54,23 @@ export function stripUnmarkedThinking(text) {
   const found = []
   const add = (start, end) => { if (end > start) found.push({ start, end }) }
 
-  // 【思考】…【/思考】、[analysis]…[/analysis] 这类显式块
-  for (const m of raw.matchAll(/(?:【|\[)\s*(?:思考|分析|推理|内心|思路|thinking|analysis|reasoning)\s*(?:】|\])[\s\S]*?(?:【|\[)\s*\/\s*(?:思考|分析|推理|内心|思路|thinking|analysis|reasoning)\s*(?:】|\])/gi)) add(m.index, m.index + m[0].length)
+  // 【思考】…【/思考】、[Previous reasoning]…[/Previous reasoning] 这类显式块
+  for (const m of raw.matchAll(new RegExp(`${REASON_OPEN}[\\s\\S]*?${REASON_CLOSE}`, 'gi'))) add(m.index, m.index + m[0].length)
+
+  // 只有开头没闭合的推理块（截断 / 网关吞掉后半截）：从开标记一路删到结尾。
+  // 只在整段开头命中「明确的推理标记」时触发，避免正文里正常出现的
+  // 「[分析]这个方案可行」被当成未闭合推理整段吞掉。
+  const headOpen = new RegExp(`^\\s*${REASON_OPEN_STRICT}`, 'i').exec(raw)
+  if (headOpen && !found.some(({ start, end }) => headOpen.index >= start && headOpen.index < end)) add(headOpen.index, raw.length)
+  else {
+    // 落单的推理标记（成对块被拆成两半、或代理吞掉了半截）：只删标记本身，不动正文。
+    // 只认「明确的推理开标记」和「闭合标记」——它们不可能是正常文字。
+    const stray = new RegExp(`${REASON_OPEN_STRICT}|${REASON_CLOSE}`, 'gi')
+    for (const m of raw.matchAll(stray)) {
+      if (found.some(({ start, end }) => m.index >= start && m.index < end)) continue
+      add(m.index, m.index + m[0].length)
+    }
+  }
 
   // （思考：…）/（分析：…）这类括号内心段
   for (const m of raw.matchAll(/[（(]\s*(?:思考|分析|推理|内心活动)\s*[：:][\s\S]{0,2000}?[）)]/g)) add(m.index, m.index + m[0].length)
