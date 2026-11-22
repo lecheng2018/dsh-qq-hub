@@ -28,26 +28,38 @@ on:
       - 'test/**'
       - 'scripts/**'
   workflow_dispatch:
-
 permissions:
-  contents: write
+  # 审计 S14：工作流级默认只读。发布需要的写权限只给 publish job。
+  # 过去整条流程（npm ci / lint / test:all / build）都跑在 contents: write 下：
+  # 构建与测试阶段执行的任何东西（含 npm 生命周期脚本、依赖的 postinstall）
+  # 都能拿着可写 token 改仓库、发 Release。
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
+  # ── 构建与验证：只读 token ────────────────────────────────────────────────
+  build:
     runs-on: ubuntu-latest
-    # tag 触发必定发版；push main 触发时再检测「这个提交是否已有同版本 tag」做幂等
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      skip: ${{ steps.meta.outputs.skip }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          # 审计 S14：不把 token 持久化进 .git/config。构建阶段不需要推送，
+          # 留着它等于给 npm 生命周期脚本一个现成的可写凭据。
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -63,15 +75,18 @@ jobs:
       - name: Run Test Suite
         run: npm run test:all
 
-      # 显式构建，别只依赖 `npm test` 里串的 build-client（package.json 的 prepack 是同一道兜底）
-      - name: Build Client Bundle
-        run: npm run build:client
+      # 审计 Q20：这里原本还有一个显式 `npm run build:client`。client 产物在
+      # 一次运行里被构建三次（test:all 串的 build-client、这一步、npm pack 的
+      # prepack）。删除重复步骤；产物一致性由 prepack 兜底，「忘了提交产物」的
+      # 漂移门禁由 verify.yml 的 check:client（--check 只比对不落盘）守住。
 
       - name: Check Package Contents
         run: npm run pack:check
 
       - name: Determine Version and Tag
         id: meta
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v${VERSION}"
@@ -82,7 +97,11 @@ jobs:
             exit 1
           fi
 
-          git fetch --tags --force || true
+          # 审计 S14：checkout 关掉了 persist-credentials（不让 token 落到 .git/config
+          # 给 npm 生命周期脚本用），所以这里显式带上本 job 的**只读** token 拉 tag。
+          # 仓库若转为私有，这一步也不会静默失败。
+          git fetch --tags --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" || true
 
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             # tag 推送 = 明确的发版意图，无条件发布
@@ -107,7 +126,6 @@ jobs:
           echo "Target tag: ${TAG} (Package version: ${VERSION}, skip=${SKIP})"
 
       - name: Extract Release Notes
-        id: changelog
         if: steps.meta.outputs.skip != 'true'
         run: |
           node -e '
@@ -142,26 +160,43 @@ jobs:
           echo "Packaged plugin: ${TGZ}"
           ls -lh dist/
 
-      - name: Upload Artifact
+      - name: Upload Build Artifacts
         if: steps.meta.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: dsh-plugin-tarball
+          name: dsh-plugin-release
           path: |
             dist/*.tgz
-            !dist/dsh-qq-hub.tgz
+            RELEASE_NOTES.md
+          if-no-files-found: error
+
+  # ── 发布：唯一持有写权限的 job ─────────────────────────────────────────────
+  # 审计 S14：构建/测试与发布分成两个 job。构建阶段即使被依赖的 postinstall
+  # 或 npm 生命周期脚本做了坏事，拿到的也只是只读 token；写权限只存在于这个
+  # 不做任何构建、只把已产出的 tgz 交给 Release 的 job 里。
+  publish:
+    needs: build
+    if: needs.build.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Build Artifacts
+        # 注意：download-artifact 与 upload-artifact 是**两个不同的仓库**，
+        # SHA 不能互用（第一版就抄错了，靠显式核对 tag→commit 才发现）。
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dsh-plugin-release
 
       - name: Publish GitHub Release
-        if: steps.meta.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: Release ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.build.outputs.tag }}
+          name: Release ${{ needs.build.outputs.tag }}
           body_path: RELEASE_NOTES.md
-          prerelease: ${{ contains(steps.meta.outputs.tag, '-test.') }}
+          prerelease: ${{ contains(needs.build.outputs.tag, '-test.') }}
           files: |
-            ${{ steps.pack.outputs.tgz_path }}
-            dist/dsh-qq-hub.tgz
+            dist/*.tgz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
