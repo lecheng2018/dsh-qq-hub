@@ -443,6 +443,75 @@ function qwenBase(s) {
   try { const p = new URL(u); return `${p.protocol}//${p.host}` } catch { return 'https://dashscope.aliyuncs.com' }
 }
 
+/** 百炼官方结果存储域（OSS）：亚太各区域的结果桶都落在这里，与 API 域不同。 */
+const DASHSCOPE_OFFICIAL_AUDIO_SUFFIXES = ['.oss-cn-beijing.aliyuncs.com', '.oss-cn-hangzhou.aliyuncs.com', '.oss-ap-southeast-1.aliyuncs.com']
+const DASHSCOPE_OFFICIAL_API_SUFFIXES = ['.dashscope.aliyuncs.com', '.dashscope-intl.aliyuncs.com']
+
+const endsWithAny = (host, suffixes) => suffixes.some((s) => host === s.slice(1) || host.endsWith(s))
+
+/**
+ * 百炼的音频下载目的地策略（审计 S10）。
+ *
+ * audioUrl 来自 API 响应 JSON，是半可信输入：供应商被劫持、或响应被篡改时，可能把
+ * 我们带去任意地址（含内网）。但**官方契约本身就是跨域**——请求打
+ * https://dashscope.aliyuncs.com/api/v1/...（或 {WorkspaceId}.cn-beijing.maas.aliyuncs.com），
+ * 而 output.audio.url 指向 http://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/....wav，
+ * 所以「与接口同源」不能当作放行条件（那会把官方正常响应全部误杀）。
+ *
+ * 这里按「官方域 vs 自填 baseUrl」分开判：
+ *   · baseUrl 是官方 DashScope 域 → 只放行官方 OSS 结果域（跨域是预期行为）；
+ *   · baseUrl 是自建/兼容服务 → 仍按原 origin 绑定（同源或显式配置的目的地）。
+ * 返回 null 表示放行，否则返回拒绝原因。
+ */
+function qwenAudioDestError(audioUrl, baseUrl, audioOrigin) {
+  const apiOrigin = qwenBase(baseUrl)
+  let u
+  try { u = new URL(audioUrl) } catch { return `音频地址不是合法 URL：${String(audioUrl).slice(0, 80)}` }
+  const host = u.host.toLowerCase()
+  const apiHost = (() => { try { return new URL(apiOrigin).host.toLowerCase() } catch { return '' } })()
+  // 官方 API 域：只认官方结果桶，别的一律拒绝
+  if (endsWithAny(apiHost, DASHSCOPE_OFFICIAL_API_SUFFIXES)) {
+    if (endsWithAny(host, DASHSCOPE_OFFICIAL_AUDIO_SUFFIXES)) return null
+    return `音频地址不是百炼官方结果域（${host}），已拒绝下载`
+  }
+  // 自建/兼容服务：默认同源绑定；主人也可以通过 voice.qwentts.audioOrigin 显式放行一个音频域
+  if (host === apiHost) return null
+  if (audioOrigin) {
+    const allow = (() => { try { return new URL(qwenBase(audioOrigin)).host.toLowerCase() } catch { return '' } })()
+    if (allow && host === allow) return null
+  }
+  return `音频地址与接口不同源（${host} ≠ ${apiHost}），已拒绝下载`
+}
+
+/**
+ * 下载百炼返回的音频：逐跳校验目的地（审计 S10）。
+ *
+ * 用 redirect:'manual' 自己跟跳转，每一跳都过一次 qwenAudioDestError，并限制总跳数。
+ * 直接让 fetch 自动跟随的话，开头那次同源检查形同虚设：一个同源的响应可以 302
+ * 到内网地址，宿主照样跟过去。
+ */
+async function qwenDownloadAudio(audioUrl, { timeoutMs, baseUrl, audioOrigin }) {
+  const MAX_HOPS = 3
+  let current = audioUrl
+  for (let hop = 0; hop <= MAX_HOPS; hop++) {
+    const r = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+    if (r.status >= 300 && r.status < 400) {
+      const location = r.headers?.get?.('location')
+      if (!location) throw new Error(`下载合成好的音频失败（HTTP ${r.status} 没有 Location）`)
+      if (hop === MAX_HOPS) throw new Error(`音频下载重定向次数过多（超过 ${MAX_HOPS} 跳），已拒绝`)
+      let next
+      try { next = new URL(location, current).toString() } catch { throw new Error(`音频重定向地址不合法：${String(location).slice(0, 80)}`) }
+      const jumpError = qwenAudioDestError(next, baseUrl, audioOrigin)
+      if (jumpError) throw new Error(`音频下载被重定向到策略外的地址（第 ${hop + 1} 跳）：${jumpError}`)
+      current = next
+      continue
+    }
+    if (!r.ok) throw new Error(`下载合成好的音频失败（HTTP ${r.status}）`)
+    return Buffer.from(await r.arrayBuffer())
+  }
+  throw new Error('音频下载重定向次数过多，已拒绝')
+}
+
 /** 合成一段：返回音频 Buffer。百炼把音频放在 output.audio.url（24 小时有效），要再 GET 一次。 */
 async function qwenSegment(text, instruction, c) {
   const url = `${qwenBase(c.baseUrl)}/api/v1/services/audio/tts/SpeechSynthesizer`
@@ -466,9 +535,11 @@ async function qwenSegment(text, instruction, c) {
   try { j = JSON.parse(raw) } catch { throw new Error('百炼语音返回的不是 JSON：' + raw.slice(0, 120)) }
   const audioUrl = j?.output?.audio?.url
   if (!audioUrl) throw new Error('百炼语音没返回音频地址：' + raw.slice(0, 160))
-  const a = await fetch(audioUrl, { signal: AbortSignal.timeout(timeoutMs) })
-  if (!a.ok) throw new Error(`下载合成好的音频失败（HTTP ${a.status}）`)
-  const buf = Buffer.from(await a.arrayBuffer())
+  // 审计 S10：二次下载的目的地策略（见 qwenAudioDestError）。首跳与**每一跳重定向**
+  // 都要判——默认 fetch 会自动跟随 3xx，只在开头查一次等于没约束后续目的地。
+  const destError = qwenAudioDestError(audioUrl, c.baseUrl, c.audioOrigin)
+  if (destError) throw new Error(destError)
+  const buf = await qwenDownloadAudio(audioUrl, { timeoutMs, baseUrl: c.baseUrl, audioOrigin: c.audioOrigin })
   if (buf.length < 1024) throw new Error(`拿到的音频太小（${buf.length} 字节），可能是空音频`)
   return buf
 }
