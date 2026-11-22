@@ -340,6 +340,26 @@ var TabBoundary = class extends React.Component {
   }
 };
 
+// client/src/domain/tab-keys.js
+var TAB_KEYS = {
+  connect: ["snowluma", "botQQ", "workspaceDir"],
+  access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
+  group: ["group", "merge", "reply", "files", "security"],
+  model: ["model", "chatModels"],
+  voice: ["voice"],
+  stickers: ["stickers"],
+  imagegen: ["imageGen"],
+  diary: ["diary", "qzoneSocial"],
+  speakup: ["speakUp"],
+  memory: ["memory"],
+  bili: ["bili"],
+  douyin: ["douyin"],
+  heybox: ["heybox"],
+  multiParser: ["multiParser"],
+  browser: ["browser"],
+  local: ["local"]
+};
+
 // client/src/domain/nav.js
 var TABS = [
   { id: "overview", label: "概览" },
@@ -413,24 +433,6 @@ var NAV_ALIAS = {
   local: "本地 接口 sd sovits",
   modules: "扩展 模块 插件",
   logs: "日志 报错"
-};
-var TAB_KEYS = {
-  connect: ["snowluma", "botQQ"],
-  access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
-  group: ["group", "merge", "reply"],
-  model: ["model", "chatModels"],
-  voice: ["voice"],
-  stickers: ["stickers"],
-  imagegen: ["imageGen"],
-  diary: ["diary", "qzoneSocial"],
-  speakup: ["speakUp"],
-  memory: ["memory"],
-  bili: ["bili"],
-  douyin: ["douyin"],
-  heybox: ["heybox"],
-  multiParser: ["multiParser"],
-  browser: ["browser"],
-  local: ["local"]
 };
 
 // client/src/shell/nav-bar.js
