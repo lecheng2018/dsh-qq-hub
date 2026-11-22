@@ -54,16 +54,23 @@ test('系统后台回合复用同 key 会话，不同 key 独立且只生成不�
   await service.dispose()
 })
 
-test('超时及时返回且不结束底层回合，迟到结果只释放占用', async () => {
+test('超时及时返回并释放占用：下一轮立刻能跑，迟到结果不串轮', async () => {
+  // 审计 Q04 改口径：过去这里断言「超时后同名任务继续报『上一轮还没结束』」，
+  // 直到一个可能永远不来的 turn/end 才释放 —— 那是缺陷本身，不是契约。
+  // 现在超时就是一个终态出口：槽位立刻释放，迟到的 turn/end 被丢弃。
   const { service, complete } = fixture()
   await assert.rejects(service.run('alpha', '后台甲', '慢慢想', { timeoutMs: 10 }), /等太久了/)
-  await assert.rejects(service.run('alpha', '后台甲', '不能插队', { timeoutMs: 10 }), /上一轮还没结束/)
-  complete('session-1', '迟到的正文')
 
+  // 关键差异：同名任务必须能立刻开下一轮（在隔离的新会话 session-2 中），而不是继续报忙。
   const next = service.run('alpha', '后台甲', '下一轮', { timeoutMs: 1000 })
   await tick()
-  complete('session-1', '新正文', 2)
-  assert.equal(await next, '新正文')
+
+  // 模拟竞态：重试已经开始后，旧任务（session-1）先产生 assistant/message 和 turn/end
+  complete('session-1', '迟到的旧答案', 1)
+
+  // 旧任务的事件不得兑现新请求，新请求仍在等待 session-2
+  complete('session-2', '下一轮的正文', 1)
+  assert.equal(await next, '下一轮的正文')
   await service.dispose()
 })
 

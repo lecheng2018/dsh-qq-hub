@@ -270,8 +270,31 @@ test('总开关关掉时完全不动作（连裁剪都不做）', async () => {
   const { ledger } = ledgerWithArchive()
   const observer = observerOf({ ledger, cfg: { threads: { enabled: false } }, now: () => 1_000_000 })
   const stat = await observer.recordTurn({ chatKey: KEY, userText: '我去洗澡了' })
-  assert.deepEqual(stat, { produced: 0, pushed: 0, pruned: 0, failed: 0 })
+  // judgeTimedOut 是 2026-11-21 新增的可观测字段（因超时丢了几轮线索），
+  // 总开关关着时它必然为 0 —— 一起钉住，免得以后又漏掉这个字段的语义。
+  assert.deepEqual(stat, { produced: 0, pushed: 0, pruned: 0, failed: 0, judgeTimedOut: 0 })
   assert.equal(ledger.list({ chatKey: KEY }).length, 0)
+})
+
+test('老配置迁移：停在旧默认值 15000 的升到 30000，用户调过的不动', async () => {
+  const { migrateThreadTimeout, THREAD_TIMEOUT_VERSION } = await import('../src/core/config.js')
+
+  // 原封不动停在旧默认值 → 升级
+  const a = migrateThreadTimeout({ threads: { judgeTimeoutMs: 15000 } })
+  assert.equal(a.threads.judgeTimeoutMs, 30000)
+  assert.equal(a.threads.timeoutVersion, THREAD_TIMEOUT_VERSION)
+
+  // 用户自己调过的（更小的、更大的）一律保留 —— 迁移不是「强制拉齐」
+  assert.equal(migrateThreadTimeout({ threads: { judgeTimeoutMs: 8000 } }).threads.judgeTimeoutMs, 8000)
+  assert.equal(migrateThreadTimeout({ threads: { judgeTimeoutMs: 45000 } }).threads.judgeTimeoutMs, 45000)
+
+  // 已经迁移过：即使现在是 15000 也不再碰（用户主动改回来的情况）
+  const done = { threads: { judgeTimeoutMs: 15000, timeoutVersion: THREAD_TIMEOUT_VERSION } }
+  assert.equal(migrateThreadTimeout(done).threads.judgeTimeoutMs, 15000)
+
+  // 没有 threads 段：不炸
+  assert.deepEqual(migrateThreadTimeout({}), {})
+  assert.deepEqual(migrateThreadTimeout(null), null)
 })
 
 test('非法 chatKey / 空 chatKey 一律不崩（fail-open）', async () => {
@@ -298,12 +321,46 @@ test('flush() 等到观察链收尾（fire-and-forget 有确定终点）', async
   assert.ok(ledger.peek(KEY, { now: 1_000_000 }), 'flush 之后账本已经写完')
 })
 
+test('默认 judgeThreads 超时时，生产观察器能正确观测到 judgeTimedOut 统计与告警', async () => {
+  const { ledger } = ledgerWithArchive()
+  const dsh = {
+    get: (n) => (n === 'llm' ? dsh.llm : undefined),
+    llm: {
+      async resolveModelInfo() { throw new Error('adapter 不支持查询') },
+      async *stream(params, opts) {
+        // 模拟慢思考超时挂起
+        await new Promise((resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => reject(opts.signal.reason || new Error('Aborted')))
+          const t = setTimeout(resolve, 5000)
+          t.unref?.()
+        })
+        yield { type: 'text-delta', text: '[]' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    },
+  }
+  const warns = []
+  const observer = createThreadObserver({
+    dsh,
+    getConfig: () => ({ model: { provider: 'p', model: 'm' }, threads: { enabled: true, judge: true, judgeTimeoutMs: 20 } }),
+    ledger,
+    log: { info() {}, debug() {}, warn: (m) => warns.push(String(m)) },
+    now: () => 1_000_000,
+    pruneIntervalMs: 0,
+  })
+  const stat = await observer.recordTurn({ chatKey: KEY, userText: '今天天气真好' })
+  assert.equal(stat.judgeTimedOut, 1, '超时必须正确计入 judgeTimedOut')
+  assert.ok(warns.some((w) => w.includes('线索慢思考超时')), `警告日志中必须包含超时提示：${JSON.stringify(warns)}`)
+})
+
 test('配置默认值：threads 开着、群里不跑 S2、超时与裁剪间隔有界', () => {
   const cfg = normalize({})
   assert.equal(cfg.threads.enabled, true)
   assert.equal(cfg.threads.judge, true)
   assert.equal(cfg.threads.judgeInGroups, false)
-  assert.equal(cfg.threads.judgeTimeoutMs, 15000)
+  // 2026-11-21 实机：15 秒太紧（模型稍慢/路由冷却时必然超时，静默丢线索），
+  // 同仓其他模型请求是 120s/150s/600s，这里提到 30 秒。
+  assert.equal(cfg.threads.judgeTimeoutMs, 30000)
   assert.equal(cfg.threads.pruneIntervalMs, 60000)
   // 越界夹值
   const clamped = normalize({ threads: { judgeTimeoutMs: 9e9, pruneIntervalMs: 1 } })

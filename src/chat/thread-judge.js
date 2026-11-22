@@ -18,8 +18,18 @@ import { normalizeThreadSummaryText } from './thread-producer.js'
 /** 单次判定的默认 token 上限（只输出一个短 JSON 数组，600 已经绰绰有余）。 */
 export const DEFAULT_MAX_TOKENS = 400
 
-/** 单次判定的默认超时（慢思考可以慢，但不能把投递链路挂住）。 */
-export const DEFAULT_TIMEOUT_MS = 15_000
+/**
+ * 单次判定的默认超时（慢思考可以慢，但不能把投递链路挂住）。
+ *
+ * 2026-11-21 实机：15 秒太紧。线索判定是一次真实的小模型调用，而同仓其他模型
+ * 请求的超时分别是 120s（llm 默认）、150s（token-guardian 摘要）、600s（回合）。
+ * 15 秒在模型稍慢、或路由处于冷却期时**必然**失败，而失败是静默的 ——
+ * 线索账本直接少一轮，且日志只留一行 warn（实测 19:58:25 就是这样丢的）。
+ *
+ * 取 30 秒：大于常见小模型判定的 P95（实机正常在 5~12 秒），又远小于投递链路
+ * 能容忍的上限。它本身就是 fire-and-forget（不阻塞投递），所以放宽不增加风险。
+ */
+export const DEFAULT_TIMEOUT_MS = 30_000
 
 /** 单轮最多产出几条：多到 6 条基本就是模型在瞎编了。 */
 export const MAX_JUDGED_THREADS = 6
@@ -185,6 +195,7 @@ export function sanitizeJudgedThreads(entries, corpus, { max = MAX_JUDGED_THREAD
 export async function judgeThreads({
   dsh, cfg, chatKey, recentText, now, deps, log,
   maxTokens = DEFAULT_MAX_TOKENS, timeoutMs = DEFAULT_TIMEOUT_MS,
+  onTimedOut,
 } = {}) {
   void now
   const corpus = String(recentText ?? '').trim().slice(-MAX_RECENT_CHARS)
@@ -206,8 +217,17 @@ export async function judgeThreads({
       timeoutMs,
     )
   } catch (error) {
-    warn(`线索判定跳过（模型不可用）：${chatKey || '?'} ${error?.message || error}`)
-    return []
+    const timedOut = error?.judgeTimedOut === true
+    if (timedOut) {
+      try { onTimedOut?.(error) } catch {}
+    }
+    warn(`线索判定跳过（模型不可用${timedOut ? '·超时' : ''}）：${chatKey || '?'} ${error?.message || error}`)
+    const empty = []
+    if (timedOut) {
+      Object.defineProperty(empty, 'judgeTimedOut', { value: true, enumerable: false, configurable: true })
+      Object.defineProperty(empty, 'judgeTimeoutMs', { value: error.judgeTimeoutMs, enumerable: false, configurable: true })
+    }
+    return empty
   }
 
   try {
@@ -220,7 +240,11 @@ export async function judgeThreads({
 }
 
 /** 给 askModel 套一层超时（它自己有 120s 兜底，慢思考不能等那么久）。 */
-async function runWithTimeout(run, timeoutMs) {
+/**
+ * 给「慢思考」套一层超时。导出是为了让测试能直接断言超时语义（fail-open 的边界
+ * 与 judgeTimedOut 标记），而不是只能通过上层间接观察。
+ */
+export async function runWithTimeout(run, timeoutMs) {
   const ms = Math.max(1, Number(timeoutMs) || DEFAULT_TIMEOUT_MS)
   const controller = new AbortController()
   let timer = null
@@ -232,6 +256,11 @@ async function runWithTimeout(run, timeoutMs) {
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => {
       const error = new Error(`线索判定超过 ${Math.ceil(ms / 1000)} 秒，已中止`)
+      // 审计：超时是「这一轮的线索判定丢了」的可观测标记。
+      // 过去它只有一行 warn，与其他失败混在一起，看不出「到底因为超时丢了多少轮线索」。
+      // 打上 tag 让上层能单独统计（线索账本是记忆/关系连续性的输入，静默丢失代价不小）。
+      error.judgeTimedOut = true
+      error.judgeTimeoutMs = ms
       controller.abort(error)
       reject(error)
     }, ms)

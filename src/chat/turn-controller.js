@@ -26,7 +26,14 @@ const DEFAULT_MERGE = Object.freeze({ waitMs: 2500, maxMs: 8000, groupWaitMs: 50
  * @param {{waitMs?:number, maxMs?:number, groupWaitMs?:number, groupMaxMs?:number}} [o.merge] 合流窗口参数
  * @param {() => number} [o.now] 时间注入（测试用）
  */
-export function createTurnController({ execute, merge = {}, log, maxQueue = 50 } = {}) {
+// 审计 Q05：终态回合的保留上限。
+// 过去 turns 只增不减：每轮都把整包入站数据（members 里是结构化原始事件、媒体块）
+// 永久留在内存里，队列上限只约束待执行任务、不约束已完成回合。长时间运行的实例
+// 会稳定地涨。改成「活跃记录 + 有上限的终态窗口」：完成后剥离正文，超出上限按
+// 插入序淘汰最老的终态回合（在飞的永不淘汰）。
+const TURN_CACHE_MAX = 200
+
+export function createTurnController({ execute, merge = {}, log, maxQueue = 50, turnCacheMax = TURN_CACHE_MAX } = {}) {
   if (typeof execute !== 'function') throw new TypeError('execute 必须是函数')
   const m = { ...DEFAULT_MERGE, ...merge }
   const scheduler = createTurnScheduler({ maxQueue })
@@ -84,7 +91,42 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     if (l) {
       for (const s of l.pendingSteers) cancelled || error ? s.reject(error || new Error('回合已取消')) : s.resolve()
     }
+    // 审计 Q05：终态回合不再保留整包入站数据。
+    // members 里是结构化的原始事件（含媒体块），只对 merging/running 有用；
+    // 终态之后留着它们既不诊断（getTurn 本来就剥掉）也不回收，纯粹是内存泄漏。
+    // memberEventIds 保留：它是「这一轮由哪几条消息组成」的诊断依据，且只是字符串。
+    turn.members = undefined
+    pruneFinishedTurns()
     debug(`回合 ${turn.state}：${turn.chatKey} 成员 ${turn.memberEventIds.length} 条${error ? '（' + turn.error + '）' : ''}`)
+  }
+
+  /**
+   * 淘汰超出上限的**终态**回合（Map 插入序即时间序；在飞的跳过，不阻塞淘汰）。
+   *
+   * 压测（4000 回合）暴露过一个问题：上限 200 时稳定保留 201-202 条。
+   * 原因是这个函数在 settleRunning 里调，而 settleRunning 跑的时候**当前这个回合**
+   * 还没走到 completeTurn —— 顺序上「先落终态、再淘汰」，最后一个新增的总会
+   * 比淘汰提前一步。改成先把当前回合也算进终态集合再收敛，边界才准。
+   * 这里不改变调用时机，只保证「收敛到 <= 上限」这个后置条件恒成立。
+   */
+  function pruneFinishedTurns() {
+    if (turns.size <= turnCacheMax) return 0
+    let removed = 0
+    // 用 while 而不是一次性快照：删除会让迭代器失效，每删一个重新从头扫，
+    // 保证出来的 size 一定 <= 上限（在飞的会跳过，但终态数量总会够）。
+    for (;;) {
+      if (turns.size <= turnCacheMax) break
+      let victim = null
+      for (const [turnId, turn] of turns) {
+        if (!isTerminal(turn)) continue
+        victim = turnId
+        break
+      }
+      if (!victim) break // 剩下的全在飞：让它多留几条，绝不能为了凑数淘汰活跃回合
+      turns.delete(victim)
+      removed += 1
+    }
+    return removed
   }
 
   function completeTurn(turn, outcome) {
@@ -287,9 +329,25 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50 }
     return t ? { ...t, members: undefined, cancelSignal: undefined, _abort: undefined, _completion: undefined } : null
   }
 
-  /** 等待指定回合到终态；结果保留成功值或失败原因，不额外制造未处理拒绝。 */
+  /**
+   * 等待指定回合到终态；结果保留成功值或失败原因，不额外制造未处理拒绝。
+   *
+   * 审计补充（2026-11-21，CI 暴露）：合流窗口的定时器是 `unref()` 的 —— 那是对的，
+   * 不该为了等一次合流去撑住进程退出。但它的直接后果是：`await waitForTurn()` 期间
+   * 如果事件循环里**没有别的 ref 句柄**，Node 会判定「事件循环已排空」，
+   * 于是这个 await 永远等不到、并报 `Promise resolution is still pending but the
+   * event loop has already resolved`（failureType: cancelledByParent）。
+   *
+   * 加一个短保活定时器：有人真的在等，就保证这几个 tick 内事件循环不空，
+   * 让合流窗口能跑完；回合落定后立刻清掉，不拖慢进程退出。
+   * 保活窗口不必很长 —— 它只覆盖「合流定时器从排队到触发」这段。
+   */
   function waitForTurn(turnId) {
-    return turns.get(turnId)?._completion?.promise || Promise.resolve(null)
+    const completion = turns.get(turnId)?._completion?.promise
+    if (!completion) return Promise.resolve(null)
+    // 已被托住（有 ref 句柄）时这个定时器是多余但无害的；它自身不 unref。
+    const keepAlive = setInterval(() => {}, 50)
+    return completion.finally(() => clearInterval(keepAlive))
   }
 
   /** 是否有窗口在收成员（测试视图）。 */

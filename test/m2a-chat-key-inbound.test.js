@@ -2,6 +2,7 @@
 // 任务书验收：不依赖 DSH、OneBot 或 host 即可运行全部用例。
 
 import test from 'node:test'
+import { mediaUrl } from './helpers/fake-media.js'
 import assert from 'node:assert/strict'
 
 import {
@@ -150,7 +151,7 @@ test('引用 / @ / 媒体段：结构化承载，textOf 只拼 text', () => {
       { type: 'reply', data: { id: '999' } },
       { type: 'at', data: { qq: '20000002' } },
       { type: 'text', data: { text: ' 看这张 ' } },
-      { type: 'image', data: { url: 'https://x/y.png' } },
+      { type: 'image', data: { url: mediaUrl('y.png') } },
       { type: 'face', data: { id: '12' } },
     ],
   }))

@@ -150,7 +150,7 @@ export function createThreadObserver({
   }
 
   async function observe(turn) {
-    const stat = { produced: 0, pushed: 0, pruned: 0, failed: 0 }
+    const stat = { produced: 0, pushed: 0, pruned: 0, failed: 0, judgeTimedOut: 0 }
     const chatKey = typeof turn.chatKey === 'string' ? turn.chatKey.trim() : ''
     if (!chatKey) return stat
     const at = typeof now === 'function' ? now() : Date.now()
@@ -185,11 +185,17 @@ export function createThreadObserver({
         const rows = await judge({
           dsh, cfg, chatKey, recentText: recent, now: at, log,
           timeoutMs: Number(cfg?.threads?.judgeTimeoutMs) || undefined,
+          onTimedOut: () => { stat.judgeTimedOut = 1 },
         })
+        if (rows?.judgeTimedOut) stat.judgeTimedOut = 1
         slow = withTtl(chatKey, rows)
       } catch (error) {
         // judgeThreads 自己已经 fail-open；这里再兜一层，防止注入实现抛出来打断整轮。
-        warn(`线索判定层跳过：${chatKey} ${error?.message || error}`)
+        // 超时单独计数：它意味着「这一轮的慢思考线索全丢」，与其他判定失败不同 ——
+        // 前者是预算不够，后者是模型给了个不能用的答案，处理方向完全不一样。
+        const timedOut = error?.judgeTimedOut === true
+        if (timedOut) stat.judgeTimedOut = 1
+        warn(`线索判定层跳过${timedOut ? '（超时）' : ''}：${chatKey} ${error?.message || error}`)
       }
     }
 
@@ -218,6 +224,8 @@ export function createThreadObserver({
     }
 
     if (stat.pushed) info(`${chatKey}：挂起线索 +${stat.pushed}（${candidates.map((c) => c.type).join(',')}）`)
+    // 超时说明预算不够或模型端不可用；打出来才看得出「线索账本为什么一直不涨」。
+    if (stat.judgeTimedOut) warn(`${chatKey}：线索慢思考超时，本轮线索未入账（可调大 threads.judgeTimeoutMs）`)
     return stat
   }
 
