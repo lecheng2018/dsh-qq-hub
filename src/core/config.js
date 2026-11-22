@@ -495,7 +495,7 @@ export function normalize(raw) {
   c.diary.attachImage = bool(c.diary.attachImage, true)
   c.diary.minChars = num(c.diary.minChars, 60, 10, 500)
   c.diary.maxChars = num(c.diary.maxChars, 140, 20, 1000)
-  c.diary.visibility = DIARY_AUDIENCES.includes(c.diary.visibility) ? c.diary.visibility : 'all'
+  c.diary.visibility = DIARY_AUDIENCES.includes(c.diary.visibility) ? c.diary.visibility : 'self'
   c.diary.audienceQQs = qqList(c.diary.audienceQQs).slice(0, 200).join('\n')
   // 审计 S07：只接受合法 chatId，去重、限 100 条。非法项直接丢弃（不让脏配置
   // 变成「匹配不到任何会话」以外的行为）。

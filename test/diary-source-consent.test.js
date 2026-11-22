@@ -89,8 +89,10 @@ test('S07 · system 会话即使被写进 includeChats 也不进素材', () => {
   assert.deepEqual(cfg.diary.includeChats, [], '非法 chatId 在归一化阶段就被丢弃')
 })
 
-test('S07 · 可见范围默认仅自己可见', () => {
+test('S07 · 可见范围默认仅自己可见（非法值安全回退到 self）', () => {
   assert.equal(normalize({}).diary.visibility, 'self', '新装默认 self，不再默认公开')
+  assert.equal(normalize({ diary: { visibility: 'invalid' } }).diary.visibility, 'self', '非法值应 fail-closed 回退到 self，不得回退到 all')
+  assert.equal(normalize({ diary: { visibility: 'friends' } }).diary.visibility, 'friends', '合法值正常保留')
 })
 
 test('S07 · includeChats 归一化：去重、丢弃非法、上限 100', () => {
