@@ -11,8 +11,9 @@ import { dirname, join } from 'node:path'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(ROOT, p), 'utf8')
 
-test('B 站与抖音：想法/知识条目带出处标题，且想法条目是 ephemeral', () => {
-  for (const [f, platform] of [['src/bili/duty.js', 'B站'], ['src/douyin/duty.js', '抖音']]) {
+test('抖音：想法/知识条目带出处标题，且想法条目是 ephemeral', () => {
+  // B 站同样的口径由商店模块自己锁（dsh-qq-hub-mods/modules/bili/duty.test.mjs）。
+  for (const [f, platform] of [['src/douyin/duty.js', '抖音']]) {
     const src = read(f)
     // 出处化：看了《标题》，她的想法：…
     assert.match(src, new RegExp('看了《\\$\\{srcTitle\\}》，她的想法'), f + ' 想法条目要带出处')
@@ -28,12 +29,7 @@ test('B 站与抖音：想法/知识条目带出处标题，且想法条目是 e
   }
 })
 
-test('知识条目仍打知识/平台标签', () => {
-  assert.match(read('src/bili/duty.js'), /tags: \['B站', '知识'\]/)
-})
-
 test('她自己的作品（发帖、画图、唱歌、签名、头像）照旧记', () => {
   assert.match(read('src/heybox/site.js'), /我在小黑盒发了一帖/)
   assert.match(read('src/modules/imagegen/index.js'), /按提示词画了一张图/)
-  assert.match(read('src/bili/duty.js'), /把B站签名改成了/)
 })
