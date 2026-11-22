@@ -120,7 +120,7 @@ export function isCommandLike(text) {
   const t = String(text ?? '').trim()
   if (!t) return false
   if (t.startsWith('/') || t.startsWith('／')) return true
-  if (/^\d{4,8}$/.test(t)) return true // TOTP 动态码
+  if (/^\d{4,8}$/.test(t)) return true // 纯数字不当命令补执行（防误触发，历史 TOTP 口令也靠这条挡）
   if (/^(?:#?\d{1,6}\s*)?(通过|同意|允许|放行|批准|拒绝|驳回|取消|不行|拦下|pass|yes|no|y|n|ok|deny)(?:\s*#?\d{1,6})?\s*[。.!！]?$/i.test(t)) return true
   return false
 }

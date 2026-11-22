@@ -72,7 +72,7 @@ test('空字符串不算没说完，也不报错', () => {
   assert.equal(looksLikeUnfinished(null).unfinished, false)
 })
 
-// ---------- 3. 权限锁（dsh-qq totp.js） ----------
+// ---------- 3. 记忆作用域隔离 ----------
 test('私聊只看到自己的私聊记忆和全局记忆', () => {
   const chat = { kind: 'private', userId: '111', chatId: 'private:111' }
   const v = visibleScopes(chat)
