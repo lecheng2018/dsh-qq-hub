@@ -4,11 +4,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const bili = readFileSync(new URL('../src/bili/duty.js', import.meta.url), 'utf8')
 const dy = readFileSync(new URL('../src/douyin/duty.js', import.meta.url), 'utf8')
 
 test('remember 提示词有明确的「将来自己」受众与反面示例', () => {
-  for (const [name, src] of [['bili', bili], ['douyin', dy]]) {
+  for (const [name, src] of [['douyin', dy]]) {
     assert.match(src, /写给你.*将来自己|将来自己/, name + '：受众设定')
     assert.match(src, /别写成视频内容简介/, name + '：反面示例①（摘要不是记忆）')
     assert.match(src, /也别只有情绪/, name + '：反面示例②（情绪截图）')
@@ -17,7 +16,6 @@ test('remember 提示词有明确的「将来自己」受众与反面示例', ()
 })
 
 test('出处标题仍在（上一轮的修复不被覆盖）', () => {
-  assert.match(bili, /看了《\$\{srcTitle\}》，她的想法/)
   assert.match(dy, /看了《\$\{srcTitle\}》，她的想法/)
 })
 
@@ -28,7 +26,7 @@ test('出处标题仍在（上一轮的修复不被覆盖）', () => {
 //   好 remember = 具体细节 + 和她已知事情的连接
 //   废 remember = 纯情绪（「太戳我了」）/ 内容简介（「该视频介绍了…」）
 test('好 remember vs 废 remember 的形态学：提示词必须同时要细节和连接', () => {
-  for (const [name, src] of [['bili', bili], ['douyin', dy]]) {
+  for (const [name, src] of [['douyin', dy]]) {
     // 好形态的两半：要「具体细节」，要「和她已知事情的连接」。
     // 注意两家措辞本来就不同：bili 写「一个具体的细节」，douyin 写「具体细节」（少一个「的」）。
     // 这里断言的是**语义要求还在**，不是逐字一致 —— 用 /具体细节/ 覆盖两种写法。

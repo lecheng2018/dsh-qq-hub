@@ -2,7 +2,7 @@
 // ① 空间评论被身份闸拦下不再记成已评论/占次数（行为级）
 // ② 小黑盒发帖配图：目录限制 + 图片魔数校验（结构锁）
 // ③ 抖音公开评论/分享私信接出站身份闸（结构锁）
-// ④ B站评论/回复被拦或试运行不再计数（结构锁）
+// ④ B站评论/回复被拦或试运行不再计数 —— 已随实现迁到商店模块，在那边做行为级用例
 // ⑤ QQ 换头像网址过 SSRF 校验（结构锁）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -58,7 +58,6 @@ test('空间评论：正常评论 → 计数、记记忆、真发', async () => 
 // ---- 结构锁：closure 内部的安全接线（行为级驱动成本高，按仓内 outbound-guard 惯例锁源码） ----
 const HEYBOX = SRC('../src/heybox/site.js')
 const DOUYIN = SRC('../src/douyin/duty.js')
-const BILI = SRC('../src/bili/duty.js')
 const PROFILE = SRC('../src/modules/profile/index.js')
 
 test('小黑盒发帖配图：先校验目录与图片魔数，再读文件入段', () => {
@@ -74,17 +73,7 @@ test('抖音：公开评论经 doWrite 过身份闸，分享私信过身份闸',
   assert.match(DOUYIN, /if \(!guard\(say, '私信'\)\)/, '分享私信过闸')
 })
 
-test('B站：评论/回复只在真发出分支计数（被拦/试运行不计数）', () => {
-  // 评论：commented++ 必须落在 guard 通过的 else 分支内，而非无条件累加
-  const commentBlock = BILI.slice(BILI.indexOf('if (comment && !isSilence(comment)'), BILI.indexOf('if (c.like && !getConfig().dryRun)'))
-  assert.match(commentBlock, /else if \(guard\(comment\.slice\(0, 200\)\)\) \{[\s\S]*?commented\+\+/, 'commented++ 在 guard 通过分支内')
-  assert.match(commentBlock, /kind: 'dry:comment'/, '试运行单独记 dry:comment')
-  assert.match(commentBlock, /kind: 'blocked'/, '被拦单独记 blocked')
-  // 回复：s.replies++ 在 else（guard 通过）分支内
-  const replyBlock = BILI.slice(BILI.indexOf('const reply = String(out'), BILI.indexOf('s.repliedFeed ='))
-  assert.match(replyBlock, /else \{[\s\S]*?s\.replies\+\+/, 's.replies++ 在 guard 通过分支内')
-})
-
+// B 站「被拦 / 试运行不计数」的行为级用例跟着实现搬到了商店模块（modules/bili/duty.test.mjs）。
 test('QQ 换头像：网址先过 assertPublicUrl 再交给网关', () => {
   assert.match(PROFILE, /import \{ segmentBytes, assertPublicUrl \} from '\.\.\/\.\.\/core\/net\.js'/, '应引入 assertPublicUrl')
   assert.match(PROFILE, /await assertPublicUrl\(src\.file\)/, '头像网址过 SSRF 校验')

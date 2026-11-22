@@ -1,5 +1,28 @@
 # 更新记录
 
+## Unreleased · B 站实现搬进商店模块，支持「单独选模型」（2026-11-22）
+
+**这次改的是职责划分**：B 站（`bili`）早就是商店模块，但实现一直留在包内 `src/bili/`，模块只是壳。
+这导致「给 B 站单独选个模型」这种模块自己的事得改插件，模块也没法自己测。现在：
+
+- **插件删掉 `src/bili/`**（api / duty / vision / shots 四个文件，含对应单测），只保留通用能力。
+- **商店模块 `modules/bili` 1.2.0 自带完整实现**，经 `api.lib` 取 `core/store`（数据目录，`bili.json` 位置不变）、
+  `core/llm`（模型调用 / 看图判定）、`core/img`（ffmpeg）、`core/net`（SSRF 校验）、`chat/reply`（静默）、
+  `chat/identity-guard`（出站身份闸）。缺 `img`/`net` 时看画面自动跳过，不影响文字流程。
+- **新增 `bili.model`**（`{ provider, model, reasoningEffort }`，默认空 = 跟随全局）：模块注册 `api.on('model')`，
+  只改 `system:bili*` 这几个后台回合；抽帧看画面也用它（先问模型能不能看图，不能就跳过）。B 站页新增
+  「B 站用的模型」下拉，复用 `/models` 列表。
+- **测试跟着实现走**：WBI 签名 / playurl / Cookie 解析 / 刷一轮 / 回评论 / 出站闸拦截不计数 / 截图库 /
+  抽帧降级 / 单独选模型，全部迁到模块的 `*.test.mjs`（假实现，不连外网）；插件这边只留宿主配置回归
+  `test/bili-config.test.js`（Cookie 拆分、面板合并、`bili.model` 归一化、改资料默认仅主人）。
+  出站闸 / 记忆出处 / 不记浏览流水 / 截图库等结构锁改成模块里的**行为级**用例。
+
+**发布顺序**：先把「B站」模块 1.2.0 发到市场，再发这个版本的插件。新插件不再带 `src/bili`，市场里的旧壳（1.1.x）
+找不到实现会加载失败；反过来「新模块 + 旧插件」是安全的——实现走模块，只是少一个 `bili.model` 下拉。
+
+**验证**：插件 `node --test "test/**/*.test.js"` 2527 pass / 0 fail；模块仓库 `scripts/test.mjs` 328 pass / 0 fail，
+`quality.mjs`、`check.mjs` 通过。
+
 ## Unreleased · fix 思考内容泄进群：`[Previous reasoning]` 块被原样发出（2026-11-22）
 
 **现象（真机 20:38，群聊）**：两条纯推理气泡发进群——
