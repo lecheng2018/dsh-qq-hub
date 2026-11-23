@@ -298,7 +298,7 @@ test('统一出站闸 身份泄露：群回复含主人 QQ 号被闸拦下（零
 // ===== §4.5 回合结束语义专用夹具：手工 DSH 事件序列（不受 fake brain 合成限制）=====
 
 /** 事件可编程的最小 DSH：按轮次投放 assistant/message / turn/end 序列，可注入 followup 拒绝。 */
-function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
+function rawFakeDsh({ turns = [], rejectTurn = null, onEvents = null } = {}) {
   const listeners = new Set()
   const session = { id: 'sess-raw' }
   let turnNo = 0
@@ -317,7 +317,8 @@ function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
       if (rejectTurn === n) return Promise.reject(new Error('brain boom'))
       const events = turns[n - 1] || [{ type: 'turn/end', data: { reason: { kind: 'completed' } } }]
       for (const ev of events) for (const fn of [...listeners]) fn(session, { ...ev, data: { ...ev.data, turn: n } })
-      return Promise.resolve()
+      // onEvents：回合事件之后、followup 兑现之前跑（模拟「回合中途调工具直发」）
+      return Promise.resolve(onEvents?.(n))
     },
   }
   const ctrl = { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) }
@@ -333,8 +334,9 @@ function rawFakeDsh({ turns = [], rejectTurn = null } = {}) {
   return { ctx, listeners, contextsMap }
 }
 
-function rawCore(dshRaw, cfgOver = {}) {
+function rawCore(dshRaw, cfgOver = {}, coreOver = {}) {
   const sent = []
+  const calls = [] // 发送族带参数的台账：断言「到底发了什么内容」用
   const cfg = {
     enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', ownerName: '主人',
     allow: { private: ['10000001'], groups: ['777'] }, longTasks: false,
@@ -343,11 +345,12 @@ function rawCore(dshRaw, cfgOver = {}) {
   }
   const core = createModularCore({
     dsh: dshRaw.ctx,
-    onebot: { call: async (action) => { if (action.startsWith('send_')) sent.push(action); return { message_id: String(sent.length) } }, }, // 只记发送族：set_input_status 等旁路状态调用不算「发消息」（2026-11-09 typing 平账后语义）
+    onebot: { call: async (action, params) => { if (action.startsWith('send_')) { sent.push(action); calls.push({ action, params }) } return { message_id: String(sent.length) } }, }, // 只记发送族：set_input_status 等旁路状态调用不算「发消息」（2026-11-09 typing 平账后语义）
     mods: { contextFor: async () => '', commands: () => [], use: () => null },
     getConfig: () => cfg, logger: noopLog, log: noopLog,
+    ...coreOver,
   })
-  return { core, sent }
+  return { core, sent, calls }
 }
 
 test('回合结束语义：interrupted 部分回复不发送（completed 结束但无定稿文本 = 不发）', async () => {
@@ -362,6 +365,43 @@ test('回合结束语义：interrupted 部分回复不发送（completed 结束�
     await core.dispatchLegacyEvent(msgEv())
     await sleep(300)
     assert.deepEqual(sent, [], 'interrupted 的部分内容绝不发出（报告 §4.5）')
+  } finally { await core.dispose() }
+})
+
+test('回合内多步：末步只剩控制标记时回退上一步正文（真机 2026-11-23 15:01 纯表情不带字）', async () => {
+  // 真机形状：step1 写了正文又调了 qq_send_sticker（工具立即直发一张表情），
+  // step2 收尾只补 <sticker:无语> —— 旧实现只留末步文本，正文凭空消失，群里只剩表情。
+  const dshRaw = rawFakeDsh({ turns: [
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '就写点后端 天天看日志' }] } } },
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '<sticker:无语>' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, calls } = rawCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await sleep(300)
+    const texts = calls.flatMap((c) => (c.params?.message || []).filter((s) => s.type === 'text').map((s) => String(s.data?.text || '')))
+    assert.ok(texts.some((t) => t.includes('就写点后端 天天看日志')), `末步只有 <sticker:…> 时不能吞掉上一步正文，实际发出：${JSON.stringify(calls)}`)
+  } finally { await core.dispose() }
+})
+
+test('回合内多步：末步有人话时只发末步，不被上一步旁白污染', async () => {
+  const dshRaw = rawFakeDsh({ turns: [
+    [
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '我先翻一下日志' }] } } },
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '是权限没开' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ],
+  ] })
+  const { core, calls } = rawCore(dshRaw)
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await sleep(300)
+    const all = calls.flatMap((c) => (c.params?.message || []).map((s) => String(s.data?.text ?? ''))).join('\n')
+    assert.ok(all.includes('是权限没开'), `末步正文照常发：${all}`)
+    assert.ok(!all.includes('我先翻一下日志'), `末步有人话时上一步的过程旁白不该跟着发：${all}`)
   } finally { await core.dispose() }
 })
 
@@ -637,3 +677,59 @@ test('真机附带：cancelled 台账留原因（cancelReason，审计断言闭�
 
 
 
+
+// ===== 同回合表情去重：工具直发 vs 正文 <sticker:…>（真机 2026-11-23 15:01 连发两张一样的）=====
+
+const fakeStickerStore = () => ({
+  match: (q) => (String(q || '').includes('无语') ? { md5: 'm-1', name: '无语' } : null),
+  segmentFor: () => ({ type: 'image', data: { file: 'sticker-b64' } }),
+  markUsed() {},
+  pickForReply: () => null,
+})
+
+test('同回合表情去重：工具直发过的那张，正文里再写 <sticker:同一张> 不再发', async () => {
+  let coreRef = null
+  const dshRaw = rawFakeDsh({
+    turns: [[
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '<sticker:无语>' }] } } },
+      { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    ]],
+    // 回合进行中：模型调了 qq_send_sticker（工具立即直发），等价于 hub.sendSticker
+    onEvents: async () => { await coreRef.services.sendSticker('private:10000001', '无语') },
+  })
+  const { core, calls } = rawCore(dshRaw, { stickers: { enabled: true, autoChance: 0 } }, { stickers: fakeStickerStore() })
+  coreRef = core
+  try {
+    await core.dispatchLegacyEvent(msgEv())
+    await sleep(400)
+    const images = calls.flatMap((c) => (c.params?.message || []).filter((s) => s.type === 'image'))
+    assert.equal(images.length, 1, `同一张表情只该发一次，实际：${JSON.stringify(calls)}`)
+  } finally { await core.dispose() }
+})
+
+test('同回合表情去重：下一回合清账，同一张表情照常能再发', async () => {
+  let coreRef = null
+  const dshRaw = rawFakeDsh({
+    turns: [
+      [
+        { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '<sticker:无语>' }] } } },
+        { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+      ],
+      [
+        { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '<sticker:无语>' }] } } },
+        { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+      ],
+    ],
+    onEvents: async (n) => { if (n === 1) await coreRef.services.sendSticker('private:10000001', '无语') },
+  })
+  const { core, calls } = rawCore(dshRaw, { stickers: { enabled: true, autoChance: 0 } }, { stickers: fakeStickerStore() })
+  coreRef = core
+  try {
+    await core.dispatchLegacyEvent(msgEv({ message_id: 1, message: [{ type: 'text', data: { text: '第一轮' } }] }))
+    await sleep(400)
+    await core.dispatchLegacyEvent(msgEv({ message_id: 2, message: [{ type: 'text', data: { text: '第二轮' } }] }))
+    await sleep(400)
+    const images = calls.flatMap((c) => (c.params?.message || []).filter((s) => s.type === 'image'))
+    assert.equal(images.length, 2, '台账只服务本回合：第二轮同一张表情照常发，不能被上一轮误伤')
+  } finally { await core.dispose() }
+})

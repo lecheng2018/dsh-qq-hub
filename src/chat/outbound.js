@@ -4,7 +4,7 @@ import { expandMentions, hasMention } from './mentions.js'
 import { fetchImage } from '../core/net.js'
 
 // 回复发送所需的 OneBot 段编排；物理发送只经注入的 Shared Outbox。
-export function createOutbound({ getConfig, log, onebot, outbox, groups, stickers, tts, interaction, hooks, onStats, deliveryContext, faces: sharedFaces, captureOnly, onMessageSent }) {
+export function createOutbound({ getConfig, log, onebot, outbox, groups, stickers, tts, interaction, hooks, onStats, deliveryContext, faces: sharedFaces, captureOnly, onMessageSent, turnStickers }) {
   const faces = sharedFaces || createFaces({ onebot, log })
   const quote = (replyId) => (replyId ? [{ type: 'reply', data: { id: String(replyId) } }] : [])
   const mention = (userId, segs = []) => (userId && !segs.some((s) => s.type === 'at' && String(s.data?.qq) === String(userId)) ? [{ type: 'at', data: { qq: String(userId) } }, { type: 'text', data: { text: ' ' } }] : [])
@@ -116,6 +116,8 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
     if (!result) return false
     stickers.markUsed?.(item.md5)
+    // 本回合台账：正文里再写 <sticker:同一张> 时投递层据此去重（见 chat/turn-stickers.js）。
+    turnStickers?.note?.(chatId, item.md5)
     onStats?.('stickers')
     return result
   }
@@ -173,7 +175,11 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     const note = parts.map((part) => part.kind === 'text' ? part.value : `[${part.kind}]`).join(' ').slice(0, 60)
     const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
     // 整泡没发出去就不记表情使用/统计（与 sendSticker 同一口径，避免失败也计数）。
-    if (result) for (const item of used) { stickers.markUsed?.(item.md5); onStats?.('stickers') }
+    if (result) for (const item of used) {
+      stickers.markUsed?.(item.md5)
+      turnStickers?.note?.(chatId, item.md5)
+      onStats?.('stickers')
+    }
     return result
   }
 
