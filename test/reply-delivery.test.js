@@ -271,3 +271,65 @@ test('回归 2026-11-23：群友昵称带零宽字符/不可见字符时，模�
     assert.equal(sent[0].replyId, '999', '模型输出如果带零宽字符也应能清洗并命中')
   }
 })
+
+// ===== 同回合表情去重（真机 2026-11-23 15:01：工具直发一张 + 正文 <sticker:同一张> 又发一张）=====
+
+const stickerConfig = { ...config, stickers: { enabled: true, autoChance: 0, faces: false } }
+const stickerLib = (md5 = 'm-1') => ({
+  match: (q) => (String(q || '').includes('无语') ? { md5, name: '无语' } : null),
+  pickForReply: () => null,
+})
+
+test('同回合表情去重：工具刚直发过的那张，正文里重复的 <sticker:…> 不发，文字照发', async () => {
+  const sent = []
+  const already = new Set(['m-1'])
+  const { delivery } = fixture({
+    getConfig: () => stickerConfig,
+    stickers: stickerLib('m-1'),
+    sendText: async (chatId, text) => { sent.push({ kind: 'text', text }); return { message_id: 1 } },
+    sendSticker: async () => { sent.push({ kind: 'sticker' }); return { message_id: 3 } },
+  })
+  const result = await delivery.deliverNow('group:7', '就写点后端 天天看日志|||<sticker:无语>', {
+    stickersSentThisTurn: () => already,
+  })
+  assert.deepEqual(sent.map((s) => s.kind), ['text'], '重复的那张表情被摘掉，只剩文字')
+  assert.equal(sent[0].text, '就写点后端 天天看日志')
+  assert.equal(result.delivered, 1, '只投递了一条')
+})
+
+test('同回合表情去重：整轮只剩重复表情时不空跑投递', async () => {
+  const sent = []
+  const { delivery } = fixture({
+    getConfig: () => stickerConfig,
+    stickers: stickerLib('m-1'),
+    sendText: async () => { sent.push({ kind: 'text' }); return { message_id: 1 } },
+    sendSticker: async () => { sent.push({ kind: 'sticker' }); return { message_id: 3 } },
+  })
+  const result = await delivery.deliverNow('group:7', '<sticker:无语>', { stickersSentThisTurn: () => new Set(['m-1']) })
+  assert.deepEqual(sent, [], '本轮已经直发过这张，正文里再写不再发一遍')
+  assert.equal(result, undefined, '没有可发内容 → 不入投递流程')
+})
+
+test('同回合表情去重：不是同一张（md5 不同）照常发', async () => {
+  const sent = []
+  const { delivery } = fixture({
+    getConfig: () => stickerConfig,
+    stickers: stickerLib('m-2'),
+    sendText: async () => ({ message_id: 1 }),
+    sendSticker: async () => { sent.push({ kind: 'sticker' }); return { message_id: 3 } },
+  })
+  await delivery.deliverNow('group:7', '<sticker:无语>', { stickersSentThisTurn: () => new Set(['m-1']) })
+  assert.deepEqual(sent.map((s) => s.kind), ['sticker'], '不同 md5 不该被误伤')
+})
+
+test('同回合表情去重：没传台账（后台/系统回合）行为不变', async () => {
+  const sent = []
+  const { delivery } = fixture({
+    getConfig: () => stickerConfig,
+    stickers: stickerLib('m-1'),
+    sendText: async () => ({ message_id: 1 }),
+    sendSticker: async () => { sent.push({ kind: 'sticker' }); return { message_id: 3 } },
+  })
+  await delivery.deliverNow('group:7', '<sticker:无语>', {})
+  assert.deepEqual(sent.map((s) => s.kind), ['sticker'])
+})

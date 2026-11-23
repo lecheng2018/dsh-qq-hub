@@ -32,6 +32,7 @@ import { createInteractionState } from '../chat/interaction-state.js'
 import { createOutbound } from '../chat/outbound.js'
 import { createOutboundFiles } from '../chat/outbound-files.js'
 import { createTurnParticipants } from '../chat/turn-participants.js'
+import { createTurnStickers } from '../chat/turn-stickers.js'
 import { createPresence } from '../chat/presence.js'
 import { createCapture } from '../chat/capture.js'
 import { createFaces } from '../chat/faces.js'
@@ -43,7 +44,7 @@ import { parseMessageEvent, cardText, neutralizeInboundDsl, stripInvisible } fro
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
-import { wantsVoice } from '../chat/reply.js'
+import { wantsVoice, parseReply } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor } from '../persona/personas.js'
@@ -102,6 +103,25 @@ async function hydrateForwards(members, onebot, log) {
     out.push({ ...member, segments: next })
   }
   return out
+}
+
+/** 这段文本里有没有「人话」：只有 `<sticker:…>` / `<poke>` / `![](…)` 这类控制标记时返回 ''。
+ *
+ *  真机 2026-11-23 15:01（群 955741432）：模型在**同一步**里写了正文、又调了 qq_send_sticker
+ *  （工具立即直发一张表情），下一步收尾又把 `<sticker:无语>` 当正文 —— 旧实现只留末步文本，
+ *  上一步已经写好的「就写点后端 天天看日志」凭空消失，群里只剩两张纯表情、一个字都没有。 */
+function visibleTextOf(text) {
+  try {
+    const parsed = parseReply(String(text || ''))
+    if (parsed.silent) return ''
+    return parsed.items
+      .filter((item) => item.kind === 'text' || item.kind === 'voice')
+      .map((item) => String(item.value || ''))
+      .join('\n')
+      .trim()
+  } catch {
+    return String(text || '').trim()
+  }
 }
 
 /** 群消息里的图片/表情段要跟着这段上下文走：群闸可能不触发回合，等下一条
@@ -763,10 +783,12 @@ export function createModularCore({
   })
 
   const deliveryContext = new AsyncLocalStorage()
+  // 同回合表情去重台账：工具直发 vs 正文 <sticker:…>（真机 2026-11-23 15:01 连发两张）。
+  const turnStickers = createTurnStickers()
   const bump = (kind) => { presence.bump(kind); try { onStats?.(kind) } catch {} }
   const outbound = createOutbound({
     getConfig, log, onebot, outbox, groups, stickers, tts, interaction, faces,
-    hooks: moduleHooks, onStats: bump, deliveryContext,
+    hooks: moduleHooks, onStats: bump, deliveryContext, turnStickers,
     captureOnly: capture.captureOnly,
     onMessageSent: (result) => {
       const id = result?.message_id ?? result?.messageId
@@ -1390,6 +1412,20 @@ export function createModularCore({
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
         let lastText = ''
+        // 本回合每一「步」的定稿文本（按 step 顺序）。末步只剩控制标记时用它兜底：
+        // agent 回合里「写了正文又调工具」的那一步，正文会随着工具结果进入下一步，
+        // 而末步往往只补一句标记收尾（真机 2026-11-23 15:01 就是这种形状）。
+        let stepTexts = []
+        /** 末步没有人话时，回退到本回合上一条带人话的步（保留末步的控制标记，如表情）。 */
+        const resolveTurnText = () => {
+          const raw = String(lastText || '')
+          if (visibleTextOf(raw)) return raw
+          for (let i = stepTexts.length - 2; i >= 0; i -= 1) {
+            const plain = visibleTextOf(stepTexts[i])
+            if (plain) return `${plain}\n${raw}`.trim()
+          }
+          return raw
+        }
         finishReply = () => {
           if (!completion) return
           cleanupListener()
@@ -1417,13 +1453,17 @@ export function createModularCore({
             const d = ev?.data || {}
             if (d.interrupted) return
             const t = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
-            if (t) { lastTurn = d.turn; lastText = t }
+            if (t) {
+              if (d.turn !== lastTurn) { lastTurn = d.turn; stepTexts = [] }
+              lastText = t
+              stepTexts.push(t)
+            }
             return
           }
           if (ev?.type === 'turn/end') {
             // 不在这里清标记：投递发生在本事件之后，标记必须活到 forceReport 被读取那一刻。
             const d = ev?.data || {}
-            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? String(lastText || '') : '', failure: d.reason?.error || d.reason?.failure || null }
+            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? resolveTurnText() : '', failure: d.reason?.error || d.reason?.failure || null }
             if (followupDone) finishReply()
           }
         })
@@ -1454,6 +1494,9 @@ export function createModularCore({
       })
       const clearTurnTimer = () => { if (turnTimer) clearTimeout(turnTimer); turnTimer = null }
       activity.startTyping(String(sessionId), chat, getConfig(), pingTyping)
+      // 回合起点清表情台账：工具直发（qq_send_sticker）与本回合正文去重是同一份账，
+      // 不能让上一轮直发过的表情把这一轮的正常发表情误伤掉（见 chat/turn-stickers.js）。
+      turnStickers.clear(turn.chatKey)
       steeringChats.add(turn.chatKey)
       const stopTyping = () => { try { activity.stopTyping(String(sessionId)) } catch {} }
       let followupError = null
@@ -1507,17 +1550,25 @@ export function createModularCore({
       // 这一轮真正进模型的用户原话：投递、线索、关系信号三处都用同一份（不再各算一次）。
       const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       try {
-        const delivered = await replyDelivery.deliver(turn.chatKey, reply, {
-          own: true,
-          topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
-          userText: turnUserText,
-          wantVoice: wantsVoice(turnUserText),
-          autoReply,
-          refs: inGroup ? groups.refs(chat.groupId) : {},
-          // 审计 Q02：报告兜底标记随**回合**传进来，不再走一个「聊天天键」的 Map
-          // （那个 Map 在 turn/end 就被删掉，而投递发生在其后，规则永远读不到它）。
-          forceReport: turnReportHit.hit,
-        })
+        let delivered = null
+        try {
+          delivered = await replyDelivery.deliver(turn.chatKey, reply, {
+            own: true,
+            topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
+            userText: turnUserText,
+            wantVoice: wantsVoice(turnUserText),
+            autoReply,
+            refs: inGroup ? groups.refs(chat.groupId) : {},
+            // 审计 Q02：报告兜底标记随**回合**传进来，不再走一个「聊天天键」的 Map
+            // （那个 Map 在 turn/end 就被删掉，而投递发生在其后，规则永远读不到它）。
+            forceReport: turnReportHit.hit,
+            // 本回合已经直发过的表情（工具 qq_send_sticker）：正文里的同一张不再重复发。
+            stickersSentThisTurn: () => turnStickers.sentIn(turn.chatKey),
+          })
+        } finally {
+          // 投递结束就清账：台账只服务本回合，留到下一轮会误伤正常的发表情。
+          turnStickers.clear(turn.chatKey)
+        }
         // 她选择沉默 / 模块拦下：与旧的 parsed.silent、next==null 语义一致，整轮不投递。
         if (!delivered) return null
         if (delivered.state === 'silent') return null
