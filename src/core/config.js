@@ -73,6 +73,10 @@ const DEFAULTS_RAW = {
   // 管不到服务端那种按字节的会话额度。阈值同时看「回合数」和「会话年龄」，任一到了就换
   //（填 0 = 该项不启用；只留一项就是单条件轮换）。
   sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 },
+  // 孤儿会话巡检：QQ 工作区里既不在聊天映射、也不在后台系统会话池的历史会话
+  //（典型来源：服务重启后内存里的 system:<key> 映射丢了，旧的后台会话失联）
+  // 会定期静默归档，免得侧栏越攒越多。闲置门槛（idleHours）是安全垫：刚建的会话不动。
+  orphanSweep: { enabled: true, idleHours: 6, intervalHours: 6, maxPerPass: 20 },
   // 图片进历史的预算（每个会话）：服务端对「会话累计上下文 + 图片」有硬上限
   //（真机 413 plugin_request_too_large：请求约 5.8 MiB / 插件内存上限 64 MiB）。
   // 图片块一旦进历史，之后每一轮都会重新发一遍，所以额度必须**按会话**累加着算，
@@ -416,6 +420,12 @@ export function normalize(raw) {
   c.sessionRotation.enabled = bool(c.sessionRotation.enabled, true)
   c.sessionRotation.maxTurns = Math.round(num(c.sessionRotation.maxTurns, 300, 0, 100000))
   c.sessionRotation.maxAgeHours = num(c.sessionRotation.maxAgeHours, 168, 0, 8760)
+  // 孤儿会话巡检：闲置门槛与巡检间隔都有上下界（填 0 的闲置门槛按 1 小时处理，避免误伤刚建的会话）
+  if (!isObj(c.orphanSweep)) c.orphanSweep = {}
+  c.orphanSweep.enabled = bool(c.orphanSweep.enabled, true)
+  c.orphanSweep.idleHours = num(c.orphanSweep.idleHours, 6, 1, 8760)
+  c.orphanSweep.intervalHours = num(c.orphanSweep.intervalHours, 6, 1, 168)
+  c.orphanSweep.maxPerPass = Math.round(num(c.orphanSweep.maxPerPass, 20, 1, 200))
   // 图片进历史的预算：张数与字节都设上下界，面板填出离谱值也不会把会话一次性撑爆
   if (!isObj(c.imageBudget)) c.imageBudget = {}
   c.imageBudget.enabled = bool(c.imageBudget.enabled, true)

@@ -47,6 +47,7 @@ const SIDE_EFFECT_PATHS = new Set([
   // routes-config.js
   '/save',                 // :70 setConfig + 网关重启 + 会话重置 + SnowLuma 改密
   '/sessions/reset',       // :119 hub.resetSessions 归档全部会话
+  '/sessions/sweep',       // :121 hub.sweepOrphanSessions 归档失联会话（写归档集合）
   '/workspaces/delete',    // :31 收会话 + reg.delete 删工作区
   // routes-gateway.js
   '/snowluma/start',       // :19 起进程
