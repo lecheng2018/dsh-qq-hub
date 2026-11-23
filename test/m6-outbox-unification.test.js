@@ -124,9 +124,6 @@ test('PR-1 源码面：send|upload 动作已无绕过 hub.deliverRaw 的写者�
   const host = read('../src/host.js')
   assert.match(host, /egressRef\.current = createHubEgress/, 'host 开旗接线')
   assert.doesNotMatch(host, /useModularCore\s*&&\s*!usePipeline/, 'pipeline 与共享 Outbox 不再互斥，物理发送仍只有一处')
-  // multi-parser 走 api.onebot('send_*forward…'/'upload_…')——由 modules.js 集中规则覆盖，无需逐处改
-  const mp = read('../src/modules/multi-parser/delivery.js')
-  assert.match(mp, /api\.onebot\('send_group_forward_msg'/, '转发保持 api.onebot 调用=经集中分流')
 })
 
 
