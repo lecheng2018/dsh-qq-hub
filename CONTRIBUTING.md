@@ -9,6 +9,28 @@
 3. 面板源代码在 `client/src/`。修改后运行 `npm run build:client` 并提交更新后的 `client/client.js`。
 4. 提交 PR 前按 [开发指南](docs/DEVELOPMENT.md#环境与本地验证) 执行验证命令。CI 不可替代必要的真实环境验收。
 
+## 上传前脱敏（必做）
+
+排障记录里很容易顺手把**真实群号 / QQ 号**写进提交或 PR 正文。2026-11-23 就发生过一次：
+`"chatId": "group:<群号>"` 这种写法既躲过了关键词规则的扫描，PR 正文又根本没进过扫描。
+
+提交前跑这两道（`pre-push` 钩子会自动跑第一道）：
+
+```sh
+# ① 提交内容 + 工作区改动（pii-guard 技能）
+python3 -I ~/.dsh/skills/pii-guard/scripts/pii_scan.py git
+
+# ② 裸号码（关键词规则抓不到的 QQ 号 / 群号形状）
+node scripts/check-numbers.mjs --range origin/main..HEAD
+
+# ③ PR 正文同样要扫 —— 先把正文写进文件，再上传
+node scripts/check-numbers.mjs --file /tmp/pr-body.md
+python3 -I ~/.dsh/skills/pii-guard/scripts/pii_scan.py files /tmp/pr-body.md
+```
+
+写文档/注释/PR 时一律用占位：`<群号>`、`private:<主人QQ>`、「某个群」。
+测试 fixture 确需固定号码时，用明显的假值（`123456789`）或行内 `pii-scan:ignore` 显式豁免。
+
 ## 代码与测试纪律
 
 - 使用 Node.js `>=22.13.0`、ES modules 和仓库现有命名/格式习惯；尽量复用原生 Node 测试工具与现有 fake DSH / mock OneBot。

@@ -7,6 +7,9 @@
 #      来自 pii-guard 技能；扫描器启动前会先跑自检，因为一个坏掉的扫描器
 #      仍然会打印「未发现敏感信息 ✓」，只看结果看不出这种事。
 #
+#   ①b 裸号码（QQ 号 / 群号）—— 关键词规则抓不到的写法：`group:<群号>`、
+#      `真机：<群号>`、测试 fixture。按形状判，见 scripts/check-numbers.mjs。
+#
 #   ② 面板产物同源 —— client/client.js 是 esbuild 产物、和 client/src 一起入库。
 #      改了 src（或改了 scripts/build-client.mjs 的 postProcess）却忘记重新提交
 #      产物时，`npm test` 会现场构建、测试照样全绿，只有 CI 会红 ——
@@ -85,6 +88,44 @@ if [ -f "$PII_SCAN" ]; then
   fi
 else
   echo "pre-push: 未找到 PII 扫描器 $PII_SCAN，跳过这一道（可用 PII_SCAN 指定）。" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# ①b 裸号码门禁 —— QQ 号 / 群号
+# ---------------------------------------------------------------------------
+# 2026-11-23 事故：pii-guard 的 qq-number 规则要求「QQ：」「群号：」这类上下文关键词，
+# 于是 `"chatId": "group:<群号>"`、`真机：<群号>` 这种写法一律被放过，
+# 真实群号直接进了 public 仓库。
+# 这一道不看关键词，只看形状（8–12 位、排除 YYYYMMDD 日期与标识符），
+# 确属假数据的行用行内 `pii-scan:ignore` 显式豁免。
+if [ "${PII_SKIP_NUMBERS:-0}" != "1" ]; then
+  echo "pre-push: 检查新增行里的 QQ 号 / 群号形状数字……" >&2
+  num_fail=0
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$local_sha" in
+      0000000000*) continue ;;
+    esac
+    if printf '%s' "$remote_sha" | grep -q '^0*$'; then
+      base=$(git rev-parse --verify -q origin/main 2>/dev/null || git rev-parse --verify -q main 2>/dev/null)
+      if [ -n "$base" ]; then
+        mb=$(git merge-base "$base" "$local_sha" 2>/dev/null || echo "$base")
+        nrange="${mb}..${local_sha}"
+      else
+        nrange="HEAD~1..HEAD"
+      fi
+    else
+      nrange="${remote_sha}..${local_sha}"
+    fi
+    if ! node scripts/check-numbers.mjs --range "$nrange"; then num_fail=1; fi
+  done
+  if [ "$num_fail" -ne 0 ]; then
+    echo "" >&2
+    echo "pre-push: 新增内容里有 QQ 号 / 群号形状的数字，已拦下。" >&2
+    echo "  排障记录里请用「某个群」「<群号>」这类占位；" >&2
+    echo "  确属假数据的测试 fixture 可加行内标记 pii-scan:ignore 显式豁免。" >&2
+    echo "  （确需跳过：PII_SKIP_NUMBERS=1 git push …）" >&2
+    exit 1
+  fi
 fi
 
 # ---------------------------------------------------------------------------
