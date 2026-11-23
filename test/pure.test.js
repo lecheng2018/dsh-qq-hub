@@ -49,6 +49,23 @@ test('parseReply 认加粗 / 冒号写法的备忘小标题', () => {
   assert.deepEqual(colon.items.map((x) => x.value), ['正文。'])
 })
 
+// 真机 2026-11-23 21:14：模型给这块加了修饰，写成「【内部备忘·非QQ内容】」。
+// 只认「备忘 紧接 】」的写法会漏掉它，于是又发出一条只有小标题的消息。
+test('parseReply 认带修饰的备忘小标题（【内部备忘·非QQ内容】这类）', () => {
+  const withLabels = parseReply('刷到个视频。|||【内部备忘·非QQ内容】\n【目的】分享\n【状态】完成')
+  assert.deepEqual(withLabels.items.map((x) => x.value), ['刷到个视频。'])
+  const bare = parseReply('正文一句。|||【内部备忘·非QQ内容】')
+  assert.deepEqual(bare.items.map((x) => x.value), ['正文一句。'])
+  const paren = parseReply('正文。\n内部备忘（不发）：\n【状态】完成')
+  assert.deepEqual(paren.items.map((x) => x.value), ['正文。'])
+})
+
+test('parseReply 不把【备忘录】当内部块（正常词要留住）', () => {
+  const r = parseReply('【备忘录】\n1. 买牛奶')
+  assert.equal(r.silent, false)
+  assert.match(r.items.map((x) => x.value).join('\n'), /备忘录/)
+})
+
 test('parseReply 只有备忘（小标题 + 标签）时沉默；只写了小标题也不发', () => {
   assert.equal(parseReply('【内部备忘】\n【目的】无\n【状态】跳过').silent, true)
   // 小标题后面什么都没写：切完只剩正文，绝不能把「【内部备忘】」本身当正文发出去
