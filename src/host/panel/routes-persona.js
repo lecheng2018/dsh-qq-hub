@@ -84,6 +84,62 @@ export function registerPersonaRoutes({
     }
   })
 
+  /**
+   * 按「预期卡 vs 会话里固化的卡」重建过期会话。
+   *
+   * 默认只出清单（dryRun），要真重建得显式传 dryRun:false。为什么要这个接口：
+   * 人设改动只有在**重建会话**时才生效，而面板上你分不清「哪些聊天还挂着旧正文」。
+   * 存量数据里那些「老映射没记指纹」的（personaHashAssumed）单独列出来，默认不动 ——
+   * 猜的基线不能当已知，重建不重建由主人决定。
+   */
+  route('/persona/rebuild-stale', async (req) => {
+    const body = (await readBody(req)) || {}
+    const dryRun = body.dryRun !== false
+    const includeAssumed = body.includeAssumed === true
+    const cfg = getConfig()
+    const sessions = (() => { try { return hub.sessions?.() || {} } catch { return {} } })()
+    const stale = []
+    const assumed = []
+    const kept = []
+    for (const [chatId, entry] of Object.entries(sessions)) {
+      let view = null
+      try { view = chatViewFromKey(chatId) } catch { continue }
+      const wantId = personaIdFor(view, cfg)
+      const wantHash = personaHash(wantId)
+      const liveId = String(entry?.personaId || '')
+      const liveHash = String(entry?.personaHash || '')
+      const row = {
+        chatId,
+        sessionId: String(entry?.sessionId || ''),
+        expected: { id: wantId, hash: wantHash },
+        live: { id: liveId, hash: liveHash },
+        assumed: entry?.personaHashAssumed === true,
+      }
+      if (row.assumed && !includeAssumed) { assumed.push(row); continue }
+      if (liveId !== wantId || liveHash !== wantHash) stale.push(row)
+      else kept.push(row)
+    }
+    let rebuilt = 0
+    const failed = []
+    if (!dryRun) {
+      for (const row of stale) {
+        try { if (hub.resetChat?.(row.chatId)) rebuilt++ } catch (error) { failed.push({ chatId: row.chatId, error: String(error?.message || error) }) }
+      }
+    }
+    return {
+      ok: failed.length === 0,
+      dryRun,
+      stale,
+      assumed,
+      kept: kept.length,
+      rebuilt,
+      failed,
+      message: dryRun
+        ? `查出 ${stale.length} 个会话挂着旧人设${assumed.length ? `，另有 ${assumed.length} 个正文版本无法确认` : ''}（还没动）`
+        : `重建了 ${rebuilt} 个会话${failed.length ? `，${failed.length} 个失败` : ''}${assumed.length ? `；${assumed.length} 个版本无法确认的没动` : ''}`,
+    }
+  })
+
   route('/persona/delete', async (req) => {
     const b = await readBody(req)
     if (b.id === getConfig().persona.current) return { ok: false, message: '正在用的人格不能删' }

@@ -59,3 +59,26 @@ test('期望值来源：专卡 > 群/私聊默认 > 全局；空值行显式标�
 test('清理临时数据目录', () => {
   rmSync(home, { recursive: true, force: true })
 })
+
+test('面板与接口：有自检卡片、能一键重建过期会话、空值行明说跟随默认', async () => {
+  const { readFileSync } = await import('node:fs')
+  const { join, dirname } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const ROUTES = readFileSync(join(ROOT, 'src/host/panel/routes-persona.js'), 'utf8')
+  const VIEW = readFileSync(join(ROOT, 'client/src/views/persona.js'), 'utf8')
+
+  assert.match(ROUTES, /route\('\/persona\/audit'/, '自检接口要在')
+  assert.match(ROUTES, /route\('\/persona\/rebuild-stale'/, '重建过期会话的接口要在')
+  // 默认只出清单，要真动手得显式 dryRun:false —— 归档会话是不可逆的副作用
+  assert.match(ROUTES, /const dryRun = body\.dryRun !== false/, '默认 dryRun')
+  // 指纹是猜的（assumed）不许跟着一起重建
+  assert.match(ROUTES, /entry\?\.personaHashAssumed === true/, 'assumed 要单独列')
+  assert.match(ROUTES, /if \(row\.assumed && !includeAssumed\)/, 'assumed 默认不动')
+
+  assert.match(VIEW, /function PersonaAudit/, '面板要有人设自检卡片')
+  assert.match(VIEW, /get\('\/persona\/audit'\)/, '卡片要真的去拿自检数据')
+  assert.match(VIEW, /post\('\/persona\/rebuild-stale'/, '卡片要能触发重建')
+  // 空值行：面板上必须写清「没选卡 = 跟随默认」，否则就是「配了没用」的现场
+  assert.match(VIEW, /跟随.*默认/, '空值行要提示跟随默认')
+})

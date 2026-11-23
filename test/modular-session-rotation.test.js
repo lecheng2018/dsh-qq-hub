@@ -135,10 +135,27 @@ test('会话轮换：主动回合走同一处判定（否则后台任务会把�
 test('会话轮换配置：默认值与上下界（关不掉也不会被填成负数）', () => {
   const d = normalize({})
   assert.equal(d.sessionRotation.enabled, true)
-  assert.equal(d.sessionRotation.maxTurns, 300)
-  assert.equal(d.sessionRotation.maxAgeHours, 168)
+  // 2026-11-23：300 轮 / 168h 等于关掉了这个兜底（人设改动只能等手动重置），改成 60 轮 / 24h
+  assert.equal(d.sessionRotation.maxTurns, 60)
+  assert.equal(d.sessionRotation.maxAgeHours, 24)
+  assert.equal(d.sessionRotation.migrated, true, '迁移标记要落下来，下次不再动主人的值')
   const clamped = normalize({ sessionRotation: { enabled: 'yes', maxTurns: -5, maxAgeHours: -1 } })
   assert.equal(clamped.sessionRotation.enabled, true, '非布尔值回退默认 true')
   assert.equal(clamped.sessionRotation.maxTurns, 0, '负数夹到 0 = 该项不启用')
   assert.equal(clamped.sessionRotation.maxAgeHours, 0)
+})
+
+test('一次性迁移：老默认 300/168 换成 60/24，主人自己调过的不动', () => {
+  // 老配置原样没动过 → 换成新默认（否则这批用户永远等不到轮换）
+  const legacy = normalize({ sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 } })
+  assert.equal(legacy.sessionRotation.maxTurns, 60)
+  assert.equal(legacy.sessionRotation.maxAgeHours, 24)
+  // 主人自己改过 → 一个字都不动
+  const custom = normalize({ sessionRotation: { enabled: true, maxTurns: 200, maxAgeHours: 100 } })
+  assert.equal(custom.sessionRotation.maxTurns, 200)
+  assert.equal(custom.sessionRotation.maxAgeHours, 100)
+  // 已经迁移过（带标记）→ 即使还是 300/168 也不再改（主人后来主动调回去的）
+  const pinned = normalize({ sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168, migrated: true } })
+  assert.equal(pinned.sessionRotation.maxTurns, 300)
+  assert.equal(pinned.sessionRotation.maxAgeHours, 168)
 })

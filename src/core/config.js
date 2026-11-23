@@ -72,7 +72,10 @@ const DEFAULTS_RAW = {
   // 插件内存上限 64 MiB），纯文字长谈也会慢慢顶到上限；DSH 的上下文压缩管的是 token 窗口，
   // 管不到服务端那种按字节的会话额度。阈值同时看「回合数」和「会话年龄」，任一到了就换
   //（填 0 = 该项不启用；只留一项就是单条件轮换）。
-  sessionRotation: { enabled: true, maxTurns: 300, maxAgeHours: 168 },
+  // 会话轮换（人设灰度的兜底）：人设是建会话时固化的，轮换是唯一「不用主人动手也会换卡」的时机。
+  // 300 轮 / 168h 等于关掉了这个兜底（真机：卡改了半小时，49 个群会话还停在旧正文）。
+  // 现在 60 轮 / 24h。老配置里那对「300/168」按未迁移处理，一次性换成新默认（见 normalize）。
+  sessionRotation: { enabled: true, maxTurns: 60, maxAgeHours: 24, migrated: true },
   // 孤儿会话巡检：QQ 工作区里既不在聊天映射、也不在后台系统会话池的历史会话
   //（典型来源：服务重启后内存里的 system:<key> 映射丢了，旧的后台会话失联）
   // 会定期静默归档，免得侧栏越攒越多。闲置门槛（idleHours）是安全垫：刚建的会话不动。
@@ -418,8 +421,19 @@ export function normalize(raw) {
   // 会话轮换：0 = 该项不启用；年龄留小数（排障/测试要能设成几十秒）
   if (!isObj(c.sessionRotation)) c.sessionRotation = {}
   c.sessionRotation.enabled = bool(c.sessionRotation.enabled, true)
-  c.sessionRotation.maxTurns = Math.round(num(c.sessionRotation.maxTurns, 300, 0, 100000))
-  c.sessionRotation.maxAgeHours = num(c.sessionRotation.maxAgeHours, 168, 0, 8760)
+  // 一次性迁移：老默认是 300 轮 / 168h（等于永不轮换，人设改动只能等手动重置）。
+  // 只有「原样没动过老默认」且没迁移标记时才替换，主人自己调过的值一律不动。
+  // 注意要看**原始输入**：DEFAULTS 里已经带了 migrated:true，deepMerge 之后永远是 true。
+  const rawRot = isObj(raw?.sessionRotation) ? raw.sessionRotation : null
+  if (rawRot && rawRot.migrated !== true
+    && Math.round(num(rawRot.maxTurns, 60, 0, 100000)) === 300
+    && num(rawRot.maxAgeHours, 24, 0, 8760) === 168) {
+    c.sessionRotation.maxTurns = 60
+    c.sessionRotation.maxAgeHours = 24
+  }
+  c.sessionRotation.migrated = true
+  c.sessionRotation.maxTurns = Math.round(num(c.sessionRotation.maxTurns, 60, 0, 100000))
+  c.sessionRotation.maxAgeHours = num(c.sessionRotation.maxAgeHours, 24, 0, 8760)
   // 孤儿会话巡检：闲置门槛与巡检间隔都有上下界（填 0 的闲置门槛按 1 小时处理，避免误伤刚建的会话）
   if (!isObj(c.orphanSweep)) c.orphanSweep = {}
   c.orphanSweep.enabled = bool(c.orphanSweep.enabled, true)
