@@ -188,11 +188,41 @@ export function createHostEffects({
     setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
   }
 
+  // ---------- 孤儿会话巡检 ----------
+  // 重启后内存里的后台会话映射会丢，旧的后台会话（刷B站/逛热榜…）就再没人认领，
+  // 只会一直挂在侧栏。这里按 orphanSweep.intervalHours 定期静默归档一次。
+  // 启动后先等一会儿再跑第一轮：让活跃会话先就位，避免把「刚建好还没登记」的会话误判成孤儿。
+  let lastSweepAt = 0
+  async function sweepOrphans() {
+    if (typeof hub.sweepOrphanSessions !== 'function') return
+    const cfg = getConfig()
+    if (cfg?.orphanSweep?.enabled === false) return
+    const everyMs = Math.max(1, Number(cfg?.orphanSweep?.intervalHours) || 6) * 3600_000
+    if (lastSweepAt && Date.now() - lastSweepAt < everyMs) return
+    lastSweepAt = Date.now() // 先占位：单轮失败也不要每 30 秒重试
+    const r = await hub.sweepOrphanSessions()
+    if (r?.archived) log.info(`孤儿会话巡检：本轮归档 ${r.archived} 个（扫描 ${r.scanned}，跳过 ${r.skipped}）`)
+  }
+  function installOrphanSweeper() {
+    const cfg = getConfig()
+    if (cfg?.orphanSweep?.enabled === false) {
+      log.info('孤儿会话巡检：已关闭（config.orphanSweep.enabled=false）')
+      return
+    }
+    const hours = Math.max(1, Number(cfg?.orphanSweep?.intervalHours) || 6)
+    const idle = Math.max(1, Number(cfg?.orphanSweep?.idleHours) || 6)
+    log.info(`孤儿会话巡检：每 ${hours} 小时扫一次，闲置超过 ${idle} 小时的失联会话会静默归档`)
+    ctx.effect(() => ctx.interval(safe(sweepOrphans, '孤儿会话巡检'), 30 * 60_000), 'qq-hub: 孤儿会话巡检')
+    setTimeout(safe(sweepOrphans, '孤儿会话巡检'), 5 * 60_000).unref?.()
+  }
+
   return {
     safe, watchdog,
     installApprovalFlow,
     setupUserQuestions,
     installSessionWatcher,
     installWatchdog,
+    installOrphanSweeper,
+    sweepOrphans,
   }
 }

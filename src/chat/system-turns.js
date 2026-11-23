@@ -115,6 +115,17 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
     return entries.length
   }
 
+  /**
+   * 当前还活着的系统会话 id（孤儿巡检要用：这些会话即便不在 QQ 聊天映射里，
+   * 也仍然是「正在复用的后台会话」，绝不能当成孤儿归档掉）。
+   * @returns {string[]}
+   */
+  function liveSessionIds() {
+    return [...sessions.values()]
+      .map((entry) => String(entry?.sessionId || ''))
+      .filter(Boolean)
+  }
+
   async function dispose() {
     disposed = true
     // 先逐个兑现等待者，再清账：顺序反过来的话，settle 里的 running.delete 会对着
@@ -126,5 +137,5 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
     running.clear()
   }
 
-  return { run, resetSessions, dispose }
+  return { run, resetSessions, liveSessionIds, dispose }
 }
