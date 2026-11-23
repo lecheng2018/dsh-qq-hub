@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { stripInvisible } from './inbound.js'
 import { parseReply, bubbleDelay, replyRules, extractAndStripInnerMonologue } from './reply.js'
 import { updateClosureState } from './conversation-closure.js'
 import { applyThreadContinuation, adaptThreadLedger } from './inner-thread-link.js'
@@ -249,11 +250,15 @@ export function createReplyDelivery({
     // refs 里那一条；解析不出来（写了不存在的名字、坏标签）就当没写引用，照常发。
     // 真机根因：行内出现「↳转述自某人」时，模型常常把「谁说的」和「被转述的人」搞混，
     // 让它按昵称/QQ 号直接指名比让它数编号可靠得多。
+    const cleanNick = (s) => stripInvisible(String(s ?? '')).trim()
     const resolveRef = (token) => {
       const want = String(token ?? '').trim()
       if (!want) return null
       if (refs[want]) return refs[want]
+      const cleanWant = cleanNick(want)
+      if (cleanWant && refs[cleanWant]) return refs[cleanWant]
       const lower = want.toLowerCase()
+      const lowerClean = cleanWant.toLowerCase()
       // 昵称：同一个昵称在一段里可能有多条，取**最后**一条（模型想回的是这个人最近那句）。
       let byNick = null
       // QQ 号：直接对 uid；对上就取该人最后一条。
@@ -261,10 +266,12 @@ export function createReplyDelivery({
       for (const key of Object.keys(refs)) {
         const ref = refs[key]
         if (!ref) continue
-        const uid = String(ref.uid ?? '')
+        const uid = String(ref.uid ?? '').trim()
         const nick = String(ref.nick ?? '')
-        if (uid && uid === want) byUid = ref
+        const cNick = cleanNick(nick)
+        if (uid && (uid === want || uid === cleanWant)) byUid = ref
         else if (nick && (nick === want || nick.toLowerCase() === lower)) byNick = ref
+        else if (cNick && (cNick === cleanWant || cNick.toLowerCase() === lowerClean)) byNick = ref
       }
       return byUid || byNick
     }

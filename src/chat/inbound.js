@@ -17,6 +17,15 @@ const INBOUND_DSL_TAG_NAMES = ['inner', 'voice', 'poke', 'report', 'sticker', 'r
 // 整族绕过中和，而注释当时还写着「零宽切分一律中和」。修法见 looseTagName()。
 const INBOUND_ZW = '\\u200B\\u200C\\u200D\\uFEFF'
 
+// 不可见字符（零宽空格、零宽连字/非连字、双向文本控制符、BOM 等）：
+// 真机事故 2026-11-23：群友昵称带 \u200b，导致模型按视觉文本输出 <reply:☆> 时严格比对失效。
+export const INVISIBLE_CHARS_RE = /[\u200B-\u200F\u202A-\u202E\uFEFF]/g
+
+/** 清洗不可见字符（零宽字符、方向控制符、BOM 等）。 */
+export function stripInvisible(text) {
+  return String(text ?? '').replace(INVISIBLE_CHARS_RE, '')
+}
+
 /**
  * 把标签名转成「字符之间允许零宽/空白切分」的模式。
  *

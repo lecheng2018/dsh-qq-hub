@@ -48,3 +48,9 @@ test('名字带标点也能 @（「。Luna」），名字后面紧跟的标点�
   const ms = [{ user_id: 10005, card: '', nickname: '。Luna' }]
   assert.deepEqual(expandMentions(text('@。Luna，在吗'), ms), [{ type: 'at', data: { qq: '10005' } }, { type: 'text', data: { text: ' ，在吗' } }])
 })
+
+test('群成员名字含零宽字符（如 ☆\\u200B）时，输入视觉文本 @☆ 也能对上', () => {
+  const ms = [{ user_id: 900000006, card: '☆\u200B', nickname: '☆' }]
+  assert.deepEqual(expandMentions(text('@☆ 在吗'), ms), [{ type: 'at', data: { qq: '900000006' } }, { type: 'text', data: { text: ' 在吗' } }])
+  assert.deepEqual(expandMentions(text('<at:☆> 在吗'), ms), [{ type: 'at', data: { qq: '900000006' } }, { type: 'text', data: { text: ' 在吗' } }])
+})

@@ -1,5 +1,22 @@
 # 更新记录
 
+## Unreleased · fix 群回复目标昵称含零宽字符导致引用失效降级（2026-11-23）
+
+**现象（真机 00:13，群 900000003）**：模型写了 `<reply:☆> 复一次就行了 别把我当复活币使`，出站日志报 `引用的「☆」对不上群里的人，按普通消息发`；引用段被剥离，发出去变成无引用的普通消息，导致紧随其后 `@豆包` 的群友误以为是在回自己，吐槽“雷霆大思考了”。
+
+**根因**：群友真实昵称末尾含有不可见字符（如零宽空格 `\u200B`，编码 `['0x2606', '0x200b']`）。提示词上下文与 `refs` 表保留了原始脏字符，模型在视觉上看到并输出纯净的 `<reply:☆>`；出站投递层 `resolveRef` 使用严格字面量比对 `nick === want`，比对落空，触发安全降级抹掉引用按普通消息单发。
+
+**改法**：
+- `src/chat/inbound.js`：定义 `INVISIBLE_CHARS_RE` 并导出 `stripInvisible(text)`，清洗零宽空格（`\u200B-\u200D`）、双向文本控制符（`\u200E-\u200F`、`\u202A-\u202E`）和 `\uFEFF`。
+- `src/host/modular-core.js`：`safeNick` 增加 `stripInvisible` 与 `trim()`，保证提示词渲染与 `refs` 账本里的昵称视觉干净，避免隐式 token 差异。
+- `src/chat/reply-delivery.js`：`resolveRef` 增加 `cleanNick` 容错比对，无论是 `refs` 中含零宽字符还是模型输出含零宽字符，均能精确匹配目标。
+- `src/chat/mentions.js`：`memberNames` 登记群成员时同步登记清洗不可见字符后的名字，保证 `@` 与 `<at:>` 也能识别。
+
+**测试**：
+- `test/reply-delivery.test.js` 新增回归：群友昵称含零宽空格 `\u200B` 和方向控制符时，视觉文本 `<reply:☆>` 成功命中并附加引用；
+- `test/neutralize-inbound-dsl.test.js` 新增 `stripInvisible` 工具函数测试；
+- `test/mentions.test.js` 新增群成员带零宽字符时的真 `@` 匹配测试。
+
 ## Unreleased · 小黑盒实现搬进商店模块，完成自包含解耦（2026-11-22）
 
 **职责划分对齐 B 站范式**：小黑盒（`heybox`）作为市场模块，此前包内残留了旧版本 `src/heybox/`（api / site / styles），而商店仓早已演进至支持扫码登录、浏览器验证兜底、共享浏览器与长帖分块的现代版本。
