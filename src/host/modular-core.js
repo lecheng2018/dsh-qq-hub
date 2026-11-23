@@ -47,7 +47,7 @@ import { createInboundVision } from '../chat/inbound-vision.js'
 import { wantsVoice, parseReply } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
-import { personaIdFor } from '../persona/personas.js'
+import { personaIdFor, personaHash } from '../persona/personas.js'
 import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { readJson, writeJson } from '../core/store.js'
@@ -537,13 +537,37 @@ export function createModularCore({
   })
   const sessionPersonas = new Map()
   const currentPersona = (chatKey) => personaIdFor(chatViewFor(chatKey), getConfig())
+  // 人设守卫的唯一口径：这张聊天现在该用哪张卡 + 这一版正文的指纹。
+  // 只看 id 会漏掉「卡没换、正文改了」——那种情况 {{qq_hub_persona}} 早就把旧正文
+  // 烧进会话历史了，而 DSH 不会重算，于是改字永远不生效（2026-11-23 真机）。
+  const currentPersonaTarget = (chatKey) => {
+    const id = currentPersona(chatKey)
+    return { id, hash: personaHash(id) }
+  }
+  /** 会话里固化的那份 vs 现在该用的那份：id 或正文指纹任一不同就算过期。 */
+  const personaStale = (persona, sessionId, want) => !persona
+    || String(persona.sessionId || '') !== String(sessionId || '')
+    || String(persona.personaId || '') !== want.id
+    || String(persona.personaHash || '') !== want.hash
   const baseSessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
   const sessionStore = baseSessionStore && {
     load() {
       const entries = baseSessionStore.load()
       for (const [chatKey, entry] of Object.entries(entries)) {
         if (!entry?.sessionId) continue
-        sessionPersonas.set(chatKey, { sessionId: String(entry.sessionId), personaId: entry.personaId || currentPersona(chatKey) })
+        const personaId = entry.personaId || currentPersona(chatKey)
+        const want = currentPersonaTarget(chatKey)
+        const sameId = personaId === want.id
+        sessionPersonas.set(chatKey, {
+          sessionId: String(entry.sessionId),
+          personaId,
+          // 老映射没有指纹字段。若记的卡和现在这张一致，就把当前指纹当基线**不 churn**
+          // （升级不该把所有会话一次性重建）；但标 assumed：这版正文到底是不是会话里
+          // 那版无法确认，自检里要如实标出来，交给主人决定要不要重建。
+          // 记的卡和现在不一致时指纹留空，守卫按 id 差异重建。
+          personaHash: entry.personaHash || (sameId ? want.hash : ''),
+          personaHashAssumed: !entry.personaHash && sameId,
+        })
       }
       return entries
     },
@@ -551,10 +575,16 @@ export function createModularCore({
       const enriched = Object.fromEntries(Object.entries(entries).map(([chatKey, entry]) => {
         let persona = sessionPersonas.get(chatKey)
         if (!persona || persona.sessionId !== entry.sessionId) {
-          persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+          const want = currentPersonaTarget(chatKey)
+          persona = { sessionId: entry.sessionId, personaId: want.id, personaHash: want.hash }
           sessionPersonas.set(chatKey, persona)
         }
-        return [chatKey, { ...entry, personaId: persona.personaId }]
+        return [chatKey, {
+          ...entry,
+          personaId: persona.personaId,
+          personaHash: persona.personaHash || '',
+          ...(persona.personaHashAssumed ? { personaHashAssumed: true } : {}),
+        }]
       }))
       baseSessionStore.save(enriched)
     },
@@ -584,9 +614,15 @@ export function createModularCore({
   }
   const registry = createSessionRegistry({
     createSession: async (chatKey, hint) => {
-      const personaId = currentPersona(chatKey)
+      // 先取目标再建会话：DSH 在 create 期间就可能装配系统提示词，
+      // 记的必须是「这一刻按哪张卡渲染的」，不是建完再补算一次。
+      const want = currentPersonaTarget(chatKey)
       const created = await sessionAdapter.createSession(chatKey, hint)
-      if (created?.sessionId) sessionPersonas.set(chatKey, { sessionId: String(created.sessionId), personaId })
+      if (created?.sessionId) {
+        sessionPersonas.set(chatKey, { sessionId: String(created.sessionId), personaId: want.id, personaHash: want.hash })
+        // 反查表立刻登记：装配期间 chatOfSession(sid) 必须能对上，否则渲染期会回落全局卡。
+        activeChatBySessionId.set(String(created.sessionId), chatKey)
+      }
       return created
     },
     ...(sessionStore ? { store: sessionStore } : {}),
@@ -612,10 +648,16 @@ export function createModularCore({
   const sessions = () => Object.fromEntries(Object.entries(registry.snapshot()).map(([chatKey, entry]) => {
     let persona = sessionPersonas.get(chatKey)
     if (!persona || persona.sessionId !== entry.sessionId) {
-      persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+      const want = currentPersonaTarget(chatKey)
+      persona = { sessionId: entry.sessionId, personaId: want.id, personaHash: want.hash }
       sessionPersonas.set(chatKey, persona)
     }
-    return [chatKey, { ...entry, personaId: persona.personaId }]
+    return [chatKey, {
+      ...entry,
+      personaId: persona.personaId,
+      personaHash: persona.personaHash || '',
+      ...(persona.personaHashAssumed ? { personaHashAssumed: true } : {}),
+    }]
   }))
   /** 这个会话该不该退休：回合数或年龄任一超过阈值就算该换（填 0 的那一项不参与判定）。 */
   function sessionRetired(entry, cfg) {
@@ -664,9 +706,10 @@ export function createModularCore({
     for (let attempt = 0; attempt < 3; attempt++) {
       const entry = await registry.sessionFor(chatKey)
       if (registry.peek(chatKey)?.sessionId !== entry.sessionId) continue
+      const want = currentPersonaTarget(chatKey)
       let persona = sessionPersonas.get(chatKey)
       if (!persona || persona.sessionId !== entry.sessionId) {
-        persona = { sessionId: entry.sessionId, personaId: currentPersona(chatKey) }
+        persona = { sessionId: entry.sessionId, personaId: want.id, personaHash: want.hash }
         sessionPersonas.set(chatKey, persona)
       }
       // 归档判定放在人设/轮换之前：已归档的会话不管用得多新，**根本跑不了回合**，
@@ -676,7 +719,7 @@ export function createModularCore({
         resetChat(chatKey)
         continue
       }
-      if (persona.personaId === currentPersona(chatKey)) {
+      if (!personaStale(persona, entry.sessionId, want)) {
         // 会话轮换：用太久/聊太多轮就归档重开。判在 sessionForChat 里是因为它是**每一轮的唯一入口**
         // （execute 与 runPromptTurn 都过这里），放别处会漏掉主动回合。
         // 放在人设判定之后：人设不对本来就该换，不必再谈退休。
@@ -2007,10 +2050,12 @@ export function createModularCore({
       } catch { continue }
       // 预期没变 = 这张卡对这条聊天没影响，历史里也没有别的卡，不用动它
       if (want === had) continue
-      // 会话里固化的正是旧卡才需要重置；若已经是新卡（上一轮刚重建过）就跳过
-      const recorded = sessionPersonas.get(chatKey)?.personaId || ''
-      if (recorded === want) continue
-      if (resetChat(chatKey)) changed.push({ chatId: chatKey, from: recorded || had || '', to: want || '' })
+      // 会话里固化的正是「id + 这一版正文」才跳过；只看 id 会漏掉「卡没换、正文改了」
+      const recorded = sessionPersonas.get(chatKey) || {}
+      const recordedId = String(recorded.personaId || '')
+      const wantHash = personaHash(want)
+      if (recordedId === want && String(recorded.personaHash || '') === wantHash) continue
+      if (resetChat(chatKey)) changed.push({ chatId: chatKey, from: recordedId || had || '', to: want || '' })
     }
     return changed
   }

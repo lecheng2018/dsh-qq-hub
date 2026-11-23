@@ -44,7 +44,11 @@ test('/save 改人设配置（分流表/全局）后重置受影响会话', () =
   assert.match(seg, /before/, '把改动前的配置传进去')
 })
 
-test('当前会话恢复对没记 personaId 的老会话补基线不误重置', () => {
-  assert.match(HUB, /entry\.personaId \|\| currentPersona\(chatKey\)/, '空 personaId 使用当前人设作为恢复基线')
-  assert.match(HUB, /sessionPersonas\.set\(chatKey, \{ sessionId: String\(entry\.sessionId\), personaId: entry\.personaId \|\| currentPersona\(chatKey\) \}\)/)
+test('当前会话恢复对没记 personaId 的老会话补基线不误重置（同时补正文指纹）', () => {
+  assert.match(HUB, /const personaId = entry\.personaId \|\| currentPersona\(chatKey\)/, '空 personaId 使用当前人设作为恢复基线')
+  // 老映射没有 personaHash：id 和现在这张卡一致时，把当前指纹当基线、**不 churn**
+  // （升级不该把全部会话一次性重建），但标 assumed；自检里如实说这版正文无法确认。
+  // id 和现在不一致时指纹留空，守卫按 id 差异重建。
+  assert.match(HUB, /personaHash: entry\.personaHash \|\| \(sameId \? want\.hash : ''\)/, '缺指纹的老映射按 id 是否一致决定基线')
+  assert.match(HUB, /personaHashAssumed: !entry\.personaHash && sameId/, '基线是猜的要标 assumed，自检不能当已知')
 })

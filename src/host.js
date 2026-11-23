@@ -128,10 +128,24 @@ export function apply(ctx) {
   // 扩展模块能整段改写人格和规则（同步：提示词变量不能等）
   const rewrite = (event, text, ...args) => { const r = mods ? mods.filterSync(event, text, ...args) : text; return typeof r === 'string' ? r : r === null ? '' : text }
 
-  // 提示词变量：动态感知当前会话（群聊/私聊专属人设卡）
+  // 提示词变量：动态感知当前会话（群聊/私聊专属人设卡）。
+  //
+  // 这里回落到全局卡是**最后一道保险**，不是常态：一旦反查不到「这个会话属于哪个聊天」，
+  // 分群/群默认人设就整轮失效，而且旧实现连一行日志都不留 —— 用户看到的就是
+  // 「分群人设配了没用」（2026-11-23 排查）。所以回落要留痕，且每个会话只报一次。
+  const personaFallbackWarned = new Set()
+  function notePersonaFallback(sid, why) {
+    const key = String(sid || 'no-session')
+    if (personaFallbackWarned.has(key)) return
+    personaFallbackWarned.add(key)
+    const line = `人设回落全局卡：会话 ${key.slice(-8)} ${why}｜该会话的分群/群默认人设本次不生效`
+    logger?.warn?.(line)
+    log?.warn?.(line)
+  }
+
   function resolvePersonaForContext(context) {
+    const sid = context?.agent?.session?.id || context?.session?.id || context?.sessionId
     try {
-      const sid = context?.agent?.session?.id || context?.session?.id || context?.sessionId
       if (sid && hub?.chatOfSession) {
         const chatKey = hub.chatOfSession(sid)
         if (chatKey) {
@@ -144,11 +158,17 @@ export function apply(ctx) {
           if (want) {
             const p = readPersona(want)
             if (p?.body) return rewrite('persona', p.body)
+            notePersonaFallback(sid, `按 ${chatKey} 选中的卡 ${want} 读不到正文`)
+          } else {
+            notePersonaFallback(sid, `按 ${chatKey} 没选出人设卡`)
           }
-        }
+        } else notePersonaFallback(sid, '反查不到它属于哪个聊天（会话映射缺失）')
+      } else if (!hub?.chatOfSession) {
+        notePersonaFallback(sid, '当前核心没有 chatOfSession 反查接口')
       }
     } catch (e) {
       logger?.debug?.(`按会话解析人设变量失败：${e?.message || e}`)
+      notePersonaFallback(sid, `解析时出错：${e?.message || e}`)
     }
     return rewrite('persona', currentPersonaText(getConfig().persona.current))
   }
