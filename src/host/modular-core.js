@@ -581,7 +581,7 @@ export function createModularCore({
     },
     resolveAgent: (sessionId) => ctxGet('sessionController')?.resolveAgent?.(sessionId),
     onEvent: (listener) => dsh.on?.('session/event', listener),
-    archiveSession: (sessionId) => ctxGet('workspaceRegistry')?.archiveSession?.(sessionId),
+    archiveSession: (sessionId, opts = {}) => (ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry)?.archiveSession?.(sessionId, { stopActivity: true, ...opts }),
     beforeTurn: async (agent, sessionId, { key, noTools }) => {
       const target = await resolveTarget({ chatId: key, kind: 'system', noTools })
       if (target) await applySessionModel(agent, sessionId, target)
@@ -1914,8 +1914,8 @@ export function createModularCore({
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
     try {
-      const reg = ctxGet('workspaceRegistry')
-      Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
+      const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+      Promise.resolve(reg?.archiveSession?.(entry.sessionId, { stopActivity: true })).catch(() => {})
     } catch { /* 归档失败不影响重置 */ }
     cleanupSession(entry.sessionId)
     participants.clear(entry.sessionId)
@@ -1961,6 +1961,50 @@ export function createModularCore({
       if (resetChat(chatKey)) changed.push({ chatId: chatKey, from: recorded || had || '', to: want || '' })
     }
     return changed
+  }
+
+  /**
+   * 重置所有系统会话并扫描 QQ 工作区中的历史孤儿会话，统一加入归档。
+   */
+  function resetAllSessions() {
+    let archivedCount = 0
+    try {
+      const n = systemTurns.resetSessions?.() || 0
+      archivedCount += n
+    } catch {}
+
+    try {
+      const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+      if (reg?.archiveSession) {
+        const cfg = getConfig()
+        const rootDir = workspaceDirOf(cfg)
+        const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+        const normRoot = norm(rootDir)
+        const workspaces = (reg.list?.() || []).filter((w) => {
+          const p = norm(w.path)
+          return p === normRoot || p.startsWith(normRoot + '/') || p.startsWith(normRoot + '\\')
+        })
+        const archived = new Set(reg.archivedSessionIds || [])
+        for (const ws of workspaces) {
+          for (const sid of (ws.sessionIds || [])) {
+            if (!archived.has(sid)) {
+              try {
+                Promise.resolve(reg.archiveSession(sid, { stopActivity: true })).catch((err) => {
+                  log?.debug?.(`归档工作区残留会话失败（${sid}）：${err?.message || err}`)
+                })
+                archived.add(sid)
+                archivedCount++
+              } catch (err) {
+                log?.debug?.(`归档工作区残留会话失败（${sid}）：${err?.message || err}`)
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      log?.debug?.(`扫描工作区孤儿会话失败：${err?.message || err}`)
+    }
+    return archivedCount
   }
 
   function knownChats() {
@@ -2094,7 +2138,7 @@ export function createModularCore({
     syncAllModels,
     sessions,
     knownChats,
-    resetSessions: () => systemTurns.resetSessions(),
+    resetSessions: resetAllSessions,
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,

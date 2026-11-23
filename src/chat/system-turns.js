@@ -84,7 +84,7 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
         // 随后旧任务产生的 assistant/message 与 turn/end 会被新重试的监听捕获，导致旧答案兑现新请求。
         // 因此超时必须废弃该 session 映射，让下一次请求创建隔离的新会话。
         sessions.delete(key)
-        try { Promise.resolve(archiveSession?.(sessionId)).catch((error) => log?.debug?.(`归档超时系统会话失败：${error?.message || error}`)) } catch (error) { log?.debug?.(`归档超时系统会话失败：${error?.message || error}`) }
+        try { Promise.resolve(archiveSession?.(sessionId, { stopActivity: true })).catch((error) => log?.debug?.(`归档超时系统会话失败：${error?.message || error}`)) } catch (error) { log?.debug?.(`归档超时系统会话失败：${error?.message || error}`) }
         state.cleanup()
         reject(new Error('等太久了'))
       }, Math.max(1, Number(timeoutMs) || 180000))
@@ -110,7 +110,7 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
     const entries = [...sessions.values()]
     sessions.clear()
     for (const entry of entries) {
-      try { Promise.resolve(archiveSession?.(entry.sessionId)).catch((error) => log?.debug?.(`归档系统会话失败：${error?.message || error}`)) } catch (error) { log?.debug?.(`归档系统会话失败：${error?.message || error}`) }
+      try { Promise.resolve(archiveSession?.(entry.sessionId, { stopActivity: true })).catch((error) => log?.debug?.(`归档系统会话失败：${error?.message || error}`)) } catch (error) { log?.debug?.(`归档系统会话失败：${error?.message || error}`) }
     }
     return entries.length
   }
