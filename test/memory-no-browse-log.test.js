@@ -30,6 +30,6 @@ test('抖音：想法/知识条目带出处标题，且想法条目是 ephemeral
 })
 
 test('她自己的作品（发帖、画图、唱歌、签名、头像）照旧记', () => {
-  assert.match(read('src/heybox/site.js'), /我在小黑盒发了一帖/)
+  // 小黑盒发帖记录经历已搬到商店模块（modules/heybox/lib/site.mjs）。
   assert.match(read('src/modules/imagegen/index.js'), /按提示词画了一张图/)
 })

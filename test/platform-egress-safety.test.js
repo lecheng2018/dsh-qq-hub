@@ -56,16 +56,9 @@ test('空间评论：正常评论 → 计数、记记忆、真发', async () => 
 })
 
 // ---- 结构锁：closure 内部的安全接线（行为级驱动成本高，按仓内 outbound-guard 惯例锁源码） ----
-const HEYBOX = SRC('../src/heybox/site.js')
+// 小黑盒发帖配图：魔数与目录校验行为级用例已随实现搬到商店模块（modules/heybox/module.test.mjs）。
 const DOUYIN = SRC('../src/douyin/duty.js')
 const PROFILE = SRC('../src/modules/profile/index.js')
-
-test('小黑盒发帖配图：先校验目录与图片魔数，再读文件入段', () => {
-  assert.match(HEYBOX, /function isImageBuffer\(/, '应有图片魔数校验')
-  assert.match(HEYBOX, /function imagePathAllowed\(/, '应有目录限制')
-  assert.match(HEYBOX, /if \(!imagePathAllowed\(p\)\)/, '配图循环先查目录')
-  assert.match(HEYBOX, /if \(!isImageBuffer\(buf\)\)/, '配图循环再查魔数')
-})
 
 test('抖音：公开评论经 doWrite 过身份闸，分享私信过身份闸', () => {
   assert.match(DOUYIN, /import \{ guardOutbound \} from '\.\.\/chat\/identity-guard\.js'/, '应引入身份闸')
