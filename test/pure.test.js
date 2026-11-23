@@ -27,6 +27,39 @@ test('parseReply 单个备忘样式标签只是正文，两个标签才按内部
   assert.equal(r.items.map((x) => x.value).join('\n'), '她问：\n【目的】是什么意思？')
 })
 
+// 2026-11-23 线上事故：私聊里连着发出两条只有六个字的「【内部备忘】」。
+// 模型把提示词要求的「内部备忘」小标题当成一条独立气泡（前面还带 |||），
+// stripInternalMemo 只按行首标签截断 → 截断点是【目的】，小标题留在正文尾巴上，
+// 按 ||| 分条后单独发给了主人。下面四条钉住"小标题不许出现在任何气泡里"。
+test('parseReply 切掉【内部备忘】小标题，不单独发出去（||| 分隔的真机形状）', () => {
+  const r = parseReply('刚刷到一个 2500 块装黑色海景房的视频，槽点挺多。|||【内部备忘】\n【目的】分享装机\n【需求】分享\n【状态】完成\n【待续】无')
+  assert.equal(r.silent, false)
+  assert.deepEqual(r.items.map((x) => x.value), ['刚刷到一个 2500 块装黑色海景房的视频，槽点挺多。'])
+})
+
+test('parseReply 切掉换行分隔的【内部备忘】小标题', () => {
+  const r = parseReply('昨晚拷固件时老弹审批弹窗，我琢磨了一下破甲插件。\n\n【内部备忘】\n【目的】聊审批\n【状态】完成')
+  assert.deepEqual(r.items.map((x) => x.value), ['昨晚拷固件时老弹审批弹窗，我琢磨了一下破甲插件。'])
+})
+
+test('parseReply 认加粗 / 冒号写法的备忘小标题', () => {
+  const bold = parseReply('正文。|||**【内部备忘】**\n内容')
+  assert.deepEqual(bold.items.map((x) => x.value), ['正文。'])
+  const colon = parseReply('正文。\n内部备忘：\n【目的】x\n【状态】完成')
+  assert.deepEqual(colon.items.map((x) => x.value), ['正文。'])
+})
+
+test('parseReply 只有备忘（小标题 + 标签）时沉默；只写了小标题也不发', () => {
+  assert.equal(parseReply('【内部备忘】\n【目的】无\n【状态】跳过').silent, true)
+  // 小标题后面什么都没写：切完只剩正文，绝不能把「【内部备忘】」本身当正文发出去
+  assert.deepEqual(parseReply('正文一句。|||【内部备忘】').items.map((x) => x.value), ['正文一句。'])
+})
+
+test('parseReply 漏写 <inner> 的独白标签（意图/情感/备忘）也不外发', () => {
+  const r = parseReply('正文。\n【意图】接话\n【情感】轻松\n【备忘】他说明天发链接')
+  assert.deepEqual(r.items.map((x) => x.value), ['正文。'])
+})
+
 test('parseReply 识别语音和表情标记', () => {
   const r = parseReply('哼 谁要你夸 <sticker:卖萌>|||<voice>晚安啦</voice>')
   assert.deepEqual(r.items, [
