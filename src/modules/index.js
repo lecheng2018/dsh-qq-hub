@@ -2,9 +2,10 @@
 //
 // 已上商店的模块（不再内置，从插件面板「扩展 → 市场」按需安装）：
 //   bili / douyin / heybox / multi-parser / qzone-social / delivery-inbox
-// douyin / qzone-social 的实现库仍留在包内（src/douyin、src/features/qzone-social.js），供商店模块经 api.lib 引用。
-// bili 1.2.0 / heybox 1.7.0 / multi-parser 1.0.2 起实现整包搬进商店模块（dsh-qq-hub-mods），包内不再有 src/bili、src/heybox、src/modules/multi-parser；
-// 它们只用 api.lib 取通用能力（store、llm、img、net、reply、identity-guard 等）。
+// qzone-social 的实现库仍留在包内（src/features/qzone-social.js），供商店模块经 api.lib 引用。
+// bili 1.2.0 / heybox 1.7.0 / multi-parser 1.0.2 / douyin 2.3.0 起实现整包搬进商店模块（dsh-qq-hub-mods），
+// 包内不再有 src/bili、src/heybox、src/modules/multi-parser、src/douyin；
+// 它们只用 api.lib 取通用能力（store、llm、img、net、reply、identity-guard、access 等）。
 //
 // 已移除的模块（1.4.6 曾内置，2026-11-17 按主人要求整体移除）：
 //   flash-transfer / group-files / online-status / social-actions / ark-cards / ai-voice / workspace-files
