@@ -6,7 +6,7 @@
 [![Tests](https://img.shields.io/badge/tests-passing-success)](https://github.com/lecheng2018/dsh-qq-hub/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-当前版本：**v1.4.7-test.20261121.1**（测试版，主干含「断线补收整批被拒」与「Token 配额跨日永久熔断」两个真机修复；正式版仍为 v1.4.6）。自 v1.3.65 或任一 1.4.x-test 升级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 中 1.4.6 的「升级须知（破坏性）」一节（六个内容模块改为「扩展 → 市场」按需安装）；版本历史与全部 test/beta 记录同在 [CHANGELOG.md](CHANGELOG.md)。
+当前版本：**v1.4.9-test.20261123.2**（测试版：刷抖音实现整包搬进商店模块（`douyin` 2.3.0），插件删除包内 `src/douyin/`；正式版仍为 v1.4.6）。自 v1.3.65 或任一 1.4.x-test 升级，请先阅读 [CHANGELOG.md](CHANGELOG.md) 中 1.4.6 的「升级须知（破坏性）」一节（六个内容模块改为「扩展 → 市场」按需安装）；版本历史与全部 test/beta 记录同在 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 它是什么
 
