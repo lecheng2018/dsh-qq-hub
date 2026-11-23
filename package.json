@@ -26,6 +26,8 @@
     "check:client": "node scripts/build-client.mjs --check",
     "check:numbers": "node scripts/check-numbers.mjs",
     "setup:hooks": "node scripts/setup-hooks.mjs",
+    "pii:scan": "node scripts/pii-scan.mjs --tree",
+    "pii:selftest": "node scripts/pii-scan.mjs selftest",
     "prepare": "node scripts/setup-hooks.mjs"
   },
   "dsh": {
