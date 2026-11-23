@@ -76,7 +76,9 @@ function makeEnv () {
 }
 
 function renderPersona () {
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  // PersonaAudit 是 2026-11-23 新增的自检卡片，Persona 里直接引用它 ——
+  // 抽 Persona 源码时必须把它一起带上，否则就是「变量未定义」（这个测试的本来目的）。
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   assert.ok(body, 'client.js 里应该有 Persona 组件')
   const env = makeEnv()
@@ -114,7 +116,7 @@ test('按聊天换人设的两张卡片都在（群 / 私聊）', () => {
 })
 
 test('配置里有分流人设时也能渲染（空 map / 有内容的 map 都不崩）', () => {
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -130,7 +132,7 @@ test('配置里有分流人设时也能渲染（空 map / 有内容的 map 都�
 })
 
 test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没反应」）', () => {
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -190,7 +192,7 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
 })
 
 test('draft 还是 null 时点添加不崩（配置没加载完）', () => {
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -216,7 +218,7 @@ test('draft 还是 null 时点添加不崩（配置没加载完）', () => {
 
 test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打号码', () => {
   // 用户报的：空输入行、不能从已有的私聊/群里选。改成 Select 后必须能列出真实聊天。
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -277,7 +279,7 @@ test('开关用的是 Switch 的 on，不是 value（写错会点了没反应）
 test('一个候选都没有时，「＋ 添加」依然可点、且给出输入框', () => {
   // 用户实际遇到的就是这个：/panel/chats 没数据 → candidates 为空 →
   // 以前按钮 disabled，点了毫无反应。这条守住它。
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -313,7 +315,7 @@ test('一个候选都没有时，「＋ 添加」依然可点、且给出输入�
 test('点「＋ 添加」后必须真的多出一行（渲染读 draft 而不是 st.config）', () => {
   // 用户报的：点了添加什么都没有。根因是渲染读已保存的 st.config，
   // 而按钮改的是 draft，两者脱节 → 新行永远不显示。
-  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona')].filter(Boolean)
+  const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
   const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
@@ -355,7 +357,7 @@ test('手输群号：敲进去、失焦之后不能消失（用户报的「离�
   // 另一个控件的 onChange 随后拿旧快照重建，就把刚填的号抹掉了。
   // 现在全改成 setDraft(prev => ...)，这里按真实调用顺序模拟一遍。
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
-    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+    extractFn('splitPersona'), extractFn('planPersonaRow'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
 
   // draft 与 typing 都要有真状态，否则只能测到「函数被调用过」
@@ -479,7 +481,7 @@ test('「＋ 添加」也用函数式更新（否则会把刚填的群号顶掉�
 
 test('手输清空已有群号时：退回占位行，绝不把原号码留住（避免「03」输入框清空后复活）', () => {
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'),
-    extractFn('splitPersona'), extractFn('planPersonaRow')].filter(Boolean)
+    extractFn('splitPersona'), extractFn('planPersonaRow'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
 
   // 前置：草稿里有一个历史遗留的 '03'

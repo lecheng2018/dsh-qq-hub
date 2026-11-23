@@ -2,7 +2,8 @@
 // 首次运行时把插件自带的人格（personas/*.md）复制过去，之后以数据目录里的为准（面板可编辑）。
 // 当前人格通过 DSH 的提示词变量 {{qq_hub_persona}} 注入到 QQ Hub 三个 preset 的系统提示词最前面。
 
-import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, unlinkSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_CHARACTER_NAME } from './identity-defaults.js'
@@ -104,6 +105,42 @@ export function currentPersonaText(currentId) {
   const p = readPersona(currentId) || (listPersonas()[0] && readPersona(listPersonas()[0].id))
   // 兜底正文也别写死角色名：卡全丢了也要保持「角色名由卡决定」这条契约。
   return p ? p.body : '你是「' + DEFAULT_CHARACTER_NAME + '」，一个住在 QQ 里、说话简短口语化的女孩子。'
+}
+
+// 正文指纹缓存：键是 id，值是 { key, hash }，key 由 mtime+size 组成。
+// 每轮守卫都要问一次「这张卡现在长什么样」，但只在文件真变了才重新算哈希。
+const hashCache = new Map()
+
+/**
+ * 人设正文指纹（sha1 前 12 位）；卡不存在 / 正文为空返回空串。
+ *
+ * 为什么需要它：`{{qq_hub_persona}}` 是**建会话那一刻**渲染进系统提示词的，
+ * 之后 DSH 不会重算。只看 personaId 变没变，改卡正文就永远不生效
+ * （2026-11-23 真机：卡改了半小时，49 个群会话里还是旧版正文）。
+ * 有了指纹，守卫能看出「同一个 id、但正文变了」，该怎么重建就怎么重建。
+ */
+export function personaHash(id) {
+  const sid = safeId(id)
+  if (!sid) return ''
+  const file = join(dir(), `${sid}.md`)
+  let stat = null
+  try { stat = statSync(file) } catch { hashCache.delete(sid); return '' }
+  const key = `${stat.mtimeMs}:${stat.size}`
+  const hit = hashCache.get(sid)
+  if (hit && hit.key === key) return hit.hash
+  let hash = ''
+  try {
+    // 只对正文取指纹：卡片头的 name/tags 改了不该触发重建（正文才是进提示词的那段）。
+    const body = parsePersona(sid, readFileSync(file, 'utf8')).body
+    hash = body ? createHash('sha1').update(body).digest('hex').slice(0, 12) : ''
+  } catch { hash = '' }
+  hashCache.set(sid, { key, hash })
+  return hash
+}
+
+/** 一次拿到「用哪张卡 + 这版正文的指纹」，守卫与诊断共用同一口径。 */
+export function personaTarget(id) {
+  return { id: String(id || ''), hash: personaHash(id) }
 }
 
 /**

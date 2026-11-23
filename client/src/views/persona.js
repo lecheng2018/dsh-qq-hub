@@ -81,6 +81,74 @@ function AiButton({ onClick, empty }) {
   )
 }
 
+/**
+ * 人设生效自检。
+ *
+ * 为什么要放在面板上：人设是**建会话那一刻**渲染进系统提示词的，DSH 之后不重算。
+ * 于是「面板改了」和「模型实际拿到什么」是两回事，用户只能看后者 ——
+ * 以前只能靠翻会话文件才能知道哪个群还挂着旧正文（2026-11-23 排查花了半小时）。
+ * 这里把「预期卡 / 会话里的卡 / 需不需要重建 / 期望值来自哪一层」一次摊开。
+ */
+function PersonaAudit({ toast }) {
+  const [rows, setRows] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = async () => {
+    setBusy(true)
+    const r = await get('/persona/audit')
+    setBusy(false)
+    if (!r.ok) { toast(r.message || '自检没成功', 'err'); return }
+    setRows(r.rows || [])
+  }
+  const rebuild = async () => {
+    if (!confirm('把挂着旧人设的会话归档、下一条消息重新开始？\n（它们的上下文会清空）')) return
+    setBusy(true)
+    const r = await post('/persona/rebuild-stale', { dryRun: false })
+    setBusy(false)
+    toast(r.message || (r.ok ? '好了' : '没成功'), r.ok ? 'ok' : 'err')
+    load()
+  }
+  const levelText = (src) => {
+    if (!src) return ''
+    if (src.level === 'group') return '按群指定'
+    if (src.level === 'private') return '按人指定'
+    if (src.level === 'groupDefault') return src.emptyRow ? '该群那行是空值 → 跟随群默认' : '群默认'
+    if (src.level === 'privateDefault') return src.emptyRow ? '该人那行是空值 → 跟随私聊默认' : '私聊默认'
+    return '跟随全局'
+  }
+  const staleCount = (rows || []).filter((r) => r.stale === true).length
+  return (
+    <Card title="人设生效自检" right={<div className="ab-flex" style={{ gap: 8 }}>
+      <Btn small onClick={load} disabled={busy}>{busy ? '查…' : rows ? '刷新' : '看一下'}</Btn>
+      {rows && staleCount > 0 ? <Btn small kind="danger" onClick={rebuild} disabled={busy}>重建 {staleCount} 个过期会话</Btn> : null}
+    </div>}>
+      <div className="ab-muted ab-small" style={{ marginBottom: 8 }}>
+        人设是在建会话那一刻烧进系统提示词的，之后不会自己重算 —— 所以「面板改了」不等于「模型拿到了」。
+        这里逐聊天列出：按现在的配置**该用哪张卡**、会话里**实际是哪个版本**、下一条消息会不会重建。
+      </div>
+      {!rows ? <div className="ab-muted ab-small">点右上角「看一下」。</div> : (
+        rows.length === 0 ? <div className="ab-muted ab-small">还没有任何会话。</div> : (
+          <div className="ab-table-wrap">
+            <table className="ab-table">
+              <thead><tr><th>聊天</th><th>该用的卡</th><th>会话里固化的</th><th>状态</th><th>期望来自</th></tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.chatId}>
+                    <td>{r.chatId}{r.chatName ? <div className="ab-muted ab-small">{r.chatName}</div> : null}</td>
+                    <td>{r.expected?.name || r.expected?.id || '—'}<div className="ab-muted ab-small">{r.expected?.hash || '（无卡）'}</div></td>
+                    <td>{r.live ? (r.live.id || '—') : <span className="ab-muted">还没有会话</span>}<div className="ab-muted ab-small">{r.live?.hash || ''}</div></td>
+                    <td>{r.stale === null ? <span className="ab-muted">—</span> : r.stale ? <span style={{ color: '#d9534f' }}>旧人设，会重建</span> : <span style={{ color: '#3c9d5d' }}>是这版</span>}</td>
+                    <td className="ab-small">{levelText(r.source)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </Card>
+  )
+}
+
 function Persona({ st, draft, setDraft, toast, reload }) {
   const [list, setList] = useState(st.personas)
   // 「按聊天换人设」里手输号码的暂存：key 是那一行的行标识，值是正在敲的文本。
@@ -147,6 +215,13 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       // 用户明确要求：这里只要输入框，不要选群下拉。
       // 下拉看着方便，实际上既拿不全群（只列聊过的），选中后还会因为
       // 拿旧配置重建 map 把刚填的号码冲掉，不如直接手输来得可靠。
+      // 空值行（添加了但没选卡）：实际会走「默认」，必须在行上说出来，
+      // 否则面板看着配过、模型一直用默认卡（2026-11-23 真机：某个群就是空值行）。
+      const fallbackName = (() => {
+        const defId = mapKey === 'groups' ? pm.groupDefault : pm.privateDefault
+        const hit = list.find((p) => p.id === defId)
+        return hit ? hit.name : ''
+      })()
       const typed = typing[id]
       const shown = typed !== undefined ? typed : cur
       /**
@@ -227,6 +302,9 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           >
             删
           </Btn>
+          {!isNew && !String(cur || '').trim()
+            ? <span className="ab-muted ab-small">没有选卡 → 跟随{(mapKey === 'groups' ? '群' : '私聊')}默认{fallbackName ? `（现=${fallbackName}）` : ''}</span>
+            : null}
         </div>
       )
     })
@@ -328,6 +406,8 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       {specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。')}
       <div style={{ height: 12 }} />
       {specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。')}
+      <div style={{ height: 12 }} />
+      <PersonaAudit toast={toast} />
     </div>
   )
 }
