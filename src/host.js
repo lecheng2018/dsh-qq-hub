@@ -552,6 +552,7 @@ export function apply(ctx) {
 
   effects.installSessionWatcher()
   effects.installWatchdog()
+  effects.installOrphanSweeper()
 
   ctx.effect(() => () => {
     interactions.questions.dispose('插件卸载')

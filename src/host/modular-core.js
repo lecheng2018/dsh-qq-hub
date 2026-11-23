@@ -581,7 +581,7 @@ export function createModularCore({
     },
     resolveAgent: (sessionId) => ctxGet('sessionController')?.resolveAgent?.(sessionId),
     onEvent: (listener) => dsh.on?.('session/event', listener),
-    archiveSession: (sessionId) => ctxGet('workspaceRegistry')?.archiveSession?.(sessionId),
+    archiveSession: (sessionId, opts = {}) => (ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry)?.archiveSession?.(sessionId, { stopActivity: true, ...opts }),
     beforeTurn: async (agent, sessionId, { key, noTools }) => {
       const target = await resolveTarget({ chatId: key, kind: 'system', noTools })
       if (target) await applySessionModel(agent, sessionId, target)
@@ -1915,8 +1915,8 @@ export function createModularCore({
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
     try {
-      const reg = ctxGet('workspaceRegistry')
-      Promise.resolve(reg?.archiveSession?.(entry.sessionId)).catch(() => {})
+      const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+      Promise.resolve(reg?.archiveSession?.(entry.sessionId, { stopActivity: true })).catch(() => {})
     } catch { /* 归档失败不影响重置 */ }
     cleanupSession(entry.sessionId)
     participants.clear(entry.sessionId)
@@ -1962,6 +1962,128 @@ export function createModularCore({
       if (resetChat(chatKey)) changed.push({ chatId: chatKey, from: recorded || had || '', to: want || '' })
     }
     return changed
+  }
+
+  /**
+   * 重置所有系统会话并扫描 QQ 工作区中的历史孤儿会话，统一加入归档。
+   */
+  function resetAllSessions() {
+    let archivedCount = 0
+    try {
+      const n = systemTurns.resetSessions?.() || 0
+      archivedCount += n
+    } catch {}
+
+    try {
+      const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+      if (reg?.archiveSession) {
+        const cfg = getConfig()
+        const rootDir = workspaceDirOf(cfg)
+        const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+        const normRoot = norm(rootDir)
+        const workspaces = (reg.list?.() || []).filter((w) => {
+          const p = norm(w.path)
+          return p === normRoot || p.startsWith(normRoot + '/') || p.startsWith(normRoot + '\\')
+        })
+        const archived = new Set(reg.archivedSessionIds || [])
+        for (const ws of workspaces) {
+          for (const sid of (ws.sessionIds || [])) {
+            if (!archived.has(sid)) {
+              try {
+                Promise.resolve(reg.archiveSession(sid, { stopActivity: true })).catch((err) => {
+                  log?.debug?.(`归档工作区残留会话失败（${sid}）：${err?.message || err}`)
+                })
+                archived.add(sid)
+                archivedCount++
+              } catch (err) {
+                log?.debug?.(`归档工作区残留会话失败（${sid}）：${err?.message || err}`)
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      log?.debug?.(`扫描工作区孤儿会话失败：${err?.message || err}`)
+    }
+    return archivedCount
+  }
+
+  /**
+   * 孤儿会话巡检：把 QQ 工作区里「既不在聊天映射、也不在后台系统会话池」的历史会话归档。
+   *
+   * 典型来源：服务重启后内存里的 `system:<key>` 映射丢了，昨天那批「刷 B 站 / 逛热榜」
+   * 会话就再也没人认领；它们不是聊天，用户也不会去点，只会一直挂在侧栏。
+   * 这里只做**分流**（归档 = 侧栏隐藏，文件与内容都还在，随时能找回）。
+   *
+   * 安全边界（宁可漏扫，绝不误伤正在用的会话）：
+   *   · 只扫 QQ 专属工作区目录下的会话（按 cwd 判定），别的项目会话一概不碰；
+   *   · 跳过活跃映射、系统会话池、当前回合反查表里的会话；
+   *   · 跳过已归档、已置顶（归档会清置顶，视为用户显式保留）、空会话（草稿）；
+   *   · 跳过仍在跑（running）的会话与子智能体会话；
+   *   · 闲置不足 idleHours 的会话不动——刚建/刚用过的会话有足够安全垫。
+   *
+   * @param {{idleHours?:number, maxPerPass?:number, now?:number}} [options]
+   * @returns {Promise<{scanned:number, archived:number, skipped:number}>}
+   */
+  async function sweepOrphanSessions(options = {}) {
+    const result = { scanned: 0, archived: 0, skipped: 0 }
+    try {
+      const ctrl = ctxGet('sessionController')
+      const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
+      if (typeof ctrl?.list !== 'function' || typeof reg?.archiveSession !== 'function') return result
+      const cfg = getConfig()
+      const idleHours = Math.max(1, Number(options.idleHours ?? cfg?.orphanSweep?.idleHours) || 6)
+      const maxPerPass = Math.max(1, Math.floor(Number(options.maxPerPass ?? cfg?.orphanSweep?.maxPerPass) || 20))
+      const now = Number(options.now) || Date.now()
+      const cutoff = now - idleHours * 3600_000
+
+      const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+      const normRoot = norm(workspaceDirOf(cfg))
+      const inScope = (p) => {
+        const v = norm(p)
+        return Boolean(v) && (v === normRoot || v.startsWith(`${normRoot}/`) || v.startsWith(`${normRoot}\\`))
+      }
+
+      const live = new Set()
+      for (const entry of Object.values(registry.snapshot?.() || {})) {
+        const sid = String(entry?.sessionId || '')
+        if (sid) live.add(sid)
+      }
+      for (const sid of systemTurns.liveSessionIds?.() || []) live.add(String(sid))
+      for (const sid of activeChatBySessionId.keys()) live.add(String(sid))
+
+      const archived = new Set((reg.archivedSessionIds || []).map(String))
+      const pinned = new Set((reg.pinnedSessionIds || []).map(String))
+
+      const listed = await ctrl.list({})
+      const items = Array.isArray(listed?.items) ? listed.items : []
+      for (const row of items) {
+        const sid = String(row?.sessionId || '')
+        if (!sid) continue
+        result.scanned++
+        if (archived.has(sid) || live.has(sid) || pinned.has(sid)) { result.skipped++; continue }
+        if (row.running === true) { result.skipped++; continue }
+        if (row.blank === true) { result.skipped++; continue }
+        if (row.origin === 'subagent' || row.parentSessionId) { result.skipped++; continue }
+        // cwd 缺失时不猜：宁可漏扫，也不把别的工作区的会话当成 QQ 孤儿
+        if (!inScope(row.cwd)) { result.skipped++; continue }
+        if (Number(row.updatedAt) > cutoff) { result.skipped++; continue }
+        if (result.archived >= maxPerPass) break
+        try {
+          await reg.archiveSession(sid, { stopActivity: true })
+          archived.add(sid)
+          result.archived++
+          debug(`孤儿会话巡检：已归档 ${sid}`)
+        } catch (error) {
+          result.skipped++
+          log?.debug?.(`孤儿会话巡检归档失败（${sid}）：${error?.message || error}`)
+        }
+      }
+      if (result.archived) log.info(`孤儿会话巡检：归档了 ${result.archived} 个历史残留会话（闲置超过 ${idleHours} 小时）`)
+    } catch (error) {
+      log?.debug?.(`孤儿会话巡检失败：${error?.message || error}`)
+    }
+    return result
   }
 
   function knownChats() {
@@ -2095,7 +2217,8 @@ export function createModularCore({
     syncAllModels,
     sessions,
     knownChats,
-    resetSessions: () => systemTurns.resetSessions(),
+    resetSessions: resetAllSessions,
+    sweepOrphanSessions,
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     resetChat,
