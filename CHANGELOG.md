@@ -1,5 +1,35 @@
 # 更新记录
 
+## Unreleased · 同回合两张一样的表情：正文被覆盖 + 工具直发与 `<sticker:>` 重复（2026-11-23）
+
+**现象（真机 15:01，群 900000001）**：她连发两张一模一样的表情，一个字都没有。群友追问
+「你为什么发两次」，她只能回「手滑 发完才看见」。台账里两条纯 `image` 记录
+（`contentChars: 0`），第二条只有 mention 的空格占位。
+
+**根因有两层**：模型在**同一步**里写了正文、又调了 `qq_send_sticker`（工具立即直发一张表情），
+下一步收尾只补 `<sticker:无语>`。
+
+1. **正文被覆盖**：`modular-core` 取回复文本时只保留**最后一条** `assistant/message` 的 text
+   （`lastText = t`），上一步写好的「就写点后端 天天看日志」被覆盖；最终 reply 只剩一个控制标记，
+   `parseReply` 解出单条 sticker —— 正文整个消失。
+2. **两条表情通路互不相识**：工具直发走 `outbound.sendSticker`，正文走 `<sticker:…>` 协议，
+   同一张就发了两遍。
+
+**改法**：
+
+- `src/host/modular-core.js`：按 step 累积本回合文本（`stepTexts`，随 `turn` 变化重置）。
+  回合结束时，若末步文本用 `parseReply` 解析后**没有人话**（只有 `<sticker:…>` / `<poke>` / 图片），
+  就回退到本回合上一条带人话的步，拼成 `正文\n控制标记` 再交给投递层。末步有人话时行为不变，
+  中途的过程旁白（「我先翻一下日志」）也不会跟着发出去。
+- `src/chat/turn-stickers.js`（新增）：按 chatKey 记「本回合已经真的发出去的表情 md5」
+  （只在拿到回执后记）。`outbound` 的 `sendSticker` / `sendMixed` 负责入账，回合开始与投递结束各清一次。
+- `src/chat/reply-delivery.js`：投递前把正文里与本回合已直发表情**同 md5** 的条目摘掉；
+  摘空了就整轮不投递（`opts.stickersSentThisTurn` 不传时行为完全不变，后台/系统回合不受影响）。
+
+**测试**：`m4-modular-core` 新增四条（末步只剩控制标记时正文回来；末步有人话时不带上一步旁白；
+工具直发那张正文不再重复发；下一回合清账后同一张照常能发）、`reply-delivery` 四条、
+`turn-stickers` 四条、`outbound-sticker-accounting` 两条。全量 `npm test` 2558 pass / 0 fail / 4 skipped。
+
 ## Unreleased · fix 私聊冒出只有六个字的「【内部备忘】」（2026-11-23）
 
 **现象（真机 10:47 与 12:36，主人私聊）**：正文之后紧跟着单独一条消息，内容只有 `【内部备忘】`；
