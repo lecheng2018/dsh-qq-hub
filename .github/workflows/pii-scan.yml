@@ -1,0 +1,49 @@
+name: PII Scan
+
+# 2026-11-23：全仓审计发现注释 / CHANGELOG / 测试夹具里写死了十几个真实 QQ 群号与 QQ 号，
+# 在公开历史里躺了三周。这道门禁对每个 PR 跑仓库自带的零依赖扫描器（scripts/pii-scan.mjs），
+# 与本地 pre-push 钩子同一份规则。先自检再扫：坏掉的扫描器会给出假的「干净」。
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'refactor/**'
+      - 'backup/**'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # 需要完整历史：--range 要能算出 PR 相对基线分支的新增行与提交信息
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Scanner Self-Test
+        run: node scripts/pii-scan.mjs selftest
+
+      - name: Scan Whole Tree
+        run: node scripts/pii-scan.mjs --tree
+
+      - name: Determine Incoming Range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "spec=origin/${{ github.base_ref }}..HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "spec=${{ github.event.before }}..HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Scan Incoming Commits (diff + messages)
+        run: node scripts/pii-scan.mjs git --range "${{ steps.range.outputs.spec }}"

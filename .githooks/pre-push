@@ -31,16 +31,43 @@ cd "$root"
 # ---------------------------------------------------------------------------
 # ① PII / 密钥门禁
 # ---------------------------------------------------------------------------
-# 扫描器位置可用 PII_SCAN 覆盖；找不到就跳过这一道（不阻断 push，因为这是
-# 本机便利工具而非仓库依赖 —— 但会明确提示，免得以为它跑过了）。
+# 扫描器优先级：① PII_SCAN 指定/默认的外部 pii-guard 扫描器（NAS 上那份）；
+# ② 找不到时回落到仓库自带的 scripts/pii-scan.mjs（零依赖，Node 即可，与 CI 同一份规则）。
+# 2026-11-23 之前找不到就直接「跳过」—— 结果这道门禁在开发机上从来没跑过，
+# 十几个真实群号/QQ 号就这样进了公开历史。
 PII_SCAN="${PII_SCAN:-/vol2/@appshare/Harness/.dsh/skills/pii-guard/scripts/pii_scan.py}"
 PII_SELFTEST="${PII_SELFTEST:-$(dirname "$PII_SCAN")/selftest.py}"
 PII_PYTHON="${PII_PYTHON:-python3}"
+PII_NODE="${PII_NODE:-node}"
 
+pii_kind=""
 if [ -f "$PII_SCAN" ]; then
+  pii_kind=python
+elif [ -f "$root/scripts/pii-scan.mjs" ] && command -v "$PII_NODE" >/dev/null 2>&1; then
+  pii_kind=node
+fi
+
+pii_selftest() {
+  if [ "$pii_kind" = python ]; then
+    [ -f "$PII_SELFTEST" ] || return 0
+    "$PII_PYTHON" -I "$PII_SELFTEST"
+  else
+    "$PII_NODE" "$root/scripts/pii-scan.mjs" selftest
+  fi
+}
+
+pii_run() {
+  if [ "$pii_kind" = python ]; then
+    "$PII_PYTHON" -I "$PII_SCAN" git "$@"
+  else
+    "$PII_NODE" "$root/scripts/pii-scan.mjs" git "$@"
+  fi
+}
+
+if [ -n "$pii_kind" ]; then
   # 自检前置：扫描器本身坏了的时候，它会给出「干净」的假结论。
-  if [ -f "$PII_SELFTEST" ] && [ "${PII_SKIP_SELFTEST:-0}" != "1" ]; then
-    if ! "$PII_PYTHON" -I "$PII_SELFTEST" >/tmp/pii-selftest.out 2>&1; then
+  if [ "${PII_SKIP_SELFTEST:-0}" != "1" ]; then
+    if ! pii_selftest >/tmp/pii-selftest.out 2>&1; then
       echo "" >&2
       echo "pre-push: PII 扫描器自检未通过，已拦下这次 push。" >&2
       echo "  一个坏掉的扫描器会给出「干净」的假结论，所以这里宁可拦下。" >&2
@@ -74,7 +101,7 @@ if [ -f "$PII_SCAN" ]; then
     else
       range="--range ${remote_sha}..${local_sha}"
     fi
-    if ! "$PII_PYTHON" -I "$PII_SCAN" git $range; then pii_fail=1; fi
+    if ! pii_run $range; then pii_fail=1; fi
   done
   if [ "$pii_fail" -ne 0 ]; then
     echo "" >&2
@@ -84,7 +111,7 @@ if [ -f "$PII_SCAN" ]; then
     exit 1
   fi
 else
-  echo "pre-push: 未找到 PII 扫描器 $PII_SCAN，跳过这一道（可用 PII_SCAN 指定）。" >&2
+  echo "pre-push: 未找到 PII 扫描器（$PII_SCAN 与 scripts/pii-scan.mjs 都不可用），跳过这一道。" >&2
 fi
 
 # ---------------------------------------------------------------------------
