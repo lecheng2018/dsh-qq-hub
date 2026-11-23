@@ -244,14 +244,39 @@ export function extractAndStripInnerMonologue(text) {
   }
 }
 
-/** purpose 的结构化内部备忘只供状态机消费，不能进入 QQ 或 bot 聊天流水。 */
+/** 内部备忘块的边界：行首、换行，或者模型把备忘当成一条气泡时的 `|||` 分隔符。 */
+const MEMO_BOUNDARY = String.raw`(?:^|\n|\|\|\|)`
+/** 备忘块的小标题：`【内部备忘】` / `【备忘】` / `内部备忘：`（允许加粗与行首缩进）。 */
+const MEMO_HEADER = new RegExp(`${MEMO_BOUNDARY}([ \\t]*(?:\\*\\*|__)?[ \\t]*(?:[【\\[]\\s*(?:内部)?备忘\\s*[】\\]]|内部备忘\\s*[：:]))`)
+/** 备忘块里的结构化标签。`备忘`/`意图`/`情感`/`闭环`/`顺承前情` 是心智独白那套，
+ *  模型漏写 `<inner>` 标签时这些行会直接露在正文里，口径要一起收。 */
+const MEMO_LABELS = new RegExp(`${MEMO_BOUNDARY}\\s*(?:\\*\\*|__)?\\s*[【\\[]\\s*(目的|需求|情绪|情感|类型|状态|待续|意图|闭环|备忘|顺承前情)\\s*[】\\]]`, 'g')
+
+/**
+ * purpose / 心智独白的结构化内部备忘只供状态机消费，不能进入 QQ 或 bot 聊天流水。
+ *
+ * 两种形态都要认，缺一个就会漏发（线上事故 2026-11-23，私聊连发两条只有六个字的「【内部备忘】」）：
+ * ① **小标题行**：purpose 提示词要求「发完在回合最后另起一段写『内部备忘』」，模型常把它当一条独立
+ *    气泡输出（前面还带 `|||`）。只按下面的标签截断时，截断点是第一个标签（`【目的】`），小标题就留在了
+ *    正文尾巴上，按 `|||` 分条后变成单独一条消息发给主人。
+ * ② **行首标签**：没有小标题时按 `【目的】【需求】…` 兜底；至少命中两个才截断——单个标签可能只是正常
+ *    行文（「她问：【目的】是什么意思？」），误删比漏发更烦人。
+ */
 export function stripInternalMemo(text) {
   const s = String(text ?? '')
-  const labels = /(^|\n)\s*[【\[]\s*(目的|需求|情绪|类型|状态|待续)\s*[】\]]/g
-  const first = labels.exec(s)
-  if (!first) return s
-  const second = labels.exec(s)
-  return second ? s.slice(0, first.index) : s
+  // ① 见到小标题就整段切掉：它是备忘块的开头，后面写的什么都不是要发的话。
+  const header = MEMO_HEADER.exec(s)
+  const headerCut = header ? header.index + header[0].length - header[1].length : -1
+  // ② 没有小标题时按行首标签兜底（正则带 g，每次从头扫，避免 lastIndex 串话）。
+  MEMO_LABELS.lastIndex = 0
+  const first = MEMO_LABELS.exec(s)
+  const second = first ? MEMO_LABELS.exec(s) : null
+  MEMO_LABELS.lastIndex = 0
+  const labelCut = second ? first.index : -1
+  // 两处都命中时取更靠前的那个：独白少写了小标题、却把 【意图】【备忘】 一起漏出来时，
+  // 小标题切点比标签切点更靠后，只按小标题切会把前半段独白留在正文里。
+  const cut = headerCut < 0 ? labelCut : (labelCut < 0 ? headerCut : Math.min(headerCut, labelCut))
+  return cut < 0 ? s : s.slice(0, cut)
 }
 
 function protectExamples(text) {
