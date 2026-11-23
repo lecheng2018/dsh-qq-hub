@@ -11,6 +11,7 @@ const item = { md5: 'abcdef123456', name: '笑' }
 function fixture(requestResult) {
   const used = []
   const stats = []
+  const noted = [] // 本回合表情台账（chat/turn-stickers.js）
   const outbound = createOutbound({
     getConfig: () => ({ stickers: { enabled: true } }),
     log,
@@ -26,8 +27,9 @@ function fixture(requestResult) {
     interaction: {},
     hooks: {},
     onStats: (kind) => stats.push(kind),
+    turnStickers: { note: (chatId, md5) => noted.push([chatId, md5]) },
   })
-  return { outbound, used, stats }
+  return { outbound, used, stats, noted }
 }
 
 test('表情拿到网关回执：返回回执、记一次使用与统计', async () => {
@@ -52,4 +54,15 @@ test('表情状态未知：同样按未送达处理，不记使用/统计', asyn
   assert.equal(receipt, false)
   assert.deepEqual(used, [])
   assert.ok(!stats.includes('stickers'))
+})
+test('表情真的发出去才记本回合台账：同回合正文里重复的那张据此去重', async () => {
+  const { outbound, noted } = fixture({ state: 'sent', raw: { message_id: 43 } })
+  await outbound.sendSticker('group:7', item)
+  assert.deepEqual(noted, [['group:7', item.md5]], '成功发送 → 记账（chatId + md5）')
+})
+
+test('表情没发出去不记台账：不能把没发的算成「本轮发过」', async () => {
+  const { outbound, noted } = fixture({ state: 'failed', reason: '网关拒收' })
+  await outbound.sendSticker('group:7', item)
+  assert.deepEqual(noted, [])
 })

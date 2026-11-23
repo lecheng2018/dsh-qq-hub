@@ -210,6 +210,21 @@ export function createReplyDelivery({
         log.warn('扩展模块改写回复出错：', error.message)
       }
     }
+    // 同回合表情去重（真机 2026-11-23 15:01，群 955741432）：`qq_send_sticker` 是工具**立即直发**，
+    // 模型随后又按回复协议写了 `<sticker:同一张>` —— 两条通路各发一次，群里就连着两张一样的表情。
+    // 宿主把「本回合这个聊天已经直发过的表情 md5」传进来，这里把正文里重复的那张摘掉。
+    const alreadyStickers = typeof opts.stickersSentThisTurn === 'function' ? opts.stickersSentThisTurn() : null
+    if (alreadyStickers && alreadyStickers.size) {
+      const before = items.length
+      items = items.filter((item) => {
+        if (item.kind !== 'sticker') return true
+        const hit = item.value && typeof item.value === 'object' ? item.value : stickers?.match?.(item.value)
+        return !(hit && alreadyStickers.has(String(hit.md5)))
+      })
+      if (items.length !== before) log.info(`${chatId}：本轮已经直发过这张表情，正文里重复的那张不再发`)
+      // 整轮只剩这张重复表情：这轮本来就发过了，不再空跑一趟投递。
+      if (!items.length) return log.info(`${chatId}：重复表情摘掉后没有别的内容，这轮不再投递`)
+    }
     if (needsGroupPacking && items.length > groupLimit) {
       const packed = items.slice()
       const packable = (item) => ['text', 'voice', 'image', 'sticker', 'mixed'].includes(item.kind)
