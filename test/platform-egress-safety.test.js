@@ -57,14 +57,8 @@ test('空间评论：正常评论 → 计数、记记忆、真发', async () => 
 
 // ---- 结构锁：closure 内部的安全接线（行为级驱动成本高，按仓内 outbound-guard 惯例锁源码） ----
 // 小黑盒发帖配图：魔数与目录校验行为级用例已随实现搬到商店模块（modules/heybox/module.test.mjs）。
-const DOUYIN = SRC('../src/douyin/duty.js')
+// 抖音的身份闸结构锁已随实现搬到商店模块（modules/douyin/douyin.test.mjs）。
 const PROFILE = SRC('../src/modules/profile/index.js')
-
-test('抖音：公开评论经 doWrite 过身份闸，分享私信过身份闸', () => {
-  assert.match(DOUYIN, /import \{ guardOutbound \} from '\.\.\/chat\/identity-guard\.js'/, '应引入身份闸')
-  assert.match(DOUYIN, /if \(meta\.text && !guard\(meta\.text/, 'doWrite 评论正文过闸')
-  assert.match(DOUYIN, /if \(!guard\(say, '私信'\)\)/, '分享私信过闸')
-})
 
 // B 站「被拦 / 试运行不计数」的行为级用例跟着实现搬到了商店模块（modules/bili/duty.test.mjs）。
 test('QQ 换头像：网址先过 assertPublicUrl 再交给网关', () => {

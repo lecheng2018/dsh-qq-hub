@@ -45,7 +45,7 @@
 | 11 | bili | 1.1.0 | external-service | 发截图/分享到私聊；**B 站评论/点赞/头像/签名** | Cookie、投喂偏好、巡查状态 | bili*.test.js | Module owner: bili |
 | 12 | profile | 1.2.0 | optional | 发头像图；**改 QQ 资料**（昵称/签名/头像，按权限） | 权限配置 | profile*.test.js | Module owner: profile |
 | 13 | contacts | 1.0.0 | core（权限面） | **改私聊/群白名单**；好友申请通知主人并执行通过/拒绝 | 白名单 | contacts.test.js、known-chats | Module owner: contacts |
-| 14 | douyin | 2.0.0 | external-service | 私信/分享到 QQ；**抖音点赞/评论（可 @主人）** | 受控浏览器、Cookie | douyin*.test.js | Module owner: douyin |
+| 14 | douyin | 2.3.0 | external-service | 私信/分享到 QQ；**抖音点赞/评论（可 @主人）** | 受控浏览器、Cookie（实现随商店模块，包内无 `src/douyin`） | 商店模块 `douyin.test.mjs`；插件留 `douyin-config.test.js` | Module owner: douyin |
 | 15 | heybox | 1.0.0 | external-service | 小黑盒点赞/评论/发帖（外部社区） | Cookie | heybox 相关（batch-expand-and-privacy 等） | Module owner: heybox |
 | 16 | token-guardian | 1.0.0 | optional | 无直接发送；压缩会话历史 | 统计/持久化 | token-guardian-*.test.js（5 文件） | Module owner: token-guardian |
 | 17 | complete-guard | 1.0.0 | optional | 无直接发送；截断检测提醒 | 无 | （含于 kernel 链路测试） | Module owner: complete-guard |

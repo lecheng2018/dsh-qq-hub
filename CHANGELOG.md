@@ -1,5 +1,35 @@
 # 更新记录
 
+## 1.4.9-test.20261123.2（2026-11-23）
+
+测试版：刷抖音实现整包搬进商店模块（`douyin` 2.3.0），插件删除包内 `src/douyin/`，包内只保留配置与面板。
+
+- **refactor 抖音实现随商店模块**：删掉 `src/douyin/{duty,site,browser,media}.js` 与对应单测；模块 2.3.0 自带完整实现，只经 `api.lib` / `api.core` 注入通用能力，只走共享浏览器（`api.browser()`）。
+- **升级须知**：先在「扩展 → 市场」把「刷抖音」升到 **2.3.0**，再升级本插件。旧模块壳 + 新插件会找不到实现；新模块 + 旧插件只是不生效。
+
+## Unreleased · 刷抖音实现搬进商店模块，插件删掉 `src/douyin`（2026-11-23）
+
+**这次改的是职责划分**：抖音（`douyin`）早就是商店模块，但实现一直留在包内 `src/douyin/`，
+模块只是壳（`api.lib('douyin/duty.js')`）。这和 B 站 1.2.0、小黑盒 1.7.0、内容解析 1.0.2 的
+处理不一致：模块自己的刷流节奏、上限、私信回复都得改插件，模块也没法单独测。
+
+- **插件删掉 `src/douyin/`**（duty / site / browser / media 四个文件）与对应单测；包内不再有抖音实现。
+- **商店模块 `douyin` 2.3.0 自带完整实现**（`modules/douyin/lib/{duty,site,browser,media}.mjs`），
+  只经 `api.lib` / `api.core` 注入通用能力：`core/store`（数据目录，`douyin.json` 位置不变）、
+  `chat/reply`（静默）、`chat/access`（权限档）、`chat/identity-guard`（出站身份闸）、
+  `api.workspaceDir`（待发视频目录）、`api.browser()`（共享浏览器）。
+- **不再自带专用浏览器**：删掉 legacy 起浏览器 + CDP 副本，只走共享浏览器；没开时明确回
+  「共享浏览器没开」，不再偷偷起第二个进程。`minPluginVersion` 因此提到 `1.4.7-test.20261121.1`
+  （第一个带 `api.browser()` 的版本）。
+- **测试跟着实现走**：解析 / 刷一轮 / 点赞评论 / @主人 / 私信 / 分享 / 验证码停手 / 下载清理 / 接线契约
+  全部迁到模块的 `*.test.mjs`（假 site、假 store，不连外网）；插件只留 `test/douyin-config.test.js`
+  （开关默认关、权限默认仅主人、旧配置迁移、面板保存改不了 secUid）。
+- **发布顺序**：模块 2.3.0 已先上架（tag `douyin-v2.3.0`）；本版插件不再带 `src/douyin/`。
+  旧模块壳 + 新插件会找不到实现，所以插件发布必须在模块之后；反过来「新模块 + 旧插件」只是不生效。
+
+**验证**：插件 `node --test "test/**/*.test.js"` 2487 pass / 0 fail / 4 skipped（共 2491 条），`npm run lint` 0 error；模块仓库 384 pass / 0 fail / 1 skipped，
+`check.mjs`、`quality.mjs` 通过。
+
 ## Unreleased · 同回合两张一样的表情：正文被覆盖 + 工具直发与 `<sticker:>` 重复（2026-11-23）
 
 **现象（真机 15:01，群 900000001）**：她连发两张一模一样的表情，一个字都没有。群友追问
