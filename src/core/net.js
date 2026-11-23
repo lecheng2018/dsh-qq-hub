@@ -9,17 +9,29 @@ function isPrivateIp(ip) {
   if (!ip) return true
   if (ip.includes(':')) {
     const s = ip.toLowerCase()
-    return s === '::1' || s.startsWith('fc') || s.startsWith('fd') || s.startsWith('fe80') || s === '::' || s.startsWith('::ffff:127.') || s.startsWith('::ffff:10.') || s.startsWith('::ffff:192.168.')
+    if (s.startsWith('::ffff:')) {
+      const v4 = s.slice(7)
+      if (isIP(v4) === 4) return isPrivateIp(v4)
+    }
+    return s === '::1' || s.startsWith('fc') || s.startsWith('fd') ||
+      /^fe[89ab]/i.test(s) || s === '::' || s.startsWith('100::') || s.startsWith('2001:db8:')
   }
-  const [a, b] = ip.split('.').map(Number)
-  return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true
+  const [a, b, c] = parts
+  return a === 0 || a === 10 || a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    a >= 224
 }
 
 export async function assertPublicUrl(url) {
   const u = new URL(url)
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('只允许 http / https')
-  const host = u.hostname.replace(/^\[|\]$/g, '')
-  if (host === 'localhost') throw new Error('不允许访问本机地址')
+  const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
+  if (host === 'localhost' || host.endsWith('.localhost')) throw new Error('不允许访问本机地址')
   const ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((x) => x.address)
   if (!ips.length || ips.some(isPrivateIp)) throw new Error('不允许访问内网地址')
 }

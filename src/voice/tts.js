@@ -139,8 +139,10 @@ async function edgeSynth(text, voice, rate, pitch) {
   const { writeFileSync } = await import('node:fs')
   writeFileSync(txt, text, 'utf8')
   const args = ['-I', '-m', 'edge_tts', '--voice', voice, '--file', txt, '--write-media', file]
-  if (rate && rate !== '+0%') args.push(`--rate=${rate}`)
-  if (pitch && pitch !== '+0Hz') args.push(`--pitch=${pitch}`)
+  const SAFE_RATE_RE = /^[+-]?\d+%(?:\s*)$/
+  const SAFE_PITCH_RE = /^[+-]?\d+Hz(?:\s*)$/
+  if (rate && rate !== '+0%' && SAFE_RATE_RE.test(rate)) args.push(`--rate=${rate.trim()}`)
+  if (pitch && pitch !== '+0Hz' && SAFE_PITCH_RE.test(pitch)) args.push(`--pitch=${pitch.trim()}`)
   const r = await run(pyExe(), args, { timeoutMs: 60000 })
   try { unlinkSync(txt) } catch (error) {}
   if (r.code !== 0 || !existsSync(file) || statSync(file).size < 500) {

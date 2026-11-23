@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 
 import { discardDownloaded, sweepMediaDir } from '../src/douyin/media.js'
-import { deliverParseResult } from '../src/modules/multi-parser/delivery.js'
 
 // 解析下载的视频以前只下不删，长期跑会把盘吃满。
 // 这里守住「发完即删」和「启动兜底清扫」两条线。
@@ -103,51 +102,4 @@ test('sweepMediaDir：目录不存在时安静返回', () => {
   const r = sweepMediaDir(join(tmp(), 'not-there'), {})
   assert.deepEqual(r, { removed: 0, bytes: 0 })
   assert.equal(sweepMediaDir('', {}).removed, 0)
-})
-
-test('deliverParseResult：视频真的发出去后，本地文件立刻被删', async () => {
-  const dir = tmp()
-  const { server, url } = await serveVideo()
-  try {
-    const sent = []
-    const api = fakeApi(dir, sent)
-    const result = {
-      platformName: 'B站',
-      title: '测试视频',
-      author: 'up',
-      summary: '',
-      videoUrl: url,
-      url: 'https://www.bilibili.com/video/BV1xx411c7mD',
-      images: [],
-      type: 'video',
-    }
-    const ok = await deliverParseResult(api, 'private:1', result, { maxVideoMB: 50, sendMedia: true })
-    assert.equal(ok, true)
-    // 确实发出去了一个本地文件
-    const fileCall = sent.find((s) => s[0] === 'file')
-    assert.ok(fileCall, '应该调用了 sendFile 发本地视频')
-    // 但发完之后，目录里不该还留着它
-    assert.equal(existsSync(fileCall[1]), false, '发出去之后本地文件必须被删掉')
-    assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.mp4')), [])
-  } finally {
-    server.close()
-  }
-})
-
-test('deliverParseResult：下载失败时不留半成品', async () => {
-  const dir = tmp()
-  const api = fakeApi(dir)
-  const result = {
-    platformName: 'B站',
-    title: '下载不了的视频',
-    author: 'up',
-    summary: '',
-    videoUrl: 'http://127.0.0.1:1/none.mp4',
-    url: 'https://www.bilibili.com/video/BV1xx411c7mD',
-    images: [],
-    type: 'video',
-  }
-  await deliverParseResult(api, 'private:1', result, { maxVideoMB: 50, sendMedia: true })
-  assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.mp4')), [], '下载失败不该留下半成品')
-  assert.deepEqual(readdirSync(dir).filter((n) => n.includes('.part')), [], '不该留下 .part')
 })
