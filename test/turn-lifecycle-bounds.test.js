@@ -103,14 +103,38 @@ const inbound = (n) => ({
  * 「短期定时器一定能撑到执行」这个在慢机器上不成立的假设。
  *
  * 改成显式轮询：每次 setImmediate 让出一次事件循环，直到终态或超时。
+ *
+ * 为什么要按**墙钟**超时、且超时直接失败（2026-11-23 的 CI 红灯）：
+ * 旧实现是「setImmediate 轮 500 次，用完把当前状态原样返回」。500 次 setImmediate
+ * 只花几毫秒，CI 上合流窗口那 1–2 ms 定时器完全可能还没轮到，于是等待方带着
+ * **还没结束**的回合继续往下走；等几个回合同时在飞时，pruneFinishedTurns 明确不淘汰
+ * 非终态回合（那是正确行为），「终态缓存有上限」就偶发地报「实际保留 6」（上限 5）。
+ * 旧实现在这种情况下返回的是非终态，调用方无法区分「已落定」和「没等到」——所以这里
+ * 等不到就直接失败，让错误显式爆在等待处，而不是变成下游一个看不懂的数量断言。
  */
-async function waitTerminal(controller, turnId, { tries = 500 } = {}) {
-  for (let i = 0; i < tries; i++) {
-    const st = controller.getTurn(turnId)?.state
-    if (st === 'succeeded' || st === 'failed' || st === 'cancelled') return st
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled'])
+
+/** 等到 check() 返回真值；先密集轮询拿快路径，之后按墙钟退到 setTimeout 续等。 */
+async function waitFor(check, { timeoutMs = 5000, spins = 100 } = {}) {
+  for (let i = 0; i < spins; i++) {
+    const hit = check()
+    if (hit) return hit
     await new Promise((resolve) => setImmediate(resolve))
   }
-  return controller.getTurn(turnId)?.state
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const hit = check()
+    if (hit) return hit
+    if (Date.now() >= deadline) return null
+    await sleep(1)
+  }
+}
+
+async function waitTerminal(controller, turnId, { timeoutMs = 5000 } = {}) {
+  const stateOf = () => controller.getTurn(turnId)?.state
+  const state = await waitFor(() => (TERMINAL_STATES.has(stateOf()) ? stateOf() : null), { timeoutMs })
+  assert.ok(state, `回合 ${turnId} 在 ${timeoutMs}ms 内没走到终态（当前 ${stateOf()}）`)
+  return state
 }
 
 test('Q05 · 回合落定后剥离 members（不保留整包入站数据）', async () => {
@@ -192,6 +216,35 @@ test('Q05 · 终态回合数量有上限，最老的先淘汰', async () => {
   await controller.dispose()
 })
 
+// CI 2026-11-23 的红灯：同一条用例偶发报「终态缓存必须有上限，实际保留 6」（上限 5）。
+// 根因不在淘汰逻辑（非终态回合本来就不该淘汰），而在等待方「轮数用尽就返回非终态」：
+// 等待方以为回合结束了就 offer 下一个，几个回合同时在飞时上限就守不住。
+// 这条回归把「多个回合同时在飞」做成确定的事（后半段执行拖慢），不靠机器有多卡。
+test('Q05 · 几个回合同时在飞时，等待方必须等到终态再判定上限', async () => {
+  let executed = 0
+  const controller = createTurnController({
+    log,
+    turnCacheMax: 5,
+    merge: { waitMs: 1, maxMs: 2, groupWaitMs: 1, groupMaxMs: 2 },
+    execute: async () => {
+      executed += 1
+      if (executed >= 7) await sleep(20) // 后几个回合落定得慢 → 等待期内必然同时在飞
+      return 'ok'
+    },
+  })
+  const ids = []
+  for (let i = 1; i <= 12; i++) {
+    const r = controller.offer({ ...inbound(i), chatKey: `private:${90200 + i}` })
+    ids.push(r.turnId)
+    // 旧实现对慢机器会在这里返回 'running'/'merging' 就继续往下跑，上限随之失守
+    assert.equal(await waitTerminal(controller, r.turnId), 'succeeded', '每个回合都应真的等到落定')
+  }
+  const alive = ids.filter((id) => controller.getTurn(id) !== null)
+  assert.ok(alive.length <= 5, `终态缓存必须有上限，实际保留 ${alive.length}`)
+  assert.ok(alive.includes(ids.at(-1)), '最新的必须还在')
+  await controller.dispose()
+})
+
 test('Q05 · 淘汰不碰在飞的回合', async () => {
   let release = null
   const gate = new Promise((resolve) => { release = resolve })
@@ -209,9 +262,8 @@ test('Q05 · 淘汰不碰在飞的回合', async () => {
   const slow = controller.offer({ ...inbound(0), eventId: 'slow', chatKey: 'private:90001' })
   // 必须确认慢回合真的进了 running：只睡固定毫秒在慢机器上可能还没进状态，
   // 那样后面「不得淘汰在飞回合」测的是别的东西。
-  for (let i = 0; i < 500 && controller.getTurn(slow.turnId)?.state !== 'running'; i++) {
-    await new Promise((resolve) => setImmediate(resolve))
-  }
+  // 同样按墙钟等，不按 setImmediate 轮数（见文件顶部 waitTerminal 的注释）。
+  await waitFor(() => controller.getTurn(slow.turnId)?.state === 'running', { timeoutMs: 2000 })
   assert.equal(controller.getTurn(slow.turnId)?.state, 'running', '慢回合应已在执行中')
   // 塞满并超过上限的快速回合（各自独立 chatKey，互不排队）
   for (let i = 1; i <= 6; i++) {
