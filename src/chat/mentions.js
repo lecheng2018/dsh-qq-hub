@@ -1,6 +1,8 @@
 // 群里真 @：她写的 <at:QQ号>、<at:名字> 或顺手打的「@名字」，发的时候换成 QQ 的 @ 消息段（对方会收到提醒）。
 // 名字按群成员的群名片、昵称对；对不上或对上好几个人，就原样留成文字，不乱 @。
 
+import { stripInvisible } from './inbound.js'
+
 const AT_TAG = /<at:\s*([^>]{1,30}?)\s*>/g
 
 /** 群成员（get_group_member_list 的结果）→ 名字对照：群名片、昵称，以及去掉括号备注的群名片（「张小明（摸鱼仔）」→「张小明」）。 */
@@ -11,6 +13,11 @@ export function memberNames(members) {
     if (!n) return
     if (!byName.has(n)) byName.set(n, new Set())
     byName.get(n).add(qq)
+    const cleaned = stripInvisible(n).trim()
+    if (cleaned && cleaned !== n) {
+      if (!byName.has(cleaned)) byName.set(cleaned, new Set())
+      byName.get(cleaned).add(qq)
+    }
   }
   for (const m of members || []) {
     const qq = String(m.user_id ?? '')
