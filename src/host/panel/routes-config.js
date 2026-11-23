@@ -113,7 +113,7 @@ export function registerConfigRoutes({
   })
 
   route('/sessions/reset', async () => {
-    const n = hub.resetSessions()
+    const n = await hub.resetSessions()
     return { ok: true, message: n ? `归档了 ${n} 个会话，下一条消息起她会重新开始` : '本来就没有会话' }
   })
 
