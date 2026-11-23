@@ -31,6 +31,7 @@ export function createCurrentHub({
     sessions: modular.sessions,
     knownChats: modular.knownChats,
     resetSessions,
+    sweepOrphanSessions: modular.sweepOrphanSessions,
     markTurnAt: modular.markTurnAt,
     chatOfSession: modular.chatKeyOfSession,
     resetChat: modular.resetChat,

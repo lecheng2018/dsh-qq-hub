@@ -117,6 +117,23 @@ export function registerConfigRoutes({
     return { ok: true, message: n ? `归档了 ${n} 个会话，下一条消息起她会重新开始` : '本来就没有会话' }
   })
 
+  // 手动跑一次孤儿会话巡检（后台每 6 小时会自动跑；这里给个「现在就看一眼」的入口，
+  // 排查「侧栏怎么又多了一堆刷B站」时不用等定时器）
+  route('/sessions/sweep', async () => {
+    if (typeof hub.sweepOrphanSessions !== 'function') {
+      return { ok: false, message: '当前核心没有孤儿会话巡检' }
+    }
+    const r = await hub.sweepOrphanSessions()
+    const n = Number(r?.archived) || 0
+    return {
+      ok: true,
+      ...r,
+      message: n
+        ? `归档了 ${n} 个失联会话（扫描 ${r.scanned} 个，跳过 ${r.skipped} 个）`
+        : `没有需要归档的失联会话（扫描 ${r?.scanned ?? 0} 个，跳过 ${r?.skipped ?? 0} 个）`,
+    }
+  })
+
   // 面板「按聊天换人设」用：把机器人见过的群和私聊列出来，直接选，不用手打号码
   route('/panel/chats', async () => {
     try {
