@@ -216,7 +216,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       // 下拉看着方便，实际上既拿不全群（只列聊过的），选中后还会因为
       // 拿旧配置重建 map 把刚填的号码冲掉，不如直接手输来得可靠。
       // 空值行（添加了但没选卡）：实际会走「默认」，必须在行上说出来，
-      // 否则面板看着配过、模型一直用默认卡（2026-11-23 真机：955741432 就是空值行）。
+      // 否则面板看着配过、模型一直用默认卡（2026-11-23 真机：某个群就是空值行）。
       const fallbackName = (() => {
         const defId = mapKey === 'groups' ? pm.groupDefault : pm.privateDefault
         const hit = list.find((p) => p.id === defId)

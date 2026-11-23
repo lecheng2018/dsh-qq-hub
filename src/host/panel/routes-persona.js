@@ -218,7 +218,7 @@ export function registerPersonaRoutes({
 /**
  * 这个聊天的期望人设是哪一层决定的：专卡 / 群·私聊默认 / 全局。
  * 空值行（面板「添加」了但没选卡）要显式说成「该行是空值，跟随默认」，
- * 否则面板上看着配过、实际一直走默认（2026-11-23 真机：955741432 就是空值行）。
+ * 否则面板上看着配过、实际一直走默认（2026-11-23 真机：某个群就是空值行）。
  */
 export function personaSourceOf (chat, cfg) {
   const p = cfg?.persona || {}
