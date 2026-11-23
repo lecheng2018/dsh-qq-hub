@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseMessageEvent, neutralizeInboundDsl, segmentsOf } from '../src/chat/inbound.js'
+import { parseMessageEvent, neutralizeInboundDsl, segmentsOf, stripInvisible } from '../src/chat/inbound.js'
 
 // ---------------------------------------------------------------------------
 // 基本契约：非法输入 fail-closed，安全输入零改动
@@ -167,4 +167,13 @@ test('segmentsOf：字符串 CQ 码只取纯文字，数组原样返回对象段
   assert.deepEqual(segmentsOf({ message: arr }), [{ type: 'text', data: { text: 'x' } }])
   assert.deepEqual(segmentsOf({}), [])
   assert.deepEqual(segmentsOf(null), [])
+})
+
+test('stripInvisible：清洗零宽空格、控制符和 BOM，普通字符原样保留', () => {
+  assert.equal(stripInvisible('☆\u200B'), '☆')
+  assert.equal(stripInvisible('\uFEFFhello\u200Cworld\u200D'), 'helloworld')
+  assert.equal(stripInvisible('\u200E测试\u200F'), '测试')
+  assert.equal(stripInvisible('纯文本 123 !@#'), '纯文本 123 !@#')
+  assert.equal(stripInvisible(''), '')
+  assert.equal(stripInvisible(null), '')
 })

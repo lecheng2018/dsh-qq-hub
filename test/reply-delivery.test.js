@@ -244,3 +244,30 @@ test('引用目标解析：<reply:…> 收编号/昵称/QQ号；对不上人时�
     assert.equal(sent[0].text, '回你')
   }
 })
+
+test('回归 2026-11-23：群友昵称带零宽字符/不可见字符时，模型写视觉昵称 <reply:☆> 正常命中引用', async () => {
+  const refs = {
+    1: { mid: '888', uid: '1659823172', nick: '☆\u200B' }, // 真实线上事故：群友昵称末尾带 \u200b
+    2: { mid: '889', uid: '1000000001', nick: '\u200E测试\u200F' },
+  }
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:249729644', '<reply:☆>复一次就行了 别把我当复活币使', { refs })
+    assert.equal(sent[0].replyId, '888', '应能容忍 \\u200B 零宽空格，成功匹配群友 ☆')
+    assert.equal(sent[0].text, '复一次就行了 别把我当复活币使')
+  }
+  {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:249729644', '<reply:测试>正常回复', { refs })
+    assert.equal(sent[0].replyId, '889', '应能容忍方向控制符')
+  }
+  // 反向：模型输出偶然带了零宽空格或首尾空格，也能对上纯文本 nick
+  {
+    const cleanRefs = {
+      1: { mid: '999', uid: '1659823172', nick: '☆' },
+    }
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:249729644', '<reply:☆\u200B>带零宽字符的引用', { refs: cleanRefs })
+    assert.equal(sent[0].replyId, '999', '模型输出如果带零宽字符也应能清洗并命中')
+  }
+})

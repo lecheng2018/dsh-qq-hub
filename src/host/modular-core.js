@@ -39,7 +39,7 @@ import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
-import { parseMessageEvent, cardText, neutralizeInboundDsl } from '../chat/inbound.js'
+import { parseMessageEvent, cardText, neutralizeInboundDsl, stripInvisible } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
@@ -842,7 +842,8 @@ export function createModularCore({
     const ownerQQ = String(getConfig().ownerQQ || '')
     // 昵称也是不可信原文：群昵称可被改成 `<inner>…</inner>`，它会拼进 `昵称(uid)：正文`
   // 前缀里，绕过「只中和 segments[].data.text」的全部 4 层。所以这里过一遍中和。
-  const safeNick = (v) => neutralizeInboundDsl(String(v ?? ''))
+  // 同时清洗不可见字符（2026-11-23 事故：群友昵称带 \u200b，导致模型按视觉文本写 <reply:☆> 时严格比对失效）。
+  const safeNick = (v) => stripInvisible(neutralizeInboundDsl(String(v ?? ''))).trim() || String(v ?? '')
   const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${safeNick(x.nick || x.uid)}(${x.uid})`)
     // 群缓冲里的 x.text 是入站原文，同样必须中和（同 §4.3 防线；否则伪造标签从群聊路径进上下文）。
     // 前情引用**挂在发言人那一块的下方**，用 `↳ 转述` 明确标出「这是别人的话」：
