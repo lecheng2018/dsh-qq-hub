@@ -246,7 +246,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
       {external ? null : (
         <Card title="高级" desc="一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。">
           <Row label="机器人 QQ 号">{f.text('botQQ')}</Row>
-          <Row label="控制台端口">{f.num('snowluma.webuiPort', { min: 1, max: 65535 })}</Row>
+          <Row label="控制台端口">{f.num('snowluma.webuiPort', { min: 1, max: 65535, fallback: 5099 })}</Row>
           <Row label="控制台密码" hint="默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）">
             {f.text('snowluma.webuiPassword', { type: 'password', placeholder: draft.snowluma.webuiPasswordSet ? (draft.snowluma.passwordAuto ? '自动管理中（不改就留空）' : '已保存（不改就留空）') : '留空 = 自动' })}
           </Row>

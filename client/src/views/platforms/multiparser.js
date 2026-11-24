@@ -1,5 +1,5 @@
 import { useState, useEffect, Fragment, h } from '../../core/react.js'
-import { Card, Row, Btn } from '../../ui/primitives.js'
+import { Card, Row, Btn, ListInput } from '../../ui/primitives.js'
 import { useField } from '../../ui/form.js'
 import { setPath, getPath } from '../../core/utils.js'
 import { get, post } from '../../core/http.js'
@@ -53,11 +53,15 @@ function MultiParser({ draft, setDraft, toast }) {
         <Row label="群聊里提供解析" hint="关掉后群里发链接完全不管（不发卡片、不下载视频）。只想在私聊用就关掉它。">{f.sw('multiParser.inGroups')}</Row>
         <Row label="私聊里提供解析" hint="关掉后私聊发链接也不解析，只有群聊生效。">{f.sw('multiParser.inPrivate')}</Row>
         <Row label="这些群不解析" hint="群号用逗号或空格隔开。列在这里的群即使「群聊里提供解析」开着也不解析。">
-          <input
-            className="ab-input" style={{ width: '100%' }}
+          {/* 旧写法是受控 input + 每个键都 split/filter 一遍：value 一直由解析结果反推，
+              敲「一群号, 」的逗号和空格当场被吃掉，光标乱跳，根本没法输入第二个群号。
+              换成 ListInput（输入过程保留原文、失焦才解析成列表），与「同类 bot 名单」同款。 */}
+          <ListInput
+            value={(Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : [])}
+            numbers
+            style={{ width: '100%' }}
             placeholder="例如 123456789, 987654321"
-            value={(Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(', ')}
-            onChange={(e) => setDraft((prev) => setPath(prev, 'multiParser.disabledGroups', String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4)))}
+            onChange={(list) => setDraft((prev) => setPath(prev, 'multiParser.disabledGroups', list))}
           />
         </Row>
         <Row label="大模型上下文注入" hint="开启后，自动将解析出的标题、作者、正文摘要喂给她，让她能看懂群友分享并自然接话讨论；关闭则仅作为纯工具运行。">{f.sw('multiParser.feedToAi')}</Row>

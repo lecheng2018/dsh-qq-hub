@@ -9,7 +9,9 @@
 export const TAB_KEYS = {
   connect: ['snowluma', 'botQQ', 'workspaceDir'],
   access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'],
-  group: ['group', 'merge', 'reply', 'files', 'security'],
+  // turnTimeoutMs 原来由裸 input 直接写路径，没登记（改了不出现「未保存」）。
+  // 2026-11-24 换成 f.num 之后测试当场逮到，补进这张表。
+  group: ['group', 'merge', 'reply', 'files', 'security', 'turnTimeoutMs'],
   model: ['model', 'chatModels'],
   voice: ['voice'],
   stickers: ['stickers'],

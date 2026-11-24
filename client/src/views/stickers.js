@@ -58,9 +58,9 @@ function Stickers({ draft, setDraft, toast }) {
             ])}
           </Row>
         ) : null}
-        <Row label="每小时最多收">{f.num('stickers.maxPerHour', { min: 0 })}<span className="ab-muted">张</span></Row>
+        <Row label="每小时最多收">{f.num('stickers.maxPerHour', { min: 0, fallback: 20 })}<span className="ab-muted">张</span></Row>
         <Row label="表情库最多存" hint="QQ 收藏表情有数量上限，满了就收不进去了。超过这个数会自动清掉最少用的偷来的表情（你自己加的不会动）">
-          {f.num('stickers.maxLibrary', { min: 20, max: 2000 })}<span className="ab-muted">张</span>
+          {f.num('stickers.maxLibrary', { min: 20, max: 2000, fallback: 300 })}<span className="ab-muted">张</span>
         </Row>
         <Row label="看图起名" hint="收下后让模型看图起个 12 字以内的备注">{f.sw('stickers.caption')}</Row>
       </Card>
