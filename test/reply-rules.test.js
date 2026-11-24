@@ -4,7 +4,7 @@
 // 长文排版里的换行不算边界；句子按句末标点攒到「最短条长」才断；条数上限均匀分组。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReply, replyRules } from '../src/chat/reply.js'
+import { bubbleLimit, parseReply, replyRules } from '../src/chat/reply.js'
 
 const texts = (raw, rules) => parseReply(raw, rules).items.filter((i) => i.kind === 'text').map((i) => i.value)
 
@@ -110,4 +110,18 @@ test('两三行各一句完整的话（16~30 字）是聊天分行，不是排�
   // 同族：三行都在 16~30 字区间
   const raw3 = '今天那个副本打得我头疼\n野队队友一个比一个离谱\n下周还是自己单刷吧'
   assert.deepEqual(texts(raw3, replyRules({}, true)), raw3.split('\n'))
+})
+
+// ---- bubbleLimit：硬顶（面板）/ 显式 ||| / 软顶（四态收尾）三层口径 ----
+// 2026-11-24：礼让把 maxBubbles 压到 1，她写的三条被换行粘成一条（真机 08:16）。
+// 现在的分层：maxBubbles 是硬顶，谁都越不过；softMaxBubbles 只压自动切出来的气泡；
+// 她自己写的 ||| 至少放行那几条。
+test('bubbleLimit：硬顶 ≥ 显式 ||| ≥ 软顶，非法值都有兜底', () => {
+  assert.equal(bubbleLimit({ maxBubbles: 6 }, 1), 6, '没有软顶时按硬顶')
+  assert.equal(bubbleLimit({ maxBubbles: 6, softMaxBubbles: 1 }, 3), 3, '显式边界压过软顶')
+  assert.equal(bubbleLimit({ maxBubbles: 6, softMaxBubbles: 1 }, 1), 1, '没有显式边界时软顶生效')
+  assert.equal(bubbleLimit({ maxBubbles: 6, softMaxBubbles: 4 }, 2), 4, '软顶比显式大就按软顶')
+  assert.equal(bubbleLimit({ maxBubbles: 2, softMaxBubbles: 1 }, 4), 2, '谁都不能越过面板硬顶')
+  assert.equal(bubbleLimit({ maxBubbles: Number.NaN, softMaxBubbles: -3 }, 2), 6, '非法值退回默认 6')
+  assert.equal(bubbleLimit({}, 0), 6, '显式条数给 0 也至少按 1 条算，不会切出 0 条')
 })

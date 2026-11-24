@@ -98,7 +98,11 @@ export function createReplyDelivery({
     // 「上一轮的标记污染下一轮」的跨回合泄漏。删掉，只留一条通路。
     if (opts.forceReport) rules.forceReport = true
     // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
-    // US-006 · 四态收尾：只收紧不放宽。maxBubbles 取更小值；CLOSED 时本轮直接不说话。
+    // US-006 · 四态收尾：只收紧不放宽 —— 但收紧的是**自动切出来**的气泡数。
+    // 她自己写的 ||| 是硬边界：软顶写进 softMaxBubbles（parseReply 里再与显式条数取大），
+    // 所以礼让/收尾不会把她明确要分开说的几条用换行粘成一条。真机 2026-11-24 08:16 复现：
+    // 对方回「我的意思是很冷」→ 趋势向下 → maxBubbles=1 → 三条变一条带换行的长消息，
+    // 主人那边看到的就是「||| 不生效」（08:18、08:21 同款）。
     // 位置很关键 —— 必须在 replyRules 之后（否则被重算覆盖），在语音转换之前
     // （否则会改到语音路径，语音用例会整片挂掉）。
     const closurePlan = closurePlanFor(chatId, opts.userText || '')
@@ -116,10 +120,8 @@ export function createReplyDelivery({
     // 群聊不套用私聊的四态紧缩：群里有多个发言者，isAck/trend 是按单会话算的，
     // 套到群里会把正常群回复压成 1 条。群侧已有 groupLimit（见下方）做合并约束。
     if (closureActive && !inGroup && Number.isFinite(Number(closurePlan.maxBubbles))) {
-      rules.maxBubbles = Math.min(
-        Number(rules.maxBubbles) || Number(closurePlan.maxBubbles),
-        Math.max(1, Number(closurePlan.maxBubbles)),
-      )
+      const soft = Math.max(1, Number(closurePlan.maxBubbles))
+      rules.softMaxBubbles = Math.min(Number(rules.maxBubbles) || soft, soft)
     }
     const parseRules = inGroup ? { ...rules, maxBubbles: Number.MAX_SAFE_INTEGER } : rules
     const r = parseReply(text, parseRules)
