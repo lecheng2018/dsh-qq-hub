@@ -16,9 +16,13 @@ const SCRIPT = join(ROOT, 'scripts/check-numbers.mjs')
 
 // 样例号码在运行时拼出来：测试要的是「9/10 位数字的形状」，源码里不留长数字字面量
 // （否则仓库自己的裸号码门禁会对着这个测试文件报，还得逐行加豁免）。
+//
+// ⚠️ 这里的每一段都必须是真的假号。2026-11-24 的 PII Scan 红灯就是这条：
+// OWNER 曾经拼的是主人真实 QQ 的前 7 位 —— 拼起来能过「裸号码」门禁，
+// 但 pii-scan 的 long-number 规则不认拼接，照样把这段前缀抓出来了。
 const GROUP = ['955741', '999'].join('')
 const OTHER = ['995845', '999'].join('')
-const OWNER = ['2471780', '123'].join('')
+const OWNER = ['888880', '001'].join('')
 const FAKE = ['123456', '789'].join('')
 const REPEAT = '9'.repeat(9)
 
