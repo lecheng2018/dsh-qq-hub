@@ -21,7 +21,7 @@
 | `ownerQQ` | 主人账号。只有该账号能执行主人命令和高权限操作 |
 | `ownerName` | 提示词和界面中对主人的称呼 |
 | `ownerLevel` | 主人私聊权限：`full` 完整工具（默认）、`social` 仅社交工具、`chat` 纯聊天 |
-| `workspaceDir` | QQ 会话工作区；留空时使用默认目录 |
+| `workspaceDir` | QQ 会话工作区；留空时用默认目录（用户目录下 `QQ Hub/qq-chats`，可用 `QQ_HUB_WORKSPACE` 覆盖）。老安装继续用 `Aurabot/qq-chats`（已在 DSH 登记成工作区的目录不会自动改名，避免旧会话丢落脚点），面板填过路径的也不动 |
 | `longTasks` | 主人私聊长任务模式；开启后增加后台任务和定时任务工具 |
 | `allow.private` | 额外允许私聊的 QQ 号数组；主人无需重复添加 |
 | `allow.groups` | 允许使用的群号数组 |

@@ -131,7 +131,7 @@ dsh plugin --profile <你的-profile-名称> add ./dsh-qq-hub-<版本号>.tgz
 | `enabled`、`dryRun` | 总开关与试运行；排障时先确认这两项 |
 | `ownerQQ`、`ownerLevel` | 主人账号及其私聊权限；完整权限包含本地工具，应谨慎授予 |
 | `allow.private`、`allow.groups` | 允许对话的私聊和群白名单 |
-| `workspaceDir` | QQ 会话工作区，也是默认允许发送文件的目录 |
+| `workspaceDir` | QQ 会话工作区，也是默认允许发送文件的目录；留空用默认目录（用户目录下 `QQ Hub/qq-chats`；老安装继续用 `Aurabot/qq-chats`，已登记成 DSH 工作区的目录不会自动改名） |
 | `model`、`chatModels` | 全局模型及按私聊/群覆盖；可按聊天选择视觉和思考强度 |
 | `merge`、`reply` | 私聊和群聊的连发合并等待时间与分条上限 |
 | `backfill` | 断线恢复后补收消息的范围、等待和数量上限 |
