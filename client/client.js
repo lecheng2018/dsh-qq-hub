@@ -36,6 +36,262 @@ __export(entry_exports, {
 });
 module.exports = __toCommonJS(entry_exports);
 
+// client/src/core/inner-fold.js
+var OPEN_TAG = /<inner(?![A-Za-z0-9_-])[^>]*>/gi;
+var CLOSE_TAG = /<\/inner\s*>/gi;
+function splitInnerBlocks(text) {
+  const source = String(text ?? "");
+  const parts = [];
+  let cursor = 0;
+  let searchAt = 0;
+  for (; ; ) {
+    OPEN_TAG.lastIndex = searchAt;
+    const open = OPEN_TAG.exec(source);
+    if (!open) break;
+    const contentStart = open.index + open[0].length;
+    searchAt = contentStart;
+    if (/\/>\s*$/.test(open[0])) continue;
+    CLOSE_TAG.lastIndex = contentStart;
+    const close = CLOSE_TAG.exec(source);
+    if (!close) break;
+    if (open.index > cursor) parts.push({ type: "text", value: source.slice(cursor, open.index) });
+    parts.push({ type: "inner", value: source.slice(contentStart, close.index) });
+    cursor = close.index + close[0].length;
+    searchAt = cursor;
+  }
+  if (cursor === 0) return [{ type: "text", value: source }];
+  if (cursor < source.length) parts.push({ type: "text", value: source.slice(cursor) });
+  return parts;
+}
+function hasInnerBlock(text) {
+  return /<inner(?![A-Za-z0-9_-])[^>]*>/i.test(String(text ?? "")) && splitInnerBlocks(text).some((part) => part.type === "inner");
+}
+var SKIP_KINDS = /* @__PURE__ */ new Set(["user", "steering", "context", "turn-trigger", "system-prompt", "command"]);
+var SKIP_CLOSEST = "pre, code, .qqhub-inner";
+var FOLD_ATTR = "data-qqhub-fold";
+var STYLE_ID = "qqhub-inner-fold-style";
+var FOLD_CLASS = "qqhub-inner";
+var FOLD_SRC = "qqhubFoldSrc";
+var FOLD_SRC_TEXT = "qqhubFoldText";
+var STYLE_TEXT = `
+.qqhub-inner { display: block; margin: 2px 0; }
+.qqhub-inner-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0; padding: 0; border: 0; background: none;
+  color: var(--dsw-alias-label-tertiary, currentColor);
+  font: inherit; font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  cursor: pointer;
+}
+.qqhub-inner-head::before {
+  content: ""; flex: none; width: 5px; height: 5px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .12s;
+}
+.qqhub-inner-head[aria-expanded="true"]::before { transform: rotate(45deg); }
+.qqhub-inner-head:focus-visible {
+  outline: 1.5px solid var(--dsw-focus-ring-color, currentColor);
+  outline-offset: 2px; border-radius: 2px;
+}
+.qqhub-inner-body {
+  display: block; white-space: pre-wrap; overflow-wrap: anywhere;
+  margin: 2px 0 4px; padding-left: 12px;
+  border-left: 1px solid var(--dsw-alias-border-l2, currentColor);
+  color: var(--dsw-alias-label-secondary, currentColor);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+}
+/* hidden 属性 + 这条规则一起管折叠：只靠 UA 的 [hidden]{display:none} 会被上面的
+   display:block 按特异性盖掉，于是正文永远摊开、点箭头也没反应（真机 2026-11-24 13:07）。 */
+.qqhub-inner-body[hidden],
+.qqhub-inner-body[data-collapsed="true"] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
+`;
+function createFold(doc, raw, srcNode) {
+  const wrap = doc.createElement("span");
+  wrap.className = FOLD_CLASS;
+  wrap.setAttribute(FOLD_ATTR, "");
+  const text = String(raw ?? "").trim();
+  if (srcNode !== void 0) wrap[FOLD_SRC] = srcNode;
+  wrap[FOLD_SRC_TEXT] = text;
+  const head = doc.createElement("button");
+  head.type = "button";
+  head.className = "qqhub-inner-head";
+  head.setAttribute("aria-expanded", "false");
+  head.textContent = "思考";
+  const body = doc.createElement("span");
+  body.className = "qqhub-inner-body";
+  const setOpen = (next) => {
+    head.setAttribute("aria-expanded", next ? "true" : "false");
+    body.setAttribute("data-collapsed", next ? "false" : "true");
+    if (next) body.removeAttribute("hidden");
+    else body.setAttribute("hidden", "");
+    body.hidden = !next;
+  };
+  setOpen(false);
+  body.textContent = text;
+  head.addEventListener("click", (event) => {
+    event.preventDefault();
+    setOpen(head.getAttribute("aria-expanded") !== "true");
+  });
+  wrap.append(head, body);
+  return wrap;
+}
+function removeNode(node) {
+  if (typeof node?.remove === "function") {
+    node.remove();
+  } else if (node?.parentNode && typeof node.parentNode.removeChild === "function") {
+    node.parentNode.removeChild(node);
+  }
+}
+function isAttached(node) {
+  if (typeof node?.isConnected === "boolean") return node.isConnected;
+  let cur = node;
+  for (let depth = 0; cur !== null && cur !== void 0 && depth < 500; depth += 1) {
+    if (cur.nodeType === 9) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+}
+function removeStaleSiblings(node) {
+  let prev = node.previousSibling;
+  while (prev && prev.nodeType === 1 && prev.hasAttribute?.(FOLD_ATTR)) {
+    const stale = prev;
+    prev = prev.previousSibling;
+    removeNode(stale);
+  }
+  let next = node.nextSibling;
+  while (next && next.nodeType === 1 && next.hasAttribute?.(FOLD_ATTR)) {
+    const stale = next;
+    next = next.nextSibling;
+    removeNode(stale);
+  }
+}
+function pruneFolds(root) {
+  const latest = /* @__PURE__ */ new Map();
+  const order = [];
+  for (const span of root.querySelectorAll?.("." + FOLD_CLASS) ?? []) {
+    const src = span[FOLD_SRC];
+    if (src === void 0 || src === null || !isAttached(src)) {
+      removeNode(span);
+      continue;
+    }
+    const text = String(span[FOLD_SRC_TEXT] ?? "");
+    if (!latest.has(text)) order.push(text);
+    latest.set(text, span);
+  }
+  for (const text of order) {
+    const keep = latest.get(text);
+    for (const span of root.querySelectorAll?.("." + FOLD_CLASS) ?? []) {
+      if (span === keep) continue;
+      if (String(span[FOLD_SRC_TEXT] ?? "") === text) removeNode(span);
+    }
+  }
+}
+function foldTextNode(node, doc) {
+  if (!node?.parentNode) return false;
+  const parts = splitInnerBlocks(node.nodeValue);
+  if (!parts.some((part) => part.type === "inner")) return false;
+  const built = parts.filter((part) => part.value !== "").map((part) => part.type === "inner" ? { kind: "inner", dom: createFold(doc, part.value, node) } : { kind: "text", dom: doc.createTextNode(part.value) });
+  const first = built[0];
+  const last = built[built.length - 1];
+  if (first === void 0 || last === void 0) return false;
+  removeStaleSiblings(node);
+  if (first.kind === "text") {
+    node.nodeValue = first.dom.nodeValue;
+    node.after(...built.slice(1).map((item) => item.dom));
+    return true;
+  }
+  if (last.kind === "text") {
+    node.nodeValue = last.dom.nodeValue;
+    node.before(...built.slice(0, -1).map((item) => item.dom));
+    return true;
+  }
+  node.nodeValue = "";
+  node.before(...built.map((item) => item.dom));
+  return true;
+}
+function foldWithin(root, doc) {
+  try {
+    pruneFolds(root);
+  } catch (error) {
+    console.warn("[qq-hub] 清理陈旧折叠行失败：", error);
+  }
+  const walker = doc.createTreeWalker(
+    root,
+    4
+    /* SHOW_TEXT */
+  );
+  const targets = [];
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const value = node.nodeValue;
+    if (!value || value.indexOf("<") === -1 || !hasInnerBlock(value)) continue;
+    if (node.parentElement?.closest(SKIP_CLOSEST)) continue;
+    targets.push(node);
+  }
+  let folded = 0;
+  for (const node of targets) {
+    try {
+      if (foldTextNode(node, doc)) folded += 1;
+    } catch (error) {
+      console.warn("[qq-hub] 折叠 <inner> 独白失败：", error);
+    }
+  }
+  return folded;
+}
+function foldChatInner(doc) {
+  if (!doc?.querySelectorAll) return 0;
+  let folded = 0;
+  for (const root of doc.querySelectorAll("[data-chat-flow-kind]")) {
+    const kind = root.getAttribute("data-chat-flow-kind") || "";
+    if (SKIP_KINDS.has(kind)) continue;
+    folded += foldWithin(root, doc);
+  }
+  return folded;
+}
+function ensureStyle(doc) {
+  if (doc.getElementById(STYLE_ID) !== null) return;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = STYLE_TEXT;
+  doc.head.append(style);
+}
+function installInnerFold({ doc = globalThis.document, delayMs = 400, observe = true } = {}) {
+  if (!doc?.body || typeof doc.createTreeWalker !== "function") return () => {
+  };
+  ensureStyle(doc);
+  let timer = null;
+  let disposed = false;
+  const run = () => {
+    if (disposed) return;
+    try {
+      foldChatInner(doc);
+    } catch (error) {
+      console.warn("[qq-hub] 扫描聊天流失败：", error);
+    }
+  };
+  const schedule = () => {
+    if (disposed || timer !== null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      run();
+    }, delayMs);
+  };
+  let observer = null;
+  const View = doc.defaultView;
+  if (observe && typeof View?.MutationObserver === "function") {
+    observer = new View.MutationObserver(schedule);
+    observer.observe(doc.body, { childList: true, subtree: true, characterData: true });
+  }
+  run();
+  return () => {
+    disposed = true;
+    observer?.disconnect();
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+}
+
 // client/src/core/react.js
 var React = require("react");
 var { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React;
@@ -860,7 +1116,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
       desc: "每个 QQ 私聊 / 群都是 DSH 里「QQ Hub」工作区下的一个会话，她在会话里读写文件也在这个文件夹。改了以后新开的会话放到新位置。",
       more: "想把她已有的会话全部挪到新位置：改完保存后去「概览」点「重新开始所有 QQ 会话」（旧会话在 DSH 侧栏的归档里还能找到）。"
     },
-    /* @__PURE__ */ h(Row, { label: "工作区文件夹", hint: "填完整路径（比如 D:\\\\Aurabot\\\\qq-chats）；留空 = 默认位置" }, f.text("workspaceDir", { size: "wide", placeholder: st.workspaceDir || "" })),
+    /* @__PURE__ */ h(Row, { label: "工作区文件夹", hint: "填完整路径（比如 D:\\\\QQ Hub\\\\qq-chats）；留空 = 默认位置（用户目录下 QQ Hub/qq-chats）" }, f.text("workspaceDir", { size: "wide", placeholder: st.workspaceDir || "" })),
     /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "现在用的：", st.workspaceDir || "—")
   ), /* @__PURE__ */ h(Card, { title: "连接状态" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "QQ 网关"), /* @__PURE__ */ h("span", null, /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("i", { className: cx("ab-dot", conn ? "ok" : st.onebot.state === "connecting" ? "warn" : "err") }), STATE_TEXT[st.onebot.state] || st.onebot.state)), /* @__PURE__ */ h("span", null, "登录的号"), /* @__PURE__ */ h("span", null, login ? login.nickname + "（" + login.uin + "）" + (login.uin !== draft.botQQ ? " ⚠ 不是机器人号！" : "") : "—"), /* @__PURE__ */ h("span", null, "HTTP"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.httpUrl || "—"), /* @__PURE__ */ h("span", null, "WebSocket"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.wsUrl || "—")), !conn && st.onebot.problem ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 10 } }, st.onebot.problem) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
     const r = await post("/onebot/reconnect");
@@ -3813,6 +4069,7 @@ function QQHubPage() {
 var inject = ["slots"];
 var PANEL_ID = "qq-hub";
 function apply(ctx) {
+  ctx.effect(() => installInnerFold(), "qq-hub: 正文里的 <inner> 独白折成一行");
   const slots = ctx.get("slots");
   if (slots === void 0) return;
   slots.inject("main", () => slots.register({ name: "main", key: PANEL_ID }, QQHubPage));
