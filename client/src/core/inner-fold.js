@@ -68,6 +68,11 @@ const SKIP_KINDS = new Set(['user', 'steering', 'context', 'turn-trigger', 'syst
 const SKIP_CLOSEST = 'pre, code, .qqhub-inner'
 const FOLD_ATTR = 'data-qqhub-fold'
 const STYLE_ID = 'qqhub-inner-fold-style'
+/** 折叠行的 class（清理孤儿/重复时按它找）。 */
+const FOLD_CLASS = 'qqhub-inner'
+/** 折叠行记住「我这条盯的是哪个文本节点 / 哪段独白」，重渲染时据此判断该留还是该删。 */
+const FOLD_SRC = 'qqhubFoldSrc'
+const FOLD_SRC_TEXT = 'qqhubFoldText'
 
 /**
  * 折叠行的样式：跟 DSH 的「思考」行同一套口径（次级文字色 + 小箭头 + 缩进竖线），
@@ -101,14 +106,22 @@ const STYLE_TEXT = `
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
 }
+/* hidden 属性 + 这条规则一起管折叠：只靠 UA 的 [hidden]{display:none} 会被上面的
+   display:block 按特异性盖掉，于是正文永远摊开、点箭头也没反应（真机 2026-11-24 13:07）。 */
+.qqhub-inner-body[hidden],
+.qqhub-inner-body[data-collapsed="true"] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
 `
 
 /** 建一个折叠行：一行「思考」+ 展开后的独白原文。只用 textContent，不碰 innerHTML。 */
-function createFold(doc, raw) {
+function createFold(doc, raw, srcNode) {
   const wrap = doc.createElement('span')
-  wrap.className = 'qqhub-inner'
+  wrap.className = FOLD_CLASS
   wrap.setAttribute(FOLD_ATTR, '')
+  const text = String(raw ?? '').trim()
+  // 记下来源，重渲染时 pruneFolds 才知道这条还该不该在
+  if (srcNode !== undefined) wrap[FOLD_SRC] = srcNode
+  wrap[FOLD_SRC_TEXT] = text
   const head = doc.createElement('button')
   head.type = 'button'
   head.className = 'qqhub-inner-head'
@@ -116,16 +129,94 @@ function createFold(doc, raw) {
   head.textContent = '思考'
   const body = doc.createElement('span')
   body.className = 'qqhub-inner-body'
-  body.hidden = true
-  body.textContent = String(raw ?? '').trim()
+  // 默认折叠：hidden 属性 + data-collapsed 双保险（样式里两条选择器都写着 display:none），
+  // 因为 .qqhub-inner-body 自己带 display:block，单靠 UA 的 [hidden] 规则压不住它。
+  const setOpen = (next) => {
+    head.setAttribute('aria-expanded', next ? 'true' : 'false')
+    body.setAttribute('data-collapsed', next ? 'false' : 'true')
+    if (next) body.removeAttribute('hidden')
+    else body.setAttribute('hidden', '')
+    body.hidden = !next
+  }
+  setOpen(false)
+  body.textContent = text
   head.addEventListener('click', (event) => {
     event.preventDefault()
-    const open = head.getAttribute('aria-expanded') === 'true'
-    head.setAttribute('aria-expanded', open ? 'false' : 'true')
-    body.hidden = open
+    setOpen(head.getAttribute('aria-expanded') !== 'true')
   })
   wrap.append(head, body)
   return wrap
+}
+
+function removeNode(node) {
+  if (typeof node?.remove === 'function') {
+    node.remove()
+  } else if (node?.parentNode && typeof node.parentNode.removeChild === 'function') {
+    node.parentNode.removeChild(node)
+  }
+}
+
+/** 节点还在文档里吗（假 DOM 没有 isConnected，按 parentNode 链走）。 */
+function isAttached(node) {
+  if (typeof node?.isConnected === 'boolean') return node.isConnected
+  let cur = node
+  for (let depth = 0; cur !== null && cur !== undefined && depth < 500; depth += 1) {
+    if (cur.nodeType === 9 /* DOCUMENT_NODE */) return true
+    cur = cur.parentNode
+  }
+  return false
+}
+
+/**
+ * 清理紧邻当前文本节点的历史折叠行。
+ * React 在组件重渲染或追加流式片段时会改写文本节点 nodeValue，但不会主动移除先前插入的非受控兄弟节点；
+ * 若不清理，多次渲染会导致同一段独白堆叠出多个「思考」行。
+ */
+function removeStaleSiblings(node) {
+  let prev = node.previousSibling
+  while (prev && prev.nodeType === 1 && prev.hasAttribute?.(FOLD_ATTR)) {
+    const stale = prev
+    prev = prev.previousSibling
+    removeNode(stale)
+  }
+  let next = node.nextSibling
+  while (next && next.nodeType === 1 && next.hasAttribute?.(FOLD_ATTR)) {
+    const stale = next
+    next = next.nextSibling
+    removeNode(stale)
+  }
+}
+
+/**
+ * 扫一遍这个聊天根里的折叠行，清掉两种残留：
+ * ① **孤儿** —— 它盯着的那个正文文本节点已经被 React 换掉/移除（流式重渲染、重挂载都常见）；
+ * ② **重复** —— 同一段独白在这个根里折出了不止一行。
+ *    真机 2026-11-24 12:37 那两个一模一样的「思考」块就是这个：React 把整段原文重新写了一遍，
+ *    我们在新节点上又折了一次，旧的那条没人收。
+ *
+ * 去重按「每个根里每段独白只留最后一条」：后折的那条才是当前渲染对应的；
+ * 而「同一条消息渲染在两处（过程组 / 回复行）」是**不同的根**，各折各的，不会被这里误删。
+ */
+function pruneFolds(root) {
+  const latest = new Map()
+  const order = []
+  for (const span of root.querySelectorAll?.('.' + FOLD_CLASS) ?? []) {
+    const src = span[FOLD_SRC]
+    if (src === undefined || src === null || !isAttached(src)) {
+      removeNode(span)
+      continue
+    }
+    const text = String(span[FOLD_SRC_TEXT] ?? '')
+    if (!latest.has(text)) order.push(text)
+    latest.set(text, span)
+  }
+  for (const text of order) {
+    const keep = latest.get(text)
+    for (const span of root.querySelectorAll?.('.' + FOLD_CLASS) ?? []) {
+      if (span === keep) continue
+      if (String(span[FOLD_SRC_TEXT] ?? '') === text) removeNode(span)
+    }
+  }
 }
 
 /**
@@ -137,16 +228,20 @@ function createFold(doc, raw) {
  * 不会写进一个已经脱离文档的孤儿节点里。
  */
 function foldTextNode(node, doc) {
+  if (!node?.parentNode) return false
   const parts = splitInnerBlocks(node.nodeValue)
   if (!parts.some((part) => part.type === 'inner')) return false
   const built = parts
     .filter((part) => part.value !== '')
     .map((part) => (part.type === 'inner'
-      ? { kind: 'inner', dom: createFold(doc, part.value) }
+      ? { kind: 'inner', dom: createFold(doc, part.value, node) }
       : { kind: 'text', dom: doc.createTextNode(part.value) }))
   const first = built[0]
   const last = built[built.length - 1]
   if (first === undefined || last === undefined) return false
+
+  removeStaleSiblings(node)
+
   if (first.kind === 'text') {
     node.nodeValue = first.dom.nodeValue
     node.after(...built.slice(1).map((item) => item.dom))
@@ -164,6 +259,12 @@ function foldTextNode(node, doc) {
 
 /** 在一个聊天节点里把所有该折的文本节点折起来。 */
 function foldWithin(root, doc) {
+  // 先清残留：上一轮折出来、这一轮已经失去意义的折叠行（孤儿 / 同源重复）
+  try {
+    pruneFolds(root)
+  } catch (error) {
+    console.warn('[qq-hub] 清理陈旧折叠行失败：', error)
+  }
   const walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */)
   const targets = []
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {

@@ -63,15 +63,22 @@ test('产物里必须带上这层折叠（改了源码不重新构建，CI 与�
   assert.match(bundle, /installInnerFold/, '产物里没有 installInnerFold')
 })
 
-// ---- 下面两个用极简假 DOM 跑真实的 foldChatInner：钉住「原文本节点留着、其余插在它后面」
-// 这条最容易写反的顺序（React 拿着那个节点的引用，顺序反了会看到一个句子被拆散重组）。----
+// ---- 下面用极简假 DOM 跑真实的 foldChatInner：钉住三件最容易写坏的事：
+// ① 顺序（原文本节点留着、其余插在它前后）—— React 拿着那个节点的引用；
+// ② 默认折叠、点一下能展开再收起 —— 真机 2026-11-24 13:07「包装的思考块默认展开不能折叠」；
+// ③ 重复渲染不叠块 —— 真机 12:37 出现两个一模一样的「思考」。----
 
 const ELEMENT = 1
 const TEXT = 3
+const DOCUMENT = 9
 
+/**
+ * 极简假 DOM：够 inner-fold.js 用的那点 API。
+ * 每个节点都带 parentNode、childNodes、siblings（after/before），元素带 attributes/hidden/class，
+ * 并且 document 支持 createTreeWalker 与 querySelectorAll（按 class 找折叠行）。
+ */
 function makeDom(bodyText) {
-  const doc = {}
-  /** after/before 用 this 取节点，文本节点和元素共用一份实现。 */
+  const all = []
   const siblings = {
     after(...kids) {
       const at = this.parentNode.childNodes.indexOf(this)
@@ -82,7 +89,18 @@ function makeDom(bodyText) {
       for (const [offset, kid] of kids.entries()) { kid.parentNode = this.parentNode; this.parentNode.childNodes.splice(at + offset, 0, kid) }
     },
   }
-  const text = (value) => Object.assign({ nodeType: TEXT, nodeValue: value, parentNode: null, childNodes: [] }, siblings)
+  const text = (value) => {
+    const node = { nodeType: TEXT, nodeValue: value, parentNode: null, childNodes: [] }
+    // 文本节点也要 previousSibling / nextSibling（清理陈旧折叠行要用）
+    Object.defineProperties(node, {
+      previousSibling: { get: () => siblingAt(node, -1) },
+      nextSibling: { get: () => siblingAt(node, 1) },
+      remove: { value: () => detach(node) },
+    })
+    Object.assign(node, siblings)
+    all.push(node)
+    return node
+  }
   const element = (tag) => {
     const node = {
       nodeType: ELEMENT,
@@ -99,11 +117,16 @@ function makeDom(bodyText) {
         node.append(text(String(value)))
       },
       setAttribute(key, value) { node.attributes[key] = String(value) },
+      removeAttribute(key) { delete node.attributes[key] },
+      hasAttribute(key) { return key in node.attributes },
       getAttribute(key) { return node.attributes[key] ?? null },
       addEventListener(type, fn) { node.listeners.push({ type, fn }) },
       append(...kids) { for (const kid of kids) { kid.parentNode = node; node.childNodes.push(kid) } },
       after(...kids) { siblings.after.apply(node, kids) },
       before(...kids) { siblings.before.apply(node, kids) },
+      remove() { detach(node) },
+      get previousSibling() { return siblingAt(node, -1) },
+      get nextSibling() { return siblingAt(node, 1) },
       closest(selector) {
         const tags = selector.split(',').map((one) => one.trim())
         for (let cur = node; cur !== null; cur = cur.parentNode) {
@@ -113,7 +136,21 @@ function makeDom(bodyText) {
         }
         return null
       },
+      querySelectorAll(selector) {
+        const out = []
+        const want = selector.startsWith('.') ? selector.slice(1) : null
+        const walk = (cur) => {
+          for (const kid of cur.childNodes) {
+            if (kid.nodeType !== ELEMENT) continue
+            if (want !== null && kid.className.split(' ').includes(want)) out.push(kid)
+            walk(kid)
+          }
+        }
+        walk(node)
+        return out
+      },
     }
+    all.push(node)
     return node
   }
   const body = element('body')
@@ -124,15 +161,18 @@ function makeDom(bodyText) {
   root.setAttribute('data-chat-flow-kind', 'assistant-step')
   root.append(paragraph)
   body.append(root)
-  const all = [root, body, head, paragraph]
-  Object.assign(doc, {
+  const documentNode = { nodeType: DOCUMENT, parentNode: null }
+  body.parentNode = documentNode
+  const doc = {
     body,
     head,
     defaultView: undefined,
     createElement: (tag) => element(tag),
     createTextNode: (value) => text(String(value)),
-    getElementById: (id) => all.find((one) => one.attributes.id === id) ?? null,
-    querySelectorAll: (selector) => (selector === '[data-chat-flow-kind]' ? all.filter((one) => one.attributes['data-chat-flow-kind'] !== undefined) : []),
+    getElementById: (id) => all.find((one) => one.nodeType === ELEMENT && one.attributes.id === id) ?? null,
+    querySelectorAll: (selector) => (selector === '[data-chat-flow-kind]'
+      ? all.filter((one) => one.nodeType === ELEMENT && one.attributes['data-chat-flow-kind'] !== undefined)
+      : []),
     createTreeWalker(node) {
       const queue = []
       const walk = (cur) => { for (const kid of cur.childNodes) { if (kid.nodeType === TEXT) queue.push(kid); walk(kid) } }
@@ -140,9 +180,28 @@ function makeDom(bodyText) {
       let index = 0
       return { nextNode: () => (index < queue.length ? queue[index++] : null), currentNode: null }
     },
-  })
+  }
   return { doc, paragraph, root, body }
 }
+
+function siblingAt(node, offset) {
+  const parent = node.parentNode
+  if (!parent) return null
+  const at = parent.childNodes.indexOf(node)
+  if (at < 0) return null
+  return parent.childNodes[at + offset] ?? null
+}
+
+function detach(node) {
+  const parent = node.parentNode
+  if (!parent) return
+  const at = parent.childNodes.indexOf(node)
+  if (at >= 0) parent.childNodes.splice(at, 1)
+  node.parentNode = null
+}
+
+/** 找段落里所有折叠行（.qqhub-inner）。 */
+const foldsIn = (paragraph) => paragraph.querySelectorAll('.qqhub-inner')
 
 test('折完的顺序：独白在开头时，原文本节点留着后半句正文，折叠行插在它前面', () => {
   const { doc, paragraph } = makeDom('<inner>【意图】报天气</inner>早 哥|||记得带伞')
@@ -152,15 +211,58 @@ test('折完的顺序：独白在开头时，原文本节点留着后半句正�
   assert.equal(paragraph.childNodes[1].nodeValue, '早 哥|||记得带伞')
   const [head, body] = paragraph.childNodes[0].childNodes
   assert.equal(head.textContent, '思考')
+  assert.equal(body.textContent, '【意图】报天气')
+})
+
+test('默认折叠：文档一出来正文就是隐藏的，点一下才展开、再点收回', () => {
+  const { doc, paragraph } = makeDom('<inner>【意图】报天气</inner>早 哥')
+  foldChatInner(doc)
+  const [head, body] = paragraph.childNodes[0].childNodes
+  // 默认：折叠
   assert.equal(head.getAttribute('aria-expanded'), 'false')
   assert.equal(body.hidden, true)
-  assert.equal(body.textContent, '【意图】报天气')
-  // 点一下展开、再点收起来
+  assert.equal(body.hasAttribute('hidden'), true, 'hidden 属性要真的挂上，样式才能压住 display:block')
+  assert.equal(body.getAttribute('data-collapsed'), 'true')
+  // 点开
   head.listeners[0].fn({ preventDefault() {} })
   assert.equal(head.getAttribute('aria-expanded'), 'true')
   assert.equal(body.hidden, false)
+  assert.equal(body.hasAttribute('hidden'), false)
+  assert.equal(body.getAttribute('data-collapsed'), 'false')
+  // 再点收回
   head.listeners[0].fn({ preventDefault() {} })
+  assert.equal(head.getAttribute('aria-expanded'), 'false')
   assert.equal(body.hidden, true)
+  assert.equal(body.hasAttribute('hidden'), true)
+})
+
+test('重复渲染不叠块：同一段正文再折一次，仍然只有一个「思考」', () => {
+  const raw = '<inner>【意图】甲</inner>正文一句'
+  const { doc, paragraph } = makeDom(raw)
+  assert.equal(foldChatInner(doc), 1)
+  assert.equal(foldsIn(paragraph).length, 1)
+
+  // 模拟 React 把整段原文又写回这个文本节点（内容不变），然后再扫一遍
+  const textNode = paragraph.childNodes.find((kid) => kid.nodeType === TEXT)
+  textNode.nodeValue = raw
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 1, `重复扫描后仍然只该有一个折叠块，实际 ${foldsIn(paragraph).length} 个`)
+})
+
+test('流式续写：源节点被换掉后，旧的「思考」不能留在原地', () => {
+  const { doc, paragraph } = makeDom('<inner>【意图】甲</inner>正文一句')
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 1)
+
+  // React 换了新的文本节点（旧的从 DOM 里摘掉），新内容还是同一段独白 + 更长的正文
+  const old = paragraph.childNodes.find((kid) => kid.nodeType === TEXT)
+  detach(old)
+  const fresh = doc.createTextNode('<inner>【意图】甲</inner>正文一句更长了')
+  paragraph.append(fresh)
+
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 1, `孤儿折叠行必须被清掉，实际 ${foldsIn(paragraph).length} 个`)
+  assert.equal(foldsIn(paragraph)[0].childNodes[1].textContent, '【意图】甲')
 })
 
 test('折完的顺序：独白在中间时，原文本节点保留前半句，折叠行和后半句插在它后面', () => {

@@ -1,5 +1,22 @@
 # 更新记录
 
+**补充（同日第二版，13:07 真机）**：第一版上线后有两个现场问题 ——
+
+1. **默认展开、点了也不折叠**：`.qqhub-inner-body` 自己写了 `display: block`，按特异性盖掉了
+   浏览器默认的 `[hidden] { display: none }`，于是 `body.hidden = true` 形同虚设，独白永远摊在正文上。
+   现在样式里显式补 `.qqhub-inner-body[hidden], .qqhub-inner-body[data-collapsed="true"] { display: none !important; }`，
+   并把开合收敛成一个 `setOpen()`：同时维护 `aria-expanded`、`hidden` 属性和 `data-collapsed`。
+2. **两个一模一样的「思考」块**（12:37 真机）：React 重渲染时把同名文本节点的内容写回原样，
+   我们在同一个节点上又折了一次，而上一轮插进去的那条没人收。
+   现在每次扫描先 `pruneFolds()`：源文本节点已脱离文档的（流式换节点）、以及**同一个源节点**
+   被折了不止一条的，只留最新一条。判据用源节点身份而不是文本内容 —— 同一条消息被 DSH
+   渲染在「过程组」和「回复行」两处时是两个不同的节点，各折各的，不会被误删。
+
+**测试**：`test/inner-fold.test.js` 从 10 条加到 13 条 —— 新增「默认折叠且能开合」「重复渲染不叠块」
+「源节点被换掉后旧折叠行必须清掉」；假 DOM 补上 `removeAttribute/hasAttribute/previousSibling/
+nextSibling/remove` 和根内 `querySelectorAll`。全量 `node --test "test/**/*.test.js"`
+2524 tests / 2520 pass / 0 fail（4 skipped，均为既有跳过项）。
+
 ## Unreleased · 会话里的 `<inner>` 心智独白折成一行「思考」（2026-11-24）
 
 **现象（真机 07:55，主人私聊 session-7234dde0）**：DSH 会话里那一轮的助手消息长这样：
@@ -41,6 +58,38 @@ DSH 0.2.3 的聊天视图没有「正文渲染」这类插槽（`conversation.ch
 `<inner/>` 不吞后续正文、大小写与属性写法、`hasInnerBlock`、产物里带没带这层折叠，
 以及用极简假 DOM 跑真实 `foldChatInner()` 钉住「原节点保留、其余节点插在它前后」的顺序。
 全量 `node --test "test/**/*.test.js"` 2583 tests / 2579 pass / 0 fail（4 skipped，均为既有跳过项）。
+
+## Unreleased · 正文折叠块默认展开、点不动、还会叠成两个（2026-11-24）
+
+**现象（真机 13:07 / 12:37）**：
+
+1. 包装出来的「思考」块**默认就是展开的**，点箭头也不收起来；
+2. 同一条回复下面出现**两个一模一样的「思考」块**。
+
+**根因两条**：
+
+1. **样式压过了 hidden 属性**：`.qqhub-inner-body` 自己写了 `display: block`，按 CSS 特异性
+   盖掉了浏览器默认的 `[hidden] { display: none }`。于是 `body.hidden = true` 形同虚设，
+   独白永远摊在正文上，点箭头也只是改了个 aria-expanded 属性，肉眼没反应。
+2. **重折时旧的折叠行没人收**：React 重渲染会把同一个文本节点的内容写回原样（或者是换了个新节点），
+   我们下一轮扫描又折了一次；上一轮插进去的 `.qqhub-inner` 是**非受控节点**，React 不认识它，
+   也不会删它 → 一叠就是两个。
+
+**改法**（`client/src/core/inner-fold.js`）：
+
+- 样式显式补 `.qqhub-inner-body[hidden], .qqhub-inner-body[data-collapsed="true"] { display: none !important; }`，
+  折叠状态由 `hidden` 属性 + `data-collapsed` 双保险表达，不再指望 UA 那条默认规则。
+- 开合收敛成一个 `setOpen(next)`：同时维护 `aria-expanded`、`hidden` 属性、`data-collapsed`，
+  点一下真能开、再点真能收。
+- 新增 `pruneFolds(root)`：每次扫描前先清残留 —— ① 源文本节点已脱离文档的（流式换节点导致的孤儿）；
+  ② **同一个源节点**被折了不止一条的，只留最新那条。
+  判据用**源节点身份**（折叠行上记 `FOLD_SRC`）而不是文本内容：同一条消息被 DSH 渲染在
+  「过程组」和「回复行」两处时是两个不同节点，各折各的，不会被误删。
+
+**测试**：`test/inner-fold.test.js` 从 10 条加到 13 条 —— 新增「默认折叠、点开、再点收回」、
+「重复渲染不叠块」、「源节点被换掉后旧折叠行必须清掉」；假 DOM 补齐
+`removeAttribute / hasAttribute / previousSibling / nextSibling / remove` 与根内 `querySelectorAll`。
+全量 `node --test "test/**/*.test.js"` 2524 tests / 2520 pass / 0 fail（4 skipped，均为既有跳过项）。
 
 ## 1.4.9-test.20261123.2（2026-11-23）
 

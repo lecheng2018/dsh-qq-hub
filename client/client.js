@@ -70,6 +70,9 @@ var SKIP_KINDS = /* @__PURE__ */ new Set(["user", "steering", "context", "turn-t
 var SKIP_CLOSEST = "pre, code, .qqhub-inner";
 var FOLD_ATTR = "data-qqhub-fold";
 var STYLE_ID = "qqhub-inner-fold-style";
+var FOLD_CLASS = "qqhub-inner";
+var FOLD_SRC = "qqhubFoldSrc";
+var FOLD_SRC_TEXT = "qqhubFoldText";
 var STYLE_TEXT = `
 .qqhub-inner { display: block; margin: 2px 0; }
 .qqhub-inner-head {
@@ -98,12 +101,19 @@ var STYLE_TEXT = `
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
 }
+/* hidden 属性 + 这条规则一起管折叠：只靠 UA 的 [hidden]{display:none} 会被上面的
+   display:block 按特异性盖掉，于是正文永远摊开、点箭头也没反应（真机 2026-11-24 13:07）。 */
+.qqhub-inner-body[hidden],
+.qqhub-inner-body[data-collapsed="true"] { display: none !important; }
 @media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
 `;
-function createFold(doc, raw) {
+function createFold(doc, raw, srcNode) {
   const wrap = doc.createElement("span");
-  wrap.className = "qqhub-inner";
+  wrap.className = FOLD_CLASS;
   wrap.setAttribute(FOLD_ATTR, "");
+  const text = String(raw ?? "").trim();
+  if (srcNode !== void 0) wrap[FOLD_SRC] = srcNode;
+  wrap[FOLD_SRC_TEXT] = text;
   const head = doc.createElement("button");
   head.type = "button";
   head.className = "qqhub-inner-head";
@@ -111,24 +121,82 @@ function createFold(doc, raw) {
   head.textContent = "思考";
   const body = doc.createElement("span");
   body.className = "qqhub-inner-body";
-  body.hidden = true;
-  body.textContent = String(raw ?? "").trim();
+  const setOpen = (next) => {
+    head.setAttribute("aria-expanded", next ? "true" : "false");
+    body.setAttribute("data-collapsed", next ? "false" : "true");
+    if (next) body.removeAttribute("hidden");
+    else body.setAttribute("hidden", "");
+    body.hidden = !next;
+  };
+  setOpen(false);
+  body.textContent = text;
   head.addEventListener("click", (event) => {
     event.preventDefault();
-    const open = head.getAttribute("aria-expanded") === "true";
-    head.setAttribute("aria-expanded", open ? "false" : "true");
-    body.hidden = open;
+    setOpen(head.getAttribute("aria-expanded") !== "true");
   });
   wrap.append(head, body);
   return wrap;
 }
+function removeNode(node) {
+  if (typeof node?.remove === "function") {
+    node.remove();
+  } else if (node?.parentNode && typeof node.parentNode.removeChild === "function") {
+    node.parentNode.removeChild(node);
+  }
+}
+function isAttached(node) {
+  if (typeof node?.isConnected === "boolean") return node.isConnected;
+  let cur = node;
+  for (let depth = 0; cur !== null && cur !== void 0 && depth < 500; depth += 1) {
+    if (cur.nodeType === 9) return true;
+    cur = cur.parentNode;
+  }
+  return false;
+}
+function removeStaleSiblings(node) {
+  let prev = node.previousSibling;
+  while (prev && prev.nodeType === 1 && prev.hasAttribute?.(FOLD_ATTR)) {
+    const stale = prev;
+    prev = prev.previousSibling;
+    removeNode(stale);
+  }
+  let next = node.nextSibling;
+  while (next && next.nodeType === 1 && next.hasAttribute?.(FOLD_ATTR)) {
+    const stale = next;
+    next = next.nextSibling;
+    removeNode(stale);
+  }
+}
+function pruneFolds(root) {
+  const latest = /* @__PURE__ */ new Map();
+  const order = [];
+  for (const span of root.querySelectorAll?.("." + FOLD_CLASS) ?? []) {
+    const src = span[FOLD_SRC];
+    if (src === void 0 || src === null || !isAttached(src)) {
+      removeNode(span);
+      continue;
+    }
+    const text = String(span[FOLD_SRC_TEXT] ?? "");
+    if (!latest.has(text)) order.push(text);
+    latest.set(text, span);
+  }
+  for (const text of order) {
+    const keep = latest.get(text);
+    for (const span of root.querySelectorAll?.("." + FOLD_CLASS) ?? []) {
+      if (span === keep) continue;
+      if (String(span[FOLD_SRC_TEXT] ?? "") === text) removeNode(span);
+    }
+  }
+}
 function foldTextNode(node, doc) {
+  if (!node?.parentNode) return false;
   const parts = splitInnerBlocks(node.nodeValue);
   if (!parts.some((part) => part.type === "inner")) return false;
-  const built = parts.filter((part) => part.value !== "").map((part) => part.type === "inner" ? { kind: "inner", dom: createFold(doc, part.value) } : { kind: "text", dom: doc.createTextNode(part.value) });
+  const built = parts.filter((part) => part.value !== "").map((part) => part.type === "inner" ? { kind: "inner", dom: createFold(doc, part.value, node) } : { kind: "text", dom: doc.createTextNode(part.value) });
   const first = built[0];
   const last = built[built.length - 1];
   if (first === void 0 || last === void 0) return false;
+  removeStaleSiblings(node);
   if (first.kind === "text") {
     node.nodeValue = first.dom.nodeValue;
     node.after(...built.slice(1).map((item) => item.dom));
@@ -144,6 +212,11 @@ function foldTextNode(node, doc) {
   return true;
 }
 function foldWithin(root, doc) {
+  try {
+    pruneFolds(root);
+  } catch (error) {
+    console.warn("[qq-hub] 清理陈旧折叠行失败：", error);
+  }
   const walker = doc.createTreeWalker(
     root,
     4
