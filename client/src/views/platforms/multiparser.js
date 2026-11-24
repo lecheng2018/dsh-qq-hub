@@ -87,10 +87,10 @@ function MultiParser({ draft, setDraft, toast }) {
       </Card>
 
       <Card title="支持平台独立开关" desc="单独控制是否响应特定平台的链接。">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '8px 16px', padding: '6px 0' }}>
+        <div className="ab-platform-grid">
           {platforms.map((p) => (
-            <div key={p.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--ab-line)' }}>
-              <span style={{ fontSize: 13 }}>{p.label}</span>
+            <div key={p.key} className="ab-platform-item">
+              <span>{p.label}</span>
               {f.sw(`multiParser.platforms.${p.key}`)}
             </div>
           ))}
@@ -124,9 +124,9 @@ function MultiParser({ draft, setDraft, toast }) {
       </Card>
 
       <Card title="在线测试解析" desc="粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="ab-flex">
           <input
-            className="ab-input" style={{ flex: 1 }}
+            className="ab-input" style={{ flex: '1 1 220px' }}
             placeholder="例如 https://www.bilibili.com/video/BV... 或 微博/知乎/小红书链接"
             value={testUrl}
             onChange={(e) => setTestUrl(e.target.value)}

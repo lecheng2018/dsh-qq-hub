@@ -9,8 +9,8 @@ function BiliCookie({ draft, setDraft }) {
   const [show, setShow] = useState(false)
   const b = draft.bili
   const field = (key, prefix, setKey, hintKey, ph) => (
-    <div className="ab-flex" style={{ flexWrap: 'nowrap', marginBottom: 6 }}>
-      <code className="ab-small" style={{ minWidth: 82, textAlign: 'right' }}>{prefix}</code>
+    <div className="ab-cookie-field">
+      <code className="ab-small">{prefix}</code>
       <input
         className="ab-input wide" type={show ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={b[key] || ''}
         placeholder={b[setKey] ? '已保存（结尾 ' + (b[hintKey] || '…') + '），不改就留空' : ph}
@@ -24,7 +24,7 @@ function BiliCookie({ draft, setDraft }) {
       hint="浏览器登录 bilibili.com 后从 F12 里复制 SESSDATA 和 bili_jct；也可以直接粘整串 Cookie，会自动拆开。不填也能看视频，但不能评论和回复。建议用小号"
       more={'取 Cookie 的路径：电脑浏览器登录 bilibili.com → F12 → 「应用」（Application）→ Cookie → bilibili.com，分别复制 SESSDATA 和 bili_jct 这两行的「值」。只存在本机；没有 AI 字幕、评论、回复这些登录能力。'}
     >
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
         {field('sessdata', 'SESSDATA=', 'sessdataSet', 'sessdataHint', '粘贴 SESSDATA 的值')}
         {field('biliJct', 'bili_jct=', 'biliJctSet', 'biliJctHint', '粘贴 bili_jct 的值')}
         <div className="ab-flex">

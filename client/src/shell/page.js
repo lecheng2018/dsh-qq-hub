@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment, h } from '
 import { clone, setPath, getPath, cx } from '../core/utils.js'
 
 import { useStyle } from '../styles/use-style.js'
-import { WhaleIcon } from '../ui/icons.js'
+import { WhaleIcon, navIcon } from '../ui/icons.js'
 import { Switch, Btn, Empty, TabBoundary, Pill } from '../ui/primitives.js'
-import { NavBar } from './nav-bar.js'
+import { NavBar, SEARCH_ICON } from './nav-bar.js'
 
 import { get, post } from '../core/http.js'
 import { pickAvatar, avatarSrc } from '../domain/persona.js'
@@ -40,6 +40,8 @@ function QQHubPage() {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem('qq-hub.tab') || 'overview' } catch (e) { return 'overview' } })
   const [toastMsg, setToastMsg] = useState(null)
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [find, setFind] = useState(null)
+  const rootRef = useRef(null)
   const toastTimer = useRef(null)
   const dirtyRef = useRef(false)
   const saveRef = useRef(null)
@@ -65,16 +67,27 @@ function QQHubPage() {
     if (!dirtyRef.current) setDraft(clone(r.config))
   }, [])
   useEffect(() => { reload(); const t = setInterval(reload, 5000); return () => clearInterval(t) }, [reload])
-  const go = (id) => { setTab(id); try { localStorage.setItem('qq-hub.tab', id) } catch (e) {} }
+  const scrollTop = () => {
+    const el = rootRef.current
+    if (!el) return
+    if (typeof el.scrollTo === 'function') el.scrollTo({ top: 0, behavior: 'smooth' })
+    else el.scrollTop = 0
+  }
+  const go = (id) => {
+    setTab(id)
+    try { localStorage.setItem('qq-hub.tab', id) } catch (e) {}
+    if (rootRef.current) rootRef.current.scrollTop = 0
+  }
   // 标签多、一屏放不下：滚轮横着滚，选中的标签自动滚进视野
   const tabsRef = useRef(null)
+  const hasNav = Boolean(st && st.config && st.config.setupDone && !wizardOpen)
   useEffect(() => {
     const el = tabsRef.current
     if (!el) return
     const onWheel = (e) => { if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { el.scrollLeft += e.deltaY; e.preventDefault() } }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  })
+  }, [tab, hasNav])
   useEffect(() => { tabsRef.current?.querySelector('.ab-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) }, [tab])
   const dirty = useMemo(() => !!(st && draft) && JSON.stringify(draft) !== JSON.stringify(st.config), [st, draft])
   dirtyRef.current = dirty
@@ -159,45 +172,68 @@ function QQHubPage() {
     const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag)
     return <i className={cx('ab-dot', flag && 'ok')} title={flag ? '开着' : '关着'} aria-hidden="true" />
   }
+  const gwText = cfg.gateway === 'onebot'
+    ? 'OneBot'
+    : 'SnowLuma ' + (st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装')
   return (
-    <div className="ab-root">
+    <div className="ab-root" ref={rootRef}>
       <div className="ab-wrap">
-        {/* 紧凑顶栏：头像 + 名字 + 状态 + 主开关，代替旧的渐变大 hero */}
+        {/* 简约顶栏：左侧身份与在线态，右侧主控开关组 */}
         <header className="ab-topbar">
-          <button type="button" className="ab-avatar-btn" title="点击换头像" onClick={() => pickAvatar(toast, reload)}>
-            <img className="ab-avatar" src={avatarSrc(st)} alt="头像" />
-            <span className="ab-avatar-tip">换头像</span>
-          </button>
-          <div className="ab-topbar-main">
-            <h1>{(st.onebot.login && st.onebot.login.nickname) || '大肥鱼'}</h1>
-            <div className="ab-meta">QQ {cfg.botQQ} · {persona ? persona.name : '默认人格'}</div>
-            <div className="ab-pills">
-              <Pill kind={status.cls}><i className={cx('ab-dot', status.cls)} />{status.text}</Pill>
-              <Pill>SnowLuma {st.snowluma.installed ? (st.snowluma.running ? '运行中' : '没启动') : '未安装'}</Pill>
-              <Pill>QQ Hub v{st.version}</Pill>
+          <div className="ab-topbar-id">
+            <button type="button" className="ab-avatar-btn" title="点击换头像" onClick={() => pickAvatar(toast, reload)}>
+              <img className="ab-avatar" src={avatarSrc(st)} alt="头像" />
+              <span className="ab-avatar-tip">换头像</span>
+            </button>
+            <div className="ab-topbar-main">
+              <div className="ab-topbar-title">
+                <h1>{(st.onebot.login && st.onebot.login.nickname) || '大肥鱼'}</h1>
+                <Pill kind={status.cls}><i className={cx('ab-dot', status.cls)} />{status.text}</Pill>
+              </div>
+              <div className="ab-meta">
+                <span>QQ {cfg.botQQ || '未填'}</span>
+                <span className="ab-meta-sep" aria-hidden="true">·</span>
+                <span>{persona ? persona.name : '默认人格'}</span>
+                <span className="ab-meta-sep" aria-hidden="true">·</span>
+                <span>{gwText}</span>
+                <span className="ab-meta-sep" aria-hidden="true">·</span>
+                <span>v{st.version}</span>
+              </div>
             </div>
+            {!showWizard ? (
+              <button type="button" className="ab-mfind-trigger" aria-label="查找功能" title="查找功能" onClick={() => setFind('')}>
+                {navIcon(SEARCH_ICON)}
+              </button>
+            ) : null}
           </div>
           <div className="ab-topbar-side">
             <div className="ab-switch-row"><span>总开关</span><Switch on={cfg.enabled} onChange={(v) => quickToggle('enabled', v)} /></div>
+            <span className="ab-topbar-div" aria-hidden="true" />
             <div className="ab-switch-row"><span className="ab-muted">试运行</span><Switch on={cfg.dryRun} onChange={(v) => quickToggle('dryRun', v)} title="开着时只写日志，不真的发到 QQ" /></div>
           </div>
         </header>
         {showWizard ? <Wizard st={st} draft={draft} setDraft={setD} save={save} toast={toast} reload={reload} onClose={() => setWizardOpen(false)} /> : null}
-        {showWizard ? null : <NavBar tabs={tabs} cur={curTab} go={go} mark={mark} dirtyOf={tabDirty} subRef={tabsRef} />}
-        {showWizard ? null : <TabBoundary key={curTab.id} onHome={() => go('overview')}>{h(body, { ...props, mod: curTab.ext })}</TabBoundary>}
-        {showWizard || curTab.ext
-          ? null
-          // memory 模块的设置由「记忆」页自己在「整理与检索」卡里渲染（不再自动追加到页尾）；
-          // multi-parser 保留在扩展页设置，别的模块照旧嵌在所属标签页。
-          : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser' && !(curTab.id === 'memory' && m.id === 'memory')).map((m) => (
-            <div key={'embed-' + m.id} style={{ marginTop: 14 }}><ExtPage {...props} mod={m.id} embedded /></div>
-          ))}
+        {showWizard ? null : <NavBar tabs={tabs} cur={curTab} go={go} onScrollTop={scrollTop} mark={mark} dirtyOf={tabDirty} subRef={tabsRef} find={find} setFind={setFind} />}
+        {showWizard ? null : (
+          <div className="ab-page-body">
+            <TabBoundary key={curTab.id} onHome={() => go('overview')}>{h(body, { ...props, mod: curTab.ext })}</TabBoundary>
+            {curTab.ext
+              ? null
+              // memory 模块的设置由「记忆」页自己在「整理与检索」卡里渲染（不再自动追加到页尾）；
+              // multi-parser 保留在扩展页设置，别的模块照旧嵌在所属标签页。
+              : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== 'multi-parser' && !(curTab.id === 'memory' && m.id === 'memory')).map((m) => (
+                <div key={'embed-' + m.id} className="ab-embed-wrap"><ExtPage {...props} mod={m.id} embedded /></div>
+              ))}
+          </div>
+        )}
         {dirty && !showWizard ? (
           <div className="ab-savebar">
             <span className="msg">有改动还没保存</span>
-            <span className="ab-muted ab-small"><span className="ab-kbd">Ctrl</span> + <span className="ab-kbd">S</span></span>
-            <Btn kind="ghost" onClick={() => setDraft(clone(st.config))}>撤销</Btn>
-            <Btn kind="primary" onClick={() => save()}>保存设置</Btn>
+            <span className="ab-muted ab-small ab-savebar-kbd"><span className="ab-kbd">Ctrl</span> + <span className="ab-kbd">S</span></span>
+            <div className="ab-savebar-acts">
+              <Btn kind="ghost" onClick={() => setDraft(clone(st.config))}>撤销</Btn>
+              <Btn kind="primary" onClick={() => save()}>保存设置</Btn>
+            </div>
           </div>
         ) : null}
       </div>

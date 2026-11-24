@@ -1,5 +1,5 @@
 import { React, useState, useEffect, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, Switch, Select, Seg, Range, Empty, More } from '../ui/primitives.js'
+import { Card, FoldSection, Row, Btn, Switch, Select, Seg, Range, Empty, More } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { API } from '../core/api-base.js'
 import { clone, setPath, getPath, timeAgo, copy, cx } from '../core/utils.js'
@@ -108,7 +108,13 @@ function ModuleRow({ m, draft, setModules, toast, reload, compact = false }) {
         {detail && what ? <div className="what">{what}</div> : null}
         {errs.length ? (
           <div className="ab-note err" style={{ marginTop: 6 }}>
-            <div style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>{(open ? '▾ ' : '▸ ') + errs.length + ' 条报错：' + String(errs[0].message).split('\n')[0].slice(0, 120)}</div>
+            <div
+              role="button" tabIndex={0} aria-expanded={open} style={{ cursor: 'pointer' }}
+              onClick={() => setOpen(!open)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
+            >
+              {(open ? '▾ ' : '▸ ') + errs.length + ' 条报错：' + String(errs[0].message).split('\n')[0].slice(0, 120)}
+            </div>
             {open ? <div className="ab-code">{errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + ' ' : '') + (e.label || '') + '：' + e.message).join('\n\n')}</div> : null}
           </div>
         ) : null}
@@ -123,7 +129,7 @@ function ModuleRow({ m, draft, setModules, toast, reload, compact = false }) {
       </div>
       <div className="side">
         <Switch on={m.enabled} onChange={(v) => setMod({ enabled: v })} title={m.enabled ? '关掉这个模块' : '打开这个模块'} />
-        {m.builtin && m.hasUser ? <label className="ab-small ab-muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>用内置的<Switch on={m.useBuiltin} onChange={(v) => setMod({ useBuiltin: v })} /></label> : null}
+        {m.builtin && m.hasUser ? <label className="ab-small ab-muted" style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>用内置的<Switch on={m.useBuiltin} onChange={(v) => setMod({ useBuiltin: v })} /></label> : null}
       </div>
     </div>
   )
@@ -258,6 +264,7 @@ function Market({ st, toast, reload }) {
       if (r.ok) { load(); reload() }
     } finally { setBusy('') }
   }
+  const customNet = Boolean(httpProxy.trim() || indexText.trim())
   const stageText = { index: '读索引…', download: '下载中', install: '校验安装…', start: '启动模块…' }
   return (
     <Card
@@ -267,18 +274,6 @@ function Market({ st, toast, reload }) {
       right={<Switch on={enabled} onChange={toggle} />}
     >
       {!enabled ? <div className="ab-note">市场没开。打开右上角开关后刷新列表。</div> : null}
-      <div style={{ marginBottom: 10 }}>
-        <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>索引/加速源：每行一个完整 HTTPS 索引地址，按顺序尝试；清空后保存可恢复默认双源。</div>
-        <textarea className="ab-textarea" rows={3} value={indexText} placeholder="例如 https://ghfast.top/https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json" onChange={(e) => setIndexText(e.target.value)} />
-        <div className="ab-flex" style={{ marginTop: 4, justifyContent: 'flex-end' }}><Btn small onClick={saveSources}>保存加速源</Btn></div>
-      </div>
-      <div style={{ marginBottom: 10 }}>
-        <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。</div>
-        <div className="ab-flex">
-          <input className="ab-input" style={{ flex: 1 }} value={httpProxy} placeholder="例如 http://192.168.10.1:7890，留空直连" onChange={(e) => setHttpProxy(e.target.value)} />
-          <Btn small onClick={saveProxy}>保存代理</Btn>
-        </div>
-      </div>
       {enabled && !data ? <Empty icon="⏳" text="加载中…" /> : null}
       {enabled && data && !data.ok ? <div className="ab-note err">{data.message || '索引读不到'}（已装模块不受影响）</div> : null}
       {enabled && data && data.ok ? (
@@ -286,39 +281,68 @@ function Market({ st, toast, reload }) {
           {data.revoked && data.revoked.length ? <div className="ab-note warn">已装版本被撤回：{data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join('；')}。建议卸载或更新。</div> : null}
           {prog && busy ? <div className="ab-note">{prog.name || prog.id}：{stageText[prog.stage] || prog.stage}{prog.stage === 'download' && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : ''}</div> : null}
           {(data.list || []).length === 0 ? <Empty icon="📦" text="索引里还没有模块" /> : null}
-          {(data.list || []).map((e) => (
-            <div key={e.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--ab-line, rgba(127,127,127,.15))' }}>
-              <div className="ab-flex" style={{ alignItems: 'center', gap: 8 }}>
-                <b>{e.name || e.id}</b>
-                <span className="ab-small ab-muted">{e.version}{e.installed ? `（已装 ${e.installed}）` : ''}</span>
-                {e.update ? <span className="ab-pill ok">可更新</span> : null}
-                {e.delisted ? <span className="ab-pill warn">已下架</span> : null}
-                {e.foreign ? <span className="ab-pill warn">同名自有文件夹</span> : null}
-                <span style={{ flex: 1 }} />
-                {e.installed ? (
-                  <Fragment>
-                    {e.update && !e.blocked ? <Btn small kind="primary" disabled={busy === e.id} onClick={() => install(e)}>更新</Btn> : null}
-                    <Btn small disabled={busy === e.id} onClick={() => remove(e, false)}>卸载</Btn>
-                    <Btn small kind="ghost" disabled={busy === e.id} onClick={() => remove(e, true)}>卸载并清数据</Btn>
-                  </Fragment>
-                ) : (
-                  <Btn small kind="primary" disabled={busy === e.id || Boolean(e.blocked) || e.foreign} onClick={() => install(e)}>安装</Btn>
-                )}
-              </div>
-              {e.description ? <div className="ab-small" style={{ marginTop: 4 }}>{e.description}</div> : null}
-              <div className="ab-small ab-muted" style={{ marginTop: 4 }}>
-                {[e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join('、')}（仅展示，不是安全边界）`].filter(Boolean).join(' · ')}
-              </div>
-              {e.sha256 ? <div className="ab-small ab-muted" style={{ marginTop: 2, wordBreak: 'break-all' }}>sha256: {e.sha256}{e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : ''}</div> : null}
-              {e.blocked ? <div className="ab-note warn" style={{ marginTop: 4 }}>{e.blocked}</div> : null}
+          {(data.list || []).length ? (
+            <div className="ab-mkt-list">
+              {(data.list || []).map((e) => {
+                const verifyLines = [
+                  Array.isArray(e.capabilities) && e.capabilities.length ? `能力声明：${e.capabilities.join('、')}（仅展示，不是安全边界）` : '',
+                  e.sha256 ? `sha256: ${e.sha256}${e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : ''}` : '',
+                ].filter(Boolean)
+                return (
+                  <div key={e.id} className="ab-mkt">
+                    <div className="ab-mkt-head">
+                      <div className="ab-mkt-info">
+                        <b>{e.name || e.id}</b>
+                        <span className="ab-small ab-muted">{e.version}{e.installed ? `（已装 ${e.installed}）` : ''}</span>
+                        {e.update ? <span className="ab-pill ok">可更新</span> : null}
+                        {e.delisted ? <span className="ab-pill warn">已下架</span> : null}
+                        {e.foreign ? <span className="ab-pill warn">同名自有文件夹</span> : null}
+                      </div>
+                      {e.installed
+                        ? (e.update && !e.blocked ? <Btn small kind="primary" disabled={busy === e.id} onClick={() => install(e)}>更新</Btn> : <span className="ab-badge dim">已装</span>)
+                        : <Btn small kind="primary" disabled={busy === e.id || Boolean(e.blocked) || e.foreign} onClick={() => install(e)}>安装</Btn>}
+                    </div>
+                    {e.description ? <div className="ab-mkt-desc">{e.description}</div> : null}
+                    <div className="ab-mkt-meta">
+                      {[e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`].filter(Boolean).join(' · ')}
+                    </div>
+                    {e.blocked ? <div className="ab-note warn" style={{ marginTop: 6 }}>{e.blocked}</div> : null}
+                    {e.installed ? (
+                      <div className="ab-mkt-acts">
+                        <Btn small disabled={busy === e.id} onClick={() => remove(e, false)}>卸载</Btn>
+                        <Btn small kind="ghost" disabled={busy === e.id} onClick={() => remove(e, true)}>卸载并清数据</Btn>
+                      </div>
+                    ) : null}
+                    {verifyLines.length ? <More label="校验与能力声明">{verifyLines.join('\n')}</More> : null}
+                  </div>
+                )
+              })}
             </div>
-          ))}
-          <div className="ab-flex" style={{ marginTop: 8 }}>
+          ) : null}
+          <div className="ab-card-foot">
             <Btn small kind="ghost" onClick={async () => { setData(null); await load() }}>刷新列表</Btn>
-            {data.source ? <span className="ab-small ab-muted">索引源：{data.source}</span> : null}
+            {data.source ? <span className="ab-small ab-muted" style={{ wordBreak: 'break-all' }}>索引源：{data.source}</span> : null}
           </div>
         </Fragment>
       ) : null}
+      <FoldSection
+        title="索引源与代理设置"
+        desc="国内网络拉不动 GitHub 时可配加速源或 HTTP 代理。"
+        right={customNet ? <span className="ab-badge dim">已自定义</span> : null}
+      >
+        <div style={{ marginTop: 8, marginBottom: 12 }}>
+          <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>索引/加速源：每行一个完整 HTTPS 索引地址，按顺序尝试；清空后保存可恢复默认双源。</div>
+          <textarea className="ab-textarea" rows={3} value={indexText} placeholder="例如 https://ghfast.top/https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json" onChange={(e) => setIndexText(e.target.value)} />
+          <div className="ab-flex" style={{ marginTop: 6, justifyContent: 'flex-end' }}><Btn small onClick={saveSources}>保存加速源</Btn></div>
+        </div>
+        <div>
+          <div className="ab-small ab-muted" style={{ marginBottom: 4 }}>市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。</div>
+          <div className="ab-flex">
+            <input className="ab-input" style={{ flex: '1 1 200px' }} value={httpProxy} placeholder="例如 http://127.0.0.1:7890，留空直连" onChange={(e) => setHttpProxy(e.target.value)} />
+            <Btn small onClick={saveProxy}>保存代理</Btn>
+          </div>
+        </div>
+      </FoldSection>
     </Card>
   )
 }
@@ -432,9 +456,9 @@ function Modules({ st, draft, toast, reload }) {
         right={<Btn small onClick={() => setCreating((v) => !v)}>{creating ? '取消' : '＋ 新建'}</Btn>}
       >
         {creating ? (
-          <div className="ab-flex" style={{ marginBottom: 8 }}>
-            <input className="ab-input" style={{ maxWidth: 180 }} placeholder="id，如 weather" value={newId} onChange={(e) => setNewId(e.target.value.toLowerCase())} />
-            <input className="ab-input" placeholder="名字，如 查天气" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <div className="ab-flex" style={{ marginBottom: 10 }}>
+            <input className="ab-input" style={{ flex: '1 1 140px' }} placeholder="id，如 weather" value={newId} onChange={(e) => setNewId(e.target.value.toLowerCase())} />
+            <input className="ab-input" style={{ flex: '2 1 160px' }} placeholder="名字，如 查天气" value={newName} onChange={(e) => setNewName(e.target.value)} />
             <Btn kind="primary" small disabled={!newId.trim()} onClick={create}>新建</Btn>
           </div>
         ) : null}

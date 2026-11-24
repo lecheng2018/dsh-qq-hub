@@ -66,16 +66,14 @@ function Stickers({ draft, setDraft, toast }) {
       </Card>
       <Card
         title={'表情库' + (items ? '（' + items.length + ' 张）' : '')}
-        right={(
-          <div className="ab-flex">
-            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => { upload(e.target.files); e.target.value = '' }} />
-            <input className="ab-input sm" style={{ width: 140 }} placeholder="名字（可不填）" value={newName} onChange={(e) => setNewName(e.target.value)} />
-            <Btn small onClick={() => fileRef.current && fileRef.current.click()}>＋ 上传</Btn>
-            <Btn small title="把机器人号 QQ「我喜欢的」里已有的表情导进来" onClick={async () => { toast('正在从 QQ 收藏导入…'); const r = await post('/sticker/import-qq'); toast(r.message, r.ok === false ? 'err' : 'ok'); load() }}>从 QQ 收藏导入</Btn>
-            <Btn small kind="ghost" onClick={load}>刷新</Btn>
-          </div>
-        )}
+        right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}
       >
+        <div className="ab-flex" style={{ marginBottom: 12 }}>
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => { upload(e.target.files); e.target.value = '' }} />
+          <input className="ab-input" style={{ flex: '1 1 140px', maxWidth: 220 }} placeholder="名字（可不填）" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <Btn small onClick={() => fileRef.current && fileRef.current.click()}>＋ 上传</Btn>
+          <Btn small title="把机器人号 QQ「我喜欢的」里已有的表情导进来" onClick={async () => { toast('正在从 QQ 收藏导入…'); const r = await post('/sticker/import-qq'); toast(r.message, r.ok === false ? 'err' : 'ok'); load() }}>从 QQ 收藏导入</Btn>
+        </div>
         {items === null
           ? <Empty icon="⏳" text="加载中…" />
           : items.length === 0

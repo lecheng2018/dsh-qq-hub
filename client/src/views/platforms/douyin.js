@@ -50,7 +50,7 @@ function Douyin({ draft, setDraft, toast }) {
       >
         <div className="ab-section-title" style={{ marginTop: 4 }}>机器人账号</div>
         <Row label="抖音账号" hint="建议用小号。扫一次码就行，登录状态存在专用浏览器里">
-          <div>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             <div className="ab-flex">
               <Btn small kind="primary" onClick={startLogin} disabled={!!busy || !!login}>{busy === 'login' ? '正在打开浏览器…' : login ? '等你扫码…' : '扫码登录'}</Btn>
               <Btn small onClick={async () => { setBusy('check'); const r = await get('/douyin/account'); setBusy(''); setS({ ...(s || {}), account: r }) }} disabled={!!busy}>{busy === 'check' ? '检查中…' : '检查登录'}</Btn>
@@ -82,7 +82,7 @@ function Douyin({ draft, setDraft, toast }) {
 
         <div className="ab-section-title">主人账号绑定</div>
         <Row label="你的抖音号 / 主页链接" hint="填你的抖音号或主页链接，点「核对」。核对后刷到好玩的视频会在评论里真的 @你（你会收到抖音通知；认不出你就不发）。">
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             {f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })}
             <div className="ab-flex" style={{ marginTop: 6 }}>
               <Btn small kind="primary" onClick={act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' })} disabled={!!busy}>{busy === 'confirm' ? '核对中…' : '核对'}</Btn>

@@ -47,7 +47,7 @@ return function PurposePanel(props) {
       h(Btn, { small: true, disabled: busy === 'fire', onClick: fire }, busy === 'fire' ? '…' : '现在就让她来找我'),
       h(Btn, { small: true, disabled: busy === 'preview', onClick: loadPreview }, busy === 'preview' ? '…' : '看她在想什么（预览）')),
     preview
-      ? h('div', { className: 'ab-small', style: { marginTop: 10, borderTop: '1px solid rgba(255,255,255,.08)', paddingTop: 8 } },
+      ? h('div', { className: 'ab-small', style: { marginTop: 10, borderTop: '1px solid var(--ab-line, rgba(127,127,127,.18))', paddingTop: 8 } },
           h('div', { style: { marginBottom: 4 } }, '素材 ' + (preview.stats?.total ?? preview.materials?.length ?? 0) + ' 条 · 候选 ' + (preview.candidates || []).length + ' 个：'),
           (preview.candidates || []).slice(0, 6).map((c, i) => h('div', { key: i, className: 'ab-muted', style: { paddingLeft: 10 } }, '· ' + c.text)),
           preview.selected ? h('div', { style: { marginTop: 4 } }, '→ 挑了：' + preview.selected.text) : null)

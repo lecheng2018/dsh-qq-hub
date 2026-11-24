@@ -136,7 +136,7 @@ function Model({ st, draft, setDraft, toast }) {
           <Seg value={draft.model.reasoningEffort || 'low'} disabled={noReasoning} onChange={(v) => setDraft(setPath(draft, 'model.reasoningEffort', v))} options={[{ value: 'low', label: '低' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' }]} />
         </Row>
         <div className="ab-flex" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--ab-line)', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div className="ab-small ab-muted">
+          <div className="ab-small ab-muted" style={{ flex: '1 1 240px', minWidth: 0 }}>
             改了模型保存后，点右侧按钮可立即把所有已有 QQ 会话切过去（否则等对方发下一条才切）。
           </div>
           <Btn
@@ -188,21 +188,23 @@ function Model({ st, draft, setDraft, toast }) {
           ? <Empty icon="⏳" text="加载中…" />
           : list.length === 0 ? <Empty text="DSH 没有列出模型" />
             : (
-              <table className="ab-table">
-                <tbody>
-                  {list.map((m) => (
-                    <tr key={key(m)}>
-                      <td>{labelOf(m)}</td>
-                      <td className="ab-muted">{m.provider}</td>
-                      <td>{ping[key(m)] || ''}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <Btn small kind="ghost" onClick={() => test(m)}>测速</Btn>
-                        <Btn small kind="ghost" onClick={() => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') }}>用这个</Btn>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="ab-table-wrap">
+                <table className="ab-table">
+                  <tbody>
+                    {list.map((m) => (
+                      <tr key={key(m)}>
+                        <td>{labelOf(m)}</td>
+                        <td className="ab-muted">{m.provider}</td>
+                        <td>{ping[key(m)] || ''}</td>
+                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <Btn small kind="ghost" onClick={() => test(m)}>测速</Btn>
+                          <Btn small kind="ghost" onClick={() => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') }}>用这个</Btn>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
       </Card>
     </div>

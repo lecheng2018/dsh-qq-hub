@@ -5,14 +5,15 @@ import { cx, parsePct } from '../core/utils.js'
  * 注意：ExtPanel 会把 Card/Btn/Switch/Row/Empty/Select/Seg/Range 这些名字原样传给
  * 模块的自定义 panel.js，导出名是隐形契约，只加不改。 */
 
-function Switch({ on, onChange, disabled, title }) {
-  return <button type="button" className={cx('ab-switch', on && 'on')} onClick={() => !disabled && onChange(!on)} disabled={disabled} title={title} role="switch" aria-checked={!!on} />
+function Switch({ on, onChange, disabled, title, label }) {
+  return <button type="button" className={cx('ab-switch', on && 'on')} onClick={() => !disabled && onChange(!on)} disabled={disabled} title={title} aria-label={label || title} role="switch" aria-checked={!!on} />
 }
 
-/** 字段行：左边是 label + hint，右边是控件；窄屏自动改成上下两行。 */
+/** 字段行：左边是 label + hint，右边是控件；窄屏自动改成上下两行（纯开关行保持左右对齐，节省留白）。 */
 function Row({ label, hint, children }) {
+  const isSwitchOnly = React.isValidElement(children) && children.type === Switch
   return (
-    <div className="ab-row">
+    <div className={cx('ab-row', isSwitchOnly && 'ab-row-sw')}>
       <div className="ab-label">
         <b>{label}</b>
         {hint ? <small>{hint}</small> : null}
@@ -29,10 +30,10 @@ function Card({ title, desc, icon, right, more, collapse, children, className })
     return (
       <div className={cx('ab-card', className)}>
         {title ? (
-          <div className="ab-flex" style={{ marginBottom: desc || more ? 0 : 10 }}>
+          <div className="ab-card-head" style={{ marginBottom: desc || more ? 0 : 12 }}>
             <h3>{icon || null}{title}</h3>
             <div className="ab-spacer" />
-            {right || null}
+            {right ? <div className="ab-card-right">{right}</div> : null}
           </div>
         ) : null}
         {desc ? <p className="ab-desc">{desc}</p> : null}
@@ -43,17 +44,18 @@ function Card({ title, desc, icon, right, more, collapse, children, className })
   }
   return (
     <div className={cx('ab-card ab-fold', !open && 'closed', className)}>
-      <div
-        className="ab-fold-head" role="button" tabIndex={0} aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
-      >
-        <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
-        </span>
-        <h3>{icon || null}{title}</h3>
-        <div className="ab-spacer" />
-        {right || null}
+      <div className="ab-fold-bar" style={{ marginBottom: desc || open ? 6 : 0 }}>
+        <div
+          className="ab-fold-head" role="button" tabIndex={0} aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
+        >
+          <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
+          </span>
+          <h3>{icon || null}{title}</h3>
+        </div>
+        {right ? <div className="ab-card-right">{right}</div> : null}
       </div>
       {desc ? <p className="ab-desc">{desc}</p> : null}
       {open ? children : null}
@@ -66,22 +68,22 @@ function Card({ title, desc, icon, right, more, collapse, children, className })
 function FoldSection({ title, desc, right, defaultOpen = false, children, style }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="ab-fold-section" style={{ marginTop: 14, ...style }}>
-      <div className="ab-flex" style={{ alignItems: 'center', marginBottom: open && desc ? 4 : 0 }}>
+    <div className="ab-fold-section" style={style}>
+      <div className="ab-fold-bar">
         <div
-          className="ab-fold-head" style={{ margin: 0, flex: 1, padding: '4px 0' }} role="button" tabIndex={0} aria-expanded={open}
+          className="ab-fold-head" role="button" tabIndex={0} aria-expanded={open}
           onClick={() => setOpen(!open)}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
         >
           <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
           </span>
-          <span style={{ fontWeight: 600, fontSize: 13.5 }}>{title}</span>
+          <span className="ab-fold-title">{title}</span>
         </div>
-        {right || null}
+        {right ? <div className="ab-card-right">{right}</div> : null}
       </div>
-      {desc ? <p className="ab-desc" style={{ margin: '2px 0 8px 20px', fontSize: 12 }}>{desc}</p> : null}
-      {open ? <div style={{ paddingTop: 4 }}>{children}</div> : null}
+      {desc ? <p className="ab-fold-section-desc">{desc}</p> : null}
+      {open ? <div className="ab-fold-section-body">{children}</div> : null}
     </div>
   )
 }
@@ -123,20 +125,42 @@ function Pill({ kind, title, children }) {
 function Select({ value, options, onChange, placeholder, width }) {
   const [open, setOpen] = useState(false)
   const [act, setAct] = useState(-1)
+  const [pos, setPos] = useState({ up: false, alignR: false })
   const ref = useRef(null)
+  const btnRef = useRef(null)
+  const popRef = useRef(null)
   const cur = options.find((o) => o.value === value)
   useEffect(() => {
-    if (!open) return
+    if (!open) return undefined
     const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
+    const esc = (e) => { if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus() } }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', esc)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', esc) }
   }, [open])
+  useEffect(() => {
+    if (open) popRef.current?.querySelector('.ab-sel-opt.act')?.scrollIntoView({ block: 'nearest' })
+  }, [open, act])
   const pick = (o) => { onChange(o.value); setOpen(false) }
-  const openAt = () => { setOpen(true); setAct(Math.max(0, options.indexOf(cur))) }
+  const openAt = () => {
+    if (ref.current && typeof window !== 'undefined') {
+      const r = ref.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - r.bottom
+      const spaceAbove = r.top
+      const spaceRight = window.innerWidth - r.left
+      setPos({
+        up: spaceBelow < 240 && spaceAbove > spaceBelow,
+        alignR: spaceRight < 260 && r.right > 200,
+      })
+    }
+    setOpen(true)
+    setAct(Math.max(0, options.indexOf(cur)))
+  }
   const onKey = (e) => {
     if (e.key === 'Escape') { setOpen(false); return }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
+      if (!options.length) return
       if (!open) return openAt()
       setAct((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length)
     }
@@ -152,19 +176,19 @@ function Select({ value, options, onChange, placeholder, width }) {
     if (o.group && o.group !== lastGroup) items.push(<div key={'g' + i} className="ab-sel-group">{o.group}</div>)
     lastGroup = o.group || lastGroup
     items.push(
-      <div key={'o' + i} role="option" aria-selected={o.value === value} className={cx('ab-sel-opt', o.value === value && 'on', i === act && 'act')} onMouseEnter={() => setAct(i)} onMouseDown={(e) => { e.preventDefault(); pick(o) }}>
+      <div key={'o' + i} role="option" aria-selected={o.value === value} className={cx('ab-sel-opt', o.value === value && 'on', i === act && 'act')} onMouseEnter={() => setAct(i)} onClick={() => pick(o)}>
         <span className="ck">{o.value === value ? '✓' : ''}</span>
         <span className="tx">{o.label}{o.desc ? <span className="ds">{o.desc}</span> : null}</span>
       </div>,
     )
   })
   return (
-    <div className={cx('ab-sel', open && 'open')} ref={ref} style={width ? { minWidth: width } : null}>
-      <button type="button" className="ab-sel-btn" onClick={() => (open ? setOpen(false) : openAt())} onKeyDown={onKey} aria-haspopup="listbox" aria-expanded={open}>
+    <div className={cx('ab-sel', open && 'open', pos.up && 'up', pos.alignR && 'align-r')} ref={ref} style={width ? { '--ab-sel-w': typeof width === 'number' ? width + 'px' : width } : null}>
+      <button ref={btnRef} type="button" className="ab-sel-btn" onClick={() => (open ? setOpen(false) : openAt())} onKeyDown={onKey} aria-haspopup="listbox" aria-expanded={open}>
         <span className="v">{cur ? cur.label : <span className="ab-muted">{placeholder || '请选择'}</span>}</span>
         <svg className="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 4.5 6 7.5 9 4.5" /></svg>
       </button>
-      {open ? <div className="ab-sel-pop" role="listbox">{items}</div> : null}
+      {open ? <div ref={popRef} className="ab-sel-pop" role="listbox">{items}</div> : null}
     </div>
   )
 }
@@ -195,9 +219,9 @@ function Range({ value, min, max, step, onChange, fmt }) {
 
 function Seg({ value, options, onChange, disabled }) {
   return (
-    <div className={'ab-seg' + (disabled ? ' off' : '')}>
+    <div className={'ab-seg' + (disabled ? ' off' : '')} role="radiogroup">
       {options.map((o) => (
-        <button key={o.value} type="button" className={value === o.value ? 'on' : ''} disabled={!!disabled} onClick={() => { if (!disabled) onChange(o.value) }}>{o.label}</button>
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} className={value === o.value ? 'on' : ''} disabled={!!disabled} onClick={() => { if (!disabled) onChange(o.value) }}>{o.label}</button>
       ))}
     </div>
   )

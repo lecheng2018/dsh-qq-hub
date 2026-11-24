@@ -1,89 +1,150 @@
-/* QQ Hub 面板样式 —— 现代中性 SaaS 风。
+/* QQ Hub 面板样式 —— 简约现代中性风，原生对齐 DSH 0.2.3 主题变量（--dsw-alias-*）。
  * 设计原则：
- *   - 一套 token 从上到下只声明一次，不再有「美化」覆盖段；
- *   - 层级靠间距和字重，不靠渐变和装饰条；
- *   - 跟随宿主 DSH 的主题变量（--dsw-alias-*），浅色/深色自动切换；
- *   - 变量名与类名沿用 .ab- / --ab- 前缀：内置模块的自定义面板（memory-privacy、
- *     token-guardian 等）直接引用这些类和变量，是隐形契约，不能改名。
+ *   - 颜色令牌严格对照 DSH 实际亮/暗色值：主色取 --dsw-alias-state-business-primary（品牌蓝），
+ *     不使用黑白反色的 --dsw-alias-brand-primary 作彩底，保证亮/暗模式均 ≥4.5:1 可读；
+ *   - 表面层级在亮色下用 bg-module-platform（画布）→ bg-layer-1（白卡片）→ bg-layer-3（浮层）清晰分层，
+ *     暗色下用 bg-base（深画布）→ bg-layer-1（卡片）→ bg-layer-3（浮层/激活态），绝不塌平或反转；
+ *   - 容器查询 + 视口响应式双保险：宽屏、DSH 侧栏展开后的窄中栏、320px 小屏手机均无溢出与挤压；
+ *   - 保留 .ab- / --ab- 命名与扩展模块 panel.js 所需别名（含深底弹窗 --ab-panel-bg）。
  */
 
 /* ---------------- tokens ---------------- */
 .ab-root {
-  --ab-bg: var(--dsw-alias-bg-base, #f5f6f8);
+  /* 表面与层级（亮色模式：柔灰画布 + 纯白卡片 + 清晰细线） */
+  --ab-bg: var(--dsw-alias-bg-module-platform, #f5f6f8);
   --ab-card: var(--dsw-alias-bg-layer-1, #ffffff);
-  --ab-card-2: var(--dsw-alias-bg-layer-2, #f3f4f6);
-  --ab-text: var(--dsw-alias-label-primary, #1a1c20);
-  --ab-sub: var(--dsw-alias-label-secondary, #5c626d);
-  --ab-dim: var(--dsw-alias-label-tertiary, #878d97);
-  --ab-line: var(--dsw-alias-border-l1, rgba(17, 20, 28, .08));
-  --ab-line-2: var(--dsw-alias-border-l2, rgba(17, 20, 28, .14));
-  --ab-sea: #3366e6;
-  --ab-deep: #274fb8;
-  --ab-sky: #7fa3f0;
-  --ab-foam: rgba(51, 102, 230, .07);
-  --ab-foam-2: rgba(51, 102, 230, .14);
-  --ab-ok: var(--dsw-alias-state-success-primary, #1a8a4a);
-  --ab-warn: var(--dsw-alias-state-warn-primary, #b37d00);
-  --ab-err: var(--dsw-alias-state-error-primary, #d33b3b);
-  --ab-hover: var(--dsw-alias-interactive-bg-hover, rgba(17, 20, 28, .05));
-  --ab-shadow: 0 1px 2px rgba(16, 24, 40, .05);
-  --ab-shadow-lg: 0 8px 28px rgba(16, 24, 40, .16);
-  --ab-radius: 12px;
-  --ab-radius-sm: 8px;
+  --ab-card-2: var(--dsw-alias-bg-module-platform, #f2f4f7);
+  --ab-overlay: var(--dsw-alias-bg-layer-3, #ffffff);
+  --ab-seg-on: var(--dsw-alias-bg-layer-1, #ffffff);
+  --ab-text: var(--dsw-alias-label-primary, #151821);
+  --ab-sub: var(--dsw-alias-label-secondary, #5a616e);
+  --ab-dim: var(--dsw-alias-label-tertiary, #737a87);
+  --ab-line: var(--dsw-alias-border-l2, rgba(15, 23, 42, .09));
+  --ab-line-2: var(--dsw-alias-border-l4, rgba(15, 23, 42, .16));
+
+  /* 强调色：跟随 DSH 业务蓝，不用黑白反色的 --dsw-alias-brand-primary */
+  --ab-sea: var(--dsw-alias-state-business-primary, #3366e6);
+  --ab-solid: var(--dsw-alias-button-info-fill, var(--ab-sea));
+  --ab-deep: color-mix(in srgb, var(--ab-sea) 86%, var(--ab-text));
+  --ab-link: var(--dsw-alias-link, var(--ab-deep));
+  --ab-sky: color-mix(in srgb, var(--ab-sea) 52%, var(--ab-line-2));
+  --ab-foam: color-mix(in srgb, var(--ab-sea) 8%, transparent);
+  --ab-foam-2: color-mix(in srgb, var(--ab-sea) 15%, transparent);
+
+  /* 状态色：亮色模式下加深绿/琥珀，保证小字与徽章达 WCAG AA 对比度 */
+  --ab-ok: color-mix(in srgb, var(--dsw-alias-state-success-primary, #178a4b) 72%, #000);
+  --ab-ok-solid: color-mix(in srgb, var(--dsw-alias-state-success-primary, #178a4b) 76%, #000);
+  --ab-warn: var(--dsw-alias-state-warn-label, #b45309);
+  --ab-err: var(--dsw-alias-state-error-primary, #d63b3b);
+  --ab-err-solid: var(--dsw-alias-state-error-primary, #d63b3b);
+  --ab-hover: var(--dsw-alias-interactive-bg-hover, rgba(38, 49, 72, .06));
+
+  /* 模块 panel.js 隐形契约别名（token-guardian / token-billing / memory-privacy / distill） */
+  --ab-surface: var(--ab-card-2);
+  /* memory-privacy 弹窗正文硬编码浅字 #e8e8e8，必须保持深底（亮/暗均取 hovercard 深底） */
+  --ab-panel-bg: var(--dsw-alias-hovercard-bg, #1a1f2b);
+  --ab-muted-2: var(--ab-line);
+  --ab-accent: var(--ab-sea);
+  --ab-subtle-accent: var(--ab-foam);
+  --ab-accent-line: color-mix(in srgb, var(--ab-sea) 32%, transparent);
+  --ab-success: var(--ab-ok);
+  --ab-muted: var(--ab-sub);
+  --ab-text-secondary: var(--ab-sub);
+
+  --ab-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+  --ab-shadow-lg: 0 10px 30px rgba(15, 23, 42, .12), 0 1px 3px rgba(15, 23, 42, .06);
+  --ab-radius: 14px;
+  --ab-radius-sm: 9px;
   --ab-focus: 0 0 0 3px var(--ab-foam-2);
 
   height: 100%;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--ab-bg);
   color: var(--ab-text);
   font-size: 14px;
   line-height: 1.55;
-  padding: var(--dsh-frame-top-clearance, 24px) 0 48px;
+  padding: 0 0 56px;
   box-sizing: border-box;
-  font-family: var(--dsh-font-family-ui, inherit);
+  font-family: var(--dsw-font-family, var(--dsh-font-family-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif));
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
-  --ab-sea: #6a95f5;
-  --ab-deep: #a5c0fa;
-  --ab-sky: #8fb0f7;
-  --ab-foam: rgba(106, 149, 245, .10);
-  --ab-foam-2: rgba(106, 149, 245, .20);
-  --ab-ok: #3fb968;
-  --ab-warn: #d9a13a;
-  --ab-err: #e5584f;
-  --ab-shadow: 0 1px 2px rgba(0, 0, 0, .3);
-  --ab-shadow-lg: 0 8px 28px rgba(0, 0, 0, .45);
+  --ab-bg: var(--dsw-alias-bg-base, #151619);
+  --ab-card: var(--dsw-alias-bg-layer-1, #1f2024);
+  /* 深色下凹槽表面比卡片更沉，确保 segmented/code/进度底槽与卡片有正向景深 */
+  --ab-card-2: color-mix(in srgb, var(--dsw-alias-bg-base, #151619) 55%, var(--dsw-alias-bg-layer-1, #1f2024));
+  --ab-overlay: var(--dsw-alias-bg-layer-3, #2b2d32);
+  --ab-seg-on: var(--dsw-alias-bg-layer-3, #31333a);
+  --ab-line: var(--dsw-alias-border-l2, rgba(255, 255, 255, .10));
+  --ab-line-2: var(--dsw-alias-border-l4, rgba(255, 255, 255, .18));
+
+  /* 深色实底按钮/徽章采用较深的 info-hover（deepseek-500），保证纯白字对比度 ≥4.5:1 */
+  --ab-solid: var(--dsw-alias-button-info-hover, #3867e8);
+  --ab-deep: var(--dsw-alias-link, #82b1ff);
+  --ab-sky: color-mix(in srgb, var(--ab-sea) 56%, transparent);
+  --ab-foam: color-mix(in srgb, var(--ab-sea) 13%, transparent);
+  --ab-foam-2: color-mix(in srgb, var(--ab-sea) 22%, transparent);
+
+  --ab-ok: var(--dsw-alias-state-success-secondary, #4ade80);
+  --ab-ok-solid: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 70%, #000);
+  --ab-warn: var(--dsw-alias-state-warn-secondary, #fbbf24);
+  --ab-err: var(--dsw-alias-state-error-primary, #f87171);
+  --ab-err-solid: color-mix(in srgb, var(--dsw-alias-state-error-primary, #ef4444) 76%, #000);
+  --ab-shadow: 0 1px 2px rgba(0, 0, 0, .26);
+  --ab-shadow-lg: 0 12px 32px rgba(0, 0, 0, .50);
 }
 .ab-root *, .ab-root *::before, .ab-root *::after { box-sizing: border-box }
+.ab-root a { color: var(--ab-link); text-decoration: none }
+.ab-root a:hover { text-decoration: underline }
+
+/* 防止 DSH 全局 corner-shape: superellipse(1.5) 把正圆头像/圆点/胶囊压成超椭圆 */
+.ab-avatar, .ab-avatar-btn, .ab-avatar-tip, .ab-pill, .ab-badge, .ab-dot,
+.ab-chip, .ab-chipbtn, .ab-switch, .ab-switch::after, .ab-mgrp-ic,
+.ab-step::before, .ab-check i, .ab-install-steps .st i, .ab-choice b::before,
+.ab-sticker .x, .ab-shot .x,
+.ab-mood, .ab-mood > i, .ab-range .val, .ab-psec-head::before,
+.ab-grp .dirty, .ab-tab .dirty, .ab-chipbtn .dirty, .ab-mgrp .dirty { corner-shape: round }
 
 /* ---------------- 布局 ---------------- */
-.ab-wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px }
+.ab-wrap { max-width: 980px; margin: 0 auto; padding: var(--dsh-frame-top-clearance, 14px) 24px 0 }
+.ab-page-body { container-type: inline-size; container-name: ab }
+.ab-embed-wrap { margin-top: 14px }
 /* 单列轨道必须写成 minmax(0, 1fr)：裸 1fr 的最小值是 min-content，卡片里任何不可收缩的
  * 内容（扩展页紧凑行的 nowrap 描述、长路径、sha256……）都会把轨道顶到内容宽，
  * 整页跟着横向溢（真机 2026-11-21：系统 → 扩展页 393px 视口下轨道被撑到 1344px）。 */
-.ab-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) }
+.ab-grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) }
 /* 网格轨道用 min(Npx, 100%) 而不是裸 Npx：窄屏（<320px 内容宽）时轨道能收到容器宽，
  * 否则 1fr 的隐式 min-content 会把整条轨道顶出视口、页面出现横向滚动（真机 2026-11-15） */
 .ab-g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)) }
-.ab-g4 { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)) }
+.ab-g4 { grid-template-columns: repeat(4, minmax(0, 1fr)) }
+.ab-platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: 6px 18px; padding: 4px 0 }
+.ab-platform-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 2px; border-bottom: 1px solid var(--ab-line); font-size: 13px }
 
-/* ---------------- 顶栏（替代旧 hero，无卡片无波浪） ---------------- */
-.ab-topbar { display: flex; align-items: center; gap: 14px; padding: 14px 2px 16px }
-.ab-avatar { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: 50% 18%; background: var(--ab-card); border: 1px solid var(--ab-line-2); flex: none; display: block }
+/* ---------------- 顶栏 ---------------- */
+.ab-topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; padding: 10px 2px 14px }
+.ab-topbar-id { display: flex; align-items: center; gap: 14px; flex: 1 1 280px; min-width: 0 }
+.ab-avatar { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: 50% 18%; background: var(--ab-card); border: 1px solid var(--ab-line-2); flex: none; display: block; transition: border-color .15s }
 .ab-topbar-main { flex: 1; min-width: 0 }
-.ab-topbar h1 { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.3; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }
-.ab-topbar .ab-meta { color: var(--ab-sub); font-size: 13px; margin-top: 2px }
-.ab-topbar-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex: none }
+.ab-topbar-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.ab-topbar h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.015em; line-height: 1.3; word-break: break-word }
+.ab-topbar .ab-meta { color: var(--ab-sub); font-size: 12.5px; margin-top: 3px; display: flex; align-items: center; flex-wrap: wrap; gap: 3px 7px }
+.ab-topbar .ab-meta-sep { opacity: .4 }
+.ab-topbar-side { display: flex; align-items: center; gap: 14px; flex: none; padding: 7px 14px; border-radius: var(--ab-radius); background: var(--ab-card); border: 1px solid var(--ab-line); box-shadow: var(--ab-shadow) }
+.ab-topbar-div { width: 1px; height: 18px; background: var(--ab-line); flex: none }
 .ab-avatar-btn { position: relative; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; flex: none }
-.ab-avatar-btn .ab-avatar-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(15, 23, 42, .5); color: #fff; font-size: 12px; opacity: 0; transition: opacity .15s }
+.ab-avatar-btn:hover .ab-avatar { border-color: var(--ab-sea) }
+.ab-avatar-btn .ab-avatar-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(15, 23, 42, .56); color: #fff; font-size: 11px; font-weight: 500; opacity: 0; transition: opacity .15s }
 .ab-avatar-btn:hover .ab-avatar-tip, .ab-avatar-btn:focus-visible .ab-avatar-tip { opacity: 1 }
+.ab-mfind-trigger { display: none }
 
-.ab-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px }
-.ab-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--ab-card); border: 1px solid var(--ab-line); color: var(--ab-sub) }
-.ab-pill.ok { color: var(--ab-ok); border-color: color-mix(in srgb, var(--ab-ok) 25%, transparent); background: color-mix(in srgb, var(--ab-ok) 7%, var(--ab-card)) }
-.ab-pill.warn { color: var(--ab-warn); border-color: color-mix(in srgb, var(--ab-warn) 30%, transparent); background: color-mix(in srgb, var(--ab-warn) 8%, var(--ab-card)) }
-.ab-pill.err { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 30%, transparent); background: color-mix(in srgb, var(--ab-err) 7%, var(--ab-card)) }
+.ab-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px }
+.ab-desc + .ab-pills, .ab-card-head + .ab-pills { margin-top: 0 }
+.ab-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; line-height: 1.5; background: var(--ab-card-2); border: 1px solid var(--ab-line); color: var(--ab-sub); max-width: 100% }
+.ab-pill.ok { color: var(--ab-ok); border-color: color-mix(in srgb, var(--ab-ok) 26%, transparent); background: color-mix(in srgb, var(--ab-ok) 9%, var(--ab-card)) }
+.ab-pill.warn { color: var(--ab-warn); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent); background: color-mix(in srgb, var(--ab-warn) 10%, var(--ab-card)) }
+.ab-pill.err { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 28%, transparent); background: color-mix(in srgb, var(--ab-err) 9%, var(--ab-card)) }
 .ab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ab-dim); flex: none }
 .ab-dot.ok { background: var(--ab-ok) }
 .ab-dot.warn { background: var(--ab-warn) }
@@ -91,297 +152,365 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 
 /* ---------------- 桌面导航（分组 + 标签两层） ---------------- */
 /* 背景用不透明底色：吸顶元素挂 backdrop-filter 会让 Electron 每帧都对背后内容做模糊，
- * 滚动/点击掉帧的大头就是它（真机 2026-11-15 反馈）。毛玻璃观感让位给流畅度。 */
-.ab-nav { position: sticky; top: 0; z-index: 5; margin: var(--dsh-frame-top-clearance, 24px) 0 14px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow) }
-/* ::before 是滚动遮罩：吸顶后盖住导航上方的宿主预留条，防止滚动内容从那一条里透出来。
- * 所以导航必须保留等高的顶部间距，把非滚动内容（顶栏）让出这条带——之前删掉这段间距，
- * 遮罩条正好压在顶栏的状态胶囊上，文字被「裁」掉一半（真机 2026-11-14 反馈）。 */
-.ab-nav::before { content: ""; position: absolute; left: -26px; right: -26px; bottom: calc(100% + 1px); height: var(--dsh-frame-top-clearance, 24px); background: var(--ab-bg); pointer-events: none }
-.ab-nav-top { display: flex; align-items: center; gap: 6px; padding: 6px }
-.ab-nav-groups { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none }
+ * 滚动/点击掉帧的大头就是它（真机 2026-11-15 反馈）。毛玻璃观感让位给流畅度。
+ * z-index: 25 高于 .ab-savebar (15)，防止快捷查找弹层被底栏压住。 */
+.ab-nav { position: sticky; top: calc(var(--dsh-frame-top-clearance, 0px) + 8px); z-index: 25; margin: calc(var(--dsh-frame-top-clearance, 0px) + 12px) 0 16px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow) }
+/* ::before 遮住吸顶后导航上方的宿主预留条（含 8px 呼吸距），防止滚动内容从缝里透出；
+ * 高度总比 margin-top 小 1px，确保未吸顶时绝不遮挡上方顶栏。 */
+.ab-nav::before { content: ""; position: absolute; left: -26px; right: -26px; bottom: calc(100% + 1px); height: calc(var(--dsh-frame-top-clearance, 0px) + 10px); background: var(--ab-bg); pointer-events: none }
+.ab-nav-top { display: flex; align-items: center; gap: 6px; padding: 6px 8px }
+.ab-nav-groups { display: flex; gap: 3px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none }
 .ab-nav-groups::-webkit-scrollbar, .ab-nav-sub::-webkit-scrollbar { display: none }
-.ab-grp { flex: none; position: relative; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 0; border-radius: var(--ab-radius-sm); background: transparent; color: var(--ab-sub); font: inherit; font-size: 13px; cursor: pointer; transition: background .15s, color .15s }
-.ab-grp svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none }
+.ab-grp { flex: none; position: relative; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 0; border-radius: var(--ab-radius-sm); background: transparent; color: var(--ab-sub); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s }
+.ab-grp svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none }
 .ab-grp:hover { background: var(--ab-hover); color: var(--ab-text) }
 .ab-grp.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }
-.ab-grp .dirty { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
-.ab-find-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-dim); font: inherit; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s }
-.ab-find-btn:hover { color: var(--ab-text); border-color: var(--ab-line-2) }
+.ab-grp .dirty { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
+.ab-find-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 10px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-sub); font: inherit; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s, background .15s }
+.ab-find-btn:hover { color: var(--ab-text); border-color: var(--ab-line-2); background: var(--ab-hover) }
 .ab-find-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round }
-.ab-nav-sub { display: flex; gap: 2px; padding: 0 8px; border-top: 1px solid var(--ab-line); overflow-x: auto; scrollbar-width: none }
+.ab-nav-sub { display: flex; gap: 2px; padding: 0 10px; border-top: 1px solid var(--ab-line); overflow-x: auto; scrollbar-width: none }
 .ab-tab { flex: none; position: relative; border: 0; background: transparent; color: var(--ab-sub); padding: 9px 12px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: color .15s }
 .ab-tab:hover { color: var(--ab-text) }
-.ab-tab::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px; background: transparent; transition: background .15s }
+.ab-tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 2px; background: transparent; transition: background .15s }
 .ab-tab.on { color: var(--ab-deep); font-weight: 600 }
 .ab-tab.on::after { background: var(--ab-sea) }
 .ab-tab .dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
 .ab-tab .ab-dot { width: 6px; height: 6px }
-.ab-finder { position: absolute; right: 6px; top: calc(100% + 6px); width: 340px; max-width: calc(100% - 12px); padding: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow-lg); z-index: 20 }
+.ab-finder { position: absolute; right: 8px; top: calc(100% + 6px); width: 340px; max-width: calc(100% - 16px); padding: 10px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius); background: var(--ab-overlay); box-shadow: var(--ab-shadow-lg); z-index: 30; animation: abPop .12s ease-out }
 .ab-finder .ab-input { width: 100% }
-.ab-finder-list { margin-top: 6px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 1px }
-.ab-finder-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--ab-radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; color: var(--ab-text); cursor: pointer }
+.ab-finder-list { margin-top: 6px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 2px }
+.ab-finder-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--ab-radius-sm); padding: 8px 10px; font: inherit; font-size: 13px; color: var(--ab-text); cursor: pointer; transition: background .12s }
 .ab-finder-item small { margin-left: auto; color: var(--ab-dim); font-size: 11.5px }
 .ab-finder-item.on, .ab-finder-item:hover { background: var(--ab-foam) }
-.ab-finder-empty { padding: 12px 10px; color: var(--ab-dim); font-size: 12px }
-.ab-kbd { font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 11px; padding: 0 5px; border: 1px solid var(--ab-line-2); border-radius: 5px; color: var(--ab-dim) }
+.ab-finder-empty { padding: 14px 10px; color: var(--ab-dim); font-size: 12.5px; text-align: center }
+.ab-kbd { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 11px; padding: 1px 5px; border: 1px solid var(--ab-line-2); border-radius: 5px; color: var(--ab-dim); background: var(--ab-card) }
 
-/* ---------------- 移动端导航：底部栏 + 当前分组横滚 chips ---------------- */
-.ab-mobilebar, .ab-chips { display: none }
+/* ---------------- 移动端导航与查找层 ---------------- */
+.ab-mobilebar, .ab-chips, .ab-mfinder-mask { display: none }
 @media (max-width: 720px) {
   .ab-nav { display: none }
-  .ab-root { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) }
-  .ab-wrap { padding: 0 14px }
-  .ab-topbar { flex-wrap: wrap; padding: 10px 0 12px }
-  .ab-topbar-side { flex-direction: row; align-items: center; width: 100%; justify-content: flex-start; gap: 14px }
-  .ab-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 0 0 10px }
+  .ab-root { padding: max(var(--dsh-frame-top-clearance, 12px), 10px) 0 calc(78px + env(safe-area-inset-bottom, 0px)) }
+  .ab-wrap { padding: 0 12px }
+  .ab-topbar { flex-direction: column; align-items: stretch; gap: 9px; padding: 4px 2px 10px }
+  .ab-topbar-id { gap: 11px; flex-basis: auto }
+  .ab-avatar { width: 42px; height: 42px }
+  .ab-topbar h1 { font-size: 16.5px }
+  .ab-topbar .ab-meta { font-size: 12px }
+  .ab-topbar-side { width: 100%; padding: 7px 12px; border-radius: 12px; justify-content: space-between; gap: 0 }
+  .ab-topbar-side .ab-switch-row { flex: 1; justify-content: space-between; padding: 0 4px }
+  .ab-topbar-div { margin: 0 10px }
+  .ab-mfind-trigger { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; border-radius: var(--ab-radius-sm); border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); cursor: pointer }
+  .ab-mfind-trigger svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round }
+  .ab-mfind-trigger:active { background: var(--ab-hover); color: var(--ab-text) }
+  .ab-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; margin: 0 -12px 10px; padding: 2px 12px 6px }
   .ab-chips::-webkit-scrollbar { display: none }
-  .ab-chipbtn { flex: none; border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }
-  .ab-chipbtn.on { background: var(--ab-foam-2); border-color: color-mix(in srgb, var(--ab-sea) 35%, transparent); color: var(--ab-deep); font-weight: 600 }
-  .ab-mobilebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; background: color-mix(in srgb, var(--ab-card) 94%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--ab-line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) }
-  .ab-mgrp { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; border: 0; background: transparent; color: var(--ab-dim); font: inherit; font-size: 10.5px; padding: 6px 2px; cursor: pointer; border-radius: var(--ab-radius-sm); position: relative }
-  .ab-mgrp svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }
-  .ab-mgrp.on { color: var(--ab-deep) }
-  .ab-mgrp .dirty { position: absolute; top: 4px; right: calc(50% - 14px); width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
-  /* 扩展页：窄屏下搜索框收窄，分组头允许换行 */
-  .ab-search { max-width: 132px }
-  .ab-modgroup-head { flex-wrap: wrap; row-gap: 2px }
+  .ab-chipbtn { flex: none; border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); border-radius: 999px; padding: 6px 13px; min-height: 34px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background .14s, color .14s, border-color .14s }
+  .ab-chipbtn.on { background: var(--ab-foam-2); border-color: color-mix(in srgb, var(--ab-sea) 36%, transparent); color: var(--ab-deep); font-weight: 600 }
+  .ab-chipbtn .dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
+  .ab-chipbtn .ab-dot { width: 6px; height: 6px }
+  .ab-mobilebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; background: var(--ab-card); border-top: 1px solid var(--ab-line); padding: 4px 6px calc(5px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -2px 12px rgba(15, 23, 42, .06) }
+  .ab-mgrp { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: transparent; color: var(--ab-dim); font: inherit; font-size: 10.5px; font-weight: 500; padding: 3px 2px; min-height: 46px; cursor: pointer; border-radius: var(--ab-radius-sm); position: relative }
+  .ab-mgrp .ab-mgrp-ic { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 26px; border-radius: 999px; transition: background .15s }
+  .ab-mgrp svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round }
+  .ab-mgrp.on { color: var(--ab-deep); font-weight: 600 }
+  .ab-mgrp.on .ab-mgrp-ic { background: var(--ab-foam-2) }
+  .ab-mgrp .dirty { position: absolute; top: 4px; right: calc(50% - 16px); width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }
+  .ab-mfinder-mask { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column; justify-content: flex-start; padding: max(14px, var(--dsh-frame-overlay-top, env(safe-area-inset-top, 14px))) 12px 12px; background: var(--dsw-alias-bg-mask-3, rgba(15, 23, 42, .45)) }
+  .ab-mfinder-sheet { width: 100%; max-height: 75dvh; display: flex; flex-direction: column; padding: 12px; border-radius: var(--ab-radius); background: var(--ab-overlay); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .14s ease-out }
+  .ab-mfinder-head { display: flex; align-items: center; gap: 8px }
+  .ab-mfinder-head .ab-input { flex: 1; width: auto }
+  .ab-mfinder-sheet .ab-finder-list { max-height: none; flex: 1; margin-top: 8px }
+  .ab-mfinder-sheet .ab-finder-item { padding: 10px 12px; font-size: 14px }
+  .ab-search { width: 100%; max-width: none }
+  .ab-modgroup-head { flex-wrap: wrap; row-gap: 4px }
 }
 
 /* ---------------- 卡片 ---------------- */
-.ab-card { background: var(--ab-card); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 16px 18px; box-shadow: var(--ab-shadow) }
-.ab-card h3 { margin: 0 0 2px; font-size: 14.5px; font-weight: 620; display: flex; align-items: center; gap: 8px }
-.ab-card .ab-desc { color: var(--ab-sub); font-size: 12.5px; margin: 2px 0 12px; line-height: 1.6 }
-.ab-stat { padding: 14px 16px }
-.ab-stat .n { font-size: 26px; font-weight: 650; color: var(--ab-text); font-variant-numeric: tabular-nums; line-height: 1.25 }
-.ab-stat .l { color: var(--ab-sub); font-size: 12px; margin-top: 2px }
-.ab-stat .ic { position: absolute; right: 14px; top: 12px; font-size: 20px; opacity: .85 }
+.ab-card { background: var(--ab-card); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 18px 20px; box-shadow: var(--ab-shadow) }
+.ab-wiz-card { padding: 20px 22px }
+.ab-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap }
+.ab-card-head .ab-spacer { display: none }
+.ab-card-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: 100%; flex: 0 1 auto }
+.ab-card h3 { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; line-height: 1.35 }
+.ab-card .ab-desc { color: var(--ab-sub); font-size: 12.5px; margin: 4px 0 11px; line-height: 1.55 }
+.ab-card.ab-fold.closed .ab-desc { margin-bottom: 0 }
+.ab-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.ab-card-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--ab-line); display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap }
+.ab-card-foot .ab-btn.ghost { margin-left: -10px }
+
+/* 概览指标卡 */
+.ab-stat { position: relative; padding: 15px 16px; display: flex; flex-direction: column; gap: 8px }
+.ab-stat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px }
+.ab-stat .l { color: var(--ab-sub); font-size: 12.5px; font-weight: 500; margin: 0 }
+.ab-stat .n { font-size: 26px; font-weight: 660; letter-spacing: -.02em; color: var(--ab-text); font-variant-numeric: tabular-nums; line-height: 1.15 }
+.ab-stat .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--ab-foam); color: var(--ab-deep); display: inline-flex; align-items: center; justify-content: center; flex: none }
+.ab-stat .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
 
 /* ---------------- 字段行（label + hint + 控件） ---------------- */
-.ab-row { display: flex; align-items: flex-start; gap: 20px; padding: 12px 0; border-top: 1px solid var(--ab-line) }
-.ab-row:first-of-type { border-top: 0 }
-.ab-row .ab-label { flex: 0 0 200px; padding-top: 5px }
-.ab-row .ab-label b { display: block; font-weight: 560; font-size: 13.5px }
-.ab-row .ab-label small { display: block; color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 2px }
+.ab-row { display: flex; align-items: flex-start; gap: 22px; padding: 12px 0; border-top: 1px solid var(--ab-line) }
+.ab-row:first-of-type { border-top: 0; padding-top: 4px }
+.ab-row:last-child { padding-bottom: 2px }
+.ab-row.ab-row-sw { align-items: center }
+.ab-row.ab-row-sw .ab-label { padding-top: 0 }
+.ab-row .ab-label { flex: 0 0 210px; padding-top: 4px }
+.ab-row .ab-label b { display: block; font-weight: 560; font-size: 13.5px; line-height: 1.4 }
+.ab-row .ab-label small { display: block; color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 3px }
 /* 控件列限宽：一行只有一个数字框时右侧不再留出大片空白，整页更紧凑 */
-.ab-row .ab-ctl { flex: 1; min-width: 0; max-width: 640px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.ab-row .ab-ctl { flex: 1; min-width: 0; max-width: 620px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
 
 /* ---------------- 控件 ---------------- */
-.ab-input, .ab-select, .ab-textarea { border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 10px; background: var(--ab-card); color: var(--ab-text); font: inherit; outline: none; min-width: 0; transition: border-color .12s, box-shadow .12s }
+.ab-input, .ab-select, .ab-textarea { border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 11px; background: var(--ab-card); color: var(--ab-text); font: inherit; outline: none; min-width: 0; transition: border-color .14s, box-shadow .14s, background .14s }
 .ab-input:hover, .ab-textarea:hover { border-color: var(--ab-sky) }
 .ab-input:focus, .ab-select:focus, .ab-textarea:focus { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }
-.ab-input { width: 240px; max-width: 100%; height: 34px }
-.ab-input.sm { width: 120px }
+.ab-input { width: 240px; max-width: 100%; height: 35px }
+.ab-input.sm, .ab-input.narrow { width: 116px }
 .ab-input.wide { width: 100% }
-.ab-textarea { width: 100%; min-height: 90px; resize: vertical; line-height: 1.55; font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 12.5px }
-.ab-btn { border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); padding: 6px 14px; border-radius: var(--ab-radius-sm); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background .12s, border-color .12s, box-shadow .12s, filter .12s; min-height: 32px }
+.ab-textarea { width: 100%; min-height: 88px; resize: vertical; line-height: 1.55; font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 12.5px }
+.ab-btn { border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); padding: 6px 14px; border-radius: var(--ab-radius-sm); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; transition: background .12s, border-color .12s, box-shadow .12s, filter .12s, transform .08s; min-height: 34px }
 .ab-btn:hover { background: var(--ab-hover) }
-.ab-btn:disabled { opacity: .5; cursor: default }
-.ab-btn.primary { background: var(--ab-sea); border-color: var(--ab-sea); color: #fff }
+.ab-btn:active:not(:disabled) { transform: scale(.985) }
+.ab-btn:disabled { opacity: .48; cursor: default }
+.ab-btn.primary { background: var(--ab-solid); border-color: var(--ab-solid); color: #fff }
 .ab-btn.primary:hover { filter: brightness(1.08) }
-.ab-btn.danger { color: var(--ab-err) }
-.ab-btn.danger:hover { background: color-mix(in srgb, var(--ab-err) 7%, transparent); border-color: color-mix(in srgb, var(--ab-err) 30%, transparent) }
+.ab-btn.danger { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 26%, var(--ab-line-2)) }
+.ab-btn.danger:hover { background: color-mix(in srgb, var(--ab-err) 8%, transparent); border-color: color-mix(in srgb, var(--ab-err) 40%, transparent) }
 .ab-btn.ghost { border-color: transparent; background: transparent; color: var(--ab-sub) }
 .ab-btn.ghost:hover { color: var(--ab-text); background: var(--ab-hover) }
-.ab-btn.sm { padding: 3px 10px; font-size: 12px; min-height: 27px }
+.ab-btn.sm { padding: 4px 10px; font-size: 12px; min-height: 29px }
 .ab-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: abSpin .7s linear infinite; vertical-align: -2px }
 @keyframes abSpin { to { transform: rotate(360deg) } }
-.ab-switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--ab-line-2); border: 0; cursor: pointer; flex: none; transition: background .15s; padding: 0 }
-.ab-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: left .15s }
-.ab-switch.on { background: var(--ab-sea) }
-.ab-switch.on::after { left: 19px }
-.ab-switch-row { display: flex; align-items: center; gap: 10px }
-.ab-seg { display: inline-flex; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); overflow: hidden }
-.ab-seg button { border: 0; background: transparent; padding: 6px 14px; font: inherit; font-size: 13px; color: var(--ab-sub); cursor: pointer; border-left: 1px solid var(--ab-line); min-height: 32px }
-.ab-seg button:first-child { border-left: 0 }
-.ab-seg button.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }
+
+.ab-switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--ab-line-2); border: 0; cursor: pointer; flex: none; transition: background .16s; padding: 0 }
+.ab-switch::before { content: ""; position: absolute; inset: -7px -4px }
+.ab-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .24); transition: transform .16s }
+.ab-switch.on { background: var(--ab-solid) }
+.ab-switch.on::after { transform: translateX(16px) }
+.ab-switch:disabled { opacity: .45; cursor: default }
+.ab-switch-row { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; white-space: nowrap }
+
+.ab-seg { display: inline-flex; align-items: center; gap: 2px; padding: 3px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); max-width: 100%; overflow-x: auto; scrollbar-width: none }
+.ab-seg::-webkit-scrollbar { display: none }
+.ab-seg button { flex: none; border: 0; background: transparent; padding: 5px 13px; border-radius: 6px; font: inherit; font-size: 13px; color: var(--ab-sub); cursor: pointer; min-height: 28px; white-space: nowrap; transition: background .14s, color .14s, box-shadow .14s }
+.ab-seg button:hover:not(:disabled) { color: var(--ab-text) }
+.ab-seg button.on { background: var(--ab-seg-on); color: var(--ab-text); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, .10) }
 .ab-seg.off { opacity: .45 }
 .ab-seg.off button { cursor: not-allowed }
+
 .ab-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; width: 100% }
-.ab-choice { border: 1px solid var(--ab-line-2); border-radius: 10px; padding: 10px 12px; background: var(--ab-card); cursor: pointer; text-align: left; font: inherit; color: var(--ab-text); transition: border-color .12s, box-shadow .12s }
+.ab-choice { border: 1px solid var(--ab-line-2); border-radius: 11px; padding: 11px 13px; background: var(--ab-card); cursor: pointer; text-align: left; font: inherit; color: var(--ab-text); transition: border-color .14s, box-shadow .14s, background .14s }
 .ab-choice:hover { border-color: var(--ab-sky) }
-.ab-choice.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }
-.ab-choice b { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13.5px }
+.ab-choice.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 7%, var(--ab-card)) }
+.ab-choice b { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px }
+.ab-choice b::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--ab-line-2); background: var(--ab-card); flex: none; transition: border-color .14s, border-width .14s }
 .ab-choice.on b { color: var(--ab-deep) }
-.ab-choice small { display: block; color: var(--ab-dim); font-size: 12px; margin-top: 3px; line-height: 1.5 }
-.ab-range { display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: 440px }
-.ab-range input[type=range] { flex: 1; accent-color: var(--ab-sea); height: 4px }
-.ab-range .val { min-width: 0; padding: 1px 9px; border-radius: 999px; background: var(--ab-foam); color: var(--ab-deep); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap }
+.ab-choice.on b::before { border-color: var(--ab-solid); border-width: 4.5px; background: #fff }
+.ab-choice small { display: block; color: var(--ab-dim); font-size: 12px; margin-top: 4px; padding-left: 22px; line-height: 1.5 }
+
+.ab-range { display: flex; align-items: center; gap: 10px; min-width: min(220px, 100%); max-width: 440px; flex: 1 1 200px }
+.ab-range input[type=range] { flex: 1; accent-color: var(--ab-solid); height: 4px; cursor: pointer }
+.ab-range .val { min-width: 0; padding: 2px 10px; border-radius: 999px; background: var(--ab-foam); color: var(--ab-deep); font-size: 12px; font-weight: 560; font-variant-numeric: tabular-nums; white-space: nowrap }
 .ab-drop { border: 2px dashed var(--ab-line-2); border-radius: var(--ab-radius); padding: 22px 16px; text-align: center; color: var(--ab-sub); cursor: pointer; transition: border-color .15s, background .15s; background: var(--ab-card-2) }
 .ab-drop:hover, .ab-drop:focus-visible { border-color: var(--ab-sky); outline: none }
 .ab-drop.over { border-color: var(--ab-sea); background: var(--ab-foam); color: var(--ab-deep) }
 
-/* 自定义下拉 */
-.ab-sel { position: relative; display: inline-block; min-width: 200px; max-width: 100% }
-.ab-sel-btn { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 10px; background: var(--ab-card); color: var(--ab-text); font: inherit; font-size: 13px; cursor: pointer; text-align: left; min-height: 34px; transition: border-color .12s, box-shadow .12s }
+/* 自定义下拉（支持自动向右对齐与向上展开，避免窄屏/页底裁剪） */
+.ab-sel { position: relative; display: inline-block; min-width: min(var(--ab-sel-w, 200px), 100%); max-width: 100% }
+.ab-sel-btn { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 11px; background: var(--ab-card); color: var(--ab-text); font: inherit; font-size: 13px; cursor: pointer; text-align: left; min-height: 35px; transition: border-color .14s, box-shadow .14s }
 .ab-sel-btn:hover { border-color: var(--ab-sky) }
 .ab-sel-btn:focus-visible, .ab-sel.open .ab-sel-btn { outline: none; border-color: var(--ab-sea); box-shadow: var(--ab-focus) }
 .ab-sel-btn .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .ab-sel-btn .chev { flex: none; color: var(--ab-dim); transition: transform .15s }
 .ab-sel.open .chev { transform: rotate(180deg) }
-.ab-sel-pop { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 100%; max-height: 300px; overflow: auto; padding: 5px; border-radius: 10px; background: var(--ab-card); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .12s ease-out }
+.ab-sel-pop { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 100%; max-width: min(380px, calc(100vw - 24px)); max-height: 280px; overflow: auto; padding: 5px; border-radius: 11px; background: var(--ab-overlay); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .12s ease-out }
+.ab-sel.align-r .ab-sel-pop { left: auto; right: 0 }
+.ab-sel.up .ab-sel-pop { top: auto; bottom: calc(100% + 6px) }
 @keyframes abPop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }
-.ab-sel-opt { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: var(--ab-radius-sm); cursor: pointer; color: var(--ab-text); white-space: nowrap }
+.ab-sel-opt { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ab-text); white-space: nowrap }
 .ab-sel-opt .ck { width: 14px; flex: none; color: var(--ab-sea); font-weight: 700 }
 .ab-sel-opt .tx { flex: 1; min-width: 0 }
-.ab-sel-opt .ds { display: block; font-size: 11.5px; color: var(--ab-dim); margin-top: 1px; white-space: normal }
+.ab-sel-opt .ds { display: block; font-size: 11.5px; color: var(--ab-dim); margin-top: 2px; white-space: normal }
 .ab-sel-opt.act { background: var(--ab-hover) }
 .ab-sel-opt.on { background: var(--ab-foam); color: var(--ab-deep); font-weight: 560 }
-.ab-sel-group { font-size: 11px; color: var(--ab-dim); padding: 6px 10px 2px; letter-spacing: .04em }
+.ab-sel-group { font-size: 11px; font-weight: 600; color: var(--ab-dim); padding: 7px 10px 3px; letter-spacing: .04em }
 
 /* ---------------- 提示 / 徽章 / 小件 ---------------- */
-.ab-note { padding: 10px 12px; border-radius: 10px; background: var(--ab-foam); color: var(--ab-text); font-size: 12.5px; border: 1px solid var(--ab-foam-2); line-height: 1.6 }
-.ab-note.warn { background: color-mix(in srgb, var(--ab-warn) 8%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent) }
-.ab-note.err { background: color-mix(in srgb, var(--ab-err) 7%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-err) 26%, transparent) }
-.ab-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--ab-sea); color: #fff; font-weight: 500; white-space: nowrap }
+.ab-note { padding: 11px 14px; border-radius: 11px; background: var(--ab-foam); color: var(--ab-text); font-size: 12.5px; border: 1px solid var(--ab-foam-2); line-height: 1.6; overflow-wrap: anywhere; word-break: break-word }
+.ab-note.warn { background: color-mix(in srgb, var(--ab-warn) 9%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent) }
+.ab-note.err { background: color-mix(in srgb, var(--ab-err) 8%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-err) 28%, transparent) }
+.ab-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--ab-solid); color: #fff; font-weight: 500; white-space: nowrap }
 .ab-badge.dim { background: var(--ab-card-2); color: var(--ab-sub); border: 1px solid var(--ab-line) }
 .ab-badge.warn { background: color-mix(in srgb, var(--ab-warn) 14%, var(--ab-card)); color: var(--ab-warn); border: 1px solid color-mix(in srgb, var(--ab-warn) 30%, transparent) }
-.ab-badge.err { background: color-mix(in srgb, var(--ab-err) 10%, var(--ab-card)); color: var(--ab-err); border: 1px solid color-mix(in srgb, var(--ab-err) 30%, transparent) }
-.ab-badge.mine { background: var(--ab-deep) }
-.ab-chip { border: 1px dashed var(--ab-line-2); background: transparent; color: var(--ab-sub); border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s }
+.ab-badge.err { background: color-mix(in srgb, var(--ab-err) 11%, var(--ab-card)); color: var(--ab-err); border: 1px solid color-mix(in srgb, var(--ab-err) 30%, transparent) }
+.ab-badge.mine { background: var(--ab-solid) }
+.ab-chip { border: 1px dashed var(--ab-line-2); background: transparent; color: var(--ab-sub); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s }
 .ab-chip:hover { border-color: var(--ab-sea); color: var(--ab-deep); background: var(--ab-foam) }
 .ab-chip.solid { border-style: solid }
 .ab-chip.on { border-style: solid; border-color: var(--ab-sea); background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }
 .ab-chip .n { margin-left: 6px; font-size: 11px; color: var(--ab-dim); font-weight: 400 }
-.ab-ibtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: var(--ab-sub); cursor: pointer; padding: 0 }
+.ab-ibtn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: var(--ab-sub); cursor: pointer; padding: 0 }
 .ab-ibtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
 .ab-ibtn:hover { background: var(--ab-hover); color: var(--ab-text) }
 .ab-ibtn.danger:hover { color: var(--ab-err) }
 .ab-ibtn:disabled { opacity: .3; cursor: default; background: transparent }
-.ab-aibtn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; margin-left: 2px; border: 0; border-radius: 7px; background: var(--ab-foam); color: var(--ab-deep); font: inherit; font-size: 12px; cursor: pointer; transition: background .12s }
+.ab-aibtn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; margin-left: 2px; border: 0; border-radius: 7px; background: var(--ab-foam); color: var(--ab-deep); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; transition: background .12s; white-space: nowrap }
 .ab-aibtn:hover, .ab-aibtn.on { background: var(--ab-foam-2) }
 .ab-aibtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }
 
-.ab-steps { counter-reset: s; display: flex; flex-direction: column; gap: 12px }
+.ab-steps { counter-reset: s; display: flex; flex-direction: column; gap: 14px }
 .ab-step { display: flex; gap: 12px; align-items: flex-start }
-.ab-step::before { counter-increment: s; content: counter(s); flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 650; display: flex; align-items: center; justify-content: center; font-size: 12px }
-.ab-step.done::before { content: "✓"; background: var(--ab-ok); color: #fff }
+.ab-step::before { counter-increment: s; content: counter(s); flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 650; display: flex; align-items: center; justify-content: center; font-size: 12px }
+.ab-step.done::before { content: "✓"; background: var(--ab-ok-solid); color: #fff }
 .ab-step > div { flex: 1; min-width: 0 }
-.ab-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12.5px }
-.ab-kv span:nth-child(odd) { color: var(--ab-sub) }
 
+.ab-kv { display: grid; grid-template-columns: minmax(92px, auto) minmax(0, 1fr); gap: 0 18px; font-size: 13px }
+.ab-kv > span { padding: 9px 0; border-top: 1px solid var(--ab-line); display: flex; align-items: center; min-width: 0 }
+.ab-kv > span:nth-child(1), .ab-kv > span:nth-child(2) { border-top: 0; padding-top: 0 }
+.ab-kv > span:nth-last-child(1), .ab-kv > span:nth-last-child(2) { padding-bottom: 0 }
+.ab-kv > span:nth-child(odd) { color: var(--ab-sub); white-space: nowrap }
+.ab-kv > span:nth-child(even) { font-weight: 520; overflow-wrap: anywhere; word-break: break-word; font-variant-numeric: tabular-nums }
+.ab-g2 .ab-kv { grid-template-columns: auto minmax(0, 1fr) }
+.ab-g2 .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }
+.ab-g2 .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }
+
+.ab-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm) }
 .ab-table { width: 100%; border-collapse: collapse; font-size: 13px }
-.ab-table th { text-align: left; color: var(--ab-dim); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--ab-line); white-space: nowrap }
-.ab-table td { padding: 7px 8px; border-bottom: 1px solid var(--ab-line) }
+.ab-table th { text-align: left; color: var(--ab-dim); font-weight: 560; font-size: 12px; padding: 8px 10px; background: var(--ab-card-2); border-bottom: 1px solid var(--ab-line); white-space: nowrap }
+.ab-table td { padding: 8px 10px; border-bottom: 1px solid var(--ab-line); vertical-align: top }
 .ab-table tr:last-child td { border-bottom: 0 }
 .ab-table tr:hover td { background: var(--ab-hover) }
 
 .ab-flex { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
 .ab-spacer { flex: 1 }
 .ab-muted { color: var(--ab-sub) }
+.ab-warn { color: var(--ab-warn) }
 .ab-small { font-size: 12px }
-.ab-section-title { font-size: 12px; font-weight: 600; color: var(--ab-dim); letter-spacing: .04em; margin: 16px 2px 8px }
-.ab-empty { padding: 28px 12px; text-align: center; color: var(--ab-dim) }
-.ab-empty .big { font-size: 26px; margin-bottom: 4px }
+.ab-section-title { font-size: 12px; font-weight: 620; color: var(--ab-sub); letter-spacing: .03em; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid var(--ab-line) }
+.ab-section-title:first-child { margin-top: 4px; padding-top: 0; border-top: 0 }
+.ab-empty { padding: 30px 14px; text-align: center; color: var(--ab-dim); font-size: 13px }
+.ab-empty .big { font-size: 26px; margin-bottom: 6px; opacity: .9 }
 
 /* 列表行 */
 .ab-list { display: flex; flex-direction: column }
-.ab-li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 4px; border-top: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm) }
+.ab-li { display: flex; gap: 12px; align-items: flex-start; padding: 11px 6px; border-top: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); transition: background .12s }
 .ab-li:first-child { border-top: 0 }
 .ab-li:hover { background: var(--ab-hover) }
-.ab-li .meta { color: var(--ab-dim); font-size: 11.5px; white-space: nowrap }
-.ab-li .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word }
+.ab-li .meta { color: var(--ab-dim); font-size: 11.5px; white-space: nowrap; flex: none }
+.ab-li .body { flex: 1 1 200px; min-width: 0; white-space: pre-wrap; word-break: break-word }
+.ab-li-col { flex-direction: column; gap: 4px }
+.ab-li-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; flex-wrap: wrap }
+
+/* Cookie 键值对输入行（B站等） */
+.ab-cookie-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px }
+.ab-cookie-field code { min-width: 82px; text-align: right; flex: none; color: var(--ab-sub) }
+.ab-cookie-field .ab-input { flex: 1; min-width: 0 }
 
 /* 日志 */
-.ab-logs { font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 12px; max-height: 520px; overflow: auto; border-radius: 10px; background: var(--ab-card-2); border: 1px solid var(--ab-line); padding: 8px 0 }
-.ab-log { display: flex; gap: 10px; padding: 2px 12px; align-items: baseline }
+.ab-logs { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 12px; max-height: 520px; overflow: auto; border-radius: 10px; background: var(--ab-card-2); border: 1px solid var(--ab-line); padding: 6px 0 }
+.ab-log { display: flex; gap: 10px; padding: 3.5px 12px 3.5px 10px; border-left: 2px solid transparent; align-items: baseline }
 .ab-log:hover { background: var(--ab-hover) }
-.ab-log .t { color: var(--ab-dim); flex: none }
-.ab-log .a { flex: none; color: var(--ab-sea); min-width: 62px }
+.ab-log .t { color: var(--ab-dim); flex: none; font-variant-numeric: tabular-nums }
+.ab-log .a { flex: none; color: var(--ab-deep); min-width: 62px }
 .ab-log .m { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word }
+.ab-log.warn { border-left-color: var(--ab-warn) }
 .ab-log.warn .m { color: var(--ab-warn) }
+.ab-log.error { border-left-color: var(--ab-err) }
 .ab-log.error .m { color: var(--ab-err) }
 .ab-log.debug .m { color: var(--ab-dim) }
 .ab-mem-item { transition: background .12s; border-radius: 6px; margin: 0 -6px; padding: 6px 6px !important }
-/* memory-privacy 的查看弹窗底色偏暗，hover 高亮两种主题下都要可见 */
+/* memory-privacy 的查看弹窗底色偏暗，hover 高亮与幽灵按钮文字在亮/暗模式下都要保持高对比 */
 .ab-mem-item:hover { background: rgba(122, 143, 175, .18) }
+.ab-mem-item .ab-btn.ghost { color: #cbd5e1 }
+.ab-mem-item .ab-btn.ghost:hover { color: #fff; background: rgba(255, 255, 255, .10) }
 .ab-close { transition: opacity .12s }
 .ab-close:hover { opacity: .72 }
-.ab-code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); padding: 8px 10px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0 }
+.ab-code { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 11.5px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); padding: 9px 11px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0 }
 
 /* 表情包 / 截图 / 画作 */
-.ab-stickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px }
-.ab-sticker { border: 1px solid var(--ab-line); border-radius: 10px; padding: 8px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative; transition: transform .12s, box-shadow .12s }
-.ab-sticker:hover { transform: translateY(-2px); box-shadow: var(--ab-shadow) }
+.ab-stickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(116px, 100%), 1fr)); gap: 10px }
+.ab-sticker { border: 1px solid var(--ab-line); border-radius: 11px; padding: 8px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative; transition: transform .12s, box-shadow .12s, border-color .12s }
+.ab-sticker:hover { transform: translateY(-2px); box-shadow: var(--ab-shadow); border-color: var(--ab-line-2) }
 .ab-sticker img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: var(--ab-radius-sm); background: var(--ab-card-2) }
 .ab-sticker .nm, .ab-sticker .tg { border: 1px dashed transparent; background: transparent; text-align: center; width: 100%; outline: none; padding: 2px 4px; border-radius: 6px; font: inherit }
 .ab-sticker .nm { font-size: 12px; color: var(--ab-text) }
 .ab-sticker .tg { font-size: 11px; color: var(--ab-dim); min-height: 16px }
 .ab-sticker:hover .nm, .ab-sticker:hover .tg { border-color: var(--ab-line) }
-.ab-sticker .nm:focus, .ab-sticker .tg:focus { background: var(--ab-card-2); border-style: solid; border-color: var(--ab-line) }
-.ab-sticker .x, .ab-shot .x { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s }
-.ab-sticker:hover .x, .ab-shot:hover .x { opacity: 1 }
-.ab-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px }
-.ab-shot { border: 1px solid var(--ab-line); border-radius: 10px; padding: 6px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative }
+.ab-sticker .nm:focus, .ab-sticker .tg:focus { background: var(--ab-card-2); border-style: solid; border-color: var(--ab-line-2) }
+.ab-sticker .x, .ab-shot .x { position: absolute; top: 5px; right: 5px; opacity: 0; transition: opacity .15s }
+.ab-sticker:hover .x, .ab-sticker:focus-within .x, .ab-shot:hover .x, .ab-shot:focus-within .x { opacity: 1 }
+.ab-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(176px, 100%), 1fr)); gap: 10px }
+.ab-shot { border: 1px solid var(--ab-line); border-radius: 11px; padding: 7px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative }
 .ab-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); display: block }
-.ab-shot .cap { font-size: 11px; color: var(--ab-dim); line-height: 1.35; max-height: 2.7em; overflow: hidden }
+.ab-shot .cap { font-size: 11.5px; color: var(--ab-dim); line-height: 1.4; max-height: 2.8em; overflow: hidden }
 
 /* 人格页：左列（列表+头像）跟随滚动钉在吸顶导航下方——右侧编辑区很长时，
  * 左列不跟着滚空一大块；列表条目少时视觉上也更完整。
  * 轨道 minmax(0,1fr)：行内「200px 标签 + 240px 固定宽输入」的最小内容宽会把裸 1fr
  * 轨道顶到 ~438px，窄屏整页横向溢出（真机 2026-11-15） */
-.ab-persona { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 12px; align-items: start }
-.ab-plist { position: sticky; top: 124px; display: flex; flex-direction: column; gap: 6px }
-.ab-pitem { text-align: left; border: 1px solid var(--ab-line); background: var(--ab-card); border-radius: 10px; padding: 10px 12px; cursor: pointer; color: var(--ab-text); font: inherit; transition: border-color .12s, box-shadow .12s }
+.ab-persona { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 14px; align-items: start }
+.ab-plist { position: sticky; top: calc(var(--dsh-frame-top-clearance, 0px) + 114px); display: flex; flex-direction: column; gap: 8px }
+.ab-pitems { display: flex; flex-direction: column; gap: 6px }
+.ab-pitem { text-align: left; border: 1px solid var(--ab-line); background: var(--ab-card); border-radius: 11px; padding: 10px 12px; cursor: pointer; color: var(--ab-text); font: inherit; transition: border-color .14s, box-shadow .14s, background .14s }
 .ab-pitem:hover { border-color: var(--ab-line-2) }
-.ab-pitem.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }
-.ab-pitem .nm { font-weight: 600; display: flex; align-items: center; gap: 6px }
-.ab-pitem .tg { color: var(--ab-dim); font-size: 11.5px; margin-top: 2px }
+.ab-pitem.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 5%, var(--ab-card)) }
+.ab-pitem .nm { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap }
+.ab-pitem .tg { color: var(--ab-dim); font-size: 11.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .ab-psecs { display: flex; flex-direction: column; gap: 10px; margin-top: 12px }
-.ab-psec { --c: var(--ab-sea); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); transition: border-color .2s, box-shadow .2s }
-.ab-psec:hover { border-color: color-mix(in srgb, var(--c) 24%, var(--ab-line)) }
-.ab-psec:focus-within { border-color: color-mix(in srgb, var(--c) 40%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 8%, transparent) }
-.ab-psec-head { display: flex; align-items: center; gap: 4px; padding: 10px 8px 0 14px }
-.ab-psec-head::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 8px; opacity: .9 }
-.ab-psec-title { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 13.5px; letter-spacing: .02em; color: color-mix(in srgb, var(--c) 42%, var(--ab-text)); padding: 4px 0; outline: none }
+.ab-psec { --c: var(--ab-sea); border: 1px solid var(--ab-line); border-radius: 12px; background: var(--ab-card); transition: border-color .2s, box-shadow .2s }
+.ab-psec:hover { border-color: color-mix(in srgb, var(--c) 26%, var(--ab-line)) }
+.ab-psec:focus-within { border-color: color-mix(in srgb, var(--c) 42%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 8%, transparent) }
+.ab-psec-head { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 10px 10px 0 14px }
+.ab-psec-head::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 6px; opacity: .9 }
+.ab-psec-title { flex: 1; min-width: 110px; border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 13.5px; letter-spacing: .01em; color: color-mix(in srgb, var(--c) 42%, var(--ab-text)); padding: 4px 0; outline: none }
 .ab-psec-title::placeholder { color: var(--ab-dim); font-weight: 400 }
-.ab-psec-fixed { flex: 1; min-width: 0; font-weight: 620; font-size: 13.5px; padding: 4px 0 }
+.ab-psec-fixed { flex: 1; min-width: 120px; font-weight: 620; font-size: 13.5px; padding: 4px 0 }
 .ab-psec-fixed small { font-weight: 400; color: var(--ab-dim); margin-left: 8px; font-size: 11.5px }
 .ab-psec-n { font-size: 11px; color: var(--ab-dim); font-variant-numeric: tabular-nums; margin-right: 4px }
-.ab-psec-act { display: flex; align-items: center; gap: 2px; opacity: .5; transition: opacity .12s }
+.ab-psec-act { display: flex; align-items: center; gap: 2px; opacity: .55; transition: opacity .12s }
 .ab-psec:hover .ab-psec-act, .ab-psec:focus-within .ab-psec-act { opacity: 1 }
-.ab-psec textarea { display: block; width: 100%; border: 0; background: transparent; resize: vertical; outline: none; padding: 6px 16px 12px 30px; font: inherit; font-size: 13px; line-height: 1.75; color: var(--ab-text) }
+.ab-psec textarea { display: block; width: 100%; border: 0; background: transparent; resize: vertical; outline: none; padding: 6px 16px 12px 28px; font: inherit; font-size: 13px; line-height: 1.75; color: var(--ab-text) }
 .ab-psec textarea::placeholder { color: var(--ab-dim) }
 .ab-psec.cmp { border-color: color-mix(in srgb, var(--c) 45%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 10%, transparent) }
 .ab-psec.cmp textarea { cursor: default }
 .ab-psec-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px }
 .ab-tf-who { margin-top: 8px; font-size: 12px; color: var(--ab-sub); line-height: 1.6 }
-.ab-compare { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 12px 12px; padding: 8px 8px 8px 12px; border-radius: 10px; background: var(--ab-foam) }
+.ab-compare { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 12px 12px; padding: 8px 10px 8px 12px; border-radius: 10px; background: var(--ab-foam) }
 .ab-compare-tag { font-size: 11.5px; font-weight: 600; color: var(--ab-deep); padding: 1px 8px; border-radius: 999px; background: var(--ab-card); border: 1px solid var(--ab-foam-2) }
 
 /* 进度条（token 用量等） */
 .ab-mood { height: 10px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; border: 1px solid var(--ab-line) }
-.ab-mood > i { display: block; height: 100%; border-radius: 999px; background: var(--ab-sea) }
+.ab-mood > i { display: block; height: 100%; border-radius: 999px; background: var(--ab-solid) }
 .ab-mood > i.hot { background: var(--ab-warn) }
 .ab-mood > i.full { background: var(--ab-err) }
 
-/* 保存条 / toast */
-.ab-savebar { position: sticky; bottom: 14px; margin-top: 16px; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--ab-radius); background: var(--ab-card); border: 1px solid color-mix(in srgb, var(--ab-sea) 45%, var(--ab-line)); box-shadow: var(--ab-shadow-lg); z-index: 6 }
-.ab-savebar .msg { flex: 1; color: var(--ab-deep); font-weight: 560 }
-@media (max-width: 720px) { .ab-savebar { bottom: calc(64px + env(safe-area-inset-bottom, 0px)) } }
-.ab-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 9px 16px; border-radius: 10px; background: var(--dsw-alias-toast-bg, #1f2328); color: var(--dsw-alias-toast-label, #fff); font-size: 13px; z-index: 50; box-shadow: var(--ab-shadow-lg); max-width: 80vw }
-.ab-toast.ok { background: var(--ab-ok); color: #fff }
-.ab-toast.err { background: var(--ab-err); color: #fff }
+/* 保存条 / toast（toast 置顶居中，绝不遮挡底部保存条与移动端底栏） */
+.ab-savebar { position: sticky; bottom: 14px; margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: var(--ab-radius); background: var(--ab-overlay); border: 1px solid color-mix(in srgb, var(--ab-sea) 42%, var(--ab-line)); box-shadow: var(--ab-shadow-lg); z-index: 15 }
+.ab-savebar .msg { flex: 1; min-width: 120px; color: var(--ab-deep); font-weight: 580; font-size: 13.5px }
+.ab-savebar-acts { display: flex; align-items: center; gap: 8px }
+.ab-toast { position: fixed; left: 50%; top: calc(max(var(--dsh-frame-overlay-top, 14px), 14px) + 6px); transform: translateX(-50%); padding: 10px 18px; border-radius: 11px; background: var(--dsw-alias-toast-bg, #1f2328); color: var(--dsw-alias-toast-label, #fff); font-size: 13px; font-weight: 500; z-index: 50; box-shadow: var(--ab-shadow-lg); max-width: calc(100vw - 32px); text-align: center; pointer-events: none; animation: abPop .14s ease-out }
+.ab-toast.ok { background: var(--ab-ok-solid); color: #fff }
+.ab-toast.err { background: var(--ab-err-solid); color: #fff }
 
 /* 向导步骤条 */
 .ab-wiz-bar { display: flex; gap: 6px; margin-top: 12px }
 .ab-wiz-bar .seg { flex: 1; border: 0; background: transparent; padding: 0; cursor: default; text-align: left; font: inherit; color: var(--ab-dim) }
-.ab-wiz-bar .seg::before { content: ""; display: block; height: 4px; border-radius: 999px; background: var(--ab-line-2); margin-bottom: 6px }
+.ab-wiz-bar .seg::before { content: ""; display: block; height: 4px; border-radius: 999px; background: var(--ab-line-2); margin-bottom: 6px; transition: background .15s }
 .ab-wiz-bar .seg.done { cursor: pointer; color: var(--ab-sub) }
 .ab-wiz-bar .seg.done::before { background: var(--ab-sky) }
 .ab-wiz-bar .seg.on { color: var(--ab-deep); font-weight: 600 }
-.ab-wiz-bar .seg.on::before { background: var(--ab-sea) }
+.ab-wiz-bar .seg.on::before { background: var(--ab-solid) }
 .ab-wiz-bar .seg span { font-size: 11.5px }
 
 /* 复查清单 / 驱动 / 安装步骤 */
 .ab-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 8px }
 .ab-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--ab-line); background: var(--ab-card-2); color: var(--ab-sub); font-size: 12.5px }
-.ab-check i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-line-2); color: #fff; flex: none }
-.ab-check.done { color: var(--ab-text); border-color: color-mix(in srgb, var(--ab-ok) 30%, transparent); background: color-mix(in srgb, var(--ab-ok) 7%, var(--ab-card)) }
-.ab-check.done i { background: var(--ab-ok) }
+.ab-check i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-line-2); color: var(--ab-sub); flex: none }
+.ab-check.done { color: var(--ab-text); border-color: color-mix(in srgb, var(--ab-ok) 30%, transparent); background: color-mix(in srgb, var(--ab-ok) 8%, var(--ab-card)) }
+.ab-check.done i { background: var(--ab-ok-solid); color: #fff }
 .ab-drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px }
 .ab-drive { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer; transition: border-color .12s, box-shadow .12s }
 .ab-drive:hover { border-color: var(--ab-sky) }
-.ab-drive.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }
+.ab-drive.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 7%, var(--ab-card)) }
 .ab-drive b { font-weight: 600 }
 .ab-drive small { color: var(--ab-dim); font-size: 11.5px; word-break: break-all }
 .ab-drive .bar { display: block; width: 100%; height: 4px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; margin-top: 4px }
@@ -392,10 +521,10 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-install-steps .st { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ab-dim); text-align: center; position: relative }
 .ab-install-steps .st::before { content: ""; position: absolute; top: 11px; left: -50%; right: 50%; height: 2px; background: var(--ab-line-2); z-index: 0 }
 .ab-install-steps .st:first-child::before { display: none }
-.ab-install-steps .st.done::before, .ab-install-steps .st.on::before { background: var(--ab-sea) }
+.ab-install-steps .st.done::before, .ab-install-steps .st.on::before { background: var(--ab-solid) }
 .ab-install-steps .st i { position: relative; z-index: 1; font-style: normal; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-card); border: 2px solid var(--ab-line-2); color: var(--ab-dim) }
-.ab-install-steps .st.done i { background: var(--ab-sea); border-color: var(--ab-sea); color: #fff }
-.ab-install-steps .st.on i { border-color: var(--ab-sea); color: var(--ab-sea); box-shadow: var(--ab-focus) }
+.ab-install-steps .st.done i { background: var(--ab-solid); border-color: var(--ab-solid); color: #fff }
+.ab-install-steps .st.on i { border-color: var(--ab-sea); color: var(--ab-deep); box-shadow: var(--ab-focus) }
 .ab-install-steps .st.on { color: var(--ab-deep); font-weight: 600 }
 .ab-install-steps .st span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }
 .ab-install-dl { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; margin-top: 10px }
@@ -408,15 +537,28 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-mod .main { flex: 1; min-width: 0 }
 .ab-mod .nm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600 }
 .ab-mod .nm code { font-weight: 400; font-size: 11.5px; color: var(--ab-dim) }
-.ab-mod .ds { color: var(--ab-sub); font-size: 12.5px; margin-top: 2px }
+.ab-mod .ds { color: var(--ab-sub); font-size: 12.5px; margin-top: 3px }
 .ab-mod .what { color: var(--ab-dim); font-size: 11.5px; margin-top: 4px; word-break: break-word }
 .ab-mod .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px }
-.ab-mod .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }
+.ab-mod .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none }
+
+/* 扩展页：市场卡片列表 */
+.ab-mkt-list { display: flex; flex-direction: column; margin-top: 4px }
+.ab-mkt { padding: 12px 0; border-top: 1px solid var(--ab-line) }
+.ab-mkt:first-child { border-top: 0; padding-top: 4px }
+.ab-mkt:last-child { padding-bottom: 2px }
+.ab-mkt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px }
+.ab-mkt-info { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; flex: 1; min-width: 0 }
+.ab-mkt-info b { font-size: 14px; font-weight: 600 }
+.ab-mkt-desc { color: var(--ab-text); font-size: 13px; line-height: 1.55; margin-top: 5px; overflow-wrap: anywhere }
+.ab-mkt-meta { color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 4px; overflow-wrap: anywhere }
+.ab-mkt-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px }
 
 /* 扩展页：模块分组（按能力折叠）+ 搜索 + 紧凑行 */
 .ab-modgroup { border-top: 1px solid var(--ab-line) }
 .ab-modgroup:first-of-type { border-top: 0 }
-.ab-modgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0; cursor: pointer; user-select: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; border-radius: var(--ab-radius-sm) }
+.ab-modgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 4px; cursor: pointer; user-select: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; border-radius: var(--ab-radius-sm); transition: background .12s }
+.ab-modgroup-head:hover { background: var(--ab-hover) }
 .ab-modgroup-head:hover .ab-modgroup-name { color: var(--ab-deep) }
 .ab-modgroup-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }
 .ab-modgroup-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }
@@ -424,49 +566,157 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-modgroup-name { font-weight: 600 }
 .ab-modgroup-meta { color: var(--ab-dim); font-size: 11.5px; font-variant-numeric: tabular-nums }
 .ab-modgroup-body { padding-bottom: 4px }
-.ab-search { max-width: 200px }
+.ab-search { max-width: 210px }
 /* 目录路径 + 操作按钮：窄屏时路径独占一行，别被按钮挤成一字一行 */
-.ab-dirrow { flex-wrap: wrap; row-gap: 8px }
-.ab-dirrow code { flex: 1 1 220px; min-width: 0 }
-.ab-mod.compact { padding: 8px 0 }
-.ab-mod.compact .ds { margin-top: 1px }
+.ab-dirrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 8px }
+.ab-dirrow code { flex: 1 1 220px; min-width: 0; padding: 5px 9px; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); border: 1px solid var(--ab-line); word-break: break-all }
+.ab-mod.compact { padding: 9px 0 }
+.ab-mod.compact .ds { margin-top: 2px }
 .ab-mod.compact .ds.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }
 .ab-mod.compact .what, .ab-mod.compact .acts { margin-top: 6px }
 
 /* 可折叠的补充说明（长文案收纳用） */
-.ab-more { margin-top: 6px; font-size: 12px; color: var(--ab-dim) }
-.ab-more summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; user-select: none }
+.ab-more { margin-top: 8px; font-size: 12px; color: var(--ab-dim) }
+.ab-more summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 5px; user-select: none; padding: 2px 0 }
 .ab-more summary::-webkit-details-marker { display: none }
-.ab-more summary::before { content: "›"; display: inline-block; transition: transform .15s; color: var(--ab-dim) }
+.ab-more summary::before { content: "›"; display: inline-block; transition: transform .15s; color: var(--ab-dim); font-size: 13px }
 .ab-more[open] summary::before { transform: rotate(90deg) }
 .ab-more summary:hover { color: var(--ab-sub) }
-.ab-more .ab-more-body { margin-top: 6px; color: var(--ab-sub); line-height: 1.65; white-space: pre-wrap }
+.ab-more .ab-more-body { margin-top: 6px; padding: 8px 11px; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-sub); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere }
 
-/* 可折叠长卡片（如「改资料与名单」16 行权限）：默认收起，标题行可点 */
-.ab-fold-head { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; cursor: pointer; user-select: none; border-radius: var(--ab-radius-sm) }
+/* 可折叠长卡片与卡内折叠小节 */
+.ab-fold-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap }
+.ab-fold-head { flex: 1 1 160px; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; padding: 2px 0; cursor: pointer; user-select: none; border-radius: var(--ab-radius-sm) }
 .ab-fold-head h3 { margin: 0 }
 .ab-fold-head:hover h3, .ab-fold-head:focus-visible h3 { color: var(--ab-deep) }
 .ab-fold-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }
 .ab-fold-chev.open { transform: rotate(90deg) }
 .ab-fold-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }
+.ab-fold-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ab-line) }
+.ab-fold-section .ab-fold-title { font-weight: 600; font-size: 13.5px; color: var(--ab-text) }
+.ab-fold-section .ab-fold-head:hover .ab-fold-title { color: var(--ab-deep) }
+.ab-fold-section-desc { margin: 3px 0 6px 20px; font-size: 12px; color: var(--ab-sub); line-height: 1.5 }
+.ab-fold-section-body { padding-top: 4px }
 
-/* ---------------- 响应式 ---------------- */
-@media (max-width: 720px) {
-  .ab-row { flex-direction: column; gap: 6px; padding: 12px 0 }
-  .ab-row .ab-label { flex: none; padding-top: 0 }
-  .ab-row .ab-label small { max-width: none }
-  .ab-row .ab-ctl { max-width: none }
-  .ab-g2 { grid-template-columns: minmax(0, 1fr) }
-  .ab-card { padding: 14px }
-  .ab-input, .ab-select, .ab-textarea, .ab-sel-btn { font-size: 16px }
-  .ab-btn { min-height: 36px }
-  .ab-range { min-width: 0; width: 100% }
+/* 筛选工具栏（日志等） */
+.ab-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+
+/* ---------------- 容器查询（适配 DSH 侧栏展开后的窄中栏 420~700px） ---------------- */
+@container ab (max-width: 680px) {
   .ab-persona { grid-template-columns: minmax(0, 1fr) }
   .ab-plist { position: static }
-  .ab-finder { left: 6px; right: 6px; width: auto; max-width: none }
+  .ab-pitems { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 8px }
+  .ab-g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }
+  .ab-kv { grid-template-columns: auto minmax(0, 1fr) }
+  .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }
+  .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }
+}
+@container ab (max-width: 560px) {
+  .ab-row { flex-direction: column; gap: 7px; padding: 11px 0 }
+  .ab-row .ab-label { flex: none; width: 100%; padding-top: 0 }
+  .ab-row .ab-ctl { width: 100%; max-width: none }
+  .ab-row.ab-row-sw { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px }
+  .ab-row.ab-row-sw .ab-label { flex: 1; min-width: 0; width: auto }
+  .ab-row.ab-row-sw .ab-ctl { width: auto; flex: none }
+  .ab-g2 { grid-template-columns: minmax(0, 1fr) }
+  .ab-range { min-width: 0; width: 100% }
+  .ab-seg { width: 100% }
+  .ab-seg button { flex: 1 0 auto }
+  .ab-choices { grid-template-columns: minmax(0, 1fr) }
+  .ab-actions .ab-btn { flex: 1 1 auto; white-space: normal; text-align: center }
+  .ab-actions .ab-btn.primary { flex: 1 0 100% }
+}
+
+/* ---------------- 触控设备 ---------------- */
+@media (hover: none) {
+  .ab-sticker .x, .ab-shot .x { opacity: .92 }
+  .ab-psec-act { opacity: 1 }
+}
+
+/* ---------------- 响应式（小屏移动端优化） ---------------- */
+@media (max-width: 720px) {
+  .ab-grid { gap: 12px }
+  .ab-g2 { grid-template-columns: minmax(0, 1fr) }
+  .ab-g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }
+  .ab-card, .ab-wiz-card { padding: 15px 14px; border-radius: 13px }
+  .ab-card h3 { font-size: 14.5px }
+  .ab-card-foot .ab-btn.ghost { margin-left: -8px }
+  .ab-toolbar { width: 100% }
+  .ab-toolbar .ab-sel { width: auto; flex: 1 1 120px }
+  .ab-toolbar .ab-switch-row { flex: 0 0 auto; margin-left: auto }
+  .ab-mod { gap: 10px }
+
+  .ab-stat { padding: 12px 14px; gap: 5px }
+  .ab-stat .ic { width: 26px; height: 26px; border-radius: 7px }
+  .ab-stat .ic svg { width: 14px; height: 14px }
+  .ab-stat .n { font-size: 24px }
+
+  .ab-kv { grid-template-columns: auto minmax(0, 1fr); gap: 0 14px }
+  .ab-kv > span { padding: 8px 0 }
+  .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }
+  .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }
+
+  .ab-actions .ab-btn { flex: 1 1 auto; white-space: normal; text-align: center; padding: 7px 12px }
+  .ab-actions .ab-btn.primary { flex: 1 0 100% }
+
+  .ab-row { flex-direction: column; gap: 7px; padding: 11px 0 }
+  .ab-row .ab-label { flex: none; width: 100%; padding-top: 0 }
+  .ab-row .ab-label small { max-width: none }
+  .ab-row .ab-ctl { width: 100%; max-width: none }
+  .ab-row.ab-row-sw { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px }
+  .ab-row.ab-row-sw .ab-label { flex: 1; min-width: 0; width: auto }
+  .ab-row.ab-row-sw .ab-ctl { width: auto; flex: none }
+
+  /* 防止 iOS Safari 聚焦输入框自动放大（font-size >= 16px） */
+  .ab-input, .ab-select, .ab-textarea, .ab-sel-btn, .ab-psec textarea, .ab-psec-title { font-size: 16px }
+  .ab-input:not(.sm):not(.narrow) { width: 100%; height: 40px }
+  .ab-input.sm, .ab-input.narrow { width: 92px; height: 36px }
+  .ab-sel { width: 100%; min-width: 0 }
+  .ab-sel-btn { min-height: 40px }
+  .ab-sel-opt { white-space: normal; padding: 10px }
+
+  .ab-btn { min-height: 38px; padding: 7px 14px }
+  .ab-btn.sm { min-height: 34px; padding: 5px 11px; font-size: 12.5px }
+  .ab-ibtn { width: 34px; height: 34px }
+  .ab-aibtn { height: 32px; padding: 0 11px }
+  .ab-range { min-width: 0; width: 100% }
+  .ab-seg { width: 100% }
+  .ab-seg button { flex: 1 0 auto; min-height: 34px; padding: 6px 10px }
+  .ab-choices { grid-template-columns: minmax(0, 1fr) }
+
+  .ab-persona { grid-template-columns: minmax(0, 1fr) }
+  .ab-plist { position: static }
+  .ab-pitems { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 8px }
+  .ab-psec-head { padding: 10px 10px 0 12px }
+  .ab-psec textarea { padding: 8px 12px 12px }
+  .ab-psec-act { opacity: 1 }
+
+  .ab-stickers { grid-template-columns: repeat(auto-fill, minmax(min(100px, 100%), 1fr)); gap: 8px }
+  .ab-shots { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px }
+  .ab-sticker .x, .ab-shot .x { opacity: .92 }
+
+  .ab-table-wrap .ab-table { min-width: 420px }
+  .ab-li { flex-wrap: wrap; gap: 6px 10px; padding: 10px 2px }
+  .ab-li .meta { white-space: normal }
+
+  .ab-savebar { bottom: calc(60px + env(safe-area-inset-bottom, 0px)); padding: 10px 12px }
+  .ab-savebar-kbd { display: none }
+  .ab-savebar-acts { width: 100%; justify-content: flex-end }
+  .ab-savebar-acts .ab-btn { flex: 1 }
+
   .ab-wiz-bar .seg span { display: none }
   .ab-install-steps .st span { display: none }
-  .ab-topbar h1 { font-size: 16px }
 }
+
+@media (max-width: 560px) {
+  .ab-log { flex-wrap: wrap; gap: 3px 8px; padding: 7px 10px; border-bottom: 1px solid var(--ab-line) }
+  .ab-log:last-child { border-bottom: 0 }
+  .ab-log .t { font-size: 11px }
+  .ab-log .a { min-width: 0; font-size: 10.5px; font-weight: 560; padding: 0 6px; border-radius: 5px; background: var(--ab-foam); line-height: 1.65 }
+  .ab-log .m { flex: 1 0 100%; margin-top: 2px; font-size: 12px; line-height: 1.55 }
+  .ab-cookie-field { flex-direction: column; align-items: stretch; gap: 4px }
+  .ab-cookie-field code { text-align: left; min-width: 0 }
+}
+
 @media (prefers-reduced-motion: reduce) { .ab-root * { transition: none !important; animation: none !important } }
 .ab-root :focus-visible { outline: none; box-shadow: var(--ab-focus) }

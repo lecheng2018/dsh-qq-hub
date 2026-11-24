@@ -213,20 +213,22 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
           {procs ? (
             <div style={{ marginTop: 14 }}>
               {procs.length === 0 ? <div className="ab-muted">没找到 QQ 进程。</div> : (
-                <table className="ab-table">
-                  <thead><tr>{['进程', '登录的号', '昵称', '状态', ''].map((x) => <th key={x}>{x}</th>)}</tr></thead>
-                  <tbody>
-                    {procs.map((p) => (
-                      <tr key={p.pid}>
-                        <td>{p.pid}</td>
-                        <td>{p.uin || '识别不出'}</td>
-                        <td>{p.nickname || '—'}</td>
-                        <td>{p.injected ? (p.connected ? '已接入' : '已注入，连接中') : '未接入'}</td>
-                        <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="ab-table-wrap">
+                  <table className="ab-table">
+                    <thead><tr>{['进程', '登录的号', '昵称', '状态', ''].map((x) => <th key={x}>{x}</th>)}</tr></thead>
+                    <tbody>
+                      {procs.map((p) => (
+                        <tr key={p.pid}>
+                          <td>{p.pid}</td>
+                          <td>{p.uin || '识别不出'}</td>
+                          <td>{p.nickname || '—'}</td>
+                          <td>{p.injected ? (p.connected ? '已接入' : '已注入，连接中') : '未接入'}</td>
+                          <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           ) : null}

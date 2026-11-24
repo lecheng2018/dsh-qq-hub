@@ -23,12 +23,12 @@ function Token({ st }) {
       >
         <div className="ab-list">
           {ITEMS.map((it) => (
-            <div key={it.id} className="ab-li">
-              <div className="meta"><b>{it.name}</b></div>
-              <div className="body">
-                <div className="ab-small">{it.desc}</div>
+            <div key={it.id} className="ab-li ab-li-col">
+              <div className="ab-li-head">
+                <b>{it.name}</b>
+                <span className={cx('ab-badge', !running(it.id) && 'dim')}>{running(it.id) ? '在跑' : '没在跑'}</span>
               </div>
-              <span className={cx('ab-badge', !running(it.id) && 'dim')}>{running(it.id) ? '在跑' : '没在跑'}</span>
+              <div className="ab-small ab-muted">{it.desc}</div>
             </div>
           ))}
         </div>

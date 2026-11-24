@@ -94,15 +94,15 @@ function Heybox({ draft, setDraft, toast }) {
         desc="用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么）。配图她自己准备：本机图片最多 4 张，传小黑盒图床插进正文，哪张传不上就跳过哪张、不影响发帖，发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。"
       >
         <Row label="小黑盒账号" hint="从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）">
-          <div>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             <div className="ab-flex">
               <Btn small onClick={checkAccount} disabled={!!busy}>{busy === 'account' ? '检查中…' : '检查登录'}</Btn>
               {acctText}
             </div>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <textarea
-                className="ab-input" rows={3} spellCheck={false}
-                style={{ flex: 1, minWidth: 260, fontFamily: 'monospace', fontSize: 12 }}
+                className="ab-textarea" rows={3} spellCheck={false}
+                style={{ flex: '1 1 220px', minHeight: 72 }}
                 placeholder="pkey=…; heybox_id=…; x_xhh_tokenid=…"
                 value={cookieText} onChange={(e) => setCookieText(e.target.value)}
               />

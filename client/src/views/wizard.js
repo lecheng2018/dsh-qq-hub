@@ -112,18 +112,20 @@ function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
           ? <div className="ab-note" style={{ marginTop: 10 }}>{login.uin === st.config.botQQ ? '✓ 连上了：' + login.nickname + '（' + login.uin + '）' : '⚠ 连上的是 ' + login.uin + '，不是机器人号'}</div>
           : <div className="ab-muted ab-small" style={{ marginTop: 10 }}>接入后需要十几秒识别登录状态，稍等一下会自动刷新。</div>}
         {procs ? (
-          <table className="ab-table" style={{ marginTop: 10 }}>
-            <tbody>
-              {procs.map((p) => (
-                <tr key={p.pid}>
-                  <td>{p.pid}</td>
-                  <td>{p.uin || '识别不出'}</td>
-                  <td>{p.nickname || ''}</td>
-                  <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="ab-table-wrap" style={{ marginTop: 10 }}>
+            <table className="ab-table">
+              <tbody>
+                {procs.map((p) => (
+                  <tr key={p.pid}>
+                    <td>{p.pid}</td>
+                    <td>{p.uin || '识别不出'}</td>
+                    <td>{p.nickname || ''}</td>
+                    <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : null}
       </div>
     ),
@@ -145,7 +147,7 @@ function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
     ),
   ][step]
   return (
-    <div className="ab-card" style={{ padding: '20px 22px' }}>
+    <div className="ab-card ab-wiz-card">
       <div className="ab-flex" style={{ marginBottom: 6 }}>
         <h3 style={{ margin: 0, fontSize: 16 }}>设置向导</h3>
         <span className="ab-muted ab-small">第 {step + 1} / {WIZ_STEPS.length} 步 · {WIZ_STEPS[step]}</span>

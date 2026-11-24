@@ -142,12 +142,12 @@ function ProfilePerms({ draft, setDraft }) {
     >
       <Seg value={group} onChange={setGroup} options={PERM_GROUPS.map((g) => ({ value: g.id, label: g.label }))} />
       <div className="ab-small ab-muted" style={{ marginTop: 8 }}>
-        这一组（{cur.label}）共 {cur.keys.length} 项 · 放开 {loosened(cur.keys)} 项（没放开的都是「仅主人私聊」）
+        这一组（{cur.label}）共 {cur.keys.length} 项 · 放开 {loosened(cur.keys)} 项（关 = 谁说都不改 · 仅主人私聊 = 默认 · 所有人 = 白名单内的人/群也能让改）
       </div>
       <div style={{ marginTop: 10 }}>
         {cur.keys.map((k) => (
           <Row key={k} label={PERM_ITEMS[k][0]} hint={PERM_ITEMS[k][1]}>
-            <Choices value={perms[k] || 'owner'} onChange={(v) => setDraft(setPath(draft, 'profilePerms.' + k, v))} options={PERM_OPTS} />
+            <Seg value={perms[k] || 'owner'} onChange={(v) => setDraft(setPath(draft, 'profilePerms.' + k, v))} options={PERM_OPTS} />
           </Row>
         ))}
       </div>
@@ -161,19 +161,21 @@ function CommandList() {
   useEffect(() => { get('/commands').then((r) => setList(r.list || [])) }, [])
   return (
     <Card collapse title={'QQ 命令参考（' + list.length + ' 条）'} desc="主人在 QQ 里（私聊或白名单群）发这些命令就能管她。总开关关着时也能用。">
-      <table className="ab-table">
-        <tbody>
-          {list.map((c) => (
-            <tr key={c.name}>
-              <td style={{ whiteSpace: 'nowrap' }}>
-                <code>/{c.name}</code>
-                {c.aliases.length ? <div className="ab-muted ab-small">{c.aliases.map((a) => '/' + a).join(' ')}</div> : null}
-              </td>
-              <td>{c.desc}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="ab-table-wrap">
+        <table className="ab-table">
+          <tbody>
+            {list.map((c) => (
+              <tr key={c.name}>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <code>/{c.name}</code>
+                  {c.aliases.length ? <div className="ab-muted ab-small">{c.aliases.map((a) => '/' + a).join(' ')}</div> : null}
+                </td>
+                <td>{c.desc}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   )
 }
@@ -189,18 +191,20 @@ function GroupRoles() {
         ? <div className="ab-muted ab-small"><i className="ab-spin" /> 查询中…</div>
         : list.length === 0 ? <div className="ab-muted ab-small">群白名单是空的。</div>
           : (
-            <table className="ab-table">
-              <thead><tr>{['群', '她的身份', '群管'].map((x) => <th key={x}>{x}</th>)}</tr></thead>
-              <tbody>
-                {list.map((g) => (
-                  <tr key={g.groupId}>
-                    <td>{(g.name && g.name !== g.groupId ? g.name + ' ' : '') + '(' + g.groupId + ')'}</td>
-                    <td>{g.label}</td>
-                    <td>{g.canManage ? <span className="ab-badge">可以</span> : <span className="ab-muted ab-small">不行</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="ab-table-wrap">
+              <table className="ab-table">
+                <thead><tr>{['群', '她的身份', '群管'].map((x) => <th key={x}>{x}</th>)}</tr></thead>
+                <tbody>
+                  {list.map((g) => (
+                    <tr key={g.groupId}>
+                      <td>{(g.name && g.name !== g.groupId ? g.name + ' ' : '') + '(' + g.groupId + ')'}</td>
+                      <td>{g.label}</td>
+                      <td>{g.canManage ? <span className="ab-badge">可以</span> : <span className="ab-muted ab-small">不行</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
     </Card>
   )

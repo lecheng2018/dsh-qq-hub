@@ -78,7 +78,7 @@ function Group({ draft, setDraft }) {
               <Row label="按 QQ 号认同类 bot" hint="逗号或空格隔开。写在这里的号说的话她一律不接">
                 <ListInput
                   value={Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []}
-                  placeholder="例如 123456789, 987654321" numbers
+                  placeholder="例如 100001, 100002" numbers
                   onChange={(list) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', list))}
                 />
               </Row>

@@ -142,7 +142,7 @@ function Voice({ st, draft, setDraft, toast, reload }) {
         <Row label="试听" hint="先保存设置再试听">
           <input className="ab-input" value={txt} onChange={(e) => setTxt(e.target.value)} />
           <Btn small onClick={async () => { const r = await post('/voice/test', { text: txt }); if (r.ok) setSrc('data:' + r.mime + ';base64,' + r.data); else toast(r.message) }}>生成</Btn>
-          {src ? <audio src={src} controls autoPlay style={{ height: 32 }} /> : null}
+          {src ? <audio src={src} controls autoPlay style={{ height: 36, maxWidth: '100%' }} /> : null}
         </Row>
       </Card>
       <Card

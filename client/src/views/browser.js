@@ -59,22 +59,25 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
       desc={running ? '浏览器正在跑（多个模块共用这一个进程）' : '现在没在跑。下次要用时会自动起来。'}
       right={running ? <Btn small kind="ghost" onClick={onShutdown} disabled={busy}>立刻关掉</Btn> : null}
     >
-      <Row label="状态">
+      <div className="ab-kv">
+        <span>状态</span>
         <span>{running ? '运行中' : '休眠'}</span>
-        {live.browser ? <span className="ab-muted ab-small" style={{ marginLeft: 8 }}>{live.browser}</span> : null}
-      </Row>
-      {running ? (
-        <>
-          <Row label="显示">{live.displayOwned ? <span>虚拟屏 {live.display}（没有桌面，看不见）</span> : <span>{live.display || '系统显示'}</span>}</Row>
-          <Row label="标签页"><span>{live.tabs} 个</span></Row>
-          <Row label="正在用">{live.active.length ? <span>{live.active.join('、')}</span> : <span className="ab-muted">没人用</span>}</Row>
-        </>
-      ) : null}
-      <Row label="可用内存">
+        {live.browser ? <Fragment><span>内核</span><span className="ab-small ab-muted" style={{ wordBreak: 'break-all' }}>{live.browser}</span></Fragment> : null}
+        {running ? (
+          <Fragment>
+            <span>显示</span>
+            <span>{live.displayOwned ? `虚拟屏 ${live.display}（无桌面）` : (live.display || '系统显示')}</span>
+            <span>标签页</span>
+            <span>{live.tabs} 个</span>
+            <span>正在用</span>
+            <span>{live.active.length ? live.active.join('、') : <span className="ab-muted">没人用</span>}</span>
+          </Fragment>
+        ) : null}
+        <span>可用内存</span>
         <span className={live.freeMB >= 0 && live.freeMB < 600 ? 'ab-warn' : ''}>{live.freeMB >= 0 ? fmtMB(live.freeMB) : '未知'}</span>
-      </Row>
+      </div>
       {live.displayOwned ? (
-        <>
+        <div style={{ marginTop: 10 }}>
           <Row label="看画面" hint="虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点">
             <Btn small onClick={() => onVnc('start')} disabled={busy || live.vnc?.running}>开 VNC</Btn>
             <Btn small kind="ghost" onClick={() => onVnc('stop')} disabled={busy || !live.vnc?.running}>关</Btn>
@@ -91,7 +94,7 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
               </div>
             </Row>
           ) : null}
-        </>
+        </div>
       ) : null}
     </Card>
   )
@@ -123,7 +126,7 @@ export function Browser({ draft, setDraft, toast }) {
   }
 
   return (
-    <>
+    <div className="ab-grid">
       <InstallCard
         st={st}
         busy={busy}
@@ -163,6 +166,6 @@ export function Browser({ draft, setDraft, toast }) {
           {f.sw('browser.vncLan')}
         </Row>
       </Card>
-    </>
+    </div>
   )
 }
