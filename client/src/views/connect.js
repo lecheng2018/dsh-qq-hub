@@ -127,6 +127,24 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
   )
   return (
     <div className="ab-grid">
+      <Card title="连接状态" desc="实时查看 QQ 网关通信状态与已接入的账号。">
+        <div className="ab-kv">
+          <span>QQ 网关</span>
+          <span>
+            <span className="ab-flex"><i className={cx('ab-dot', conn ? 'ok' : st.onebot.state === 'connecting' ? 'warn' : 'err')} />{STATE_TEXT[st.onebot.state] || st.onebot.state}</span>
+          </span>
+          <span>登录的号</span>
+          <span>{login ? login.nickname + '（' + login.uin + '）' + (login.uin !== draft.botQQ ? ' ⚠ 不是机器人号！' : '') : '—'}</span>
+          <span>HTTP</span><span>{st.onebot.endpoint.httpUrl || '—'}</span>
+          <span>WebSocket</span><span>{st.onebot.endpoint.wsUrl || '—'}</span>
+        </div>
+        {!conn && st.onebot.problem ? <div className="ab-note warn" style={{ marginTop: 10 }}>{st.onebot.problem}</div> : null}
+        <div className="ab-flex" style={{ marginTop: 10 }}>
+          <Btn small kind="primary" onClick={async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() }}>重新连接</Btn>
+          <Btn small onClick={async () => { const r = await get('/onebot/test'); toast(r.message) }}>测试连接</Btn>
+        </div>
+      </Card>
+
       <Card title="用什么接 QQ" right={openWizard ? <Btn small kind="ghost" onClick={openWizard}>重新走一遍设置向导</Btn> : null}>
         <GatewayChoice draft={draft} setDraft={setDraft} />
       </Card>
@@ -224,23 +242,6 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
           {f.text('workspaceDir', { size: 'wide', placeholder: st.workspaceDir || '' })}
         </Row>
         <div className="ab-muted ab-small">现在用的：{st.workspaceDir || '—'}</div>
-      </Card>
-
-      <Card title="连接状态">
-        <div className="ab-kv">
-          <span>QQ 网关</span>
-          <span>
-            <span className="ab-flex"><i className={cx('ab-dot', conn ? 'ok' : st.onebot.state === 'connecting' ? 'warn' : 'err')} />{STATE_TEXT[st.onebot.state] || st.onebot.state}</span>
-          </span>
-          <span>登录的号</span>
-          <span>{login ? login.nickname + '（' + login.uin + '）' + (login.uin !== draft.botQQ ? ' ⚠ 不是机器人号！' : '') : '—'}</span>
-          <span>HTTP</span><span>{st.onebot.endpoint.httpUrl || '—'}</span>
-          <span>WebSocket</span><span>{st.onebot.endpoint.wsUrl || '—'}</span>
-        </div>
-        {!conn && st.onebot.problem ? <div className="ab-note warn" style={{ marginTop: 10 }}>{st.onebot.problem}</div> : null}
-        <div className="ab-flex" style={{ marginTop: 10 }}>
-          <Btn small onClick={async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() }}>重新连接</Btn>
-        </div>
       </Card>
 
       {external ? null : (

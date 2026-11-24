@@ -1106,7 +1106,14 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
     toast(r.message, r.ok ? "ok" : "err");
     reload();
   } }, "重新连接"));
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "用什么接 QQ", right: openWizard ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, /* @__PURE__ */ h(GatewayChoice, { draft, setDraft })), external ? /* @__PURE__ */ h(Card, { title: "接上 QQ（已有的 OneBot 机器人）", desc: "让 OneBot 服务登录机器人号，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。连上后会先核对登录的是不是机器人号，不是就断开。" }, /* @__PURE__ */ h(OneBotFields, { draft, f }), /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), testBtns) : /* @__PURE__ */ h(Card, { title: "接上 QQ（SnowLuma）", desc: "SnowLuma 是让机器人号上线的 QQ 网关，按协议要你自己下载并同意它的用户协议；启动、密码、接入、断线重连都交给 QQ Hub。" }, /* @__PURE__ */ h("div", { className: "ab-steps" }, /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "下载 SnowLuma"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "官方发布页下载 Windows 完整版（名字类似 SnowLuma-v2.x.x-win-x64.zip，不带 lite）。"), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => window.open(sl.downloadPage, "_blank") }, "打开下载页 ↗")))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "解压到一个纯英文的目录"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "推荐 C:\\Aurabot\\snowluma。解压后这个目录里应该直接能看到 index.mjs 和 node.exe。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, f.text("snowluma.dir", { size: "wide", placeholder: "C:\\Aurabot\\snowluma" })), !sl.installed && sl.reason ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-warn)", marginTop: 4 } }, sl.reason) : sl.installed ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-ok)", marginTop: 4 } }, "找到了 SnowLuma v", sl.version) : null)), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.running && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "启动"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "后台运行，不弹窗口；以后会跟着 DSH 自动启动。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.installed || sl.running, onClick: act("/snowluma/start") }, sl.running ? "已在运行" : "启动"), sl.owns ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: act("/snowluma/stop") }, "停止") : null), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(SnowLumaAuth, { running: sl.running, toast, onChange: reload })))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.consented && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "阅读并同意 SnowLuma 的用户协议"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "同意之前 SnowLuma 不会工作。"), /* @__PURE__ */ h(Agreement, { running: sl.running, toast, onChange: reload }))), /* @__PURE__ */ h("div", { className: cx("ab-step", conn && login && login.uin === draft.botQQ && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "登录机器人号并接入"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "在电脑上另开一个 QQ 登录机器人号 ", draft.botQQ, "（可以最小化），然后点「接入机器人号」。你的大号照常开着——插件只接机器人号。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.running, onClick: act("/snowluma/attach") }, "接入机器人号"), /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: loadProcs }, "看看有哪些 QQ 进程"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "连接状态", desc: "实时查看 QQ 网关通信状态与已接入的账号。" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "QQ 网关"), /* @__PURE__ */ h("span", null, /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("i", { className: cx("ab-dot", conn ? "ok" : st.onebot.state === "connecting" ? "warn" : "err") }), STATE_TEXT[st.onebot.state] || st.onebot.state)), /* @__PURE__ */ h("span", null, "登录的号"), /* @__PURE__ */ h("span", null, login ? login.nickname + "（" + login.uin + "）" + (login.uin !== draft.botQQ ? " ⚠ 不是机器人号！" : "") : "—"), /* @__PURE__ */ h("span", null, "HTTP"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.httpUrl || "—"), /* @__PURE__ */ h("span", null, "WebSocket"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.wsUrl || "—")), !conn && st.onebot.problem ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 10 } }, st.onebot.problem) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
+    const r = await post("/onebot/reconnect");
+    toast(r.message, r.ok ? "ok" : "err");
+    reload();
+  } }, "重新连接"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+    const r = await get("/onebot/test");
+    toast(r.message);
+  } }, "测试连接"))), /* @__PURE__ */ h(Card, { title: "用什么接 QQ", right: openWizard ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, /* @__PURE__ */ h(GatewayChoice, { draft, setDraft })), external ? /* @__PURE__ */ h(Card, { title: "接上 QQ（已有的 OneBot 机器人）", desc: "让 OneBot 服务登录机器人号，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。连上后会先核对登录的是不是机器人号，不是就断开。" }, /* @__PURE__ */ h(OneBotFields, { draft, f }), /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), testBtns) : /* @__PURE__ */ h(Card, { title: "接上 QQ（SnowLuma）", desc: "SnowLuma 是让机器人号上线的 QQ 网关，按协议要你自己下载并同意它的用户协议；启动、密码、接入、断线重连都交给 QQ Hub。" }, /* @__PURE__ */ h("div", { className: "ab-steps" }, /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "下载 SnowLuma"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "官方发布页下载 Windows 完整版（名字类似 SnowLuma-v2.x.x-win-x64.zip，不带 lite）。"), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => window.open(sl.downloadPage, "_blank") }, "打开下载页 ↗")))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "解压到一个纯英文的目录"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "推荐 C:\\Aurabot\\snowluma。解压后这个目录里应该直接能看到 index.mjs 和 node.exe。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, f.text("snowluma.dir", { size: "wide", placeholder: "C:\\Aurabot\\snowluma" })), !sl.installed && sl.reason ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-warn)", marginTop: 4 } }, sl.reason) : sl.installed ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-ok)", marginTop: 4 } }, "找到了 SnowLuma v", sl.version) : null)), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.running && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "启动"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "后台运行，不弹窗口；以后会跟着 DSH 自动启动。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.installed || sl.running, onClick: act("/snowluma/start") }, sl.running ? "已在运行" : "启动"), sl.owns ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: act("/snowluma/stop") }, "停止") : null), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(SnowLumaAuth, { running: sl.running, toast, onChange: reload })))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.consented && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "阅读并同意 SnowLuma 的用户协议"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "同意之前 SnowLuma 不会工作。"), /* @__PURE__ */ h(Agreement, { running: sl.running, toast, onChange: reload }))), /* @__PURE__ */ h("div", { className: cx("ab-step", conn && login && login.uin === draft.botQQ && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "登录机器人号并接入"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "在电脑上另开一个 QQ 登录机器人号 ", draft.botQQ, "（可以最小化），然后点「接入机器人号」。你的大号照常开着——插件只接机器人号。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.running, onClick: act("/snowluma/attach") }, "接入机器人号"), /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: loadProcs }, "看看有哪些 QQ 进程"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
     const r = await get("/onebot/test");
     toast(r.message);
   } }, "测试连接")), sl.lastAttach && sl.lastAttach.at ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4, color: sl.lastAttach.ok ? "var(--ab-ok)" : "var(--ab-warn)" } }, timeAgo(sl.lastAttach.at), "：", sl.lastAttach.message) : null))), procs ? /* @__PURE__ */ h("div", { style: { marginTop: 14 } }, procs.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted" }, "没找到 QQ 进程。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["进程", "登录的号", "昵称", "状态", ""].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, procs.map((p) => /* @__PURE__ */ h("tr", { key: p.pid }, /* @__PURE__ */ h("td", null, p.pid), /* @__PURE__ */ h("td", null, p.uin || "识别不出"), /* @__PURE__ */ h("td", null, p.nickname || "—"), /* @__PURE__ */ h("td", null, p.injected ? p.connected ? "已接入" : "已注入，连接中" : "未接入"), /* @__PURE__ */ h("td", null, p.isBot ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "机器人号") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不会碰"))))))) : null), /* @__PURE__ */ h(
@@ -1118,11 +1125,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
     },
     /* @__PURE__ */ h(Row, { label: "工作区文件夹", hint: "填完整路径（比如 D:\\\\QQ Hub\\\\qq-chats）；留空 = 默认位置（用户目录下 QQ Hub/qq-chats）" }, f.text("workspaceDir", { size: "wide", placeholder: st.workspaceDir || "" })),
     /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "现在用的：", st.workspaceDir || "—")
-  ), /* @__PURE__ */ h(Card, { title: "连接状态" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "QQ 网关"), /* @__PURE__ */ h("span", null, /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("i", { className: cx("ab-dot", conn ? "ok" : st.onebot.state === "connecting" ? "warn" : "err") }), STATE_TEXT[st.onebot.state] || st.onebot.state)), /* @__PURE__ */ h("span", null, "登录的号"), /* @__PURE__ */ h("span", null, login ? login.nickname + "（" + login.uin + "）" + (login.uin !== draft.botQQ ? " ⚠ 不是机器人号！" : "") : "—"), /* @__PURE__ */ h("span", null, "HTTP"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.httpUrl || "—"), /* @__PURE__ */ h("span", null, "WebSocket"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.wsUrl || "—")), !conn && st.onebot.problem ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 10 } }, st.onebot.problem) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
-    const r = await post("/onebot/reconnect");
-    toast(r.message, r.ok ? "ok" : "err");
-    reload();
-  } }, "重新连接"))), external ? null : /* @__PURE__ */ h(Card, { title: "高级", desc: "一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。" }, /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), /* @__PURE__ */ h(Row, { label: "控制台端口" }, f.num("snowluma.webuiPort", { min: 1, max: 65535 })), /* @__PURE__ */ h(Row, { label: "控制台密码", hint: "默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）" }, f.text("snowluma.webuiPassword", { type: "password", placeholder: draft.snowluma.webuiPasswordSet ? draft.snowluma.passwordAuto ? "自动管理中（不改就留空）" : "已保存（不改就留空）" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "SnowLuma 自己的控制台", hint: "一般用不到，想看它的原始界面时用" }, /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: () => window.open(sl.webui, "_blank") }, "打开 ↗")), /* @__PURE__ */ h(Row, { label: "随 DSH 自动启动 SnowLuma" }, f.sw("snowluma.autoStart")), /* @__PURE__ */ h(Row, { label: "自动接入机器人号", hint: "断线后自动重新接入，只接机器人号" }, f.sw("snowluma.autoAttach")), /* @__PURE__ */ h(Row, { label: "手动 HTTP 地址", hint: "留空 = 自动" }, f.text("snowluma.httpUrl", { placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "手动 WS 地址", hint: "留空 = 自动" }, f.text("snowluma.wsUrl", { placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "手动 HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "手动 WS 令牌" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "留空 = 自动" }))));
+  ), external ? null : /* @__PURE__ */ h(Card, { title: "高级", desc: "一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。" }, /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), /* @__PURE__ */ h(Row, { label: "控制台端口" }, f.num("snowluma.webuiPort", { min: 1, max: 65535 })), /* @__PURE__ */ h(Row, { label: "控制台密码", hint: "默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）" }, f.text("snowluma.webuiPassword", { type: "password", placeholder: draft.snowluma.webuiPasswordSet ? draft.snowluma.passwordAuto ? "自动管理中（不改就留空）" : "已保存（不改就留空）" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "SnowLuma 自己的控制台", hint: "一般用不到，想看它的原始界面时用" }, /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: () => window.open(sl.webui, "_blank") }, "打开 ↗")), /* @__PURE__ */ h(Row, { label: "随 DSH 自动启动 SnowLuma" }, f.sw("snowluma.autoStart")), /* @__PURE__ */ h(Row, { label: "自动接入机器人号", hint: "断线后自动重新接入，只接机器人号" }, f.sw("snowluma.autoAttach")), /* @__PURE__ */ h(Row, { label: "手动 HTTP 地址", hint: "留空 = 自动" }, f.text("snowluma.httpUrl", { placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "手动 WS 地址", hint: "留空 = 自动" }, f.text("snowluma.wsUrl", { placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "手动 HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "手动 WS 令牌" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "留空 = 自动" }))));
 }
 
 // client/src/views/persona.js
@@ -1440,7 +1443,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       )))
     );
   };
-  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-persona" }, /* @__PURE__ */ h("div", { className: "ab-plist" }, list.map((p) => /* @__PURE__ */ h("button", { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => setSel(p.id) }, /* @__PURE__ */ h("div", { className: "nm" }, p.name, p.id === current ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "正在用") : null), /* @__PURE__ */ h("div", { className: "tg" }, (p.tags || []).join(" · ") || p.id + " · " + p.chars + " 字"))), /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h("div", { className: "ab-persona" }, /* @__PURE__ */ h("div", { className: "ab-plist" }, list.map((p) => /* @__PURE__ */ h("button", { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => setSel(p.id) }, /* @__PURE__ */ h("div", { className: "nm" }, p.name, p.id === current ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "正在用") : null), /* @__PURE__ */ h("div", { className: "tg" }, (p.tags || []).join(" · ") || p.id + " · " + p.chars + " 字"))), /* @__PURE__ */ h(
     Btn,
     {
       kind: "ghost",
@@ -1493,7 +1496,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       }
     )), /* @__PURE__ */ h("div", { className: "ab-psec-add" }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "加一节："), suggest.map((t) => /* @__PURE__ */ h("button", { key: t, type: "button", className: "ab-chip", onClick: () => addSec(t) }, t)), /* @__PURE__ */ h("button", { type: "button", className: "ab-chip solid", onClick: () => addSec("") }, "＋ 自己起名"))),
     /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 14 } }, waiting ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "还有 ", waiting, " 节 AI 润色没选定，选好再保存") : null, /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { kind: "primary", disabled: !dirty || !!waiting, onClick: save }, dirty ? "保存人格" : "已保存"))
-  ) : /* @__PURE__ */ h(Card, null, /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }))), /* @__PURE__ */ h("div", { style: { height: 12 } }), specific("groups", "按群换人设", "指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。"), /* @__PURE__ */ h("div", { style: { height: 12 } }), specific("privates", "按人换人设（私聊）", "指定某个人私聊时用哪个人格；没指定的用「默认」。"), /* @__PURE__ */ h("div", { style: { height: 12 } }), /* @__PURE__ */ h(PersonaAudit, { toast }));
+  ) : /* @__PURE__ */ h(Card, null, /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }))), specific("groups", "按群换人设", "指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。"), specific("privates", "按人换人设（私聊）", "指定某个人私聊时用哪个人格；没指定的用「默认」。"), /* @__PURE__ */ h(PersonaAudit, { toast }));
 }
 
 // client/src/views/access.js
@@ -1510,7 +1513,7 @@ function Access({ draft, setDraft }) {
       desc: "一眼看清：主人是谁、给到什么档位、白名单里有谁、改资料类放开了几项。要改去下面对应的卡。"
     },
     /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { title: "主人 QQ 号" }, "主人 ", draft.ownerQQ || "没设"), /* @__PURE__ */ h(Pill, { kind: draft.ownerLevel === "full" ? "warn" : void 0 }, LEVEL_TEXT[draft.ownerLevel] || "完整权限"), /* @__PURE__ */ h(Pill, { title: "只有名单里的人和群她才会理" }, "白名单 私聊 ", privates.length, " / 群 ", groups.length), /* @__PURE__ */ h(Pill, { kind: loosened ? "warn" : void 0, title: "改资料类操作里被放开到「所有人」或显式开启的项数" }, "改资料放开 ", loosened, " 项"), draft.longTasks ? /* @__PURE__ */ h(Pill, { kind: "warn" }, "长任务模式 开") : null)
-  ), /* @__PURE__ */ h(OwnerCard, { draft, setDraft }), /* @__PURE__ */ h(Whitelist, { draft, setDraft }), /* @__PURE__ */ h(OwnerPower, { draft, setDraft }), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null));
+  ), /* @__PURE__ */ h(OwnerCard, { draft, setDraft }), /* @__PURE__ */ h(OwnerPower, { draft, setDraft }), /* @__PURE__ */ h(Whitelist, { draft, setDraft }), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null)));
 }
 function OwnerCard({ draft, setDraft }) {
   const f = useField(draft, setDraft);
@@ -1524,7 +1527,6 @@ function OwnerPower({ draft, setDraft }) {
   return /* @__PURE__ */ h(
     Card,
     {
-      collapse: true,
       title: "她能做到哪一步",
       desc: "主人私聊的权限档位（能不能用电脑上的工具）和长任务模式。默认「完整」；不需要她碰电脑时，降到「受限」或「纯聊天」更安全。",
       more: "群聊永远没有电脑操作权限，这里管不到群。\n切换档位会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。\n长任务模式只在「完整」下生效：打开后她能把命令放后台跑、跑完回来告诉你，也能设定时任务；工具多一点，回话会稍慢。"
@@ -1592,7 +1594,6 @@ function ProfilePerms({ draft, setDraft }) {
   return /* @__PURE__ */ h(
     Card,
     {
-      collapse: true,
       title: "改资料与名单",
       desc: "她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，要放开在这里逐项开。",
       more: "说明：\n· QQ 昵称 / 签名 / 头像要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。\n· B 站签名 / 头像要先在「B站」页登录。\n· 好友申请：她自己主动加别人暂不支持（SnowLuma 没有这个接口）。\n· 抖音 / 小黑盒的定时自动刷不受「浏览」这项限制；「分享抖音给主人」指刷到好玩的私聊发给你。"
@@ -1607,7 +1608,7 @@ function CommandList() {
   useEffect(() => {
     get("/commands").then((r) => setList(r.list || []));
   }, []);
-  return /* @__PURE__ */ h(Card, { collapse: true, title: "QQ 命令（" + list.length + " 条）", desc: "主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc))))));
+  return /* @__PURE__ */ h(Card, { title: "QQ 命令（" + list.length + " 条）", desc: "主人在 QQ 里（私聊或白名单群）发这些命令就能管她。总开关关着时也能用。" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc))))));
 }
 function GroupRoles() {
   const [list, setList] = useState(null);
@@ -1616,7 +1617,7 @@ function GroupRoles() {
     get("/groups/roles").then((r) => setList(r.list || []));
   };
   useEffect(load, []);
-  return /* @__PURE__ */ h(Card, { collapse: true, title: "群管权限", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行")))))));
+  return /* @__PURE__ */ h(Card, { title: "群管权限", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行")))))));
 }
 function OwnerBrief({ draft, setDraft }) {
   const f = useField(draft, setDraft);
@@ -1640,7 +1641,6 @@ function OwnerBrief({ draft, setDraft }) {
     {
       title: "主人私聊：群聊摘要",
       right: f.sw("group.ownerBrief.enabled"),
-      collapse: true,
       desc: "主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在主人私聊提到群相关的事时触发，不常驻、不写进记忆；默认关。",
       more: "开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。"
     },
@@ -1650,70 +1650,85 @@ function OwnerBrief({ draft, setDraft }) {
 }
 
 // client/src/views/group.js
-function FoldSection({ title, desc, right, defaultOpen = false, children }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return /* @__PURE__ */ h("div", { className: "ab-fold-section" }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 12 } }, /* @__PURE__ */ h(
-    "div",
-    {
-      className: "ab-fold-head",
-      style: { margin: 0, flex: 1 },
-      role: "button",
-      tabIndex: 0,
-      "aria-expanded": open,
-      onClick: () => setOpen(!open),
-      onKeyDown: (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          setOpen(!open);
-        }
-      }
-    },
-    /* @__PURE__ */ h("span", { className: cx("ab-fold-chev", open && "open"), "aria-hidden": "true" }, /* @__PURE__ */ h("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ h("path", { d: "M4.5 3 7.5 6 4.5 9" }))),
-    /* @__PURE__ */ h("h3", null, title)
-  ), right || null), desc ? /* @__PURE__ */ h("p", { className: "ab-desc", style: { marginTop: 2 } }, desc) : null, open ? /* @__PURE__ */ h("div", null, children) : null);
-}
 function Group({ draft, setDraft }) {
   const f = useField(draft, setDraft);
   const overrides = draft.group.overrides || {};
   const [newGid, setNewGid] = useState("");
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "消息节奏", desc: "人常常一口气发好几句：她等对方说完再一起回，而不是一句一回；模型或工具卡住时也不会无限等。" }, /* @__PURE__ */ h(Row, { label: "连发合并", hint: "打开后她会等对方说完再回" }, f.sw("merge.enabled")), /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "回合超时", hint: "模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟" }, /* @__PURE__ */ h(
-    "input",
-    {
-      className: "ab-input sm",
-      type: "number",
-      min: 1,
-      max: 120,
-      step: 1,
-      value: Math.round((Number(draft.turnTimeoutMs) || 6e5) / 6e4),
-      onChange: (e) => setDraft(setPath(draft, "turnTimeoutMs", Number(e.target.value) * 6e4))
-    }
-  ), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟"))), /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
-      title: "怎么说话（分条）",
-      desc: "她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。句子太短不会单独成条，攒够一截才断。",
+      title: "消息节奏与回复策略",
+      desc: "人常常一口气发好几句：她等对方说完再一起回；分条规则让回复更像真人自然聊天。",
       more: "换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。"
     },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "连发合并"),
+    /* @__PURE__ */ h(Row, { label: "连发合并", hint: "打开后她会等对方说完再回" }, f.sw("merge.enabled")),
+    /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "回合超时", hint: "模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟" }, /* @__PURE__ */ h(
+      "input",
+      {
+        className: "ab-input sm",
+        type: "number",
+        min: 1,
+        max: 120,
+        step: 1,
+        value: Math.round((Number(draft.turnTimeoutMs) || 6e5) / 6e4),
+        onChange: (e) => setDraft(setPath(draft, "turnTimeoutMs", Number(e.target.value) * 6e4))
+      }
+    ), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "分条策略"),
     /* @__PURE__ */ h(Row, { label: "群里一条最长", hint: "攒到这么长就断开；正常聊天她一般写得比这短" }, f.num("reply.groupMaxChars", { min: 10, max: 500 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
     /* @__PURE__ */ h(Row, { label: "私聊一条最长", hint: "私聊可以整段说，设大一点更像正常聊天" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
     /* @__PURE__ */ h(Row, { label: "一轮最多几条", hint: "超过就均匀合并，不会把剩下的全塞进最后一条" }, f.num("reply.maxBubbles", { min: 1, max: 12 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")),
     /* @__PURE__ */ h(Row, { label: "清单和汇报整段发", hint: "开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆" }, f.sw("reply.keepReports"))
-  ), /* @__PURE__ */ h(Card, { title: "群聊行为", desc: "群里什么时候必回、什么时候插话、怎么防刷屏。低频的刹车与防 bot 规则默认收起。" }, /* @__PURE__ */ h(FoldSection, { title: "被叫到一定回", defaultOpen: true, desc: "被 @、有人引用回复她的消息、或者提到下面这些名字时，她一定会回。" }, /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))), /* @__PURE__ */ h(FoldSection, { title: "插话", defaultOpen: true, desc: "没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。" }, /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")), /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "每小时最多说", hint: "这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发" }, f.range("group.maxPerHour", 0, 120, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })), /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")), /* @__PURE__ */ h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点 到"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")), /* @__PURE__ */ h(More, { label: "加入话题之后怎么聊" }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她刚说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却限制 —— 但照样吃上面的每小时说话额度，不会白送。话题跑偏或者她选择不说话就退出。"), /* @__PURE__ */ h(Row, { label: "连聊预算", hint: "一次入场最多连着接几条 / 最多聊多久；填 0 = 关掉连聊通道（只靠插话）" }, f.range("group.engagedMaxReplies", 0, 10, 1, (v) => v === 0 ? "关闭" : v + " 条"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.engagedMaxMs", 0, 30 * 6e4, 6e4, (v) => v === 0 ? "关闭" : Math.round(v / 6e4) + " 分钟"))), /* @__PURE__ */ h(FoldSection, { title: "安全刹车", desc: "只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。" }, /* @__PURE__ */ h(Row, { label: "最多说几次" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))), /* @__PURE__ */ h(FoldSection, { title: "防同类 bot", desc: "防 bot 对聊刷屏：她和一个对象互相针对地接话，已确认是同类 bot 的 2 个来回就停、看不出身份的 4 个来回才停，停的是这一对 30 分钟。" }, /* @__PURE__ */ h(Row, { label: "启用", hint: "关掉就完全不判定，她照常按插话概率说话。" }, f.sw("group.fishGuard.enabled")), /* @__PURE__ */ h(Row, { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）" }, /* @__PURE__ */ h(
-    ListInput,
+  ), /* @__PURE__ */ h(
+    Card,
     {
-      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
-      placeholder: "例如 123456789, 987654321",
-      numbers: true,
-      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
-    }
-  )), /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
-    ListInput,
+      title: "群聊互动机制",
+      desc: "群里被 @、引用或提到名字时必回；没人叫她时按概率自然插话。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "被叫到一定回"),
+    /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个；被 @、有人引用回复她的消息、或提到这些名字时，她一定会回。" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" })),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主动插话"),
+    /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")),
+    /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "每小时最多说", hint: "这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发" }, f.range("group.maxPerHour", 0, 120, 1, (v) => v + " 条")),
+    /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })),
+    /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")),
+    /* @__PURE__ */ h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")),
+    /* @__PURE__ */ h(Row, { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点 到"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")),
+    /* @__PURE__ */ h(More, { label: "加入话题之后怎么聊" }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她刚说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却限制 —— 但照样吃上面的每小时说话额度，不会白送。话题跑偏或者她选择不说话就退出。"),
+    /* @__PURE__ */ h(Row, { label: "连聊预算", hint: "一次入场最多连着接几条 / 最多聊多久；填 0 = 关掉连聊通道（只靠插话）" }, f.range("group.engagedMaxReplies", 0, 10, 1, (v) => v === 0 ? "关闭" : v + " 条"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.engagedMaxMs", 0, 30 * 6e4, 6e4, (v) => v === 0 ? "关闭" : Math.round(v / 6e4) + " 分钟"))
+  ), /* @__PURE__ */ h(
+    Card,
     {
-      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
-      placeholder: "例如 小鱼, 咸鱼罐头",
-      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
-    }
-  ))), /* @__PURE__ */ h(FoldSection, { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
+      title: "频率控制与防刷屏",
+      desc: "防失控（在一个群里短时间说太多就歇一会儿，主人 @ 她除外）与防 bot 对聊刷屏。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "安全刹车"),
+    /* @__PURE__ */ h(Row, { label: "最多说几次", hint: "她在同一个群短时间内说的次数超过这个上限就歇一会儿，主人 @ 仍会回复" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟")),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "防同类 bot"),
+    /* @__PURE__ */ h(Row, { label: "防 bot 刷屏检测", hint: "防 bot 对聊刷屏：互相针对接话，已确认是同类 bot 的 2 个来回就停，未确认的 4 个来回停，停这一对 30 分钟。" }, f.sw("group.fishGuard.enabled")),
+    draft.group && draft.group.fishGuard && draft.group.fishGuard.enabled ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）" }, /* @__PURE__ */ h(
+      ListInput,
+      {
+        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
+        placeholder: "例如 123456789, 987654321",
+        numbers: true,
+        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
+      }
+    )), /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
+      ListInput,
+      {
+        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
+        placeholder: "例如 小鱼, 咸鱼罐头",
+        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
+      }
+    ))) : null
+  ), /* @__PURE__ */ h(Card, { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
     PercentRow,
     {
       key: gid,
@@ -1730,10 +1745,10 @@ function Group({ draft, setDraft }) {
         return setPath(prev, "group.overrides", n);
       })
     }
-  )), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
+  )), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
     setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
     setNewGid("");
-  } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "收发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "收文件", desc: "别人发来的文件，她会下载到 QQ 工作区的 qq-inbox 目录，再把路径告诉她（要看得用工具读）。这里管的是单个文件的大小上限。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大", hint: "文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB" }, f.num("files.inboundMaxMB", { min: 1, max: 256 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
+  } }, "添加群单独设置"))), /* @__PURE__ */ h(Card, { title: "安全与收发文件", desc: "管理收发文件能力与执行终端敏感操作前的二次确认。" }, /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "发文件"), /* @__PURE__ */ h(Row, { label: "允许发文件", hint: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, f.sw("files.enabled")), draft.files && draft.files.enabled ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { margin: "4px 0 12px" } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")) : null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "收文件"), /* @__PURE__ */ h(Row, { label: "接收单个文件最大", hint: "别人发来的文件下载到 QQ 工作区的 qq-inbox 目录；整包读进内存，一条消息最多取 3 个，上限 256MB" }, f.num("files.inboundMaxMB", { min: 1, max: 256 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { margin: "4px 0 12px" } }, "超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "危险命令确认"), /* @__PURE__ */ h(Row, { label: "危险命令私聊确认", hint: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, f.sw("security.dangerConfirm")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 8 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。")), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
 }
 
 // client/src/views/browser.js
@@ -1929,7 +1944,23 @@ function Model({ st, draft, setDraft, toast }) {
         setDraft(setPath(setPath(draft, "model.provider", v ? p : ""), "model.model", v ? m.join("::") : ""));
       }
     }
-  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null), /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] }))), /* @__PURE__ */ h(
+  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null), /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] })), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ab-line)", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "改了模型保存后，点右侧按钮可立即把所有已有 QQ 会话切过去（否则等对方发下一条才切）。"), /* @__PURE__ */ h(
+    Btn,
+    {
+      small: true,
+      disabled: applying,
+      onClick: async () => {
+        setApplying(true);
+        try {
+          const r = await post("/models/apply", {});
+          toast(r?.ok ? r.message || "切好了" : r?.message || "没切成", r?.ok ? "ok" : "err");
+        } finally {
+          setApplying(false);
+        }
+      }
+    },
+    applying ? "切着呢…" : "立刻应用到所有会话"
+  ))), /* @__PURE__ */ h(
     Card,
     {
       title: "看图",
@@ -1957,26 +1988,10 @@ function Model({ st, draft, setDraft, toast }) {
         }
       }
     )) : null
-  ), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { collapse: true, title: "可用的模型", desc: "DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+  ), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { title: "可用的模型", desc: "DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
     setDraft(setPath(setPath(draft, "model.provider", m.provider), "model.model", m.model));
     toast("选好了，记得保存");
-  } }, "用这个"))))))), /* @__PURE__ */ h(Card, { collapse: true, title: "应用到现有会话", desc: "这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去——保存设置之后点。" }, /* @__PURE__ */ h(
-    Btn,
-    {
-      small: true,
-      disabled: applying,
-      onClick: async () => {
-        setApplying(true);
-        try {
-          const r = await post("/models/apply", {});
-          toast(r?.ok ? r.message || "切好了" : r?.message || "没切成", r?.ok ? "ok" : "err");
-        } finally {
-          setApplying(false);
-        }
-      }
-    },
-    applying ? "切着呢…" : "立刻应用到所有会话"
-  ), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。")));
+  } }, "用这个"))))))));
 }
 
 // client/src/views/token.js
@@ -2064,8 +2079,10 @@ function Voice({ st, draft, setDraft, toast, reload }) {
       setDraft(d);
       toast("已填入豆包模板：把 APPID_HERE / TOKEN_HERE / VOICE_TYPE_HERE 换成你在火山引擎开通的值，保存后试听");
     } }, "豆包预设")), /* @__PURE__ */ h(Row, { label: "地址模板", hint: draft.voice.http.method === "POST" ? "POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON" : "{text} 会换成要念的话，返回 wav/mp3" }, f.text("voice.http.urlTemplate", { size: "wide", placeholder: "http://127.0.0.1:8000/tts?text={text}" })), draft.voice.http.method === "POST" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "请求头", hint: "一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON。含凭据，保存后面板不再回显原文（留空保存保留原值，整段重填则覆盖）；要看原文去 config.json" }, f.area("voice.http.headers", { rows: 3, placeholder: "Authorization: Bearer;你的token（重新粘贴整段即可替换）" })), /* @__PURE__ */ h(Row, { label: "请求体", hint: "{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID" }, f.area("voice.http.body", { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}（同请求头：保存后不回显，留空保留原值）' }))) : null) : null,
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "触发规则"),
     /* @__PURE__ */ h(Row, { label: "短回复变语音的概率" }, f.percent("voice.autoChance")),
     /* @__PURE__ */ h(Row, { label: "多短算短回复" }, f.range("voice.autoMaxChars", 10, 200, 5, (v) => v + " 字")),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "效果试听"),
     /* @__PURE__ */ h(Row, { label: "试听", hint: "先保存设置再试听" }, /* @__PURE__ */ h("input", { className: "ab-input", value: txt, onChange: (e) => setTxt(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       const r = await post("/voice/test", { text: txt });
       if (r.ok) setSrc("data:" + r.mime + ";base64," + r.data);
@@ -2836,7 +2853,7 @@ function Mood({ st, draft, setDraft, toast }) {
   const [ins, setIns] = useState(null);
   const [adding, setAdding] = useState({ text: "", aboutName: "", importance: 0.6 });
   const [addOpen, setAddOpen] = useState(false);
-  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(true);
   const [personaTab, setPersonaTab] = useState("profiles");
   const [health, setHealth] = useState(null);
   const [reloading, setReloading] = useState(false);
@@ -2951,7 +2968,7 @@ function Mood({ st, draft, setDraft, toast }) {
     } finally {
       setVecBusy(false);
     }
-  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。", collapse: true }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() })));
+  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。" }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() }))));
 }
 /** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
 function ProfilesList({ toast }) {
@@ -3008,7 +3025,7 @@ function RecallLog() {
   useEffect(() => {
     load();
   }, []);
-  return /* @__PURE__ */ h(Card, { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新"), collapse: true }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
+  return /* @__PURE__ */ h(Card, { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
 }
 function OwnerMigrate({ toast, onChanged }) {
   const [from, setFrom] = useState("");
@@ -3163,7 +3180,7 @@ function BiliCookie({ draft, setDraft }) {
   );
 }
 var BILI_KIND = { watch: "看了", comment: "评论", reply: "回复", share: "分享给你", shot: "发你截图", error: "没成功" };
-function BiliModel({ draft, setDraft }) {
+function BiliModelRow({ draft, setDraft }) {
   const [list, setList] = useState(null);
   useEffect(() => {
     get("/models").then((r) => setList(r.list || [])).catch(() => setList([]));
@@ -3173,27 +3190,18 @@ function BiliModel({ draft, setDraft }) {
   const labelOf = (x) => (x.name && x.name !== x.model ? x.name : x.model) + (x.model && x.name !== x.model ? "（" + x.model + "）" : "");
   const options = [{ value: "", label: "跟随全局模型", desc: "和聊天用的一样" }].concat((list || []).map((x) => ({ value: x.provider + "::" + x.model, label: labelOf(x), desc: x.provider, group: x.provider })));
   if (cur && !options.some((o) => o.value === cur)) options.push({ value: cur, label: m.model, desc: m.provider + "（DSH 里没找到）" });
-  return /* @__PURE__ */ h(
-    Card,
+  return /* @__PURE__ */ h(Row, { label: "刷 B 站用什么", hint: "定时刷与抽帧看画面走它；留空跟随聊天全局模型" }, /* @__PURE__ */ h(
+    Select,
     {
-      title: "B 站用的模型",
-      desc: "B 站自己单独用一个模型：定时刷（挑关键词、决定评论 / 回复 / 分享）和抽帧看画面都走它，聊天还是用全局模型。留空就跟随全局。",
-      more: "需要商店里的「B站」模块 1.2.0 以上。看画面要选能看图的模型，选了个不能看图的会自动跳过看画面、只读文字。切换从下一轮刷 B 站起生效。"
-    },
-    /* @__PURE__ */ h(Row, { label: "刷 B 站用什么" }, /* @__PURE__ */ h(
-      Select,
-      {
-        value: cur,
-        width: 280,
-        options,
-        onChange: (v) => {
-          const [provider, ...model] = v.split("::");
-          setDraft(setPath(draft, "bili.model", v ? { ...m, provider, model: model.join("::") } : { ...m, provider: "", model: "" }));
-        }
+      value: cur,
+      width: 280,
+      options,
+      onChange: (v) => {
+        const [provider, ...model] = v.split("::");
+        setDraft(setPath(draft, "bili.model", v ? { ...m, provider, model: model.join("::") } : { ...m, provider: "", model: "" }));
       }
-    )),
-    list === null ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "模型列表加载中…") : null
-  );
+    }
+  ));
 }
 function Bili({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
@@ -3231,7 +3239,7 @@ function Bili({ draft, setDraft, toast }) {
       const r = await get("/bili/account");
       setS({ ...s || {}, account: r });
     } }, "检查登录"), acct ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: acct.isLogin ? "var(--ab-ok)" : "var(--ab-warn)" } }, acct.isLogin ? "已登录：" + acct.uname : "没登录（只能看，不能评论）") : null)
-  ), /* @__PURE__ */ h(Card, { title: "怎么刷", desc: "只在「主动搭话」里设的醒着时间内刷。" }, /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("bili.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("bili.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("bili.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个视频" }, f.range("bili.perRun", 1, 6, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "额外想看的方向", hint: "一行一个；另外还会参考她的兴趣和记忆" }, f.list("bili.keywords", { placeholder: "白米饭 做法\n猫咪\n游戏解说" })), /* @__PURE__ */ h(Row, { label: "播放量门槛" }, f.num("bili.minViews", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次以上")), /* @__PURE__ */ h(Row, { label: "只看最近" }, f.num("bili.maxAgeDays", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天内发的（0 = 不限）"))), /* @__PURE__ */ h(BiliModel, { draft, setDraft }), /* @__PURE__ */ h(
+  ), /* @__PURE__ */ h(Card, { title: "怎么刷与模型", desc: "只在「主动搭话」里设的醒着时间内刷。留空则跟随聊天用的全局模型。" }, /* @__PURE__ */ h(BiliModelRow, { draft, setDraft }), /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("bili.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("bili.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("bili.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个视频" }, f.range("bili.perRun", 1, 6, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "额外想看的方向", hint: "一行一个；另外还会参考她的兴趣和记忆" }, f.list("bili.keywords", { placeholder: "白米饭 做法\n猫咪\n游戏解说" })), /* @__PURE__ */ h(Row, { label: "播放量门槛" }, f.num("bili.minViews", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次以上")), /* @__PURE__ */ h(Row, { label: "只看最近" }, f.num("bili.maxAgeDays", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天内发的（0 = 不限）"))), /* @__PURE__ */ h(
     Card,
     {
       title: "看画面（抽帧 + 视觉）",
@@ -3324,11 +3332,12 @@ function Douyin({ draft, setDraft, toast }) {
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
-      title: "刷抖音",
+      title: "抖音账号与绑定",
       right: f.sw("douyin.enabled"),
-      desc: "她用一个专用浏览器（独立的登录资料，不碰你平时用的浏览器）刷抖音：定时打开推荐，一个个点开看，读标题、分类、内容摘要和热评，再决定点不点赞、评不评论（特别想让你看的会在评论里 @你）、要不要分享给你。总开关默认关：先扫码登录，再打开。",
+      desc: "使用专用浏览器（独立登录资料，不碰平时用的浏览器）登录机器人账号并绑定主人；支持评论区 @你、私信互动与分享。总开关默认关：先扫码登录，再打开。",
       more: "浏览器窗口放在屏幕外，不抢前台。你在 QQ 里发抖音链接，她也能点开看完再聊。"
     },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "机器人账号"),
     /* @__PURE__ */ h(Row, { label: "抖音账号", hint: "建议用小号。扫一次码就行，登录状态存在专用浏览器里" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: startLogin, disabled: !!busy || !!login }, busy === "login" ? "正在打开浏览器…" : login ? "等你扫码…" : "扫码登录"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       setBusy("check");
       const r = await get("/douyin/account");
@@ -3336,15 +3345,9 @@ function Douyin({ draft, setDraft, toast }) {
       setS({ ...s || {}, account: r });
     }, disabled: !!busy }, busy === "check" ? "检查中…" : "检查登录"), acctText), login ? /* @__PURE__ */ h("div", { style: { marginTop: 10, display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" } }, login.shot ? /* @__PURE__ */ h("img", { src: login.shot, alt: "抖音登录", style: { maxWidth: 360, width: "100%", borderRadius: 10, border: "1px solid var(--ab-line)", background: "#fff" } }) : /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "二维码还没出来，稍等…"), /* @__PURE__ */ h("div", { className: "ab-small", style: { flex: 1, minWidth: 160 } }, /* @__PURE__ */ h("div", null, login.message || "用抖音 App 扫码"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: true }) }, "显示浏览器窗口"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setLogin(null) }, "先不登了")))) : null)),
     /* @__PURE__ */ h(Row, { label: "浏览器窗口", hint: "遇到验证码、扫码后要短信验证时，挪到屏幕上处理" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: true }), disabled: !!busy }, "显示浏览器窗口"), /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: false }), disabled: !!busy }, "收起窗口"))),
-    /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 自动找 Edge（找不到再找 Chrome / Chromium）" }, f.text("douyin.browserPath", { size: "wide", placeholder: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" }))
-  ), /* @__PURE__ */ h(
-    Card,
-    {
-      title: "主人抖音号",
-      desc: "填你的抖音号或主页链接，点「核对」。核对过之后，她刷到特别想让你看的视频，会在评论里真的 @你（你会收到抖音通知；认不出你就不发，不会发假 @）。改了输入要重新核对。"
-    },
-    /* @__PURE__ */ h(Row, { label: "你的抖音号 / 主页链接" }, f.text("douyin.owner.input", { size: "wide", placeholder: "抖音号，或 https://www.douyin.com/user/…" })),
-    /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 4 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/confirm-owner", "confirm", { input: ((draft.douyin || {}).owner || {}).input || "" }), disabled: !!busy }, busy === "confirm" ? "核对中…" : "核对"), s && s.owner ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "已核对：", s.owner.nickname) : /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "还没核对（不核对就不会 @你）"))
+    /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 自动找 Edge（找不到再找 Chrome / Chromium）" }, f.text("douyin.browserPath", { size: "wide", placeholder: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" })),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主人账号绑定"),
+    /* @__PURE__ */ h(Row, { label: "你的抖音号 / 主页链接", hint: "填你的抖音号或主页链接，点「核对」。核对后刷到好玩的视频会在评论里真的 @你（你会收到抖音通知；认不出你就不发）。" }, /* @__PURE__ */ h("div", { style: { flex: 1 } }, f.text("douyin.owner.input", { size: "wide", placeholder: "抖音号，或 https://www.douyin.com/user/…" }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/confirm-owner", "confirm", { input: ((draft.douyin || {}).owner || {}).input || "" }), disabled: !!busy }, busy === "confirm" ? "核对中…" : "核对"), s && s.owner ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "已核对：", s.owner.nickname) : /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "还没核对（不核对就不会 @你）"))))
   ), /* @__PURE__ */ h(
     Card,
     {

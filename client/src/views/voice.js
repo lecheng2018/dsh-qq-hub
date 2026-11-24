@@ -134,8 +134,11 @@ function Voice({ st, draft, setDraft, toast, reload }) {
             ) : null}
           </Fragment>
         ) : null}
+        <div className="ab-section-title">触发规则</div>
         <Row label="短回复变语音的概率">{f.percent('voice.autoChance')}</Row>
         <Row label="多短算短回复">{f.range('voice.autoMaxChars', 10, 200, 5, (v) => v + ' 字')}</Row>
+
+        <div className="ab-section-title">效果试听</div>
         <Row label="试听" hint="先保存设置再试听">
           <input className="ab-input" value={txt} onChange={(e) => setTxt(e.target.value)} />
           <Btn small onClick={async () => { const r = await post('/voice/test', { text: txt }); if (r.ok) setSrc('data:' + r.mime + ';base64,' + r.data); else toast(r.message) }}>生成</Btn>

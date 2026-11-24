@@ -342,7 +342,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     )
   }
   return (
-    <div>
+    <div className="ab-grid">
       <div className="ab-persona">
         <div className="ab-plist">
           {list.map((p) => (
@@ -402,11 +402,8 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           </Card>
         ) : <Card><Empty icon="⏳" text="加载中…" /></Card>}
       </div>
-      <div style={{ height: 12 }} />
       {specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。')}
-      <div style={{ height: 12 }} />
       {specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。')}
-      <div style={{ height: 12 }} />
       <PersonaAudit toast={toast} />
     </div>
   )

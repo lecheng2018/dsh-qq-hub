@@ -17,7 +17,7 @@ function Mood({ st, draft, setDraft, toast }) {
   const [ins, setIns] = useState(null)
   const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
   const [addOpen, setAddOpen] = useState(false) // 「手动加一条」收进按钮，默认不占版面
-  const [browseOpen, setBrowseOpen] = useState(false) // 全部记忆默认收起，整页长度不再被几百条记忆拉爆
+  const [browseOpen, setBrowseOpen] = useState(true) // 全部记忆默认展示，更直观
   const [personaTab, setPersonaTab] = useState('profiles') // 人物档案 / 相处经验 / 说话方式 三合一
   const [health, setHealth] = useState(null)
   const [reloading, setReloading] = useState(false)
@@ -169,11 +169,13 @@ function Mood({ st, draft, setDraft, toast }) {
         <ExtPage st={st} draft={draft} setDraft={setDraft} toast={toast} reload={loadVec} mod="memory" embedded />
       </Card>
 
-      <RecallLog />
-      <Card title="导入与迁移" desc="一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。" collapse>
-        <MemoryImport toast={toast} onDone={() => load()} />
-        <OwnerMigrate toast={toast} onChanged={() => load()} />
-      </Card>
+      <div className="ab-grid ab-g2">
+        <RecallLog />
+        <Card title="导入与迁移" desc="一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。">
+          <MemoryImport toast={toast} onDone={() => load()} />
+          <OwnerMigrate toast={toast} onChanged={() => load()} />
+        </Card>
+      </div>
     </div>
   )
 }
@@ -237,7 +239,7 @@ function RecallLog() {
   const load = () => get('/memory/recalls').then((r) => setList(r.list || []))
   useEffect(() => { load() }, [])
   return (
-    <Card title="最近想起了什么" desc="每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>} collapse>
+    <Card title="最近想起了什么" desc="每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}>
       {!list
         ? <Empty icon="⏳" text="加载中…" />
         : list.length === 0 ? <Empty icon="🫧" text="还没有记录（重启后从头记）。" />
