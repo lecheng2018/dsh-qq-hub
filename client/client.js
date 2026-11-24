@@ -36,6 +36,189 @@ __export(entry_exports, {
 });
 module.exports = __toCommonJS(entry_exports);
 
+// client/src/core/inner-fold.js
+var OPEN_TAG = /<inner(?![A-Za-z0-9_-])[^>]*>/gi;
+var CLOSE_TAG = /<\/inner\s*>/gi;
+function splitInnerBlocks(text) {
+  const source = String(text ?? "");
+  const parts = [];
+  let cursor = 0;
+  let searchAt = 0;
+  for (; ; ) {
+    OPEN_TAG.lastIndex = searchAt;
+    const open = OPEN_TAG.exec(source);
+    if (!open) break;
+    const contentStart = open.index + open[0].length;
+    searchAt = contentStart;
+    if (/\/>\s*$/.test(open[0])) continue;
+    CLOSE_TAG.lastIndex = contentStart;
+    const close = CLOSE_TAG.exec(source);
+    if (!close) break;
+    if (open.index > cursor) parts.push({ type: "text", value: source.slice(cursor, open.index) });
+    parts.push({ type: "inner", value: source.slice(contentStart, close.index) });
+    cursor = close.index + close[0].length;
+    searchAt = cursor;
+  }
+  if (cursor === 0) return [{ type: "text", value: source }];
+  if (cursor < source.length) parts.push({ type: "text", value: source.slice(cursor) });
+  return parts;
+}
+function hasInnerBlock(text) {
+  return /<inner(?![A-Za-z0-9_-])[^>]*>/i.test(String(text ?? "")) && splitInnerBlocks(text).some((part) => part.type === "inner");
+}
+var SKIP_KINDS = /* @__PURE__ */ new Set(["user", "steering", "context", "turn-trigger", "system-prompt", "command"]);
+var SKIP_CLOSEST = "pre, code, .qqhub-inner";
+var FOLD_ATTR = "data-qqhub-fold";
+var STYLE_ID = "qqhub-inner-fold-style";
+var STYLE_TEXT = `
+.qqhub-inner { display: block; margin: 2px 0; }
+.qqhub-inner-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0; padding: 0; border: 0; background: none;
+  color: var(--dsw-alias-label-tertiary, currentColor);
+  font: inherit; font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  cursor: pointer;
+}
+.qqhub-inner-head::before {
+  content: ""; flex: none; width: 5px; height: 5px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .12s;
+}
+.qqhub-inner-head[aria-expanded="true"]::before { transform: rotate(45deg); }
+.qqhub-inner-head:focus-visible {
+  outline: 1.5px solid var(--dsw-focus-ring-color, currentColor);
+  outline-offset: 2px; border-radius: 2px;
+}
+.qqhub-inner-body {
+  display: block; white-space: pre-wrap; overflow-wrap: anywhere;
+  margin: 2px 0 4px; padding-left: 12px;
+  border-left: 1px solid var(--dsw-alias-border-l2, currentColor);
+  color: var(--dsw-alias-label-secondary, currentColor);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+}
+@media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
+`;
+function createFold(doc, raw) {
+  const wrap = doc.createElement("span");
+  wrap.className = "qqhub-inner";
+  wrap.setAttribute(FOLD_ATTR, "");
+  const head = doc.createElement("button");
+  head.type = "button";
+  head.className = "qqhub-inner-head";
+  head.setAttribute("aria-expanded", "false");
+  head.textContent = "思考";
+  const body = doc.createElement("span");
+  body.className = "qqhub-inner-body";
+  body.hidden = true;
+  body.textContent = String(raw ?? "").trim();
+  head.addEventListener("click", (event) => {
+    event.preventDefault();
+    const open = head.getAttribute("aria-expanded") === "true";
+    head.setAttribute("aria-expanded", open ? "false" : "true");
+    body.hidden = open;
+  });
+  wrap.append(head, body);
+  return wrap;
+}
+function foldTextNode(node, doc) {
+  const parts = splitInnerBlocks(node.nodeValue);
+  if (!parts.some((part) => part.type === "inner")) return false;
+  const built = parts.filter((part) => part.value !== "").map((part) => part.type === "inner" ? { kind: "inner", dom: createFold(doc, part.value) } : { kind: "text", dom: doc.createTextNode(part.value) });
+  const first = built[0];
+  const last = built[built.length - 1];
+  if (first === void 0 || last === void 0) return false;
+  if (first.kind === "text") {
+    node.nodeValue = first.dom.nodeValue;
+    node.after(...built.slice(1).map((item) => item.dom));
+    return true;
+  }
+  if (last.kind === "text") {
+    node.nodeValue = last.dom.nodeValue;
+    node.before(...built.slice(0, -1).map((item) => item.dom));
+    return true;
+  }
+  node.nodeValue = "";
+  node.before(...built.map((item) => item.dom));
+  return true;
+}
+function foldWithin(root, doc) {
+  const walker = doc.createTreeWalker(
+    root,
+    4
+    /* SHOW_TEXT */
+  );
+  const targets = [];
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const value = node.nodeValue;
+    if (!value || value.indexOf("<") === -1 || !hasInnerBlock(value)) continue;
+    if (node.parentElement?.closest(SKIP_CLOSEST)) continue;
+    targets.push(node);
+  }
+  let folded = 0;
+  for (const node of targets) {
+    try {
+      if (foldTextNode(node, doc)) folded += 1;
+    } catch (error) {
+      console.warn("[qq-hub] 折叠 <inner> 独白失败：", error);
+    }
+  }
+  return folded;
+}
+function foldChatInner(doc) {
+  if (!doc?.querySelectorAll) return 0;
+  let folded = 0;
+  for (const root of doc.querySelectorAll("[data-chat-flow-kind]")) {
+    const kind = root.getAttribute("data-chat-flow-kind") || "";
+    if (SKIP_KINDS.has(kind)) continue;
+    folded += foldWithin(root, doc);
+  }
+  return folded;
+}
+function ensureStyle(doc) {
+  if (doc.getElementById(STYLE_ID) !== null) return;
+  const style = doc.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = STYLE_TEXT;
+  doc.head.append(style);
+}
+function installInnerFold({ doc = globalThis.document, delayMs = 400, observe = true } = {}) {
+  if (!doc?.body || typeof doc.createTreeWalker !== "function") return () => {
+  };
+  ensureStyle(doc);
+  let timer = null;
+  let disposed = false;
+  const run = () => {
+    if (disposed) return;
+    try {
+      foldChatInner(doc);
+    } catch (error) {
+      console.warn("[qq-hub] 扫描聊天流失败：", error);
+    }
+  };
+  const schedule = () => {
+    if (disposed || timer !== null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      run();
+    }, delayMs);
+  };
+  let observer = null;
+  const View = doc.defaultView;
+  if (observe && typeof View?.MutationObserver === "function") {
+    observer = new View.MutationObserver(schedule);
+    observer.observe(doc.body, { childList: true, subtree: true, characterData: true });
+  }
+  run();
+  return () => {
+    disposed = true;
+    observer?.disconnect();
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+  };
+}
+
 // client/src/core/react.js
 var React = require("react");
 var { useState, useEffect, useRef, useCallback, useMemo, Fragment } = React;
@@ -3813,6 +3996,7 @@ function QQHubPage() {
 var inject = ["slots"];
 var PANEL_ID = "qq-hub";
 function apply(ctx) {
+  ctx.effect(() => installInnerFold(), "qq-hub: 正文里的 <inner> 独白折成一行");
   const slots = ctx.get("slots");
   if (slots === void 0) return;
   slots.inject("main", () => slots.register({ name: "main", key: PANEL_ID }, QQHubPage));

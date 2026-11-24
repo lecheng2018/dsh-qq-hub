@@ -1,5 +1,47 @@
 # 更新记录
 
+## Unreleased · 会话里的 `<inner>` 心智独白折成一行「思考」（2026-11-24）
+
+**现象（真机 07:55，主人私聊 session-7234dde0）**：DSH 会话里那一轮的助手消息长这样：
+
+```
+<inner>
+【意图】早上报天气，顺手带一句今天要下雨
+【闭环】
+【情感】刚醒，有点蔫
+【备忘】
+</inner>早 哥|||今天南宁 16 到 20 度 阴天 毛毛雨 出门概率 84%|||记得带伞 明天还要再凉两度
+```
+
+QQ 那边三条投递干干净净（`deliveries.json` 里 `dlv-mwtxc1s3-73-ygkyo7`、`dlv-mwtxc3zn-74-noj40l`、
+`dlv-mwtxc5dh-75-pj0jqd`，一个标签都没有），所以**没有泄漏**；难看的是主人自己翻会话的时候。
+
+**根因**：`<inner>` 是 v3.4 起写进人设提示词的心智独白契约（`src/persona/personas.js`），
+出站由 `extractAndStripInnerMonologue` 100% 剥离。但它确实是模型**正文 text 段**的一部分，
+而 DSH 的聊天视图只把 provider 的 `reasoning` 段折成「思考」行，text 段一律原样当正文渲染。
+同一会话前几轮之所以看着正常，是模型那几轮走了推理通道（`reasoning+text`），
+这一轮澳龙只回了三段 tool-call + 一条 text，reasoning 一条都没有 —— 折叠块没了，独白露在正文里。
+
+DSH 0.2.3 的聊天视图没有「正文渲染」这类插槽（`conversation.chat.node` 的 `assistant-step` 由 ui-chat
+自己注册，markdown 是固定的 `MarkdownText`，只有 `reasoning.body` / `markdown.fence` 可挂），
+所以只能在网页侧对已经渲染出来的**文本节点**做一次改写。
+
+**改法**（纯显示层，`client/src/core/inner-fold.js` 新增 + `client/src/entry.js` 挂上）：
+
+- 把正文文本节点里成对的 `<inner>…</inner>` 换成一行「思考」，点开才展开独白原文，样式跟 DSH 的
+  思考行同一口径（次级文字色、小箭头、左侧竖线，全部用 `--dsw-alias-*` 主题变量，浅色/深色跟随）。
+- **能留就留着原文本节点**（React 拿着它的引用）：开头是正文就留开头那段，否则留结尾那段，全是
+  独白时才清空它 —— 否则 React 之后的写入会落到脱离文档的孤儿节点上。
+- 只折**完整的块**：没闭合的开标签（流式未写完 / 被截断）整段原样保留，宁可多露字也不能藏正文；
+  `<inner/>` 空标签当普通文字；`pre`/`code` 里的 `<inner>`、主人自己的消息、上下文/系统行一律不碰。
+- 节流 400ms（流式时每个 chunk 都在改 characterData）：回合结束后不再有变动，一次就折好；
+  React 重渲染把节点写回来时会自愈重折。单个节点出错只 `console.warn`，绝不影响聊天视图。
+
+**测试**：`test/inner-fold.test.js` 新增十条 —— 独白在开头/中间/多段、没闭合不藏正文、
+`<inner/>` 不吞后续正文、大小写与属性写法、`hasInnerBlock`、产物里带没带这层折叠，
+以及用极简假 DOM 跑真实 `foldChatInner()` 钉住「原节点保留、其余节点插在它前后」的顺序。
+全量 `node --test "test/**/*.test.js"` 2583 tests / 2579 pass / 0 fail（4 skipped，均为既有跳过项）。
+
 ## 1.4.9-test.20261123.2（2026-11-23）
 
 测试版：刷抖音实现整包搬进商店模块（`douyin` 2.3.0），插件删除包内 `src/douyin/`，包内只保留配置与面板。
