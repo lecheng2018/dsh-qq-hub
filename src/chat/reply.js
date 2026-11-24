@@ -396,14 +396,35 @@ function stripPromptEcho(text) {
   return text.slice(0, cut)
 }
 
+/**
+ * DSH 的「中断续跑」通知：客户端在流被掐断后会把这一句当成**用户消息**塞回会话
+ * （`⚠ The stream was interrupted. Please continue the task you were working on.`），
+ * 模型有时候照着念一遍，于是它进了正文、被当气泡发出去 —— 真机 2026-11-24 08:54:56，
+ * 群里收到的第一条就是这个（`deliveries.json` 里内容只有这行字）。
+ *
+ * 只在**同一行同时**出现「stream … interrupted」和「continue the task」时才丢：
+ * 正常聊天里说一句「刚被中断了」不会被误杀；代码块里的示例由 protectExamples 保护。
+ */
+const INTERRUPT_NOTICE_LINE = /^[ \t]*(?:⚠\uFE0F?[ \t]*)?(?:the[ \t]+)?stream[ \t]+(?:was[ \t]+|got[ \t]+)?interrupted\b[^\n]*?continue[ \t]+the[ \t]+task[^\n]*$/i
+
+/** 丢掉续跑通知整行；整段只有这一行就返回空串（等于这一轮无话可说）。 */
+export function stripInterruptNotice(text) {
+  const s = String(text ?? '')
+  if (!/stream\s+(?:was\s+|got\s+)?interrupted/i.test(s)) return s
+  const lines = s.split('\n')
+  const kept = lines.filter((line) => !INTERRUPT_NOTICE_LINE.test(line))
+  return kept.length === lines.length ? s : kept.join('\n').trim()
+}
+
 /** 去掉出站中的工具协议残片和被复读的人设提示词；示例代码不参与检测。 */
 export function sanitizeOutbound(text) {
   const protectedText = protectExamples(text)
   const protectedJson = protectJsonExamples(protectedText.text)
   // 心智独白（v3.4 Phase 1）：<inner>…</inner> 只给状态机消费，绝不能混进 QQ。
-  // 管线顺序按计划书：stripReasoning → stripUnmarkedThinking → extractAndStripInnerMonologue → stripPromptEcho。
+  // 管线顺序按计划书：stripReasoning → stripUnmarkedThinking → extractAndStripInnerMonologue
+  // → stripInterruptNotice → stripInternalMemo → stripPromptEcho。
   const stripped = extractAndStripInnerMonologue(stripUnmarkedThinking(stripReasoning(protectedJson.text))).text
-  const cleaned = stripInternalMemo(stripped)
+  const cleaned = stripInternalMemo(stripInterruptNotice(stripped))
   const sanitized = stripPromptEcho(stripToolOutput(cleaned))
   return protectedText.restore(protectedJson.restore(sanitized))
 }
@@ -464,6 +485,14 @@ export function parseReply(text, rules = {}) {
     raw = (raw.slice(0, reportMatch.index) + raw.slice(reportMatch.index + reportMatch[0].length)).trim()
     if (isSilence(raw) && isSilence(reportBody)) return { silent: true, items: [] }
   }
+  // 她自己用 ||| 划出来的气泡数：这是**硬边界**，场景软顶（四态收尾礼让、群聊紧缩）只能压
+  // 「自动切出来」的气泡，不能把她的边界粘回去。真机 2026-11-24 08:16：对方回短句 → 趋势
+  // 向下 → 礼让 maxBubbles=1 → 她写的三条被 capBubbles 合成一条带换行的长消息，QQ 上看起来
+  // 就是「||| 不生效」（同一天 08:18、08:21 又各复现一次）。
+  const explicitBubbles = raw.split('|||').filter((bubble) => {
+    const part = bubble.trim()
+    return part && !isSilence(part)
+  }).length
   const items = []
   let replyTo = '' // 等着挂到下一条气泡上的「引用回复」编号
   const attach = (from) => {
@@ -514,13 +543,31 @@ export function parseReply(text, rules = {}) {
     quoted = true
   }
   if (items.length === 0 && !reportBody) return { silent: true, items: [] }
-  const finalItems = capBubbles(items, rules.maxBubbles)
+  const finalItems = capBubbles(items, bubbleLimit(rules, explicitBubbles))
   // 报告气泡放最后（她一般先说一句人话，再给数据），不参与条数上限——数据报告不该被截断
   if (reportBody) finalItems.push({ kind: 'text', value: reportBody })
   return { silent: false, items: finalItems }
 }
 
 const MAX_BUBBLES = 6
+
+/**
+ * 这一轮最多几条文字气泡。
+ *
+ * - `maxBubbles`（面板「一轮最多几条」，1~12）是**硬顶**，谁都越不过；
+ * - `softMaxBubbles` 是场景软顶（四态收尾礼让/收尾、群聊紧缩），只压**自动**切出来的气泡；
+ * - 她自己写的 `|||` 是硬边界：软顶再小，也至少放出她划出来的那几条（仍受硬顶约束）。
+ *
+ * 收尾该收紧的是「按字数/标点自动切分」，不是把她明确要分开说的话用换行粘回一条 ——
+ * 后者在 QQ 上就是「||| 不生效」（真机 2026-11-24 08:16/08:18/08:21 三连复现）。
+ */
+export function bubbleLimit(rules = {}, explicitBubbles = 1) {
+  const hard = Math.max(1, Math.round(Number(rules.maxBubbles) || MAX_BUBBLES))
+  const softRaw = Number(rules.softMaxBubbles)
+  const soft = Number.isFinite(softRaw) && softRaw > 0 ? Math.round(softRaw) : hard
+  const explicit = Math.max(1, Math.round(Number(explicitBubbles) || 1))
+  return Math.min(hard, Math.max(1, Math.max(soft, explicit)))
+}
 
 /**
  * 文字气泡超过上限时，**均匀分组**，不是把剩下的全塞进最后一条。

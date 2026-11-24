@@ -1,5 +1,62 @@
 # 更新记录
 
+## Unreleased · 中断续跑通知被当成她的正文发进群（2026-11-24）
+
+**现象（真机 08:54:56，群聊）**：群里收到的第一条是
+`⚠ The stream was interrupted. Please continue the task you were working on.`，
+后面才是她真说的话。`deliveries.json` 里那一轮三条，第一条的内容只有这行字。
+
+**根因**：流被掐断后客户端把这句话当成**用户消息**塞回会话（那一轮 `step/start` 之前有一条
+`agent/inbox/spliced`，`removedCount: 1`），模型照着念了一遍 → 它进了 assistant 的正文 text 段 →
+出站清洗管线里没有这一条，于是按分条规则原样发成第一条气泡。跟 `|||` 那个 bug 无关。
+
+**改法**：`src/chat/reply.js` 新增 `stripInterruptNotice()`，接在 `extractAndStripInnerMonologue`
+之后、`stripInternalMemo` 之前 —— **同一行同时**出现「stream … interrupted」和「continue the task」
+才整行丢弃，正常聊天里说一句「刚才那条被中断了」不会被误杀；整段只剩这一行时返回空串，
+`parseReply` 直接判沉默（这一轮不说话），代码块里的示例继续走 `protectExamples` 豁免。
+
+**顺带收尾（当日验收）**：
+
+- `bubbleLimit` 里那个没人能开的 `respectExplicit` 逃生开关删掉（配置没有、调用方没有、测试没有）。
+- 给 `bubbleLimit` 补上纯函数断言：硬顶 / 显式 `/|||` / 软顶三层，以及 NaN、0 这类脏输入。
+
+**测试**：`test/outbound-sanitize.test.js` 新增五条（整行丢弃、整轮只有通知时沉默、夹在正文中间、
+代码块豁免、08:54 真机形状）；`test/reply-rules.test.js` 新增一条 `bubbleLimit` 断言。
+
+## Unreleased · `|||` 分条被四态收尾压成一条（2026-11-24）
+
+**现象（真机 08:16 / 08:18 / 08:21，主人私聊）**：她明明用 `|||` 分了三条，
+QQ 那边却收到**一条**带换行的长消息：
+
+```
+哦哦 反了 抱歉
+阴天加毛毛雨加风 那种湿冷确实比数字冷得多
+多穿点 别冻着
+```
+
+同一段聊天里 08:20、08:21:17、08:28 的分条又都正常，所以现场看起来像「偶尔抽风」，
+她自己也这么判断（「那不是记号的问题 是我这边偶尔抽风」）。
+
+**根因**：四态收尾（US-006）把 `PLAN[YIELDING/CLOSED].maxBubbles = 1` 直接写进
+`rules.maxBubbles`，再由 `capBubbles` 把多余的文字气泡**用 `
+` 拼成一条**。而这个状态
+是按对方回话长度推的——「我的意思是很冷」(7 字，比上一轮 11 字短) → 趋势向下 → YIELDING。
+于是**越短的回话，越容易把她自己分好的话粘回一坨**，恰好是主人现场遇到的三轮。
+
+**改法**：
+
+- `src/chat/reply.js`：`parseReply` 数出她显式写的 `|||` 条数（`explicitBubbles`），新增
+  `bubbleLimit(rules, explicitBubbles)`——面板 `maxBubbles` 仍是硬顶（1~12），
+  场景软顶走 `softMaxBubbles`，只压**自动**切出来的气泡；显式边界至少放行她划的那几条。
+- `src/chat/reply-delivery.js`：四态收尾不再改写 `rules.maxBubbles`，改写成
+  `rules.softMaxBubbles`（取更小值，仍然「只收紧不放宽」）。
+- 群聊那条路不变：解析时 `maxBubbles` 仍是无穷大，条数由 `groupLimit`（≤3）统一合并。
+
+**测试**：`test/us006-closure-wiring.test.js` 新增三条——礼让下三条仍是三条（且气泡里没有
+换行拼接）、没有 `|||` 时自动切分照旧被压成 1 条、面板硬顶 2 条时 4 条并成 2 条。
+
+## Unreleased · 会话里的 `<inner>` 心智独白折成一行「思考」（2026-11-24）
+
 ## 1.4.9-test.20261123.2（2026-11-23）
 
 测试版：刷抖音实现整包搬进商店模块（`douyin` 2.3.0），插件删除包内 `src/douyin/`，包内只保留配置与面板。

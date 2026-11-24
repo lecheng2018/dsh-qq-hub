@@ -105,3 +105,30 @@ test('群聊问句豁免：yielding/closed 且 allowQuestion 为 false 时末尾
   }
 })
 
+
+test('礼让收紧不碰她写的 |||：三条仍是三条（真机 2026-11-24 08:16 回归）', async () => {
+  const { d, sent } = harness()
+  // 第一轮把对方回话长度基线拉高，第二轮明显变短 → 趋势向下 → YIELDING（maxBubbles 1）
+  await d.deliver('private:1000', '知道了', { userText: '我感觉体感不止13.6，风也有点大' })
+  sent.length = 0
+  await d.deliver('private:1000', '哦哦 反了 抱歉|||阴天加毛毛雨加风 那种湿冷确实比数字冷得多|||多穿点 别冻着', { userText: '我的意思是很冷' })
+  const texts = sent.flat().filter((i) => i.kind === 'text')
+  assert.equal(texts.length, 3, `她显式写的 3 条不该被压成 ${texts.length} 条`)
+  for (const it of texts) assert.ok(!it.value.includes('\n'), `气泡里不该靠换行拼内容：${JSON.stringify(it.value)}`)
+})
+
+test('礼让收紧仍然作用于自动切出来的气泡（没有 ||| 时照旧压成 1 条）', async () => {
+  const { d, sent } = harness()
+  await d.deliver('private:1000', '知道了', { userText: '我感觉体感不止13.6，风也有点大' })
+  sent.length = 0
+  await d.deliver('private:1000', '第一句话。第二句话。第三句话。', { userText: '我的意思是很冷' })
+  const texts = sent.flat().filter((i) => i.kind === 'text')
+  assert.equal(texts.length, 1, `自动切分在礼让下应合成 1 条，实际 ${texts.length}`)
+})
+
+test('显式 ||| 也不能越过面板硬顶（maxBubbles=2 时 4 条并成 2 条）', async () => {
+  const { d, sent } = harness({ cfgOver: { reply: { maxBubbles: 2, groupMaxChars: 40, privateMaxChars: 120 } } })
+  await d.deliver('private:1000', '一|||二|||三|||四', { userText: '你好呀今天过得怎么样' })
+  const texts = sent.flat().filter((i) => i.kind === 'text')
+  assert.equal(texts.length, 2, `配置硬顶 2 条应生效，实际 ${texts.length}`)
+})

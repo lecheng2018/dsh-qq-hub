@@ -50,3 +50,38 @@ test('代码块和 JSON 示例中的 DSML 与人设字样按示例原样保留',
   assert.deepEqual(textsOf(code), ['<|im_start|>assistant to=python.exec\n你是大肥鱼，一个真实存在的人'])
   assert.deepEqual(textsOf(json, { maxChars: 1000 }), [json])
 })
+
+// ---- DSH 的「中断续跑」通知（2026-11-24 08:54:56 真机）----
+// 客户端在流被掐断后把 `⚠ The stream was interrupted. Please continue the task you were working on.`
+// 当用户消息塞回会话，模型照着念了一遍，于是这行字进了正文、被当第一条气泡发进群。
+
+const NOTICE = '⚠ The stream was interrupted. Please continue the task you were working on.'
+
+test('续跑通知整行丢弃，后面的正文照常分条', () => {
+  const raw = `${NOTICE}\n<inner>【意图】接着刚才的话说\n</inner>哦哦 反了 抱歉|||多穿点 别冻着`
+  assert.deepEqual(textsOf(raw), ['哦哦 反了 抱歉', '多穿点 别冻着'])
+})
+
+test('整轮只有续跑通知时这一轮就不说话（不把通知当正文发出去）', () => {
+  assert.equal(parseReply(NOTICE).silent, true)
+  assert.deepEqual(parseReply(NOTICE).items, [])
+})
+
+test('通知夹在正文中间也丢；正常说「被中断了」不误删', () => {
+  // 短行的换行本来就算一个气泡边界（见 reply-rules），这里只关心通知那行没了
+  assert.deepEqual(textsOf(`我刚在看日志\n${NOTICE}\n然后就没了`), ['我刚在看日志', '然后就没了'])
+  assert.deepEqual(textsOf('刚才那条被中断了 我重发|||你说啥'), ['刚才那条被中断了 我重发', '你说啥'])
+})
+
+test('代码块里的续跑通知按示例原样保留', () => {
+  const code = '```text\n' + NOTICE + '\n```'
+  assert.deepEqual(textsOf(code), [NOTICE])
+})
+
+test('真机 08:54 形状：通知 + 独白 + 引用 + 两条正文，通知不再占第一条气泡', () => {
+  const raw = `${NOTICE}\n<inner>\n【意图】接主人的柠檬精发言，吐槽群友30块用一年确实破防\n【闭环】\n【情感】好笑 吃瓜\n【备忘】\n</inner><reply:20>30块爽一年 换谁不破防|||经典群友赚钱比自己亏钱难受`
+  assert.deepEqual(parseReply(raw).items, [
+    { kind: 'text', value: '30块爽一年 换谁不破防', replyTo: '20' },
+    { kind: 'text', value: '经典群友赚钱比自己亏钱难受' },
+  ])
+})
