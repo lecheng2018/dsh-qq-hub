@@ -119,6 +119,12 @@
 - `autoChance`：回复自动附带表情的概率。
 - `collect`：是否收集收到的表情。
 - `collectMode`：`auto` 自动收集、`ask` 由模型选择、`owner` 仅主人语境。
+- `maxPerHour`：每个聊天每小时最多收几张。
+- `maxLibrary`：表情库上限；超出时先淘汰「偷来的」，手动/QQ 收藏/图包导入的不自动清。
+- `caption`：收下后是否让视觉模型起备注；起名前不参与自动配图。
+- `cooldownSec`、`sendMaxPerHour`：自动配图的冷却和每聊天每小时上限（0 = 不限）；显式发不受影响。
+- `webpToJpeg`：WebP 发送前转 JPEG（兼容优先，会丢动画；原图保留）。
+- `overrides`：按群覆盖，例如 `{ "123456": { "enabled": false, "autoChance": 0, "collect": false, "cooldownSec": 60, "sendMaxPerHour": 5 } }`；只影响群聊。
 
 普通照片不应因为开启了表情收藏就被当作表情入库。
 

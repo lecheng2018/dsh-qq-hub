@@ -117,6 +117,8 @@ const SIDE_EFFECT_PATHS = new Set([
   '/sticker/import-qq',           // 从 QQ 拉取导入（写库＋网络）
   '/sticker/rename',              // 写状态
   '/sticker/upload',              // 上传写库
+  '/sticker/delete-batch',        // 批量删除（QQ 收藏里也删）
+  '/sticker/pack/import',         // 导入 ZIP 图包（写库）
   '/style/save',                  // 写说话方式
   '/voice/asr-prepare',           // 下载 200MB 模型
   '/voice/asr-last',              // 触发识别（计费）

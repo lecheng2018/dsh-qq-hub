@@ -105,7 +105,8 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
   }
 
   async function sendSticker(chatId, query, replyId, userId) {
-    if (!getConfig().stickers?.enabled) return false
+    const policy = stickers.policyFor?.(chatId) || getConfig().stickers
+    if (!policy?.enabled) return false
     const item = query && typeof query === 'object' ? query : stickers.match(query)
     if (!item) return false
     const seg = stickers.segmentFor(item)
@@ -115,7 +116,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     // 才算成功（与 sendText/sendImage 同口径返回回执），失败 return false 且不记使用/统计。
     const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
     if (!result) return false
-    stickers.markUsed?.(item.md5)
+    await stickers.markUsed?.(item.md5, chatId)
     // 本回合台账：正文里再写 <sticker:同一张> 时投递层据此去重（见 chat/turn-stickers.js）。
     turnStickers?.note?.(chatId, item.md5)
     onStats?.('stickers')
@@ -165,7 +166,9 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         } catch (error) { log.warn('图片发不出去：', error.message) }
       } else if (part.kind === 'voice') {
         await sendVoice(chatId, part.value, part.replyTo, undefined)
-      } else if (part.kind === 'sticker' && getConfig().stickers?.enabled) {
+      } else if (part.kind === 'sticker') {
+        const policy = stickers.policyFor?.(chatId) || getConfig().stickers
+        if (!policy?.enabled) continue
         const item = part.value && typeof part.value === 'object' ? part.value : stickers.match(part.value)
         const seg = item && stickers.segmentFor(item)
         if (seg) { segs.push(seg); used.push(item) }
@@ -176,7 +179,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
     // 整泡没发出去就不记表情使用/统计（与 sendSticker 同一口径，避免失败也计数）。
     if (result) for (const item of used) {
-      stickers.markUsed?.(item.md5)
+      await stickers.markUsed?.(item.md5, chatId)
       turnStickers?.note?.(chatId, item.md5)
       onStats?.('stickers')
     }

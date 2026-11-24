@@ -198,9 +198,10 @@ export function createReplyDelivery({
       needsGroupPacking = items.length > groupLimit
       log.info(`${chatId}：回复超过 ${groupLimit} 条，按原顺序合并相邻气泡`)
     }
-    // 按概率补一张表情（群里已经有两条以上就不补了）
-    if (cfg.stickers?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && random() < cfg.stickers.autoChance) {
-      const pick = stickers.pickForReply(texts.map((t) => t.value).join(' '))
+    // 按概率补一张表情（群里已经有两条以上就不补了）；按群覆盖 + 冷却/每群额度
+    const stickerPolicy = stickers?.policyFor?.(chatId) || cfg.stickers
+    if (stickerPolicy?.enabled && !items.some((i) => i.kind === 'sticker') && !(inGroup && items.length >= 2) && random() < stickerPolicy.autoChance && stickers?.canAutoSend?.(chatId) !== false) {
+      const pick = stickers?.pickForReply?.(texts.map((t) => t.value).join(' '))
       if (pick) items.push({ kind: 'sticker', value: pick })
     }
     if (hooks?.items) {
