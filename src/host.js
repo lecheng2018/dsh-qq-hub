@@ -38,7 +38,7 @@ import { createInboundAudio } from './chat/inbound-audio.js'
 import { createQuotedMessages } from './chat/quoted-messages.js'
 import { createInboundImages } from './chat/inbound-images.js'
 import { createInboundVision } from './chat/inbound-vision.js'
-import { workspaceDirOf } from './chat/workspace.js'
+import { workspaceDirOf, migrateLegacyWorkspace } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
 import { isStickerSegment } from './chat/inbound.js'
@@ -121,6 +121,20 @@ export function apply(ctx) {
   }
   secrets()
   seedPersonas()
+
+  // 默认工作区从 Aurabot/qq-chats 改名为 QQ Hub/qq-chats（1.4.8）：老目录还在、又没在 DSH 里登记过
+  // （登记过的会话还挂在这个路径上，宿主没有改路径的接口），就先整体改名带过来；面板里自己填过路径的人
+  // 一律不动。失败就继续用老位置，只记一条日志（见 chat/workspace.js）。
+  const workspaceRegisteredAt = (dir) => {
+    try {
+      const reg = ctx.get('workspaceRegistry') || ctx.workspaceRegistry
+      const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase()
+      return Boolean(reg?.list?.().some((w) => norm(w.path) === norm(dir)))
+    } catch {
+      return true // 登记表拿不到就当登记过：宁可位置旧，也别把会话落脚点搬丢
+    }
+  }
+  migrateLegacyWorkspace(cfg, { log, isRegistered: workspaceRegisteredAt })
 
   // ---------- 人格与规则：通过提示词变量注入到 QQ Hub 的三个 preset ----------
   const variable = (n, fn) => ctx.effect(() => ctx.systemPrompt.variable(n, fn), `qq-hub: 变量 ${n}`)

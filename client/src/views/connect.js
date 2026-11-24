@@ -220,7 +220,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
         desc="每个 QQ 私聊 / 群都是 DSH 里「QQ Hub」工作区下的一个会话，她在会话里读写文件也在这个文件夹。改了以后新开的会话放到新位置。"
         more={'想把她已有的会话全部挪到新位置：改完保存后去「概览」点「重新开始所有 QQ 会话」（旧会话在 DSH 侧栏的归档里还能找到）。'}
       >
-        <Row label="工作区文件夹" hint="填完整路径（比如 D:\\Aurabot\\qq-chats）；留空 = 默认位置">
+        <Row label="工作区文件夹" hint="填完整路径（比如 D:\\QQ Hub\\qq-chats）；留空 = 默认位置（用户目录下 QQ Hub/qq-chats）">
           {f.text('workspaceDir', { size: 'wide', placeholder: st.workspaceDir || '' })}
         </Row>
         <div className="ab-muted ab-small">现在用的：{st.workspaceDir || '—'}</div>
