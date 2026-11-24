@@ -1,5 +1,5 @@
 import { useState, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, ListInput, PercentRow, More } from '../ui/primitives.js'
+import { Card, FoldSection, Row, Btn, ListInput, PercentRow, More } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath } from '../core/utils.js'
 import { OwnerBrief } from './access.js'
@@ -12,26 +12,32 @@ function Group({ draft, setDraft }) {
   return (
     <div className="ab-grid">
       <Card
-        title="消息节奏与回复策略"
-        desc="人常常一口气发好几句：她等对方说完再一起回；分条规则让回复更像真人自然聊天。"
-        more={'换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。'}
+        title="消息节奏"
+        desc="人常常一口气发好几句：她等对方说完再一起回，而不是一句一回；遇到复杂任务也能安心等待。"
       >
-        <div className="ab-section-title" style={{ marginTop: 4 }}>连发合并</div>
         <Row label="连发合并" hint="打开后她会等对方说完再回">{f.sw('merge.enabled')}</Row>
         <Row label="对方停顿多久算说完">{f.range('merge.waitSec', 0.5, 10, 0.5, (v) => v + ' 秒')}</Row>
         <Row label="最多等多久" hint="对方一直在发也最多等这么久">{f.range('merge.maxSec', 2, 30, 1, (v) => v + ' 秒')}</Row>
-        <Row label="群里停顿多久算一段" hint="群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着">{f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')}</Row>
-        <Row label="群里最多等多久">{f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')}</Row>
-        <Row label="回合超时" hint="模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟">
-          <input
-            className="ab-input sm" type="number" min={1} max={120} step={1}
-            value={Math.round((Number(draft.turnTimeoutMs) || 600000) / 60000)}
-            onChange={(e) => setDraft(setPath(draft, 'turnTimeoutMs', Number(e.target.value) * 60000))}
-          />
-          <span className="ab-muted">分钟</span>
-        </Row>
 
-        <div className="ab-section-title">分条策略</div>
+        <FoldSection title="高级微调（群等待与超时）" desc="微调群内多人群聊节奏以及模型长任务中断阈值">
+          <Row label="群里停顿多久算一段" hint="群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着">{f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')}</Row>
+          <Row label="群里最多等多久">{f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')}</Row>
+          <Row label="回合超时" hint="模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟">
+            <input
+              className="ab-input sm" type="number" min={1} max={120} step={1}
+              value={Math.round((Number(draft.turnTimeoutMs) || 600000) / 60000)}
+              onChange={(e) => setDraft(setPath(draft, 'turnTimeoutMs', Number(e.target.value) * 60000))}
+            />
+            <span className="ab-muted">分钟</span>
+          </Row>
+        </FoldSection>
+      </Card>
+
+      <Card
+        title="怎么说话（分条）"
+        desc="她写的 ||| 一定断开；空行算段落；句末标点会按字数上限攒成条。句子太短不会单独成条，攒够一截才断。"
+        more={'换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。'}
+      >
         <Row label="群里一条最长" hint="攒到这么长就断开；正常聊天她一般写得比这短">{f.num('reply.groupMaxChars', { min: 10, max: 500 })}<span className="ab-muted">字</span></Row>
         <Row label="私聊一条最长" hint="私聊可以整段说，设大一点更像正常聊天">{f.num('reply.privateMaxChars', { min: 20, max: 2000 })}<span className="ab-muted">字</span></Row>
         <Row label="一轮最多几条" hint="超过就均匀合并，不会把剩下的全塞进最后一条">{f.num('reply.maxBubbles', { min: 1, max: 12 })}<span className="ab-muted">条</span></Row>
@@ -50,61 +56,49 @@ function Group({ draft, setDraft }) {
         <Row label="冷却" hint="两次插话至少隔多久">{f.range('group.cooldownSec', 0, 600, 10, (v) => v + ' 秒')}</Row>
         <Row label="每小时最多说" hint="这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发">{f.range('group.maxPerHour', 0, 120, 1, (v) => v + ' 条')}</Row>
         <Row label="她感兴趣的话题" hint="群里在聊这些（或她记得相关的事）时更容易插话；一行一个">{f.list('group.interests', { placeholder: '白米饭\n游戏\n追剧' })}</Row>
-        <Row label="话题相关度门槛" hint="和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机">{f.range('group.minRelevance', 0, 1, 0.05, (v) => (v === 0 ? '不看话题' : Math.round(v * 100) + '%'))}</Row>
-        <Row label="群冷清时不插话" hint="最近几分钟内消息少于这个数就不插">
-          {f.num('group.minRecentMessages', { min: 0 })}<span className="ab-muted">条 / </span>
-          {f.num('group.activeWindowSec', { min: 30 })}<span className="ab-muted">秒</span>
-        </Row>
-        <Row label="静默时段" hint="这段时间不插话（被叫到还是会回）">
-          <input className="ab-input sm" type="number" min={0} max={23} value={draft.group.quietHours[0]} onChange={(e) => setDraft(setPath(draft, 'group.quietHours', [Number(e.target.value), draft.group.quietHours[1]]))} />
-          <span className="ab-muted">点 到</span>
-          <input className="ab-input sm" type="number" min={0} max={23} value={draft.group.quietHours[1]} onChange={(e) => setDraft(setPath(draft, 'group.quietHours', [draft.group.quietHours[0], Number(e.target.value)]))} />
-          <span className="ab-muted">点</span>
-        </Row>
-        <More label="加入话题之后怎么聊">
-          {'她被叫到或插上话以后算「加入了话题」：话题还和她相关、她刚说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却限制 —— 但照样吃上面的每小时说话额度，不会白送。话题跑偏或者她选择不说话就退出。'}
-        </More>
-        <Row label="连聊预算" hint="一次入场最多连着接几条 / 最多聊多久；填 0 = 关掉连聊通道（只靠插话）">
-          {f.range('group.engagedMaxReplies', 0, 10, 1, (v) => (v === 0 ? '关闭' : v + ' 条'))}
-          <span className="ab-muted">/</span>
-          {f.range('group.engagedMaxMs', 0, 30 * 60_000, 60_000, (v) => (v === 0 ? '关闭' : Math.round(v / 60_000) + ' 分钟'))}
-        </Row>
+        <Row label="话题相关度门槛" hint="和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机">{f.range('group.minRelevance', 0, 1, 0.05, (v) => (v === 0 ? '不看话题' : v + ' 以上'))}</Row>
+
+        <div className="ab-section-title">群事件通知与辅助功能</div>
+        <Row label="进群打招呼" hint="有人进群或自己被拉进群时在群里说一句，开群多的别开">{f.sw('group.welcome.enabled')}</Row>
+        <Row label="戳一戳回复" hint="群里有人双击头像戳她时回一句">{f.sw('group.poke.enabled')}</Row>
+        {draft.group && draft.group.poke && draft.group.poke.enabled ? (
+          <Fragment>
+            <Row label="戳一戳回复内容">{f.text('group.poke.reply', { placeholder: '干嘛呀' })}</Row>
+            <Row label="戳一戳冷却">{f.range('group.poke.cooldownSec', 0, 300, 5, (v) => v + ' 秒')}</Row>
+          </Fragment>
+        ) : null}
+        <Row label="被移出群私聊通知" hint="被踢或被退群时，在控制台和主人私聊里留一条记录">{f.sw('group.leaveNotice')}</Row>
+        <Row label="回复失败群内提醒" hint="报错或网络断开没回出来时在群里说一声，关则默默吞掉">{f.sw('group.failNotice')}</Row>
+        <Row label="被禁言自动暂停" hint="被群管理员禁言时暂停往这个群发消息直到解禁">{f.sw('group.muteDetect')}</Row>
+
+        <FoldSection title="防两只 Bot 互相刷屏（高级选项）" desc="群里还有另一只用类似人设的 bot 时防死循环互刷" defaultOpen={false}>
+          <Row label="启用防御" hint="群里还有另一只用类似人设的 bot 时，避免接对方的话停不下来">{f.sw('group.fishGuard.enabled')}</Row>
+          {draft.group && draft.group.fishGuard && draft.group.fishGuard.enabled ? (
+            <Fragment>
+              <Row label="按 QQ 号认同类 bot" hint="逗号或空格隔开。写在这里的号说的话她一律不接">
+                <ListInput
+                  value={Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []}
+                  placeholder="例如 123456789, 987654321" numbers
+                  onChange={(list) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', list))}
+                />
+              </Row>
+              <Row label="按名字认同类 bot" hint="在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。">
+                <ListInput
+                  value={Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : []}
+                  placeholder="例如 小鱼, 咸鱼罐头"
+                  onChange={(list) => setDraft((prev) => setPath(prev, 'group.fishGuard.nameSuffixes', list))}
+                />
+              </Row>
+            </Fragment>
+          ) : null}
+        </FoldSection>
       </Card>
 
       <Card
-        title="频率控制与防刷屏"
-        desc="防失控（在一个群里短时间说太多就歇一会儿，主人 @ 她除外）与防 bot 对聊刷屏。"
+        collapse={Object.keys(overrides).length === 0}
+        title="按群单独设置插话概率"
+        desc="某个群想让她更安静或更活跃，在这里单独设插话概率。"
       >
-        <div className="ab-section-title" style={{ marginTop: 4 }}>安全刹车</div>
-        <Row label="最多说几次" hint="她在同一个群短时间内说的次数超过这个上限就歇一会儿，主人 @ 仍会回复">
-          {f.range('group.burstMax', 1, 20, 1, (v) => v + ' 次')}
-          <span className="ab-muted">/</span>
-          {f.range('group.burstWindowSec', 30, 600, 30, (v) => Math.round(v / 6) / 10 + ' 分钟')}
-        </Row>
-
-        <div className="ab-section-title">防同类 bot</div>
-        <Row label="防 bot 刷屏检测" hint="防 bot 对聊刷屏：互相针对接话，已确认是同类 bot 的 2 个来回就停，未确认的 4 个来回停，停这一对 30 分钟。">{f.sw('group.fishGuard.enabled')}</Row>
-        {draft.group && draft.group.fishGuard && draft.group.fishGuard.enabled ? (
-          <Fragment>
-            <Row label="按号码认同类 bot" hint="逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）">
-              <ListInput
-                value={Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : []}
-                placeholder="例如 123456789, 987654321" numbers
-                onChange={(list) => setDraft((prev) => setPath(prev, 'group.fishGuard.fishIds', list))}
-              />
-            </Row>
-            <Row label="按名字认同类 bot" hint="在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。">
-              <ListInput
-                value={Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : []}
-                placeholder="例如 小鱼, 咸鱼罐头"
-                onChange={(list) => setDraft((prev) => setPath(prev, 'group.fishGuard.nameSuffixes', list))}
-              />
-            </Row>
-          </Fragment>
-        ) : null}
-      </Card>
-
-      <Card title="按群单独设置" desc="某个群想让她更安静或更活跃，在这里单独设插话概率。">
         {Object.keys(overrides).length === 0
           ? <div className="ab-muted" style={{ marginBottom: 10 }}>还没有单独设置的群。</div>
           : Object.entries(overrides).map(([gid, o]) => (

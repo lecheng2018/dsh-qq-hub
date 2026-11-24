@@ -62,6 +62,30 @@ function Card({ title, desc, icon, right, more, collapse, children, className })
   )
 }
 
+/** 卡内可折叠小节：低频/高级配置默认收起，标题行可点开。 */
+function FoldSection({ title, desc, right, defaultOpen = false, children, style }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="ab-fold-section" style={{ marginTop: 14, ...style }}>
+      <div className="ab-flex" style={{ alignItems: 'center', marginBottom: open && desc ? 4 : 0 }}>
+        <div
+          className="ab-fold-head" style={{ margin: 0, flex: 1, padding: '4px 0' }} role="button" tabIndex={0} aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open) } }}
+        >
+          <span className={cx('ab-fold-chev', open && 'open')} aria-hidden="true">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 3 7.5 6 4.5 9" /></svg>
+          </span>
+          <span style={{ fontWeight: 600, fontSize: 13.5 }}>{title}</span>
+        </div>
+        {right || null}
+      </div>
+      {desc ? <p className="ab-desc" style={{ margin: '2px 0 8px 20px', fontSize: 12 }}>{desc}</p> : null}
+      {open ? <div style={{ paddingTop: 4 }}>{children}</div> : null}
+    </div>
+  )
+}
+
 function Btn({ kind, small, onClick, disabled, children, title, className }) {
   const [busy, setBusy] = useState(false)
   return (
@@ -271,5 +295,5 @@ class TabBoundary extends React.Component {
 }
 
 export {
-  Switch, Row, Card, Btn, More, Badge, Pill, Select, Choices, Range, Seg, Empty, ListArea, ListInput, PercentRow, ModOff, TabBoundary
+  Switch, Row, Card, FoldSection, Btn, More, Badge, Pill, Select, Choices, Range, Seg, Empty, ListArea, ListInput, PercentRow, ModOff, TabBoundary
 }

@@ -234,7 +234,8 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
       )}
 
       <Card
-        title="QQ 会话放在哪"
+        collapse
+        title="QQ 会话放在哪（工作区路径）"
         desc="每个 QQ 私聊 / 群都是 DSH 里「QQ Hub」工作区下的一个会话，她在会话里读写文件也在这个文件夹。改了以后新开的会话放到新位置。"
         more={'想把她已有的会话全部挪到新位置：改完保存后去「概览」点「重新开始所有 QQ 会话」（旧会话在 DSH 侧栏的归档里还能找到）。'}
       >
@@ -245,7 +246,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
       </Card>
 
       {external ? null : (
-        <Card title="高级" desc="一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。">
+        <Card collapse title="高级网关参数" desc="一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。">
           <Row label="机器人 QQ 号">{f.text('botQQ')}</Row>
           <Row label="控制台端口">{f.num('snowluma.webuiPort', { min: 1, max: 65535 })}</Row>
           <Row label="控制台密码" hint="默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）">

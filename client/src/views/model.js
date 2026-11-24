@@ -183,7 +183,7 @@ function Model({ st, draft, setDraft, toast }) {
         ) : null}
       </Card>
       <ChatModels draft={draft} setDraft={setDraft} list={list} />
-      <Card title="可用的模型" desc="DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。">
+      <Card collapse title="可用的模型与连通性测速" desc="DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。">
         {list === null
           ? <Empty icon="⏳" text="加载中…" />
           : list.length === 0 ? <Empty text="DSH 没有列出模型" />
