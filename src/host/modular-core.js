@@ -309,7 +309,71 @@ export function createModularCore({
     if (pairCalmUntil.size < 50) return
     for (const [key, until] of pairCalmUntil) if (until < now - 3 * 3600_000) pairCalmUntil.delete(key)
   }
-  const pendingMode = new Map() // chatKey → 决定本轮的 mode（interject/engaged/must），execute 消费
+  // 按 turnId 绑定群闸决策模式，替代旧版按 chatKey 单槽 pendingMode：
+  // 连续排入多轮时，旧单槽会在前轮 delete 后让后轮兜底成 'must'，既在提示词里谎称「有人在叫你」，
+  // 又在 deliver 后走 noteSpokeInGroup 重置 engaged 窗口导致无限续聊。
+  const MODE_PRIORITY = { engaged: 1, interject: 2, must: 3 }
+  const turnModes = new Map() // turnId -> 'engaged' | 'interject' | 'must'
+  const inFlightEngaged = new Map() // gid -> Set<turnId>（已过闸未结账的 engaged 回合，防并发超卖）
+  const inFlightInterject = new Map() // gid -> Map<turnId, number>（已过闸未结账的 interject 时刻，防冷却期并发双插）
+  const systemSessionIds = new Set() // systemTurns 后台会话 id（不进 chatOfSession，但供人设解析免误报回落告警）
+
+  function isTurnActive(turnId) {
+    const t = controller?.getTurn?.(turnId)
+    return Boolean(t && (t.state === 'merging' || t.state === 'pending' || t.state === 'running'))
+  }
+  function pruneInFlightGroup(gid) {
+    const id = String(gid || '')
+    const eng = inFlightEngaged.get(id)
+    if (eng) {
+      for (const tid of eng) {
+        if (!isTurnActive(tid)) { eng.delete(tid); turnModes.delete(tid) }
+      }
+      if (!eng.size) inFlightEngaged.delete(id)
+    }
+    const inj = inFlightInterject.get(id)
+    if (inj) {
+      for (const tid of inj.keys()) {
+        if (!isTurnActive(tid)) { inj.delete(tid); turnModes.delete(tid) }
+      }
+      if (!inj.size) inFlightInterject.delete(id)
+    }
+  }
+  function noteTurnMode(gid, turnId, mode, now = Date.now()) {
+    if (!turnId || !mode) return
+    const id = String(gid || '')
+    const prev = turnModes.get(turnId)
+    const next = !prev || (MODE_PRIORITY[mode] || 0) > (MODE_PRIORITY[prev] || 0) ? mode : prev
+    turnModes.set(turnId, next)
+    if (!id) return
+    if (next === 'engaged') {
+      let set = inFlightEngaged.get(id)
+      if (!set) { set = new Set(); inFlightEngaged.set(id, set) }
+      set.add(turnId)
+      const inj = inFlightInterject.get(id)
+      if (inj) { inj.delete(turnId); if (!inj.size) inFlightInterject.delete(id) }
+    } else if (next === 'interject') {
+      let map = inFlightInterject.get(id)
+      if (!map) { map = new Map(); inFlightInterject.set(id, map) }
+      if (!map.has(turnId)) map.set(turnId, now)
+      const eng = inFlightEngaged.get(id)
+      if (eng) { eng.delete(turnId); if (!eng.size) inFlightEngaged.delete(id) }
+    } else {
+      const eng = inFlightEngaged.get(id)
+      if (eng) { eng.delete(turnId); if (!eng.size) inFlightEngaged.delete(id) }
+      const inj = inFlightInterject.get(id)
+      if (inj) { inj.delete(turnId); if (!inj.size) inFlightInterject.delete(id) }
+    }
+  }
+  function releaseTurnMode(chatKey, turnId) {
+    if (turnId) turnModes.delete(turnId)
+    if (!String(chatKey || '').startsWith('group:')) return
+    const id = String(chatKey).slice(6)
+    const eng = inFlightEngaged.get(id)
+    if (eng) { eng.delete(turnId); if (!eng.size) inFlightEngaged.delete(id) }
+    const inj = inFlightInterject.get(id)
+    if (inj) { inj.delete(turnId); if (!inj.size) inFlightInterject.delete(id) }
+  }
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
@@ -345,13 +409,16 @@ export function createModularCore({
       const memChat = { chatId: chatKey, kind: 'group', groupId: gid }
       memScore = typeof memoryScore === 'function' ? memoryScore(recentTexts.join(' '), memChat) : 0
     } catch { memScore = 0 }
+    pruneInFlightGroup(gid)
+    const inFlightEng = inFlightEngaged.get(gid)?.size || 0
+    const inFlightInj = inFlightInterject.get(gid) ? [...inFlightInterject.get(gid).values()] : []
     const decision = decideGroupReplyWithAtmosphere({
       messages: groups.buffer(gid),
       policy: pol,
       relevance: topicRelevance(recentTexts, pol.interests, memScore),
       engagedUntil: groups.engagedUntil(gid),
-      // engaged 连聊预算的两路输入：已接条数 + 入场时刻（group-policy 封顶）
-      engagedReplies: groups.engagedReplies(gid),
+      // engaged 连聊预算的两路输入：已接条数（含在途未结账回合）+ 入场时刻（group-policy 封顶）
+      engagedReplies: groups.engagedReplies(gid) + inFlightEng,
       engagedSince: groups.engagedSince(gid),
       mentioned: !!mentioned,
       repliedToBot: !!repliedToBot,
@@ -360,7 +427,7 @@ export function createModularCore({
       now,
       hour: new Date().getHours(),
       recentTimes: groups.buffer(gid).map((x) => x.t),
-      interjectTimes: groups.interjectTimes(gid),
+      interjectTimes: inFlightInj.length ? [...groups.interjectTimes(gid), ...inFlightInj] : groups.interjectTimes(gid),
       botReplyTimes: groups.speakTimes(gid),
     }, { gate: atmosphereGate })
     // 氛围快照只在门禁开启时存在：进日志，排障时能直接看到「为什么没插嘴」。
@@ -631,13 +698,18 @@ export function createModularCore({
   backfillTitles(registry)
   refreshGroupTitles(registry)
   const systemTurns = createSystemTurns({
-    createSession: ({ key, title, noTools }) => {
+    createSession: async ({ key, title, noTools }) => {
       systemTitles.set(key, String(title || 'QQ · 后台'))
-      return sessionAdapter.createSession(key, { agentPreset: presetFor(noTools ? 'chat' : 'social', getConfig()) })
+      const created = await sessionAdapter.createSession(key, { agentPreset: presetFor(noTools ? 'chat' : 'social', getConfig()) })
+      if (created?.sessionId) systemSessionIds.add(String(created.sessionId))
+      return created
     },
     resolveAgent: (sessionId) => ctxGet('sessionController')?.resolveAgent?.(sessionId),
     onEvent: (listener) => dsh.on?.('session/event', listener),
-    archiveSession: (sessionId, opts = {}) => (ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry)?.archiveSession?.(sessionId, { stopActivity: true, ...opts }),
+    archiveSession: (sessionId, opts = {}) => {
+      systemSessionIds.delete(String(sessionId || ''))
+      return (ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry)?.archiveSession?.(sessionId, { stopActivity: true, ...opts })
+    },
     beforeTurn: async (agent, sessionId, { key, noTools }) => {
       const target = await resolveTarget({ chatId: key, kind: 'system', noTools })
       if (target) await applySessionModel(agent, sessionId, target)
@@ -885,7 +957,7 @@ export function createModularCore({
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
    *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
    *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一经当前 reply-delivery。 */
-  function groupPromptContent(chatKey, members, previousTurnAt) {
+  function groupPromptContent(chatKey, members, previousTurnAt, modeOverride) {
     const gid = chatKey.slice(6)
     const buf = groups.buffer(gid)
     for (const m of (members || [])) {
@@ -901,8 +973,7 @@ export function createModularCore({
     // 标 fed，永远进不了上下文；② 标在 followup 之前，回合若在模型消费前失败，这些消息
     // 已 fed，下轮不再喂。现只把**选中的 fresh** 作为 fedItems 返回，由 execute 在拿到回复
     // （模型确实消费了这段输入）后才标 fed；失败路径不标 → 下轮重新作为 fresh 喂入。
-    const mode = pendingMode.get(chatKey) || 'must'
-    pendingMode.delete(chatKey)
+    const mode = modeOverride || 'must'
     const nowAt = Date.now()
     const ownerQQ = String(getConfig().ownerQQ || '')
     // 昵称也是不可信原文：群昵称可被改成 `<inner>…</inner>`，它会拼进 `昵称(uid)：正文`
@@ -1254,6 +1325,8 @@ export function createModularCore({
       groupMaxMs: Number(getConfig().merge?.groupMaxSec * 1000) || 15000,
     },
     execute: async (turn, io) => {
+      const offeredMode = turnModes.get(turn.turnId) || null
+      try {
       if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
       // 上一轮因 413 / 请求体过大失败：归档旧会话重建。旧历史每轮重放必然再 413，只有换会话能救。
       if (oversizedChats.delete(turn.chatKey)) {
@@ -1267,6 +1340,11 @@ export function createModularCore({
       }
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
+      // 排队期间前序回合已选 [沉默] 退场或话题窗口已过期：纯 engaged 续聊不再浪费模型调用、也不复活话题。
+      if (inGroup && offeredMode === 'engaged' && !(groups.engagedUntil(chat.groupId) > Date.now())) {
+        debug(`群 ${chat.groupId}：排队中的续聊回合 ${turn.turnId} 已退场/过期，跳过执行`)
+        return null
+      }
       const { sessionId } = await sessionForChat(turn.chatKey)
       activeChatBySessionId.set(String(sessionId), turn.chatKey)
       // 装配上下文时使用当前会话，避免重建人设后仍传入旧 sessionId。
@@ -1301,7 +1379,7 @@ export function createModularCore({
       }
       const previousTurnAt = turnAt(turn.chatKey)
       if (inGroup) {
-        const gp = groupPromptContent(turn.chatKey, members, previousTurnAt)
+        const gp = groupPromptContent(turn.chatKey, members, previousTurnAt, offeredMode)
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
@@ -1674,6 +1752,9 @@ export function createModularCore({
         log.warn(`回复发送失败：${error?.message || error}`)
         throw error
       }
+      } finally {
+        releaseTurnMode(turn.chatKey, turn.turnId)
+      }
     },
   })
 
@@ -1859,8 +1940,8 @@ export function createModularCore({
             }
           }
         } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
-        if (decision.mode) pendingMode.set(inbound.chatKey, decision.mode)
         const offered = controller.offer(inbound)
+        if (offered?.turnId && decision.mode) noteTurnMode(inbound.chatKey.slice(6), offered.turnId, decision.mode)
         // 正向决策也留痕：否则只能看到后一条“不回”，容易误判成它绕闸门发了上一条回合。
         debug(`群闸 ${inbound.chatKey}：回 —— ${decision.reason}｜消息 ${inbound.messageId || '?'}｜回合 ${offered.turnId}`)
         return { handled: 'offered', turnId: offered.turnId }
@@ -2317,6 +2398,7 @@ export function createModularCore({
     sweepOrphanSessions,
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
+    isSystemSession: (sid) => systemSessionIds.has(String(sid || '')),
     resetChat,
     resetChatsForPersonaChange,
     dispatchBackfill,

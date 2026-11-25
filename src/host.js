@@ -176,7 +176,9 @@ export function apply(ctx) {
           } else {
             notePersonaFallback(sid, `按 ${chatKey} 没选出人设卡`)
           }
-        } else notePersonaFallback(sid, '反查不到它属于哪个聊天（会话映射缺失）')
+        } else if (!hub?.isSystemSession?.(sid)) {
+          notePersonaFallback(sid, '反查不到它属于哪个聊天（会话映射缺失）')
+        }
       } else if (!hub?.chatOfSession) {
         notePersonaFallback(sid, '当前核心没有 chatOfSession 反查接口')
       }

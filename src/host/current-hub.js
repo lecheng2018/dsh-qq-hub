@@ -34,6 +34,7 @@ export function createCurrentHub({
     sweepOrphanSessions: modular.sweepOrphanSessions,
     markTurnAt: modular.markTurnAt,
     chatOfSession: modular.chatKeyOfSession,
+    isSystemSession: modular.isSystemSession,
     resetChat: modular.resetChat,
     // 人设变更后按「新旧预期人设」逐聊天比对并重置：面板切卡/改默认人设统一走这一条，
     // 不再靠 sessions() 视图里的 personaId 猜（那只是建会话那一刻的快照，改了默认值不会动）。
