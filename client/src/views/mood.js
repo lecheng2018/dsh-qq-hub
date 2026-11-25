@@ -148,9 +148,13 @@ function Mood({ st, draft, setDraft, toast }) {
       <Card title="整理与检索" desc="每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。">
         <Row label="每天自动整理两次" hint="把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。">
           {f.sw('memory.dailyConsolidate')}<span className="ab-muted">每天</span>
-          <input className="ab-input sm" type="time" value={times[0] || '04:00'} onChange={(e) => setTime(0, e.target.value)} />
+          {/* 旧的 `value={times[0] || '04:00'}` 有两个毛病：清空时框里立刻跳回 04:00（像删不掉），
+              而且那个 04:00 只活在前端，draft 里其实没这个值 —— 看着像改好了，保存下来还是空的。
+              现在照实显示 draft 里的值（空就是空），改了才写回；后端 normalize 把空项丢掉、
+              全空时回落默认的两个时间。 */}
+          <input className="ab-input sm" type="time" value={times[0] || ''} onChange={(e) => setTime(0, e.target.value)} />
           <span className="ab-muted">和</span>
-          <input className="ab-input sm" type="time" value={times[1] || '16:00'} onChange={(e) => setTime(1, e.target.value)} />
+          <input className="ab-input sm" type="time" value={times[1] || ''} onChange={(e) => setTime(1, e.target.value)} />
         </Row>
         <Row label="每轮最多想起几条">{f.range('memory.recallCount', 0, 12, 1, (v) => v + ' 条')}</Row>
         <Row label="语义召回（向量通道）" hint="BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。">

@@ -92,8 +92,8 @@ function Bili({ draft, setDraft, toast }) {
         <Row label="每天最多刷">{f.range('bili.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')}</Row>
         <Row label="一轮看几个视频">{f.range('bili.perRun', 1, 6, 1, (v) => v + ' 个')}</Row>
         <Row label="额外想看的方向" hint="一行一个；另外还会参考她的兴趣和记忆">{f.list('bili.keywords', { placeholder: '白米饭 做法\n猫咪\n游戏解说' })}</Row>
-        <Row label="播放量门槛">{f.num('bili.minViews', { min: 0 })}<span className="ab-muted">次以上</span></Row>
-        <Row label="只看最近">{f.num('bili.maxAgeDays', { min: 0 })}<span className="ab-muted">天内发的（0 = 不限）</span></Row>
+        <Row label="播放量门槛">{f.num('bili.minViews', { min: 0, fallback: 5000 })}<span className="ab-muted">次以上</span></Row>
+        <Row label="只看最近">{f.num('bili.maxAgeDays', { min: 0, fallback: 60 })}<span className="ab-muted">天内发的（0 = 不限）</span></Row>
       </Card>
       <Card
         title="看画面（抽帧 + 视觉）"
@@ -103,7 +103,7 @@ function Bili({ draft, setDraft, toast }) {
         <Row label="让她看画面" hint="需要视觉模型 + ffmpeg；关掉就退回只看文字">{f.sw('bili.vision')}</Row>
         <Row label="每个视频抽几帧">{f.range('bili.visionFrames', 2, 12, 1, (v) => v + ' 帧')}</Row>
         <Row label="刷完顺手发张截图" hint="概率；默认 35%，0 = 从不。截图都存在本机，你让她发她也能挑">{f.range('bili.shotChance', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')}</Row>
-        <Row label="截图库最多存" hint="超过就自动删最旧的；下面的截图库里也能一张张手动删">{f.num('bili.shotLibrary', { min: 20, max: 2000 })}<span className="ab-muted">张</span></Row>
+        <Row label="截图库最多存" hint="超过就自动删最旧的；下面的截图库里也能一张张手动删">{f.num('bili.shotLibrary', { min: 20, max: 2000, fallback: 300 })}<span className="ab-muted">张</span></Row>
         <Row label="ffmpeg 路径" hint="留空就自己在 PATH 里找；找不到就填绝对路径">{f.text('bili.ffmpegPath', { placeholder: 'C:\\ffmpeg\\bin\\ffmpeg.exe' })}</Row>
         {s && s.vision ? (
           <div className="ab-small" style={{ marginTop: 4, color: s.vision.ffmpeg ? 'var(--ab-ok)' : 'var(--ab-warn)' }}>
@@ -118,8 +118,8 @@ function Bili({ draft, setDraft, toast }) {
             : <div className="ab-shots">{(shots || []).map((it) => <ShotCell key={it.file} it={it} onChanged={() => { loadShots(); load() }} toast={toast} />)}</div>}
       </Card>
       <Card title="评论、回复和分享" desc="评论和回复要登录。试运行开着时只记日志不发。">
-        <Row label="自己发评论">{f.sw('bili.comment')}<span className="ab-muted">每天最多</span>{f.num('bili.maxCommentsPerDay', { min: 0, max: 50 })}<span className="ab-muted">条</span></Row>
-        <Row label="回别人回她的评论">{f.sw('bili.reply')}<span className="ab-muted">每天最多</span>{f.num('bili.maxRepliesPerDay', { min: 0, max: 100 })}<span className="ab-muted">条</span></Row>
+        <Row label="自己发评论">{f.sw('bili.comment')}<span className="ab-muted">每天最多</span>{f.num('bili.maxCommentsPerDay', { min: 0, max: 50, fallback: 3 })}<span className="ab-muted">条</span></Row>
+        <Row label="回别人回她的评论">{f.sw('bili.reply')}<span className="ab-muted">每天最多</span>{f.num('bili.maxRepliesPerDay', { min: 0, max: 100, fallback: 6 })}<span className="ab-muted">条</span></Row>
         <Row label="看到好玩的分享给你" hint="私聊发给主人，带视频链接">{f.sw('bili.shareToOwner')}</Row>
         <Row label="顺手点赞">{f.sw('bili.like')}</Row>
       </Card>

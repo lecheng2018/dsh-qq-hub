@@ -31,7 +31,7 @@ function PaintGallery({ draft, setDraft, toast }) {
         </div>
       )}
     >
-      <Row label="面板显示最近" hint="最多 50 张；只影响面板显示，不删文件">{f.num('imageGen.galleryShown', { min: 1, max: 50 })}<span className="ab-muted">张</span></Row>
+      <Row label="面板显示最近" hint="最多 50 张；只影响面板显示，不删文件">{f.num('imageGen.galleryShown', { min: 1, max: 50, fallback: 20 })}<span className="ab-muted">张</span></Row>
       {data && data.dir ? <div className="ab-muted ab-small" style={{ margin: '4px 0 8px', wordBreak: 'break-all' }}>存图目录：{data.dir}</div> : null}
       {!data
         ? <Empty icon="⏳" text="加载中…" />

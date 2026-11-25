@@ -1,5 +1,5 @@
 import { React, useState, useEffect, Fragment, h } from '../core/react.js'
-import { Card, FoldSection, Row, Btn, Switch, Select, Seg, Range, Empty, More } from '../ui/primitives.js'
+import { Card, FoldSection, Row, Btn, Switch, Select, Seg, Range, Empty, More, ListInput, NumInput } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { API } from '../core/api-base.js'
 import { clone, setPath, getPath, timeAgo, copy, cx } from '../core/utils.js'
@@ -514,7 +514,9 @@ function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload, draf
         // 内置模块的路由在 /qq-hub/api/ 下（没有 /ext/ 前缀），用户自己写的才在 /ext/<id> 下
         const base = m.builtin && m.running === 'builtin' ? '' : '/ext/' + m.id
         const call = (p, body) => (body === undefined ? get(base + p) : post(base + p, body))
-        const ui = { Card, Btn, Switch, Row, Empty, Select, Seg, Range }
+        // NumInput / ListInput 一起交给模块面板：它们自带「输入过程不归一、失焦才写完」的语义，
+        // 模块自己写数字框时不用再重复踩那个坑（贴吧面板的浏览间隔曾经失焦被夹回 10）。
+        const ui = { Card, Btn, Switch, Row, Empty, Select, Seg, Range, ListInput, NumInput }
         const C = new Function('React', 'h', 'ui', 'call', src)(React, h, ui, call)
         if (typeof C !== 'function') throw new Error('panel.js 最后要 return 一个组件（函数）')
         if (alive) setComp(() => C)
@@ -539,9 +541,11 @@ function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
   const field = (s) => {
     const p = base + s.key
     if (s.type === 'switch') return f.sw(p)
-    // allowEmpty：模块声明了 min:0 的数字框允许清空（0/空 = 沿用默认，比如目的引擎每日上限）。
-    // 模块自己没声明可空就不要给——普通数字框空着保存还是老行为。
-    if (s.type === 'number') return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key], allowEmpty: Number(s.min) === 0 && s.key === 'maxPerDay' })
+    // 数字框一律可留空（2026-11-24）：清空 = 恢复 defaults 里的默认值。
+    // 以前只有目的引擎的 maxPerDay 能清（`s.key === 'maxPerDay'` 写死），别的模块
+    // （阈值、每日预算、压缩间隔……）删空后立刻被默认值顶回来，看着像键盘坏了。
+    // 后端 resolveModuleSettings 把 '' 当「未设置」回落 defaults，所以这里给个空值是安全的。
+    if (s.type === 'number') return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key] })
     if (s.type === 'select') return f.select(p, (s.options || []).map((o) => (typeof o === 'string' ? { value: o, label: o } : o)))
     if (s.type === 'textarea') return <textarea className="ab-textarea" value={getPath(draft, p) ?? ''} placeholder={s.placeholder} onChange={(e) => setDraft(setPath(draft, p, e.target.value))} />
     if (s.type === 'password') return f.text(p, { type: 'password', placeholder: getPath(draft, p + 'Set') ? '已保存（不改就留空）' : s.placeholder || '' })

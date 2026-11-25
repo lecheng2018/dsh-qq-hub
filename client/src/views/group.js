@@ -18,17 +18,12 @@ function Group({ draft, setDraft }) {
         <Row label="连发合并" hint="打开后她会等对方说完再回">{f.sw('merge.enabled')}</Row>
         <Row label="对方停顿多久算说完">{f.range('merge.waitSec', 0.5, 10, 0.5, (v) => v + ' 秒')}</Row>
         <Row label="最多等多久" hint="对方一直在发也最多等这么久">{f.range('merge.maxSec', 2, 30, 1, (v) => v + ' 秒')}</Row>
-
         <FoldSection title="高级微调（群等待与超时）" desc="微调群内多人群聊节奏以及模型长任务中断阈值">
           <Row label="群里停顿多久算一段" hint="群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着">{f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')}</Row>
           <Row label="群里最多等多久">{f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')}</Row>
           <Row label="回合超时" hint="模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟">
-            <input
-              className="ab-input sm" type="number" min={1} max={120} step={1}
-              value={Math.round((Number(draft.turnTimeoutMs) || 600000) / 60000)}
-              onChange={(e) => setDraft(setPath(draft, 'turnTimeoutMs', Number(e.target.value) * 60000))}
-            />
-            <span className="ab-muted">分钟</span>
+            {/* 显示分钟、存毫秒：交给 NumInput，失焦才写回，清空 = 恢复默认。 */}
+            {f.num('turnTimeoutMs', { min: 1, max: 120, scale: 60000, fallback: 10 })}<span className="ab-muted">分钟</span>
           </Row>
         </FoldSection>
       </Card>
@@ -38,9 +33,9 @@ function Group({ draft, setDraft }) {
         desc="她写的 ||| 一定断开；空行算段落；句末标点会按字数上限攒成条。句子太短不会单独成条，攒够一截才断。"
         more={'换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。'}
       >
-        <Row label="群里一条最长" hint="攒到这么长就断开；正常聊天她一般写得比这短">{f.num('reply.groupMaxChars', { min: 10, max: 500 })}<span className="ab-muted">字</span></Row>
-        <Row label="私聊一条最长" hint="私聊可以整段说，设大一点更像正常聊天">{f.num('reply.privateMaxChars', { min: 20, max: 2000 })}<span className="ab-muted">字</span></Row>
-        <Row label="一轮最多几条" hint="超过就均匀合并，不会把剩下的全塞进最后一条">{f.num('reply.maxBubbles', { min: 1, max: 12 })}<span className="ab-muted">条</span></Row>
+        <Row label="群里一条最长" hint="攒到这么长就断开；正常聊天她一般写得比这短">{f.num('reply.groupMaxChars', { min: 10, max: 500, fallback: 40 })}<span className="ab-muted">字</span></Row>
+        <Row label="私聊一条最长" hint="私聊可以整段说，设大一点更像正常聊天">{f.num('reply.privateMaxChars', { min: 20, max: 2000, fallback: 120 })}<span className="ab-muted">字</span></Row>
+        <Row label="一轮最多几条" hint="超过就均匀合并，不会把剩下的全塞进最后一条">{f.num('reply.maxBubbles', { min: 1, max: 12, fallback: 6 })}<span className="ab-muted">条</span></Row>
         <Row label="清单和汇报整段发" hint="开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆">{f.sw('reply.keepReports')}</Row>
       </Card>
 
@@ -120,14 +115,14 @@ function Group({ draft, setDraft }) {
         <Row label="允许发文件" hint="打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。">{f.sw('files.enabled')}</Row>
         {draft.files && draft.files.enabled ? (
           <Fragment>
-            <Row label="单个文件最大">{f.num('files.maxMB', { min: 1, max: 2048 })}<span className="ab-muted">MB</span></Row>
+            <Row label="单个文件最大">{f.num('files.maxMB', { min: 1, max: 2048, fallback: 50 })}<span className="ab-muted">MB</span></Row>
             <Row label="额外允许的目录" hint="一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的">{f.list('files.dirs', { placeholder: 'D:\\Aurabot\\要发的文件' })}</Row>
             <div className="ab-muted ab-small" style={{ margin: '4px 0 12px' }}>限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。</div>
           </Fragment>
         ) : null}
 
         <div className="ab-section-title">收文件</div>
-        <Row label="接收单个文件最大" hint="别人发来的文件下载到 QQ 工作区的 qq-inbox 目录；整包读进内存，一条消息最多取 3 个，上限 256MB">{f.num('files.inboundMaxMB', { min: 1, max: 256 })}<span className="ab-muted">MB</span></Row>
+        <Row label="接收单个文件最大" hint="别人发来的文件下载到 QQ 工作区的 qq-inbox 目录；整包读进内存，一条消息最多取 3 个，上限 256MB">{f.num('files.inboundMaxMB', { min: 1, max: 256, fallback: 50 })}<span className="ab-muted">MB</span></Row>
         <div className="ab-muted ab-small" style={{ margin: '4px 0 12px' }}>超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。</div>
 
         <div className="ab-section-title">危险命令确认</div>

@@ -128,12 +128,12 @@ function Diary({ st, draft, setDraft, toast }) {
         title="空间日记" right={f.sw('diary.enabled')}
         desc="她每天会在 QQ 空间发几条说说，结合当天聊过的事，用自己的口吻写。写日记那一轮不会发到聊天里。"
       >
-        <Row label="每天写几次">{f.num('diary.timesPerDay', { min: 0, max: 6 })}</Row>
+        <Row label="每天写几次">{f.num('diary.timesPerDay', { min: 0, max: 6, fallback: 2 })}</Row>
         <Row label="时间段" hint="在这段时间里随机挑时间">
           {f.text('diary.windowStart', { size: 'sm' })}<span className="ab-muted">到</span>{f.text('diary.windowEnd', { size: 'sm' })}
         </Row>
-        <Row label="两篇至少隔">{f.num('diary.minGapMinutes', { min: 0 })}<span className="ab-muted">分钟</span></Row>
-        <Row label="字数">{f.num('diary.minChars', { min: 10 })}<span className="ab-muted">到</span>{f.num('diary.maxChars', { min: 20 })}<span className="ab-muted">字</span></Row>
+        <Row label="两篇至少隔">{f.num('diary.minGapMinutes', { min: 0, fallback: 180 })}<span className="ab-muted">分钟</span></Row>
+        <Row label="字数">{f.num('diary.minChars', { min: 10, fallback: 60 })}<span className="ab-muted">到</span>{f.num('diary.maxChars', { min: 20, fallback: 140 })}<span className="ab-muted">字</span></Row>
         <Row label="日记配图" hint="开着时每篇会从「今天她画的图 / 今天收的表情包」里挑一张配上去；没有合适的就只发文字">{f.sw('diary.attachImage')}</Row>
         <DiarySources draft={draft} setDraft={setDraft} />
         <DiaryAudience draft={draft} setDraft={setDraft} toast={toast} />

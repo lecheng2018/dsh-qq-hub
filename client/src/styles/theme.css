@@ -438,6 +438,18 @@ body[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {
 .ab-sticker .nm:focus, .ab-sticker .tg:focus { background: var(--ab-card-2); border-style: solid; border-color: var(--ab-line-2) }
 .ab-sticker .x, .ab-shot .x { position: absolute; top: 5px; right: 5px; opacity: 0; transition: opacity .15s }
 .ab-sticker:hover .x, .ab-sticker:focus-within .x, .ab-shot:hover .x, .ab-shot:focus-within .x { opacity: 1 }
+.ab-sticker.sel { border-color: var(--ab-sea); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ab-sea) 12%, transparent) }
+.ab-sticker-check { position: absolute; top: 6px; left: 8px; z-index: 2; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; background: color-mix(in srgb, var(--ab-card) 88%, transparent); border: 1px solid var(--ab-line) }
+.ab-sticker-check input { margin: 0; accent-color: var(--ab-sea) }
+.ab-sticker-badges { display: flex; flex-wrap: wrap; gap: 3px; min-height: 16px }
+.ab-sticker-badges .ab-badge { font-size: 10px; padding: 0 5px; line-height: 16px }
+.ab-sticker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px }
+.ab-sticker-tools .ab-input { flex: 1 1 180px; min-width: 120px }
+.ab-sticker-tools .ab-select { flex: 0 1 auto }
+.ab-sticker-drop { border: 1px dashed transparent; border-radius: var(--ab-radius); padding: 2px; transition: border-color .15s, background .15s }
+.ab-sticker-drop.on { border-color: var(--ab-sea); background: color-mix(in srgb, var(--ab-sea) 6%, transparent) }
+.ab-sticker-policy { border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 8px 12px; margin-bottom: 10px; background: var(--ab-card-2) }
+.ab-sticker-policy .ab-row { padding: 4px 0 }
 .ab-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(176px, 100%), 1fr)); gap: 10px }
 .ab-shot { border: 1px solid var(--ab-line); border-radius: 11px; padding: 7px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative }
 .ab-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); display: block }

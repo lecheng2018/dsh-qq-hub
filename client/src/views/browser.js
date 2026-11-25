@@ -148,13 +148,13 @@ export function Browser({ draft, setDraft, toast }) {
           {f.text('browser.chromePath', { size: 'wide', placeholder: '留空自动找' })}
         </Row>
         <Row label="同时用几个" hint="默认 2。机器内存小就调到 1，超了会立刻报忙而不是排队">
-          {f.num('browser.maxConcurrent', { min: 1, max: 4 })}
+          {f.num('browser.maxConcurrent', { min: 1, max: 4, fallback: 2 })}
         </Row>
         <Row label="没人用多久就关" hint="默认 10 分钟。0 = 一直开着（不推荐，会一直占内存）">
-          {f.num('browser.idleMinutes', { min: 0, max: 240 })}<span className="ab-muted">分钟</span>
+          {f.num('browser.idleMinutes', { min: 0, max: 240, fallback: 10 })}<span className="ab-muted">分钟</span>
         </Row>
         <Row label="内存低于多少就不开" hint="默认 600 MB。可用内存不够时不启动，免得把整机拖垮">
-          {f.num('browser.minFreeMB', { min: 0, max: 8192 })}<span className="ab-muted">MB</span>
+          {f.num('browser.minFreeMB', { min: 0, max: 8192, fallback: 600 })}<span className="ab-muted">MB</span>
         </Row>
         <Row label="无头模式" hint="默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容">
           {f.sw('browser.headless')}

@@ -1,5 +1,5 @@
 import { React, useState, useEffect, useRef, Fragment, h } from '../core/react.js'
-import { cx, parsePct } from '../core/utils.js'
+import { cx, parsePct, commitNumText } from '../core/utils.js'
 
 /* 基础控件层：所有视图与内置模块面板共用的组件。
  * 注意：ExtPanel 会把 Card/Btn/Switch/Row/Empty/Select/Seg/Range 这些名字原样传给
@@ -291,6 +291,54 @@ function PercentRow({ label, value, fallback, write, remove }) {
   )
 }
 
+/** 数字框（2026-11-24 重写）：**输入过程只进暂存，失焦 / 回车才解析写回**。
+ *
+ * 旧实现每敲一键就走一遍 sanitize：删到空 → 立刻被 min 夹回下限或被 fallback 顶回默认值，
+ * 于是「群里一条最长 / 私聊一条最长 / 一轮最多几条」这类框根本清不掉（删光就弹回原值）。
+ * 现在：
+ *   - 中间态（空、'-'、'1.'）原样留在框里，不归一、不夹取；
+ *   - 失焦 / 回车才换算成数字写回；空 → 写 ''（= 没填，后端回落默认值）；
+ *   - 显示值在渲染期派生：没在编辑时跟着 draft 走（保存 / 撤销 / 重新载入立刻生效），
+ *     正在敲时以暂存为准（外面的值变化不会冲掉你刚输入的内容）。
+ *
+ * 换算规则集中在 core/utils.js 的 commitNumText，可被单测直接驱动。
+ * `scale` 用于「显示单位 ≠ 存储单位」的框（回合超时：显示分钟、存毫秒）。
+ * `allowEmpty` 决定清空后写 ''（= 恢复默认）还是夹回 min（必填项）。
+ */
+function NumInput({ value, onChange, min, max, step, allowEmpty, scale, placeholder, className, style }) {
+  const unit = Number(step || 1)
+  const toText = (v) => {
+    if (v === undefined || v === null || v === '') return ''
+    const n = Number(v) / (scale || 1)
+    if (!Number.isFinite(n)) return ''
+    return String(unit === 1 ? Math.round(n) : n)
+  }
+  // draft 里那个值对应的显示文本（用户没在编辑时以它为准）
+  const external = toText(value)
+  const [typed, setTyped] = useState(null) // 用户正在敲的原文；null = 没在编辑
+  // 渲染期直接派生显示值：不靠 effect 回写，省掉一次重渲染，也不会有一帧显示旧值
+  const shown = typed !== null ? typed : external
+  const commit = () => {
+    const { value, text } = commitNumText(shown, { min, max, step: unit, allowEmpty, scale })
+    setTyped(text === '' ? null : text) // null = 回到「跟着 draft 显示」；有值就钉住提交结果
+    onChange(value)
+  }
+  return (
+    <input
+      className={cx('ab-input sm', className)} type="number"
+      min={min} max={max} step={step || 1} style={style}
+      value={shown} placeholder={placeholder}
+      // 输入过程只进暂存：清空、'-'、'1.' 都保持原样，不然光标会跳、值会被夹走
+      onChange={(e) => setTyped(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        if (e.key === 'Escape') setTyped(null)
+      }}
+    />
+  )
+}
+
 // 绑定到草稿配置的控件
 
 
@@ -319,5 +367,5 @@ class TabBoundary extends React.Component {
 }
 
 export {
-  Switch, Row, Card, FoldSection, Btn, More, Badge, Pill, Select, Choices, Range, Seg, Empty, ListArea, ListInput, PercentRow, ModOff, TabBoundary
+  Switch, Row, Card, FoldSection, Btn, More, Badge, Pill, Select, Choices, Range, Seg, Empty, ListArea, ListInput, NumInput, PercentRow, ModOff, TabBoundary
 }
