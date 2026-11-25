@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path'
 
 // 把仓库里的 .githooks/ 挂成本地钩子目录（pre-push 用来拦「面板产物忘了重新构建」）。
 //
-// 由 package.json 的 prepare 调用：`npm ci` / `npm install` 之后自动生效一次。
+// 由开发者显式执行 `npm run setup:hooks` 启用；刻意不挂进 package.json 的 `prepare`：
+// 终端用户通过 DSH 插件市场（pnpm）按 Git 源安装/更新时，pnpm 会拦截任何带 `prepare`
+// 的 git 依赖并要求逐次放行构建脚本，而 git hooks 对终端用户毫无用处。
 // 拿不到 git（从 tarball 装、或 CI 里没 .git）、以及 git 命令失败，都不算错：
 // 钩子只是本地便利，缺了它 CI 的 Verify 门禁照样兜底。
 

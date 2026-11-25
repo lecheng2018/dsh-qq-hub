@@ -321,7 +321,7 @@ npm run pack:check
 npm run check:client   # 退出码非 0 = 产物与 client/src 不同步，跑 npm run build:client 后一起提交
 ```
 
-`npm ci` 会自动执行 `npm run setup:hooks`，把仓库内的 `.githooks/` 挂成本地钩子；其中的 `pre-push` 用同一条 `check:client` 在 push 之前就拦下「改了源码忘了重新提交产物」（紧急情况 `git push --no-verify` 可跳过，CI 仍会拦）。
+开发前可手动执行一次 `npm run setup:hooks`，把仓库内的 `.githooks/` 挂成本地钩子；其中的 `pre-push` 用同一条 `check:client` 在 push 之前就拦下「改了源码忘了重新提交产物」（紧急情况 `git push --no-verify` 可跳过，CI 仍会拦）。为避免终端用户通过 DSH 插件市场（pnpm）从 Git 安装或更新时触发构建脚本拦截，仓库不再把该脚本挂进 `prepare`。
 
 ### 文档入口
 
