@@ -107,3 +107,21 @@ test('模型在途时来源版本变化，旧输入生成的画像不得写入',
   assert.equal(store.profiles().length, 0)
   assert.equal(store.profileOf('10002', 'private:10002'), null)
 })
+
+test('模型在途时后台写入无关事件不误杀当前人的画像写入', async (t) => {
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const { store } = fixture(t, async function* () {
+    await gate
+    yield { type: 'text-delta', text: '小张喜欢乌龙茶和摄影。' }
+  })
+  for (const text of ['小张喜欢乌龙茶', '小张常去北郊骑车', '小张最近在学习摄影']) {
+    store.add({ text, about: '10002', aboutName: '小张', scope: 'private:10002' })
+  }
+  const pending = store.buildProfile('10002', 'private:10002')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  store.addEvent({ text: '在别处看了条无关动态', scope: 'private:10001' })
+  release()
+  assert.equal(await pending, true)
+  assert.match(store.profileOf('10002', 'private:10002').text, /乌龙茶/)
+})

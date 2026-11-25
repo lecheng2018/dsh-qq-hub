@@ -285,6 +285,26 @@ export function retention(m, now = Date.now()) {
 
 // ---------------- 记忆库 ----------------
 
+/** 检查「回顾」的模型输出是否包含合法 JSON 对象或数组（用于区分正常空结果与模型跑偏回复）。 */
+export function hasReflectionJson(out) {
+  const raw = String(out || '').trim()
+  if (!raw) return false
+  const obj = raw.match(/\{[\s\S]*\}/)
+  if (obj) {
+    try {
+      const j = JSON.parse(obj[0])
+      if (j && typeof j === 'object' && (Array.isArray(j.insights) || Array.isArray(j.style))) return true
+    } catch {}
+  }
+  const arr = raw.match(/\[[\s\S]*\]/)
+  if (arr) {
+    try {
+      if (Array.isArray(JSON.parse(arr[0]))) return true
+    } catch {}
+  }
+  return false
+}
+
 /** 解析「回顾」的模型输出：{insights:[], style:[]}；老格式的纯数组当作 insights。 */
 export function parseReflection(out) {
   const str = (t) => String(typeof t === 'string' ? t : t?.text || '').trim()

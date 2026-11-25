@@ -27,6 +27,7 @@ function Mood({ st, draft, setDraft, toast }) {
   const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null); setHealth(r.health || null) })
   const loadVec = () => get('/memory/vector').then((r) => { setVec(r.status || { enabled: false }); setRerank(r.rerank || { enabled: false }) }).catch(() => { setVec({ enabled: false }); setRerank({ enabled: false }) })
   const [styles, setStyles] = useState({})
+  const [profileRev, setProfileRev] = useState(0)
   const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
   const times = draft.memory.consolidateTimes || []
   const setTime = (i, v) => { const t = times.slice(); t[i] = v; setDraft(setPath(draft, 'memory.consolidateTimes', t)) }
@@ -51,7 +52,7 @@ function Mood({ st, draft, setDraft, toast }) {
           </div>
         ) : null}
         <div className="ab-flex">
-          <Btn small kind="primary" onClick={async () => { toast('正在整理，可能要一两分钟…'); const r = await post('/memory/extract', {}); toast(r.message); load(); loadIns() }}>现在整理一次</Btn>
+          <Btn small kind="primary" onClick={async () => { toast('正在整理，可能要一两分钟…'); const r = await post('/memory/extract', {}); toast(r.message, r.ok ? 'ok' : 'err'); load(); loadIns(); setProfileRev((v) => v + 1) }}>现在整理一次</Btn>
           <Btn
             small disabled={reloading}
             onClick={async () => {
@@ -61,6 +62,7 @@ function Mood({ st, draft, setDraft, toast }) {
                 setHealth(r.health || null)
                 toast(r.message, r.ok ? 'ok' : 'err')
                 await Promise.all([load(), loadIns()])
+                setProfileRev((v) => v + 1)
               } catch (error) { toast(error.message, 'err') } finally { setReloading(false) }
             }}
           >
@@ -126,11 +128,20 @@ function Mood({ st, draft, setDraft, toast }) {
       <Card title="人物与相处" desc="她对每个人的印象、总结出的相处之道，以及潜移默化学到的说话方式。点开某一项才编辑。">
         <Seg value={personaTab} onChange={setPersonaTab} options={[{ value: 'profiles', label: '人物档案' }, { value: 'insights', label: '相处经验' }, { value: 'style', label: '说话方式' }]} />
         <div style={{ marginTop: 10 }}>
-          {personaTab === 'profiles' ? <ProfilesList toast={toast} /> : null}
-          {personaTab === 'insights' ? (ins === null
-            ? <Empty icon="⏳" text="加载中…" />
-            : ins.length === 0 ? <Empty icon="🌱" text="还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" />
-              : ins.map((p) => <InsightRow key={p.key} p={p} toast={toast} onSaved={loadIns} style={styles[p.key] || []} />)) : null}
+          {personaTab === 'profiles' ? <ProfilesList toast={toast} refreshKey={profileRev} /> : null}
+          {personaTab === 'insights' ? (() => {
+            if (ins === null) return <Empty icon="⏳" text="加载中…" />
+            const byKey = new Map(ins.map((p) => [p.key, p]))
+            for (const [k, list] of Object.entries(styles || {})) {
+              if (k !== 'self' && Array.isArray(list) && list.length && !byKey.has(k)) {
+                byKey.set(k, { key: k, name: '', list: [] })
+              }
+            }
+            const rows = [...byKey.values()]
+            return rows.length === 0
+              ? <Empty icon="🌱" text="还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" />
+              : rows.map((p) => <InsightRow key={p.key} p={p} toast={toast} onSaved={loadIns} style={styles[p.key] || []} />)
+          })() : null}
           {personaTab === 'style' ? (
             <div>
               <StyleEditor k="self" label="她自己养成的说法" list={styles.self || []} toast={toast} onSaved={loadIns} />
@@ -179,10 +190,10 @@ function Mood({ st, draft, setDraft, toast }) {
 }
 
 /** 人物小档案：她对每个人的一段印象。列表只显示摘要，点「编辑」再改。 */
-function ProfilesList({ toast }) {
+function ProfilesList({ toast, refreshKey = 0 }) {
   const [list, setList] = useState(null)
   const load = () => get('/profiles').then((r) => setList(r.list || []))
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [refreshKey])
   if (list === null) return <Empty icon="⏳" text="加载中…" />
   if (list.length === 0) return <Empty icon="🌱" text="还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。" />
   return <div className="ab-list">{list.map((p) => <ProfileRow key={p.key || `${p.qq}@${p.scope}`} p={p} toast={toast} onChanged={load} />)}</div>
@@ -214,7 +225,7 @@ function ProfileRow({ p, toast, onChanged }) {
         : <div className="body ab-small" style={{ flex: 1, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{p.text}</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <Btn small onClick={() => setOpen(!open)}>{open ? '收起' : '编辑'}</Btn>
-        {open ? <Btn small kind="primary" disabled={text === p.text} onClick={async () => { const r = await post('/profiles/save', { qq: p.qq, text, scope: p.scope }); toast(r.message, 'ok'); onChanged() }}>保存</Btn> : null}
+        {open ? <Btn small kind="primary" disabled={text === p.text} onClick={async () => { const r = await post('/profiles/save', { qq: p.qq, text, scope: p.scope }); toast(r.message, r.ok ? 'ok' : 'err'); if (r.ok) onChanged() }}>保存</Btn> : null}
         {open ? (
           <Btn
             small kind="ghost" disabled={busy}
@@ -354,15 +365,22 @@ function MemoryImport({ toast, onDone }) {
 }
 
 function StyleEditor({ k, label, list, toast, onSaved }) {
-  const [text, setText] = useState(list.join('\n'))
-  useEffect(() => setText(list.join('\n')), [list.join('\n')])
-  const changed = text !== list.join('\n')
+  const joined = list.join('\n')
+  const [text, setText] = useState(joined)
+  useEffect(() => setText(joined), [joined])
+  const changed = text !== joined
+  const saveStyle = async () => {
+    const clean = text.split('\n').map((t) => t.trim()).filter(Boolean)
+    const r = await post('/style/save', { key: k, list: clean })
+    toast(r.message, r.ok ? 'ok' : 'err')
+    if (r.ok) { setText(clean.slice(0, k === 'self' ? 6 : 5).map((t) => t.slice(0, 40)).join('\n')); onSaved() }
+  }
   return (
     <div style={{ marginTop: 8 }}>
       <div className="ab-flex" style={{ marginBottom: 4 }}>
         <span className="ab-small" style={{ color: 'var(--ab-sub)' }}>{label}</span>
         <div className="ab-spacer" />
-        {changed ? <Btn small kind="primary" onClick={async () => { const r = await post('/style/save', { key: k, list: text.split('\n') }); toast(r.message, 'ok'); onSaved() }}>保存</Btn> : null}
+        {changed ? <Btn small kind="primary" onClick={saveStyle}>保存</Btn> : null}
       </div>
       <textarea className="ab-textarea" style={{ minHeight: 50, fontFamily: 'inherit' }} value={text} onChange={(e) => setText(e.target.value)} placeholder="一行一条，例如：消息很短，常一句话分几条发" />
     </div>
@@ -372,18 +390,26 @@ function StyleEditor({ k, label, list, toast, onSaved }) {
 /** 某个人的相处经验：默认只显示一行摘要，点「编辑」展开条目与编辑器。 */
 function InsightRow({ p, toast, onSaved, style }) {
   const [open, setOpen] = useState(false)
-  const [text, setText] = useState(p.list.map((x) => x.text).join('\n'))
   const joined = p.list.map((x) => x.text).join('\n')
+  const [text, setText] = useState(joined)
   useEffect(() => setText(joined), [joined])
   const changed = text !== joined
-  const who = p.key.startsWith('group:') ? '群 ' + p.key.slice(6) : (p.name ? p.name + '（' + p.key.slice(3) + '）' : p.key.slice(3))
+  const who = p.key.startsWith('group:') ? '群 ' + p.key.slice(6)
+    : p.key.startsWith('qq:') ? (p.name ? p.name + '（' + p.key.slice(3) + '）' : p.key.slice(3))
+      : p.key === 'global' ? '通用经验' : (p.name || p.key)
   // 单条删除：textarea 是「一行一条」，按行号找到对应条目的 id 再删
   const delOne = async (lineIdx) => {
     const item = p.list[lineIdx]
     if (!item) return
     const r = await post('/insights/delete', { key: p.key, id: item.id })
     toast(r.message, r.ok ? 'ok' : 'err')
-    onSaved()
+    if (r.ok) onSaved()
+  }
+  const saveIns = async () => {
+    const clean = text.split('\n').map((t) => t.trim()).filter(Boolean)
+    const r = await post('/insights/save', { key: p.key, list: clean })
+    toast(r.message, r.ok ? 'ok' : 'err')
+    if (r.ok) { setText(clean.slice(0, 8).join('\n')); onSaved() }
   }
   return (
     <div style={{ marginBottom: open ? 12 : 4, borderTop: '1px solid var(--ab-line)', paddingTop: 8 }}>
@@ -391,7 +417,7 @@ function InsightRow({ p, toast, onSaved, style }) {
         <b>{who}</b>
         <span className="ab-muted ab-small">{p.list.length + ' 条'}</span>
         <div className="ab-spacer" />
-        {open && changed ? <Btn small kind="primary" onClick={async () => { const r = await post('/insights/save', { key: p.key, list: text.split('\n') }); toast(r.message, 'ok'); onSaved() }}>保存</Btn> : null}
+        {open && changed ? <Btn small kind="primary" onClick={saveIns}>保存</Btn> : null}
         <Btn small kind="ghost" onClick={() => setOpen(!open)}>{open ? '收起' : '编辑'}</Btn>
       </div>
       {open ? (

@@ -153,3 +153,21 @@ test('extractLines 在独立状态适配器上跳过成功块并重试失败块'
   assert.equal(prompts.filter((text) => text.includes('第 80 条')).length, 1)
   assert.equal(reflected, 1)
 })
+
+test('extractLines 跳过 bili 等无合法作用域的非聊天会话', async () => {
+  let called = 0
+  const extractor = createMemoryExtractor({
+    dsh: { llm: { async *stream() { called++; yield { type: 'text-delta', text: '[]' } } } },
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: () => false,
+    isActive: () => true,
+    scopeOf: (chatId) => (chatId === 'bili' ? null : chatId),
+    recoveryError: () => '',
+  })
+  const lines = Array.from({ length: 8 }, (_, index) => ({ chatId: 'bili', who: '路人', text: `弹幕通知 ${index}` }))
+  const res = await extractor.extractLines('bili', lines)
+  assert.equal(res.ok, true)
+  assert.equal(res.skipped, true)
+  assert.equal(called, 0)
+})

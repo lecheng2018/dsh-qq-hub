@@ -178,3 +178,29 @@ test('memory-files: 多次 save() 与重载后，Markdown 中的 ## 当前记忆
   assert.equal(matches.length, 1, '多次保存后 ## 当前记忆 只能有且仅有 1 行，绝不应累积堆叠')
 })
 
+test('memory-files: 多个非数字自定义 style key 不冲突且空非 self 风格不落盘占位', () => {
+  const memDir = join(dir, 'store6')
+  const s1 = openMemoryFiles(memDir)
+  s1.save({
+    items: [],
+    styles: {
+      self: ['短句'],
+      customAlpha: ['习惯A'],
+      customBeta: ['习惯B'],
+      'qq:10002': [], /* pii-scan:ignore */
+    },
+    styleSources: {
+      customAlpha: { origin: 'manual' },
+      customBeta: { origin: 'manual' },
+      'qq:10002': { origin: 'manual' }, /* pii-scan:ignore */
+    },
+  })
+  s1.close()
+
+  const s2 = openMemoryFiles(memDir)
+  const loaded = s2.load()
+  assert.deepEqual(loaded.styles.self, ['短句'])
+  assert.deepEqual(loaded.styles['qq:10002'], undefined) /* pii-scan:ignore */
+  s2.close()
+})
+

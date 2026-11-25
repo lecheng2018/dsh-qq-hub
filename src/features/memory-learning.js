@@ -10,9 +10,22 @@ import { characterName } from '../persona/identity-context.js'
 
 export const CONSOLIDATION_MAX_ATTEMPTS = 3
 export const CONSOLIDATION_RETRY_DELAYS_MS = Object.freeze([5 * 60_000, 15 * 60_000, 30 * 60_000])
+export const CONSOLIDATION_COOLDOWN_RESET_MS = 4 * 60 * 60_000
+
+const localDayOf = (ms) => {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export function retryCycleExpired(retry, now = Date.now()) {
+  const failedAt = Number(retry?.failedAt || 0)
+  if (!failedAt) return false
+  return localDayOf(failedAt) !== localDayOf(now) || (now - failedAt >= CONSOLIDATION_COOLDOWN_RESET_MS)
+}
 
 export function nextConsolidationRetry(previous, now, lastError) {
-  const attempts = Math.max(0, Math.floor(Number(previous?.attempts) || 0)) + 1
+  const baseAttempts = retryCycleExpired(previous, now) ? 0 : Math.max(0, Math.floor(Number(previous?.attempts) || 0))
+  const attempts = baseAttempts + 1
   const capped = attempts >= CONSOLIDATION_MAX_ATTEMPTS
   const delay = CONSOLIDATION_RETRY_DELAYS_MS[Math.min(attempts - 1, CONSOLIDATION_RETRY_DELAYS_MS.length - 1)]
   return {
@@ -24,6 +37,7 @@ export function nextConsolidationRetry(previous, now, lastError) {
 }
 
 export function consolidationRetryBlocked(retry, now = Date.now()) {
+  if (retryCycleExpired(retry, now)) return false
   const attempts = Math.max(0, Math.floor(Number(retry?.attempts) || 0))
   return attempts >= CONSOLIDATION_MAX_ATTEMPTS || Number(retry?.nextRetryAt || 0) > now
 }
@@ -104,12 +118,14 @@ export function createMemoryLearning({
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
     const old = profileOf(qq, scope)?.text || ''
+    const charName = characterName('', cfg)
     let out = ''
     try {
       out = await askModel(dsh, {
         cfg,
-        system: `你是「${characterName('', cfg)}」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。`, 
-        text: `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}\n\n【任务要求】根据上述事实，用第三人称写一段 100 字以内的人物小档案，不要标题、不要列表，直接输出档案正文。`,
+        system: `你是「${charName}」。根据你记得的关于一个人的事，写一张给自己看的人物小档案：TA 是谁、怎么称呼、和你什么关系、性格和喜好、最近在忙什么。只写记忆里明确有的，不要推测性格、不要编，也不要写「应该」「可能」这种猜的话；旧档案和新记忆矛盾时以新记忆为准。用第三人称，一段话，100 字以内，不要标题和列表。`,
+        text: `【后台离线任务：生成人物小档案（非编程任务，切勿作为编码助手回复）】\n你是「${charName}」，请根据下方事实用第三人称写一段 100 字以内的人物小档案（TA 是谁、怎么称呼、关系、明确提到的喜好与近况；不猜测不编造，新记忆与旧档案矛盾时以新记忆为准；不要标题、不要列表，直接输出档案正文）。\n\n` +
+          `${String(qq) === String(cfg.ownerQQ) ? `这是你的${cfg.ownerName || '主人'}。\n` : ''}旧档案：${old || '（还没有）'}\n\n记得的事（越往下越新）：\n${mine.slice(-40).map((m) => `- [${whenText(m.at)}] ${m.text}`).join('\n')}\n\n【任务要求】直接输出 100 字以内的第三人称档案正文，不要任何解释或反问。`,
         maxTokens: 1500,
         temperature: 0.3,
         signal: genSignal?.signal,
@@ -121,6 +137,9 @@ export function createMemoryLearning({
     if (!isActive() || (genSignal && !genSignal.isValid())) return false
     const text = String(out || '').trim().replace(/^[「"]|[」"]$/g, '')
     if (!text) throw new Error('模型没写出东西，等会儿再试')
+    if (/编程助手|请告诉我你要|需要我帮你做什么|没有收到具体的/.test(text)) {
+      throw new Error('模型未按要求生成人物小档案')
+    }
       return setDerivedProfile(qq, text, name, scope, mine, sourceRev)
     } finally {
       task.cleanup()

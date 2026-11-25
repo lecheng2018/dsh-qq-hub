@@ -950,7 +950,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
   function setDerivedProfile(qq, text, name, scope, facts, expectedRev, personaId = '') {
     const s = load()
-    if (expectedRev !== undefined && (s.rev || 0) !== expectedRev) return false
+    if (expectedRev !== undefined && (s.rev || 0) !== expectedRev) {
+      // 仅当同一作用域、同一人的有效非传闻来源事实实际变化时才放弃，避免后台无关 addEvent 误杀在途画像写入
+      const liveFacts = (s.items || [])
+        .filter((m) => !m.invalidAt && String(m.about) === String(qq) && String(m.scope || '') === String(scope || 'global') && m.status !== 'hearsay')
+        .sort((a, b) => a.at - b.at)
+      const same = Array.isArray(facts)
+        && liveFacts.length === facts.length
+        && liveFacts.every((m, idx) => String(m.id) === String(facts[idx]?.id) && String(m.text) === String(facts[idx]?.text))
+      if (!same) return false
+    }
     s.profiles = s.profiles || {}
     const key = profileKeyOf(qq, scope)
     const pid = normalizePersonaId(personaId || s.profiles[key]?.personaId)
