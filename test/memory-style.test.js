@@ -64,3 +64,22 @@ test('自我风格学习也记录输入指纹', async (t) => {
   assert.equal(store.styleSourceOf('self').origin, 'derived')
   assert.equal(store.styleSourceOf('self').sourceFingerprint.length, 64)
 })
+
+test('learnSelfStyle 遇到非 JSON 回复自动重试一次并成功写入', async (t) => {
+  let calls = 0
+  const store = fixture(t, {
+    dsh: {
+      llm: {
+        async *stream(params) {
+          calls++
+          assert.match(params.messages[0].content[0].text, /JSON/)
+          yield { type: 'text-delta', text: calls === 1 ? '请问你需要我如何改写这些句子？' : '["偶尔用hhh","少用标点"]' }
+        },
+      },
+    },
+  })
+  store.setStyle('qq:10002', ['短句', '爱用hhh', '少标点']) /* pii-scan:ignore */
+  await store.learnSelfStyle()
+  assert.equal(calls, 2)
+  assert.deepEqual(store.styleOf('self'), ['偶尔用hhh', '少用标点'])
+})

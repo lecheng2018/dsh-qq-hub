@@ -5,10 +5,10 @@ import { readFileSync } from 'node:fs'
 const src = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
 const body = src.slice(src.indexOf('function Mood('), src.indexOf('/** 人物小档案'))
 
-function render({ health = null, reloading = false, post = async () => ({ ok: true, message: '已重新载入' }) } = {}) {
+function render({ health = null, reloading = false, personaTab = 'profiles', ins = null, styles = {}, post = async () => ({ ok: true, message: '已重新载入' }) } = {}) {
   // 顺序与 Mood 里的 useState 一一对应：
-  // mem / stats / q / ins / adding / addOpen / browseOpen / personaTab / health / reloading / vec / vecBusy / rerank / styles
-  const states = [null, null, '', null, { text: '', aboutName: '', importance: 0.6 }, false, false, 'profiles', health, reloading, null, false, null, {}]
+  // mem / stats / q / ins / adding / addOpen / browseOpen / personaTab / health / reloading / vec / vecBusy / rerank / styles / profileRev
+  const states = [null, null, '', ins, { text: '', aboutName: '', importance: 0.6 }, false, false, personaTab, health, reloading, null, false, null, styles, 0]
   const updates = [], toasts = [], requests = []
   let slot = 0
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((x) => x != null && x !== false) })
@@ -54,4 +54,12 @@ test('重新载入调用 POST 并刷新档案与派生列表，处理进行中�
   }
   const busy = render({ reloading: true }).nodes.find((node) => node.type === 'Btn' && node.props.disabled && node.children.includes('正在载入…'))
   assert.ok(busy)
+})
+
+test('仅有说话方式而无相处经验的对象也在相处经验页展示以供点开编辑', () => {
+  const { nodes } = render({ personaTab: 'insights', ins: [], styles: { 'qq:10002': ['短句'] } }) /* pii-scan:ignore */
+  const insightRow = nodes.find((node) => node.type === 'InsightRow')
+  assert.ok(insightRow)
+  assert.equal(insightRow.props.p.key, 'qq:10002') /* pii-scan:ignore */
+  assert.deepEqual(insightRow.props.style, ['短句'])
 })

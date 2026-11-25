@@ -114,3 +114,20 @@ test('模块卸载后的迟到 tick 不写重试或完成状态', async (t) => {
   assert.equal(f.state().lastConsolidate.retry, undefined)
   assert.deepEqual(f.state().runs, {})
 })
+
+test('跨天或超过 4 小时后，三次失败的整理退避锁自动解除并重置计数', () => {
+  const now = new Date(2026, 10, 22, 4, 22, 0).getTime()
+  const third = {
+    attempts: CONSOLIDATION_MAX_ATTEMPTS,
+    nextRetryAt: 0,
+    failedAt: now,
+    lastError: 'upstream 400',
+  }
+  assert.equal(consolidationRetryBlocked(third, now + 30 * 60_000), true)
+  const nextSlotSameDay = new Date(2026, 10, 22, 16, 0, 0).getTime()
+  assert.equal(consolidationRetryBlocked(third, nextSlotSameDay), false)
+  const nextDay = new Date(2026, 10, 23, 4, 0, 0).getTime()
+  assert.equal(consolidationRetryBlocked(third, nextDay), false)
+  const reset = nextConsolidationRetry(third, nextDay, '次日偶发失败')
+  assert.equal(reset.attempts, 1)
+})

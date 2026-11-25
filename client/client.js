@@ -3193,6 +3193,7 @@ function Mood({ st, draft, setDraft, toast }) {
     setRerank({ enabled: false });
   });
   const [styles, setStyles] = useState({});
+  const [profileRev, setProfileRev] = useState(0);
   const loadIns = () => get("/insights").then((r) => {
     setIns(r.items || []);
     setStyles(r.styles || {});
@@ -3221,9 +3222,10 @@ function Mood({ st, draft, setDraft, toast }) {
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "记忆概览", desc: "她记得多少、上次整理是什么时候；档案有问题会在这里冒红条。" }, /* @__PURE__ */ h("div", { className: "ab-pills", style: { marginTop: 0, marginBottom: 10 } }, /* @__PURE__ */ h("span", { className: "ab-pill" }, stats ? stats.count : "–", " 条长期记忆"), /* @__PURE__ */ h("span", { className: "ab-pill" }, stats ? stats.auto : "–", " 条来自每日整理", stats && stats.outdated ? " · 另有 " + stats.outdated + " 条已过时" : ""), /* @__PURE__ */ h("span", { className: "ab-pill" }, "上次整理：", last ? new Date(last.at).toLocaleString() : "还没整理过")), health && !health.ok ? /* @__PURE__ */ h("div", { className: "ab-note err", role: "alert" }, /* @__PURE__ */ h("b", null, "档案异常，自动整理已暂停。修复文件后点击「重新载入档案」。"), health.stateError ? /* @__PURE__ */ h("div", null, health.stateError) : null, (health.brokenScopes || []).map((item) => /* @__PURE__ */ h("div", { key: item.file }, item.file, "：", item.error))) : null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
     toast("正在整理，可能要一两分钟…");
     const r = await post("/memory/extract", {});
-    toast(r.message);
+    toast(r.message, r.ok ? "ok" : "err");
     load();
     loadIns();
+    setProfileRev((v) => v + 1);
   } }, "现在整理一次"), /* @__PURE__ */ h(
     Btn,
     {
@@ -3236,6 +3238,7 @@ function Mood({ st, draft, setDraft, toast }) {
           setHealth(r.health || null);
           toast(r.message, r.ok ? "ok" : "err");
           await Promise.all([load(), loadIns()]);
+          setProfileRev((v) => v + 1);
         } catch (error) {
           toast(error.message, "err");
         } finally {
@@ -3295,7 +3298,17 @@ function Mood({ st, draft, setDraft, toast }) {
       /* @__PURE__ */ h("div", { key: "s:" + k, className: "ab-section-title", style: { margin: "10px 0 4px" } }, k, /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 6 } }, groups.get(k).length + " 条")),
       ...groups.get(k).map((m) => /* @__PURE__ */ h(MemoryRow, { key: m.id, m, onChanged: () => load(), toast }))
     ]));
-  })())), /* @__PURE__ */ h(Card, { title: "人物与相处", desc: "她对每个人的印象、总结出的相处之道，以及潜移默化学到的说话方式。点开某一项才编辑。" }, /* @__PURE__ */ h(Seg, { value: personaTab, onChange: setPersonaTab, options: [{ value: "profiles", label: "人物档案" }, { value: "insights", label: "相处经验" }, { value: "style", label: "说话方式" }] }), /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, personaTab === "profiles" ? /* @__PURE__ */ h(ProfilesList, { toast }) : null, personaTab === "insights" ? ins === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : ins.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : ins.map((p) => /* @__PURE__ */ h(InsightRow, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] })) : null, personaTab === "style" ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "每个人的说话习惯跟着上面的「相处经验」一起显示和编辑。")) : null)), /* @__PURE__ */ h(Card, { title: "整理与检索", desc: "每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。" }, /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "", onChange: (e) => setTime(1, e.target.value) })), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
+  })())), /* @__PURE__ */ h(Card, { title: "人物与相处", desc: "她对每个人的印象、总结出的相处之道，以及潜移默化学到的说话方式。点开某一项才编辑。" }, /* @__PURE__ */ h(Seg, { value: personaTab, onChange: setPersonaTab, options: [{ value: "profiles", label: "人物档案" }, { value: "insights", label: "相处经验" }, { value: "style", label: "说话方式" }] }), /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, personaTab === "profiles" ? /* @__PURE__ */ h(ProfilesList, { toast, refreshKey: profileRev }) : null, personaTab === "insights" ? (() => {
+    if (ins === null) return /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" });
+    const byKey = new Map(ins.map((p) => [p.key, p]));
+    for (const [k, list] of Object.entries(styles || {})) {
+      if (k !== "self" && Array.isArray(list) && list.length && !byKey.has(k)) {
+        byKey.set(k, { key: k, name: "", list: [] });
+      }
+    }
+    const rows = [...byKey.values()];
+    return rows.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : rows.map((p) => /* @__PURE__ */ h(InsightRow, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }));
+  })() : null, personaTab === "style" ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "每个人的说话习惯跟着上面的「相处经验」一起显示和编辑。")) : null)), /* @__PURE__ */ h(Card, { title: "整理与检索", desc: "每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。" }, /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "", onChange: (e) => setTime(1, e.target.value) })), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
     setVecBusy(true);
     try {
       const r = await post("/memory/vector/backfill", {});
@@ -3309,12 +3322,12 @@ function Mood({ st, draft, setDraft, toast }) {
   } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { collapse: true, title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。" }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() }))));
 }
 /** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
-function ProfilesList({ toast }) {
+function ProfilesList({ toast, refreshKey = 0 }) {
   const [list, setList] = useState(null);
   const load = () => get("/profiles").then((r) => setList(r.list || []));
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshKey]);
   if (list === null) return /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" });
   if (list.length === 0) return /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有。关于一个人记住 3 条以上的事后，整理记忆时会写出来。" });
   return /* @__PURE__ */ h("div", { className: "ab-list" }, list.map((p) => /* @__PURE__ */ h(ProfileRow, { key: p.key || `${p.qq}@${p.scope}`, p, toast, onChanged: load })));
@@ -3335,8 +3348,8 @@ function ProfileRow({ p, toast, onChanged }) {
   const scopeLabel = p.scope === "global" ? "通用" : p.scope.startsWith("group:") ? "群 " + p.scope.slice(6) : "私聊";
   return /* @__PURE__ */ h("div", { className: "ab-li", style: { alignItems: "flex-start" } }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, p.name || p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11, background: p.scope === "global" ? "var(--ab-solid)" : "var(--ab-card-2)", borderColor: p.scope === "global" ? "transparent" : "var(--ab-line)", color: p.scope === "global" ? "#fff" : "var(--ab-sub)" } }, scopeLabel), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, timeAgo(p.at))), open ? /* @__PURE__ */ h("textarea", { className: "ab-textarea", rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: "1 1 220px", minHeight: 72 } }) : /* @__PURE__ */ h("div", { className: "body ab-small", style: { flex: "1 1 200px", whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } }, p.text), /* @__PURE__ */ h("div", { className: "ab-flex", style: { gap: 4 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setOpen(!open) }, open ? "收起" : "编辑"), open ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: text === p.text, onClick: async () => {
     const r = await post("/profiles/save", { qq: p.qq, text, scope: p.scope });
-    toast(r.message, "ok");
-    onChanged();
+    toast(r.message, r.ok ? "ok" : "err");
+    if (r.ok) onChanged();
   } }, "保存") : null, open ? /* @__PURE__ */ h(
     Btn,
     {
@@ -3423,34 +3436,45 @@ function MemoryImport({ toast, onDone }) {
   return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "导入旧档案"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "以前写过的设定、聊天笔记、别的机器人的记忆文件，贴进来或上传。她会挑出值得记的，你勾选后再存；和已有记忆重复的会自动去掉。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 110 }, placeholder: "把旧档案的文字粘贴到这里（最多 3 万字）", value: text, onChange: (e) => setText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: readFile }, "选择文件"), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy || !text.trim(), onClick: scan }, busy ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 正在挑…") : "挑出值得记的"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, text ? text.length + " 字" : "")), cands ? cands.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 10 } }, "没挑出新的可记的东西（或者都已经记过了）。") : /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h("div", { className: "ab-list" }, cands.map((c, i) => /* @__PURE__ */ h("label", { key: i, className: "ab-li", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: !!pick[i], onChange: (e) => setPick({ ...pick, [i]: e.target.checked }), style: { accentColor: "var(--ab-sea)", marginTop: 3 } }), /* @__PURE__ */ h("div", { className: "body" }, c.aboutName ? /* @__PURE__ */ h("b", null, "[", c.aboutName, "] ") : null, c.text, c.importance >= 0.8 ? " ★" : "")))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer" } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "private", onChange: () => setScope("private"), style: { accentColor: "var(--ab-sea)" } }), " 只在她的私聊里想起（默认）"), /* @__PURE__ */ h("label", { className: "ab-small", style: { cursor: "pointer", marginLeft: 12 } }, /* @__PURE__ */ h("input", { type: "radio", checked: scope === "global", onChange: () => setScope("global"), style: { accentColor: "var(--ab-sea)" } }), " 所有聊天都能想起（她自己的设定选这个）")), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: commit, disabled: !Object.values(pick).some(Boolean) }, "存进记忆库（", Object.values(pick).filter(Boolean).length, " 条）"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setCands(null) }, "取消"))) : null);
 }
 function StyleEditor({ k, label, list, toast, onSaved }) {
-  const [text, setText] = useState(list.join("\n"));
-  useEffect(() => setText(list.join("\n")), [list.join("\n")]);
-  const changed = text !== list.join("\n");
-  return /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 4 } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-sub)" } }, label), /* @__PURE__ */ h("div", { className: "ab-spacer" }), changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
-    const r = await post("/style/save", { key: k, list: text.split("\n") });
-    toast(r.message, "ok");
-    onSaved();
-  } }, "保存") : null), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 50, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条，例如：消息很短，常一句话分几条发" }));
+  const joined = list.join("\n");
+  const [text, setText] = useState(joined);
+  useEffect(() => setText(joined), [joined]);
+  const changed = text !== joined;
+  const saveStyle = async () => {
+    const clean = text.split("\n").map((t) => t.trim()).filter(Boolean);
+    const r = await post("/style/save", { key: k, list: clean });
+    toast(r.message, r.ok ? "ok" : "err");
+    if (r.ok) {
+      setText(clean.slice(0, k === "self" ? 6 : 5).map((t) => t.slice(0, 40)).join("\n"));
+      onSaved();
+    }
+  };
+  return /* @__PURE__ */ h("div", { style: { marginTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 4 } }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-sub)" } }, label), /* @__PURE__ */ h("div", { className: "ab-spacer" }), changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: saveStyle }, "保存") : null), /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 50, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条，例如：消息很短，常一句话分几条发" }));
 }
 function InsightRow({ p, toast, onSaved, style }) {
   const [open, setOpen] = useState(false);
-  const [text, setText] = useState(p.list.map((x) => x.text).join("\n"));
   const joined = p.list.map((x) => x.text).join("\n");
+  const [text, setText] = useState(joined);
   useEffect(() => setText(joined), [joined]);
   const changed = text !== joined;
-  const who = p.key.startsWith("group:") ? "群 " + p.key.slice(6) : p.name ? p.name + "（" + p.key.slice(3) + "）" : p.key.slice(3);
+  const who = p.key.startsWith("group:") ? "群 " + p.key.slice(6) : p.key.startsWith("qq:") ? p.name ? p.name + "（" + p.key.slice(3) + "）" : p.key.slice(3) : p.key === "global" ? "通用经验" : p.name || p.key;
   const delOne = async (lineIdx) => {
     const item = p.list[lineIdx];
     if (!item) return;
     const r = await post("/insights/delete", { key: p.key, id: item.id });
     toast(r.message, r.ok ? "ok" : "err");
-    onSaved();
+    if (r.ok) onSaved();
   };
-  return /* @__PURE__ */ h("div", { style: { marginBottom: open ? 12 : 4, borderTop: "1px solid var(--ab-line)", paddingTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: open ? 6 : 0 } }, /* @__PURE__ */ h("b", null, who), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, p.list.length + " 条"), /* @__PURE__ */ h("div", { className: "ab-spacer" }), open && changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
-    const r = await post("/insights/save", { key: p.key, list: text.split("\n") });
-    toast(r.message, "ok");
-    onSaved();
-  } }, "保存") : null, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "编辑")), open ? /* @__PURE__ */ h(Fragment, null, p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+  const saveIns = async () => {
+    const clean = text.split("\n").map((t) => t.trim()).filter(Boolean);
+    const r = await post("/insights/save", { key: p.key, list: clean });
+    toast(r.message, r.ok ? "ok" : "err");
+    if (r.ok) {
+      setText(clean.slice(0, 8).join("\n"));
+      onSaved();
+    }
+  };
+  return /* @__PURE__ */ h("div", { style: { marginBottom: open ? 12 : 4, borderTop: "1px solid var(--ab-line)", paddingTop: 8 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: open ? 6 : 0 } }, /* @__PURE__ */ h("b", null, who), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, p.list.length + " 条"), /* @__PURE__ */ h("div", { className: "ab-spacer" }), open && changed ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: saveIns }, "保存") : null, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setOpen(!open) }, open ? "收起" : "编辑")), open ? /* @__PURE__ */ h(Fragment, null, p.list.length ? /* @__PURE__ */ h("div", { className: "ab-list", style: { marginBottom: 6 } }, p.list.map((x, i) => /* @__PURE__ */ h("div", { key: x.id || i, className: "ab-li", style: { padding: "4px 0" } }, /* @__PURE__ */ h("div", { className: "body ab-small" }, x.text), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
     if (window.confirm("删掉这条相处经验？\n\n" + x.text.slice(0, 60))) delOne(i);
   } }, "删")))) : null, /* @__PURE__ */ h("textarea", { className: "ab-textarea", style: { minHeight: 70, fontFamily: "inherit" }, value: text, onChange: (e) => setText(e.target.value), placeholder: "一行一条经验" }), /* @__PURE__ */ h(StyleEditor, { k: p.key, label: "说话方式", list: style || [], toast, onSaved })) : null);
 }

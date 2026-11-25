@@ -503,10 +503,13 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         }
         for (const [key, list] of Object.entries(s.styles)) {
           if (key === 'self') continue
+          if (!Array.isArray(list) || list.length === 0) continue
           const sc = personKeyToScope(key)
           if (!byScope.has(sc)) byScope.set(sc, [])
+          const digits = key.replace(/\D/g, '')
+          const safeId = digits || key.replace(/[^a-zA-Z0-9_-]/g, '_') || 'custom'
           byScope.get(sc).push({
-            id: `style_${key.replace(/\D/g, '') || 'custom'}`,
+            id: `style_${safeId}`,
             kind: 'style',
             text: JSON.stringify(list),
             origin: s.styleSources?.[key]?.origin || undefined,

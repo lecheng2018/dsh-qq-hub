@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMemoryStore } from '../src/features/memory.js'
+import { createMemoryStore, hasReflectionJson } from '../src/features/memory.js'
 
 function fixture(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'memory-reflection-'))
@@ -54,4 +54,38 @@ test('关闭 reflection 上下文不影响手工记事和事实召回', (t) => {
   store.add({ text: '小张喜欢冷萃咖啡', about: '10002', scope: 'private:10002' })
   assert.doesNotMatch(store.contextFor(chat), /不应由 memory 重复注入的经验/)
   assert.equal(store.recall('冷萃咖啡', { chat }).length, 1)
+})
+
+test('reflect 遇到非 JSON 跑偏回包时自动重试一次；连续两次非 JSON 时抛出', async (t) => {
+  let calls = 0
+  let mode = 'retry-ok'
+  const store = fixture(t, {
+    dsh: {
+      llm: {
+        async *stream(params) {
+          calls++
+          const text = params.messages[0].content[0].text
+          assert.match(text, /"insights"/)
+          assert.match(text, /"style"/)
+          if (mode === 'retry-ok' && calls === 1) {
+            yield { type: 'text-delta', text: '我这边是编程助手，请问需要我帮你处理什么任务？' }
+          } else if (mode === 'always-prose') {
+            yield { type: 'text-delta', text: '看起来你贴了一段聊天记录，请问需要我总结吗？' }
+          } else {
+            yield { type: 'text-delta', text: '{"insights":["他喜欢直说重点"],"style":["短句加感叹号"]}' }
+          }
+        },
+      },
+    },
+  })
+  assert.equal(hasReflectionJson('我是编程助手'), false)
+  assert.equal(hasReflectionJson('{"insights":[],"style":[]}'), true)
+  const n = await store.reflect(chat, '小张：直接说吧！')
+  assert.equal(n, 1)
+  assert.equal(calls, 2)
+  assert.equal(store.insights()[0].list[0].text, '他喜欢直说重点')
+  assert.deepEqual(store.styles()['qq:10002'], ['短句加感叹号']) /* pii-scan:ignore */
+
+  mode = 'always-prose'
+  await assert.rejects(() => store.reflect(chat, '小张：换一段聊天'), /有效的相处经验 JSON/)
 })
