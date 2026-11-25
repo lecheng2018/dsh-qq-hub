@@ -181,6 +181,13 @@ const DEFAULTS_RAW = {
     maxPerHour: 20,
     maxLibrary: 300, // 表情库最多存多少张（QQ 收藏表情有上限），超了就清掉最少用的
     caption: true, // 用视觉模型起备注
+    maxSide: 1920, // 收表情时单边像素上限
+    maxBytes: 5 * 1024 * 1024, // 静态表情体积上限
+    maxGifBytes: 10 * 1024 * 1024, // GIF 动图体积上限
+    cooldownSec: 0, // 自动配表情冷却（0 = 不冷却）；显式发不受影响
+    sendMaxPerHour: 0, // 自动配表情每小时上限（0 = 不限）
+    webpToJpeg: false, // WebP 发送前转 JPEG（兼容优先，会丢动画）
+    overrides: {}, // 按群覆盖：{ 群号: { enabled, autoChance, collect, ... } }
   },
   diary: {
     enabled: true,
@@ -530,6 +537,31 @@ export function normalize(raw) {
   c.stickers.collectMode = ['ask', 'auto', 'owner'].includes(c.stickers.collectMode) ? c.stickers.collectMode : 'auto'
   c.stickers.maxPerHour = num(c.stickers.maxPerHour, 20, 0, 200)
   c.stickers.maxLibrary = num(c.stickers.maxLibrary, 300, 20, 2000)
+  c.stickers.maxSide = num(c.stickers.maxSide, 1920, 32, 10000)
+  c.stickers.maxBytes = num(c.stickers.maxBytes, 5 * 1024 * 1024, 1024, 50 * 1024 * 1024)
+  c.stickers.maxGifBytes = num(c.stickers.maxGifBytes, 10 * 1024 * 1024, 1024, 50 * 1024 * 1024)
+  c.stickers.cooldownSec = num(c.stickers.cooldownSec, 0, 0, 3600)
+  c.stickers.sendMaxPerHour = num(c.stickers.sendMaxPerHour, 0, 0, 500)
+  c.stickers.webpToJpeg = bool(c.stickers.webpToJpeg, false)
+  // 按群覆盖只收已知键、群号只留数字；空对象不落盘，避免面板越存越脏。
+  if (!isObj(c.stickers.overrides)) c.stickers.overrides = {}
+  const stickerOverrides = {}
+  for (const [rawId, raw] of Object.entries(c.stickers.overrides)) {
+    const gid = String(rawId).replace(/\D/g, '')
+    if (!gid || !isObj(raw)) continue
+    const o = {}
+    if (typeof raw.enabled === 'boolean') o.enabled = raw.enabled
+    if (typeof raw.collect === 'boolean') o.collect = raw.collect
+    if (typeof raw.fromGroups === 'boolean') o.fromGroups = raw.fromGroups
+    if (typeof raw.fromPrivate === 'boolean') o.fromPrivate = raw.fromPrivate
+    if (['auto', 'ask', 'owner'].includes(raw.collectMode)) o.collectMode = raw.collectMode
+    if (raw.autoChance !== undefined) o.autoChance = num(raw.autoChance, 0.35, 0, 1)
+    if (raw.maxPerHour !== undefined) o.maxPerHour = num(raw.maxPerHour, 20, 0, 200)
+    if (raw.cooldownSec !== undefined) o.cooldownSec = num(raw.cooldownSec, 0, 0, 3600)
+    if (raw.sendMaxPerHour !== undefined) o.sendMaxPerHour = num(raw.sendMaxPerHour, 0, 0, 500)
+    if (Object.keys(o).length) stickerOverrides[gid] = o
+  }
+  c.stickers.overrides = stickerOverrides
   c.diary.timesPerDay = num(c.diary.timesPerDay, 2, 0, 6)
   c.diary.windowStart = hhmm(c.diary.windowStart, '10:00')
   c.diary.windowEnd = hhmm(c.diary.windowEnd, '23:30')
