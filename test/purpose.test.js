@@ -325,6 +325,7 @@ test('投递回执：按 state 如实映射结局，沉默/失败不能说成 se
   assert.equal(deliveryOutcome({ state: 'failed', delivered: 0 }), 'delivery-failed')
   assert.equal(deliveryOutcome(undefined), 'silent')
   assert.equal(deliveryOutcome(null), 'silent')
+  assert.equal(deliveryOutcome([]), 'silent', '数组不是有效回执，不能落入兼容 sent 分支')
   assert.equal(deliveryOutcome({ missedAt: [] }), 'sent', '旧测试桩无 state 字段，兼容为 sent')
 })
 
@@ -339,6 +340,7 @@ test('投递回执接线：deliver 返回 state:silent 时结局记 silent，不
   assert.equal(s.lastOutcome, 'silent', '没说出去就不能记 sent')
   const sentHistory = (s.history || []).filter((h) => h.outcome === 'sent')
   assert.equal(sentHistory.length, 0, '「最近已说过」不能混进没发出去的轮次')
+  assert.equal(s.lastText, '', '没发出去的文案不能覆写 state.lastText')
 })
 
 test('投递回执接线：deliver 返回 state:failed 时结局记 delivery-failed 并进失败重试', async () => {
@@ -349,11 +351,13 @@ test('投递回执接线：deliver 返回 state:failed 时结局记 delivery-fai
   const s = JSON.parse(readFileSync(stateFile(), 'utf8'))
   assert.equal(s.lastOutcome, 'delivery-failed')
   assert.ok(s.attempts >= 1, '投递失败进重试计数')
+  assert.equal(s.lastText, '', '投递失败的文案不能覆写 state.lastText')
 })
 
 test('silent：模型只输出内部备忘（跳过）也被清洗成 silent', async () => {
   const raw = '【目的】无\n【需求】陪\n【类型】分享\n【状态】跳过\n【待续】无'
   assert.equal(cleanReply(raw), '')
+  assert.equal(cleanReply('【目的】无、【状态】跳过'), '', '同行顿号分隔的跳过备忘也要洗成沉默')
   const memo = engine.parsePurposeMemo(raw)
   assert.equal(memo.status, '跳过')
 })

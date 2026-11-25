@@ -112,6 +112,19 @@ test('stripInternalMemo 跳过已闭合的 <inner> 段，不把正文一起切�
   assert.equal(stripInternalMemo('<inner>【意图】x\n【目的】y\n【状态】完成'), '<inner>【意图】x')
 })
 
+test('stripInternalMemo 认同行顿号分隔（提示词原文【目的】无、【状态】跳过），且不跨行误切单标签', () => {
+  // prompt.js:142 原文：「写【目的】无、【状态】跳过，然后结束回合」
+  assert.equal(stripInternalMemo('【目的】无、【状态】跳过'), '')
+  assert.equal(parseReply('【目的】无、【状态】跳过').silent, true)
+  assert.equal(stripInternalMemo('晚安啦\n【目的】无、【状态】跳过'), '晚安啦')
+  // 护栏：单行首标签后面换了行再在行内提到【状态】，不能跨行误切
+  const normal = '她问：\n【目的】是什么意思？\n另外你今天 【状态】 看起来不错'
+  assert.equal(stripInternalMemo(normal), normal)
+  // 紧跟 </inner> 无换行的备忘小标题 / 双标签也能切掉，且不砍断 </inner> 的闭合尖括号
+  assert.equal(stripInternalMemo('<inner>【意图】x</inner>内部备忘\n【目的】a\n【状态】完成'), '<inner>【意图】x</inner>')
+  assert.equal(stripInternalMemo('<inner>【意图】x</inner>【目的】无\n【状态】跳过'), '<inner>【意图】x</inner>')
+})
+
 test('parseReply 识别语音和表情标记', () => {
   const r = parseReply('哼 谁要你夸 <sticker:卖萌>|||<voice>晚安啦</voice>')
   assert.deepEqual(r.items, [

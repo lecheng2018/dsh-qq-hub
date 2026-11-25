@@ -98,7 +98,7 @@ export function cleanReply(raw, role = '') {
  * 旧测试桩只返回 `{ missedAt: [] }`（无 state 字段），仍兼容为 sent。
  */
 export function deliveryOutcome(receipt) {
-  if (!receipt || typeof receipt !== 'object') return 'silent'
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'silent'
   if (typeof receipt.state === 'string') {
     if (receipt.state === 'sent' || receipt.state === 'partial') return 'sent'
     if (receipt.state === 'failed') return 'delivery-failed'
@@ -354,6 +354,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       log?.warn?.('目的：生成出错：', error?.message)
     }
     const memo = parsePurposeMemo(raw)
+    // 主动搭话不走回复链路的线索顺承（applyThreadContinuation），这里先剥完 <inner> 与备忘再交给投递层
     const text = cleanReply(raw, roleOf(cfg))
     let outcome
     if (!text) {
@@ -368,7 +369,8 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
         log?.warn?.('目的：投递失败：', error?.message)
       }
     }
-    applyPurposeOutcome(state, { now: Date.now(), config, outcome, text, memo, planned: picked.purpose })
+    // 只有真的发出去时才把本轮文案写入 state.lastText，沉默/投递失败不能污染面板与「最近发言」
+    applyPurposeOutcome(state, { now: Date.now(), config, outcome, text: outcome === 'sent' ? text : '', memo, planned: picked.purpose })
     saveState(state)
     log?.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
     return { outcome, text, memo }

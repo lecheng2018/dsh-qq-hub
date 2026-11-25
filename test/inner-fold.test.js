@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { foldChatInner, hasInnerBlock, splitInnerBlocks, splitFoldableBlocks, findMemoStart, splitMarkupTags, hasMarkupTag } from '../client/src/core/inner-fold.js'
+import { stripInternalMemo } from '../src/chat/reply.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -185,7 +186,8 @@ function makeDom(bodyText) {
   const body = element('body')
   const head = element('head')
   const paragraph = element('p')
-  paragraph.append(text(bodyText))
+  if (Array.isArray(bodyText)) paragraph.append(...bodyText.map((chunk) => text(chunk)))
+  else paragraph.append(text(bodyText))
   const root = element('div')
   root.setAttribute('data-chat-flow-kind', 'assistant-step')
   root.append(paragraph)
@@ -385,4 +387,125 @@ test('协议标记渲染：重渲染不叠 chip', () => {
   textNode.nodeValue = raw
   foldChatInner(doc)
   assert.equal(paragraph.querySelectorAll('.qqhub-mark').length, 1, '重扫后仍然只有一个 chip')
+})
+
+const plainTextOf = (paragraph) => paragraph.childNodes.filter((kid) => kid.nodeType === TEXT).map((kid) => kid.nodeValue).join('')
+
+test('协议标记渲染：chip 后有正文 / 多 chip 重渲染与流式续写不重复正文', () => {
+  const raw = '咒谁呢<face:白眼>|||刚吃完午饭正犯困'
+  const { doc, paragraph } = makeDom(raw)
+  assert.equal(foldChatInner(doc), 1)
+  assert.equal(paragraph.querySelectorAll('.qqhub-mark').length, 1)
+  assert.equal(plainTextOf(paragraph), '咒谁呢|||刚吃完午饭正犯困')
+
+  // 模拟 React 重渲染把原文写回主文本节点：旧的新建 Text 尾巴必须一并清掉，不能翻倍
+  const primary = paragraph.childNodes[0]
+  primary.nodeValue = raw
+  foldChatInner(doc)
+  assert.equal(paragraph.querySelectorAll('.qqhub-mark').length, 1)
+  assert.equal(plainTextOf(paragraph), '咒谁呢|||刚吃完午饭正犯困')
+
+  // 模拟流式续写：先截断尾巴再续长，旧截断尾不能残留
+  primary.nodeValue = '咒谁呢<face:白眼>|||刚'
+  foldChatInner(doc)
+  assert.equal(plainTextOf(paragraph), '咒谁呢|||刚')
+  primary.nodeValue = '咒谁呢<face:白眼>|||刚吃完午饭'
+  foldChatInner(doc)
+  assert.equal(paragraph.querySelectorAll('.qqhub-mark').length, 1)
+  assert.equal(plainTextOf(paragraph), '咒谁呢|||刚吃完午饭')
+
+  // 多 chip 重渲染：不能叠出第二套 chip 或重复中间/尾部正文
+  const multi = makeDom('啊<face:白眼>真的吗<face:笑哭>绝了')
+  foldChatInner(multi.doc)
+  assert.equal(multi.paragraph.querySelectorAll('.qqhub-mark').length, 2)
+  assert.equal(plainTextOf(multi.paragraph), '啊真的吗绝了')
+  multi.paragraph.childNodes[0].nodeValue = '啊<face:白眼>真的吗<face:笑哭>绝了'
+  foldChatInner(multi.doc)
+  assert.equal(multi.paragraph.querySelectorAll('.qqhub-mark').length, 2)
+  assert.equal(plainTextOf(multi.paragraph), '啊真的吗绝了')
+})
+
+test('独白 + 正文 + 备忘重渲染与换节点：折叠块与夹在中间的正文都不翻倍', () => {
+  const raw = '<inner>【意图】早八犯困</inner>早八要困死了|||起得来吗\n\n内部备忘\n【目的】戳他一下\n【状态】完成'
+  const { doc, paragraph } = makeDom(raw)
+  const anchor = paragraph.childNodes[0]
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 2)
+  assert.equal(plainTextOf(paragraph).trim(), '早八要困死了|||起得来吗')
+
+  // React 覆写同一个锚点
+  anchor.nodeValue = raw
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 2)
+  assert.equal(plainTextOf(paragraph).trim(), '早八要困死了|||起得来吗')
+
+  // React 摘掉旧锚点并挂上新文本节点：旧的新建正文 Text 节点必须随旧组一起清掉
+  detach(anchor)
+  paragraph.append(doc.createTextNode(raw))
+  foldChatInner(doc)
+  assert.equal(foldsIn(paragraph).length, 2)
+  assert.equal(plainTextOf(paragraph).trim(), '早八要困死了|||起得来吗')
+})
+
+test('DSH 真实 MarkdownText 拆开的相邻 Text 节点：<voice> / <sticker:></sticker> / 行内 <inner> 都能整体识别', () => {
+  // MarkdownText 把 html 节点单独渲染成相邻 Text 节点
+  const voiceDom = makeDom(['发个语音', '<voice>', '晚安啦', '</voice>'])
+  assert.equal(foldChatInner(voiceDom.doc), 1)
+  const vChips = voiceDom.paragraph.querySelectorAll('.qqhub-mark')
+  assert.equal(vChips.length, 1)
+  assert.equal(vChips[0].getAttribute('data-qqhub-mark'), 'voice')
+  assert.match(vChips[0].textContent, /晚安啦/)
+  assert.equal(plainTextOf(voiceDom.paragraph), '发个语音')
+
+  // <sticker:开心> 含冒号留在前一个 Text 节点，</sticker> 落在下一个 Text 节点：不能残留裸 </sticker>
+  const stickerDom = makeDom(['好耶<sticker:开心>', '</sticker>'])
+  assert.equal(foldChatInner(stickerDom.doc), 1)
+  const sChips = stickerDom.paragraph.querySelectorAll('.qqhub-mark')
+  assert.equal(sChips.length, 1)
+  assert.equal(sChips[0].getAttribute('data-qqhub-mark'), 'sticker')
+  assert.equal(plainTextOf(stickerDom.paragraph), '好耶')
+
+  // 流式分两帧到达：第一帧先折了 <sticker:开心>，第二帧补上 </sticker> 时应整组合并吸收尾标签
+  const streamSticker = makeDom(['好耶<sticker:开心>'])
+  assert.equal(foldChatInner(streamSticker.doc), 1)
+  assert.equal(streamSticker.paragraph.querySelectorAll('.qqhub-mark').length, 1)
+  streamSticker.paragraph.append(streamSticker.doc.createTextNode('</sticker>'))
+  foldChatInner(streamSticker.doc)
+  assert.equal(streamSticker.paragraph.querySelectorAll('.qqhub-mark').length, 1)
+  assert.equal(plainTextOf(streamSticker.paragraph), '好耶')
+
+  // 行内 <inner>…</inner> 被拆成 4 个相邻 Text 节点，以及后续流式续写最后一个锚点
+  const inlineInner = makeDom(['<inner>', '【意图】早八犯困', '</inner>', '早八要困死了'])
+  const tailAnchor = inlineInner.paragraph.childNodes[3]
+  assert.equal(foldChatInner(inlineInner.doc), 1)
+  assert.equal(foldsIn(inlineInner.paragraph).length, 1)
+  assert.equal(plainTextOf(inlineInner.paragraph), '早八要困死了')
+  tailAnchor.nodeValue = '早八要困死了|||昨晚熬太晚'
+  foldChatInner(inlineInner.doc)
+  assert.equal(foldsIn(inlineInner.paragraph).length, 1)
+  assert.equal(plainTextOf(inlineInner.paragraph), '早八要困死了|||昨晚熬太晚')
+})
+
+test('双端备忘切分对拍：display findMemoStart 与 outbound stripInternalMemo 口径完全一致', () => {
+  const samples = [
+    '正文。\n【内部备忘】这次不发了',
+    '正文。\n内部备忘：目的无',
+    '正文。\n**【内部备忘】** 内容',
+    '正文。\n【目的】x\n【备忘】\ny',
+    '正文。\n【目的】无 【状态】跳过',
+    '正文。\n【目的】无、【状态】跳过',
+    '她问：\n【目的】是什么意思？\n另外你今天 【状态】 看起来不错',
+    '内部备忘发我看看',
+  ]
+  for (const s of samples) {
+    const cut = findMemoStart(s)
+    const expected = cut < 0 ? s : s.slice(0, cut)
+    assert.equal(stripInternalMemo(s), expected, `双端口径不一致：${JSON.stringify(s)}`)
+  }
+  assert.equal(findMemoStart('正文。\n【目的】x\n【备忘】\ny'), '正文。'.length, '两处都命中时必须取更靠前的切点')
+  assert.equal(findMemoStart('她问：\n【目的】是什么意思？\n另外你今天 【状态】 看起来不错'), -1, '单行首标签不跨行误切')
+})
+
+test('协议标记切分：大小写不敏感', () => {
+  assert.deepEqual(splitMarkupTags('啊<FACE:白眼><VOICE>晚安</VOICE><POKE/>').map((p) => p.type), ['text', 'face', 'voice', 'poke'])
 })

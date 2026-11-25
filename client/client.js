@@ -36,6 +36,35 @@ __export(entry_exports, {
 });
 module.exports = __toCommonJS(entry_exports);
 
+// src/chat/memo-cut.js
+var MEMO_BOUNDARY = String.raw`(?:^|\n|\|\|\||(?<=\uE002))`;
+var MEMO_LABEL_WORD = String.raw`(?:目的|需求|情绪|情感|类型|状态|待续|意图|闭环|备忘|顺承前情)`;
+var MEMO_HEADER = new RegExp(
+  `${MEMO_BOUNDARY}[ \\t]*(?:#{1,6}[ \\t]+)?(?:\\*\\*|__)?[ \\t]*(?:` + String.raw`[【\[]\s*[^】\]]{0,6}?备忘(?!录)[^】\]]{0,12}[】\]]` + String.raw`|内部备忘(?!录)[^：:\n]{0,12}[：:]` + String.raw`|(?:[「『]内部备忘(?!录)[^」』\n]{0,12}[」』]|内部备忘(?!录)(?:[ \t]*(?:[（(][^）)\n]{1,16}[）)]|[·•\-—/][^\s\n，。！？!?,;；【\[\]]{1,12}))?)[ \t]*(?:\*\*|__)?[ \t]*(?=\r?\n|$|\|\|\||[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]])` + ")"
+);
+var MEMO_LABELS = new RegExp(`${MEMO_BOUNDARY}\\s*(?:\\*\\*|__)?\\s*[【\\[]\\s*${MEMO_LABEL_WORD}\\s*[】\\]]`, "g");
+var MEMO_LABEL_FOLLOW = new RegExp(
+  `(?:^|[ \\t、，,;；|/])[ \\t]*(?:\\*\\*|__)?[ \\t]*[【\\[]\\s*${MEMO_LABEL_WORD}\\s*[】\\]]`
+);
+function findMemoStart(text) {
+  const s = String(text ?? "");
+  if (!s.includes("备忘") && !s.includes("【") && !s.includes("[")) return -1;
+  const header = MEMO_HEADER.exec(s);
+  const headerCut = header ? header.index : -1;
+  MEMO_LABELS.lastIndex = 0;
+  const first = MEMO_LABELS.exec(s);
+  let second = first ? MEMO_LABELS.exec(s) : null;
+  MEMO_LABELS.lastIndex = 0;
+  if (first && !second) {
+    const afterFirst = first.index + first[0].length;
+    const lineEnd = s.indexOf("\n", afterFirst);
+    const sameLine = lineEnd < 0 ? s.slice(afterFirst) : s.slice(afterFirst, lineEnd);
+    second = MEMO_LABEL_FOLLOW.exec(sameLine);
+  }
+  const labelCut = second ? first.index : -1;
+  return headerCut < 0 ? labelCut : labelCut < 0 ? headerCut : Math.min(headerCut, labelCut);
+}
+
 // client/src/core/inner-fold.js
 var OPEN_TAG = /<inner(?![A-Za-z0-9_-])[^>]*>/gi;
 var CLOSE_TAG = /<\/inner\s*>/gi;
@@ -66,25 +95,6 @@ function splitInnerBlocks(text) {
 function hasInnerBlock(text) {
   return /<inner(?![A-Za-z0-9_-])[^>]*>/i.test(String(text ?? "")) && splitInnerBlocks(text).some((part) => part.type === "inner");
 }
-var MEMO_LABEL_WORD = String.raw`(?:目的|需求|情绪|情感|类型|状态|待续|意图|闭环|备忘|顺承前情)`;
-var MEMO_HEADER_RE = new RegExp(
-  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?[ \t]*(?:` + String.raw`[【\[]\s*[^】\]]{0,6}?备忘(?!录)[^】\]]{0,12}[】\]]` + String.raw`|内部备忘(?!录)[^：:\n]{0,12}[：:]` + String.raw`|(?:[「『]内部备忘(?!录)[^」』\n]{0,12}[」』]|内部备忘(?!录)(?:[ \t]*(?:[（(][^）)\n]{1,16}[）)]|[·•\-—/][^\s\n，。！？!?,;；【\[\]]{1,12}))?)` + String.raw`)[ \t]*(?:\*\*|__)?[ \t]*(?=\r?\n|$|\|\|\||[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]])`
-);
-var MEMO_LABEL_RE = new RegExp(
-  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:\*\*|__)?[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]]`,
-  "g"
-);
-function findMemoStart(text) {
-  const s = String(text ?? "");
-  if (!s.includes("备忘") && !s.includes("【") && !s.includes("[")) return -1;
-  const header = MEMO_HEADER_RE.exec(s);
-  if (header) return header.index;
-  MEMO_LABEL_RE.lastIndex = 0;
-  const first = MEMO_LABEL_RE.exec(s);
-  const second = first ? MEMO_LABEL_RE.exec(s) : null;
-  MEMO_LABEL_RE.lastIndex = 0;
-  return second ? first.index : -1;
-}
 function splitMemoBlocks(text) {
   const start = findMemoStart(text);
   if (start < 0) return [{ type: "text", value: text }];
@@ -112,7 +122,7 @@ function hasFoldableBlock(text) {
   const s = String(text ?? "");
   return hasInnerBlock(s) || hasMemoBlock(s);
 }
-var MARKUP_RE = /<(?:face|sticker)\s*:\s*([^<>|\n]{1,40}?)\s*(\/?)>(?:\s*<\/sticker>)?|<voice>\s*([\s\S]*?)\s*<\/voice>|<poke\s*\/?>/g;
+var MARKUP_RE = /<(?:face|sticker)\s*:\s*([^<>|\n]{1,40}?)\s*(\/?)>(?:\s*<\/sticker>)?|<voice>\s*([\s\S]*?)\s*<\/voice>|<poke\s*\/?>/gi;
 function splitMarkupTags(text) {
   const s = String(text ?? "");
   const parts = [];
@@ -154,6 +164,8 @@ var MARK_ATTR = "data-qqhub-mark";
 var MARK_CLASS = "qqhub-mark";
 var MARK_SRC = "qqhubMarkSrc";
 var MARK_SRC_TEXT = "qqhubMarkText";
+var OWNED_FLAG = "qqhubOwned";
+var GROUPS_KEY = "qqhubFoldGroups";
 var STYLE_TEXT = `
 .qqhub-inner { display: block; margin: 2px 0; }
 .qqhub-inner-head {
@@ -261,20 +273,59 @@ function isAttached(node) {
   }
   return false;
 }
-function removeStaleSiblings(node) {
-  const isOurs = (el) => el.hasAttribute?.(FOLD_ATTR) || el.hasAttribute?.(MARK_ATTR);
-  let prev = node.previousSibling;
-  while (prev && prev.nodeType === 1 && isOurs(prev)) {
-    const stale = prev;
-    prev = prev.previousSibling;
-    removeNode(stale);
+function parentElementOf(node) {
+  if (node?.parentElement) return node.parentElement;
+  return node?.parentNode?.nodeType === 1 ? node.parentNode : null;
+}
+function getGroups(root) {
+  if (!root[GROUPS_KEY]) root[GROUPS_KEY] = /* @__PURE__ */ new Set();
+  return root[GROUPS_KEY];
+}
+function teardownGroup(group) {
+  for (const node of group.owned) removeNode(node);
+  for (let i = 0; i < group.anchors.length; i += 1) {
+    const anchor = group.anchors[i];
+    if (isAttached(anchor) && anchor.nodeValue === group.writtenValues[i]) {
+      anchor.nodeValue = group.origValues[i];
+    }
   }
-  let next = node.nextSibling;
-  while (next && next.nodeType === 1 && isOurs(next)) {
-    const stale = next;
-    next = next.nextSibling;
-    removeNode(stale);
+}
+function groupNeedsTeardown(group) {
+  const { anchors, writtenValues, owned } = group;
+  const ownedSet = new Set(owned);
+  const parent = anchors[0]?.parentNode;
+  if (!parent) return true;
+  for (let i = 0; i < anchors.length; i += 1) {
+    const anchor = anchors[i];
+    if (!isAttached(anchor) || anchor.parentNode !== parent) return true;
+    if (anchor.nodeValue !== writtenValues[i]) return true;
   }
+  for (let i = 0; i < anchors.length - 1; i += 1) {
+    let cur = anchors[i].nextSibling;
+    while (cur && ownedSet.has(cur)) cur = cur.nextSibling;
+    if (cur !== anchors[i + 1]) return true;
+  }
+  let prev = anchors[0].previousSibling;
+  while (prev && ownedSet.has(prev)) prev = prev.previousSibling;
+  if (prev && prev.nodeType === 3 && !prev[OWNED_FLAG]) return true;
+  let next = anchors[anchors.length - 1].nextSibling;
+  while (next && ownedSet.has(next)) next = next.nextSibling;
+  if (next && next.nodeType === 3 && !next[OWNED_FLAG]) return true;
+  return false;
+}
+function reconcileGroups(root) {
+  const groups = root[GROUPS_KEY];
+  const activeAnchors = /* @__PURE__ */ new Set();
+  if (!groups) return activeAnchors;
+  for (const group of [...groups]) {
+    if (groupNeedsTeardown(group)) {
+      teardownGroup(group);
+      groups.delete(group);
+    } else {
+      for (const anchor of group.anchors) activeAnchors.add(anchor);
+    }
+  }
+  return activeAnchors;
 }
 function pruneFolds(root) {
   const sweep = (selector, srcKey) => {
@@ -300,46 +351,56 @@ function pruneFolds(root) {
     }
   }
 }
-function foldTextNode(node, doc) {
-  if (!node?.parentNode) return false;
-  const parts = splitFoldableBlocks(node.nodeValue);
+function foldTextRun(run, doc, root) {
+  const primary = run[0];
+  if (!primary?.parentNode) return false;
+  const origValues = run.map((node) => String(node.nodeValue ?? ""));
+  const fullText = origValues.join("");
+  const parts = splitFoldableBlocks(fullText);
   const hasFoldable = parts.some((part) => part.type === "inner" || part.type === "memo");
   const hasMarkup = parts.some((part) => part.type === "text" && hasMarkupTag(part.value));
   if (!hasFoldable && !hasMarkup) return false;
   const built = [];
   for (const part of parts) {
     if (part.type === "inner") {
-      built.push({ kind: "inner", dom: createFold(doc, part.value, node, "思考") });
+      built.push({ kind: "inner", dom: createFold(doc, part.value, primary, "思考") });
     } else if (part.type === "memo") {
-      built.push({ kind: "memo", dom: createFold(doc, part.value, node, "思考 · 内部备忘") });
+      built.push({ kind: "memo", dom: createFold(doc, part.value, primary, "思考 · 内部备忘") });
     } else {
       for (const sub of splitMarkupTags(part.value)) {
         if (sub.value === "" && sub.type !== "poke") continue;
         if (sub.type === "text") built.push({ kind: "text", dom: doc.createTextNode(sub.value) });
-        else built.push({ kind: "mark", dom: createMark(doc, sub.type, sub.value, node) });
+        else built.push({ kind: "mark", dom: createMark(doc, sub.type, sub.value, primary) });
       }
     }
   }
   const first = built[0];
   const last = built[built.length - 1];
   if (first === void 0 || last === void 0) return false;
-  removeStaleSiblings(node);
+  let owned = [];
   if (first.kind === "text") {
-    node.nodeValue = first.dom.nodeValue;
-    node.after(...built.slice(1).map((item) => item.dom));
-    return true;
+    primary.nodeValue = first.dom.nodeValue;
+    owned = built.slice(1).map((item) => item.dom);
+    if (owned.length) primary.after(...owned);
+  } else if (last.kind === "text") {
+    primary.nodeValue = last.dom.nodeValue;
+    owned = built.slice(0, -1).map((item) => item.dom);
+    if (owned.length) primary.before(...owned);
+  } else {
+    primary.nodeValue = "";
+    owned = built.map((item) => item.dom);
+    if (owned.length) primary.before(...owned);
   }
-  if (last.kind === "text") {
-    node.nodeValue = last.dom.nodeValue;
-    node.before(...built.slice(0, -1).map((item) => item.dom));
-    return true;
-  }
-  node.nodeValue = "";
-  node.before(...built.map((item) => item.dom));
+  for (let i = 1; i < run.length; i += 1) run[i].nodeValue = "";
+  for (const dom of owned) dom[OWNED_FLAG] = true;
+  const writtenValues = run.map((node) => node.nodeValue);
+  getGroups(root).add({ anchors: run, origValues, writtenValues, owned });
   return true;
 }
 function foldWithin(root, doc) {
+  let activeAnchors = /* @__PURE__ */ new Set();
   try {
+    activeAnchors = reconcileGroups(root);
     pruneFolds(root);
   } catch (error) {
     console.warn("[qq-hub] 清理陈旧折叠行失败：", error);
@@ -349,18 +410,31 @@ function foldWithin(root, doc) {
     4
     /* SHOW_TEXT */
   );
-  const targets = [];
+  const runs = [];
+  let currentRun = null;
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-    const value = node.nodeValue;
-    if (!value) continue;
-    if (!hasFoldableBlock(value) && !hasMarkupTag(value)) continue;
-    if (node.parentElement?.closest(SKIP_CLOSEST)) continue;
-    targets.push(node);
+    if (node[OWNED_FLAG] || activeAnchors.has(node)) {
+      currentRun = null;
+      continue;
+    }
+    if (parentElementOf(node)?.closest?.(SKIP_CLOSEST)) {
+      currentRun = null;
+      continue;
+    }
+    if (currentRun !== null && currentRun[currentRun.length - 1].parentNode === node.parentNode && currentRun[currentRun.length - 1].nextSibling === node) {
+      currentRun.push(node);
+    } else {
+      currentRun = [node];
+      runs.push(currentRun);
+    }
   }
   let folded = 0;
-  for (const node of targets) {
+  for (const run of runs) {
+    const fullText = run.map((node) => node.nodeValue ?? "").join("");
+    if (!fullText) continue;
+    if (!hasFoldableBlock(fullText) && !hasMarkupTag(fullText)) continue;
     try {
-      if (foldTextNode(node, doc)) folded += 1;
+      if (foldTextRun(run, doc, root)) folded += 1;
     } catch (error) {
       console.warn("[qq-hub] 折叠独白 / 内部备忘 / 渲染标记失败：", error);
     }
@@ -390,12 +464,15 @@ function installInnerFold({ doc = globalThis.document, delayMs = 400, observe = 
   ensureStyle(doc);
   let timer = null;
   let disposed = false;
+  let observer = null;
   const run = () => {
     if (disposed) return;
     try {
       foldChatInner(doc);
     } catch (error) {
       console.warn("[qq-hub] 扫描聊天流失败：", error);
+    } finally {
+      observer?.takeRecords?.();
     }
   };
   const schedule = () => {
@@ -405,7 +482,6 @@ function installInnerFold({ doc = globalThis.document, delayMs = 400, observe = 
       run();
     }, delayMs);
   };
-  let observer = null;
   const View = doc.defaultView;
   if (observe && typeof View?.MutationObserver === "function") {
     observer = new View.MutationObserver(schedule);
