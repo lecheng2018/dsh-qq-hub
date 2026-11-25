@@ -26,11 +26,13 @@ function Access({ draft, setDraft }) {
         </div>
       </Card>
       <OwnerCard draft={draft} setDraft={setDraft} />
-      <Whitelist draft={draft} setDraft={setDraft} />
       <OwnerPower draft={draft} setDraft={setDraft} />
+      <Whitelist draft={draft} setDraft={setDraft} />
       <ProfilePerms draft={draft} setDraft={setDraft} />
-      <GroupRoles />
-      <CommandList />
+      <div className="ab-grid ab-g2">
+        <GroupRoles />
+        <CommandList />
+      </div>
     </div>
   )
 }
@@ -57,11 +59,10 @@ function Whitelist({ draft, setDraft }) {
   )
 }
 
-/** 权限档位与长任务：低频但重要，默认收起，展开再改。 */
+/** 权限档位与长任务：核心权限配置。 */
 function OwnerPower({ draft, setDraft }) {
   return (
     <Card
-      collapse
       title="她能做到哪一步"
       desc="主人私聊的权限档位（能不能用电脑上的工具）和长任务模式。默认「完整」；不需要她碰电脑时，降到「受限」或「纯聊天」更安全。"
       more={'群聊永远没有电脑操作权限，这里管不到群。\n切换档位会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。\n长任务模式只在「完整」下生效：打开后她能把命令放后台跑、跑完回来告诉你，也能设定时任务；工具多一点，回话会稍慢。'}
@@ -135,18 +136,18 @@ function ProfilePerms({ draft, setDraft }) {
   return (
     <Card
       collapse
-      title="改资料与名单"
-      desc="她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，要放开在这里逐项开。"
+      title="改资料与平台权限"
+      desc="她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，需要放开时点开设置。"
       more={'说明：\n· QQ 昵称 / 签名 / 头像要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。\n· B 站签名 / 头像要先在「B站」页登录。\n· 好友申请：她自己主动加别人暂不支持（SnowLuma 没有这个接口）。\n· 抖音 / 小黑盒的定时自动刷不受「浏览」这项限制；「分享抖音给主人」指刷到好玩的私聊发给你。'}
     >
       <Seg value={group} onChange={setGroup} options={PERM_GROUPS.map((g) => ({ value: g.id, label: g.label }))} />
       <div className="ab-small ab-muted" style={{ marginTop: 8 }}>
-        这一组（{cur.label}）共 {cur.keys.length} 项 · 放开 {loosened(cur.keys)} 项（没放开的都是「仅主人私聊」）
+        这一组（{cur.label}）共 {cur.keys.length} 项 · 放开 {loosened(cur.keys)} 项（关 = 谁说都不改 · 仅主人私聊 = 默认 · 所有人 = 白名单内的人/群也能让改）
       </div>
       <div style={{ marginTop: 10 }}>
         {cur.keys.map((k) => (
           <Row key={k} label={PERM_ITEMS[k][0]} hint={PERM_ITEMS[k][1]}>
-            <Choices value={perms[k] || 'owner'} onChange={(v) => setDraft(setPath(draft, 'profilePerms.' + k, v))} options={PERM_OPTS} />
+            <Seg value={perms[k] || 'owner'} onChange={(v) => setDraft(setPath(draft, 'profilePerms.' + k, v))} options={PERM_OPTS} />
           </Row>
         ))}
       </div>
@@ -154,25 +155,27 @@ function ProfilePerms({ draft, setDraft }) {
   )
 }
 
-/** QQ 里的主人命令一览（只读参考，默认收起）。 */
+/** QQ 里的主人命令一览（参考）。 */
 function CommandList() {
   const [list, setList] = useState([])
   useEffect(() => { get('/commands').then((r) => setList(r.list || [])) }, [])
   return (
-    <Card collapse title={'QQ 命令（' + list.length + ' 条）'} desc="主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。">
-      <table className="ab-table">
-        <tbody>
-          {list.map((c) => (
-            <tr key={c.name}>
-              <td style={{ whiteSpace: 'nowrap' }}>
-                <code>/{c.name}</code>
-                {c.aliases.length ? <div className="ab-muted ab-small">{c.aliases.map((a) => '/' + a).join(' ')}</div> : null}
-              </td>
-              <td>{c.desc}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <Card collapse title={'QQ 命令参考（' + list.length + ' 条）'} desc="主人在 QQ 里（私聊或白名单群）发这些命令就能管她。总开关关着时也能用。">
+      <div className="ab-table-wrap">
+        <table className="ab-table">
+          <tbody>
+            {list.map((c) => (
+              <tr key={c.name}>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <code>/{c.name}</code>
+                  {c.aliases.length ? <div className="ab-muted ab-small">{c.aliases.map((a) => '/' + a).join(' ')}</div> : null}
+                </td>
+                <td>{c.desc}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   )
 }
@@ -183,23 +186,25 @@ function GroupRoles() {
   const load = () => { setList(null); get('/groups/roles').then((r) => setList(r.list || [])) }
   useEffect(load, [])
   return (
-    <Card collapse title="群管权限" desc="她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}>
+    <Card collapse title="群管权限查询" desc="她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}>
       {!list
         ? <div className="ab-muted ab-small"><i className="ab-spin" /> 查询中…</div>
         : list.length === 0 ? <div className="ab-muted ab-small">群白名单是空的。</div>
           : (
-            <table className="ab-table">
-              <thead><tr>{['群', '她的身份', '群管'].map((x) => <th key={x}>{x}</th>)}</tr></thead>
-              <tbody>
-                {list.map((g) => (
-                  <tr key={g.groupId}>
-                    <td>{(g.name && g.name !== g.groupId ? g.name + ' ' : '') + '(' + g.groupId + ')'}</td>
-                    <td>{g.label}</td>
-                    <td>{g.canManage ? <span className="ab-badge">可以</span> : <span className="ab-muted ab-small">不行</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="ab-table-wrap">
+              <table className="ab-table">
+                <thead><tr>{['群', '她的身份', '群管'].map((x) => <th key={x}>{x}</th>)}</tr></thead>
+                <tbody>
+                  {list.map((g) => (
+                    <tr key={g.groupId}>
+                      <td>{(g.name && g.name !== g.groupId ? g.name + ' ' : '') + '(' + g.groupId + ')'}</td>
+                      <td>{g.label}</td>
+                      <td>{g.canManage ? <span className="ab-badge">可以</span> : <span className="ab-muted ab-small">不行</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
     </Card>
   )
@@ -221,7 +226,8 @@ function OwnerBrief({ draft, setDraft }) {
   const toggle = (gid) => setDraft(setPath(draft, 'group.ownerBrief.groups', on(gid) ? (ob.groups || []).filter((x) => x !== gid) : [...(ob.groups || []), gid]))
   return (
     <Card
-      title="主人私聊：群聊摘要" right={f.sw('group.ownerBrief.enabled')} collapse
+      collapse
+      title="主人私聊：群聊摘要" right={f.sw('group.ownerBrief.enabled')}
       desc="主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在主人私聊提到群相关的事时触发，不常驻、不写进记忆；默认关。"
       more={'开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。'}
     >

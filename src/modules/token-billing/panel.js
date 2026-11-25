@@ -51,7 +51,7 @@ return function TokenBillingPanel(props) {
     return { chatKey, limit: Number(limit) || 0, used }
   }).sort((a, b) => b.used - a.used)
 
-  const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 4 } },
+  const head = h('div', { style: { display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 4 } },
     h('span', null, '已用 ' + fmt(totalUsed) + ' / ' + fmt(totalLimit)),
     h('span', { style: exhausted ? { color: 'var(--ab-err, #b91c1c)' } : null },
       exhausted ? '已用完 · 主动搭话熔断中' : '剩 ' + fmt(totalRemaining)))
@@ -63,7 +63,7 @@ return function TokenBillingPanel(props) {
 
   const rowNodes = []
   for (const r of rows) {
-    const label = h('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 2 } },
+    const label = h('div', { style: { display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 2 } },
       h('span', null, r.chatKey),
       h('span', { className: 'ab-muted ab-small' }, fmt(r.used) + ' / ' + fmt(r.limit)))
     rowNodes.push(h('div', { key: r.chatKey, style: { marginBottom: 8 } }, label, bar(r.used, r.limit)))
@@ -76,7 +76,7 @@ return function TokenBillingPanel(props) {
   const confirmNo = h(Btn, { small: true, onClick: () => setConfirming(false) }, '算了')
   const hint = h('span', { className: 'ab-muted ab-small' }, '重置只清已用，分配保留')
 
-  const actions = h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+  const actions = h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
     refreshBtn, confirming ? [confirmYes, confirmNo] : resetBtn, hint)
 
   return h(Card, { title: 'Token 记账（' + (d.dateKey || '?') + '）' }, usageCard, detail, actions)

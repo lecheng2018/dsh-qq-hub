@@ -44,12 +44,13 @@ function Douyin({ draft, setDraft, toast }) {
   return (
     <div className="ab-grid">
       <Card
-        title="刷抖音" right={f.sw('douyin.enabled')}
-        desc="她用一个专用浏览器（独立的登录资料，不碰你平时用的浏览器）刷抖音：定时打开推荐，一个个点开看，读标题、分类、内容摘要和热评，再决定点不点赞、评不评论（特别想让你看的会在评论里 @你）、要不要分享给你。总开关默认关：先扫码登录，再打开。"
+        title="抖音账号与绑定" right={f.sw('douyin.enabled')}
+        desc="使用专用浏览器（独立登录资料，不碰平时用的浏览器）登录机器人账号并绑定主人；支持评论区 @你、私信互动与分享。总开关默认关：先扫码登录，再打开。"
         more={'浏览器窗口放在屏幕外，不抢前台。你在 QQ 里发抖音链接，她也能点开看完再聊。'}
       >
+        <div className="ab-section-title" style={{ marginTop: 4 }}>机器人账号</div>
         <Row label="抖音账号" hint="建议用小号。扫一次码就行，登录状态存在专用浏览器里">
-          <div>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             <div className="ab-flex">
               <Btn small kind="primary" onClick={startLogin} disabled={!!busy || !!login}>{busy === 'login' ? '正在打开浏览器…' : login ? '等你扫码…' : '扫码登录'}</Btn>
               <Btn small onClick={async () => { setBusy('check'); const r = await get('/douyin/account'); setBusy(''); setS({ ...(s || {}), account: r }) }} disabled={!!busy}>{busy === 'check' ? '检查中…' : '检查登录'}</Btn>
@@ -78,16 +79,17 @@ function Douyin({ draft, setDraft, toast }) {
           </div>
         </Row>
         <Row label="浏览器路径" hint="留空 = 自动找 Edge（找不到再找 Chrome / Chromium）">{f.text('douyin.browserPath', { size: 'wide', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })}</Row>
-      </Card>
-      <Card
-        title="主人抖音号"
-        desc="填你的抖音号或主页链接，点「核对」。核对过之后，她刷到特别想让你看的视频，会在评论里真的 @你（你会收到抖音通知；认不出你就不发，不会发假 @）。改了输入要重新核对。"
-      >
-        <Row label="你的抖音号 / 主页链接">{f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })}</Row>
-        <div className="ab-flex" style={{ marginTop: 4 }}>
-          <Btn small kind="primary" onClick={act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' })} disabled={!!busy}>{busy === 'confirm' ? '核对中…' : '核对'}</Btn>
-          {s && s.owner ? <span className="ab-small" style={{ color: 'var(--ab-ok)' }}>已核对：{s.owner.nickname}</span> : <span className="ab-small ab-muted">还没核对（不核对就不会 @你）</span>}
-        </div>
+
+        <div className="ab-section-title">主人账号绑定</div>
+        <Row label="你的抖音号 / 主页链接" hint="填你的抖音号或主页链接，点「核对」。核对后刷到好玩的视频会在评论里真的 @你（你会收到抖音通知；认不出你就不发）。">
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
+            {f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })}
+            <div className="ab-flex" style={{ marginTop: 6 }}>
+              <Btn small kind="primary" onClick={act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' })} disabled={!!busy}>{busy === 'confirm' ? '核对中…' : '核对'}</Btn>
+              {s && s.owner ? <span className="ab-small" style={{ color: 'var(--ab-ok)' }}>已核对：{s.owner.nickname}</span> : <span className="ab-small ab-muted">还没核对（不核对就不会 @你）</span>}
+            </div>
+          </div>
+        </Row>
       </Card>
       <Card
         title="抖音私信"

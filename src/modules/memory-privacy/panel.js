@@ -112,9 +112,9 @@ return function MemoryPrivacyPanel(props) {
   const viewer = viewing
     ? h('div', { style: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' },
         onClick: (e) => { if (e.target === e.currentTarget) setViewing(null) } },
-        h('div', { style: { background: 'var(--ab-panel-bg, #1a1f2b)', borderRadius: 10, padding: 16, maxWidth: 520, width: '86%', maxHeight: '72vh', overflow: 'auto' } },
-          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
-            h('b', { className: 'ab-small' }, (viewing.kind === 'profiles' ? '小档案：' : '分区记忆：') + label(viewing.scope)),
+        h('div', { style: { background: 'var(--ab-panel-bg, #1a1f2b)', color: '#f3f4f6', borderRadius: 12, padding: 16, maxWidth: 520, width: '90%', maxHeight: '72vh', overflow: 'auto', border: '1px solid rgba(255,255,255,.12)' } },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 } },
+            h('b', { className: 'ab-small', style: { color: '#f3f4f6' } }, (viewing.kind === 'profiles' ? '小档案：' : '分区记忆：') + label(viewing.scope)),
             h(Btn, { small: true, className: 'ab-close', onClick: () => setViewing(null) }, '关')),
           viewItems === null
             ? h('div', { className: 'ab-small', style: { color: '#b0b0b0' } }, '读着呢…')

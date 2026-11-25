@@ -135,6 +135,23 @@ function Model({ st, draft, setDraft, toast }) {
         <Row label="思考强度" hint={noReasoning ? '这个模型不支持思考强度，会自动忽略' : '聊天建议「低」，回得快'}>
           <Seg value={draft.model.reasoningEffort || 'low'} disabled={noReasoning} onChange={(v) => setDraft(setPath(draft, 'model.reasoningEffort', v))} options={[{ value: 'low', label: '低' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' }]} />
         </Row>
+        <div className="ab-flex" style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--ab-line)', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="ab-small ab-muted" style={{ flex: '1 1 240px', minWidth: 0 }}>
+            改了模型保存后，点右侧按钮可立即把所有已有 QQ 会话切过去（否则等对方发下一条才切）。
+          </div>
+          <Btn
+            small disabled={applying}
+            onClick={async () => {
+              setApplying(true)
+              try {
+                const r = await post('/models/apply', {})
+                toast(r?.ok ? (r.message || '切好了') : (r?.message || '没切成'), r?.ok ? 'ok' : 'err')
+              } finally { setApplying(false) }
+            }}
+          >
+            {applying ? '切着呢…' : '立刻应用到所有会话'}
+          </Btn>
+        </div>
       </Card>
       <Card
         title="看图"
@@ -166,45 +183,29 @@ function Model({ st, draft, setDraft, toast }) {
         ) : null}
       </Card>
       <ChatModels draft={draft} setDraft={setDraft} list={list} />
-      <Card collapse title="可用的模型" desc="DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。">
+      <Card collapse title="可用的模型与连通性测速" desc="DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。">
         {list === null
           ? <Empty icon="⏳" text="加载中…" />
           : list.length === 0 ? <Empty text="DSH 没有列出模型" />
             : (
-              <table className="ab-table">
-                <tbody>
-                  {list.map((m) => (
-                    <tr key={key(m)}>
-                      <td>{labelOf(m)}</td>
-                      <td className="ab-muted">{m.provider}</td>
-                      <td>{ping[key(m)] || ''}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <Btn small kind="ghost" onClick={() => test(m)}>测速</Btn>
-                        <Btn small kind="ghost" onClick={() => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') }}>用这个</Btn>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="ab-table-wrap">
+                <table className="ab-table">
+                  <tbody>
+                    {list.map((m) => (
+                      <tr key={key(m)}>
+                        <td>{labelOf(m)}</td>
+                        <td className="ab-muted">{m.provider}</td>
+                        <td>{ping[key(m)] || ''}</td>
+                        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <Btn small kind="ghost" onClick={() => test(m)}>测速</Btn>
+                          <Btn small kind="ghost" onClick={() => { setDraft(setPath(setPath(draft, 'model.provider', m.provider), 'model.model', m.model)); toast('选好了，记得保存') }}>用这个</Btn>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-      </Card>
-      {/* 模型配置默认「等对方发下一条消息才切」，冷群可能几小时不动。
-          这个按钮主动把配置抹平到所有已有会话，省得去 DSH 会话里一个个换。
-          一次性动作，默认收起——展开再点，误触没了。 */}
-      <Card collapse title="应用到现有会话" desc="这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去——保存设置之后点。">
-        <Btn
-          small disabled={applying}
-          onClick={async () => {
-            setApplying(true)
-            try {
-              const r = await post('/models/apply', {})
-              toast(r?.ok ? (r.message || '切好了') : (r?.message || '没切成'), r?.ok ? 'ok' : 'err')
-            } finally { setApplying(false) }
-          }}
-        >
-          {applying ? '切着呢…' : '立刻应用到所有会话'}
-        </Btn>
-        <div className="ab-small ab-muted" style={{ marginTop: 8 }}>只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。</div>
       </Card>
     </div>
   )

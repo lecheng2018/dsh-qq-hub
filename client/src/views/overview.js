@@ -1,5 +1,6 @@
 import { useState, useEffect, Fragment, h } from '../core/react.js'
 import { Card, Btn, Empty, More } from '../ui/primitives.js'
+import { navIcon } from '../ui/icons.js'
 import { cx } from '../core/utils.js'
 import { get, post } from '../core/http.js'
 
@@ -27,7 +28,7 @@ function UpdateNotes({ st, toast }) {
         <div className="ab-note warn">
           <div><b>有新版本 v{upd.latest}</b>（现在是 v{upd.current}）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。</div>
           <div className="ab-flex" style={{ marginTop: 6 }}>
-            <code style={{ flex: '1 1 300px', fontSize: 11.5, wordBreak: 'break-all' }}>{upd.command}</code>
+            <code style={{ flex: '1 1 220px', minWidth: 0, fontSize: 11.5, wordBreak: 'break-all' }}>{upd.command}</code>
             <Btn small onClick={() => { try { navigator.clipboard.writeText(upd.command); toast('复制好了', 'ok') } catch (e) { toast('复制失败，手动选中复制吧', 'err') } }}>复制</Btn>
           </div>
         </div>
@@ -37,10 +38,10 @@ function UpdateNotes({ st, toast }) {
 }
 
 const STATS = [
-  ['今天收到', 'received', '📥'],
-  ['今天发出', 'sent', '📤'],
-  ['语音条', 'voice', '🎙️'],
-  ['表情包', 'stickers', '😺'],
+  ['今天收到', 'received', 'M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5M12 4v10M8.5 10.5 12 14l3.5-3.5'],
+  ['今天发出', 'sent', 'M20 4 11 13M20 4l-6 16-3-7-7-3 16-6z'],
+  ['语音条', 'voice', 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4M9 21h6'],
+  ['表情包', 'stickers', 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9 14.2s1.2 1.8 3 1.8 3-1.8 3-1.8M9.5 10h.01M14.5 10h.01'],
 ]
 
 function Overview({ st, toast, go }) {
@@ -63,23 +64,25 @@ function Overview({ st, toast, go }) {
       <div className="ab-grid ab-g4">
         {STATS.map(([label, key, icon]) => (
           <div key={label} className="ab-card ab-stat">
-            <span className="ic" aria-hidden="true">{icon}</span>
+            <div className="ab-stat-top">
+              <div className="l">{label}</div>
+              <span className="ic" aria-hidden="true">{navIcon(icon)}</span>
+            </div>
             <div className="n">{s[key] || 0}</div>
-            <div className="l">{label}</div>
           </div>
         ))}
       </div>
       <div className="ab-grid ab-g2">
-        <Card title="她现在" desc="表情库、日记、人格与会话的一眼速览。">
+        <Card title="她现在">
           <div className="ab-kv">
             <span>表情库</span><span>{st.stickers.count} 张</span>
             <span>下一篇日记</span><span>{cfg.diary.enabled ? (st.diary.next || '今天写完了') : '没开'}</span>
             <span>人格</span><span>{(st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current}</span>
-            <span>QQ 会话</span><span>{sessionCount} 个（在侧栏「QQ Hub」工作区里）</span>
+            <span>QQ 会话</span><span>{sessionCount} 个 · 侧栏「QQ Hub」</span>
           </div>
         </Card>
-        <Card title="快捷操作" desc="试一试她是不是活着。这些操作会真的发到 QQ（试运行时只写日志）。">
-          <div className="ab-flex">
+        <Card title="快捷操作" desc="实际发到 QQ（试运行时只写日志）。">
+          <div className="ab-actions">
             <Btn kind="primary" onClick={quick('/test-send')}>给主人发一条自测</Btn>
             <Btn onClick={quick('/speakup/fire')}>让她现在来找你</Btn>
             <Btn onClick={quick('/diary/run', { visibility: 'self' })}>写一篇日记（仅自己可见）</Btn>
@@ -87,7 +90,7 @@ function Overview({ st, toast, go }) {
           <More label="怎么看她和谁聊了什么">
             {'点 DSH 侧栏「QQ Hub」工作区里对应的会话，可以看到她和每个人聊了什么、调了什么工具，也可以直接在会话里插话。'}
           </More>
-          <div className="ab-flex" style={{ marginTop: 10 }}>
+          <div className="ab-card-foot">
             <Btn
               small kind="ghost"
               onClick={async () => {

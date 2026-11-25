@@ -170,19 +170,17 @@ function Stickers({ draft, setDraft, toast }) {
       <Card
         title={'表情库' + (items ? '（' + items.length + ' 张）' : '')}
         desc={meta.over > 0 ? `超过上限 ${meta.over} 张，而且剩下的都是手动添加/导入的表情；再收新表情会失败，需要先删一些。` : '支持搜索、按来源筛选、排序和批量删除；也可以把整库导出成图包。'}
-        right={(
-          <div className="ab-flex">
-            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => { upload(e.target.files); e.target.value = '' }} />
-            <input ref={packRef} type="file" accept=".zip,application/zip" style={{ display: 'none' }} onChange={(e) => { importPack(e.target.files[0]); e.target.value = '' }} />
-            <input className="ab-input sm" style={{ width: 130 }} placeholder="名字（可不填）" value={newName} onChange={(e) => setNewName(e.target.value)} />
-            <Btn small onClick={() => fileRef.current && fileRef.current.click()}>＋ 上传</Btn>
-            <Btn small kind="ghost" onClick={() => packRef.current && packRef.current.click()}>导入图包</Btn>
-            <a className="ab-btn sm ghost" href={API + '/sticker/pack/export'} download>导出图包</a>
-            <Btn small title="把机器人号 QQ「我喜欢的」里已有的表情导进来" onClick={async () => { setBusy('从 QQ 收藏导入…'); const r = await post('/sticker/import-qq'); setBusy(''); toast(r.message, r.ok === false ? 'err' : 'ok'); load() }}>从 QQ 收藏导入</Btn>
-            <Btn small kind="ghost" onClick={load}>刷新</Btn>
-          </div>
-        )}
+        right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}
       >
+        <div className="ab-flex" style={{ marginBottom: 10 }}>
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => { upload(e.target.files); e.target.value = '' }} />
+          <input ref={packRef} type="file" accept=".zip,application/zip" style={{ display: 'none' }} onChange={(e) => { importPack(e.target.files[0]); e.target.value = '' }} />
+          <input className="ab-input" style={{ flex: '1 1 140px', maxWidth: 220 }} placeholder="名字（可不填）" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <Btn small onClick={() => fileRef.current && fileRef.current.click()}>＋ 上传</Btn>
+          <Btn small kind="ghost" onClick={() => packRef.current && packRef.current.click()}>导入图包</Btn>
+          <a className="ab-btn sm ghost" href={API + '/sticker/pack/export'} download>导出图包</a>
+          <Btn small title="把机器人号 QQ「我喜欢的」里已有的表情导进来" onClick={async () => { setBusy('从 QQ 收藏导入…'); const r = await post('/sticker/import-qq'); setBusy(''); toast(r.message, r.ok === false ? 'err' : 'ok'); load() }}>从 QQ 收藏导入</Btn>
+        </div>
         <div className="ab-sticker-tools">
           <input className="ab-input" placeholder="搜名字 / 标签 / md5" value={query} onChange={(e) => setQuery(e.target.value)} />
           <select className="ab-select" value={source} onChange={(e) => setSource(e.target.value)}>

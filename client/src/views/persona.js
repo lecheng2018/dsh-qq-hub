@@ -11,9 +11,9 @@ import {
 function AvatarCard({ st, toast, reload }) {
   const custom = st.avatar && st.avatar.custom
   return (
-    <div className="ab-card" style={{ marginTop: 12, padding: 14 }}>
+    <div className="ab-card" style={{ padding: 14 }}>
       <div className="ab-flex" style={{ alignItems: 'center', gap: 12 }}>
-        <img src={avatarSrc(st)} alt="头像" style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', objectPosition: '50% 18%', border: '2px solid var(--ab-line)' }} />
+        <img className="ab-avatar" src={avatarSrc(st)} alt="头像" style={{ width: 52, height: 52 }} />
         <div><b>头像</b><div className="ab-muted ab-small">{custom ? '用的是你上传的图片' : '默认的大肥鱼'}</div></div>
       </div>
       <div className="ab-flex" style={{ marginTop: 10, flexWrap: 'wrap' }}>
@@ -136,7 +136,7 @@ function PersonaAudit({ toast }) {
                     <td>{r.chatId}{r.chatName ? <div className="ab-muted ab-small">{r.chatName}</div> : null}</td>
                     <td>{r.expected?.name || r.expected?.id || '—'}<div className="ab-muted ab-small">{r.expected?.hash || '（无卡）'}</div></td>
                     <td>{r.live ? (r.live.id || '—') : <span className="ab-muted">还没有会话</span>}<div className="ab-muted ab-small">{r.live?.hash || ''}</div></td>
-                    <td>{r.stale === null ? <span className="ab-muted">—</span> : r.stale ? <span style={{ color: '#d9534f' }}>旧人设，会重建</span> : <span style={{ color: '#3c9d5d' }}>是这版</span>}</td>
+                    <td>{r.stale === null ? <span className="ab-muted">—</span> : r.stale ? <span style={{ color: 'var(--ab-err)' }}>旧人设，会重建</span> : <span style={{ color: 'var(--ab-ok)' }}>是这版</span>}</td>
                     <td className="ab-small">{levelText(r.source)}</td>
                   </tr>
                 ))}
@@ -263,9 +263,9 @@ function Persona({ st, draft, setDraft, toast, reload }) {
         })
       }
       return (
-        <div key={id} className="ab-flex" style={{ marginBottom: 6 }}>
+        <div key={id} className="ab-flex" style={{ marginBottom: 8 }}>
           <input
-            className="ab-input" style={{ width: 240 }} value={shown}
+            className="ab-input" value={shown}
             placeholder={wantKind === 'group' ? '填群号' : '填 QQ 号'}
             inputMode="numeric"
             // 敲的时候只进暂存，不逐字改配置里的 key（否则整行被重建、光标丢失）
@@ -342,15 +342,17 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     )
   }
   return (
-    <div>
+    <div className="ab-grid">
       <div className="ab-persona">
         <div className="ab-plist">
-          {list.map((p) => (
-            <button key={p.id} type="button" className={cx('ab-pitem', sel === p.id && 'on')} onClick={() => setSel(p.id)}>
-              <div className="nm">{p.name}{p.id === current ? <span className="ab-badge">正在用</span> : null}</div>
-              <div className="tg">{(p.tags || []).join(' · ') || p.id + ' · ' + p.chars + ' 字'}</div>
-            </button>
-          ))}
+          <div className="ab-pitems">
+            {list.map((p) => (
+              <button key={p.id} type="button" className={cx('ab-pitem', sel === p.id && 'on')} onClick={() => setSel(p.id)}>
+                <div className="nm">{p.name}{p.id === current ? <span className="ab-badge">正在用</span> : null}</div>
+                <div className="tg">{(p.tags || []).join(' · ') || p.id + ' · ' + p.chars + ' 字'}</div>
+              </button>
+            ))}
+          </div>
           <Btn
             kind="ghost"
             onClick={() => { const id = 'persona-' + Date.now().toString(36); setEdit({ id, name: '新人格', tags: '', secs: splitPersona('你是……\n\n【打字习惯】\n- 短句、口语，一次只说一两句。') }); setSel(id); setDirty(true); setPending({}) }}
@@ -402,11 +404,8 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           </Card>
         ) : <Card><Empty icon="⏳" text="加载中…" /></Card>}
       </div>
-      <div style={{ height: 12 }} />
       {specific('groups', '按群换人设', '指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。')}
-      <div style={{ height: 12 }} />
       {specific('privates', '按人换人设（私聊）', '指定某个人私聊时用哪个人格；没指定的用「默认」。')}
-      <div style={{ height: 12 }} />
       <PersonaAudit toast={toast} />
     </div>
   )

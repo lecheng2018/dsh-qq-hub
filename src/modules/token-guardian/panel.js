@@ -265,7 +265,7 @@ return function TokenGuardianPanel(props) {
           h('div', { className: 'tg-stat-lbl' }, '监控会话总数')
         ),
         h('div', { className: 'tg-stat-box' },
-          h('div', { className: 'tg-stat-val', style: { color: highUsageCount > 0 ? '#ef4444' : 'inherit' } }, highUsageCount),
+          h('div', { className: 'tg-stat-val', style: { color: highUsageCount > 0 ? 'var(--ab-err, #ef4444)' : 'inherit' } }, highUsageCount),
           h('div', { className: 'tg-stat-lbl' }, '超阈值待压缩')
         ),
         h('div', { className: 'tg-stat-box' },
@@ -348,7 +348,7 @@ return function TokenGuardianPanel(props) {
                 // 底部元信息
                 h('div', { className: 'tg-chat-meta' },
                   h('span', null,
-                    h('b', { style: { color: isOver ? '#ef4444' : 'inherit' } }, fmt(it.tokens)),
+                    h('b', { style: { color: isOver ? 'var(--ab-err, #ef4444)' : 'inherit' } }, fmt(it.tokens)),
                     ` / ${fmt(threshold)} token `,
                     h('span', { className: 'ab-muted' }, `(${pct}% · ${it.estimated ? '字符估算' : '真实用量'})`)
                   ),
@@ -362,7 +362,7 @@ return function TokenGuardianPanel(props) {
                 // 异常与报警提示条
                 it.failures > 0 && h('div', {
                   className: 'ab-note' + (inModCooldown ? '' : ' err'),
-                  style: { marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }
+                  style: { marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }
                 },
                   h('span', null,
                     inModCooldown
@@ -378,7 +378,7 @@ return function TokenGuardianPanel(props) {
 
                 // 展开的结构化摘要详情抽屉
                 summaryData && h('div', { className: 'tg-summary-box' },
-                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--ab-sub, #6b7280)' } },
+                  h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontSize: 12, color: 'var(--ab-sub, #6b7280)' } },
                     h('b', null, '📋 当前生效的检查点摘要：'),
                     h('span', null, `生成于 ${new Date(summaryData.at).toLocaleString('zh-CN')} (${summaryData.text.length}字)`)
                   ),
@@ -401,7 +401,7 @@ return function TokenGuardianPanel(props) {
                       h('span', { style: { fontWeight: 500 } }, summaryData.structured.pending.join('；'))
                     ),
                     summaryData.structured.agreements?.length > 0 && h('div', { className: 'tg-struct-item' },
-                      h('span', { className: 'tg-struct-tag', style: { color: '#059669' } }, '【约定】'),
+                      h('span', { className: 'tg-struct-tag', style: { color: 'var(--ab-ok, #059669)' } }, '【约定】'),
                       h('span', null, summaryData.structured.agreements.join('；'))
                     )
                   )

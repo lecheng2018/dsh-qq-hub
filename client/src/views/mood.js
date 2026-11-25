@@ -17,7 +17,7 @@ function Mood({ st, draft, setDraft, toast }) {
   const [ins, setIns] = useState(null)
   const [adding, setAdding] = useState({ text: '', aboutName: '', importance: 0.6 })
   const [addOpen, setAddOpen] = useState(false) // 「手动加一条」收进按钮，默认不占版面
-  const [browseOpen, setBrowseOpen] = useState(false) // 全部记忆默认收起，整页长度不再被几百条记忆拉爆
+  const [browseOpen, setBrowseOpen] = useState(false) // 全部记忆默认收起，整页长度不再被几百条记忆拉爆；搜索或点击时展开
   const [personaTab, setPersonaTab] = useState('profiles') // 人物档案 / 相处经验 / 说话方式 三合一
   const [health, setHealth] = useState(null)
   const [reloading, setReloading] = useState(false)
@@ -71,20 +71,25 @@ function Mood({ st, draft, setDraft, toast }) {
 
       <Card title="记忆库" right={f.sw('memory.enabled')} desc="她聊天时自己记的、每天从聊天里整理出来的、你手动加的。每轮回复前，她会按对方正在说的话翻出最相关的几条。">
         <div className="ab-flex">
-          <input className="ab-input" style={{ flex: '2 1 260px' }} placeholder="搜索记忆，例如：白米饭、游戏、约定…" value={q} onChange={(e) => { setQ(e.target.value); if (e.target.value) setBrowseOpen(true) }} />
+          <input className="ab-input" style={{ flex: '2 1 180px' }} placeholder="搜索记忆，例如：白米饭、游戏、约定…" value={q} onChange={(e) => { setQ(e.target.value); if (e.target.value) setBrowseOpen(true) }} />
           <Btn small onClick={() => setAddOpen(!addOpen)}>{addOpen ? '收起' : '＋ 手动加一条'}</Btn>
         </div>
         {addOpen ? (
           <div className="ab-flex" style={{ marginTop: 8 }}>
-            <input className="ab-input" style={{ flex: '2 1 260px' }} placeholder="要她记住的事，例如：主人不吃香菜" value={adding.text} onChange={(e) => setAdding({ ...adding, text: e.target.value })} />
+            <input className="ab-input" style={{ flex: '2 1 180px' }} placeholder="要她记住的事，例如：主人不吃香菜" value={adding.text} onChange={(e) => setAdding({ ...adding, text: e.target.value })} />
             <input className="ab-input" style={{ flex: '1 1 120px' }} placeholder="关于谁（可选）" value={adding.aboutName} onChange={(e) => setAdding({ ...adding, aboutName: e.target.value })} />
             <Select value={adding.importance} width={120} onChange={(v) => setAdding({ ...adding, importance: v })} options={[{ value: 0.3, label: '随口一提' }, { value: 0.6, label: '比较重要' }, { value: 0.9, label: '非常重要' }]} />
             <Btn small kind="primary" disabled={!adding.text.trim()} onClick={async () => { const r = await post('/memory/add', adding); toast(r.ok ? '记住了' : r.message); setAdding({ text: '', aboutName: '', importance: 0.6 }); setAddOpen(false); load() }}>记住</Btn>
           </div>
         ) : null}
-        <div className="ab-flex" style={{ marginTop: 10, cursor: 'pointer' }} onClick={() => setBrowseOpen(!browseOpen)}>
-          <div className="ab-section-title" style={{ margin: 0 }}>{(browseOpen ? '▾' : '▸') + ' 全部记忆'}</div>
-          <span className="ab-muted ab-small">{mem ? mem.length + ' 条' : ''}</span>
+        <div
+          className="ab-flex" style={{ marginTop: 10, cursor: 'pointer' }}
+          role="button" tabIndex={0} aria-expanded={browseOpen}
+          onClick={() => setBrowseOpen(!browseOpen)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBrowseOpen(!browseOpen) } }}
+        >
+          <div className="ab-section-title" style={{ margin: 0, padding: 0, border: 0 }}>{(browseOpen ? '▾' : '▸') + ' 全部记忆'}</div>
+          <span className="ab-muted ab-small">{mem ? mem.length + ' 条' + (!browseOpen ? '（点击展开）' : '') : ''}</span>
         </div>
         {!browseOpen ? null : mem === null
           ? <Empty icon="⏳" text="加载中…" />
@@ -173,11 +178,13 @@ function Mood({ st, draft, setDraft, toast }) {
         <ExtPage st={st} draft={draft} setDraft={setDraft} toast={toast} reload={loadVec} mod="memory" embedded />
       </Card>
 
-      <RecallLog />
-      <Card title="导入与迁移" desc="一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。" collapse>
-        <MemoryImport toast={toast} onDone={() => load()} />
-        <OwnerMigrate toast={toast} onChanged={() => load()} />
-      </Card>
+      <div className="ab-grid ab-g2">
+        <RecallLog />
+        <Card collapse title="导入与迁移" desc="一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。">
+          <MemoryImport toast={toast} onDone={() => load()} />
+          <OwnerMigrate toast={toast} onChanged={() => load()} />
+        </Card>
+      </div>
     </div>
   )
 }
@@ -208,15 +215,15 @@ function ProfileRow({ p, toast, onChanged }) {
         <b>{p.name || p.qq}</b><br />
         <span className="ab-small">{p.qq}</span><br />
         {/* 蓝底胶囊必须显式白字：.ab-pill 默认 color 是 var(--ab-sub)（深灰），压在 --ab-sea 上几乎看不见 */}
-        <span className="ab-pill" style={{ padding: '0 6px', fontSize: 11, background: p.scope === 'global' ? 'var(--ab-sea, #35506b)' : 'rgba(0,0,0,.18)', color: p.scope === 'global' ? '#fff' : 'var(--ab-sub)' }}>
+        <span className="ab-pill" style={{ padding: '0 6px', fontSize: 11, background: p.scope === 'global' ? 'var(--ab-solid)' : 'var(--ab-card-2)', borderColor: p.scope === 'global' ? 'transparent' : 'var(--ab-line)', color: p.scope === 'global' ? '#fff' : 'var(--ab-sub)' }}>
           {scopeLabel}
         </span><br />
         <span className="ab-small">{timeAgo(p.at)}</span>
       </div>
       {open
-        ? <textarea className="ab-input wide" rows={3} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1 }} />
-        : <div className="body ab-small" style={{ flex: 1, whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{p.text}</div>}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        ? <textarea className="ab-textarea" rows={3} value={text} onChange={(e) => setText(e.target.value)} style={{ flex: '1 1 220px', minHeight: 72 }} />
+        : <div className="body ab-small" style={{ flex: '1 1 200px', whiteSpace: 'pre-wrap', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{p.text}</div>}
+      <div className="ab-flex" style={{ gap: 4 }}>
         <Btn small onClick={() => setOpen(!open)}>{open ? '收起' : '编辑'}</Btn>
         {open ? <Btn small kind="primary" disabled={text === p.text} onClick={async () => { const r = await post('/profiles/save', { qq: p.qq, text, scope: p.scope }); toast(r.message, 'ok'); onChanged() }}>保存</Btn> : null}
         {open ? (
@@ -241,7 +248,7 @@ function RecallLog() {
   const load = () => get('/memory/recalls').then((r) => setList(r.list || []))
   useEffect(() => { load() }, [])
   return (
-    <Card title="最近想起了什么" desc="每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>} collapse>
+    <Card collapse title="最近想起了什么" desc="每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。" right={<Btn small kind="ghost" onClick={load}>刷新</Btn>}>
       {!list
         ? <Empty icon="⏳" text="加载中…" />
         : list.length === 0 ? <Empty icon="🫧" text="还没有记录（重启后从头记）。" />
