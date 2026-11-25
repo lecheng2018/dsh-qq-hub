@@ -113,6 +113,21 @@ export function isStickerSegment(seg) {
 }
 
 /**
+ * 收表情用的候选判定：严格判定之外，再认一类网关兼容形状——
+ * 有些 OneBot 实现不给 sub_type，只在 summary 里写「[动画表情] / [表情包] / [贴纸]」。
+ * 明确标了 sub_type=0（普通图片）的不认；summary 必须是完整标签，不能是照片配文里
+ * 随手带了「表情包」三个字。尺寸/比例仍由 stickerSizeOk 在后面兜底。
+ */
+export function isStickerCandidate(seg) {
+  if (isStickerSegment(seg)) return true
+  if (!seg || seg.type !== 'image' || !seg.data) return false
+  const d = seg.data
+  if (String(d.sub_type ?? d.subType ?? '') === '0') return false
+  const summary = String(d.summary || '').trim()
+  return /^\[?(?:动画表情|表情包|贴纸)\]?$/.test(summary)
+}
+
+/**
  * @param {object} event OneBot 消息事件
  * @param {string|number} selfId 机器人 QQ
  * @returns {{
@@ -160,7 +175,7 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
       }
       case 'image':
       case 'mface':
-        if (isStickerSegment(seg)) {
+        if (isStickerCandidate(seg)) {
           stickers.push(seg)
           texts.push(d.summary ? `${d.summary}` : '[表情包]')
         } else {

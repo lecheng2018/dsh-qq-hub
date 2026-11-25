@@ -13,7 +13,7 @@ export default {
   version: '1.0.0',
   description: '偷表情、回复时按情绪配表情、她自己改名删图；关掉后不发也不收表情',
   tab: 'stickers',
-  files: ['features/stickers.js'],
+  files: ['features/stickers.js', 'features/sticker-pack.js'],
   setup(api) {
     const { hub, onebot, http } = api.core
     const store = createStickerStore({ dsh: api.dsh, getConfig: api.config, onebot, log: api.log })
@@ -21,9 +21,10 @@ export default {
     api.tool(({ chat, level, sessionId }) => {
       if (chat.kind === 'system') return []
       const current = chat.chatId
+      const stickerPolicy = () => store.policyFor(current)
       const tools = [
-        // 表情包关着就不挂「发表情」（整理表情库的工具照样留着）
-        ...(api.config().stickers.enabled ? [defineTool({
+        // 表情包关着就不挂「发表情」（整理表情库的工具照样留着）；按群覆盖也在这里生效
+        ...(stickerPolicy().enabled ? [defineTool({
           name: 'qq_send_sticker',
           description: '在当前 QQ 聊天里发一张表情包。name 写表情的名字或情绪（如「委屈」「开心」「早晚安」），会在表情库里模糊匹配。一般直接在回复里写 <sticker:名字> 就行，这个工具用于回复之外单独补发。',
           properties: { name: str('表情名字或情绪关键词') },
@@ -55,18 +56,28 @@ export default {
           },
           required: ['sticker'],
           execute: async ({ sticker, new_name, tags, delete: del }) => {
-            const item = store.match(String(sticker || ''))
-            if (!item) return { ok: false, message: '表情库里没找到这张' }
+            // 同名/同标签有多张时不猜：直接让模型用 md5 前缀或完整名字重试，避免改错删错。
+            const found = store.resolve(String(sticker || ''))
+            if (!found.item) {
+              if (found.ambiguous) {
+                const list = found.candidates.map((c) => `${c.name || '未命名'}（${c.md5.slice(0, 8)}）`).join('、')
+                return { ok: false, message: `有多张对得上的表情：${list}。用 md5 前 8 位或完整名字再试`, candidates: found.candidates }
+              }
+              return { ok: false, message: '表情库里没找到这张' }
+            }
+            const item = found.item
             const label = item.name || item.md5.slice(0, 8)
             if (del) {
               // 主人亲手加的表情，主人开口才删
-              if ((item.from === 'manual' || item.from === 'panel') && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
+              if ((item.from === 'manual' || item.from === 'panel' || item.from === 'pack') && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
               const r = await store.remove(item.md5)
               return r.ok ? { ok: true, message: `删掉了「${label}」` } : { ok: false, message: r.reason || '没删成' }
             }
             if (!new_name && !(Array.isArray(tags) && tags.length)) return { ok: false, message: '要说改成什么' }
-            const r = store.rename(item.md5, new_name ? String(new_name).trim().slice(0, 12) : undefined, Array.isArray(tags) && tags.length ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 5) : undefined)
-            return r.ok ? { ok: true, message: `改好了：「${label}」→「${r.item.name}」${r.item.tags?.length ? '（' + r.item.tags.join('/') + '）' : ''}` } : { ok: false, message: '没改成' }
+            const r = await store.rename(item.md5, new_name ? String(new_name).trim().slice(0, 12) : undefined, Array.isArray(tags) && tags.length ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 5) : undefined)
+            return r.ok
+              ? { ok: true, message: `改好了：「${label}」→「${r.item.name}」${r.item.tags?.length ? '（' + r.item.tags.join('/') + '）' : ''}` }
+              : { ok: false, message: r.reason || '没改成' }
           },
         }),
       ]
@@ -102,8 +113,9 @@ export default {
             if (r.existed) return { ok: true, message: `库里已经有这张了（叫「${r.item.name || '未命名'}」）` }
             return { ok: true, message: `收进库了：「${r.item.name || '未命名'}」（${p.prompt ? '画的是' + p.prompt : '自己画的'}）` }
           }
-          if (!api.config().stickers.collect) return { ok: false, message: '偷表情关着' }
-          const mode = (api.config().stickers.collectMode || 'auto')
+          const pol = stickerPolicy()
+          if (!pol.collect) return { ok: false, message: '偷表情关着' }
+          const mode = pol.collectMode || 'auto'
           if (mode === 'owner' && !hub.turnSendersAllOwner(sessionId)) {
             return { ok: false, message: '现在是「只听主人的」模式：这一轮有别人在，得主人让我收才行' }
           }
@@ -156,7 +168,7 @@ export default {
           const r = await store.addFromBuffer(buf, { name: String(name || '').slice(0, 12), tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
           if (!r.ok) return { ok: false, message: r.reason || '没存成' }
           if (r.existed) return { ok: true, message: `库里已经有这张了（叫「${r.item.name || '未命名'}」）` }
-          return { ok: true, message: `存好了${r.item.name ? '「' + r.item.name + '」' : ''}` }
+          return { ok: true, message: `存好了${r.item.name ? '「' + r.item.name + '」' : ''}${r.warning ? '（' + r.warning + '，本地仍能发）' : ''}` }
         },
       }))
       tools.push(defineTool({
@@ -176,15 +188,28 @@ export default {
         execute: async ({ source, name, tags }) => {
           const buf = await fetchImage(String(source), { maxBytes: 10 * 1024 * 1024, allowLocal: true })
           const r = await store.addFromBuffer(buf, { name: name || '', tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
-          return r.ok ? { ok: true, message: r.existed ? '库里已经有这张了' : `收好了「${r.item.name || '未命名'}」` } : { ok: false, message: r.reason }
+          return r.ok
+            ? { ok: true, message: (r.existed ? '库里已经有这张了' : `收好了「${r.item.name || '未命名'}」`) + (r.warning ? '（' + r.warning + '，本地仍能发）' : '') }
+            : { ok: false, message: r.reason }
         },
       }))
       return tools
     })
 
-    api.route('/stickers', async () => ({ ok: true, items: store.library().items.slice().reverse() }))
+    api.route('/stickers', async () => {
+      const items = store.library().items.slice().reverse()
+      const max = Number(api.config().stickers.maxLibrary) || 300
+      const protectedCount = items.filter((i) => ['manual', 'panel', 'qq', 'tool', 'pack'].includes(String(i.from || ''))).length
+      return { ok: true, items, max, protectedCount, over: Math.max(0, items.length - max) }
+    })
     api.route('/sticker/image', async (req, res) => {
-      const it = store.library().items.find((i) => i.md5 === http.query(req).md5)
+      const q = http.query(req)
+      if (q.thumb) {
+        const thumb = await store.thumbFor(q.md5)
+        if (!thumb) return http.send(res, 404, '')
+        return http.send(res, 200, thumb.buf, thumb.mime)
+      }
+      const it = store.library().items.find((i) => i.md5 === q.md5)
       if (!it || !existsSync(stickerPath(it))) return http.send(res, 404, '')
       const ext = it.file.split('.').pop()
       http.send(res, 200, readFileSync(stickerPath(it)), ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg')
@@ -197,9 +222,31 @@ export default {
       const b = await http.body(req)
       return store.remove(b.md5, { fromQQ: b.fromQQ !== false })
     })
+    api.route('/sticker/delete-batch', async (req) => {
+      const b = await http.body(req)
+      return store.removeMany(b.md5s, { fromQQ: b.fromQQ !== false })
+    })
     api.route('/sticker/import-qq', async () => store.importFromQQ())
+    api.route('/sticker/pack/export', async (req, res) => {
+      const buf = await store.exportPack()
+      if (typeof res.setHeader === 'function') res.setHeader('content-disposition', 'attachment; filename="qq-hub-stickers.zip"')
+      http.send(res, 200, buf, 'application/zip')
+    })
+    api.route('/sticker/pack/import', async (req) => {
+      // 原始 ZIP 请求体，不走 JSON（64MB 上限由 readRaw 兜住）
+      const buf = await http.raw(req, 64 * 1024 * 1024)
+      return store.importPack(buf)
+    })
     api.rule(() => '- 主人让你存某个表情（「存一下」「导入这个表情」）时用 qq_save_sticker；让你把 QQ 收藏里的表情导进来时用 qq_import_qq_stickers。别人让你存，不用理。')
     api.route('/sticker/upload', async (req) => {
+      const q = http.query(req)
+      const type = String(req.headers?.['content-type'] || '')
+      // 面板新流程直接发原始图片字节（JSON 请求体有 2MB 上限，大图会被挡）。
+      if (Boolean(type) && !/^application\/json/i.test(type) && !/^text\/plain/i.test(type)) {
+        const buf = await http.raw(req, 6 * 1024 * 1024)
+        if (!buf.length) return { ok: false, message: '图片是空的' }
+        return store.addFromBuffer(buf, { name: q.name || '', tags: [], from: 'panel' })
+      }
       const b = await http.body(req)
       const buf = Buffer.from(String(b.data || '').replace(/^data:[^,]+,/, ''), 'base64')
       if (!buf.length || buf.length > 5 * 1024 * 1024) return { ok: false, message: '图片太大或是空的' }

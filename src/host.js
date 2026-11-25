@@ -41,7 +41,7 @@ import { createInboundVision } from './chat/inbound-vision.js'
 import { workspaceDirOf, migrateLegacyWorkspace } from './chat/workspace.js'
 import { createLocal } from './local/local.js'
 import { createGroupRoles } from './chat/group-roles.js'
-import { isStickerSegment } from './chat/inbound.js'
+import { isStickerCandidate } from './chat/inbound.js'
 import { defaultModel, askModel } from './core/llm.js'
 import { parseCommand, runCommand, createMutes } from './chat/commands.js'
 import { listPersonas, readPersona, currentPersonaText, rulesText, seedPersonas, personaIdFor } from './persona/personas.js'
@@ -243,9 +243,12 @@ export function apply(ctx) {
   const use = (id) => mods?.use(id) || null
   const stickers = {
     match: (q) => use('stickers')?.match?.(q) ?? null,
+    matchAll: (q) => use('stickers')?.matchAll?.(q) ?? [],
     segmentFor: (it) => use('stickers')?.segmentFor?.(it) ?? null,
-    markUsed: (md5) => use('stickers')?.markUsed?.(md5),
+    markUsed: (md5, chatId) => use('stickers')?.markUsed?.(md5, chatId),
     pickForReply: (t) => use('stickers')?.pickForReply?.(t) ?? null,
+    policyFor: (chatId) => use('stickers')?.policyFor?.(chatId) ?? null,
+    canAutoSend: (chatId) => use('stickers')?.canAutoSend?.(chatId) ?? true,
     collect: async (s, chatId) => (use('stickers')?.collect ? use('stickers').collect(s, chatId) : { ok: false, reason: '表情包模块关着' }),
     library: () => use('stickers')?.library?.() ?? { items: [] },
   }
@@ -424,17 +427,18 @@ export function apply(ctx) {
         collectInboundStickers: (chatKey, segments, userId) => {
           try {
             const cfg = getConfig()
-            const settings = cfg.stickers
-            if (!settings?.enabled || !settings.collect) return
-            if (chatKey.startsWith('group:') ? !settings.fromGroups : !settings.fromPrivate) return
-            const stickers = (Array.isArray(segments) ? segments : []).filter(isStickerSegment)
-            if (!stickers.length) return
-            const mode = settings.collectMode || 'auto'
+            // 全局配置 + 这个群的覆盖（stickers.overrides[群号]）
+            const policy = stickers.policyFor?.(chatKey) || cfg.stickers
+            if (!policy?.enabled || !policy.collect) return
+            if (chatKey.startsWith('group:') ? !policy.fromGroups : !policy.fromPrivate) return
+            const found = (Array.isArray(segments) ? segments : []).filter(isStickerCandidate)
+            if (!found.length) return
+            const mode = policy.collectMode || 'auto'
             if (mode === 'auto') {
-              for (const seg of stickers) Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
+              for (const seg of found) Promise.resolve(hub.collectInboundSticker?.(seg, chatKey)).catch(() => {})
               return
             }
-            const count = rememberStickers(chatKey, stickers)
+            const count = rememberStickers(chatKey, found)
             return mode === 'owner' && String(userId) !== String(cfg.ownerQQ || '') ? 0 : count
           } catch { /* 收表情是旁路 */ }
         },

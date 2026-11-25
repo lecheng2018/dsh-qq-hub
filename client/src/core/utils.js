@@ -18,6 +18,45 @@ const parsePct = (t) => {
   if (!Number.isFinite(n) || n < 0) return 0
   return Math.round(Math.min(n, 100))
 }
+// 数字框的解析（2026-11-24）：**空就是空**，返回 ''。
+// 旧的写法把「空」也归一成数字（'' → 0 → 再被 min 夹回去 / 被 fallback 顶回来），于是
+// 面板上「群里一条最长」「私聊一条最长」「一轮最多几条」这类框永远清不掉 —— 删光即弹回原值。
+// 现在清空就写 ''，后端 normalize 的 num() 把空值当「没填」回落默认值（清空 = 恢复默认）。
+// clamp=false 用于输入过程：敲「1」再敲「0」的过程中不该被 min 提前改掉；失焦才夹取。
+const parseNumText = (t, { min, max, clamp, step } = {}) => {
+  const s = String(t ?? '').trim()
+  if (!s) return ''
+  // 只认纯数字（可带正负号和小数点）；别的字符一律当「还没输完」，不当数字
+  if (!/^[-+]?(\d+(\.\d*)?|\.\d+)$/.test(s)) return ''
+  const n = Number(s)
+  if (!Number.isFinite(n)) return ''
+  let v = Number(step || 1) === 1 ? Math.floor(n) : n // 步长是 1 的框按整数语义（3.7 → 3）
+  if (clamp) {
+    if (min !== undefined && min !== null && v < min) v = min
+    if (max !== undefined && max !== null && v > max) v = max
+  }
+  return v
+}
+/**
+ * 数字框提交时的换算（纯函数，便于测试）：把框里的原文换算成写回配置的值。
+ *
+ * 返回 `{ value, text }`：
+ *   - `value` 是要写回配置草稿的值（数字，或空串 '' = 没填）；
+ *   - `text` 是提交后框里该显示什么（空串表示保持空着）。
+ *
+ * 规则（2026-11-24 定）：空 / 非数字 → 允许留空就写 ''（= 恢复默认），否则落回 min；
+ * 有数字就夹到 [min, max]，整数框取整；`scale` 处理「显示单位 ≠ 存储单位」（分钟 ↔ 毫秒）。
+ */
+const commitNumText = (raw, { min, max, step, allowEmpty, scale } = {}) => {
+  const unit = Number(step || 1)
+  const parsed = parseNumText(raw, { min, max, clamp: true, step: unit })
+  if (parsed === '') {
+    if (allowEmpty) return { value: '', text: '' }
+    const fallback = min !== undefined && min !== null ? min : (max !== undefined && max !== null ? max : '')
+    return { value: fallback === '' ? '' : fallback * (scale || 1), text: fallback === '' ? '' : String(fallback) }
+  }
+  return { value: parsed * (scale || 1), text: String(parsed) }
+}
 // 音调存的是 '+20Hz' 这种字符串，滑条要数字；合法范围 ±80Hz（再往上 edge-tts 服务端会夹）
 const pitchNum = (s) => {
   const m = /^([+-]?\d+)Hz$/i.exec(String(s || ''))
@@ -46,5 +85,5 @@ const copy = (text, toast, msg) => {
 }
 
 export {
-  clone, setPath, getPath, pct, cx, parsePct, pitchNum, pitchText, pitchLabel, timeAgo, copy
+  clone, setPath, getPath, pct, cx, parsePct, parseNumText, commitNumText, pitchNum, pitchText, pitchLabel, timeAgo, copy
 }

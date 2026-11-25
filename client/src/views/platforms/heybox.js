@@ -94,15 +94,15 @@ function Heybox({ draft, setDraft, toast }) {
         desc="用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么）。配图她自己准备：本机图片最多 4 张，传小黑盒图床插进正文，哪张传不上就跳过哪张、不影响发帖，发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。"
       >
         <Row label="小黑盒账号" hint="从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）">
-          <div>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             <div className="ab-flex">
               <Btn small onClick={checkAccount} disabled={!!busy}>{busy === 'account' ? '检查中…' : '检查登录'}</Btn>
               {acctText}
             </div>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <textarea
-                className="ab-input" rows={3} spellCheck={false}
-                style={{ flex: 1, minWidth: 260, fontFamily: 'monospace', fontSize: 12 }}
+                className="ab-textarea" rows={3} spellCheck={false}
+                style={{ flex: '1 1 220px', minHeight: 72 }}
                 placeholder="pkey=…; heybox_id=…; x_xhh_tokenid=…"
                 value={cookieText} onChange={(e) => setCookieText(e.target.value)}
               />
@@ -126,9 +126,9 @@ function Heybox({ draft, setDraft, toast }) {
         title="每天上限"
         desc="小黑盒的帖详情和搜索接口查太勤会弹验证码（还可能连坐浏览器登录态），所以额度别设太大。搜索被挡时她会自动降级去翻信息流，不会反复硬试。"
       >
-        <Row label="点赞">{f.num('heybox.likeDaily', { min: 0, max: 60 })}<span className="ab-muted">次/天</span></Row>
-        <Row label="评论">{f.num('heybox.commentDaily', { min: 0, max: 30 })}<span className="ab-muted">条/天</span></Row>
-        <Row label="发帖">{f.num('heybox.maxPostsPerDay', { min: 0, max: 5 })}<span className="ab-muted">篇/天（建议别超过 3）</span></Row>
+        <Row label="点赞">{f.num('heybox.likeDaily', { min: 0, max: 60, fallback: 10 })}<span className="ab-muted">次/天</span></Row>
+        <Row label="评论">{f.num('heybox.commentDaily', { min: 0, max: 30, fallback: 3 })}<span className="ab-muted">条/天</span></Row>
+        <Row label="发帖">{f.num('heybox.maxPostsPerDay', { min: 0, max: 5, fallback: 3 })}<span className="ab-muted">篇/天（建议别超过 3）</span></Row>
         <Row label="发帖风格" hint="她写帖时按这个口吻来。也可以让她单次换：跟她说「用日记风格发一篇」">
           {f.select('heybox.postStyle', [
             { value: 'diary', label: '大肥鱼日记', desc: '第一人称随手记，跟空间日记一个味，120-300字' },

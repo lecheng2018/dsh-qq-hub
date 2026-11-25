@@ -1,5 +1,5 @@
 import { useState, useEffect, Fragment, h } from '../../core/react.js'
-import { Card, Row, Btn } from '../../ui/primitives.js'
+import { Card, Row, Btn, ListInput } from '../../ui/primitives.js'
 import { useField } from '../../ui/form.js'
 import { setPath, getPath } from '../../core/utils.js'
 import { get, post } from '../../core/http.js'
@@ -53,11 +53,15 @@ function MultiParser({ draft, setDraft, toast }) {
         <Row label="群聊里提供解析" hint="关掉后群里发链接完全不管（不发卡片、不下载视频）。只想在私聊用就关掉它。">{f.sw('multiParser.inGroups')}</Row>
         <Row label="私聊里提供解析" hint="关掉后私聊发链接也不解析，只有群聊生效。">{f.sw('multiParser.inPrivate')}</Row>
         <Row label="这些群不解析" hint="群号用逗号或空格隔开。列在这里的群即使「群聊里提供解析」开着也不解析。">
-          <input
-            className="ab-input" style={{ width: '100%' }}
+          {/* 旧写法是受控 input + 每个键都 split/filter 一遍：value 一直由解析结果反推，
+              敲「一群号, 」的逗号和空格当场被吃掉，光标乱跳，根本没法输入第二个群号。
+              换成 ListInput（输入过程保留原文、失焦才解析成列表），与「同类 bot 名单」同款。 */}
+          <ListInput
+            value={(Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : [])}
+            numbers
+            style={{ width: '100%' }}
             placeholder="例如 123456789, 987654321"
-            value={(Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(', ')}
-            onChange={(e) => setDraft((prev) => setPath(prev, 'multiParser.disabledGroups', String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, '')).filter((s) => s.length >= 4)))}
+            onChange={(list) => setDraft((prev) => setPath(prev, 'multiParser.disabledGroups', list))}
           />
         </Row>
         <Row label="大模型上下文注入" hint="开启后，自动将解析出的标题、作者、正文摘要喂给她，让她能看懂群友分享并自然接话讨论；关闭则仅作为纯工具运行。">{f.sw('multiParser.feedToAi')}</Row>
@@ -87,10 +91,10 @@ function MultiParser({ draft, setDraft, toast }) {
       </Card>
 
       <Card title="支持平台独立开关" desc="单独控制是否响应特定平台的链接。">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '8px 16px', padding: '6px 0' }}>
+        <div className="ab-platform-grid">
           {platforms.map((p) => (
-            <div key={p.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--ab-line)' }}>
-              <span style={{ fontSize: 13 }}>{p.label}</span>
+            <div key={p.key} className="ab-platform-item">
+              <span>{p.label}</span>
               {f.sw(`multiParser.platforms.${p.key}`)}
             </div>
           ))}
@@ -124,9 +128,9 @@ function MultiParser({ draft, setDraft, toast }) {
       </Card>
 
       <Card title="在线测试解析" desc="粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="ab-flex">
           <input
-            className="ab-input" style={{ flex: 1 }}
+            className="ab-input" style={{ flex: '1 1 220px' }}
             placeholder="例如 https://www.bilibili.com/video/BV... 或 微博/知乎/小红书链接"
             value={testUrl}
             onChange={(e) => setTestUrl(e.target.value)}

@@ -9,8 +9,8 @@ function BiliCookie({ draft, setDraft }) {
   const [show, setShow] = useState(false)
   const b = draft.bili
   const field = (key, prefix, setKey, hintKey, ph) => (
-    <div className="ab-flex" style={{ flexWrap: 'nowrap', marginBottom: 6 }}>
-      <code className="ab-small" style={{ minWidth: 82, textAlign: 'right' }}>{prefix}</code>
+    <div className="ab-cookie-field">
+      <code className="ab-small">{prefix}</code>
       <input
         className="ab-input wide" type={show ? 'text' : 'password'} autoComplete="off" spellCheck={false} value={b[key] || ''}
         placeholder={b[setKey] ? '已保存（结尾 ' + (b[hintKey] || '…') + '），不改就留空' : ph}
@@ -24,7 +24,7 @@ function BiliCookie({ draft, setDraft }) {
       hint="浏览器登录 bilibili.com 后从 F12 里复制 SESSDATA 和 bili_jct；也可以直接粘整串 Cookie，会自动拆开。不填也能看视频，但不能评论和回复。建议用小号"
       more={'取 Cookie 的路径：电脑浏览器登录 bilibili.com → F12 → 「应用」（Application）→ Cookie → bilibili.com，分别复制 SESSDATA 和 bili_jct 这两行的「值」。只存在本机；没有 AI 字幕、评论、回复这些登录能力。'}
     >
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
         {field('sessdata', 'SESSDATA=', 'sessdataSet', 'sessdataHint', '粘贴 SESSDATA 的值')}
         {field('biliJct', 'bili_jct=', 'biliJctSet', 'biliJctHint', '粘贴 bili_jct 的值')}
         <div className="ab-flex">
@@ -39,8 +39,8 @@ function BiliCookie({ draft, setDraft }) {
 
 const BILI_KIND = { watch: '看了', comment: '评论', reply: '回复', share: '分享给你', shot: '发你截图', error: '没成功' }
 
-/** 「B 站用的模型」下拉：留空 = 跟随全局模型；选了就刷 B 站的后台回合 + 看画面都用它。 */
-function BiliModel({ draft, setDraft }) {
+/** 「B 站用的模型」配置行：留空 = 跟随全局模型；选了就刷 B 站的后台回合 + 看画面都用它。 */
+function BiliModelRow({ draft, setDraft }) {
   const [list, setList] = useState(null)
   useEffect(() => { get('/models').then((r) => setList(r.list || [])).catch(() => setList([])) }, [])
   const m = (draft.bili && draft.bili.model) || {}
@@ -49,22 +49,15 @@ function BiliModel({ draft, setDraft }) {
   const options = [{ value: '', label: '跟随全局模型', desc: '和聊天用的一样' }].concat((list || []).map((x) => ({ value: x.provider + '::' + x.model, label: labelOf(x), desc: x.provider, group: x.provider })))
   if (cur && !options.some((o) => o.value === cur)) options.push({ value: cur, label: m.model, desc: m.provider + '（DSH 里没找到）' })
   return (
-    <Card
-      title="B 站用的模型"
-      desc="B 站自己单独用一个模型：定时刷（挑关键词、决定评论 / 回复 / 分享）和抽帧看画面都走它，聊天还是用全局模型。留空就跟随全局。"
-      more={'需要商店里的「B站」模块 1.2.0 以上。看画面要选能看图的模型，选了个不能看图的会自动跳过看画面、只读文字。切换从下一轮刷 B 站起生效。'}
-    >
-      <Row label="刷 B 站用什么">
-        <Select
-          value={cur} width={280} options={options}
-          onChange={(v) => {
-            const [provider, ...model] = v.split('::')
-            setDraft(setPath(draft, 'bili.model', v ? { ...m, provider, model: model.join('::') } : { ...m, provider: '', model: '' }))
-          }}
-        />
-      </Row>
-      {list === null ? <div className="ab-small ab-muted">模型列表加载中…</div> : null}
-    </Card>
+    <Row label="刷 B 站用什么" hint="定时刷与抽帧看画面走它；留空跟随聊天全局模型">
+      <Select
+        value={cur} width={280} options={options}
+        onChange={(v) => {
+          const [provider, ...model] = v.split('::')
+          setDraft(setPath(draft, 'bili.model', v ? { ...m, provider, model: model.join('::') } : { ...m, provider: '', model: '' }))
+        }}
+      />
+    </Row>
   )
 }
 
@@ -92,16 +85,16 @@ function Bili({ draft, setDraft, toast }) {
           {acct ? <span className="ab-small" style={{ color: acct.isLogin ? 'var(--ab-ok)' : 'var(--ab-warn)' }}>{acct.isLogin ? '已登录：' + acct.uname : '没登录（只能看，不能评论）'}</span> : null}
         </div>
       </Card>
-      <Card title="怎么刷" desc="只在「主动搭话」里设的醒着时间内刷。">
+      <Card title="怎么刷与模型" desc="只在「主动搭话」里设的醒着时间内刷。留空则跟随聊天用的全局模型。">
+        <BiliModelRow draft={draft} setDraft={setDraft} />
         <Row label="定时自己去刷">{f.sw('bili.autoBrowse')}</Row>
         <Row label="多久刷一轮">{f.range('bili.intervalHours', 1, 24, 1, (v) => v + ' 小时')}</Row>
         <Row label="每天最多刷">{f.range('bili.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')}</Row>
         <Row label="一轮看几个视频">{f.range('bili.perRun', 1, 6, 1, (v) => v + ' 个')}</Row>
         <Row label="额外想看的方向" hint="一行一个；另外还会参考她的兴趣和记忆">{f.list('bili.keywords', { placeholder: '白米饭 做法\n猫咪\n游戏解说' })}</Row>
-        <Row label="播放量门槛">{f.num('bili.minViews', { min: 0 })}<span className="ab-muted">次以上</span></Row>
-        <Row label="只看最近">{f.num('bili.maxAgeDays', { min: 0 })}<span className="ab-muted">天内发的（0 = 不限）</span></Row>
+        <Row label="播放量门槛">{f.num('bili.minViews', { min: 0, fallback: 5000 })}<span className="ab-muted">次以上</span></Row>
+        <Row label="只看最近">{f.num('bili.maxAgeDays', { min: 0, fallback: 60 })}<span className="ab-muted">天内发的（0 = 不限）</span></Row>
       </Card>
-      <BiliModel draft={draft} setDraft={setDraft} />
       <Card
         title="看画面（抽帧 + 视觉）"
         desc="默认只读标题、简介、字幕和热评。打开后用 ffmpeg 抽帧交给视觉模型，截图保存到本机，可以在 QQ 聊天里让她挑一张发送。"
@@ -110,7 +103,7 @@ function Bili({ draft, setDraft, toast }) {
         <Row label="让她看画面" hint="需要视觉模型 + ffmpeg；关掉就退回只看文字">{f.sw('bili.vision')}</Row>
         <Row label="每个视频抽几帧">{f.range('bili.visionFrames', 2, 12, 1, (v) => v + ' 帧')}</Row>
         <Row label="刷完顺手发张截图" hint="概率；默认 35%，0 = 从不。截图都存在本机，你让她发她也能挑">{f.range('bili.shotChance', 0, 1, 0.05, (v) => Math.round(v * 100) + '%')}</Row>
-        <Row label="截图库最多存" hint="超过就自动删最旧的；下面的截图库里也能一张张手动删">{f.num('bili.shotLibrary', { min: 20, max: 2000 })}<span className="ab-muted">张</span></Row>
+        <Row label="截图库最多存" hint="超过就自动删最旧的；下面的截图库里也能一张张手动删">{f.num('bili.shotLibrary', { min: 20, max: 2000, fallback: 300 })}<span className="ab-muted">张</span></Row>
         <Row label="ffmpeg 路径" hint="留空就自己在 PATH 里找；找不到就填绝对路径">{f.text('bili.ffmpegPath', { placeholder: 'C:\\ffmpeg\\bin\\ffmpeg.exe' })}</Row>
         {s && s.vision ? (
           <div className="ab-small" style={{ marginTop: 4, color: s.vision.ffmpeg ? 'var(--ab-ok)' : 'var(--ab-warn)' }}>
@@ -125,8 +118,8 @@ function Bili({ draft, setDraft, toast }) {
             : <div className="ab-shots">{(shots || []).map((it) => <ShotCell key={it.file} it={it} onChanged={() => { loadShots(); load() }} toast={toast} />)}</div>}
       </Card>
       <Card title="评论、回复和分享" desc="评论和回复要登录。试运行开着时只记日志不发。">
-        <Row label="自己发评论">{f.sw('bili.comment')}<span className="ab-muted">每天最多</span>{f.num('bili.maxCommentsPerDay', { min: 0, max: 50 })}<span className="ab-muted">条</span></Row>
-        <Row label="回别人回她的评论">{f.sw('bili.reply')}<span className="ab-muted">每天最多</span>{f.num('bili.maxRepliesPerDay', { min: 0, max: 100 })}<span className="ab-muted">条</span></Row>
+        <Row label="自己发评论">{f.sw('bili.comment')}<span className="ab-muted">每天最多</span>{f.num('bili.maxCommentsPerDay', { min: 0, max: 50, fallback: 3 })}<span className="ab-muted">条</span></Row>
+        <Row label="回别人回她的评论">{f.sw('bili.reply')}<span className="ab-muted">每天最多</span>{f.num('bili.maxRepliesPerDay', { min: 0, max: 100, fallback: 6 })}<span className="ab-muted">条</span></Row>
         <Row label="看到好玩的分享给你" hint="私聊发给主人，带视频链接">{f.sw('bili.shareToOwner')}</Row>
         <Row label="顺手点赞">{f.sw('bili.like')}</Row>
       </Card>

@@ -322,6 +322,29 @@ var parsePct = (t) => {
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(Math.min(n, 100));
 };
+var parseNumText = (t, { min, max, clamp, step } = {}) => {
+  const s = String(t ?? "").trim();
+  if (!s) return "";
+  if (!/^[-+]?(\d+(\.\d*)?|\.\d+)$/.test(s)) return "";
+  const n = Number(s);
+  if (!Number.isFinite(n)) return "";
+  let v = Number(step || 1) === 1 ? Math.floor(n) : n;
+  if (clamp) {
+    if (min !== void 0 && min !== null && v < min) v = min;
+    if (max !== void 0 && max !== null && v > max) v = max;
+  }
+  return v;
+};
+var commitNumText = (raw, { min, max, step, allowEmpty, scale } = {}) => {
+  const unit = Number(step || 1);
+  const parsed = parseNumText(raw, { min, max, clamp: true, step: unit });
+  if (parsed === "") {
+    if (allowEmpty) return { value: "", text: "" };
+    const fallback = min !== void 0 && min !== null ? min : max !== void 0 && max !== null ? max : "";
+    return { value: fallback === "" ? "" : fallback * (scale || 1), text: fallback === "" ? "" : String(fallback) };
+  }
+  return { value: parsed * (scale || 1), text: String(parsed) };
+};
 var pitchNum = (s) => {
   const m = /^([+-]?\d+)Hz$/i.exec(String(s || ""));
   return m ? Math.max(-80, Math.min(80, Number(m[1]))) : 0;
@@ -346,7 +369,7 @@ var copy = (text, toast, msg) => {
 };
 
 // client/src/styles/theme.css
-var theme_default = '/* QQ Hub 面板样式 —— 现代中性 SaaS 风。\n * 设计原则：\n *   - 一套 token 从上到下只声明一次，不再有「美化」覆盖段；\n *   - 层级靠间距和字重，不靠渐变和装饰条；\n *   - 跟随宿主 DSH 的主题变量（--dsw-alias-*），浅色/深色自动切换；\n *   - 变量名与类名沿用 .ab- / --ab- 前缀：内置模块的自定义面板（memory-privacy、\n *     token-guardian 等）直接引用这些类和变量，是隐形契约，不能改名。\n */\n\n/* ---------------- tokens ---------------- */\n.ab-root {\n  --ab-bg: var(--dsw-alias-bg-base, #f5f6f8);\n  --ab-card: var(--dsw-alias-bg-layer-1, #ffffff);\n  --ab-card-2: var(--dsw-alias-bg-layer-2, #f3f4f6);\n  --ab-text: var(--dsw-alias-label-primary, #1a1c20);\n  --ab-sub: var(--dsw-alias-label-secondary, #5c626d);\n  --ab-dim: var(--dsw-alias-label-tertiary, #878d97);\n  --ab-line: var(--dsw-alias-border-l1, rgba(17, 20, 28, .08));\n  --ab-line-2: var(--dsw-alias-border-l2, rgba(17, 20, 28, .14));\n  --ab-sea: #3366e6;\n  --ab-deep: #274fb8;\n  --ab-sky: #7fa3f0;\n  --ab-foam: rgba(51, 102, 230, .07);\n  --ab-foam-2: rgba(51, 102, 230, .14);\n  --ab-ok: var(--dsw-alias-state-success-primary, #1a8a4a);\n  --ab-warn: var(--dsw-alias-state-warn-primary, #b37d00);\n  --ab-err: var(--dsw-alias-state-error-primary, #d33b3b);\n  --ab-hover: var(--dsw-alias-interactive-bg-hover, rgba(17, 20, 28, .05));\n  --ab-shadow: 0 1px 2px rgba(16, 24, 40, .05);\n  --ab-shadow-lg: 0 8px 28px rgba(16, 24, 40, .16);\n  --ab-radius: 12px;\n  --ab-radius-sm: 8px;\n  --ab-focus: 0 0 0 3px var(--ab-foam-2);\n\n  height: 100%;\n  overflow: auto;\n  background: var(--ab-bg);\n  color: var(--ab-text);\n  font-size: 14px;\n  line-height: 1.55;\n  padding: var(--dsh-frame-top-clearance, 24px) 0 48px;\n  box-sizing: border-box;\n  font-family: var(--dsh-font-family-ui, inherit);\n  -webkit-font-smoothing: antialiased;\n}\nbody[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {\n  --ab-sea: #6a95f5;\n  --ab-deep: #a5c0fa;\n  --ab-sky: #8fb0f7;\n  --ab-foam: rgba(106, 149, 245, .10);\n  --ab-foam-2: rgba(106, 149, 245, .20);\n  --ab-ok: #3fb968;\n  --ab-warn: #d9a13a;\n  --ab-err: #e5584f;\n  --ab-shadow: 0 1px 2px rgba(0, 0, 0, .3);\n  --ab-shadow-lg: 0 8px 28px rgba(0, 0, 0, .45);\n}\n.ab-root *, .ab-root *::before, .ab-root *::after { box-sizing: border-box }\n\n/* ---------------- 布局 ---------------- */\n.ab-wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px }\n/* 单列轨道必须写成 minmax(0, 1fr)：裸 1fr 的最小值是 min-content，卡片里任何不可收缩的\n * 内容（扩展页紧凑行的 nowrap 描述、长路径、sha256……）都会把轨道顶到内容宽，\n * 整页跟着横向溢（真机 2026-11-21：系统 → 扩展页 393px 视口下轨道被撑到 1344px）。 */\n.ab-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) }\n/* 网格轨道用 min(Npx, 100%) 而不是裸 Npx：窄屏（<320px 内容宽）时轨道能收到容器宽，\n * 否则 1fr 的隐式 min-content 会把整条轨道顶出视口、页面出现横向滚动（真机 2026-11-15） */\n.ab-g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)) }\n.ab-g4 { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)) }\n\n/* ---------------- 顶栏（替代旧 hero，无卡片无波浪） ---------------- */\n.ab-topbar { display: flex; align-items: center; gap: 14px; padding: 14px 2px 16px }\n.ab-avatar { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: 50% 18%; background: var(--ab-card); border: 1px solid var(--ab-line-2); flex: none; display: block }\n.ab-topbar-main { flex: 1; min-width: 0 }\n.ab-topbar h1 { margin: 0; font-size: 18px; font-weight: 650; line-height: 1.3; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }\n.ab-topbar .ab-meta { color: var(--ab-sub); font-size: 13px; margin-top: 2px }\n.ab-topbar-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; flex: none }\n.ab-avatar-btn { position: relative; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; flex: none }\n.ab-avatar-btn .ab-avatar-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(15, 23, 42, .5); color: #fff; font-size: 12px; opacity: 0; transition: opacity .15s }\n.ab-avatar-btn:hover .ab-avatar-tip, .ab-avatar-btn:focus-visible .ab-avatar-tip { opacity: 1 }\n\n.ab-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px }\n.ab-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--ab-card); border: 1px solid var(--ab-line); color: var(--ab-sub) }\n.ab-pill.ok { color: var(--ab-ok); border-color: color-mix(in srgb, var(--ab-ok) 25%, transparent); background: color-mix(in srgb, var(--ab-ok) 7%, var(--ab-card)) }\n.ab-pill.warn { color: var(--ab-warn); border-color: color-mix(in srgb, var(--ab-warn) 30%, transparent); background: color-mix(in srgb, var(--ab-warn) 8%, var(--ab-card)) }\n.ab-pill.err { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 30%, transparent); background: color-mix(in srgb, var(--ab-err) 7%, var(--ab-card)) }\n.ab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ab-dim); flex: none }\n.ab-dot.ok { background: var(--ab-ok) }\n.ab-dot.warn { background: var(--ab-warn) }\n.ab-dot.err { background: var(--ab-err) }\n\n/* ---------------- 桌面导航（分组 + 标签两层） ---------------- */\n/* 背景用不透明底色：吸顶元素挂 backdrop-filter 会让 Electron 每帧都对背后内容做模糊，\n * 滚动/点击掉帧的大头就是它（真机 2026-11-15 反馈）。毛玻璃观感让位给流畅度。 */\n.ab-nav { position: sticky; top: 0; z-index: 5; margin: var(--dsh-frame-top-clearance, 24px) 0 14px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow) }\n/* ::before 是滚动遮罩：吸顶后盖住导航上方的宿主预留条，防止滚动内容从那一条里透出来。\n * 所以导航必须保留等高的顶部间距，把非滚动内容（顶栏）让出这条带——之前删掉这段间距，\n * 遮罩条正好压在顶栏的状态胶囊上，文字被「裁」掉一半（真机 2026-11-14 反馈）。 */\n.ab-nav::before { content: ""; position: absolute; left: -26px; right: -26px; bottom: calc(100% + 1px); height: var(--dsh-frame-top-clearance, 24px); background: var(--ab-bg); pointer-events: none }\n.ab-nav-top { display: flex; align-items: center; gap: 6px; padding: 6px }\n.ab-nav-groups { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none }\n.ab-nav-groups::-webkit-scrollbar, .ab-nav-sub::-webkit-scrollbar { display: none }\n.ab-grp { flex: none; position: relative; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 0; border-radius: var(--ab-radius-sm); background: transparent; color: var(--ab-sub); font: inherit; font-size: 13px; cursor: pointer; transition: background .15s, color .15s }\n.ab-grp svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none }\n.ab-grp:hover { background: var(--ab-hover); color: var(--ab-text) }\n.ab-grp.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }\n.ab-grp .dirty { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n.ab-find-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-dim); font: inherit; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s }\n.ab-find-btn:hover { color: var(--ab-text); border-color: var(--ab-line-2) }\n.ab-find-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round }\n.ab-nav-sub { display: flex; gap: 2px; padding: 0 8px; border-top: 1px solid var(--ab-line); overflow-x: auto; scrollbar-width: none }\n.ab-tab { flex: none; position: relative; border: 0; background: transparent; color: var(--ab-sub); padding: 9px 12px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: color .15s }\n.ab-tab:hover { color: var(--ab-text) }\n.ab-tab::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px; background: transparent; transition: background .15s }\n.ab-tab.on { color: var(--ab-deep); font-weight: 600 }\n.ab-tab.on::after { background: var(--ab-sea) }\n.ab-tab .dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n.ab-tab .ab-dot { width: 6px; height: 6px }\n.ab-finder { position: absolute; right: 6px; top: calc(100% + 6px); width: 340px; max-width: calc(100% - 12px); padding: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow-lg); z-index: 20 }\n.ab-finder .ab-input { width: 100% }\n.ab-finder-list { margin-top: 6px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 1px }\n.ab-finder-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--ab-radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; color: var(--ab-text); cursor: pointer }\n.ab-finder-item small { margin-left: auto; color: var(--ab-dim); font-size: 11.5px }\n.ab-finder-item.on, .ab-finder-item:hover { background: var(--ab-foam) }\n.ab-finder-empty { padding: 12px 10px; color: var(--ab-dim); font-size: 12px }\n.ab-kbd { font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 11px; padding: 0 5px; border: 1px solid var(--ab-line-2); border-radius: 5px; color: var(--ab-dim) }\n\n/* ---------------- 移动端导航：底部栏 + 当前分组横滚 chips ---------------- */\n.ab-mobilebar, .ab-chips { display: none }\n@media (max-width: 720px) {\n  .ab-nav { display: none }\n  .ab-root { padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) }\n  .ab-wrap { padding: 0 14px }\n  .ab-topbar { flex-wrap: wrap; padding: 10px 0 12px }\n  .ab-topbar-side { flex-direction: row; align-items: center; width: 100%; justify-content: flex-start; gap: 14px }\n  .ab-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 0 0 10px }\n  .ab-chips::-webkit-scrollbar { display: none }\n  .ab-chipbtn { flex: none; border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap }\n  .ab-chipbtn.on { background: var(--ab-foam-2); border-color: color-mix(in srgb, var(--ab-sea) 35%, transparent); color: var(--ab-deep); font-weight: 600 }\n  .ab-mobilebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; background: color-mix(in srgb, var(--ab-card) 94%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--ab-line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px)) }\n  .ab-mgrp { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; border: 0; background: transparent; color: var(--ab-dim); font: inherit; font-size: 10.5px; padding: 6px 2px; cursor: pointer; border-radius: var(--ab-radius-sm); position: relative }\n  .ab-mgrp svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round }\n  .ab-mgrp.on { color: var(--ab-deep) }\n  .ab-mgrp .dirty { position: absolute; top: 4px; right: calc(50% - 14px); width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n  /* 扩展页：窄屏下搜索框收窄，分组头允许换行 */\n  .ab-search { max-width: 132px }\n  .ab-modgroup-head { flex-wrap: wrap; row-gap: 2px }\n}\n\n/* ---------------- 卡片 ---------------- */\n.ab-card { background: var(--ab-card); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 16px 18px; box-shadow: var(--ab-shadow) }\n.ab-card h3 { margin: 0 0 2px; font-size: 14.5px; font-weight: 620; display: flex; align-items: center; gap: 8px }\n.ab-card .ab-desc { color: var(--ab-sub); font-size: 12.5px; margin: 2px 0 12px; line-height: 1.6 }\n.ab-stat { padding: 14px 16px }\n.ab-stat .n { font-size: 26px; font-weight: 650; color: var(--ab-text); font-variant-numeric: tabular-nums; line-height: 1.25 }\n.ab-stat .l { color: var(--ab-sub); font-size: 12px; margin-top: 2px }\n.ab-stat .ic { position: absolute; right: 14px; top: 12px; font-size: 20px; opacity: .85 }\n\n/* ---------------- 字段行（label + hint + 控件） ---------------- */\n.ab-row { display: flex; align-items: flex-start; gap: 20px; padding: 12px 0; border-top: 1px solid var(--ab-line) }\n.ab-row:first-of-type { border-top: 0 }\n.ab-row .ab-label { flex: 0 0 200px; padding-top: 5px }\n.ab-row .ab-label b { display: block; font-weight: 560; font-size: 13.5px }\n.ab-row .ab-label small { display: block; color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 2px }\n/* 控件列限宽：一行只有一个数字框时右侧不再留出大片空白，整页更紧凑 */\n.ab-row .ab-ctl { flex: 1; min-width: 0; max-width: 640px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n\n/* ---------------- 控件 ---------------- */\n.ab-input, .ab-select, .ab-textarea { border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 10px; background: var(--ab-card); color: var(--ab-text); font: inherit; outline: none; min-width: 0; transition: border-color .12s, box-shadow .12s }\n.ab-input:hover, .ab-textarea:hover { border-color: var(--ab-sky) }\n.ab-input:focus, .ab-select:focus, .ab-textarea:focus { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-input { width: 240px; max-width: 100%; height: 34px }\n.ab-input.sm { width: 120px }\n.ab-input.wide { width: 100% }\n.ab-textarea { width: 100%; min-height: 90px; resize: vertical; line-height: 1.55; font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 12.5px }\n.ab-btn { border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); padding: 6px 14px; border-radius: var(--ab-radius-sm); font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background .12s, border-color .12s, box-shadow .12s, filter .12s; min-height: 32px }\n.ab-btn:hover { background: var(--ab-hover) }\n.ab-btn:disabled { opacity: .5; cursor: default }\n.ab-btn.primary { background: var(--ab-sea); border-color: var(--ab-sea); color: #fff }\n.ab-btn.primary:hover { filter: brightness(1.08) }\n.ab-btn.danger { color: var(--ab-err) }\n.ab-btn.danger:hover { background: color-mix(in srgb, var(--ab-err) 7%, transparent); border-color: color-mix(in srgb, var(--ab-err) 30%, transparent) }\n.ab-btn.ghost { border-color: transparent; background: transparent; color: var(--ab-sub) }\n.ab-btn.ghost:hover { color: var(--ab-text); background: var(--ab-hover) }\n.ab-btn.sm { padding: 3px 10px; font-size: 12px; min-height: 27px }\n.ab-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: abSpin .7s linear infinite; vertical-align: -2px }\n@keyframes abSpin { to { transform: rotate(360deg) } }\n.ab-switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--ab-line-2); border: 0; cursor: pointer; flex: none; transition: background .15s; padding: 0 }\n.ab-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: left .15s }\n.ab-switch.on { background: var(--ab-sea) }\n.ab-switch.on::after { left: 19px }\n.ab-switch-row { display: flex; align-items: center; gap: 10px }\n.ab-seg { display: inline-flex; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); overflow: hidden }\n.ab-seg button { border: 0; background: transparent; padding: 6px 14px; font: inherit; font-size: 13px; color: var(--ab-sub); cursor: pointer; border-left: 1px solid var(--ab-line); min-height: 32px }\n.ab-seg button:first-child { border-left: 0 }\n.ab-seg button.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }\n.ab-seg.off { opacity: .45 }\n.ab-seg.off button { cursor: not-allowed }\n.ab-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; width: 100% }\n.ab-choice { border: 1px solid var(--ab-line-2); border-radius: 10px; padding: 10px 12px; background: var(--ab-card); cursor: pointer; text-align: left; font: inherit; color: var(--ab-text); transition: border-color .12s, box-shadow .12s }\n.ab-choice:hover { border-color: var(--ab-sky) }\n.ab-choice.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }\n.ab-choice b { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13.5px }\n.ab-choice.on b { color: var(--ab-deep) }\n.ab-choice small { display: block; color: var(--ab-dim); font-size: 12px; margin-top: 3px; line-height: 1.5 }\n.ab-range { display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: 440px }\n.ab-range input[type=range] { flex: 1; accent-color: var(--ab-sea); height: 4px }\n.ab-range .val { min-width: 0; padding: 1px 9px; border-radius: 999px; background: var(--ab-foam); color: var(--ab-deep); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap }\n.ab-drop { border: 2px dashed var(--ab-line-2); border-radius: var(--ab-radius); padding: 22px 16px; text-align: center; color: var(--ab-sub); cursor: pointer; transition: border-color .15s, background .15s; background: var(--ab-card-2) }\n.ab-drop:hover, .ab-drop:focus-visible { border-color: var(--ab-sky); outline: none }\n.ab-drop.over { border-color: var(--ab-sea); background: var(--ab-foam); color: var(--ab-deep) }\n\n/* 自定义下拉 */\n.ab-sel { position: relative; display: inline-block; min-width: 200px; max-width: 100% }\n.ab-sel-btn { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 10px; background: var(--ab-card); color: var(--ab-text); font: inherit; font-size: 13px; cursor: pointer; text-align: left; min-height: 34px; transition: border-color .12s, box-shadow .12s }\n.ab-sel-btn:hover { border-color: var(--ab-sky) }\n.ab-sel-btn:focus-visible, .ab-sel.open .ab-sel-btn { outline: none; border-color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-sel-btn .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }\n.ab-sel-btn .chev { flex: none; color: var(--ab-dim); transition: transform .15s }\n.ab-sel.open .chev { transform: rotate(180deg) }\n.ab-sel-pop { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 100%; max-height: 300px; overflow: auto; padding: 5px; border-radius: 10px; background: var(--ab-card); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .12s ease-out }\n@keyframes abPop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }\n.ab-sel-opt { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: var(--ab-radius-sm); cursor: pointer; color: var(--ab-text); white-space: nowrap }\n.ab-sel-opt .ck { width: 14px; flex: none; color: var(--ab-sea); font-weight: 700 }\n.ab-sel-opt .tx { flex: 1; min-width: 0 }\n.ab-sel-opt .ds { display: block; font-size: 11.5px; color: var(--ab-dim); margin-top: 1px; white-space: normal }\n.ab-sel-opt.act { background: var(--ab-hover) }\n.ab-sel-opt.on { background: var(--ab-foam); color: var(--ab-deep); font-weight: 560 }\n.ab-sel-group { font-size: 11px; color: var(--ab-dim); padding: 6px 10px 2px; letter-spacing: .04em }\n\n/* ---------------- 提示 / 徽章 / 小件 ---------------- */\n.ab-note { padding: 10px 12px; border-radius: 10px; background: var(--ab-foam); color: var(--ab-text); font-size: 12.5px; border: 1px solid var(--ab-foam-2); line-height: 1.6 }\n.ab-note.warn { background: color-mix(in srgb, var(--ab-warn) 8%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent) }\n.ab-note.err { background: color-mix(in srgb, var(--ab-err) 7%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-err) 26%, transparent) }\n.ab-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--ab-sea); color: #fff; font-weight: 500; white-space: nowrap }\n.ab-badge.dim { background: var(--ab-card-2); color: var(--ab-sub); border: 1px solid var(--ab-line) }\n.ab-badge.warn { background: color-mix(in srgb, var(--ab-warn) 14%, var(--ab-card)); color: var(--ab-warn); border: 1px solid color-mix(in srgb, var(--ab-warn) 30%, transparent) }\n.ab-badge.err { background: color-mix(in srgb, var(--ab-err) 10%, var(--ab-card)); color: var(--ab-err); border: 1px solid color-mix(in srgb, var(--ab-err) 30%, transparent) }\n.ab-badge.mine { background: var(--ab-deep) }\n.ab-chip { border: 1px dashed var(--ab-line-2); background: transparent; color: var(--ab-sub); border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s }\n.ab-chip:hover { border-color: var(--ab-sea); color: var(--ab-deep); background: var(--ab-foam) }\n.ab-chip.solid { border-style: solid }\n.ab-chip.on { border-style: solid; border-color: var(--ab-sea); background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }\n.ab-chip .n { margin-left: 6px; font-size: 11px; color: var(--ab-dim); font-weight: 400 }\n.ab-ibtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: var(--ab-sub); cursor: pointer; padding: 0 }\n.ab-ibtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }\n.ab-ibtn:hover { background: var(--ab-hover); color: var(--ab-text) }\n.ab-ibtn.danger:hover { color: var(--ab-err) }\n.ab-ibtn:disabled { opacity: .3; cursor: default; background: transparent }\n.ab-aibtn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; margin-left: 2px; border: 0; border-radius: 7px; background: var(--ab-foam); color: var(--ab-deep); font: inherit; font-size: 12px; cursor: pointer; transition: background .12s }\n.ab-aibtn:hover, .ab-aibtn.on { background: var(--ab-foam-2) }\n.ab-aibtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }\n\n.ab-steps { counter-reset: s; display: flex; flex-direction: column; gap: 12px }\n.ab-step { display: flex; gap: 12px; align-items: flex-start }\n.ab-step::before { counter-increment: s; content: counter(s); flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 650; display: flex; align-items: center; justify-content: center; font-size: 12px }\n.ab-step.done::before { content: "✓"; background: var(--ab-ok); color: #fff }\n.ab-step > div { flex: 1; min-width: 0 }\n.ab-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12.5px }\n.ab-kv span:nth-child(odd) { color: var(--ab-sub) }\n\n.ab-table { width: 100%; border-collapse: collapse; font-size: 13px }\n.ab-table th { text-align: left; color: var(--ab-dim); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--ab-line); white-space: nowrap }\n.ab-table td { padding: 7px 8px; border-bottom: 1px solid var(--ab-line) }\n.ab-table tr:last-child td { border-bottom: 0 }\n.ab-table tr:hover td { background: var(--ab-hover) }\n\n.ab-flex { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n.ab-spacer { flex: 1 }\n.ab-muted { color: var(--ab-sub) }\n.ab-small { font-size: 12px }\n.ab-section-title { font-size: 12px; font-weight: 600; color: var(--ab-dim); letter-spacing: .04em; margin: 16px 2px 8px }\n.ab-empty { padding: 28px 12px; text-align: center; color: var(--ab-dim) }\n.ab-empty .big { font-size: 26px; margin-bottom: 4px }\n\n/* 列表行 */\n.ab-list { display: flex; flex-direction: column }\n.ab-li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 4px; border-top: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm) }\n.ab-li:first-child { border-top: 0 }\n.ab-li:hover { background: var(--ab-hover) }\n.ab-li .meta { color: var(--ab-dim); font-size: 11.5px; white-space: nowrap }\n.ab-li .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word }\n\n/* 日志 */\n.ab-logs { font-family: var(--dsh-font-family-code, ui-monospace, monospace); font-size: 12px; max-height: 520px; overflow: auto; border-radius: 10px; background: var(--ab-card-2); border: 1px solid var(--ab-line); padding: 8px 0 }\n.ab-log { display: flex; gap: 10px; padding: 2px 12px; align-items: baseline }\n.ab-log:hover { background: var(--ab-hover) }\n.ab-log .t { color: var(--ab-dim); flex: none }\n.ab-log .a { flex: none; color: var(--ab-sea); min-width: 62px }\n.ab-log .m { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word }\n.ab-log.warn .m { color: var(--ab-warn) }\n.ab-log.error .m { color: var(--ab-err) }\n.ab-log.debug .m { color: var(--ab-dim) }\n.ab-mem-item { transition: background .12s; border-radius: 6px; margin: 0 -6px; padding: 6px 6px !important }\n/* memory-privacy 的查看弹窗底色偏暗，hover 高亮两种主题下都要可见 */\n.ab-mem-item:hover { background: rgba(122, 143, 175, .18) }\n.ab-close { transition: opacity .12s }\n.ab-close:hover { opacity: .72 }\n.ab-code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); padding: 8px 10px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0 }\n\n/* 表情包 / 截图 / 画作 */\n.ab-stickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px }\n.ab-sticker { border: 1px solid var(--ab-line); border-radius: 10px; padding: 8px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative; transition: transform .12s, box-shadow .12s }\n.ab-sticker:hover { transform: translateY(-2px); box-shadow: var(--ab-shadow) }\n.ab-sticker img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: var(--ab-radius-sm); background: var(--ab-card-2) }\n.ab-sticker .nm, .ab-sticker .tg { border: 1px dashed transparent; background: transparent; text-align: center; width: 100%; outline: none; padding: 2px 4px; border-radius: 6px; font: inherit }\n.ab-sticker .nm { font-size: 12px; color: var(--ab-text) }\n.ab-sticker .tg { font-size: 11px; color: var(--ab-dim); min-height: 16px }\n.ab-sticker:hover .nm, .ab-sticker:hover .tg { border-color: var(--ab-line) }\n.ab-sticker .nm:focus, .ab-sticker .tg:focus { background: var(--ab-card-2); border-style: solid; border-color: var(--ab-line) }\n.ab-sticker .x, .ab-shot .x { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .15s }\n.ab-sticker:hover .x, .ab-shot:hover .x { opacity: 1 }\n.ab-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px }\n.ab-shot { border: 1px solid var(--ab-line); border-radius: 10px; padding: 6px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative }\n.ab-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); display: block }\n.ab-shot .cap { font-size: 11px; color: var(--ab-dim); line-height: 1.35; max-height: 2.7em; overflow: hidden }\n\n/* 人格页：左列（列表+头像）跟随滚动钉在吸顶导航下方——右侧编辑区很长时，\n * 左列不跟着滚空一大块；列表条目少时视觉上也更完整。\n * 轨道 minmax(0,1fr)：行内「200px 标签 + 240px 固定宽输入」的最小内容宽会把裸 1fr\n * 轨道顶到 ~438px，窄屏整页横向溢出（真机 2026-11-15） */\n.ab-persona { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 12px; align-items: start }\n.ab-plist { position: sticky; top: 124px; display: flex; flex-direction: column; gap: 6px }\n.ab-pitem { text-align: left; border: 1px solid var(--ab-line); background: var(--ab-card); border-radius: 10px; padding: 10px 12px; cursor: pointer; color: var(--ab-text); font: inherit; transition: border-color .12s, box-shadow .12s }\n.ab-pitem:hover { border-color: var(--ab-line-2) }\n.ab-pitem.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-pitem .nm { font-weight: 600; display: flex; align-items: center; gap: 6px }\n.ab-pitem .tg { color: var(--ab-dim); font-size: 11.5px; margin-top: 2px }\n.ab-psecs { display: flex; flex-direction: column; gap: 10px; margin-top: 12px }\n.ab-psec { --c: var(--ab-sea); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); transition: border-color .2s, box-shadow .2s }\n.ab-psec:hover { border-color: color-mix(in srgb, var(--c) 24%, var(--ab-line)) }\n.ab-psec:focus-within { border-color: color-mix(in srgb, var(--c) 40%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 8%, transparent) }\n.ab-psec-head { display: flex; align-items: center; gap: 4px; padding: 10px 8px 0 14px }\n.ab-psec-head::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 8px; opacity: .9 }\n.ab-psec-title { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 13.5px; letter-spacing: .02em; color: color-mix(in srgb, var(--c) 42%, var(--ab-text)); padding: 4px 0; outline: none }\n.ab-psec-title::placeholder { color: var(--ab-dim); font-weight: 400 }\n.ab-psec-fixed { flex: 1; min-width: 0; font-weight: 620; font-size: 13.5px; padding: 4px 0 }\n.ab-psec-fixed small { font-weight: 400; color: var(--ab-dim); margin-left: 8px; font-size: 11.5px }\n.ab-psec-n { font-size: 11px; color: var(--ab-dim); font-variant-numeric: tabular-nums; margin-right: 4px }\n.ab-psec-act { display: flex; align-items: center; gap: 2px; opacity: .5; transition: opacity .12s }\n.ab-psec:hover .ab-psec-act, .ab-psec:focus-within .ab-psec-act { opacity: 1 }\n.ab-psec textarea { display: block; width: 100%; border: 0; background: transparent; resize: vertical; outline: none; padding: 6px 16px 12px 30px; font: inherit; font-size: 13px; line-height: 1.75; color: var(--ab-text) }\n.ab-psec textarea::placeholder { color: var(--ab-dim) }\n.ab-psec.cmp { border-color: color-mix(in srgb, var(--c) 45%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 10%, transparent) }\n.ab-psec.cmp textarea { cursor: default }\n.ab-psec-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px }\n.ab-tf-who { margin-top: 8px; font-size: 12px; color: var(--ab-sub); line-height: 1.6 }\n.ab-compare { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 12px 12px; padding: 8px 8px 8px 12px; border-radius: 10px; background: var(--ab-foam) }\n.ab-compare-tag { font-size: 11.5px; font-weight: 600; color: var(--ab-deep); padding: 1px 8px; border-radius: 999px; background: var(--ab-card); border: 1px solid var(--ab-foam-2) }\n\n/* 进度条（token 用量等） */\n.ab-mood { height: 10px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; border: 1px solid var(--ab-line) }\n.ab-mood > i { display: block; height: 100%; border-radius: 999px; background: var(--ab-sea) }\n.ab-mood > i.hot { background: var(--ab-warn) }\n.ab-mood > i.full { background: var(--ab-err) }\n\n/* 保存条 / toast */\n.ab-savebar { position: sticky; bottom: 14px; margin-top: 16px; display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: var(--ab-radius); background: var(--ab-card); border: 1px solid color-mix(in srgb, var(--ab-sea) 45%, var(--ab-line)); box-shadow: var(--ab-shadow-lg); z-index: 6 }\n.ab-savebar .msg { flex: 1; color: var(--ab-deep); font-weight: 560 }\n@media (max-width: 720px) { .ab-savebar { bottom: calc(64px + env(safe-area-inset-bottom, 0px)) } }\n.ab-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 9px 16px; border-radius: 10px; background: var(--dsw-alias-toast-bg, #1f2328); color: var(--dsw-alias-toast-label, #fff); font-size: 13px; z-index: 50; box-shadow: var(--ab-shadow-lg); max-width: 80vw }\n.ab-toast.ok { background: var(--ab-ok); color: #fff }\n.ab-toast.err { background: var(--ab-err); color: #fff }\n\n/* 向导步骤条 */\n.ab-wiz-bar { display: flex; gap: 6px; margin-top: 12px }\n.ab-wiz-bar .seg { flex: 1; border: 0; background: transparent; padding: 0; cursor: default; text-align: left; font: inherit; color: var(--ab-dim) }\n.ab-wiz-bar .seg::before { content: ""; display: block; height: 4px; border-radius: 999px; background: var(--ab-line-2); margin-bottom: 6px }\n.ab-wiz-bar .seg.done { cursor: pointer; color: var(--ab-sub) }\n.ab-wiz-bar .seg.done::before { background: var(--ab-sky) }\n.ab-wiz-bar .seg.on { color: var(--ab-deep); font-weight: 600 }\n.ab-wiz-bar .seg.on::before { background: var(--ab-sea) }\n.ab-wiz-bar .seg span { font-size: 11.5px }\n\n/* 复查清单 / 驱动 / 安装步骤 */\n.ab-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 8px }\n.ab-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--ab-line); background: var(--ab-card-2); color: var(--ab-sub); font-size: 12.5px }\n.ab-check i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-line-2); color: #fff; flex: none }\n.ab-check.done { color: var(--ab-text); border-color: color-mix(in srgb, var(--ab-ok) 30%, transparent); background: color-mix(in srgb, var(--ab-ok) 7%, var(--ab-card)) }\n.ab-check.done i { background: var(--ab-ok) }\n.ab-drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px }\n.ab-drive { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer; transition: border-color .12s, box-shadow .12s }\n.ab-drive:hover { border-color: var(--ab-sky) }\n.ab-drive.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: linear-gradient(var(--ab-foam), var(--ab-foam)), var(--ab-card) }\n.ab-drive b { font-weight: 600 }\n.ab-drive small { color: var(--ab-dim); font-size: 11.5px; word-break: break-all }\n.ab-drive .bar { display: block; width: 100%; height: 4px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; margin-top: 4px }\n.ab-drive .bar i { display: block; height: 100%; background: var(--ab-sky) }\n.ab-drive.low .bar i { background: var(--ab-warn) }\n.ab-install { margin-top: 12px; padding: 14px 16px; border-radius: var(--ab-radius); border: 1px solid var(--ab-foam-2); background: var(--ab-foam) }\n.ab-install-steps { display: flex; gap: 6px }\n.ab-install-steps .st { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ab-dim); text-align: center; position: relative }\n.ab-install-steps .st::before { content: ""; position: absolute; top: 11px; left: -50%; right: 50%; height: 2px; background: var(--ab-line-2); z-index: 0 }\n.ab-install-steps .st:first-child::before { display: none }\n.ab-install-steps .st.done::before, .ab-install-steps .st.on::before { background: var(--ab-sea) }\n.ab-install-steps .st i { position: relative; z-index: 1; font-style: normal; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-card); border: 2px solid var(--ab-line-2); color: var(--ab-dim) }\n.ab-install-steps .st.done i { background: var(--ab-sea); border-color: var(--ab-sea); color: #fff }\n.ab-install-steps .st.on i { border-color: var(--ab-sea); color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-install-steps .st.on { color: var(--ab-deep); font-weight: 600 }\n.ab-install-steps .st span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }\n.ab-install-dl { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; margin-top: 10px }\n.ab-install-dl small { display: block; color: var(--ab-dim); font-size: 11px }\n.ab-install-dl b { font-size: 18px; font-variant-numeric: tabular-nums }\n\n/* 模块行 */\n.ab-mod { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--ab-line) }\n.ab-mod:first-child { border-top: 0 }\n.ab-mod .main { flex: 1; min-width: 0 }\n.ab-mod .nm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600 }\n.ab-mod .nm code { font-weight: 400; font-size: 11.5px; color: var(--ab-dim) }\n.ab-mod .ds { color: var(--ab-sub); font-size: 12.5px; margin-top: 2px }\n.ab-mod .what { color: var(--ab-dim); font-size: 11.5px; margin-top: 4px; word-break: break-word }\n.ab-mod .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px }\n.ab-mod .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px }\n\n/* 扩展页：模块分组（按能力折叠）+ 搜索 + 紧凑行 */\n.ab-modgroup { border-top: 1px solid var(--ab-line) }\n.ab-modgroup:first-of-type { border-top: 0 }\n.ab-modgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0; cursor: pointer; user-select: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; border-radius: var(--ab-radius-sm) }\n.ab-modgroup-head:hover .ab-modgroup-name { color: var(--ab-deep) }\n.ab-modgroup-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }\n.ab-modgroup-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }\n.ab-modgroup-chev.open { transform: rotate(90deg) }\n.ab-modgroup-name { font-weight: 600 }\n.ab-modgroup-meta { color: var(--ab-dim); font-size: 11.5px; font-variant-numeric: tabular-nums }\n.ab-modgroup-body { padding-bottom: 4px }\n.ab-search { max-width: 200px }\n/* 目录路径 + 操作按钮：窄屏时路径独占一行，别被按钮挤成一字一行 */\n.ab-dirrow { flex-wrap: wrap; row-gap: 8px }\n.ab-dirrow code { flex: 1 1 220px; min-width: 0 }\n.ab-mod.compact { padding: 8px 0 }\n.ab-mod.compact .ds { margin-top: 1px }\n.ab-mod.compact .ds.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }\n.ab-mod.compact .what, .ab-mod.compact .acts { margin-top: 6px }\n\n/* 可折叠的补充说明（长文案收纳用） */\n.ab-more { margin-top: 6px; font-size: 12px; color: var(--ab-dim) }\n.ab-more summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; user-select: none }\n.ab-more summary::-webkit-details-marker { display: none }\n.ab-more summary::before { content: "›"; display: inline-block; transition: transform .15s; color: var(--ab-dim) }\n.ab-more[open] summary::before { transform: rotate(90deg) }\n.ab-more summary:hover { color: var(--ab-sub) }\n.ab-more .ab-more-body { margin-top: 6px; color: var(--ab-sub); line-height: 1.65; white-space: pre-wrap }\n\n/* 可折叠长卡片（如「改资料与名单」16 行权限）：默认收起，标题行可点 */\n.ab-fold-head { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; cursor: pointer; user-select: none; border-radius: var(--ab-radius-sm) }\n.ab-fold-head h3 { margin: 0 }\n.ab-fold-head:hover h3, .ab-fold-head:focus-visible h3 { color: var(--ab-deep) }\n.ab-fold-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }\n.ab-fold-chev.open { transform: rotate(90deg) }\n.ab-fold-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }\n\n/* ---------------- 响应式 ---------------- */\n@media (max-width: 720px) {\n  .ab-row { flex-direction: column; gap: 6px; padding: 12px 0 }\n  .ab-row .ab-label { flex: none; padding-top: 0 }\n  .ab-row .ab-label small { max-width: none }\n  .ab-row .ab-ctl { max-width: none }\n  .ab-g2 { grid-template-columns: minmax(0, 1fr) }\n  .ab-card { padding: 14px }\n  .ab-input, .ab-select, .ab-textarea, .ab-sel-btn { font-size: 16px }\n  .ab-btn { min-height: 36px }\n  .ab-range { min-width: 0; width: 100% }\n  .ab-persona { grid-template-columns: minmax(0, 1fr) }\n  .ab-plist { position: static }\n  .ab-finder { left: 6px; right: 6px; width: auto; max-width: none }\n  .ab-wiz-bar .seg span { display: none }\n  .ab-install-steps .st span { display: none }\n  .ab-topbar h1 { font-size: 16px }\n}\n@media (prefers-reduced-motion: reduce) { .ab-root * { transition: none !important; animation: none !important } }\n.ab-root :focus-visible { outline: none; box-shadow: var(--ab-focus) }\n';
+var theme_default = '/* QQ Hub 面板样式 —— 简约现代中性风，原生对齐 DSH 0.2.3 主题变量（--dsw-alias-*）。\n * 设计原则：\n *   - 颜色令牌严格对照 DSH 实际亮/暗色值：主色取 --dsw-alias-state-business-primary（品牌蓝），\n *     不使用黑白反色的 --dsw-alias-brand-primary 作彩底，保证亮/暗模式均 ≥4.5:1 可读；\n *   - 表面层级在亮色下用 bg-module-platform（画布）→ bg-layer-1（白卡片）→ bg-layer-3（浮层）清晰分层，\n *     暗色下用 bg-base（深画布）→ bg-layer-1（卡片）→ bg-layer-3（浮层/激活态），绝不塌平或反转；\n *   - 容器查询 + 视口响应式双保险：宽屏、DSH 侧栏展开后的窄中栏、320px 小屏手机均无溢出与挤压；\n *   - 保留 .ab- / --ab- 命名与扩展模块 panel.js 所需别名（含深底弹窗 --ab-panel-bg）。\n */\n\n/* ---------------- tokens ---------------- */\n.ab-root {\n  /* 表面与层级（亮色模式：柔灰画布 + 纯白卡片 + 清晰细线） */\n  --ab-bg: var(--dsw-alias-bg-module-platform, #f5f6f8);\n  --ab-card: var(--dsw-alias-bg-layer-1, #ffffff);\n  --ab-card-2: var(--dsw-alias-bg-module-platform, #f2f4f7);\n  --ab-overlay: var(--dsw-alias-bg-layer-3, #ffffff);\n  --ab-seg-on: var(--dsw-alias-bg-layer-1, #ffffff);\n  --ab-text: var(--dsw-alias-label-primary, #151821);\n  --ab-sub: var(--dsw-alias-label-secondary, #5a616e);\n  --ab-dim: var(--dsw-alias-label-tertiary, #737a87);\n  --ab-line: var(--dsw-alias-border-l2, rgba(15, 23, 42, .09));\n  --ab-line-2: var(--dsw-alias-border-l4, rgba(15, 23, 42, .16));\n\n  /* 强调色：跟随 DSH 业务蓝，不用黑白反色的 --dsw-alias-brand-primary */\n  --ab-sea: var(--dsw-alias-state-business-primary, #3366e6);\n  --ab-solid: var(--dsw-alias-button-info-fill, var(--ab-sea));\n  --ab-deep: color-mix(in srgb, var(--ab-sea) 86%, var(--ab-text));\n  --ab-link: var(--dsw-alias-link, var(--ab-deep));\n  --ab-sky: color-mix(in srgb, var(--ab-sea) 52%, var(--ab-line-2));\n  --ab-foam: color-mix(in srgb, var(--ab-sea) 8%, transparent);\n  --ab-foam-2: color-mix(in srgb, var(--ab-sea) 15%, transparent);\n\n  /* 状态色：亮色模式下加深绿/琥珀，保证小字与徽章达 WCAG AA 对比度 */\n  --ab-ok: color-mix(in srgb, var(--dsw-alias-state-success-primary, #178a4b) 72%, #000);\n  --ab-ok-solid: color-mix(in srgb, var(--dsw-alias-state-success-primary, #178a4b) 76%, #000);\n  --ab-warn: var(--dsw-alias-state-warn-label, #b45309);\n  --ab-err: var(--dsw-alias-state-error-primary, #d63b3b);\n  --ab-err-solid: var(--dsw-alias-state-error-primary, #d63b3b);\n  --ab-hover: var(--dsw-alias-interactive-bg-hover, rgba(38, 49, 72, .06));\n\n  /* 模块 panel.js 隐形契约别名（token-guardian / token-billing / memory-privacy / distill） */\n  --ab-surface: var(--ab-card-2);\n  /* memory-privacy 弹窗正文硬编码浅字 #e8e8e8，必须保持深底（亮/暗均取 hovercard 深底） */\n  --ab-panel-bg: var(--dsw-alias-hovercard-bg, #1a1f2b);\n  --ab-muted-2: var(--ab-line);\n  --ab-accent: var(--ab-sea);\n  --ab-subtle-accent: var(--ab-foam);\n  --ab-accent-line: color-mix(in srgb, var(--ab-sea) 32%, transparent);\n  --ab-success: var(--ab-ok);\n  --ab-muted: var(--ab-sub);\n  --ab-text-secondary: var(--ab-sub);\n\n  --ab-shadow: 0 1px 2px rgba(15, 23, 42, .04);\n  --ab-shadow-lg: 0 10px 30px rgba(15, 23, 42, .12), 0 1px 3px rgba(15, 23, 42, .06);\n  --ab-radius: 14px;\n  --ab-radius-sm: 9px;\n  --ab-focus: 0 0 0 3px var(--ab-foam-2);\n\n  height: 100%;\n  overflow-y: auto;\n  overflow-x: hidden;\n  background: var(--ab-bg);\n  color: var(--ab-text);\n  font-size: 14px;\n  line-height: 1.55;\n  padding: 0 0 56px;\n  box-sizing: border-box;\n  font-family: var(--dsw-font-family, var(--dsh-font-family-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif));\n  -webkit-font-smoothing: antialiased;\n  -webkit-tap-highlight-color: transparent;\n}\nbody[data-ds-dark-theme] .ab-root, .ab-root.ab-dark {\n  --ab-bg: var(--dsw-alias-bg-base, #151619);\n  --ab-card: var(--dsw-alias-bg-layer-1, #1f2024);\n  /* 深色下凹槽表面比卡片更沉，确保 segmented/code/进度底槽与卡片有正向景深 */\n  --ab-card-2: color-mix(in srgb, var(--dsw-alias-bg-base, #151619) 55%, var(--dsw-alias-bg-layer-1, #1f2024));\n  --ab-overlay: var(--dsw-alias-bg-layer-3, #2b2d32);\n  --ab-seg-on: var(--dsw-alias-bg-layer-3, #31333a);\n  --ab-line: var(--dsw-alias-border-l2, rgba(255, 255, 255, .10));\n  --ab-line-2: var(--dsw-alias-border-l4, rgba(255, 255, 255, .18));\n\n  /* 深色实底按钮/徽章采用较深的 info-hover（deepseek-500），保证纯白字对比度 ≥4.5:1 */\n  --ab-solid: var(--dsw-alias-button-info-hover, #3867e8);\n  --ab-deep: var(--dsw-alias-link, #82b1ff);\n  --ab-sky: color-mix(in srgb, var(--ab-sea) 56%, transparent);\n  --ab-foam: color-mix(in srgb, var(--ab-sea) 13%, transparent);\n  --ab-foam-2: color-mix(in srgb, var(--ab-sea) 22%, transparent);\n\n  --ab-ok: var(--dsw-alias-state-success-secondary, #4ade80);\n  --ab-ok-solid: color-mix(in srgb, var(--dsw-alias-state-success-primary, #22c55e) 70%, #000);\n  --ab-warn: var(--dsw-alias-state-warn-secondary, #fbbf24);\n  --ab-err: var(--dsw-alias-state-error-primary, #f87171);\n  --ab-err-solid: color-mix(in srgb, var(--dsw-alias-state-error-primary, #ef4444) 76%, #000);\n  --ab-shadow: 0 1px 2px rgba(0, 0, 0, .26);\n  --ab-shadow-lg: 0 12px 32px rgba(0, 0, 0, .50);\n}\n.ab-root *, .ab-root *::before, .ab-root *::after { box-sizing: border-box }\n.ab-root a { color: var(--ab-link); text-decoration: none }\n.ab-root a:hover { text-decoration: underline }\n\n/* 防止 DSH 全局 corner-shape: superellipse(1.5) 把正圆头像/圆点/胶囊压成超椭圆 */\n.ab-avatar, .ab-avatar-btn, .ab-avatar-tip, .ab-pill, .ab-badge, .ab-dot,\n.ab-chip, .ab-chipbtn, .ab-switch, .ab-switch::after, .ab-mgrp-ic,\n.ab-step::before, .ab-check i, .ab-install-steps .st i, .ab-choice b::before,\n.ab-sticker .x, .ab-shot .x,\n.ab-mood, .ab-mood > i, .ab-range .val, .ab-psec-head::before,\n.ab-grp .dirty, .ab-tab .dirty, .ab-chipbtn .dirty, .ab-mgrp .dirty { corner-shape: round }\n\n/* ---------------- 布局 ---------------- */\n.ab-wrap { max-width: 980px; margin: 0 auto; padding: var(--dsh-frame-top-clearance, 14px) 24px 0 }\n.ab-page-body { container-type: inline-size; container-name: ab }\n.ab-embed-wrap { margin-top: 14px }\n/* 单列轨道必须写成 minmax(0, 1fr)：裸 1fr 的最小值是 min-content，卡片里任何不可收缩的\n * 内容（扩展页紧凑行的 nowrap 描述、长路径、sha256……）都会把轨道顶到内容宽，\n * 整页跟着横向溢（真机 2026-11-21：系统 → 扩展页 393px 视口下轨道被撑到 1344px）。 */\n.ab-grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) }\n/* 网格轨道用 min(Npx, 100%) 而不是裸 Npx：窄屏（<320px 内容宽）时轨道能收到容器宽，\n * 否则 1fr 的隐式 min-content 会把整条轨道顶出视口、页面出现横向滚动（真机 2026-11-15） */\n.ab-g2 { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)) }\n.ab-g4 { grid-template-columns: repeat(4, minmax(0, 1fr)) }\n.ab-platform-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); gap: 6px 18px; padding: 4px 0 }\n.ab-platform-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 2px; border-bottom: 1px solid var(--ab-line); font-size: 13px }\n\n/* ---------------- 顶栏 ---------------- */\n.ab-topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 16px; padding: 10px 2px 14px }\n.ab-topbar-id { display: flex; align-items: center; gap: 14px; flex: 1 1 280px; min-width: 0 }\n.ab-avatar { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: 50% 18%; background: var(--ab-card); border: 1px solid var(--ab-line-2); flex: none; display: block; transition: border-color .15s }\n.ab-topbar-main { flex: 1; min-width: 0 }\n.ab-topbar-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n.ab-topbar h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.015em; line-height: 1.3; word-break: break-word }\n.ab-topbar .ab-meta { color: var(--ab-sub); font-size: 12.5px; margin-top: 3px; display: flex; align-items: center; flex-wrap: wrap; gap: 3px 7px }\n.ab-topbar .ab-meta-sep { opacity: .4 }\n.ab-topbar-side { display: flex; align-items: center; gap: 14px; flex: none; padding: 7px 14px; border-radius: var(--ab-radius); background: var(--ab-card); border: 1px solid var(--ab-line); box-shadow: var(--ab-shadow) }\n.ab-topbar-div { width: 1px; height: 18px; background: var(--ab-line); flex: none }\n.ab-avatar-btn { position: relative; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; flex: none }\n.ab-avatar-btn:hover .ab-avatar { border-color: var(--ab-sea) }\n.ab-avatar-btn .ab-avatar-tip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: rgba(15, 23, 42, .56); color: #fff; font-size: 11px; font-weight: 500; opacity: 0; transition: opacity .15s }\n.ab-avatar-btn:hover .ab-avatar-tip, .ab-avatar-btn:focus-visible .ab-avatar-tip { opacity: 1 }\n.ab-mfind-trigger { display: none }\n\n.ab-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px }\n.ab-desc + .ab-pills, .ab-card-head + .ab-pills { margin-top: 0 }\n.ab-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; line-height: 1.5; background: var(--ab-card-2); border: 1px solid var(--ab-line); color: var(--ab-sub); max-width: 100% }\n.ab-pill.ok { color: var(--ab-ok); border-color: color-mix(in srgb, var(--ab-ok) 26%, transparent); background: color-mix(in srgb, var(--ab-ok) 9%, var(--ab-card)) }\n.ab-pill.warn { color: var(--ab-warn); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent); background: color-mix(in srgb, var(--ab-warn) 10%, var(--ab-card)) }\n.ab-pill.err { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 28%, transparent); background: color-mix(in srgb, var(--ab-err) 9%, var(--ab-card)) }\n.ab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ab-dim); flex: none }\n.ab-dot.ok { background: var(--ab-ok) }\n.ab-dot.warn { background: var(--ab-warn) }\n.ab-dot.err { background: var(--ab-err) }\n\n/* ---------------- 桌面导航（分组 + 标签两层） ---------------- */\n/* 背景用不透明底色：吸顶元素挂 backdrop-filter 会让 Electron 每帧都对背后内容做模糊，\n * 滚动/点击掉帧的大头就是它（真机 2026-11-15 反馈）。毛玻璃观感让位给流畅度。\n * z-index: 25 高于 .ab-savebar (15)，防止快捷查找弹层被底栏压住。 */\n.ab-nav { position: sticky; top: calc(var(--dsh-frame-top-clearance, 0px) + 8px); z-index: 25; margin: calc(var(--dsh-frame-top-clearance, 0px) + 12px) 0 16px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius); background: var(--ab-card); box-shadow: var(--ab-shadow) }\n/* ::before 遮住吸顶后导航上方的宿主预留条（含 8px 呼吸距），防止滚动内容从缝里透出；\n * 高度总比 margin-top 小 1px，确保未吸顶时绝不遮挡上方顶栏。 */\n.ab-nav::before { content: ""; position: absolute; left: -26px; right: -26px; bottom: calc(100% + 1px); height: calc(var(--dsh-frame-top-clearance, 0px) + 10px); background: var(--ab-bg); pointer-events: none }\n.ab-nav-top { display: flex; align-items: center; gap: 6px; padding: 6px 8px }\n.ab-nav-groups { display: flex; gap: 3px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none }\n.ab-nav-groups::-webkit-scrollbar, .ab-nav-sub::-webkit-scrollbar { display: none }\n.ab-grp { flex: none; position: relative; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border: 0; border-radius: var(--ab-radius-sm); background: transparent; color: var(--ab-sub); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s }\n.ab-grp svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none }\n.ab-grp:hover { background: var(--ab-hover); color: var(--ab-text) }\n.ab-grp.on { background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }\n.ab-grp .dirty { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n.ab-find-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 10px; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-sub); font: inherit; font-size: 12px; cursor: pointer; transition: color .15s, border-color .15s, background .15s }\n.ab-find-btn:hover { color: var(--ab-text); border-color: var(--ab-line-2); background: var(--ab-hover) }\n.ab-find-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round }\n.ab-nav-sub { display: flex; gap: 2px; padding: 0 10px; border-top: 1px solid var(--ab-line); overflow-x: auto; scrollbar-width: none }\n.ab-tab { flex: none; position: relative; border: 0; background: transparent; color: var(--ab-sub); padding: 9px 12px 10px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: color .15s }\n.ab-tab:hover { color: var(--ab-text) }\n.ab-tab::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 2px; background: transparent; transition: background .15s }\n.ab-tab.on { color: var(--ab-deep); font-weight: 600 }\n.ab-tab.on::after { background: var(--ab-sea) }\n.ab-tab .dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n.ab-tab .ab-dot { width: 6px; height: 6px }\n.ab-finder { position: absolute; right: 8px; top: calc(100% + 6px); width: 340px; max-width: calc(100% - 16px); padding: 10px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius); background: var(--ab-overlay); box-shadow: var(--ab-shadow-lg); z-index: 30; animation: abPop .12s ease-out }\n.ab-finder .ab-input { width: 100% }\n.ab-finder-list { margin-top: 6px; max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 2px }\n.ab-finder-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; border-radius: var(--ab-radius-sm); padding: 8px 10px; font: inherit; font-size: 13px; color: var(--ab-text); cursor: pointer; transition: background .12s }\n.ab-finder-item small { margin-left: auto; color: var(--ab-dim); font-size: 11.5px }\n.ab-finder-item.on, .ab-finder-item:hover { background: var(--ab-foam) }\n.ab-finder-empty { padding: 14px 10px; color: var(--ab-dim); font-size: 12.5px; text-align: center }\n.ab-kbd { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 11px; padding: 1px 5px; border: 1px solid var(--ab-line-2); border-radius: 5px; color: var(--ab-dim); background: var(--ab-card) }\n\n/* ---------------- 移动端导航与查找层 ---------------- */\n.ab-mobilebar, .ab-chips, .ab-mfinder-mask { display: none }\n@media (max-width: 720px) {\n  .ab-nav { display: none }\n  .ab-root { padding: max(var(--dsh-frame-top-clearance, 12px), 10px) 0 calc(78px + env(safe-area-inset-bottom, 0px)) }\n  .ab-wrap { padding: 0 12px }\n  .ab-topbar { flex-direction: column; align-items: stretch; gap: 9px; padding: 4px 2px 10px }\n  .ab-topbar-id { gap: 11px; flex-basis: auto }\n  .ab-avatar { width: 42px; height: 42px }\n  .ab-topbar h1 { font-size: 16.5px }\n  .ab-topbar .ab-meta { font-size: 12px }\n  .ab-topbar-side { width: 100%; padding: 7px 12px; border-radius: 12px; justify-content: space-between; gap: 0 }\n  .ab-topbar-side .ab-switch-row { flex: 1; justify-content: space-between; padding: 0 4px }\n  .ab-topbar-div { margin: 0 10px }\n  .ab-mfind-trigger { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; flex: none; border-radius: var(--ab-radius-sm); border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); cursor: pointer }\n  .ab-mfind-trigger svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.85; stroke-linecap: round; stroke-linejoin: round }\n  .ab-mfind-trigger:active { background: var(--ab-hover); color: var(--ab-text) }\n  .ab-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; margin: 0 -12px 10px; padding: 2px 12px 6px }\n  .ab-chips::-webkit-scrollbar { display: none }\n  .ab-chipbtn { flex: none; border: 1px solid var(--ab-line); background: var(--ab-card); color: var(--ab-sub); border-radius: 999px; padding: 6px 13px; min-height: 34px; font: inherit; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background .14s, color .14s, border-color .14s }\n  .ab-chipbtn.on { background: var(--ab-foam-2); border-color: color-mix(in srgb, var(--ab-sea) 36%, transparent); color: var(--ab-deep); font-weight: 600 }\n  .ab-chipbtn .dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n  .ab-chipbtn .ab-dot { width: 6px; height: 6px }\n  .ab-mobilebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; background: var(--ab-card); border-top: 1px solid var(--ab-line); padding: 4px 6px calc(5px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -2px 12px rgba(15, 23, 42, .06) }\n  .ab-mgrp { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 0; background: transparent; color: var(--ab-dim); font: inherit; font-size: 10.5px; font-weight: 500; padding: 3px 2px; min-height: 46px; cursor: pointer; border-radius: var(--ab-radius-sm); position: relative }\n  .ab-mgrp .ab-mgrp-ic { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 26px; border-radius: 999px; transition: background .15s }\n  .ab-mgrp svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round }\n  .ab-mgrp.on { color: var(--ab-deep); font-weight: 600 }\n  .ab-mgrp.on .ab-mgrp-ic { background: var(--ab-foam-2) }\n  .ab-mgrp .dirty { position: absolute; top: 4px; right: calc(50% - 16px); width: 6px; height: 6px; border-radius: 50%; background: var(--ab-warn) }\n  .ab-mfinder-mask { position: fixed; inset: 0; z-index: 45; display: flex; flex-direction: column; justify-content: flex-start; padding: max(14px, var(--dsh-frame-overlay-top, env(safe-area-inset-top, 14px))) 12px 12px; background: var(--dsw-alias-bg-mask-3, rgba(15, 23, 42, .45)) }\n  .ab-mfinder-sheet { width: 100%; max-height: 75dvh; display: flex; flex-direction: column; padding: 12px; border-radius: var(--ab-radius); background: var(--ab-overlay); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .14s ease-out }\n  .ab-mfinder-head { display: flex; align-items: center; gap: 8px }\n  .ab-mfinder-head .ab-input { flex: 1; width: auto }\n  .ab-mfinder-sheet .ab-finder-list { max-height: none; flex: 1; margin-top: 8px }\n  .ab-mfinder-sheet .ab-finder-item { padding: 10px 12px; font-size: 14px }\n  .ab-search { width: 100%; max-width: none }\n  .ab-modgroup-head { flex-wrap: wrap; row-gap: 4px }\n}\n\n/* ---------------- 卡片 ---------------- */\n.ab-card { background: var(--ab-card); border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 18px 20px; box-shadow: var(--ab-shadow) }\n.ab-wiz-card { padding: 20px 22px }\n.ab-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap }\n.ab-card-head .ab-spacer { display: none }\n.ab-card-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: 100%; flex: 0 1 auto }\n.ab-card h3 { margin: 0; font-size: 15px; font-weight: 620; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; line-height: 1.35 }\n.ab-card .ab-desc { color: var(--ab-sub); font-size: 12.5px; margin: 4px 0 11px; line-height: 1.55 }\n.ab-card.ab-fold.closed .ab-desc { margin-bottom: 0 }\n.ab-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n.ab-card-foot { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--ab-line); display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap }\n.ab-card-foot .ab-btn.ghost { margin-left: -10px }\n\n/* 概览指标卡 */\n.ab-stat { position: relative; padding: 15px 16px; display: flex; flex-direction: column; gap: 8px }\n.ab-stat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px }\n.ab-stat .l { color: var(--ab-sub); font-size: 12.5px; font-weight: 500; margin: 0 }\n.ab-stat .n { font-size: 26px; font-weight: 660; letter-spacing: -.02em; color: var(--ab-text); font-variant-numeric: tabular-nums; line-height: 1.15 }\n.ab-stat .ic { width: 28px; height: 28px; border-radius: 8px; background: var(--ab-foam); color: var(--ab-deep); display: inline-flex; align-items: center; justify-content: center; flex: none }\n.ab-stat .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }\n\n/* ---------------- 字段行（label + hint + 控件） ---------------- */\n.ab-row { display: flex; align-items: flex-start; gap: 22px; padding: 12px 0; border-top: 1px solid var(--ab-line) }\n.ab-row:first-of-type { border-top: 0; padding-top: 4px }\n.ab-row:last-child { padding-bottom: 2px }\n.ab-row.ab-row-sw { align-items: center }\n.ab-row.ab-row-sw .ab-label { padding-top: 0 }\n.ab-row .ab-label { flex: 0 0 210px; padding-top: 4px }\n.ab-row .ab-label b { display: block; font-weight: 560; font-size: 13.5px; line-height: 1.4 }\n.ab-row .ab-label small { display: block; color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 3px }\n/* 控件列限宽：一行只有一个数字框时右侧不再留出大片空白，整页更紧凑 */\n.ab-row .ab-ctl { flex: 1; min-width: 0; max-width: 620px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n\n/* ---------------- 控件 ---------------- */\n.ab-input, .ab-select, .ab-textarea { border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 11px; background: var(--ab-card); color: var(--ab-text); font: inherit; outline: none; min-width: 0; transition: border-color .14s, box-shadow .14s, background .14s }\n.ab-input:hover, .ab-textarea:hover { border-color: var(--ab-sky) }\n.ab-input:focus, .ab-select:focus, .ab-textarea:focus { border-color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-input { width: 240px; max-width: 100%; height: 35px }\n.ab-input.sm, .ab-input.narrow { width: 116px }\n.ab-input.wide { width: 100% }\n.ab-textarea { width: 100%; min-height: 88px; resize: vertical; line-height: 1.55; font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 12.5px }\n.ab-btn { border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); padding: 6px 14px; border-radius: var(--ab-radius-sm); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; transition: background .12s, border-color .12s, box-shadow .12s, filter .12s, transform .08s; min-height: 34px }\n.ab-btn:hover { background: var(--ab-hover) }\n.ab-btn:active:not(:disabled) { transform: scale(.985) }\n.ab-btn:disabled { opacity: .48; cursor: default }\n.ab-btn.primary { background: var(--ab-solid); border-color: var(--ab-solid); color: #fff }\n.ab-btn.primary:hover { filter: brightness(1.08) }\n.ab-btn.danger { color: var(--ab-err); border-color: color-mix(in srgb, var(--ab-err) 26%, var(--ab-line-2)) }\n.ab-btn.danger:hover { background: color-mix(in srgb, var(--ab-err) 8%, transparent); border-color: color-mix(in srgb, var(--ab-err) 40%, transparent) }\n.ab-btn.ghost { border-color: transparent; background: transparent; color: var(--ab-sub) }\n.ab-btn.ghost:hover { color: var(--ab-text); background: var(--ab-hover) }\n.ab-btn.sm { padding: 4px 10px; font-size: 12px; min-height: 29px }\n.ab-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: abSpin .7s linear infinite; vertical-align: -2px }\n@keyframes abSpin { to { transform: rotate(360deg) } }\n\n.ab-switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--ab-line-2); border: 0; cursor: pointer; flex: none; transition: background .16s; padding: 0 }\n.ab-switch::before { content: ""; position: absolute; inset: -7px -4px }\n.ab-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .24); transition: transform .16s }\n.ab-switch.on { background: var(--ab-solid) }\n.ab-switch.on::after { transform: translateX(16px) }\n.ab-switch:disabled { opacity: .45; cursor: default }\n.ab-switch-row { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; white-space: nowrap }\n\n.ab-seg { display: inline-flex; align-items: center; gap: 2px; padding: 3px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); max-width: 100%; overflow-x: auto; scrollbar-width: none }\n.ab-seg::-webkit-scrollbar { display: none }\n.ab-seg button { flex: none; border: 0; background: transparent; padding: 5px 13px; border-radius: 6px; font: inherit; font-size: 13px; color: var(--ab-sub); cursor: pointer; min-height: 28px; white-space: nowrap; transition: background .14s, color .14s, box-shadow .14s }\n.ab-seg button:hover:not(:disabled) { color: var(--ab-text) }\n.ab-seg button.on { background: var(--ab-seg-on); color: var(--ab-text); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, .10) }\n.ab-seg.off { opacity: .45 }\n.ab-seg.off button { cursor: not-allowed }\n\n.ab-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; width: 100% }\n.ab-choice { border: 1px solid var(--ab-line-2); border-radius: 11px; padding: 11px 13px; background: var(--ab-card); cursor: pointer; text-align: left; font: inherit; color: var(--ab-text); transition: border-color .14s, box-shadow .14s, background .14s }\n.ab-choice:hover { border-color: var(--ab-sky) }\n.ab-choice.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 7%, var(--ab-card)) }\n.ab-choice b { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px }\n.ab-choice b::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--ab-line-2); background: var(--ab-card); flex: none; transition: border-color .14s, border-width .14s }\n.ab-choice.on b { color: var(--ab-deep) }\n.ab-choice.on b::before { border-color: var(--ab-solid); border-width: 4.5px; background: #fff }\n.ab-choice small { display: block; color: var(--ab-dim); font-size: 12px; margin-top: 4px; padding-left: 22px; line-height: 1.5 }\n\n.ab-range { display: flex; align-items: center; gap: 10px; min-width: min(220px, 100%); max-width: 440px; flex: 1 1 200px }\n.ab-range input[type=range] { flex: 1; accent-color: var(--ab-solid); height: 4px; cursor: pointer }\n.ab-range .val { min-width: 0; padding: 2px 10px; border-radius: 999px; background: var(--ab-foam); color: var(--ab-deep); font-size: 12px; font-weight: 560; font-variant-numeric: tabular-nums; white-space: nowrap }\n.ab-drop { border: 2px dashed var(--ab-line-2); border-radius: var(--ab-radius); padding: 22px 16px; text-align: center; color: var(--ab-sub); cursor: pointer; transition: border-color .15s, background .15s; background: var(--ab-card-2) }\n.ab-drop:hover, .ab-drop:focus-visible { border-color: var(--ab-sky); outline: none }\n.ab-drop.over { border-color: var(--ab-sea); background: var(--ab-foam); color: var(--ab-deep) }\n\n/* 自定义下拉（支持自动向右对齐与向上展开，避免窄屏/页底裁剪） */\n.ab-sel { position: relative; display: inline-block; min-width: min(var(--ab-sel-w, 200px), 100%); max-width: 100% }\n.ab-sel-btn { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid var(--ab-line-2); border-radius: var(--ab-radius-sm); padding: 6px 11px; background: var(--ab-card); color: var(--ab-text); font: inherit; font-size: 13px; cursor: pointer; text-align: left; min-height: 35px; transition: border-color .14s, box-shadow .14s }\n.ab-sel-btn:hover { border-color: var(--ab-sky) }\n.ab-sel-btn:focus-visible, .ab-sel.open .ab-sel-btn { outline: none; border-color: var(--ab-sea); box-shadow: var(--ab-focus) }\n.ab-sel-btn .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }\n.ab-sel-btn .chev { flex: none; color: var(--ab-dim); transition: transform .15s }\n.ab-sel.open .chev { transform: rotate(180deg) }\n.ab-sel-pop { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 100%; max-width: min(380px, calc(100vw - 24px)); max-height: 280px; overflow: auto; padding: 5px; border-radius: 11px; background: var(--ab-overlay); border: 1px solid var(--ab-line-2); box-shadow: var(--ab-shadow-lg); animation: abPop .12s ease-out }\n.ab-sel.align-r .ab-sel-pop { left: auto; right: 0 }\n.ab-sel.up .ab-sel-pop { top: auto; bottom: calc(100% + 6px) }\n@keyframes abPop { from { opacity: 0; transform: translateY(-4px) } to { opacity: 1; transform: none } }\n.ab-sel-opt { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ab-text); white-space: nowrap }\n.ab-sel-opt .ck { width: 14px; flex: none; color: var(--ab-sea); font-weight: 700 }\n.ab-sel-opt .tx { flex: 1; min-width: 0 }\n.ab-sel-opt .ds { display: block; font-size: 11.5px; color: var(--ab-dim); margin-top: 2px; white-space: normal }\n.ab-sel-opt.act { background: var(--ab-hover) }\n.ab-sel-opt.on { background: var(--ab-foam); color: var(--ab-deep); font-weight: 560 }\n.ab-sel-group { font-size: 11px; font-weight: 600; color: var(--ab-dim); padding: 7px 10px 3px; letter-spacing: .04em }\n\n/* ---------------- 提示 / 徽章 / 小件 ---------------- */\n.ab-note { padding: 11px 14px; border-radius: 11px; background: var(--ab-foam); color: var(--ab-text); font-size: 12.5px; border: 1px solid var(--ab-foam-2); line-height: 1.6; overflow-wrap: anywhere; word-break: break-word }\n.ab-note.warn { background: color-mix(in srgb, var(--ab-warn) 9%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-warn) 28%, transparent) }\n.ab-note.err { background: color-mix(in srgb, var(--ab-err) 8%, var(--ab-card)); border-color: color-mix(in srgb, var(--ab-err) 28%, transparent) }\n.ab-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--ab-solid); color: #fff; font-weight: 500; white-space: nowrap }\n.ab-badge.dim { background: var(--ab-card-2); color: var(--ab-sub); border: 1px solid var(--ab-line) }\n.ab-badge.warn { background: color-mix(in srgb, var(--ab-warn) 14%, var(--ab-card)); color: var(--ab-warn); border: 1px solid color-mix(in srgb, var(--ab-warn) 30%, transparent) }\n.ab-badge.err { background: color-mix(in srgb, var(--ab-err) 11%, var(--ab-card)); color: var(--ab-err); border: 1px solid color-mix(in srgb, var(--ab-err) 30%, transparent) }\n.ab-badge.mine { background: var(--ab-solid) }\n.ab-chip { border: 1px dashed var(--ab-line-2); background: transparent; color: var(--ab-sub); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .12s, color .12s, background .12s }\n.ab-chip:hover { border-color: var(--ab-sea); color: var(--ab-deep); background: var(--ab-foam) }\n.ab-chip.solid { border-style: solid }\n.ab-chip.on { border-style: solid; border-color: var(--ab-sea); background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 600 }\n.ab-chip .n { margin-left: 6px; font-size: 11px; color: var(--ab-dim); font-weight: 400 }\n.ab-ibtn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: transparent; color: var(--ab-sub); cursor: pointer; padding: 0 }\n.ab-ibtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }\n.ab-ibtn:hover { background: var(--ab-hover); color: var(--ab-text) }\n.ab-ibtn.danger:hover { color: var(--ab-err) }\n.ab-ibtn:disabled { opacity: .3; cursor: default; background: transparent }\n.ab-aibtn { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; margin-left: 2px; border: 0; border-radius: 7px; background: var(--ab-foam); color: var(--ab-deep); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; transition: background .12s; white-space: nowrap }\n.ab-aibtn:hover, .ab-aibtn.on { background: var(--ab-foam-2) }\n.ab-aibtn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round }\n\n.ab-steps { counter-reset: s; display: flex; flex-direction: column; gap: 14px }\n.ab-step { display: flex; gap: 12px; align-items: flex-start }\n.ab-step::before { counter-increment: s; content: counter(s); flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--ab-foam-2); color: var(--ab-deep); font-weight: 650; display: flex; align-items: center; justify-content: center; font-size: 12px }\n.ab-step.done::before { content: "✓"; background: var(--ab-ok-solid); color: #fff }\n.ab-step > div { flex: 1; min-width: 0 }\n\n.ab-kv { display: grid; grid-template-columns: minmax(92px, auto) minmax(0, 1fr); gap: 0 18px; font-size: 13px }\n.ab-kv > span { padding: 9px 0; border-top: 1px solid var(--ab-line); display: flex; align-items: center; min-width: 0 }\n.ab-kv > span:nth-child(1), .ab-kv > span:nth-child(2) { border-top: 0; padding-top: 0 }\n.ab-kv > span:nth-last-child(1), .ab-kv > span:nth-last-child(2) { padding-bottom: 0 }\n.ab-kv > span:nth-child(odd) { color: var(--ab-sub); white-space: nowrap }\n.ab-kv > span:nth-child(even) { font-weight: 520; overflow-wrap: anywhere; word-break: break-word; font-variant-numeric: tabular-nums }\n.ab-g2 .ab-kv { grid-template-columns: auto minmax(0, 1fr) }\n.ab-g2 .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }\n.ab-g2 .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }\n\n.ab-table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm) }\n.ab-table { width: 100%; border-collapse: collapse; font-size: 13px }\n.ab-table th { text-align: left; color: var(--ab-dim); font-weight: 560; font-size: 12px; padding: 8px 10px; background: var(--ab-card-2); border-bottom: 1px solid var(--ab-line); white-space: nowrap }\n.ab-table td { padding: 8px 10px; border-bottom: 1px solid var(--ab-line); vertical-align: top }\n.ab-table tr:last-child td { border-bottom: 0 }\n.ab-table tr:hover td { background: var(--ab-hover) }\n\n.ab-flex { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n.ab-spacer { flex: 1 }\n.ab-muted { color: var(--ab-sub) }\n.ab-warn { color: var(--ab-warn) }\n.ab-small { font-size: 12px }\n.ab-section-title { font-size: 12px; font-weight: 620; color: var(--ab-sub); letter-spacing: .03em; margin: 18px 0 8px; padding-top: 12px; border-top: 1px solid var(--ab-line) }\n.ab-section-title:first-child { margin-top: 4px; padding-top: 0; border-top: 0 }\n.ab-empty { padding: 30px 14px; text-align: center; color: var(--ab-dim); font-size: 13px }\n.ab-empty .big { font-size: 26px; margin-bottom: 6px; opacity: .9 }\n\n/* 列表行 */\n.ab-list { display: flex; flex-direction: column }\n.ab-li { display: flex; gap: 12px; align-items: flex-start; padding: 11px 6px; border-top: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); transition: background .12s }\n.ab-li:first-child { border-top: 0 }\n.ab-li:hover { background: var(--ab-hover) }\n.ab-li .meta { color: var(--ab-dim); font-size: 11.5px; white-space: nowrap; flex: none }\n.ab-li .body { flex: 1 1 200px; min-width: 0; white-space: pre-wrap; word-break: break-word }\n.ab-li-col { flex-direction: column; gap: 4px }\n.ab-li-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; flex-wrap: wrap }\n\n/* Cookie 键值对输入行（B站等） */\n.ab-cookie-field { display: flex; align-items: center; gap: 8px; margin-bottom: 6px }\n.ab-cookie-field code { min-width: 82px; text-align: right; flex: none; color: var(--ab-sub) }\n.ab-cookie-field .ab-input { flex: 1; min-width: 0 }\n\n/* 日志 */\n.ab-logs { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 12px; max-height: 520px; overflow: auto; border-radius: 10px; background: var(--ab-card-2); border: 1px solid var(--ab-line); padding: 6px 0 }\n.ab-log { display: flex; gap: 10px; padding: 3.5px 12px 3.5px 10px; border-left: 2px solid transparent; align-items: baseline }\n.ab-log:hover { background: var(--ab-hover) }\n.ab-log .t { color: var(--ab-dim); flex: none; font-variant-numeric: tabular-nums }\n.ab-log .a { flex: none; color: var(--ab-deep); min-width: 62px }\n.ab-log .m { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word }\n.ab-log.warn { border-left-color: var(--ab-warn) }\n.ab-log.warn .m { color: var(--ab-warn) }\n.ab-log.error { border-left-color: var(--ab-err) }\n.ab-log.error .m { color: var(--ab-err) }\n.ab-log.debug .m { color: var(--ab-dim) }\n.ab-mem-item { transition: background .12s; border-radius: 6px; margin: 0 -6px; padding: 6px 6px !important }\n/* memory-privacy 的查看弹窗底色偏暗，hover 高亮与幽灵按钮文字在亮/暗模式下都要保持高对比 */\n.ab-mem-item:hover { background: rgba(122, 143, 175, .18) }\n.ab-mem-item .ab-btn.ghost { color: #cbd5e1 }\n.ab-mem-item .ab-btn.ghost:hover { color: #fff; background: rgba(255, 255, 255, .10) }\n.ab-close { transition: opacity .12s }\n.ab-close:hover { opacity: .72 }\n.ab-code { font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 11.5px; background: var(--ab-card-2); border: 1px solid var(--ab-line); border-radius: var(--ab-radius-sm); padding: 9px 11px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 0 }\n\n/* 表情包 / 截图 / 画作 */\n.ab-stickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(116px, 100%), 1fr)); gap: 10px }\n.ab-sticker { border: 1px solid var(--ab-line); border-radius: 11px; padding: 8px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative; transition: transform .12s, box-shadow .12s, border-color .12s }\n.ab-sticker:hover { transform: translateY(-2px); box-shadow: var(--ab-shadow); border-color: var(--ab-line-2) }\n.ab-sticker img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: var(--ab-radius-sm); background: var(--ab-card-2) }\n.ab-sticker .nm, .ab-sticker .tg { border: 1px dashed transparent; background: transparent; text-align: center; width: 100%; outline: none; padding: 2px 4px; border-radius: 6px; font: inherit }\n.ab-sticker .nm { font-size: 12px; color: var(--ab-text) }\n.ab-sticker .tg { font-size: 11px; color: var(--ab-dim); min-height: 16px }\n.ab-sticker:hover .nm, .ab-sticker:hover .tg { border-color: var(--ab-line) }\n.ab-sticker .nm:focus, .ab-sticker .tg:focus { background: var(--ab-card-2); border-style: solid; border-color: var(--ab-line-2) }\n.ab-sticker .x, .ab-shot .x { position: absolute; top: 5px; right: 5px; opacity: 0; transition: opacity .15s }\n.ab-sticker:hover .x, .ab-sticker:focus-within .x, .ab-shot:hover .x, .ab-shot:focus-within .x { opacity: 1 }\n.ab-sticker.sel { border-color: var(--ab-sea); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ab-sea) 12%, transparent) }\n.ab-sticker-check { position: absolute; top: 6px; left: 8px; z-index: 2; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; background: color-mix(in srgb, var(--ab-card) 88%, transparent); border: 1px solid var(--ab-line) }\n.ab-sticker-check input { margin: 0; accent-color: var(--ab-sea) }\n.ab-sticker-badges { display: flex; flex-wrap: wrap; gap: 3px; min-height: 16px }\n.ab-sticker-badges .ab-badge { font-size: 10px; padding: 0 5px; line-height: 16px }\n.ab-sticker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px }\n.ab-sticker-tools .ab-input { flex: 1 1 180px; min-width: 120px }\n.ab-sticker-tools .ab-select { flex: 0 1 auto }\n.ab-sticker-drop { border: 1px dashed transparent; border-radius: var(--ab-radius); padding: 2px; transition: border-color .15s, background .15s }\n.ab-sticker-drop.on { border-color: var(--ab-sea); background: color-mix(in srgb, var(--ab-sea) 6%, transparent) }\n.ab-sticker-policy { border: 1px solid var(--ab-line); border-radius: var(--ab-radius); padding: 8px 12px; margin-bottom: 10px; background: var(--ab-card-2) }\n.ab-sticker-policy .ab-row { padding: 4px 0 }\n.ab-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(176px, 100%), 1fr)); gap: 10px }\n.ab-shot { border: 1px solid var(--ab-line); border-radius: 11px; padding: 7px; background: var(--ab-card); display: flex; flex-direction: column; gap: 6px; position: relative }\n.ab-shot img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); display: block }\n.ab-shot .cap { font-size: 11.5px; color: var(--ab-dim); line-height: 1.4; max-height: 2.8em; overflow: hidden }\n\n/* 人格页：左列（列表+头像）跟随滚动钉在吸顶导航下方——右侧编辑区很长时，\n * 左列不跟着滚空一大块；列表条目少时视觉上也更完整。\n * 轨道 minmax(0,1fr)：行内「200px 标签 + 240px 固定宽输入」的最小内容宽会把裸 1fr\n * 轨道顶到 ~438px，窄屏整页横向溢出（真机 2026-11-15） */\n.ab-persona { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 14px; align-items: start }\n.ab-plist { position: sticky; top: calc(var(--dsh-frame-top-clearance, 0px) + 114px); display: flex; flex-direction: column; gap: 8px }\n.ab-pitems { display: flex; flex-direction: column; gap: 6px }\n.ab-pitem { text-align: left; border: 1px solid var(--ab-line); background: var(--ab-card); border-radius: 11px; padding: 10px 12px; cursor: pointer; color: var(--ab-text); font: inherit; transition: border-color .14s, box-shadow .14s, background .14s }\n.ab-pitem:hover { border-color: var(--ab-line-2) }\n.ab-pitem.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 5%, var(--ab-card)) }\n.ab-pitem .nm { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap }\n.ab-pitem .tg { color: var(--ab-dim); font-size: 11.5px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }\n.ab-psecs { display: flex; flex-direction: column; gap: 10px; margin-top: 12px }\n.ab-psec { --c: var(--ab-sea); border: 1px solid var(--ab-line); border-radius: 12px; background: var(--ab-card); transition: border-color .2s, box-shadow .2s }\n.ab-psec:hover { border-color: color-mix(in srgb, var(--c) 26%, var(--ab-line)) }\n.ab-psec:focus-within { border-color: color-mix(in srgb, var(--c) 42%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 8%, transparent) }\n.ab-psec-head { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 10px 10px 0 14px }\n.ab-psec-head::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c); margin-right: 6px; opacity: .9 }\n.ab-psec-title { flex: 1; min-width: 110px; border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 13.5px; letter-spacing: .01em; color: color-mix(in srgb, var(--c) 42%, var(--ab-text)); padding: 4px 0; outline: none }\n.ab-psec-title::placeholder { color: var(--ab-dim); font-weight: 400 }\n.ab-psec-fixed { flex: 1; min-width: 120px; font-weight: 620; font-size: 13.5px; padding: 4px 0 }\n.ab-psec-fixed small { font-weight: 400; color: var(--ab-dim); margin-left: 8px; font-size: 11.5px }\n.ab-psec-n { font-size: 11px; color: var(--ab-dim); font-variant-numeric: tabular-nums; margin-right: 4px }\n.ab-psec-act { display: flex; align-items: center; gap: 2px; opacity: .55; transition: opacity .12s }\n.ab-psec:hover .ab-psec-act, .ab-psec:focus-within .ab-psec-act { opacity: 1 }\n.ab-psec textarea { display: block; width: 100%; border: 0; background: transparent; resize: vertical; outline: none; padding: 6px 16px 12px 28px; font: inherit; font-size: 13px; line-height: 1.75; color: var(--ab-text) }\n.ab-psec textarea::placeholder { color: var(--ab-dim) }\n.ab-psec.cmp { border-color: color-mix(in srgb, var(--c) 45%, var(--ab-line)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 10%, transparent) }\n.ab-psec.cmp textarea { cursor: default }\n.ab-psec-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px }\n.ab-tf-who { margin-top: 8px; font-size: 12px; color: var(--ab-sub); line-height: 1.6 }\n.ab-compare { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 12px 12px; padding: 8px 10px 8px 12px; border-radius: 10px; background: var(--ab-foam) }\n.ab-compare-tag { font-size: 11.5px; font-weight: 600; color: var(--ab-deep); padding: 1px 8px; border-radius: 999px; background: var(--ab-card); border: 1px solid var(--ab-foam-2) }\n\n/* 进度条（token 用量等） */\n.ab-mood { height: 10px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; border: 1px solid var(--ab-line) }\n.ab-mood > i { display: block; height: 100%; border-radius: 999px; background: var(--ab-solid) }\n.ab-mood > i.hot { background: var(--ab-warn) }\n.ab-mood > i.full { background: var(--ab-err) }\n\n/* 保存条 / toast（toast 置顶居中，绝不遮挡底部保存条与移动端底栏） */\n.ab-savebar { position: sticky; bottom: 14px; margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: var(--ab-radius); background: var(--ab-overlay); border: 1px solid color-mix(in srgb, var(--ab-sea) 42%, var(--ab-line)); box-shadow: var(--ab-shadow-lg); z-index: 15 }\n.ab-savebar .msg { flex: 1; min-width: 120px; color: var(--ab-deep); font-weight: 580; font-size: 13.5px }\n.ab-savebar-acts { display: flex; align-items: center; gap: 8px }\n.ab-toast { position: fixed; left: 50%; top: calc(max(var(--dsh-frame-overlay-top, 14px), 14px) + 6px); transform: translateX(-50%); padding: 10px 18px; border-radius: 11px; background: var(--dsw-alias-toast-bg, #1f2328); color: var(--dsw-alias-toast-label, #fff); font-size: 13px; font-weight: 500; z-index: 50; box-shadow: var(--ab-shadow-lg); max-width: calc(100vw - 32px); text-align: center; pointer-events: none; animation: abPop .14s ease-out }\n.ab-toast.ok { background: var(--ab-ok-solid); color: #fff }\n.ab-toast.err { background: var(--ab-err-solid); color: #fff }\n\n/* 向导步骤条 */\n.ab-wiz-bar { display: flex; gap: 6px; margin-top: 12px }\n.ab-wiz-bar .seg { flex: 1; border: 0; background: transparent; padding: 0; cursor: default; text-align: left; font: inherit; color: var(--ab-dim) }\n.ab-wiz-bar .seg::before { content: ""; display: block; height: 4px; border-radius: 999px; background: var(--ab-line-2); margin-bottom: 6px; transition: background .15s }\n.ab-wiz-bar .seg.done { cursor: pointer; color: var(--ab-sub) }\n.ab-wiz-bar .seg.done::before { background: var(--ab-sky) }\n.ab-wiz-bar .seg.on { color: var(--ab-deep); font-weight: 600 }\n.ab-wiz-bar .seg.on::before { background: var(--ab-solid) }\n.ab-wiz-bar .seg span { font-size: 11.5px }\n\n/* 复查清单 / 驱动 / 安装步骤 */\n.ab-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: 8px }\n.ab-check { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--ab-line); background: var(--ab-card-2); color: var(--ab-sub); font-size: 12.5px }\n.ab-check i { font-style: normal; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-line-2); color: var(--ab-sub); flex: none }\n.ab-check.done { color: var(--ab-text); border-color: color-mix(in srgb, var(--ab-ok) 30%, transparent); background: color-mix(in srgb, var(--ab-ok) 8%, var(--ab-card)) }\n.ab-check.done i { background: var(--ab-ok-solid); color: #fff }\n.ab-drives { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px }\n.ab-drive { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--ab-line-2); background: var(--ab-card); color: var(--ab-text); font: inherit; cursor: pointer; transition: border-color .12s, box-shadow .12s }\n.ab-drive:hover { border-color: var(--ab-sky) }\n.ab-drive.on { border-color: var(--ab-sea); box-shadow: var(--ab-focus); background: color-mix(in srgb, var(--ab-sea) 7%, var(--ab-card)) }\n.ab-drive b { font-weight: 600 }\n.ab-drive small { color: var(--ab-dim); font-size: 11.5px; word-break: break-all }\n.ab-drive .bar { display: block; width: 100%; height: 4px; border-radius: 999px; background: var(--ab-card-2); overflow: hidden; margin-top: 4px }\n.ab-drive .bar i { display: block; height: 100%; background: var(--ab-sky) }\n.ab-drive.low .bar i { background: var(--ab-warn) }\n.ab-install { margin-top: 12px; padding: 14px 16px; border-radius: var(--ab-radius); border: 1px solid var(--ab-foam-2); background: var(--ab-foam) }\n.ab-install-steps { display: flex; gap: 6px }\n.ab-install-steps .st { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ab-dim); text-align: center; position: relative }\n.ab-install-steps .st::before { content: ""; position: absolute; top: 11px; left: -50%; right: 50%; height: 2px; background: var(--ab-line-2); z-index: 0 }\n.ab-install-steps .st:first-child::before { display: none }\n.ab-install-steps .st.done::before, .ab-install-steps .st.on::before { background: var(--ab-solid) }\n.ab-install-steps .st i { position: relative; z-index: 1; font-style: normal; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--ab-card); border: 2px solid var(--ab-line-2); color: var(--ab-dim) }\n.ab-install-steps .st.done i { background: var(--ab-solid); border-color: var(--ab-solid); color: #fff }\n.ab-install-steps .st.on i { border-color: var(--ab-sea); color: var(--ab-deep); box-shadow: var(--ab-focus) }\n.ab-install-steps .st.on { color: var(--ab-deep); font-weight: 600 }\n.ab-install-steps .st span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }\n.ab-install-dl { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; margin-top: 10px }\n.ab-install-dl small { display: block; color: var(--ab-dim); font-size: 11px }\n.ab-install-dl b { font-size: 18px; font-variant-numeric: tabular-nums }\n\n/* 模块行 */\n.ab-mod { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--ab-line) }\n.ab-mod:first-child { border-top: 0 }\n.ab-mod .main { flex: 1; min-width: 0 }\n.ab-mod .nm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600 }\n.ab-mod .nm code { font-weight: 400; font-size: 11.5px; color: var(--ab-dim) }\n.ab-mod .ds { color: var(--ab-sub); font-size: 12.5px; margin-top: 3px }\n.ab-mod .what { color: var(--ab-dim); font-size: 11.5px; margin-top: 4px; word-break: break-word }\n.ab-mod .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px }\n.ab-mod .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none }\n\n/* 扩展页：市场卡片列表 */\n.ab-mkt-list { display: flex; flex-direction: column; margin-top: 4px }\n.ab-mkt { padding: 12px 0; border-top: 1px solid var(--ab-line) }\n.ab-mkt:first-child { border-top: 0; padding-top: 4px }\n.ab-mkt:last-child { padding-bottom: 2px }\n.ab-mkt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px }\n.ab-mkt-info { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; flex: 1; min-width: 0 }\n.ab-mkt-info b { font-size: 14px; font-weight: 600 }\n.ab-mkt-desc { color: var(--ab-text); font-size: 13px; line-height: 1.55; margin-top: 5px; overflow-wrap: anywhere }\n.ab-mkt-meta { color: var(--ab-dim); font-size: 12px; line-height: 1.5; margin-top: 4px; overflow-wrap: anywhere }\n.ab-mkt-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px }\n\n/* 扩展页：模块分组（按能力折叠）+ 搜索 + 紧凑行 */\n.ab-modgroup { border-top: 1px solid var(--ab-line) }\n.ab-modgroup:first-of-type { border-top: 0 }\n.ab-modgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 4px; cursor: pointer; user-select: none; background: none; border: 0; color: inherit; font: inherit; text-align: left; border-radius: var(--ab-radius-sm); transition: background .12s }\n.ab-modgroup-head:hover { background: var(--ab-hover) }\n.ab-modgroup-head:hover .ab-modgroup-name { color: var(--ab-deep) }\n.ab-modgroup-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }\n.ab-modgroup-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }\n.ab-modgroup-chev.open { transform: rotate(90deg) }\n.ab-modgroup-name { font-weight: 600 }\n.ab-modgroup-meta { color: var(--ab-dim); font-size: 11.5px; font-variant-numeric: tabular-nums }\n.ab-modgroup-body { padding-bottom: 4px }\n.ab-search { max-width: 210px }\n/* 目录路径 + 操作按钮：窄屏时路径独占一行，别被按钮挤成一字一行 */\n.ab-dirrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 8px }\n.ab-dirrow code { flex: 1 1 220px; min-width: 0; padding: 5px 9px; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); border: 1px solid var(--ab-line); word-break: break-all }\n.ab-mod.compact { padding: 9px 0 }\n.ab-mod.compact .ds { margin-top: 2px }\n.ab-mod.compact .ds.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100% }\n.ab-mod.compact .what, .ab-mod.compact .acts { margin-top: 6px }\n\n/* 可折叠的补充说明（长文案收纳用） */\n.ab-more { margin-top: 8px; font-size: 12px; color: var(--ab-dim) }\n.ab-more summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 5px; user-select: none; padding: 2px 0 }\n.ab-more summary::-webkit-details-marker { display: none }\n.ab-more summary::before { content: "›"; display: inline-block; transition: transform .15s; color: var(--ab-dim); font-size: 13px }\n.ab-more[open] summary::before { transform: rotate(90deg) }\n.ab-more summary:hover { color: var(--ab-sub) }\n.ab-more .ab-more-body { margin-top: 6px; padding: 8px 11px; border-radius: var(--ab-radius-sm); background: var(--ab-card-2); color: var(--ab-sub); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere }\n\n/* 可折叠长卡片与卡内折叠小节 */\n.ab-fold-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap }\n.ab-fold-head { flex: 1 1 160px; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; padding: 2px 0; cursor: pointer; user-select: none; border-radius: var(--ab-radius-sm) }\n.ab-fold-head h3 { margin: 0 }\n.ab-fold-head:hover h3, .ab-fold-head:focus-visible h3 { color: var(--ab-deep) }\n.ab-fold-chev { color: var(--ab-dim); display: inline-flex; flex: none; transition: transform .15s }\n.ab-fold-chev.open { transform: rotate(90deg) }\n.ab-fold-head:focus-visible { outline: none; box-shadow: var(--ab-focus) }\n.ab-fold-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ab-line) }\n.ab-fold-section .ab-fold-title { font-weight: 600; font-size: 13.5px; color: var(--ab-text) }\n.ab-fold-section .ab-fold-head:hover .ab-fold-title { color: var(--ab-deep) }\n.ab-fold-section-desc { margin: 3px 0 6px 20px; font-size: 12px; color: var(--ab-sub); line-height: 1.5 }\n.ab-fold-section-body { padding-top: 4px }\n\n/* 筛选工具栏（日志等） */\n.ab-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }\n\n/* ---------------- 容器查询（适配 DSH 侧栏展开后的窄中栏 420~700px） ---------------- */\n@container ab (max-width: 680px) {\n  .ab-persona { grid-template-columns: minmax(0, 1fr) }\n  .ab-plist { position: static }\n  .ab-pitems { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 8px }\n  .ab-g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }\n  .ab-kv { grid-template-columns: auto minmax(0, 1fr) }\n  .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }\n  .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }\n}\n@container ab (max-width: 560px) {\n  .ab-row { flex-direction: column; gap: 7px; padding: 11px 0 }\n  .ab-row .ab-label { flex: none; width: 100%; padding-top: 0 }\n  .ab-row .ab-ctl { width: 100%; max-width: none }\n  .ab-row.ab-row-sw { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px }\n  .ab-row.ab-row-sw .ab-label { flex: 1; min-width: 0; width: auto }\n  .ab-row.ab-row-sw .ab-ctl { width: auto; flex: none }\n  .ab-g2 { grid-template-columns: minmax(0, 1fr) }\n  .ab-range { min-width: 0; width: 100% }\n  .ab-seg { width: 100% }\n  .ab-seg button { flex: 1 0 auto }\n  .ab-choices { grid-template-columns: minmax(0, 1fr) }\n  .ab-actions .ab-btn { flex: 1 1 auto; white-space: normal; text-align: center }\n  .ab-actions .ab-btn.primary { flex: 1 0 100% }\n}\n\n/* ---------------- 触控设备 ---------------- */\n@media (hover: none) {\n  .ab-sticker .x, .ab-shot .x { opacity: .92 }\n  .ab-psec-act { opacity: 1 }\n}\n\n/* ---------------- 响应式（小屏移动端优化） ---------------- */\n@media (max-width: 720px) {\n  .ab-grid { gap: 12px }\n  .ab-g2 { grid-template-columns: minmax(0, 1fr) }\n  .ab-g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px }\n  .ab-card, .ab-wiz-card { padding: 15px 14px; border-radius: 13px }\n  .ab-card h3 { font-size: 14.5px }\n  .ab-card-foot .ab-btn.ghost { margin-left: -8px }\n  .ab-toolbar { width: 100% }\n  .ab-toolbar .ab-sel { width: auto; flex: 1 1 120px }\n  .ab-toolbar .ab-switch-row { flex: 0 0 auto; margin-left: auto }\n  .ab-mod { gap: 10px }\n\n  .ab-stat { padding: 12px 14px; gap: 5px }\n  .ab-stat .ic { width: 26px; height: 26px; border-radius: 7px }\n  .ab-stat .ic svg { width: 14px; height: 14px }\n  .ab-stat .n { font-size: 24px }\n\n  .ab-kv { grid-template-columns: auto minmax(0, 1fr); gap: 0 14px }\n  .ab-kv > span { padding: 8px 0 }\n  .ab-kv > span:nth-child(even) { justify-content: flex-end; text-align: right }\n  .ab-kv > span:nth-child(even) .ab-flex { justify-content: flex-end }\n\n  .ab-actions .ab-btn { flex: 1 1 auto; white-space: normal; text-align: center; padding: 7px 12px }\n  .ab-actions .ab-btn.primary { flex: 1 0 100% }\n\n  .ab-row { flex-direction: column; gap: 7px; padding: 11px 0 }\n  .ab-row .ab-label { flex: none; width: 100%; padding-top: 0 }\n  .ab-row .ab-label small { max-width: none }\n  .ab-row .ab-ctl { width: 100%; max-width: none }\n  .ab-row.ab-row-sw { flex-direction: row; align-items: center; justify-content: space-between; gap: 14px }\n  .ab-row.ab-row-sw .ab-label { flex: 1; min-width: 0; width: auto }\n  .ab-row.ab-row-sw .ab-ctl { width: auto; flex: none }\n\n  /* 防止 iOS Safari 聚焦输入框自动放大（font-size >= 16px） */\n  .ab-input, .ab-select, .ab-textarea, .ab-sel-btn, .ab-psec textarea, .ab-psec-title { font-size: 16px }\n  .ab-input:not(.sm):not(.narrow) { width: 100%; height: 40px }\n  .ab-input.sm, .ab-input.narrow { width: 92px; height: 36px }\n  .ab-sel { width: 100%; min-width: 0 }\n  .ab-sel-btn { min-height: 40px }\n  .ab-sel-opt { white-space: normal; padding: 10px }\n\n  .ab-btn { min-height: 38px; padding: 7px 14px }\n  .ab-btn.sm { min-height: 34px; padding: 5px 11px; font-size: 12.5px }\n  .ab-ibtn { width: 34px; height: 34px }\n  .ab-aibtn { height: 32px; padding: 0 11px }\n  .ab-range { min-width: 0; width: 100% }\n  .ab-seg { width: 100% }\n  .ab-seg button { flex: 1 0 auto; min-height: 34px; padding: 6px 10px }\n  .ab-choices { grid-template-columns: minmax(0, 1fr) }\n\n  .ab-persona { grid-template-columns: minmax(0, 1fr) }\n  .ab-plist { position: static }\n  .ab-pitems { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(148px, 100%), 1fr)); gap: 8px }\n  .ab-psec-head { padding: 10px 10px 0 12px }\n  .ab-psec textarea { padding: 8px 12px 12px }\n  .ab-psec-act { opacity: 1 }\n\n  .ab-stickers { grid-template-columns: repeat(auto-fill, minmax(min(100px, 100%), 1fr)); gap: 8px }\n  .ab-shots { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px }\n  .ab-sticker .x, .ab-shot .x { opacity: .92 }\n\n  .ab-table-wrap .ab-table { min-width: 420px }\n  .ab-li { flex-wrap: wrap; gap: 6px 10px; padding: 10px 2px }\n  .ab-li .meta { white-space: normal }\n\n  .ab-savebar { bottom: calc(60px + env(safe-area-inset-bottom, 0px)); padding: 10px 12px }\n  .ab-savebar-kbd { display: none }\n  .ab-savebar-acts { width: 100%; justify-content: flex-end }\n  .ab-savebar-acts .ab-btn { flex: 1 }\n\n  .ab-wiz-bar .seg span { display: none }\n  .ab-install-steps .st span { display: none }\n}\n\n@media (max-width: 560px) {\n  .ab-log { flex-wrap: wrap; gap: 3px 8px; padding: 7px 10px; border-bottom: 1px solid var(--ab-line) }\n  .ab-log:last-child { border-bottom: 0 }\n  .ab-log .t { font-size: 11px }\n  .ab-log .a { min-width: 0; font-size: 10.5px; font-weight: 560; padding: 0 6px; border-radius: 5px; background: var(--ab-foam); line-height: 1.65 }\n  .ab-log .m { flex: 1 0 100%; margin-top: 2px; font-size: 12px; line-height: 1.55 }\n  .ab-cookie-field { flex-direction: column; align-items: stretch; gap: 4px }\n  .ab-cookie-field code { text-align: left; min-width: 0 }\n}\n\n@media (prefers-reduced-motion: reduce) { .ab-root * { transition: none !important; animation: none !important } }\n.ab-root :focus-visible { outline: none; box-shadow: var(--ab-focus) }\n';
 
 // client/src/styles/use-style.js
 var CSS = theme_default;
@@ -366,18 +389,19 @@ function useStyle() {
 }
 
 // client/src/ui/primitives.js
-function Switch({ on, onChange, disabled, title }) {
-  return /* @__PURE__ */ h("button", { type: "button", className: cx("ab-switch", on && "on"), onClick: () => !disabled && onChange(!on), disabled, title, role: "switch", "aria-checked": !!on });
+function Switch({ on, onChange, disabled, title, label }) {
+  return /* @__PURE__ */ h("button", { type: "button", className: cx("ab-switch", on && "on"), onClick: () => !disabled && onChange(!on), disabled, title, "aria-label": label || title, role: "switch", "aria-checked": !!on });
 }
 function Row({ label, hint, children }) {
-  return /* @__PURE__ */ h("div", { className: "ab-row" }, /* @__PURE__ */ h("div", { className: "ab-label" }, /* @__PURE__ */ h("b", null, label), hint ? /* @__PURE__ */ h("small", null, hint) : null), /* @__PURE__ */ h("div", { className: "ab-ctl" }, children));
+  const isSwitchOnly = React.isValidElement(children) && children.type === Switch;
+  return /* @__PURE__ */ h("div", { className: cx("ab-row", isSwitchOnly && "ab-row-sw") }, /* @__PURE__ */ h("div", { className: "ab-label" }, /* @__PURE__ */ h("b", null, label), hint ? /* @__PURE__ */ h("small", null, hint) : null), /* @__PURE__ */ h("div", { className: "ab-ctl" }, children));
 }
 function Card({ title, desc, icon, right, more, collapse, children, className }) {
   const [open, setOpen] = useState(!collapse);
   if (!collapse) {
-    return /* @__PURE__ */ h("div", { className: cx("ab-card", className) }, title ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: desc || more ? 0 : 10 } }, /* @__PURE__ */ h("h3", null, icon || null, title), /* @__PURE__ */ h("div", { className: "ab-spacer" }), right || null) : null, desc ? /* @__PURE__ */ h("p", { className: "ab-desc" }, desc) : null, more ? /* @__PURE__ */ h(More, null, more) : null, children);
+    return /* @__PURE__ */ h("div", { className: cx("ab-card", className) }, title ? /* @__PURE__ */ h("div", { className: "ab-card-head", style: { marginBottom: desc || more ? 0 : 12 } }, /* @__PURE__ */ h("h3", null, icon || null, title), /* @__PURE__ */ h("div", { className: "ab-spacer" }), right ? /* @__PURE__ */ h("div", { className: "ab-card-right" }, right) : null) : null, desc ? /* @__PURE__ */ h("p", { className: "ab-desc" }, desc) : null, more ? /* @__PURE__ */ h(More, null, more) : null, children);
   }
-  return /* @__PURE__ */ h("div", { className: cx("ab-card ab-fold", !open && "closed", className) }, /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: cx("ab-card ab-fold", !open && "closed", className) }, /* @__PURE__ */ h("div", { className: "ab-fold-bar", style: { marginBottom: desc || open ? 6 : 0 } }, /* @__PURE__ */ h(
     "div",
     {
       className: "ab-fold-head",
@@ -393,10 +417,29 @@ function Card({ title, desc, icon, right, more, collapse, children, className })
       }
     },
     /* @__PURE__ */ h("span", { className: cx("ab-fold-chev", open && "open"), "aria-hidden": "true" }, /* @__PURE__ */ h("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ h("path", { d: "M4.5 3 7.5 6 4.5 9" }))),
-    /* @__PURE__ */ h("h3", null, icon || null, title),
-    /* @__PURE__ */ h("div", { className: "ab-spacer" }),
-    right || null
-  ), desc ? /* @__PURE__ */ h("p", { className: "ab-desc" }, desc) : null, open ? children : null, open && more ? /* @__PURE__ */ h(More, null, more) : null);
+    /* @__PURE__ */ h("h3", null, icon || null, title)
+  ), right ? /* @__PURE__ */ h("div", { className: "ab-card-right" }, right) : null), desc ? /* @__PURE__ */ h("p", { className: "ab-desc" }, desc) : null, open ? children : null, open && more ? /* @__PURE__ */ h(More, null, more) : null);
+}
+function FoldSection({ title, desc, right, defaultOpen = false, children, style }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return /* @__PURE__ */ h("div", { className: "ab-fold-section", style }, /* @__PURE__ */ h("div", { className: "ab-fold-bar" }, /* @__PURE__ */ h(
+    "div",
+    {
+      className: "ab-fold-head",
+      role: "button",
+      tabIndex: 0,
+      "aria-expanded": open,
+      onClick: () => setOpen(!open),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(!open);
+        }
+      }
+    },
+    /* @__PURE__ */ h("span", { className: cx("ab-fold-chev", open && "open"), "aria-hidden": "true" }, /* @__PURE__ */ h("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ h("path", { d: "M4.5 3 7.5 6 4.5 9" }))),
+    /* @__PURE__ */ h("span", { className: "ab-fold-title" }, title)
+  ), right ? /* @__PURE__ */ h("div", { className: "ab-card-right" }, right) : null), desc ? /* @__PURE__ */ h("p", { className: "ab-fold-section-desc" }, desc) : null, open ? /* @__PURE__ */ h("div", { className: "ab-fold-section-body" }, children) : null);
 }
 function Btn({ kind, small, onClick, disabled, children, title, className }) {
   const [busy, setBusy] = useState(false);
@@ -429,21 +472,47 @@ function Pill({ kind, title, children }) {
 function Select({ value, options, onChange, placeholder, width }) {
   const [open, setOpen] = useState(false);
   const [act, setAct] = useState(-1);
+  const [pos, setPos] = useState({ up: false, alignR: false });
   const ref = useRef(null);
+  const btnRef = useRef(null);
+  const popRef = useRef(null);
   const cur = options.find((o) => o.value === value);
   useEffect(() => {
-    if (!open) return;
+    if (!open) return void 0;
     const close = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    const esc = (e) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+        btnRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", esc);
+    };
   }, [open]);
+  useEffect(() => {
+    if (open) popRef.current?.querySelector(".ab-sel-opt.act")?.scrollIntoView({ block: "nearest" });
+  }, [open, act]);
   const pick = (o) => {
     onChange(o.value);
     setOpen(false);
   };
   const openAt = () => {
+    if (ref.current && typeof window !== "undefined") {
+      const r = ref.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - r.bottom;
+      const spaceAbove = r.top;
+      const spaceRight = window.innerWidth - r.left;
+      setPos({
+        up: spaceBelow < 240 && spaceAbove > spaceBelow,
+        alignR: spaceRight < 260 && r.right > 200
+      });
+    }
     setOpen(true);
     setAct(Math.max(0, options.indexOf(cur)));
   };
@@ -454,6 +523,7 @@ function Select({ value, options, onChange, placeholder, width }) {
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
+      if (!options.length) return;
       if (!open) return openAt();
       setAct((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + options.length) % options.length);
     }
@@ -469,13 +539,10 @@ function Select({ value, options, onChange, placeholder, width }) {
     if (o.group && o.group !== lastGroup) items.push(/* @__PURE__ */ h("div", { key: "g" + i, className: "ab-sel-group" }, o.group));
     lastGroup = o.group || lastGroup;
     items.push(
-      /* @__PURE__ */ h("div", { key: "o" + i, role: "option", "aria-selected": o.value === value, className: cx("ab-sel-opt", o.value === value && "on", i === act && "act"), onMouseEnter: () => setAct(i), onMouseDown: (e) => {
-        e.preventDefault();
-        pick(o);
-      } }, /* @__PURE__ */ h("span", { className: "ck" }, o.value === value ? "✓" : ""), /* @__PURE__ */ h("span", { className: "tx" }, o.label, o.desc ? /* @__PURE__ */ h("span", { className: "ds" }, o.desc) : null))
+      /* @__PURE__ */ h("div", { key: "o" + i, role: "option", "aria-selected": o.value === value, className: cx("ab-sel-opt", o.value === value && "on", i === act && "act"), onMouseEnter: () => setAct(i), onClick: () => pick(o) }, /* @__PURE__ */ h("span", { className: "ck" }, o.value === value ? "✓" : ""), /* @__PURE__ */ h("span", { className: "tx" }, o.label, o.desc ? /* @__PURE__ */ h("span", { className: "ds" }, o.desc) : null))
     );
   });
-  return /* @__PURE__ */ h("div", { className: cx("ab-sel", open && "open"), ref, style: width ? { minWidth: width } : null }, /* @__PURE__ */ h("button", { type: "button", className: "ab-sel-btn", onClick: () => open ? setOpen(false) : openAt(), onKeyDown: onKey, "aria-haspopup": "listbox", "aria-expanded": open }, /* @__PURE__ */ h("span", { className: "v" }, cur ? cur.label : /* @__PURE__ */ h("span", { className: "ab-muted" }, placeholder || "请选择")), /* @__PURE__ */ h("svg", { className: "chev", width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8" }, /* @__PURE__ */ h("path", { d: "M3 4.5 6 7.5 9 4.5" }))), open ? /* @__PURE__ */ h("div", { className: "ab-sel-pop", role: "listbox" }, items) : null);
+  return /* @__PURE__ */ h("div", { className: cx("ab-sel", open && "open", pos.up && "up", pos.alignR && "align-r"), ref, style: width ? { "--ab-sel-w": typeof width === "number" ? width + "px" : width } : null }, /* @__PURE__ */ h("button", { ref: btnRef, type: "button", className: "ab-sel-btn", onClick: () => open ? setOpen(false) : openAt(), onKeyDown: onKey, "aria-haspopup": "listbox", "aria-expanded": open }, /* @__PURE__ */ h("span", { className: "v" }, cur ? cur.label : /* @__PURE__ */ h("span", { className: "ab-muted" }, placeholder || "请选择")), /* @__PURE__ */ h("svg", { className: "chev", width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8" }, /* @__PURE__ */ h("path", { d: "M3 4.5 6 7.5 9 4.5" }))), open ? /* @__PURE__ */ h("div", { ref: popRef, className: "ab-sel-pop", role: "listbox" }, items) : null);
 }
 function Choices({ value, options, onChange }) {
   return /* @__PURE__ */ h("div", { className: "ab-choices", role: "radiogroup" }, options.map((o) => /* @__PURE__ */ h("button", { key: o.value, type: "button", role: "radio", "aria-checked": o.value === value, className: cx("ab-choice", o.value === value && "on"), onClick: () => onChange(o.value) }, /* @__PURE__ */ h("b", null, o.icon || null, o.label), o.desc ? /* @__PURE__ */ h("small", null, o.desc) : null)));
@@ -484,7 +551,7 @@ function Range({ value, min, max, step, onChange, fmt }) {
   return /* @__PURE__ */ h("div", { className: "ab-range" }, /* @__PURE__ */ h("input", { type: "range", min, max, step: step || 1, value: value ?? min, onChange: (e) => onChange(Number(e.target.value)) }), /* @__PURE__ */ h("span", { className: "val" }, fmt ? fmt(value) : value));
 }
 function Seg({ value, options, onChange, disabled }) {
-  return /* @__PURE__ */ h("div", { className: "ab-seg" + (disabled ? " off" : "") }, options.map((o) => /* @__PURE__ */ h("button", { key: o.value, type: "button", className: value === o.value ? "on" : "", disabled: !!disabled, onClick: () => {
+  return /* @__PURE__ */ h("div", { className: "ab-seg" + (disabled ? " off" : ""), role: "radiogroup" }, options.map((o) => /* @__PURE__ */ h("button", { key: o.value, type: "button", role: "radio", "aria-checked": value === o.value, className: value === o.value ? "on" : "", disabled: !!disabled, onClick: () => {
     if (!disabled) onChange(o.value);
   } }, o.label)));
 }
@@ -573,6 +640,45 @@ function PercentRow({ label, value, fallback, write, remove }) {
     }
   ), /* @__PURE__ */ h("span", { className: "ab-muted" }, "% 插话"), remove ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: remove }, "移除") : null);
 }
+function NumInput({ value, onChange, min, max, step, allowEmpty, scale, placeholder, className, style }) {
+  const unit = Number(step || 1);
+  const toText = (v) => {
+    if (v === void 0 || v === null || v === "") return "";
+    const n = Number(v) / (scale || 1);
+    if (!Number.isFinite(n)) return "";
+    return String(unit === 1 ? Math.round(n) : n);
+  };
+  const external = toText(value);
+  const [typed, setTyped] = useState(null);
+  const shown = typed !== null ? typed : external;
+  const commit = () => {
+    const { value: value2, text } = commitNumText(shown, { min, max, step: unit, allowEmpty, scale });
+    setTyped(text === "" ? null : text);
+    onChange(value2);
+  };
+  return /* @__PURE__ */ h(
+    "input",
+    {
+      className: cx("ab-input sm", className),
+      type: "number",
+      min,
+      max,
+      step: step || 1,
+      style,
+      value: shown,
+      placeholder,
+      onChange: (e) => setTyped(e.target.value),
+      onBlur: commit,
+      onKeyDown: (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commit();
+        }
+        if (e.key === "Escape") setTyped(null);
+      }
+    }
+  );
+}
 function ModOff({ name }) {
   return /* @__PURE__ */ h(Card, { title: name }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", name, "」模块关着，这部分用不了。要用的话去「扩展」页把它打开。"));
 }
@@ -600,7 +706,9 @@ var TabBoundary = class extends React.Component {
 var TAB_KEYS = {
   connect: ["snowluma", "botQQ", "workspaceDir"],
   access: ["ownerQQ", "ownerName", "ownerLevel", "longTasks", "profilePerms", "allow"],
-  group: ["group", "merge", "reply", "files", "security"],
+  // turnTimeoutMs 原来由裸 input 直接写路径，没登记（改了不出现「未保存」）。
+  // 2026-11-24 换成 f.num 之后测试当场逮到，补进这张表。
+  group: ["group", "merge", "reply", "files", "security", "turnTimeoutMs"],
   model: ["model", "chatModels"],
   voice: ["voice"],
   stickers: ["stickers"],
@@ -692,7 +800,8 @@ var NAV_ALIAS = {
 };
 
 // client/src/shell/nav-bar.js
-function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
+var SEARCH_ICON = "M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.2-4.2";
+function NavBar({ tabs, cur, go, onScrollTop, mark, dirtyOf, subRef, find: extFind, setFind: extSetFind }) {
   const [last, setLast] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("qq-hub.navlast") || "{}") || {};
@@ -700,9 +809,22 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
       return {};
     }
   });
-  const [find, setFind] = useState(null);
+  const [localFind, setLocalFind] = useState(null);
+  const find = extFind !== void 0 ? extFind : localFind;
+  const setFind = extSetFind || setLocalFind;
   const [hi, setHi] = useState(0);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(max-width: 720px)").matches : false);
   const box = useRef(null);
+  const chipsRef = useRef(null);
+  const findBtnRef = useRef(null);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return void 0;
+    const mq = window.matchMedia("(max-width: 720px)");
+    const onChange = (e) => setIsMobile(e.matches);
+    setIsMobile(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
   const groups = NAV_GROUPS.map((g) => ({ ...g, list: tabs.filter((t) => navGroupOf(t).id === g.id).sort((a, b) => navOrder(g, a) - navOrder(g, b)) })).filter((g) => g.list.length);
   const curGroup = groups.find((g) => g.list.some((t) => t.id === cur.id)) || groups[0];
   useEffect(() => {
@@ -714,36 +836,65 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
     } catch (e) {
     }
   }, [cur.id]);
-  const openGroup = (g) => go((g.list.find((t) => t.id === last[g.id]) || g.list[0]).id);
-  const toggleFind = () => {
-    setFind((f) => f === null ? "" : null);
-    setHi(0);
+  useEffect(() => {
+    chipsRef.current?.querySelector(".ab-chipbtn.on")?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [cur.id]);
+  useEffect(() => {
+    if (find !== null) setHi(0);
+  }, [find === null]);
+  const openGroup = (g) => {
+    if (curGroup && g.id === curGroup.id) {
+      if (onScrollTop) onScrollTop();
+      return;
+    }
+    go((g.list.find((t) => t.id === last[g.id]) || g.list[0]).id);
   };
+  const toggleFind = () => setFind((f) => f === null ? "" : null);
   useEffect(() => {
     const onKey = (e) => {
-      if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "k") {
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.code === "KeyK" || e.key.toLowerCase() === "k")) {
         e.preventDefault();
         toggleFind();
-      } else if (e.key === "Escape") setFind(null);
+      } else if (e.key === "Escape") {
+        setFind((prev) => {
+          if (prev !== null && !isMobile) setTimeout(() => findBtnRef.current?.focus(), 0);
+          return null;
+        });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [isMobile]);
   useEffect(() => {
-    if (find === null) return;
+    if (find === null || isMobile) return void 0;
     const onDown = (e) => {
       if (box.current && !box.current.contains(e.target)) setFind(null);
     };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [find === null]);
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [find === null, isMobile]);
   const q = (find || "").trim().toLowerCase();
   const hits = find === null ? [] : groups.flatMap((g) => g.list.map((t) => ({ t, g }))).filter(({ t, g }) => !q || [t.label, g.label, NAV_ALIAS[t.id] || "", t.id].join(" ").toLowerCase().includes(q));
   const pick = (t) => {
     setFind(null);
     go(t.id);
   };
+  const onFindKey = (e) => {
+    if (!hits.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHi(Math.min(hi + 1, hits.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHi(Math.max(hi - 1, 0));
+    } else if (e.key === "Enter" && hits[hi]) {
+      e.preventDefault();
+      pick(hits[hi].t);
+    }
+  };
   const tabBtn = (t) => /* @__PURE__ */ h("button", { key: t.id, type: "button", role: "tab", "aria-selected": cur.id === t.id, className: cx("ab-tab", cur.id === t.id && "on"), onClick: () => go(t.id) }, t.label, mark(t));
+  const chipBtn = (t) => /* @__PURE__ */ h("button", { key: t.id, type: "button", role: "tab", "aria-selected": cur.id === t.id, className: cx("ab-chipbtn", cur.id === t.id && "on"), onClick: () => go(t.id) }, t.label, mark(t));
+  const finderList = /* @__PURE__ */ h("div", { className: "ab-finder-list", role: "listbox" }, hits.length ? hits.map(({ t, g }, i) => /* @__PURE__ */ h("button", { key: t.id, type: "button", role: "option", "aria-selected": i === hi, className: cx("ab-finder-item", i === hi && "on"), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, /* @__PURE__ */ h("small", null, g.label))) : /* @__PURE__ */ h("div", { className: "ab-finder-empty" }, "没找到，换个说法试试：语音、抖音、白名单"));
   return /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("nav", { className: "ab-nav", ref: box, "aria-label": "QQ Hub 功能" }, /* @__PURE__ */ h("div", { className: "ab-nav-top" }, /* @__PURE__ */ h("div", { className: "ab-nav-groups", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => /* @__PURE__ */ h(
     "button",
     {
@@ -758,7 +909,7 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
     navIcon(g.icon),
     /* @__PURE__ */ h("span", null, g.label),
     g.list.some((t) => dirtyOf(t.id)) ? /* @__PURE__ */ h("i", { className: "dirty", title: "这组里有没保存的改动", "aria-hidden": "true" }) : null
-  ))), /* @__PURE__ */ h("button", { type: "button", className: "ab-find-btn", "aria-expanded": find !== null, title: "查找功能（Alt+K）", onClick: toggleFind }, navIcon("M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.2-4.2"), /* @__PURE__ */ h("span", { className: "t" }, "查找"), /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Alt K"))), curGroup && curGroup.list.length > 1 ? /* @__PURE__ */ h("div", { className: "ab-nav-sub", role: "tablist", "aria-label": curGroup.label, ref: subRef }, curGroup.list.map(tabBtn)) : null, find !== null ? /* @__PURE__ */ h("div", { className: "ab-finder" }, /* @__PURE__ */ h(
+  ))), /* @__PURE__ */ h("button", { ref: findBtnRef, type: "button", className: "ab-find-btn", "aria-expanded": find !== null, title: "查找功能（Alt+K）", onClick: toggleFind }, navIcon(SEARCH_ICON), /* @__PURE__ */ h("span", { className: "t" }, "查找"), /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Alt K"))), curGroup && curGroup.list.length > 1 ? /* @__PURE__ */ h("div", { className: "ab-nav-sub", role: "tablist", "aria-label": curGroup.label, ref: subRef }, curGroup.list.map(tabBtn)) : null, find !== null && !isMobile ? /* @__PURE__ */ h("div", { className: "ab-finder" }, /* @__PURE__ */ h(
     "input",
     {
       className: "ab-input",
@@ -769,20 +920,35 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
         setFind(e.target.value);
         setHi(0);
       },
-      onKeyDown: (e) => {
-        if (e.key === "ArrowDown") {
+      onKeyDown: onFindKey
+    }
+  ), finderList) : null), curGroup && curGroup.list.length > 1 ? /* @__PURE__ */ h("div", { className: "ab-chips", ref: chipsRef, role: "tablist", "aria-label": curGroup.label }, curGroup.list.map(chipBtn)) : null, find !== null && isMobile ? /* @__PURE__ */ h(
+    "div",
+    {
+      className: "ab-mfinder-mask",
+      onPointerDown: (e) => {
+        if (e.target === e.currentTarget) {
           e.preventDefault();
-          setHi(Math.min(hi + 1, hits.length - 1));
-        } else if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setHi(Math.max(hi - 1, 0));
-        } else if (e.key === "Enter" && hits[hi]) {
-          e.preventDefault();
-          pick(hits[hi].t);
+          e.stopPropagation();
+          setFind(null);
         }
       }
-    }
-  ), /* @__PURE__ */ h("div", { className: "ab-finder-list", role: "listbox" }, hits.length ? hits.map(({ t, g }, i) => /* @__PURE__ */ h("button", { key: t.id, type: "button", role: "option", "aria-selected": i === hi, className: cx("ab-finder-item", i === hi && "on"), onMouseEnter: () => setHi(i), onClick: () => pick(t) }, t.label, /* @__PURE__ */ h("small", null, g.label))) : /* @__PURE__ */ h("div", { className: "ab-finder-empty" }, "没找到，换个说法试试：语音、抖音、白名单"))) : null), curGroup ? /* @__PURE__ */ h("div", { className: "ab-chips", role: "tablist", "aria-label": curGroup.label }, curGroup.list.map(tabBtn)) : null, /* @__PURE__ */ h("div", { className: "ab-mobilebar", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => /* @__PURE__ */ h(
+    },
+    /* @__PURE__ */ h("div", { className: "ab-mfinder-sheet", role: "dialog", "aria-modal": "true", "aria-label": "查找功能" }, /* @__PURE__ */ h("div", { className: "ab-mfinder-head" }, /* @__PURE__ */ h(
+      "input",
+      {
+        className: "ab-input",
+        autoFocus: true,
+        placeholder: "找功能：语音、抖音、白名单…",
+        value: find,
+        onChange: (e) => {
+          setFind(e.target.value);
+          setHi(0);
+        },
+        onKeyDown: onFindKey
+      }
+    ), /* @__PURE__ */ h("button", { type: "button", className: "ab-btn sm ghost", onClick: () => setFind(null) }, "取消")), finderList)
+  ) : null, /* @__PURE__ */ h("div", { className: "ab-mobilebar", role: "tablist", "aria-label": "功能分组" }, groups.map((g) => /* @__PURE__ */ h(
     "button",
     {
       key: g.id,
@@ -792,7 +958,7 @@ function NavBar({ tabs, cur, go, mark, dirtyOf, subRef }) {
       className: cx("ab-mgrp", g.id === curGroup.id && "on"),
       onClick: () => openGroup(g)
     },
-    navIcon(g.icon),
+    /* @__PURE__ */ h("span", { className: "ab-mgrp-ic" }, navIcon(g.icon)),
     /* @__PURE__ */ h("span", null, g.label),
     g.list.some((t) => dirtyOf(t.id)) ? /* @__PURE__ */ h("i", { className: "dirty", title: "这组里有没保存的改动", "aria-hidden": "true" }) : null
   ))));
@@ -909,7 +1075,7 @@ function UpdateNotes({ st, toast }) {
     }
     setNotes(null);
   };
-  return /* @__PURE__ */ h(Fragment, null, notes ? /* @__PURE__ */ h("div", { className: "ab-note" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("b", null, "已更新到 v", st.version), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: dismiss }, "知道了")), /* @__PURE__ */ h("div", { style: { whiteSpace: "pre-wrap", marginTop: 6 } }, notes)) : null, upd && upd.newer ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "有新版本 v", upd.latest), "（现在是 v", upd.current, "）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h("code", { style: { flex: "1 1 300px", fontSize: 11.5, wordBreak: "break-all" } }, upd.command), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
+  return /* @__PURE__ */ h(Fragment, null, notes ? /* @__PURE__ */ h("div", { className: "ab-note" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("b", null, "已更新到 v", st.version), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: dismiss }, "知道了")), /* @__PURE__ */ h("div", { style: { whiteSpace: "pre-wrap", marginTop: 6 } }, notes)) : null, upd && upd.newer ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "有新版本 v", upd.latest), "（现在是 v", upd.current, "）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h("code", { style: { flex: "1 1 220px", minWidth: 0, fontSize: 11.5, wordBreak: "break-all" } }, upd.command), /* @__PURE__ */ h(Btn, { small: true, onClick: () => {
     try {
       navigator.clipboard.writeText(upd.command);
       toast("复制好了", "ok");
@@ -919,10 +1085,10 @@ function UpdateNotes({ st, toast }) {
   } }, "复制"))) : null);
 }
 var STATS = [
-  ["今天收到", "received", "📥"],
-  ["今天发出", "sent", "📤"],
-  ["语音条", "voice", "🎙️"],
-  ["表情包", "stickers", "😺"]
+  ["今天收到", "received", "M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5M12 4v10M8.5 10.5 12 14l3.5-3.5"],
+  ["今天发出", "sent", "M20 4 11 13M20 4l-6 16-3-7-7-3 16-6z"],
+  ["语音条", "voice", "M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"],
+  ["表情包", "stickers", "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9 14.2s1.2 1.8 3 1.8 3-1.8 3-1.8M9.5 10h.01M14.5 10h.01"]
 ];
 function Overview({ st, toast, go }) {
   const cfg = st.config;
@@ -936,7 +1102,7 @@ function Overview({ st, toast, go }) {
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(UpdateNotes, { st, toast }), !cfg.enabled ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "总开关是关着的：她现在不会收也不会发任何 QQ 消息。准备好了就在右上角打开。") : null, cfg.enabled && cfg.dryRun ? /* @__PURE__ */ h("div", { className: "ab-note" }, "现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。") : null, cfg.enabled && !conn ? /* @__PURE__ */ h("div", { className: "ab-note err" }, "还没连上 QQ 网关", st.onebot.problem ? "：" + st.onebot.problem + "。" : "。看看 SnowLuma 有没有装好、启动没有。", " ", /* @__PURE__ */ h("a", { href: "#", onClick: (e) => {
     e.preventDefault();
     go("connect");
-  } }, "去连接 →")) : null, /* @__PURE__ */ h("div", { className: "ab-grid ab-g4" }, STATS.map(([label, key2, icon]) => /* @__PURE__ */ h("div", { key: label, className: "ab-card ab-stat" }, /* @__PURE__ */ h("span", { className: "ic", "aria-hidden": "true" }, icon), /* @__PURE__ */ h("div", { className: "n" }, s[key2] || 0), /* @__PURE__ */ h("div", { className: "l" }, label)))), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(Card, { title: "她现在", desc: "表情库、日记、人格与会话的一眼速览。" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "表情库"), /* @__PURE__ */ h("span", null, st.stickers.count, " 张"), /* @__PURE__ */ h("span", null, "下一篇日记"), /* @__PURE__ */ h("span", null, cfg.diary.enabled ? st.diary.next || "今天写完了" : "没开"), /* @__PURE__ */ h("span", null, "人格"), /* @__PURE__ */ h("span", null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current), /* @__PURE__ */ h("span", null, "QQ 会话"), /* @__PURE__ */ h("span", null, sessionCount, " 个（在侧栏「QQ Hub」工作区里）"))), /* @__PURE__ */ h(Card, { title: "快捷操作", desc: "试一试她是不是活着。这些操作会真的发到 QQ（试运行时只写日志）。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { kind: "primary", onClick: quick("/test-send") }, "给主人发一条自测"), /* @__PURE__ */ h(Btn, { onClick: quick("/speakup/fire") }, "让她现在来找你"), /* @__PURE__ */ h(Btn, { onClick: quick("/diary/run", { visibility: "self" }) }, "写一篇日记（仅自己可见）")), /* @__PURE__ */ h(More, { label: "怎么看她和谁聊了什么" }, "点 DSH 侧栏「QQ Hub」工作区里对应的会话，可以看到她和每个人聊了什么、调了什么工具，也可以直接在会话里插话。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(
+  } }, "去连接 →")) : null, /* @__PURE__ */ h("div", { className: "ab-grid ab-g4" }, STATS.map(([label, key2, icon]) => /* @__PURE__ */ h("div", { key: label, className: "ab-card ab-stat" }, /* @__PURE__ */ h("div", { className: "ab-stat-top" }, /* @__PURE__ */ h("div", { className: "l" }, label), /* @__PURE__ */ h("span", { className: "ic", "aria-hidden": "true" }, navIcon(icon))), /* @__PURE__ */ h("div", { className: "n" }, s[key2] || 0)))), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(Card, { title: "她现在" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "表情库"), /* @__PURE__ */ h("span", null, st.stickers.count, " 张"), /* @__PURE__ */ h("span", null, "下一篇日记"), /* @__PURE__ */ h("span", null, cfg.diary.enabled ? st.diary.next || "今天写完了" : "没开"), /* @__PURE__ */ h("span", null, "人格"), /* @__PURE__ */ h("span", null, (st.personas.find((p) => p.id === cfg.persona.current) || {}).name || cfg.persona.current), /* @__PURE__ */ h("span", null, "QQ 会话"), /* @__PURE__ */ h("span", null, sessionCount, " 个 · 侧栏「QQ Hub」"))), /* @__PURE__ */ h(Card, { title: "快捷操作", desc: "实际发到 QQ（试运行时只写日志）。" }, /* @__PURE__ */ h("div", { className: "ab-actions" }, /* @__PURE__ */ h(Btn, { kind: "primary", onClick: quick("/test-send") }, "给主人发一条自测"), /* @__PURE__ */ h(Btn, { onClick: quick("/speakup/fire") }, "让她现在来找你"), /* @__PURE__ */ h(Btn, { onClick: quick("/diary/run", { visibility: "self" }) }, "写一篇日记（仅自己可见）")), /* @__PURE__ */ h(More, { label: "怎么看她和谁聊了什么" }, "点 DSH 侧栏「QQ Hub」工作区里对应的会话，可以看到她和每个人聊了什么、调了什么工具，也可以直接在会话里插话。"), /* @__PURE__ */ h("div", { className: "ab-card-foot" }, /* @__PURE__ */ h(
     Btn,
     {
       small: true,
@@ -973,29 +1139,33 @@ function useField(draft, setDraft) {
   return {
     sw: (path, extra) => /* @__PURE__ */ h(Switch, { on: !!getPath(draft, path), onChange: (v) => setDraft(setPath(draft, path, v)), ...extra || {} }),
     text: (path, props) => /* @__PURE__ */ h("input", { className: cx("ab-input", props && props.size), value: getPath(draft, path) ?? "", placeholder: props && props.placeholder, type: props && props.type || "text", onChange: (e) => setDraft(setPath(draft, path, e.target.value)) }),
-    // 数字框要有兜底：draft 里没存过值时，显示扩展模块 defaults 里的默认值，
-    // 否则「每次最多带几条」这类框一片空白，看着像没配置。
-    // allowEmpty：0 或留空有「沿用默认」含义的字段（如目的引擎每日上限）允许清空——
-    // 空值原样保存为 ''，后端按「未覆写」处理；清空瞬间不能被 fallback 顶回来，否则永远清不掉。
+    // 数字框：**没填就显示空的 + 占位提示「留空 = 沿用 N」**，不把默认值塞进框里。
+    //
+    // 关键点（2026-11-24 修）：旧实现把 fallback 当成 value 显示，于是用户删光后
+    // 立刻又被默认值填回去 —— 「群里一条最长 / 私聊一条最长 / 一轮最多几条」这些框
+    // 根本清不掉，看着像输入框坏了。清空要真的能清空，就得让「框里是空的」这个状态
+    // 存在，默认值只作为占位提示出现（真正生效的是后端 normalize 的回落值）。
+    //
+    // 注意 `fallback` 只在**草稿里没有存过值**时才有提示意义：最小值由 min 兜住，
+    // 清空后保存的是 ''，后端 num() 把 '' 当「没填」回落默认（见 core/config.js）。
     num: (path, props) => {
       const raw = getPath(draft, path);
       const fallback = props && props.fallback;
       const empty = raw === void 0 || raw === null || raw === "";
-      const shown = empty && fallback !== void 0 && !(props && props.allowEmpty) ? fallback : raw ?? "";
-      const sanitize = (v) => {
-        if (v === "") return props && props.allowEmpty ? "" : v;
-        let s = String(v).trim();
-        const dot = s.indexOf(".");
-        let head = (dot >= 0 ? s.slice(0, dot) : s).replace(/[^\d]/g, "");
-        let frac = dot >= 0 ? s.slice(dot + 1).replace(/[^\d]/g, "") : "";
-        if (!head && !frac) return props && props.allowEmpty ? "" : v;
-        let n = Number(head || "0");
-        if (props && props.min !== void 0 && props.min >= 0) n = Math.floor(n);
-        if (props && props.max !== void 0 && n > props.max) n = props.max;
-        if (props && props.min !== void 0 && n < props.min) n = props.min;
-        return n;
-      };
-      return /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: props && props.min, max: props && props.max, step: props && props.step || 1, value: shown, placeholder: props && props.allowEmpty && empty && fallback !== void 0 ? "留空=沿用 " + fallback : void 0, onChange: (e) => setDraft(setPath(draft, path, sanitize(e.target.value))) });
+      return /* @__PURE__ */ h(
+        NumInput,
+        {
+          value: empty ? "" : raw,
+          min: props && props.min,
+          max: props && props.max,
+          step: props && props.step,
+          scale: props && props.scale,
+          style: props && props.style,
+          allowEmpty: true,
+          placeholder: fallback !== void 0 ? "留空 = 沿用 " + fallback : props && props.placeholder,
+          onChange: (v) => setDraft(setPath(draft, path, v))
+        }
+      );
     },
     percent: (path) => /* @__PURE__ */ h(Range, { min: 0, max: 100, value: pct(getPath(draft, path)), onChange: (v) => setDraft(setPath(draft, path, v / 100)), fmt: (v) => v + "%" }),
     range: (path, min, max, step, fmt) => /* @__PURE__ */ h(Range, { min, max, step, value: getPath(draft, path), onChange: (v) => setDraft(setPath(draft, path, v)), fmt }),
@@ -1106,29 +1276,33 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
     toast(r.message, r.ok ? "ok" : "err");
     reload();
   } }, "重新连接"));
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "用什么接 QQ", right: openWizard ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, /* @__PURE__ */ h(GatewayChoice, { draft, setDraft })), external ? /* @__PURE__ */ h(Card, { title: "接上 QQ（已有的 OneBot 机器人）", desc: "让 OneBot 服务登录机器人号，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。连上后会先核对登录的是不是机器人号，不是就断开。" }, /* @__PURE__ */ h(OneBotFields, { draft, f }), /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), testBtns) : /* @__PURE__ */ h(Card, { title: "接上 QQ（SnowLuma）", desc: "SnowLuma 是让机器人号上线的 QQ 网关，按协议要你自己下载并同意它的用户协议；启动、密码、接入、断线重连都交给 QQ Hub。" }, /* @__PURE__ */ h("div", { className: "ab-steps" }, /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "下载 SnowLuma"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "官方发布页下载 Windows 完整版（名字类似 SnowLuma-v2.x.x-win-x64.zip，不带 lite）。"), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => window.open(sl.downloadPage, "_blank") }, "打开下载页 ↗")))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "解压到一个纯英文的目录"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "推荐 C:\\Aurabot\\snowluma。解压后这个目录里应该直接能看到 index.mjs 和 node.exe。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, f.text("snowluma.dir", { size: "wide", placeholder: "C:\\Aurabot\\snowluma" })), !sl.installed && sl.reason ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-warn)", marginTop: 4 } }, sl.reason) : sl.installed ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-ok)", marginTop: 4 } }, "找到了 SnowLuma v", sl.version) : null)), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.running && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "启动"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "后台运行，不弹窗口；以后会跟着 DSH 自动启动。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.installed || sl.running, onClick: act("/snowluma/start") }, sl.running ? "已在运行" : "启动"), sl.owns ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: act("/snowluma/stop") }, "停止") : null), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(SnowLumaAuth, { running: sl.running, toast, onChange: reload })))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.consented && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "阅读并同意 SnowLuma 的用户协议"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "同意之前 SnowLuma 不会工作。"), /* @__PURE__ */ h(Agreement, { running: sl.running, toast, onChange: reload }))), /* @__PURE__ */ h("div", { className: cx("ab-step", conn && login && login.uin === draft.botQQ && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "登录机器人号并接入"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "在电脑上另开一个 QQ 登录机器人号 ", draft.botQQ, "（可以最小化），然后点「接入机器人号」。你的大号照常开着——插件只接机器人号。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.running, onClick: act("/snowluma/attach") }, "接入机器人号"), /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: loadProcs }, "看看有哪些 QQ 进程"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "连接状态", desc: "实时查看 QQ 网关通信状态与已接入的账号。" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "QQ 网关"), /* @__PURE__ */ h("span", null, /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("i", { className: cx("ab-dot", conn ? "ok" : st.onebot.state === "connecting" ? "warn" : "err") }), STATE_TEXT[st.onebot.state] || st.onebot.state)), /* @__PURE__ */ h("span", null, "登录的号"), /* @__PURE__ */ h("span", null, login ? login.nickname + "（" + login.uin + "）" + (login.uin !== draft.botQQ ? " ⚠ 不是机器人号！" : "") : "—"), /* @__PURE__ */ h("span", null, "HTTP"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.httpUrl || "—"), /* @__PURE__ */ h("span", null, "WebSocket"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.wsUrl || "—")), !conn && st.onebot.problem ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 10 } }, st.onebot.problem) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: async () => {
+    const r = await post("/onebot/reconnect");
+    toast(r.message, r.ok ? "ok" : "err");
+    reload();
+  } }, "重新连接"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
     const r = await get("/onebot/test");
     toast(r.message);
-  } }, "测试连接")), sl.lastAttach && sl.lastAttach.at ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4, color: sl.lastAttach.ok ? "var(--ab-ok)" : "var(--ab-warn)" } }, timeAgo(sl.lastAttach.at), "：", sl.lastAttach.message) : null))), procs ? /* @__PURE__ */ h("div", { style: { marginTop: 14 } }, procs.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted" }, "没找到 QQ 进程。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["进程", "登录的号", "昵称", "状态", ""].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, procs.map((p) => /* @__PURE__ */ h("tr", { key: p.pid }, /* @__PURE__ */ h("td", null, p.pid), /* @__PURE__ */ h("td", null, p.uin || "识别不出"), /* @__PURE__ */ h("td", null, p.nickname || "—"), /* @__PURE__ */ h("td", null, p.injected ? p.connected ? "已接入" : "已注入，连接中" : "未接入"), /* @__PURE__ */ h("td", null, p.isBot ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "机器人号") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不会碰"))))))) : null), /* @__PURE__ */ h(
+  } }, "测试连接"))), /* @__PURE__ */ h(Card, { title: "用什么接 QQ", right: openWizard ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: openWizard }, "重新走一遍设置向导") : null }, /* @__PURE__ */ h(GatewayChoice, { draft, setDraft })), external ? /* @__PURE__ */ h(Card, { title: "接上 QQ（已有的 OneBot 机器人）", desc: "让 OneBot 服务登录机器人号，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。连上后会先核对登录的是不是机器人号，不是就断开。" }, /* @__PURE__ */ h(OneBotFields, { draft, f }), /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), testBtns) : /* @__PURE__ */ h(Card, { title: "接上 QQ（SnowLuma）", desc: "SnowLuma 是让机器人号上线的 QQ 网关，按协议要你自己下载并同意它的用户协议；启动、密码、接入、断线重连都交给 QQ Hub。" }, /* @__PURE__ */ h("div", { className: "ab-steps" }, /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "下载 SnowLuma"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "官方发布页下载 Windows 完整版（名字类似 SnowLuma-v2.x.x-win-x64.zip，不带 lite）。"), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => window.open(sl.downloadPage, "_blank") }, "打开下载页 ↗")))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.installed && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "解压到一个纯英文的目录"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "推荐 C:\\Aurabot\\snowluma。解压后这个目录里应该直接能看到 index.mjs 和 node.exe。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, f.text("snowluma.dir", { size: "wide", placeholder: "C:\\Aurabot\\snowluma" })), !sl.installed && sl.reason ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-warn)", marginTop: 4 } }, sl.reason) : sl.installed ? /* @__PURE__ */ h("div", { className: "ab-small", style: { color: "var(--ab-ok)", marginTop: 4 } }, "找到了 SnowLuma v", sl.version) : null)), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.running && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "启动"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "后台运行，不弹窗口；以后会跟着 DSH 自动启动。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.installed || sl.running, onClick: act("/snowluma/start") }, sl.running ? "已在运行" : "启动"), sl.owns ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: act("/snowluma/stop") }, "停止") : null), /* @__PURE__ */ h("div", { style: { marginTop: 6 } }, /* @__PURE__ */ h(SnowLumaAuth, { running: sl.running, toast, onChange: reload })))), /* @__PURE__ */ h("div", { className: cx("ab-step", sl.consented && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "阅读并同意 SnowLuma 的用户协议"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "同意之前 SnowLuma 不会工作。"), /* @__PURE__ */ h(Agreement, { running: sl.running, toast, onChange: reload }))), /* @__PURE__ */ h("div", { className: cx("ab-step", conn && login && login.uin === draft.botQQ && "done") }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "登录机器人号并接入"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "在电脑上另开一个 QQ 登录机器人号 ", draft.botQQ, "（可以最小化），然后点「接入机器人号」。你的大号照常开着——插件只接机器人号。"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !sl.running, onClick: act("/snowluma/attach") }, "接入机器人号"), /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: loadProcs }, "看看有哪些 QQ 进程"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+    const r = await get("/onebot/test");
+    toast(r.message);
+  } }, "测试连接")), sl.lastAttach && sl.lastAttach.at ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4, color: sl.lastAttach.ok ? "var(--ab-ok)" : "var(--ab-warn)" } }, timeAgo(sl.lastAttach.at), "：", sl.lastAttach.message) : null))), procs ? /* @__PURE__ */ h("div", { style: { marginTop: 14 } }, procs.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted" }, "没找到 QQ 进程。") : /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["进程", "登录的号", "昵称", "状态", ""].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, procs.map((p) => /* @__PURE__ */ h("tr", { key: p.pid }, /* @__PURE__ */ h("td", null, p.pid), /* @__PURE__ */ h("td", null, p.uin || "识别不出"), /* @__PURE__ */ h("td", null, p.nickname || "—"), /* @__PURE__ */ h("td", null, p.injected ? p.connected ? "已接入" : "已注入，连接中" : "未接入"), /* @__PURE__ */ h("td", null, p.isBot ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "机器人号") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不会碰")))))))) : null), /* @__PURE__ */ h(
     Card,
     {
-      title: "QQ 会话放在哪",
+      collapse: true,
+      title: "QQ 会话放在哪（工作区路径）",
       desc: "每个 QQ 私聊 / 群都是 DSH 里「QQ Hub」工作区下的一个会话，她在会话里读写文件也在这个文件夹。改了以后新开的会话放到新位置。",
       more: "想把她已有的会话全部挪到新位置：改完保存后去「概览」点「重新开始所有 QQ 会话」（旧会话在 DSH 侧栏的归档里还能找到）。"
     },
     /* @__PURE__ */ h(Row, { label: "工作区文件夹", hint: "填完整路径（比如 D:\\\\QQ Hub\\\\qq-chats）；留空 = 默认位置（用户目录下 QQ Hub/qq-chats）" }, f.text("workspaceDir", { size: "wide", placeholder: st.workspaceDir || "" })),
     /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "现在用的：", st.workspaceDir || "—")
-  ), /* @__PURE__ */ h(Card, { title: "连接状态" }, /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "QQ 网关"), /* @__PURE__ */ h("span", null, /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("i", { className: cx("ab-dot", conn ? "ok" : st.onebot.state === "connecting" ? "warn" : "err") }), STATE_TEXT[st.onebot.state] || st.onebot.state)), /* @__PURE__ */ h("span", null, "登录的号"), /* @__PURE__ */ h("span", null, login ? login.nickname + "（" + login.uin + "）" + (login.uin !== draft.botQQ ? " ⚠ 不是机器人号！" : "") : "—"), /* @__PURE__ */ h("span", null, "HTTP"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.httpUrl || "—"), /* @__PURE__ */ h("span", null, "WebSocket"), /* @__PURE__ */ h("span", null, st.onebot.endpoint.wsUrl || "—")), !conn && st.onebot.problem ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 10 } }, st.onebot.problem) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
-    const r = await post("/onebot/reconnect");
-    toast(r.message, r.ok ? "ok" : "err");
-    reload();
-  } }, "重新连接"))), external ? null : /* @__PURE__ */ h(Card, { title: "高级", desc: "一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。" }, /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), /* @__PURE__ */ h(Row, { label: "控制台端口" }, f.num("snowluma.webuiPort", { min: 1, max: 65535 })), /* @__PURE__ */ h(Row, { label: "控制台密码", hint: "默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）" }, f.text("snowluma.webuiPassword", { type: "password", placeholder: draft.snowluma.webuiPasswordSet ? draft.snowluma.passwordAuto ? "自动管理中（不改就留空）" : "已保存（不改就留空）" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "SnowLuma 自己的控制台", hint: "一般用不到，想看它的原始界面时用" }, /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: () => window.open(sl.webui, "_blank") }, "打开 ↗")), /* @__PURE__ */ h(Row, { label: "随 DSH 自动启动 SnowLuma" }, f.sw("snowluma.autoStart")), /* @__PURE__ */ h(Row, { label: "自动接入机器人号", hint: "断线后自动重新接入，只接机器人号" }, f.sw("snowluma.autoAttach")), /* @__PURE__ */ h(Row, { label: "手动 HTTP 地址", hint: "留空 = 自动" }, f.text("snowluma.httpUrl", { placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "手动 WS 地址", hint: "留空 = 自动" }, f.text("snowluma.wsUrl", { placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "手动 HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "手动 WS 令牌" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "留空 = 自动" }))));
+  ), external ? null : /* @__PURE__ */ h(Card, { collapse: true, title: "高级网关参数", desc: "一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。" }, /* @__PURE__ */ h(Row, { label: "机器人 QQ 号" }, f.text("botQQ")), /* @__PURE__ */ h(Row, { label: "控制台端口" }, f.num("snowluma.webuiPort", { min: 1, max: 65535, fallback: 5099 })), /* @__PURE__ */ h(Row, { label: "控制台密码", hint: "默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）" }, f.text("snowluma.webuiPassword", { type: "password", placeholder: draft.snowluma.webuiPasswordSet ? draft.snowluma.passwordAuto ? "自动管理中（不改就留空）" : "已保存（不改就留空）" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "SnowLuma 自己的控制台", hint: "一般用不到，想看它的原始界面时用" }, /* @__PURE__ */ h(Btn, { small: true, disabled: !sl.running, onClick: () => window.open(sl.webui, "_blank") }, "打开 ↗")), /* @__PURE__ */ h(Row, { label: "随 DSH 自动启动 SnowLuma" }, f.sw("snowluma.autoStart")), /* @__PURE__ */ h(Row, { label: "自动接入机器人号", hint: "断线后自动重新接入，只接机器人号" }, f.sw("snowluma.autoAttach")), /* @__PURE__ */ h(Row, { label: "手动 HTTP 地址", hint: "留空 = 自动" }, f.text("snowluma.httpUrl", { placeholder: "http://127.0.0.1:3000" })), /* @__PURE__ */ h(Row, { label: "手动 WS 地址", hint: "留空 = 自动" }, f.text("snowluma.wsUrl", { placeholder: "ws://127.0.0.1:3001" })), /* @__PURE__ */ h(Row, { label: "手动 HTTP 令牌" }, f.text("snowluma.httpToken", { type: "password", placeholder: draft.snowluma.httpTokenSet ? "已保存" : "留空 = 自动" })), /* @__PURE__ */ h(Row, { label: "手动 WS 令牌" }, f.text("snowluma.wsToken", { type: "password", placeholder: draft.snowluma.wsTokenSet ? "已保存" : "留空 = 自动" }))));
 }
 
 // client/src/views/persona.js
 function AvatarCard({ st, toast, reload }) {
   const custom = st.avatar && st.avatar.custom;
-  return /* @__PURE__ */ h("div", { className: "ab-card", style: { marginTop: 12, padding: 14 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 12 } }, /* @__PURE__ */ h("img", { src: avatarSrc(st), alt: "头像", style: { width: 56, height: 56, borderRadius: "50%", objectFit: "cover", objectPosition: "50% 18%", border: "2px solid var(--ab-line)" } }), /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "头像"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, custom ? "用的是你上传的图片" : "默认的大肥鱼"))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: () => pickAvatar(toast, reload) }, "换一张"), custom ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+  return /* @__PURE__ */ h("div", { className: "ab-card", style: { padding: 14 } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 12 } }, /* @__PURE__ */ h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像", style: { width: 52, height: 52 } }), /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("b", null, "头像"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, custom ? "用的是你上传的图片" : "默认的大肥鱼"))), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10, flexWrap: "wrap" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: () => pickAvatar(toast, reload) }, "换一张"), custom ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
     const r = await post("/avatar/reset");
     toast(r.message, "ok");
     reload();
@@ -1212,7 +1386,7 @@ function PersonaAudit({ toast }) {
     return "跟随全局";
   };
   const staleCount = (rows || []).filter((r) => r.stale === true).length;
-  return /* @__PURE__ */ h(Card, { title: "人设生效自检", right: /* @__PURE__ */ h("div", { className: "ab-flex", style: { gap: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: load, disabled: busy }, busy ? "查…" : rows ? "刷新" : "看一下"), rows && staleCount > 0 ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: rebuild, disabled: busy }, "重建 ", staleCount, " 个过期会话") : null) }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "人设是在建会话那一刻烧进系统提示词的，之后不会自己重算 —— 所以「面板改了」不等于「模型拿到了」。 这里逐聊天列出：按现在的配置**该用哪张卡**、会话里**实际是哪个版本**、下一条消息会不会重建。"), !rows ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "点右上角「看一下」。") : rows.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "还没有任何会话。") : /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, /* @__PURE__ */ h("th", null, "聊天"), /* @__PURE__ */ h("th", null, "该用的卡"), /* @__PURE__ */ h("th", null, "会话里固化的"), /* @__PURE__ */ h("th", null, "状态"), /* @__PURE__ */ h("th", null, "期望来自"))), /* @__PURE__ */ h("tbody", null, rows.map((r) => /* @__PURE__ */ h("tr", { key: r.chatId }, /* @__PURE__ */ h("td", null, r.chatId, r.chatName ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.chatName) : null), /* @__PURE__ */ h("td", null, r.expected?.name || r.expected?.id || "—", /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.expected?.hash || "（无卡）")), /* @__PURE__ */ h("td", null, r.live ? r.live.id || "—" : /* @__PURE__ */ h("span", { className: "ab-muted" }, "还没有会话"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.live?.hash || "")), /* @__PURE__ */ h("td", null, r.stale === null ? /* @__PURE__ */ h("span", { className: "ab-muted" }, "—") : r.stale ? /* @__PURE__ */ h("span", { style: { color: "#d9534f" } }, "旧人设，会重建") : /* @__PURE__ */ h("span", { style: { color: "#3c9d5d" } }, "是这版")), /* @__PURE__ */ h("td", { className: "ab-small" }, levelText(r.source))))))));
+  return /* @__PURE__ */ h(Card, { title: "人设生效自检", right: /* @__PURE__ */ h("div", { className: "ab-flex", style: { gap: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: load, disabled: busy }, busy ? "查…" : rows ? "刷新" : "看一下"), rows && staleCount > 0 ? /* @__PURE__ */ h(Btn, { small: true, kind: "danger", onClick: rebuild, disabled: busy }, "重建 ", staleCount, " 个过期会话") : null) }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 8 } }, "人设是在建会话那一刻烧进系统提示词的，之后不会自己重算 —— 所以「面板改了」不等于「模型拿到了」。 这里逐聊天列出：按现在的配置**该用哪张卡**、会话里**实际是哪个版本**、下一条消息会不会重建。"), !rows ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "点右上角「看一下」。") : rows.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "还没有任何会话。") : /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, /* @__PURE__ */ h("th", null, "聊天"), /* @__PURE__ */ h("th", null, "该用的卡"), /* @__PURE__ */ h("th", null, "会话里固化的"), /* @__PURE__ */ h("th", null, "状态"), /* @__PURE__ */ h("th", null, "期望来自"))), /* @__PURE__ */ h("tbody", null, rows.map((r) => /* @__PURE__ */ h("tr", { key: r.chatId }, /* @__PURE__ */ h("td", null, r.chatId, r.chatName ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.chatName) : null), /* @__PURE__ */ h("td", null, r.expected?.name || r.expected?.id || "—", /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.expected?.hash || "（无卡）")), /* @__PURE__ */ h("td", null, r.live ? r.live.id || "—" : /* @__PURE__ */ h("span", { className: "ab-muted" }, "还没有会话"), /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, r.live?.hash || "")), /* @__PURE__ */ h("td", null, r.stale === null ? /* @__PURE__ */ h("span", { className: "ab-muted" }, "—") : r.stale ? /* @__PURE__ */ h("span", { style: { color: "var(--ab-err)" } }, "旧人设，会重建") : /* @__PURE__ */ h("span", { style: { color: "var(--ab-ok)" } }, "是这版")), /* @__PURE__ */ h("td", { className: "ab-small" }, levelText(r.source))))))));
 }
 function Persona({ st, draft, setDraft, toast, reload }) {
   const [list, setList] = useState(st.personas);
@@ -1355,11 +1529,10 @@ function Persona({ st, draft, setDraft, toast, reload }) {
           return setPath(prev, "persona." + mapKey, m2);
         });
       };
-      return /* @__PURE__ */ h("div", { key: id, className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h(
+      return /* @__PURE__ */ h("div", { key: id, className: "ab-flex", style: { marginBottom: 8 } }, /* @__PURE__ */ h(
         "input",
         {
           className: "ab-input",
-          style: { width: 240 },
           value: shown,
           placeholder: wantKind === "group" ? "填群号" : "填 QQ 号",
           inputMode: "numeric",
@@ -1440,7 +1613,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       )))
     );
   };
-  return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-persona" }, /* @__PURE__ */ h("div", { className: "ab-plist" }, list.map((p) => /* @__PURE__ */ h("button", { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => setSel(p.id) }, /* @__PURE__ */ h("div", { className: "nm" }, p.name, p.id === current ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "正在用") : null), /* @__PURE__ */ h("div", { className: "tg" }, (p.tags || []).join(" · ") || p.id + " · " + p.chars + " 字"))), /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h("div", { className: "ab-persona" }, /* @__PURE__ */ h("div", { className: "ab-plist" }, /* @__PURE__ */ h("div", { className: "ab-pitems" }, list.map((p) => /* @__PURE__ */ h("button", { key: p.id, type: "button", className: cx("ab-pitem", sel === p.id && "on"), onClick: () => setSel(p.id) }, /* @__PURE__ */ h("div", { className: "nm" }, p.name, p.id === current ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "正在用") : null), /* @__PURE__ */ h("div", { className: "tg" }, (p.tags || []).join(" · ") || p.id + " · " + p.chars + " 字")))), /* @__PURE__ */ h(
     Btn,
     {
       kind: "ghost",
@@ -1493,7 +1666,7 @@ function Persona({ st, draft, setDraft, toast, reload }) {
       }
     )), /* @__PURE__ */ h("div", { className: "ab-psec-add" }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "加一节："), suggest.map((t) => /* @__PURE__ */ h("button", { key: t, type: "button", className: "ab-chip", onClick: () => addSec(t) }, t)), /* @__PURE__ */ h("button", { type: "button", className: "ab-chip solid", onClick: () => addSec("") }, "＋ 自己起名"))),
     /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 14 } }, waiting ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "还有 ", waiting, " 节 AI 润色没选定，选好再保存") : null, /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { kind: "primary", disabled: !dirty || !!waiting, onClick: save }, dirty ? "保存人格" : "已保存"))
-  ) : /* @__PURE__ */ h(Card, null, /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }))), /* @__PURE__ */ h("div", { style: { height: 12 } }), specific("groups", "按群换人设", "指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。"), /* @__PURE__ */ h("div", { style: { height: 12 } }), specific("privates", "按人换人设（私聊）", "指定某个人私聊时用哪个人格；没指定的用「默认」。"), /* @__PURE__ */ h("div", { style: { height: 12 } }), /* @__PURE__ */ h(PersonaAudit, { toast }));
+  ) : /* @__PURE__ */ h(Card, null, /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }))), specific("groups", "按群换人设", "指定某个群用哪个人格；没指定的群用「默认」。优先级和聊天模型一致：具体群号 > 群默认 > 全局人设。"), specific("privates", "按人换人设（私聊）", "指定某个人私聊时用哪个人格；没指定的用「默认」。"), /* @__PURE__ */ h(PersonaAudit, { toast }));
 }
 
 // client/src/views/access.js
@@ -1510,7 +1683,7 @@ function Access({ draft, setDraft }) {
       desc: "一眼看清：主人是谁、给到什么档位、白名单里有谁、改资料类放开了几项。要改去下面对应的卡。"
     },
     /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { title: "主人 QQ 号" }, "主人 ", draft.ownerQQ || "没设"), /* @__PURE__ */ h(Pill, { kind: draft.ownerLevel === "full" ? "warn" : void 0 }, LEVEL_TEXT[draft.ownerLevel] || "完整权限"), /* @__PURE__ */ h(Pill, { title: "只有名单里的人和群她才会理" }, "白名单 私聊 ", privates.length, " / 群 ", groups.length), /* @__PURE__ */ h(Pill, { kind: loosened ? "warn" : void 0, title: "改资料类操作里被放开到「所有人」或显式开启的项数" }, "改资料放开 ", loosened, " 项"), draft.longTasks ? /* @__PURE__ */ h(Pill, { kind: "warn" }, "长任务模式 开") : null)
-  ), /* @__PURE__ */ h(OwnerCard, { draft, setDraft }), /* @__PURE__ */ h(Whitelist, { draft, setDraft }), /* @__PURE__ */ h(OwnerPower, { draft, setDraft }), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null));
+  ), /* @__PURE__ */ h(OwnerCard, { draft, setDraft }), /* @__PURE__ */ h(OwnerPower, { draft, setDraft }), /* @__PURE__ */ h(Whitelist, { draft, setDraft }), /* @__PURE__ */ h(ProfilePerms, { draft, setDraft }), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(GroupRoles, null), /* @__PURE__ */ h(CommandList, null)));
 }
 function OwnerCard({ draft, setDraft }) {
   const f = useField(draft, setDraft);
@@ -1524,7 +1697,6 @@ function OwnerPower({ draft, setDraft }) {
   return /* @__PURE__ */ h(
     Card,
     {
-      collapse: true,
       title: "她能做到哪一步",
       desc: "主人私聊的权限档位（能不能用电脑上的工具）和长任务模式。默认「完整」；不需要她碰电脑时，降到「受限」或「纯聊天」更安全。",
       more: "群聊永远没有电脑操作权限，这里管不到群。\n切换档位会给主人私聊换一个新的 DSH 会话（旧的还在侧栏里）。\n长任务模式只在「完整」下生效：打开后她能把命令放后台跑、跑完回来告诉你，也能设定时任务；工具多一点，回话会稍慢。"
@@ -1593,13 +1765,13 @@ function ProfilePerms({ draft, setDraft }) {
     Card,
     {
       collapse: true,
-      title: "改资料与名单",
-      desc: "她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，要放开在这里逐项开。",
+      title: "改资料与平台权限",
+      desc: "她能不能按别人的要求改自己的昵称、签名、头像，处理好友申请、改白名单，以及在抖音 / 小黑盒上的浏览、点赞、评论。默认都只听主人的，需要放开时点开设置。",
       more: "说明：\n· QQ 昵称 / 签名 / 头像要 SnowLuma 支持（set_qq_profile / set_self_longnick / set_qq_avatar）。\n· B 站签名 / 头像要先在「B站」页登录。\n· 好友申请：她自己主动加别人暂不支持（SnowLuma 没有这个接口）。\n· 抖音 / 小黑盒的定时自动刷不受「浏览」这项限制；「分享抖音给主人」指刷到好玩的私聊发给你。"
     },
     /* @__PURE__ */ h(Seg, { value: group, onChange: setGroup, options: PERM_GROUPS.map((g) => ({ value: g.id, label: g.label })) }),
-    /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "这一组（", cur.label, "）共 ", cur.keys.length, " 项 · 放开 ", loosened(cur.keys), " 项（没放开的都是「仅主人私聊」）"),
-    /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, cur.keys.map((k) => /* @__PURE__ */ h(Row, { key: k, label: PERM_ITEMS[k][0], hint: PERM_ITEMS[k][1] }, /* @__PURE__ */ h(Choices, { value: perms[k] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + k, v)), options: PERM_OPTS }))))
+    /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "这一组（", cur.label, "）共 ", cur.keys.length, " 项 · 放开 ", loosened(cur.keys), " 项（关 = 谁说都不改 · 仅主人私聊 = 默认 · 所有人 = 白名单内的人/群也能让改）"),
+    /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, cur.keys.map((k) => /* @__PURE__ */ h(Row, { key: k, label: PERM_ITEMS[k][0], hint: PERM_ITEMS[k][1] }, /* @__PURE__ */ h(Seg, { value: perms[k] || "owner", onChange: (v) => setDraft(setPath(draft, "profilePerms." + k, v)), options: PERM_OPTS }))))
   );
 }
 function CommandList() {
@@ -1607,7 +1779,7 @@ function CommandList() {
   useEffect(() => {
     get("/commands").then((r) => setList(r.list || []));
   }, []);
-  return /* @__PURE__ */ h(Card, { collapse: true, title: "QQ 命令（" + list.length + " 条）", desc: "主人在 QQ 里（私聊或白名单群）直接发这些命令就能管她，别人发了不算。总开关关着时也能用。" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc))))));
+  return /* @__PURE__ */ h(Card, { collapse: true, title: "QQ 命令参考（" + list.length + " 条）", desc: "主人在 QQ 里（私聊或白名单群）发这些命令就能管她。总开关关着时也能用。" }, /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((c) => /* @__PURE__ */ h("tr", { key: c.name }, /* @__PURE__ */ h("td", { style: { whiteSpace: "nowrap" } }, /* @__PURE__ */ h("code", null, "/", c.name), c.aliases.length ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, c.aliases.map((a) => "/" + a).join(" ")) : null), /* @__PURE__ */ h("td", null, c.desc)))))));
 }
 function GroupRoles() {
   const [list, setList] = useState(null);
@@ -1616,7 +1788,7 @@ function GroupRoles() {
     get("/groups/roles").then((r) => setList(r.list || []));
   };
   useEffect(load, []);
-  return /* @__PURE__ */ h(Card, { collapse: true, title: "群管权限", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行")))))));
+  return /* @__PURE__ */ h(Card, { collapse: true, title: "群管权限查询", desc: "她在群里是群主或管理员时，主人才能让她禁言、踢人、发公告；改专属头衔要群主。按已保存的群白名单查。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("i", { className: "ab-spin" }), " 查询中…") : list.length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "群白名单是空的。") : /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("thead", null, /* @__PURE__ */ h("tr", null, ["群", "她的身份", "群管"].map((x) => /* @__PURE__ */ h("th", { key: x }, x)))), /* @__PURE__ */ h("tbody", null, list.map((g) => /* @__PURE__ */ h("tr", { key: g.groupId }, /* @__PURE__ */ h("td", null, (g.name && g.name !== g.groupId ? g.name + " " : "") + "(" + g.groupId + ")"), /* @__PURE__ */ h("td", null, g.label), /* @__PURE__ */ h("td", null, g.canManage ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "可以") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不行"))))))));
 }
 function OwnerBrief({ draft, setDraft }) {
   const f = useField(draft, setDraft);
@@ -1638,9 +1810,9 @@ function OwnerBrief({ draft, setDraft }) {
   return /* @__PURE__ */ h(
     Card,
     {
+      collapse: true,
       title: "主人私聊：群聊摘要",
       right: f.sw("group.ownerBrief.enabled"),
-      collapse: true,
       desc: "主人在私聊里问起群里的事时，把最近 24 小时的群聊流水当成「她自己的见闻」补进这一轮上下文。只在主人私聊提到群相关的事时触发，不常驻、不写进记忆；默认关。",
       more: "开启前先在「权限」页把群加进白名单。她只会当成自己最近在群里看到的，不会把群聊原文说成是主人发的。"
     },
@@ -1650,90 +1822,98 @@ function OwnerBrief({ draft, setDraft }) {
 }
 
 // client/src/views/group.js
-function FoldSection({ title, desc, right, defaultOpen = false, children }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return /* @__PURE__ */ h("div", { className: "ab-fold-section" }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 12 } }, /* @__PURE__ */ h(
-    "div",
-    {
-      className: "ab-fold-head",
-      style: { margin: 0, flex: 1 },
-      role: "button",
-      tabIndex: 0,
-      "aria-expanded": open,
-      onClick: () => setOpen(!open),
-      onKeyDown: (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          setOpen(!open);
-        }
-      }
-    },
-    /* @__PURE__ */ h("span", { className: cx("ab-fold-chev", open && "open"), "aria-hidden": "true" }, /* @__PURE__ */ h("svg", { width: "12", height: "12", viewBox: "0 0 12 12", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round" }, /* @__PURE__ */ h("path", { d: "M4.5 3 7.5 6 4.5 9" }))),
-    /* @__PURE__ */ h("h3", null, title)
-  ), right || null), desc ? /* @__PURE__ */ h("p", { className: "ab-desc", style: { marginTop: 2 } }, desc) : null, open ? /* @__PURE__ */ h("div", null, children) : null);
-}
 function Group({ draft, setDraft }) {
   const f = useField(draft, setDraft);
   const overrides = draft.group.overrides || {};
   const [newGid, setNewGid] = useState("");
-  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(Card, { title: "消息节奏", desc: "人常常一口气发好几句：她等对方说完再一起回，而不是一句一回；模型或工具卡住时也不会无限等。" }, /* @__PURE__ */ h(Row, { label: "连发合并", hint: "打开后她会等对方说完再回" }, f.sw("merge.enabled")), /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "回合超时", hint: "模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟" }, /* @__PURE__ */ h(
-    "input",
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
+    Card,
     {
-      className: "ab-input sm",
-      type: "number",
-      min: 1,
-      max: 120,
-      step: 1,
-      value: Math.round((Number(draft.turnTimeoutMs) || 6e5) / 6e4),
-      onChange: (e) => setDraft(setPath(draft, "turnTimeoutMs", Number(e.target.value) * 6e4))
-    }
-  ), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟"))), /* @__PURE__ */ h(
+      title: "消息节奏",
+      desc: "人常常一口气发好几句：她等对方说完再一起回，而不是一句一回；遇到复杂任务也能安心等待。"
+    },
+    /* @__PURE__ */ h(Row, { label: "连发合并", hint: "打开后她会等对方说完再回" }, f.sw("merge.enabled")),
+    /* @__PURE__ */ h(Row, { label: "对方停顿多久算说完" }, f.range("merge.waitSec", 0.5, 10, 0.5, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "最多等多久", hint: "对方一直在发也最多等这么久" }, f.range("merge.maxSec", 2, 30, 1, (v) => v + " 秒")),
+    /* @__PURE__ */ h(FoldSection, { title: "高级微调（群等待与超时）", desc: "微调群内多人群聊节奏以及模型长任务中断阈值" }, /* @__PURE__ */ h(Row, { label: "群里停顿多久算一段", hint: "群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着" }, f.range("merge.groupWaitSec", 1, 20, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "群里最多等多久" }, f.range("merge.groupMaxSec", 3, 60, 1, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "回合超时", hint: "模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟" }, f.num("turnTimeoutMs", { min: 1, max: 120, scale: 6e4, fallback: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")))
+  ), /* @__PURE__ */ h(
     Card,
     {
       title: "怎么说话（分条）",
-      desc: "她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。句子太短不会单独成条，攒够一截才断。",
+      desc: "她写的 ||| 一定断开；空行算段落；句末标点会按字数上限攒成条。句子太短不会单独成条，攒够一截才断。",
       more: "换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。"
     },
-    /* @__PURE__ */ h(Row, { label: "群里一条最长", hint: "攒到这么长就断开；正常聊天她一般写得比这短" }, f.num("reply.groupMaxChars", { min: 10, max: 500 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
-    /* @__PURE__ */ h(Row, { label: "私聊一条最长", hint: "私聊可以整段说，设大一点更像正常聊天" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
-    /* @__PURE__ */ h(Row, { label: "一轮最多几条", hint: "超过就均匀合并，不会把剩下的全塞进最后一条" }, f.num("reply.maxBubbles", { min: 1, max: 12 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")),
+    /* @__PURE__ */ h(Row, { label: "群里一条最长", hint: "攒到这么长就断开；正常聊天她一般写得比这短" }, f.num("reply.groupMaxChars", { min: 10, max: 500, fallback: 40 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
+    /* @__PURE__ */ h(Row, { label: "私聊一条最长", hint: "私聊可以整段说，设大一点更像正常聊天" }, f.num("reply.privateMaxChars", { min: 20, max: 2e3, fallback: 120 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
+    /* @__PURE__ */ h(Row, { label: "一轮最多几条", hint: "超过就均匀合并，不会把剩下的全塞进最后一条" }, f.num("reply.maxBubbles", { min: 1, max: 12, fallback: 6 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")),
     /* @__PURE__ */ h(Row, { label: "清单和汇报整段发", hint: "开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆" }, f.sw("reply.keepReports"))
-  ), /* @__PURE__ */ h(Card, { title: "群聊行为", desc: "群里什么时候必回、什么时候插话、怎么防刷屏。低频的刹车与防 bot 规则默认收起。" }, /* @__PURE__ */ h(FoldSection, { title: "被叫到一定回", defaultOpen: true, desc: "被 @、有人引用回复她的消息、或者提到下面这些名字时，她一定会回。" }, /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" }))), /* @__PURE__ */ h(FoldSection, { title: "插话", defaultOpen: true, desc: "没人叫她的时候，她也可能自然地插一句；她看完群里在聊什么，也可以决定不说话。" }, /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")), /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")), /* @__PURE__ */ h(Row, { label: "每小时最多说", hint: "这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发" }, f.range("group.maxPerHour", 0, 120, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })), /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : Math.round(v * 100) + "%")), /* @__PURE__ */ h(Row, { label: "群冷清时不插话", hint: "最近几分钟内消息少于这个数就不插" }, f.num("group.minRecentMessages", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条 / "), f.num("group.activeWindowSec", { min: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "静默时段", hint: "这段时间不插话（被叫到还是会回）" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[0], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [Number(e.target.value), draft.group.quietHours[1]])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点 到"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 23, value: draft.group.quietHours[1], onChange: (e) => setDraft(setPath(draft, "group.quietHours", [draft.group.quietHours[0], Number(e.target.value)])) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")), /* @__PURE__ */ h(More, { label: "加入话题之后怎么聊" }, "她被叫到或插上话以后算「加入了话题」：话题还和她相关、她刚说过话，就会接着聊下去（每次看完群里新说的一段再回），不受冷却限制 —— 但照样吃上面的每小时说话额度，不会白送。话题跑偏或者她选择不说话就退出。"), /* @__PURE__ */ h(Row, { label: "连聊预算", hint: "一次入场最多连着接几条 / 最多聊多久；填 0 = 关掉连聊通道（只靠插话）" }, f.range("group.engagedMaxReplies", 0, 10, 1, (v) => v === 0 ? "关闭" : v + " 条"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.engagedMaxMs", 0, 30 * 6e4, 6e4, (v) => v === 0 ? "关闭" : Math.round(v / 6e4) + " 分钟"))), /* @__PURE__ */ h(FoldSection, { title: "安全刹车", desc: "只防失控（比如和别的机器人聊停不下来）：她在一个群里短时间说太多就歇一会儿，主人 @ 她除外。平时碰不到。" }, /* @__PURE__ */ h(Row, { label: "最多说几次" }, f.range("group.burstMax", 1, 20, 1, (v) => v + " 次"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "/"), f.range("group.burstWindowSec", 30, 600, 30, (v) => Math.round(v / 6) / 10 + " 分钟"))), /* @__PURE__ */ h(FoldSection, { title: "防同类 bot", desc: "防 bot 对聊刷屏：她和一个对象互相针对地接话，已确认是同类 bot 的 2 个来回就停、看不出身份的 4 个来回才停，停的是这一对 30 分钟。" }, /* @__PURE__ */ h(Row, { label: "启用", hint: "关掉就完全不判定，她照常按插话概率说话。" }, f.sw("group.fishGuard.enabled")), /* @__PURE__ */ h(Row, { label: "按号码认同类 bot", hint: "逗号或空格隔开。名单里的人一律当成同类 bot（哪怕名字看不出）" }, /* @__PURE__ */ h(
-    ListInput,
+  ), /* @__PURE__ */ h(
+    Card,
     {
-      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
-      placeholder: "例如 123456789, 987654321",
-      numbers: true,
-      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
-    }
-  )), /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
-    ListInput,
+      title: "群聊互动机制",
+      desc: "群里被 @、引用或提到名字时必回；没人叫她时按概率自然插话。"
+    },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "被叫到一定回"),
+    /* @__PURE__ */ h(Row, { label: "唤醒词", hint: "一行一个；被 @、有人引用回复她的消息、或提到这些名字时，她一定会回。" }, f.list("group.wakeWords", { placeholder: "大肥鱼\n肥鱼" })),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主动插话"),
+    /* @__PURE__ */ h(Row, { label: "插话概率", hint: "每条普通消息触发插话的机会" }, f.percent("group.interjectChance")),
+    /* @__PURE__ */ h(Row, { label: "冷却", hint: "两次插话至少隔多久" }, f.range("group.cooldownSec", 0, 600, 10, (v) => v + " 秒")),
+    /* @__PURE__ */ h(Row, { label: "每小时最多说", hint: "这是说话总条数（插话和接着聊都算），不是只看插话次数；额度按小时均摊发放，允许最多三分之一连发" }, f.range("group.maxPerHour", 0, 120, 1, (v) => v + " 条")),
+    /* @__PURE__ */ h(Row, { label: "她感兴趣的话题", hint: "群里在聊这些（或她记得相关的事）时更容易插话；一行一个" }, f.list("group.interests", { placeholder: "白米饭\n游戏\n追剧" })),
+    /* @__PURE__ */ h(Row, { label: "话题相关度门槛", hint: "和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机" }, f.range("group.minRelevance", 0, 1, 0.05, (v) => v === 0 ? "不看话题" : v + " 以上")),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "群事件通知与辅助功能"),
+    /* @__PURE__ */ h(Row, { label: "进群打招呼", hint: "有人进群或自己被拉进群时在群里说一句，开群多的别开" }, f.sw("group.welcome.enabled")),
+    /* @__PURE__ */ h(Row, { label: "戳一戳回复", hint: "群里有人双击头像戳她时回一句" }, f.sw("group.poke.enabled")),
+    draft.group && draft.group.poke && draft.group.poke.enabled ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "戳一戳回复内容" }, f.text("group.poke.reply", { placeholder: "干嘛呀" })), /* @__PURE__ */ h(Row, { label: "戳一戳冷却" }, f.range("group.poke.cooldownSec", 0, 300, 5, (v) => v + " 秒"))) : null,
+    /* @__PURE__ */ h(Row, { label: "被移出群私聊通知", hint: "被踢或被退群时，在控制台和主人私聊里留一条记录" }, f.sw("group.leaveNotice")),
+    /* @__PURE__ */ h(Row, { label: "回复失败群内提醒", hint: "报错或网络断开没回出来时在群里说一声，关则默默吞掉" }, f.sw("group.failNotice")),
+    /* @__PURE__ */ h(Row, { label: "被禁言自动暂停", hint: "被群管理员禁言时暂停往这个群发消息直到解禁" }, f.sw("group.muteDetect")),
+    /* @__PURE__ */ h(FoldSection, { title: "防两只 Bot 互相刷屏（高级选项）", desc: "群里还有另一只用类似人设的 bot 时防死循环互刷", defaultOpen: false }, /* @__PURE__ */ h(Row, { label: "启用防御", hint: "群里还有另一只用类似人设的 bot 时，避免接对方的话停不下来" }, f.sw("group.fishGuard.enabled")), draft.group && draft.group.fishGuard && draft.group.fishGuard.enabled ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "按 QQ 号认同类 bot", hint: "逗号或空格隔开。写在这里的号说的话她一律不接" }, /* @__PURE__ */ h(
+      ListInput,
+      {
+        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.fishIds) ? draft.group.fishGuard.fishIds : [],
+        placeholder: "例如 100001, 100002",
+        numbers: true,
+        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.fishIds", list))
+      }
+    )), /* @__PURE__ */ h(Row, { label: "按名字认同类 bot", hint: "在默认的「肥鱼/鲸/fish」之外还要算哪些名字？逗号或空格隔开。名字带「鱼」但其实是真人的别加。" }, /* @__PURE__ */ h(
+      ListInput,
+      {
+        value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
+        placeholder: "例如 小鱼, 咸鱼罐头",
+        onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
+      }
+    ))) : null)
+  ), /* @__PURE__ */ h(
+    Card,
     {
-      value: Array.isArray(draft.group && draft.group.fishGuard && draft.group.fishGuard.nameSuffixes) ? draft.group.fishGuard.nameSuffixes : [],
-      placeholder: "例如 小鱼, 咸鱼罐头",
-      onChange: (list) => setDraft((prev) => setPath(prev, "group.fishGuard.nameSuffixes", list))
-    }
-  ))), /* @__PURE__ */ h(FoldSection, { title: "按群单独设置", desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
-    PercentRow,
-    {
-      key: gid,
-      label: "群 " + gid,
-      value: o.interjectChance,
-      fallback: draft.group.interjectChance,
-      write: (v) => setDraft((prev) => {
-        const cur = (prev.group.overrides || {})[gid] || {};
-        return setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [gid]: { ...cur, interjectChance: v } });
-      }),
-      remove: () => setDraft((prev) => {
-        const n = { ...prev.group.overrides || {} };
-        delete n[gid];
-        return setPath(prev, "group.overrides", n);
-      })
-    }
-  )), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
-    setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
-    setNewGid("");
-  } }, "添加")))), /* @__PURE__ */ h(Card, { title: "安全与文件", desc: "收发文件与危险命令确认。平时用不到的话保持默认即可。" }, /* @__PURE__ */ h(FoldSection, { title: "发文件", right: f.sw("files.enabled"), desc: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")), /* @__PURE__ */ h(FoldSection, { title: "收文件", desc: "别人发来的文件，她会下载到 QQ 工作区的 qq-inbox 目录，再把路径告诉她（要看得用工具读）。这里管的是单个文件的大小上限。" }, /* @__PURE__ */ h(Row, { label: "单个文件最大", hint: "文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB" }, f.num("files.inboundMaxMB", { min: 1, max: 256 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。")), /* @__PURE__ */ h(FoldSection, { title: "危险命令确认", right: f.sw("security.dangerConfirm"), desc: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。"))), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
+      collapse: Object.keys(overrides).length === 0,
+      title: "按群单独设置插话概率",
+      desc: "某个群想让她更安静或更活跃，在这里单独设插话概率。"
+    },
+    Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h(
+      PercentRow,
+      {
+        key: gid,
+        label: "群 " + gid,
+        value: o.interjectChance,
+        fallback: draft.group.interjectChance,
+        write: (v) => setDraft((prev) => {
+          const cur = (prev.group.overrides || {})[gid] || {};
+          return setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [gid]: { ...cur, interjectChance: v } });
+        }),
+        remove: () => setDraft((prev) => {
+          const n = { ...prev.group.overrides || {} };
+          delete n[gid];
+          return setPath(prev, "group.overrides", n);
+        })
+      }
+    )),
+    /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
+      setDraft((prev) => setPath(prev, "group.overrides", { ...prev.group.overrides || {}, [newGid]: { interjectChance: prev.group.interjectChance } }));
+      setNewGid("");
+    } }, "添加群单独设置"))
+  ), /* @__PURE__ */ h(Card, { title: "安全与收发文件", desc: "管理收发文件能力与执行终端敏感操作前的二次确认。" }, /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "发文件"), /* @__PURE__ */ h(Row, { label: "允许发文件", hint: "打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。" }, f.sw("files.enabled")), draft.files && draft.files.enabled ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "单个文件最大" }, f.num("files.maxMB", { min: 1, max: 2048, fallback: 50 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "额外允许的目录", hint: "一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的" }, f.list("files.dirs", { placeholder: "D:\\Aurabot\\要发的文件" })), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { margin: "4px 0 12px" } }, "限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。")) : null, /* @__PURE__ */ h("div", { className: "ab-section-title" }, "收文件"), /* @__PURE__ */ h(Row, { label: "接收单个文件最大", hint: "别人发来的文件下载到 QQ 工作区的 qq-inbox 目录；整包读进内存，一条消息最多取 3 个，上限 256MB" }, f.num("files.inboundMaxMB", { min: 1, max: 256, fallback: 50 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { margin: "4px 0 12px" } }, "超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "危险命令确认"), /* @__PURE__ */ h(Row, { label: "危险命令私聊确认", hint: "她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。" }, f.sw("security.dangerConfirm")), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 4 } }, "拦的是真正致命的那几类：删根目录 / 格式化 / 关机重启 / 清空磁盘 / 改注册表关键项 / 下载后直接执行等。普通删除、构建、改文件不受影响。"), /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 8 } }, "注意：这是静态规则检测，不是沙箱——动态拼装的命令仍可能绕过，不能替代系统权限隔离。")), /* @__PURE__ */ h(OwnerBrief, { draft, setDraft }));
 }
 
 // client/src/views/browser.js
@@ -1780,10 +1960,8 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
       desc: running ? "浏览器正在跑（多个模块共用这一个进程）" : "现在没在跑。下次要用时会自动起来。",
       right: running ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onShutdown, disabled: busy }, "立刻关掉") : null
     },
-    /* @__PURE__ */ h(Row, { label: "状态" }, /* @__PURE__ */ h("span", null, running ? "运行中" : "休眠"), live.browser ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small", style: { marginLeft: 8 } }, live.browser) : null),
-    running ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "显示" }, live.displayOwned ? /* @__PURE__ */ h("span", null, "虚拟屏 ", live.display, "（没有桌面，看不见）") : /* @__PURE__ */ h("span", null, live.display || "系统显示")), /* @__PURE__ */ h(Row, { label: "标签页" }, /* @__PURE__ */ h("span", null, live.tabs, " 个")), /* @__PURE__ */ h(Row, { label: "正在用" }, live.active.length ? /* @__PURE__ */ h("span", null, live.active.join("、")) : /* @__PURE__ */ h("span", { className: "ab-muted" }, "没人用"))) : null,
-    /* @__PURE__ */ h(Row, { label: "可用内存" }, /* @__PURE__ */ h("span", { className: live.freeMB >= 0 && live.freeMB < 600 ? "ab-warn" : "" }, live.freeMB >= 0 ? fmtMB(live.freeMB) : "未知")),
-    live.displayOwned ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "看画面", hint: "虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => onVnc("start"), disabled: busy || live.vnc?.running }, "开 VNC"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => onVnc("stop"), disabled: busy || !live.vnc?.running }, "关")), live.vnc?.running ? /* @__PURE__ */ h(Row, { label: "连接方式" }, /* @__PURE__ */ h("div", { className: "ab-small" }, /* @__PURE__ */ h("div", null, "端口 ", /* @__PURE__ */ h("b", null, live.vnc.port), "　密码 ", /* @__PURE__ */ h("b", null, live.vnc.password)), /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 4 } }, live.vnc.lan ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。` : `只允许本机连：先做隧道 ssh -L ${live.vnc.port}:127.0.0.1:${live.vnc.port} 用户@NAS，再连 127.0.0.1:${live.vnc.port}。`))) : null) : null
+    /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "状态"), /* @__PURE__ */ h("span", null, running ? "运行中" : "休眠"), live.browser ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("span", null, "内核"), /* @__PURE__ */ h("span", { className: "ab-small ab-muted", style: { wordBreak: "break-all" } }, live.browser)) : null, running ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("span", null, "显示"), /* @__PURE__ */ h("span", null, live.displayOwned ? `虚拟屏 ${live.display}（无桌面）` : live.display || "系统显示"), /* @__PURE__ */ h("span", null, "标签页"), /* @__PURE__ */ h("span", null, live.tabs, " 个"), /* @__PURE__ */ h("span", null, "正在用"), /* @__PURE__ */ h("span", null, live.active.length ? live.active.join("、") : /* @__PURE__ */ h("span", { className: "ab-muted" }, "没人用"))) : null, /* @__PURE__ */ h("span", null, "可用内存"), /* @__PURE__ */ h("span", { className: live.freeMB >= 0 && live.freeMB < 600 ? "ab-warn" : "" }, live.freeMB >= 0 ? fmtMB(live.freeMB) : "未知")),
+    live.displayOwned ? /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h(Row, { label: "看画面", hint: "虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => onVnc("start"), disabled: busy || live.vnc?.running }, "开 VNC"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => onVnc("stop"), disabled: busy || !live.vnc?.running }, "关")), live.vnc?.running ? /* @__PURE__ */ h(Row, { label: "连接方式" }, /* @__PURE__ */ h("div", { className: "ab-small" }, /* @__PURE__ */ h("div", null, "端口 ", /* @__PURE__ */ h("b", null, live.vnc.port), "　密码 ", /* @__PURE__ */ h("b", null, live.vnc.password)), /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 4 } }, live.vnc.lan ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。` : `只允许本机连：先做隧道 ssh -L ${live.vnc.port}:127.0.0.1:${live.vnc.port} 用户@NAS，再连 127.0.0.1:${live.vnc.port}。`))) : null) : null
   );
 }
 function Browser({ draft, setDraft, toast }) {
@@ -1812,7 +1990,7 @@ function Browser({ draft, setDraft, toast }) {
       setBusy(false);
     }
   };
-  return /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     InstallCard,
     {
       st,
@@ -1829,7 +2007,7 @@ function Browser({ draft, setDraft, toast }) {
       onShutdown: () => act("/browser/shutdown", {}, "已关闭"),
       onVnc: (action) => act("/browser/vnc", { action }, "好")
     }
-  ), /* @__PURE__ */ h(Card, { title: "设置", desc: "一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。" }, /* @__PURE__ */ h(Row, { label: "总开关", hint: "关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）" }, f.sw("browser.enabled")), /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 用装好的那份；也可以填系统里已有的 Chrome / Edge 完整路径" }, f.text("browser.chromePath", { size: "wide", placeholder: "留空自动找" })), /* @__PURE__ */ h(Row, { label: "同时用几个", hint: "默认 2。机器内存小就调到 1，超了会立刻报忙而不是排队" }, f.num("browser.maxConcurrent", { min: 1, max: 4 })), /* @__PURE__ */ h(Row, { label: "没人用多久就关", hint: "默认 10 分钟。0 = 一直开着（不推荐，会一直占内存）" }, f.num("browser.idleMinutes", { min: 0, max: 240 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")), /* @__PURE__ */ h(Row, { label: "内存低于多少就不开", hint: "默认 600 MB。可用内存不够时不启动，免得把整机拖垮" }, f.num("browser.minFreeMB", { min: 0, max: 8192 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "无头模式", hint: "默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容" }, f.sw("browser.headless")), /* @__PURE__ */ h(Row, { label: "优先官方 Chrome", hint: "开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）" }, f.sw("browser.chrome")), /* @__PURE__ */ h(Row, { label: "VNC 开给局域网", hint: "默认关：VNC 只绑本机，跨机器看要先做 SSH 隧道。打开后局域网能直接连（有随机密码），但浏览器等于敞开，验完记得关" }, f.sw("browser.vncLan"))));
+  ), /* @__PURE__ */ h(Card, { title: "设置", desc: "一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。" }, /* @__PURE__ */ h(Row, { label: "总开关", hint: "关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）" }, f.sw("browser.enabled")), /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 用装好的那份；也可以填系统里已有的 Chrome / Edge 完整路径" }, f.text("browser.chromePath", { size: "wide", placeholder: "留空自动找" })), /* @__PURE__ */ h(Row, { label: "同时用几个", hint: "默认 2。机器内存小就调到 1，超了会立刻报忙而不是排队" }, f.num("browser.maxConcurrent", { min: 1, max: 4, fallback: 2 })), /* @__PURE__ */ h(Row, { label: "没人用多久就关", hint: "默认 10 分钟。0 = 一直开着（不推荐，会一直占内存）" }, f.num("browser.idleMinutes", { min: 0, max: 240, fallback: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")), /* @__PURE__ */ h(Row, { label: "内存低于多少就不开", hint: "默认 600 MB。可用内存不够时不启动，免得把整机拖垮" }, f.num("browser.minFreeMB", { min: 0, max: 8192, fallback: 600 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "无头模式", hint: "默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容" }, f.sw("browser.headless")), /* @__PURE__ */ h(Row, { label: "优先官方 Chrome", hint: "开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）" }, f.sw("browser.chrome")), /* @__PURE__ */ h(Row, { label: "VNC 开给局域网", hint: "默认关：VNC 只绑本机，跨机器看要先做 SSH 隧道。打开后局域网能直接连（有随机密码），但浏览器等于敞开，验完记得关" }, f.sw("browser.vncLan"))));
 }
 
 // client/src/views/model.js
@@ -1929,7 +2107,23 @@ function Model({ st, draft, setDraft, toast }) {
         setDraft(setPath(setPath(draft, "model.provider", v ? p : ""), "model.model", v ? m.join("::") : ""));
       }
     }
-  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null), /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] }))), /* @__PURE__ */ h(
+  ), cur ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => test({ provider: draft.model.provider, model: draft.model.model }) }, "测速") : null, cur && ping[cur] ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, ping[cur]) : null), /* @__PURE__ */ h(Row, { label: "思考强度", hint: noReasoning ? "这个模型不支持思考强度，会自动忽略" : "聊天建议「低」，回得快" }, /* @__PURE__ */ h(Seg, { value: draft.model.reasoningEffort || "low", disabled: noReasoning, onChange: (v) => setDraft(setPath(draft, "model.reasoningEffort", v)), options: [{ value: "low", label: "低" }, { value: "high", label: "高" }, { value: "max", label: "最高" }] })), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ab-line)", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { flex: "1 1 240px", minWidth: 0 } }, "改了模型保存后，点右侧按钮可立即把所有已有 QQ 会话切过去（否则等对方发下一条才切）。"), /* @__PURE__ */ h(
+    Btn,
+    {
+      small: true,
+      disabled: applying,
+      onClick: async () => {
+        setApplying(true);
+        try {
+          const r = await post("/models/apply", {});
+          toast(r?.ok ? r.message || "切好了" : r?.message || "没切成", r?.ok ? "ok" : "err");
+        } finally {
+          setApplying(false);
+        }
+      }
+    },
+    applying ? "切着呢…" : "立刻应用到所有会话"
+  ))), /* @__PURE__ */ h(
     Card,
     {
       title: "看图",
@@ -1957,26 +2151,10 @@ function Model({ st, draft, setDraft, toast }) {
         }
       }
     )) : null
-  ), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { collapse: true, title: "可用的模型", desc: "DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+  ), /* @__PURE__ */ h(ChatModels, { draft, setDraft, list }), /* @__PURE__ */ h(Card, { collapse: true, title: "可用的模型与连通性测速", desc: "DSH 里现在能选的模型。点「测速」会真的问一次（花一点点额度），「用这个」把它填到上面的全局模型。" }, list === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { text: "DSH 没有列出模型" }) : /* @__PURE__ */ h("div", { className: "ab-table-wrap" }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, list.map((m) => /* @__PURE__ */ h("tr", { key: key(m) }, /* @__PURE__ */ h("td", null, labelOf(m)), /* @__PURE__ */ h("td", { className: "ab-muted" }, m.provider), /* @__PURE__ */ h("td", null, ping[key(m)] || ""), /* @__PURE__ */ h("td", { style: { textAlign: "right", whiteSpace: "nowrap" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => test(m) }, "测速"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
     setDraft(setPath(setPath(draft, "model.provider", m.provider), "model.model", m.model));
     toast("选好了，记得保存");
-  } }, "用这个"))))))), /* @__PURE__ */ h(Card, { collapse: true, title: "应用到现有会话", desc: "这里的模型设置默认要等对方发下一条消息才生效（冷群可能几小时都不动）。点这里立刻把所有已有 QQ 会话切过去——保存设置之后点。" }, /* @__PURE__ */ h(
-    Btn,
-    {
-      small: true,
-      disabled: applying,
-      onClick: async () => {
-        setApplying(true);
-        try {
-          const r = await post("/models/apply", {});
-          toast(r?.ok ? r.message || "切好了" : r?.message || "没切成", r?.ok ? "ok" : "err");
-        } finally {
-          setApplying(false);
-        }
-      }
-    },
-    applying ? "切着呢…" : "立刻应用到所有会话"
-  ), /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 8 } }, "只改这个插件管的 QQ 会话，不动你在 DSH 里其他对话的模型。")));
+  } }, "用这个")))))))));
 }
 
 // client/src/views/token.js
@@ -1995,7 +2173,7 @@ function Token({ st }) {
       desc: "这一页管三件事：今天花了多少 Token、上下文什么时候压缩、回复被截断时怎么补。三件事都在下面各自的卡里改，改完点「保存设置」。",
       more: "说清楚一件事：每日预算烧完，只会熔断「她主动开口」（主动搭话 / 目的引擎），你正常问她不受影响；跨日自动恢复。模块开关在「系统 → 扩展」，这里只给设置。"
     },
-    /* @__PURE__ */ h("div", { className: "ab-list" }, ITEMS.map((it) => /* @__PURE__ */ h("div", { key: it.id, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, it.name)), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-small" }, it.desc)), /* @__PURE__ */ h("span", { className: cx("ab-badge", !running(it.id) && "dim") }, running(it.id) ? "在跑" : "没在跑"))))
+    /* @__PURE__ */ h("div", { className: "ab-list" }, ITEMS.map((it) => /* @__PURE__ */ h("div", { key: it.id, className: "ab-li ab-li-col" }, /* @__PURE__ */ h("div", { className: "ab-li-head" }, /* @__PURE__ */ h("b", null, it.name), /* @__PURE__ */ h("span", { className: cx("ab-badge", !running(it.id) && "dim") }, running(it.id) ? "在跑" : "没在跑")), /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, it.desc))))
   ));
 }
 
@@ -2064,13 +2242,15 @@ function Voice({ st, draft, setDraft, toast, reload }) {
       setDraft(d);
       toast("已填入豆包模板：把 APPID_HERE / TOKEN_HERE / VOICE_TYPE_HERE 换成你在火山引擎开通的值，保存后试听");
     } }, "豆包预设")), /* @__PURE__ */ h(Row, { label: "地址模板", hint: draft.voice.http.method === "POST" ? "POST 时 {text} 放请求体里；返回音频或含 base64 音频的 JSON" : "{text} 会换成要念的话，返回 wav/mp3" }, f.text("voice.http.urlTemplate", { size: "wide", placeholder: "http://127.0.0.1:8000/tts?text={text}" })), draft.voice.http.method === "POST" ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h(Row, { label: "请求头", hint: "一行一个 Key: Value，# 开头是注释；不填 Content-Type 自动按 JSON。含凭据，保存后面板不再回显原文（留空保存保留原值，整段重填则覆盖）；要看原文去 config.json" }, f.area("voice.http.headers", { rows: 3, placeholder: "Authorization: Bearer;你的token（重新粘贴整段即可替换）" })), /* @__PURE__ */ h(Row, { label: "请求体", hint: "{text} 自动 JSON 转义；{text_raw} 不转义（表单用）；{reqid} 每次换新 UUID" }, f.area("voice.http.body", { rows: 5, placeholder: '{"request":{"reqid":"{reqid}","text":"{text}"}}（同请求头：保存后不回显，留空保留原值）' }))) : null) : null,
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "触发规则"),
     /* @__PURE__ */ h(Row, { label: "短回复变语音的概率" }, f.percent("voice.autoChance")),
     /* @__PURE__ */ h(Row, { label: "多短算短回复" }, f.range("voice.autoMaxChars", 10, 200, 5, (v) => v + " 字")),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "效果试听"),
     /* @__PURE__ */ h(Row, { label: "试听", hint: "先保存设置再试听" }, /* @__PURE__ */ h("input", { className: "ab-input", value: txt, onChange: (e) => setTxt(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       const r = await post("/voice/test", { text: txt });
       if (r.ok) setSrc("data:" + r.mime + ";base64," + r.data);
       else toast(r.message);
-    } }, "生成"), src ? /* @__PURE__ */ h("audio", { src, controls: true, autoPlay: true, style: { height: 32 } }) : null)
+    } }, "生成"), src ? /* @__PURE__ */ h("audio", { src, controls: true, autoPlay: true, style: { height: 36, maxWidth: "100%" } }) : null)
   ), /* @__PURE__ */ h(
     Card,
     {
@@ -2103,43 +2283,131 @@ function AsrStatus({ toast }) {
 }
 
 // client/src/views/stickers.js
+var PROTECTED = /* @__PURE__ */ new Set(["manual", "panel", "qq", "tool", "pack"]);
+var SOURCE_NAMES = { auto: "偷来的", manual: "手动", panel: "面板", qq: "QQ 收藏", tool: "工具", pack: "图包", painting: "画作" };
 function Stickers({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
   const [items, setItems] = useState(null);
+  const [meta, setMeta] = useState({ max: 300, protectedCount: 0, over: 0 });
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState("all");
+  const [sort, setSort] = useState("new");
+  const [selected, setSelected] = useState(() => /* @__PURE__ */ new Set());
+  const [busy, setBusy] = useState("");
+  const [drag, setDrag] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newGid, setNewGid] = useState("");
   const fileRef = useRef(null);
-  const load = () => get("/stickers").then((r) => setItems(r.items || []));
+  const packRef = useRef(null);
+  const load = async () => {
+    const r = await get("/stickers");
+    setItems(r.items || []);
+    setMeta({ max: Number(r.max) || 300, protectedCount: Number(r.protectedCount) || 0, over: Number(r.over) || 0 });
+    const alive = new Set((r.items || []).map((i) => i.md5));
+    setSelected((prev) => new Set([...prev].filter((md5) => alive.has(md5))));
+  };
   useEffect(() => {
     load();
   }, []);
-  const [newName, setNewName] = useState("");
   const upload = async (files) => {
     const list = [...files || []];
     if (!list.length) return;
     let ok = 0;
     const errs = [];
+    setBusy("上传中…");
     for (const file of list) {
       if (file.size > 5 * 1024 * 1024) {
         errs.push(file.name + " 超过 5MB");
         continue;
       }
       try {
-        const data = await new Promise((res, rej) => {
-          const fr = new FileReader();
-          fr.onload = () => res(fr.result);
-          fr.onerror = () => rej(new Error("读不了这个文件"));
-          fr.readAsDataURL(file);
+        const name = list.length === 1 ? newName.trim().slice(0, 12) : "";
+        const res = await fetch(API + "/sticker/upload?name=" + encodeURIComponent(name), {
+          method: "POST",
+          headers: { "content-type": file.type || "application/octet-stream" },
+          body: file
         });
-        const r = await post("/sticker/upload", { data, name: list.length === 1 ? newName.trim().slice(0, 12) : "" });
+        const r = await readJson(res);
         if (r.ok) ok++;
-        else errs.push(file.name + "：" + (r.reason || r.message || "没加成功"));
-      } catch (e) {
-        errs.push(file.name + "：" + e.message);
+        else errs.push(file.name + "：" + (r.reason || r.warning || r.message || "没加成功"));
+      } catch (error) {
+        errs.push(file.name + "：" + error.message);
       }
     }
+    setBusy("");
     setNewName("");
     toast(errs.length ? (ok ? `加好 ${ok} 张；` : "") + errs.join("；") : `加好了 ${ok} 张`, errs.length ? "err" : "ok");
     load();
   };
+  const importPack = async (file) => {
+    if (!file) return;
+    if (file.size > 64 * 1024 * 1024) return toast("图包超过 64MB", "err");
+    setBusy("导入图包中…");
+    try {
+      const res = await fetch(API + "/sticker/pack/import", {
+        method: "POST",
+        headers: { "content-type": "application/zip" },
+        body: file
+      });
+      const r = await readJson(res);
+      toast(r.message || (r.ok ? "导入完成" : "导入失败"), r.ok === false ? "err" : "ok");
+    } catch (error) {
+      toast("导入失败：" + error.message, "err");
+    } finally {
+      setBusy("");
+      load();
+    }
+  };
+  const filtered = (items || []).filter((it) => {
+    const q = query.trim();
+    if (q && !String(it.name || "").includes(q) && !(it.tags || []).some((t) => String(t).includes(q)) && !String(it.md5 || "").startsWith(q.toLowerCase())) return false;
+    if (source === "pending") return Boolean(it.pending);
+    if (source === "unsynced") return Boolean(it.qqError);
+    if (source === "auto") return !PROTECTED.has(String(it.from || ""));
+    if (source === "manual") return ["manual", "panel", "tool", "painting"].includes(String(it.from || ""));
+    if (source === "qq" || source === "pack") return String(it.from || "") === source;
+    return true;
+  }).sort((a, b) => {
+    if (sort === "name") return String(a.name || "").localeCompare(String(b.name || ""), "zh");
+    if (sort === "uses") return (Number(b.uses) || 0) - (Number(a.uses) || 0);
+    if (sort === "size") return (Number(b.bytes) || 0) - (Number(a.bytes) || 0);
+    return (Number(b.at) || 0) - (Number(a.at) || 0);
+  });
+  const allVisibleSelected = filtered.length > 0 && filtered.every((it) => selected.has(it.md5));
+  const toggleAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) for (const it of filtered) next.delete(it.md5);
+      else for (const it of filtered) next.add(it.md5);
+      return next;
+    });
+  };
+  const toggleOne = (md5) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(md5)) next.delete(md5);
+    else next.add(md5);
+    return next;
+  });
+  const bulkDelete = async () => {
+    if (!selected.size) return;
+    if (!confirm(`删掉选中的 ${selected.size} 张表情？（QQ 收藏里也会删）`)) return;
+    setBusy("删除中…");
+    const r = await post("/sticker/delete-batch", { md5s: [...selected] });
+    setBusy("");
+    toast(r.ok ? `删掉了 ${r.removed} 张${r.missing ? `，${r.missing} 张没找到` : ""}` : r.reason || "没删成", r.ok ? "ok" : "err");
+    setSelected(/* @__PURE__ */ new Set());
+    load();
+  };
+  const overrides = draft.stickers && draft.stickers.overrides ? draft.stickers.overrides : {};
+  const patchOverride = (gid, patch) => setDraft((prev) => {
+    const cur = (prev.stickers.overrides || {})[gid] || {};
+    return setPath(prev, "stickers.overrides", { ...prev.stickers.overrides || {}, [gid]: { ...cur, ...patch } });
+  });
+  const removeOverride = (gid) => setDraft((prev) => {
+    const next = { ...prev.stickers.overrides || {} };
+    delete next[gid];
+    return setPath(prev, "stickers.overrides", next);
+  });
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
@@ -2148,6 +2416,8 @@ function Stickers({ draft, setDraft, toast }) {
       desc: "回复里写 <sticker:名字> 就会发对应的表情；也会按概率自动配一张。"
     },
     /* @__PURE__ */ h(Row, { label: "自动配表情的概率" }, f.percent("stickers.autoChance")),
+    /* @__PURE__ */ h(Row, { label: "自动配图冷却", hint: "两次自动配图至少隔多久；显式让她发不受影响" }, f.num("stickers.cooldownSec", { min: 0, max: 3600 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")),
+    /* @__PURE__ */ h(Row, { label: "每小时自动配图上限", hint: "按聊天分别算；0 = 不限" }, f.num("stickers.sendMaxPerHour", { min: 0, max: 500 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
     /* @__PURE__ */ h(Row, { label: "夹 QQ 小黄脸", hint: "回复里能夹 QQ 自带的系统表情（/捂脸 /斜眼笑 这种），和文字在同一条消息里" }, f.sw("stickers.faces")),
     /* @__PURE__ */ h(Row, { label: "偷表情", hint: "别人发的表情包会被收藏（普通照片不收）。关掉就完全不收。" }, f.sw("stickers.collect")),
     draft.stickers.collect !== false ? /* @__PURE__ */ h(Row, { label: "从哪收", hint: "两个都关等于不偷，只留一个就只从那边收。" }, /* @__PURE__ */ h("span", { className: "ab-muted" }, "群聊"), f.sw("stickers.fromGroups"), /* @__PURE__ */ h("span", { className: "ab-muted", style: { marginLeft: 16 } }, "私聊"), f.sw("stickers.fromPrivate")) : null,
@@ -2156,36 +2426,72 @@ function Stickers({ draft, setDraft, toast }) {
       { value: "ask", label: "她挑", desc: "先记着，给她一句轻提示，喜欢才凭编号收" },
       { value: "owner", label: "只听主人的", desc: "只有主人私聊 / 只有主人时她才可自己收；别人在场要主人发话" }
     ])) : null,
-    /* @__PURE__ */ h(Row, { label: "每小时最多收" }, f.num("stickers.maxPerHour", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
-    /* @__PURE__ */ h(Row, { label: "表情库最多存", hint: "QQ 收藏表情有数量上限，满了就收不进去了。超过这个数会自动清掉最少用的偷来的表情（你自己加的不会动）" }, f.num("stickers.maxLibrary", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
-    /* @__PURE__ */ h(Row, { label: "看图起名", hint: "收下后让模型看图起个 12 字以内的备注" }, f.sw("stickers.caption"))
+    /* @__PURE__ */ h(Row, { label: "每小时最多收" }, f.num("stickers.maxPerHour", { min: 0, fallback: 20 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张 / 每个聊天")),
+    /* @__PURE__ */ h(Row, { label: "表情库最多存", hint: "超过这个数会先清掉最少用的「偷来的」；你自己加的、从 QQ/图包导入的不会被自动清理" }, f.num("stickers.maxLibrary", { min: 20, max: 2e3, fallback: 300 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
+    /* @__PURE__ */ h(Row, { label: "看图起名", hint: "收下后让模型看图起个 12 字以内的备注；起名前不会进自动配图池" }, f.sw("stickers.caption")),
+    /* @__PURE__ */ h(Row, { label: "WebP 转 JPEG", hint: "兼容优先：发送前转成 JPEG，会丢动画；原图仍保留" }, f.sw("stickers.webpToJpeg"))
   ), /* @__PURE__ */ h(
     Card,
     {
       title: "表情库" + (items ? "（" + items.length + " 张）" : ""),
-      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { ref: fileRef, type: "file", accept: "image/*", multiple: true, style: { display: "none" }, onChange: (e) => {
-        upload(e.target.files);
-        e.target.value = "";
-      } }), /* @__PURE__ */ h("input", { className: "ab-input sm", style: { width: 140 }, placeholder: "名字（可不填）", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => fileRef.current && fileRef.current.click() }, "＋ 上传"), /* @__PURE__ */ h(Btn, { small: true, title: "把机器人号 QQ「我喜欢的」里已有的表情导进来", onClick: async () => {
-        toast("正在从 QQ 收藏导入…");
-        const r = await post("/sticker/import-qq");
-        toast(r.message, r.ok === false ? "err" : "ok");
-        load();
-      } }, "从 QQ 收藏导入"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新"))
+      desc: meta.over > 0 ? `超过上限 ${meta.over} 张，而且剩下的都是手动添加/导入的表情；再收新表情会失败，需要先删一些。` : "支持搜索、按来源筛选、排序和批量删除；也可以把整库导出成图包。",
+      right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新")
     },
-    items === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : items.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🐳", text: "表情库还是空的。别人发表情包她会自己收；也可以上传，或从 QQ 收藏导入。" }) : /* @__PURE__ */ h("div", { className: "ab-stickers" }, items.map((it) => /* @__PURE__ */ h(StickerCell, { key: it.md5, it, onChanged: load, toast })))
-  ));
+    /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 10 } }, /* @__PURE__ */ h("input", { ref: fileRef, type: "file", accept: "image/*", multiple: true, style: { display: "none" }, onChange: (e) => {
+      upload(e.target.files);
+      e.target.value = "";
+    } }), /* @__PURE__ */ h("input", { ref: packRef, type: "file", accept: ".zip,application/zip", style: { display: "none" }, onChange: (e) => {
+      importPack(e.target.files[0]);
+      e.target.value = "";
+    } }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 140px", maxWidth: 220 }, placeholder: "名字（可不填）", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => fileRef.current && fileRef.current.click() }, "＋ 上传"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => packRef.current && packRef.current.click() }, "导入图包"), /* @__PURE__ */ h("a", { className: "ab-btn sm ghost", href: API + "/sticker/pack/export", download: true }, "导出图包"), /* @__PURE__ */ h(Btn, { small: true, title: "把机器人号 QQ「我喜欢的」里已有的表情导进来", onClick: async () => {
+      setBusy("从 QQ 收藏导入…");
+      const r = await post("/sticker/import-qq");
+      setBusy("");
+      toast(r.message, r.ok === false ? "err" : "ok");
+      load();
+    } }, "从 QQ 收藏导入")),
+    /* @__PURE__ */ h("div", { className: "ab-sticker-tools" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "搜名字 / 标签 / md5", value: query, onChange: (e) => setQuery(e.target.value) }), /* @__PURE__ */ h("select", { className: "ab-select", value: source, onChange: (e) => setSource(e.target.value) }, /* @__PURE__ */ h("option", { value: "all" }, "全部来源"), /* @__PURE__ */ h("option", { value: "auto" }, "偷来的"), /* @__PURE__ */ h("option", { value: "manual" }, "手动 / 面板"), /* @__PURE__ */ h("option", { value: "qq" }, "QQ 收藏"), /* @__PURE__ */ h("option", { value: "pack" }, "图包"), /* @__PURE__ */ h("option", { value: "pending" }, "待起名"), /* @__PURE__ */ h("option", { value: "unsynced" }, "QQ 未同步")), /* @__PURE__ */ h("select", { className: "ab-select", value: sort, onChange: (e) => setSort(e.target.value) }, /* @__PURE__ */ h("option", { value: "new" }, "最新在前"), /* @__PURE__ */ h("option", { value: "name" }, "按名字"), /* @__PURE__ */ h("option", { value: "uses" }, "常用在前"), /* @__PURE__ */ h("option", { value: "size" }, "体积从大到小")), /* @__PURE__ */ h("label", { className: "ab-muted ab-small ab-flex", style: { gap: 4 } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: allVisibleSelected, onChange: toggleAll }), " 全选当前"), selected.size ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: bulkDelete }, "删除选中（", selected.size, "）") : null, busy ? /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, busy) : null),
+    /* @__PURE__ */ h(
+      "div",
+      {
+        className: cx("ab-sticker-drop", drag && "on"),
+        onDragOver: (e) => {
+          e.preventDefault();
+          setDrag(true);
+        },
+        onDragLeave: () => setDrag(false),
+        onDrop: (e) => {
+          e.preventDefault();
+          setDrag(false);
+          upload(e.dataTransfer.files);
+        }
+      },
+      items === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : filtered.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🐳", text: items.length ? "没有符合筛选的表情。" : "表情库还是空的。别人发表情包她会自己收；也可以上传、导入图包，或从 QQ 收藏导入。" }) : /* @__PURE__ */ h("div", { className: "ab-stickers" }, filtered.map((it) => /* @__PURE__ */ h(StickerCell, { key: it.md5, it, selected: selected.has(it.md5), onToggle: toggleOne, onChanged: load, toast })))
+    )
+  ), /* @__PURE__ */ h(Card, { title: "按群单独设置", desc: "某个群想让她安静点、别偷表情或别自动配图，在这里单独设；只影响群聊，私聊仍按上面的全局设置。" }, Object.keys(overrides).length === 0 ? /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginBottom: 10 } }, "还没有单独设置的群。") : Object.entries(overrides).map(([gid, o]) => /* @__PURE__ */ h("div", { className: "ab-sticker-policy", key: gid }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("b", null, "群 ", gid), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "关掉总开关 = 这个群完全不发表情"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => removeOverride(gid) }, "移除")), /* @__PURE__ */ h(Row, { label: "发表情" }, /* @__PURE__ */ h("label", { className: "ab-muted ab-small ab-flex", style: { gap: 6 } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: o.enabled !== false, onChange: (e) => patchOverride(gid, { enabled: e.target.checked }) }), " 开启")), /* @__PURE__ */ h(Row, { label: "偷表情" }, /* @__PURE__ */ h("label", { className: "ab-muted ab-small ab-flex", style: { gap: 6 } }, /* @__PURE__ */ h("input", { type: "checkbox", checked: o.collect !== false, onChange: (e) => patchOverride(gid, { collect: e.target.checked }) }), " 开启")), /* @__PURE__ */ h(Row, { label: "自动配图概率" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 100, value: Math.round((o.autoChance ?? draft.stickers.autoChance ?? 0) * 100), onChange: (e) => patchOverride(gid, { autoChance: Number(e.target.value) / 100 }) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "%")), /* @__PURE__ */ h(Row, { label: "冷却 / 每小时上限" }, /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 3600, value: o.cooldownSec ?? 0, onChange: (e) => patchOverride(gid, { cooldownSec: Number(e.target.value) }) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒 /"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "number", min: 0, max: 500, value: o.sendMaxPerHour ?? 0, onChange: (e) => patchOverride(gid, { sendMaxPerHour: Number(e.target.value) }) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张（0=不限）")))), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "群号", value: newGid, onChange: (e) => setNewGid(e.target.value.replace(/\D/g, "")) }), /* @__PURE__ */ h(Btn, { small: true, disabled: !newGid, onClick: () => {
+    patchOverride(newGid, { enabled: true });
+    setNewGid("");
+  } }, "添加"))));
 }
-function StickerCell({ it, onChanged, toast }) {
+function StickerCell({ it, selected, onToggle, onChanged, toast }) {
   const [name, setName] = useState(it.name || "");
   const tagText = (it.tags || []).join(" ");
   const [tags, setTags] = useState(tagText);
+  useEffect(() => {
+    setName(it.name || "");
+    setTags((it.tags || []).join(" "));
+  }, [it.md5, it.name, tagText]);
   const save = async (body, label) => {
     const r = await post("/sticker/rename", { md5: it.md5, ...body });
-    toast(r.ok ? label + "改好了" : "没改成：" + (r.message || "找不到这张表情"), r.ok ? "ok" : "err");
+    toast(r.ok ? label + "改好了" : r.reason || "没改成", r.ok ? "ok" : "err");
     if (r.ok) onChanged();
+    else {
+      setName(it.name || "");
+      setTags((it.tags || []).join(" "));
+    }
   };
-  return /* @__PURE__ */ h("div", { className: "ab-sticker" }, /* @__PURE__ */ h("img", { src: API + "/sticker/image?md5=" + it.md5, alt: it.name || "表情", loading: "lazy" }), /* @__PURE__ */ h(
+  const sourceName = SOURCE_NAMES[String(it.from || "")] || (String(it.from || "").startsWith("group:") ? "群里偷的" : String(it.from || "").startsWith("private:") ? "私聊偷的" : "手动");
+  return /* @__PURE__ */ h("div", { className: cx("ab-sticker", selected && "sel") }, /* @__PURE__ */ h("label", { className: "ab-sticker-check", title: "选中" }, /* @__PURE__ */ h("input", { type: "checkbox", checked: selected, onChange: () => onToggle(it.md5) })), /* @__PURE__ */ h("img", { src: API + "/sticker/image?md5=" + it.md5 + "&thumb=1", alt: it.name || "表情", loading: "lazy" }), /* @__PURE__ */ h("div", { className: "ab-sticker-badges" }, /* @__PURE__ */ h("span", { className: "ab-badge dim" }, sourceName), it.pending ? /* @__PURE__ */ h("span", { className: "ab-badge warn" }, "待起名") : null, it.qqError ? /* @__PURE__ */ h("span", { className: "ab-badge err", title: it.qqError }, "QQ 未同步") : null, it.uses ? /* @__PURE__ */ h("span", { className: "ab-badge dim" }, it.uses, " 次") : null), /* @__PURE__ */ h(
     "input",
     {
       className: "nm",
@@ -2326,10 +2632,10 @@ function Diary({ st, draft, setDraft, toast }) {
       right: f.sw("diary.enabled"),
       desc: "她每天会在 QQ 空间发几条说说，结合当天聊过的事，用自己的口吻写。写日记那一轮不会发到聊天里。"
     },
-    /* @__PURE__ */ h(Row, { label: "每天写几次" }, f.num("diary.timesPerDay", { min: 0, max: 6 })),
+    /* @__PURE__ */ h(Row, { label: "每天写几次" }, f.num("diary.timesPerDay", { min: 0, max: 6, fallback: 2 })),
     /* @__PURE__ */ h(Row, { label: "时间段", hint: "在这段时间里随机挑时间" }, f.text("diary.windowStart", { size: "sm" }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.text("diary.windowEnd", { size: "sm" })),
-    /* @__PURE__ */ h(Row, { label: "两篇至少隔" }, f.num("diary.minGapMinutes", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
-    /* @__PURE__ */ h(Row, { label: "字数" }, f.num("diary.minChars", { min: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.num("diary.maxChars", { min: 20 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
+    /* @__PURE__ */ h(Row, { label: "两篇至少隔" }, f.num("diary.minGapMinutes", { min: 0, fallback: 180 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
+    /* @__PURE__ */ h(Row, { label: "字数" }, f.num("diary.minChars", { min: 10, fallback: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.num("diary.maxChars", { min: 20, fallback: 140 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "字")),
     /* @__PURE__ */ h(Row, { label: "日记配图", hint: "开着时每篇会从「今天她画的图 / 今天收的表情包」里挑一张配上去；没有合适的就只发文字" }, f.sw("diary.attachImage")),
     /* @__PURE__ */ h(DiarySources, { draft, setDraft }),
     /* @__PURE__ */ h(DiaryAudience, { draft, setDraft, toast })
@@ -2413,10 +2719,10 @@ function SpeakUp({ st, draft, setDraft, toast }) {
       desc: "只在和你的私聊里：你一阵子没理她，她会主动来找你说一句——每次由头不一样（分享小事、接着上次的话题、想起你的事、按时间问候……），内容是她现想的，不是模板。群里不会这样。"
     },
     /* @__PURE__ */ h(Row, { label: "追问", hint: "她问了你一句、你 15~40 分钟没回，偶尔轻轻追一句（「人呢」之类），每句最多追一次" }, f.sw("speakUp.nudge")),
-    /* @__PURE__ */ h(Row, { label: "多久没聊才找你" }, f.num("speakUp.idleMinutes", { min: 5 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
-    /* @__PURE__ */ h(Row, { label: "两次之间隔", hint: "在这个范围里随机" }, f.num("speakUp.minIntervalMinutes", { min: 5 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.num("speakUp.maxIntervalMinutes", { min: 5 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
-    /* @__PURE__ */ h(Row, { label: "每天最多" }, f.num("speakUp.maxPerDay", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次")),
-    /* @__PURE__ */ h(Row, { label: "她醒着的时间", hint: "这段时间外不打扰你" }, f.num("speakUp.awakeFrom", { min: 0, max: 23 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点到"), f.num("speakUp.awakeTo", { min: 1, max: 24 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")),
+    /* @__PURE__ */ h(Row, { label: "多久没聊才找你" }, f.num("speakUp.idleMinutes", { min: 5, fallback: 40 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
+    /* @__PURE__ */ h(Row, { label: "两次之间隔", hint: "在这个范围里随机" }, f.num("speakUp.minIntervalMinutes", { min: 5, fallback: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "到"), f.num("speakUp.maxIntervalMinutes", { min: 5, fallback: 180 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
+    /* @__PURE__ */ h(Row, { label: "每天最多" }, f.num("speakUp.maxPerDay", { min: 0, fallback: 4 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次")),
+    /* @__PURE__ */ h(Row, { label: "她醒着的时间", hint: "这段时间外不打扰你" }, f.num("speakUp.awakeFrom", { min: 0, max: 23, fallback: 8 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点到"), f.num("speakUp.awakeTo", { min: 1, max: 24, fallback: 23 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "点")),
     /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10 } }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "今天已经找过你 ", st.speakUp.count || 0, " 次"), /* @__PURE__ */ h("div", { className: "ab-spacer" }), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       const r = await post("/speakup/fire");
       toast(r.message);
@@ -2492,7 +2798,23 @@ function ModuleRow({ m, draft, setModules, toast, reload, compact = false }) {
   const commands = m.commands || [];
   const what = [tools.length ? "工具：" + tools.join("、") : "", commands.length ? "命令：" + commands.map((c) => "/" + c).join(" ") : ""].filter(Boolean).join("　");
   const errs = (m.error ? [{ label: "加载", message: m.error }] : []).concat(m.errors || []);
-  return /* @__PURE__ */ h("div", { className: cx("ab-mod", compact && "compact") }, /* @__PURE__ */ h("div", { className: "main" }, /* @__PURE__ */ h("div", { className: "nm" }, m.name, /* @__PURE__ */ h("code", null, m.id), /* @__PURE__ */ h("span", { className: cx("ab-badge", s.cls) }, s.text), m.market ? /* @__PURE__ */ h("span", { className: "ab-badge mine", title: "从模块市场安装（.qqhub-source.json）" }, "市场") : null, m.outdated ? /* @__PURE__ */ h("span", { className: "ab-badge warn", title: "你复制 / 替换时内置的是 " + m.forkedFrom + "，现在是 " + m.builtinVersion }, "内置版本更新了") : null, compact ? /* @__PURE__ */ h("span", { style: { marginLeft: "auto" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setDetail(!detail) }, detail ? "收起" : "详情")) : null), m.description ? /* @__PURE__ */ h("div", { className: cx("ds", compact && !detail && "clip") }, m.description) : null, detail && what ? /* @__PURE__ */ h("div", { className: "what" }, what) : null, errs.length ? /* @__PURE__ */ h("div", { className: "ab-note err", style: { marginTop: 6 } }, /* @__PURE__ */ h("div", { style: { cursor: "pointer" }, onClick: () => setOpen(!open) }, (open ? "▾ " : "▸ ") + errs.length + " 条报错：" + String(errs[0].message).split("\n")[0].slice(0, 120)), open ? /* @__PURE__ */ h("div", { className: "ab-code" }, errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + " " : "") + (e.label || "") + "：" + e.message).join("\n\n")) : null) : null, detail ? /* @__PURE__ */ h("div", { className: "acts" }, m.builtin && !m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => act("/modules/fork", { id: m.id }, "复制好了"), title: "把这个内置模块的源码复制到 modules/" + m.id + "/，改了就替换内置的" }, "复制一份来改") : null, m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => post("/modules/open?id=" + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, "打开文件夹") : null, m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => get("/modules/prompt?id=" + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, "复制好了，粘给 DSH，把【】里那句换成你想要的")) }, "复制给 DSH 的话") : null, m.hasUser && !m.safeSkipped ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => act("/modules/reload", { id: m.id }, "重新加载好了") }, "重新加载") : null) : null), /* @__PURE__ */ h("div", { className: "side" }, /* @__PURE__ */ h(Switch, { on: m.enabled, onChange: (v) => setMod({ enabled: v }), title: m.enabled ? "关掉这个模块" : "打开这个模块" }), m.builtin && m.hasUser ? /* @__PURE__ */ h("label", { className: "ab-small ab-muted", style: { display: "flex", alignItems: "center", gap: 6 } }, "用内置的", /* @__PURE__ */ h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null));
+  return /* @__PURE__ */ h("div", { className: cx("ab-mod", compact && "compact") }, /* @__PURE__ */ h("div", { className: "main" }, /* @__PURE__ */ h("div", { className: "nm" }, m.name, /* @__PURE__ */ h("code", null, m.id), /* @__PURE__ */ h("span", { className: cx("ab-badge", s.cls) }, s.text), m.market ? /* @__PURE__ */ h("span", { className: "ab-badge mine", title: "从模块市场安装（.qqhub-source.json）" }, "市场") : null, m.outdated ? /* @__PURE__ */ h("span", { className: "ab-badge warn", title: "你复制 / 替换时内置的是 " + m.forkedFrom + "，现在是 " + m.builtinVersion }, "内置版本更新了") : null, compact ? /* @__PURE__ */ h("span", { style: { marginLeft: "auto" } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => setDetail(!detail) }, detail ? "收起" : "详情")) : null), m.description ? /* @__PURE__ */ h("div", { className: cx("ds", compact && !detail && "clip") }, m.description) : null, detail && what ? /* @__PURE__ */ h("div", { className: "what" }, what) : null, errs.length ? /* @__PURE__ */ h("div", { className: "ab-note err", style: { marginTop: 6 } }, /* @__PURE__ */ h(
+    "div",
+    {
+      role: "button",
+      tabIndex: 0,
+      "aria-expanded": open,
+      style: { cursor: "pointer" },
+      onClick: () => setOpen(!open),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpen(!open);
+        }
+      }
+    },
+    (open ? "▾ " : "▸ ") + errs.length + " 条报错：" + String(errs[0].message).split("\n")[0].slice(0, 120)
+  ), open ? /* @__PURE__ */ h("div", { className: "ab-code" }, errs.map((e) => (e.at ? new Date(e.at).toLocaleTimeString() + " " : "") + (e.label || "") + "：" + e.message).join("\n\n")) : null) : null, detail ? /* @__PURE__ */ h("div", { className: "acts" }, m.builtin && !m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => act("/modules/fork", { id: m.id }, "复制好了"), title: "把这个内置模块的源码复制到 modules/" + m.id + "/，改了就替换内置的" }, "复制一份来改") : null, m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => post("/modules/open?id=" + encodeURIComponent(m.id)).then((r) => toast(r.message)) }, "打开文件夹") : null, m.hasUser ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => get("/modules/prompt?id=" + encodeURIComponent(m.id)).then((r) => copy(r.prompt, toast, "复制好了，粘给 DSH，把【】里那句换成你想要的")) }, "复制给 DSH 的话") : null, m.hasUser && !m.safeSkipped ? /* @__PURE__ */ h(Btn, { small: true, onClick: () => act("/modules/reload", { id: m.id }, "重新加载好了") }, "重新加载") : null) : null), /* @__PURE__ */ h("div", { className: "side" }, /* @__PURE__ */ h(Switch, { on: m.enabled, onChange: (v) => setMod({ enabled: v }), title: m.enabled ? "关掉这个模块" : "打开这个模块" }), m.builtin && m.hasUser ? /* @__PURE__ */ h("label", { className: "ab-small ab-muted", style: { display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" } }, "用内置的", /* @__PURE__ */ h(Switch, { on: m.useBuiltin, onChange: (v) => setMod({ useBuiltin: v }) })) : null));
 }
 function Simulate({ toast }) {
   const [open, setOpen] = useState(false);
@@ -2613,6 +2935,7 @@ function Market({ st, toast, reload }) {
       setBusy("");
     }
   };
+  const customNet = Boolean(httpProxy.trim() || indexText.trim());
   const stageText = { index: "读索引…", download: "下载中", install: "校验安装…", start: "启动模块…" };
   return /* @__PURE__ */ h(
     Card,
@@ -2623,14 +2946,28 @@ function Market({ st, toast, reload }) {
       right: /* @__PURE__ */ h(Switch, { on: enabled, onChange: toggle })
     },
     !enabled ? /* @__PURE__ */ h("div", { className: "ab-note" }, "市场没开。打开右上角开关后刷新列表。") : null,
-    /* @__PURE__ */ h("div", { style: { marginBottom: 10 } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "索引/加速源：每行一个完整 HTTPS 索引地址，按顺序尝试；清空后保存可恢复默认双源。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", rows: 3, value: indexText, placeholder: "例如 https://ghfast.top/https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json", onChange: (e) => setIndexText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 4, justifyContent: "flex-end" } }, /* @__PURE__ */ h(Btn, { small: true, onClick: saveSources }, "保存加速源"))),
-    /* @__PURE__ */ h("div", { style: { marginBottom: 10 } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: 1 }, value: httpProxy, placeholder: "例如 http://192.168.10.1:7890，留空直连", onChange: (e) => setHttpProxy(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: saveProxy }, "保存代理"))),
     enabled && !data ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : null,
     enabled && data && !data.ok ? /* @__PURE__ */ h("div", { className: "ab-note err" }, data.message || "索引读不到", "（已装模块不受影响）") : null,
-    enabled && data && data.ok ? /* @__PURE__ */ h(Fragment, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).map((e) => /* @__PURE__ */ h("div", { key: e.id, style: { padding: "8px 0", borderBottom: "1px solid var(--ab-line, rgba(127,127,127,.15))" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { alignItems: "center", gap: 8 } }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null, /* @__PURE__ */ h("span", { style: { flex: 1 } }), e.installed ? /* @__PURE__ */ h(Fragment, null, e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : null, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4 } }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 4 } }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`, Array.isArray(e.capabilities) && e.capabilities.length && `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）`].filter(Boolean).join(" · ")), e.sha256 ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginTop: 2, wordBreak: "break-all" } }, "sha256: ", e.sha256, e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : "") : null, e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 4 } }, e.blocked) : null)), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
+    enabled && data && data.ok ? /* @__PURE__ */ h(Fragment, null, data.revoked && data.revoked.length ? /* @__PURE__ */ h("div", { className: "ab-note warn" }, "已装版本被撤回：", data.revoked.map((r) => `${r.id} ${r.version}（${r.reason}）`).join("；"), "。建议卸载或更新。") : null, prog && busy ? /* @__PURE__ */ h("div", { className: "ab-note" }, prog.name || prog.id, "：", stageText[prog.stage] || prog.stage, prog.stage === "download" && prog.total ? ` ${Math.round(prog.received / 1024)} / ${Math.round(prog.total / 1024)} KB` : "") : null, (data.list || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "📦", text: "索引里还没有模块" }) : null, (data.list || []).length ? /* @__PURE__ */ h("div", { className: "ab-mkt-list" }, (data.list || []).map((e) => {
+      const verifyLines = [
+        Array.isArray(e.capabilities) && e.capabilities.length ? `能力声明：${e.capabilities.join("、")}（仅展示，不是安全边界）` : "",
+        e.sha256 ? `sha256: ${e.sha256}${e.commit ? ` · commit ${String(e.commit).slice(0, 8)}` : ""}` : ""
+      ].filter(Boolean);
+      return /* @__PURE__ */ h("div", { key: e.id, className: "ab-mkt" }, /* @__PURE__ */ h("div", { className: "ab-mkt-head" }, /* @__PURE__ */ h("div", { className: "ab-mkt-info" }, /* @__PURE__ */ h("b", null, e.name || e.id), /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, e.version, e.installed ? `（已装 ${e.installed}）` : ""), e.update ? /* @__PURE__ */ h("span", { className: "ab-pill ok" }, "可更新") : null, e.delisted ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "已下架") : null, e.foreign ? /* @__PURE__ */ h("span", { className: "ab-pill warn" }, "同名自有文件夹") : null), e.installed ? e.update && !e.blocked ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id, onClick: () => install(e) }, "更新") : /* @__PURE__ */ h("span", { className: "ab-badge dim" }, "已装") : /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: busy === e.id || Boolean(e.blocked) || e.foreign, onClick: () => install(e) }, "安装")), e.description ? /* @__PURE__ */ h("div", { className: "ab-mkt-desc" }, e.description) : null, /* @__PURE__ */ h("div", { className: "ab-mkt-meta" }, [e.author && `作者 ${e.author}`, e.license && `许可 ${e.license}`, e.category, e.minPluginVersion && `需插件 ≥${e.minPluginVersion}`].filter(Boolean).join(" · ")), e.blocked ? /* @__PURE__ */ h("div", { className: "ab-note warn", style: { marginTop: 6 } }, e.blocked) : null, e.installed ? /* @__PURE__ */ h("div", { className: "ab-mkt-acts" }, /* @__PURE__ */ h(Btn, { small: true, disabled: busy === e.id, onClick: () => remove(e, false) }, "卸载"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", disabled: busy === e.id, onClick: () => remove(e, true) }, "卸载并清数据")) : null, verifyLines.length ? /* @__PURE__ */ h(More, { label: "校验与能力声明" }, verifyLines.join("\n")) : null);
+    })) : null, /* @__PURE__ */ h("div", { className: "ab-card-foot" }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: async () => {
       setData(null);
       await load();
-    } }, "刷新列表"), data.source ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "索引源：", data.source) : null)) : null
+    } }, "刷新列表"), data.source ? /* @__PURE__ */ h("span", { className: "ab-small ab-muted", style: { wordBreak: "break-all" } }, "索引源：", data.source) : null)) : null,
+    /* @__PURE__ */ h(
+      FoldSection,
+      {
+        title: "索引源与代理设置",
+        desc: "国内网络拉不动 GitHub 时可配加速源或 HTTP 代理。",
+        right: customNet ? /* @__PURE__ */ h("span", { className: "ab-badge dim" }, "已自定义") : null
+      },
+      /* @__PURE__ */ h("div", { style: { marginTop: 8, marginBottom: 12 } }, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "索引/加速源：每行一个完整 HTTPS 索引地址，按顺序尝试；清空后保存可恢复默认双源。"), /* @__PURE__ */ h("textarea", { className: "ab-textarea", rows: 3, value: indexText, placeholder: "例如 https://ghfast.top/https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json", onChange: (e) => setIndexText(e.target.value) }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6, justifyContent: "flex-end" } }, /* @__PURE__ */ h(Btn, { small: true, onClick: saveSources }, "保存加速源"))),
+      /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-small ab-muted", style: { marginBottom: 4 } }, "市场 HTTP 代理（可选）：只影响索引和安装包，不影响模型等其他请求。"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 200px" }, value: httpProxy, placeholder: "例如 http://127.0.0.1:7890，留空直连", onChange: (e) => setHttpProxy(e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: saveProxy }, "保存代理")))
+    )
   );
 }
 var EXT_GROUPS = [
@@ -2750,7 +3087,7 @@ function Modules({ st, draft, toast, reload }) {
       desc: "自己写的或从模块市场安装的模块；和内置一样走统一发送出口，数据和设置按模块隔离。",
       right: /* @__PURE__ */ h(Btn, { small: true, onClick: () => setCreating((v) => !v) }, creating ? "取消" : "＋ 新建")
     },
-    creating ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { maxWidth: 180 }, placeholder: "id，如 weather", value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }), /* @__PURE__ */ h("input", { className: "ab-input", placeholder: "名字，如 查天气", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !newId.trim(), onClick: create }, "新建")) : null,
+    creating ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 10 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 140px" }, placeholder: "id，如 weather", value: newId, onChange: (e) => setNewId(e.target.value.toLowerCase()) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 160px" }, placeholder: "名字，如 查天气", value: newName, onChange: (e) => setNewName(e.target.value) }), /* @__PURE__ */ h(Btn, { kind: "primary", small: true, disabled: !newId.trim(), onClick: create }, "新建")) : null,
     mine.length ? mine.map((m) => /* @__PURE__ */ h(ModuleRow, { key: m.id, m, ...props })) : /* @__PURE__ */ h(Empty, { icon: "🧩", text: "还没有自己写的或从市场安装的扩展" })
   ), /* @__PURE__ */ h(
     Card,
@@ -2788,7 +3125,7 @@ function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload, draf
     fetch(API + "/modules/panel?id=" + encodeURIComponent(m.id) + "&t=" + Date.now(), { cache: "no-store" }).then((r) => r.ok ? r.text() : Promise.reject(new Error("读不到 panel.js"))).then((src) => {
       const base = m.builtin && m.running === "builtin" ? "" : "/ext/" + m.id;
       const call = (p, body) => body === void 0 ? get(base + p) : post(base + p, body);
-      const ui = { Card, Btn, Switch, Row, Empty, Select, Seg, Range };
+      const ui = { Card, Btn, Switch, Row, Empty, Select, Seg, Range, ListInput, NumInput };
       const C = new Function("React", "h", "ui", "call", src)(React, h, ui, call);
       if (typeof C !== "function") throw new Error("panel.js 最后要 return 一个组件（函数）");
       if (alive) setComp(() => C);
@@ -2817,7 +3154,7 @@ function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
   const field = (s) => {
     const p = base + s.key;
     if (s.type === "switch") return f.sw(p);
-    if (s.type === "number") return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key], allowEmpty: Number(s.min) === 0 && s.key === "maxPerDay" });
+    if (s.type === "number") return f.num(p, { min: s.min, max: s.max, step: s.step, fallback: (m.defaults || {})[s.key] });
     if (s.type === "select") return f.select(p, (s.options || []).map((o) => typeof o === "string" ? { value: o, label: o } : o));
     if (s.type === "textarea") return /* @__PURE__ */ h("textarea", { className: "ab-textarea", value: getPath(draft, p) ?? "", placeholder: s.placeholder, onChange: (e) => setDraft(setPath(draft, p, e.target.value)) });
     if (s.type === "password") return f.text(p, { type: "password", placeholder: getPath(draft, p + "Set") ? "已保存（不改就留空）" : s.placeholder || "" });
@@ -2910,16 +3247,34 @@ function Mood({ st, draft, setDraft, toast }) {
       }
     },
     reloading ? "正在载入…" : "重新载入档案"
-  ))), /* @__PURE__ */ h(Card, { title: "记忆库", right: f.sw("memory.enabled"), desc: "她聊天时自己记的、每天从聊天里整理出来的、你手动加的。每轮回复前，她会按对方正在说的话翻出最相关的几条。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 260px" }, placeholder: "搜索记忆，例如：白米饭、游戏、约定…", value: q, onChange: (e) => {
+  ))), /* @__PURE__ */ h(Card, { title: "记忆库", right: f.sw("memory.enabled"), desc: "她聊天时自己记的、每天从聊天里整理出来的、你手动加的。每轮回复前，她会按对方正在说的话翻出最相关的几条。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 180px" }, placeholder: "搜索记忆，例如：白米饭、游戏、约定…", value: q, onChange: (e) => {
     setQ(e.target.value);
     if (e.target.value) setBrowseOpen(true);
-  } }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setAddOpen(!addOpen) }, addOpen ? "收起" : "＋ 手动加一条")), addOpen ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 260px" }, placeholder: "要她记住的事，例如：主人不吃香菜", value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 120px" }, placeholder: "关于谁（可选）", value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }), /* @__PURE__ */ h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: "随口一提" }, { value: 0.6, label: "比较重要" }, { value: 0.9, label: "非常重要" }] }), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !adding.text.trim(), onClick: async () => {
+  } }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setAddOpen(!addOpen) }, addOpen ? "收起" : "＋ 手动加一条")), addOpen ? /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 180px" }, placeholder: "要她记住的事，例如：主人不吃香菜", value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 120px" }, placeholder: "关于谁（可选）", value: adding.aboutName, onChange: (e) => setAdding({ ...adding, aboutName: e.target.value }) }), /* @__PURE__ */ h(Select, { value: adding.importance, width: 120, onChange: (v) => setAdding({ ...adding, importance: v }), options: [{ value: 0.3, label: "随口一提" }, { value: 0.6, label: "比较重要" }, { value: 0.9, label: "非常重要" }] }), /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: !adding.text.trim(), onClick: async () => {
     const r = await post("/memory/add", adding);
     toast(r.ok ? "记住了" : r.message);
     setAdding({ text: "", aboutName: "", importance: 0.6 });
     setAddOpen(false);
     load();
-  } }, "记住")) : null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 10, cursor: "pointer" }, onClick: () => setBrowseOpen(!browseOpen) }, /* @__PURE__ */ h("div", { className: "ab-section-title", style: { margin: 0 } }, (browseOpen ? "▾" : "▸") + " 全部记忆"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem ? mem.length + " 条" : "")), !browseOpen ? null : mem === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : mem.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: q ? "没找到相关的记忆" : "还没有记住什么。" }) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem.length + " 条" + (mem.length >= 300 ? "（只显示最近 300 条，可搜索）" : ""))), (() => {
+  } }, "记住")) : null, /* @__PURE__ */ h(
+    "div",
+    {
+      className: "ab-flex",
+      style: { marginTop: 10, cursor: "pointer" },
+      role: "button",
+      tabIndex: 0,
+      "aria-expanded": browseOpen,
+      onClick: () => setBrowseOpen(!browseOpen),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setBrowseOpen(!browseOpen);
+        }
+      }
+    },
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { margin: 0, padding: 0, border: 0 } }, (browseOpen ? "▾" : "▸") + " 全部记忆"),
+    /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem ? mem.length + " 条" + (!browseOpen ? "（点击展开）" : "") : "")
+  ), !browseOpen ? null : mem === null ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : mem.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: q ? "没找到相关的记忆" : "还没有记住什么。" }) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, mem.length + " 条" + (mem.length >= 300 ? "（只显示最近 300 条，可搜索）" : ""))), (() => {
     const secOf = (m) => {
       const t = new Date(m.invalidAt || m.at);
       const now = /* @__PURE__ */ new Date();
@@ -2953,7 +3308,7 @@ function Mood({ st, draft, setDraft, toast }) {
     }
     const rows = [...byKey.values()];
     return rows.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🌱", text: "还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。" }) : rows.map((p) => /* @__PURE__ */ h(InsightRow, { key: p.key, p, toast, onSaved: loadIns, style: styles[p.key] || [] }));
-  })() : null, personaTab === "style" ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "每个人的说话习惯跟着上面的「相处经验」一起显示和编辑。")) : null)), /* @__PURE__ */ h(Card, { title: "整理与检索", desc: "每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。" }, /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "04:00", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "16:00", onChange: (e) => setTime(1, e.target.value) })), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
+  })() : null, personaTab === "style" ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(StyleEditor, { k: "self", label: "她自己养成的说法", list: styles.self || [], toast, onSaved: loadIns }), /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, "每个人的说话习惯跟着上面的「相处经验」一起显示和编辑。")) : null)), /* @__PURE__ */ h(Card, { title: "整理与检索", desc: "每天什么时候整理、每轮想起几条；向量与精排的接口配置也在这一张卡里。" }, /* @__PURE__ */ h(Row, { label: "每天自动整理两次", hint: "把聊天流水提炼成长期记忆、相处经验和说话方式；第二次只处理新增部分。" }, f.sw("memory.dailyConsolidate"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[0] || "", onChange: (e) => setTime(0, e.target.value) }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "和"), /* @__PURE__ */ h("input", { className: "ab-input sm", type: "time", value: times[1] || "", onChange: (e) => setTime(1, e.target.value) })), /* @__PURE__ */ h(Row, { label: "每轮最多想起几条" }, f.range("memory.recallCount", 0, 12, 1, (v) => v + " 条")), /* @__PURE__ */ h(Row, { label: "语义召回（向量通道）", hint: "BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。" }, vec ? vec.enabled ? /* @__PURE__ */ h("span", { className: "ab-flex" }, /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)", flex: 1 } }, "● ", vec.model || "?", "（", vec.dim, " 维）· 已向量 ", vec.vectors || 0, " 条", vec.pending ? "，待补全 " + vec.pending + " 个作用域" : ""), /* @__PURE__ */ h(Btn, { small: true, disabled: !!vecBusy, onClick: async () => {
     setVecBusy(true);
     try {
       const r = await post("/memory/vector/backfill", {});
@@ -2964,7 +3319,7 @@ function Mood({ st, draft, setDraft, toast }) {
     } finally {
       setVecBusy(false);
     }
-  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。", collapse: true }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() })));
+  } }, vecBusy ? "补全中…" : "补全存量向量")) : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 在下面「接口与阈值」里填 Embeddings 接口地址、API Key，打开「语义召回」") : "…"), /* @__PURE__ */ h(Row, { label: "记忆精排（reranker）", hint: "RRF 融合后用 cross-encoder 对候选精排，只重排、不扩可见性；失败自动退回 RRF 顺序。" }, rerank ? rerank.enabled ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "● ", rerank.model || "?", " · 精排前 ", rerank.topN || 20, " 条", rerank.lastError ? " · 上次失败已退回 RRF：" + rerank.lastError : "") : /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-dim)" } }, "未开启 —— 需先开启语义召回，再在下面「接口与阈值」里填 Rerank API Key 并打开开关") : "…"), /* @__PURE__ */ h("div", { className: "ab-section-title" }, "接口与阈值"), /* @__PURE__ */ h(ExtPage, { st, draft, setDraft, toast, reload: loadVec, mod: "memory", embedded: true })), /* @__PURE__ */ h("div", { className: "ab-grid ab-g2" }, /* @__PURE__ */ h(RecallLog, null), /* @__PURE__ */ h(Card, { collapse: true, title: "导入与迁移", desc: "一次性操作：导入旧档案，或主人换号后把旧号名下的记忆整体搬过来。" }, /* @__PURE__ */ h(MemoryImport, { toast, onDone: () => load() }), /* @__PURE__ */ h(OwnerMigrate, { toast, onChanged: () => load() }))));
 }
 /** 人物小档案：她对每个人的一小段印象，聊天时常驻。 */
 function ProfilesList({ toast, refreshKey = 0 }) {
@@ -2991,7 +3346,7 @@ function ProfileRow({ p, toast, onChanged }) {
     onChanged();
   };
   const scopeLabel = p.scope === "global" ? "通用" : p.scope.startsWith("group:") ? "群 " + p.scope.slice(6) : "私聊";
-  return /* @__PURE__ */ h("div", { className: "ab-li", style: { alignItems: "flex-start" } }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, p.name || p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11, background: p.scope === "global" ? "var(--ab-sea, #35506b)" : "rgba(0,0,0,.18)", color: p.scope === "global" ? "#fff" : "var(--ab-sub)" } }, scopeLabel), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, timeAgo(p.at))), open ? /* @__PURE__ */ h("textarea", { className: "ab-input wide", rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: 1 } }) : /* @__PURE__ */ h("div", { className: "body ab-small", style: { flex: 1, whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } }, p.text), /* @__PURE__ */ h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setOpen(!open) }, open ? "收起" : "编辑"), open ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: text === p.text, onClick: async () => {
+  return /* @__PURE__ */ h("div", { className: "ab-li", style: { alignItems: "flex-start" } }, /* @__PURE__ */ h("div", { className: "meta" }, /* @__PURE__ */ h("b", null, p.name || p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, p.qq), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-pill", style: { padding: "0 6px", fontSize: 11, background: p.scope === "global" ? "var(--ab-solid)" : "var(--ab-card-2)", borderColor: p.scope === "global" ? "transparent" : "var(--ab-line)", color: p.scope === "global" ? "#fff" : "var(--ab-sub)" } }, scopeLabel), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, timeAgo(p.at))), open ? /* @__PURE__ */ h("textarea", { className: "ab-textarea", rows: 3, value: text, onChange: (e) => setText(e.target.value), style: { flex: "1 1 220px", minHeight: 72 } }) : /* @__PURE__ */ h("div", { className: "body ab-small", style: { flex: "1 1 200px", whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } }, p.text), /* @__PURE__ */ h("div", { className: "ab-flex", style: { gap: 4 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setOpen(!open) }, open ? "收起" : "编辑"), open ? /* @__PURE__ */ h(Btn, { small: true, kind: "primary", disabled: text === p.text, onClick: async () => {
     const r = await post("/profiles/save", { qq: p.qq, text, scope: p.scope });
     toast(r.message, r.ok ? "ok" : "err");
     if (r.ok) onChanged();
@@ -3021,7 +3376,7 @@ function RecallLog() {
   useEffect(() => {
     load();
   }, []);
-  return /* @__PURE__ */ h(Card, { title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新"), collapse: true }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
+  return /* @__PURE__ */ h(Card, { collapse: true, title: "最近想起了什么", desc: "每次回复前她会按对方说的话翻记忆。这里能看到最近几次想起了哪几条、是因为哪几个词；想不起来的那次也会列出来。", right: /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新") }, !list ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : list.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🫧", text: "还没有记录（重启后从头记）。" }) : /* @__PURE__ */ h("div", { className: "ab-list" }, list.slice(0, 10).map((r, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-li" }, /* @__PURE__ */ h("div", { className: "meta" }, timeAgo(r.at), /* @__PURE__ */ h("br", null), /* @__PURE__ */ h("span", { className: "ab-small" }, String(r.where || "").replace(/^private:/, "私聊 ").replace(/^group:/, "群 "))), /* @__PURE__ */ h("div", { className: "body" }, /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "「", r.query.slice(0, 60), r.query.length > 60 ? "…" : "", "」"), r.hits.length ? r.hits.map((x) => /* @__PURE__ */ h("div", { key: x.id, style: { marginTop: 3 } }, "· ", x.text, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "  ← ", x.why.join("、") || "—", " · ", x.score))) : /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 3 } }, "这次什么都没想起来"))))));
 }
 function OwnerMigrate({ toast, onChanged }) {
   const [from, setFrom] = useState("");
@@ -3162,7 +3517,7 @@ function MemoryRow({ m, onChanged, toast }) {
 function BiliCookie({ draft, setDraft }) {
   const [show, setShow] = useState(false);
   const b = draft.bili;
-  const field = (key2, prefix, setKey, hintKey, ph) => /* @__PURE__ */ h("div", { className: "ab-flex", style: { flexWrap: "nowrap", marginBottom: 6 } }, /* @__PURE__ */ h("code", { className: "ab-small", style: { minWidth: 82, textAlign: "right" } }, prefix), /* @__PURE__ */ h(
+  const field = (key2, prefix, setKey, hintKey, ph) => /* @__PURE__ */ h("div", { className: "ab-cookie-field" }, /* @__PURE__ */ h("code", { className: "ab-small" }, prefix), /* @__PURE__ */ h(
     "input",
     {
       className: "ab-input wide",
@@ -3181,13 +3536,13 @@ function BiliCookie({ draft, setDraft }) {
       hint: "浏览器登录 bilibili.com 后从 F12 里复制 SESSDATA 和 bili_jct；也可以直接粘整串 Cookie，会自动拆开。不填也能看视频，但不能评论和回复。建议用小号",
       more: "取 Cookie 的路径：电脑浏览器登录 bilibili.com → F12 → 「应用」（Application）→ Cookie → bilibili.com，分别复制 SESSDATA 和 bili_jct 这两行的「值」。只存在本机；没有 AI 字幕、评论、回复这些登录能力。"
     },
-    /* @__PURE__ */ h("div", { style: { flex: 1 } }, field("sessdata", "SESSDATA=", "sessdataSet", "sessdataHint", "粘贴 SESSDATA 的值"), field("biliJct", "bili_jct=", "biliJctSet", "biliJctHint", "粘贴 bili_jct 的值"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setShow(!show) }, show ? "隐藏" : "显示"), b.sessdataSet || b.biliJctSet ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
+    /* @__PURE__ */ h("div", { style: { flex: 1, minWidth: 0, width: "100%" } }, field("sessdata", "SESSDATA=", "sessdataSet", "sessdataHint", "粘贴 SESSDATA 的值"), field("biliJct", "bili_jct=", "biliJctSet", "biliJctHint", "粘贴 bili_jct 的值"), /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setShow(!show) }, show ? "隐藏" : "显示"), b.sessdataSet || b.biliJctSet ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => {
       if (confirm("清空保存的 B 站 Cookie？")) setDraft(setPath(setPath(setPath(draft, "bili.sessdata", null), "bili.biliJct", null), "bili.cookie", null));
     } }, "清空") : null, /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "「显示」看的是正在填的内容；保存过的出于安全不回传，只显示结尾几位")))
   );
 }
 var BILI_KIND = { watch: "看了", comment: "评论", reply: "回复", share: "分享给你", shot: "发你截图", error: "没成功" };
-function BiliModel({ draft, setDraft }) {
+function BiliModelRow({ draft, setDraft }) {
   const [list, setList] = useState(null);
   useEffect(() => {
     get("/models").then((r) => setList(r.list || [])).catch(() => setList([]));
@@ -3197,27 +3552,18 @@ function BiliModel({ draft, setDraft }) {
   const labelOf = (x) => (x.name && x.name !== x.model ? x.name : x.model) + (x.model && x.name !== x.model ? "（" + x.model + "）" : "");
   const options = [{ value: "", label: "跟随全局模型", desc: "和聊天用的一样" }].concat((list || []).map((x) => ({ value: x.provider + "::" + x.model, label: labelOf(x), desc: x.provider, group: x.provider })));
   if (cur && !options.some((o) => o.value === cur)) options.push({ value: cur, label: m.model, desc: m.provider + "（DSH 里没找到）" });
-  return /* @__PURE__ */ h(
-    Card,
+  return /* @__PURE__ */ h(Row, { label: "刷 B 站用什么", hint: "定时刷与抽帧看画面走它；留空跟随聊天全局模型" }, /* @__PURE__ */ h(
+    Select,
     {
-      title: "B 站用的模型",
-      desc: "B 站自己单独用一个模型：定时刷（挑关键词、决定评论 / 回复 / 分享）和抽帧看画面都走它，聊天还是用全局模型。留空就跟随全局。",
-      more: "需要商店里的「B站」模块 1.2.0 以上。看画面要选能看图的模型，选了个不能看图的会自动跳过看画面、只读文字。切换从下一轮刷 B 站起生效。"
-    },
-    /* @__PURE__ */ h(Row, { label: "刷 B 站用什么" }, /* @__PURE__ */ h(
-      Select,
-      {
-        value: cur,
-        width: 280,
-        options,
-        onChange: (v) => {
-          const [provider, ...model] = v.split("::");
-          setDraft(setPath(draft, "bili.model", v ? { ...m, provider, model: model.join("::") } : { ...m, provider: "", model: "" }));
-        }
+      value: cur,
+      width: 280,
+      options,
+      onChange: (v) => {
+        const [provider, ...model] = v.split("::");
+        setDraft(setPath(draft, "bili.model", v ? { ...m, provider, model: model.join("::") } : { ...m, provider: "", model: "" }));
       }
-    )),
-    list === null ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "模型列表加载中…") : null
-  );
+    }
+  ));
 }
 function Bili({ draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
@@ -3255,7 +3601,7 @@ function Bili({ draft, setDraft, toast }) {
       const r = await get("/bili/account");
       setS({ ...s || {}, account: r });
     } }, "检查登录"), acct ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: acct.isLogin ? "var(--ab-ok)" : "var(--ab-warn)" } }, acct.isLogin ? "已登录：" + acct.uname : "没登录（只能看，不能评论）") : null)
-  ), /* @__PURE__ */ h(Card, { title: "怎么刷", desc: "只在「主动搭话」里设的醒着时间内刷。" }, /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("bili.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("bili.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("bili.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个视频" }, f.range("bili.perRun", 1, 6, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "额外想看的方向", hint: "一行一个；另外还会参考她的兴趣和记忆" }, f.list("bili.keywords", { placeholder: "白米饭 做法\n猫咪\n游戏解说" })), /* @__PURE__ */ h(Row, { label: "播放量门槛" }, f.num("bili.minViews", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次以上")), /* @__PURE__ */ h(Row, { label: "只看最近" }, f.num("bili.maxAgeDays", { min: 0 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天内发的（0 = 不限）"))), /* @__PURE__ */ h(BiliModel, { draft, setDraft }), /* @__PURE__ */ h(
+  ), /* @__PURE__ */ h(Card, { title: "怎么刷与模型", desc: "只在「主动搭话」里设的醒着时间内刷。留空则跟随聊天用的全局模型。" }, /* @__PURE__ */ h(BiliModelRow, { draft, setDraft }), /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("bili.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("bili.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("bili.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个视频" }, f.range("bili.perRun", 1, 6, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "额外想看的方向", hint: "一行一个；另外还会参考她的兴趣和记忆" }, f.list("bili.keywords", { placeholder: "白米饭 做法\n猫咪\n游戏解说" })), /* @__PURE__ */ h(Row, { label: "播放量门槛" }, f.num("bili.minViews", { min: 0, fallback: 5e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次以上")), /* @__PURE__ */ h(Row, { label: "只看最近" }, f.num("bili.maxAgeDays", { min: 0, fallback: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天内发的（0 = 不限）"))), /* @__PURE__ */ h(
     Card,
     {
       title: "看画面（抽帧 + 视觉）",
@@ -3265,13 +3611,13 @@ function Bili({ draft, setDraft, toast }) {
     /* @__PURE__ */ h(Row, { label: "让她看画面", hint: "需要视觉模型 + ffmpeg；关掉就退回只看文字" }, f.sw("bili.vision")),
     /* @__PURE__ */ h(Row, { label: "每个视频抽几帧" }, f.range("bili.visionFrames", 2, 12, 1, (v) => v + " 帧")),
     /* @__PURE__ */ h(Row, { label: "刷完顺手发张截图", hint: "概率；默认 35%，0 = 从不。截图都存在本机，你让她发她也能挑" }, f.range("bili.shotChance", 0, 1, 0.05, (v) => Math.round(v * 100) + "%")),
-    /* @__PURE__ */ h(Row, { label: "截图库最多存", hint: "超过就自动删最旧的；下面的截图库里也能一张张手动删" }, f.num("bili.shotLibrary", { min: 20, max: 2e3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
+    /* @__PURE__ */ h(Row, { label: "截图库最多存", hint: "超过就自动删最旧的；下面的截图库里也能一张张手动删" }, f.num("bili.shotLibrary", { min: 20, max: 2e3, fallback: 300 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
     /* @__PURE__ */ h(Row, { label: "ffmpeg 路径", hint: "留空就自己在 PATH 里找；找不到就填绝对路径" }, f.text("bili.ffmpegPath", { placeholder: "C:\\ffmpeg\\bin\\ffmpeg.exe" })),
     s && s.vision ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 4, color: s.vision.ffmpeg ? "var(--ab-ok)" : "var(--ab-warn)" } }, (s.vision.ffmpeg ? "✓ 已找到 ffmpeg：" + s.vision.ffmpeg : "✗ 没找到 ffmpeg：抽帧会被跳过，装一个或者在上面填路径") + (s.shots ? "　·　手上存了 " + s.shots.count + " 张截图" : "")) : null
   ), /* @__PURE__ */ h(Card, { title: "截图库" + (shots ? "（" + shots.length + " / " + (draft.bili && draft.bili.shotLibrary || 300) + "）" : ""), right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: loadShots }, "刷新")) }, !shots ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : (shots || []).length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🎬", text: "还没有截图。打开上面的「让她看画面」刷一轮 B 站，就会开始截。" }) : /* @__PURE__ */ h("div", { className: "ab-shots" }, (shots || []).map((it) => /* @__PURE__ */ h(ShotCell, { key: it.file, it, onChanged: () => {
     loadShots();
     load();
-  }, toast })))), /* @__PURE__ */ h(Card, { title: "评论、回复和分享", desc: "评论和回复要登录。试运行开着时只记日志不发。" }, /* @__PURE__ */ h(Row, { label: "自己发评论" }, f.sw("bili.comment"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxCommentsPerDay", { min: 0, max: 50 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "回别人回她的评论" }, f.sw("bili.reply"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxRepliesPerDay", { min: 0, max: 100 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "看到好玩的分享给你", hint: "私聊发给主人，带视频链接" }, f.sw("bili.shareToOwner")), /* @__PURE__ */ h(Row, { label: "顺手点赞" }, f.sw("bili.like"))), /* @__PURE__ */ h(
+  }, toast })))), /* @__PURE__ */ h(Card, { title: "评论、回复和分享", desc: "评论和回复要登录。试运行开着时只记日志不发。" }, /* @__PURE__ */ h(Row, { label: "自己发评论" }, f.sw("bili.comment"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxCommentsPerDay", { min: 0, max: 50, fallback: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "回别人回她的评论" }, f.sw("bili.reply"), /* @__PURE__ */ h("span", { className: "ab-muted" }, "每天最多"), f.num("bili.maxRepliesPerDay", { min: 0, max: 100, fallback: 6 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条")), /* @__PURE__ */ h(Row, { label: "看到好玩的分享给你", hint: "私聊发给主人，带视频链接" }, f.sw("bili.shareToOwner")), /* @__PURE__ */ h(Row, { label: "顺手点赞" }, f.sw("bili.like"))), /* @__PURE__ */ h(
     Card,
     {
       title: "她刷过什么",
@@ -3348,27 +3694,22 @@ function Douyin({ draft, setDraft, toast }) {
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, /* @__PURE__ */ h(
     Card,
     {
-      title: "刷抖音",
+      title: "抖音账号与绑定",
       right: f.sw("douyin.enabled"),
-      desc: "她用一个专用浏览器（独立的登录资料，不碰你平时用的浏览器）刷抖音：定时打开推荐，一个个点开看，读标题、分类、内容摘要和热评，再决定点不点赞、评不评论（特别想让你看的会在评论里 @你）、要不要分享给你。总开关默认关：先扫码登录，再打开。",
+      desc: "使用专用浏览器（独立登录资料，不碰平时用的浏览器）登录机器人账号并绑定主人；支持评论区 @你、私信互动与分享。总开关默认关：先扫码登录，再打开。",
       more: "浏览器窗口放在屏幕外，不抢前台。你在 QQ 里发抖音链接，她也能点开看完再聊。"
     },
-    /* @__PURE__ */ h(Row, { label: "抖音账号", hint: "建议用小号。扫一次码就行，登录状态存在专用浏览器里" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: startLogin, disabled: !!busy || !!login }, busy === "login" ? "正在打开浏览器…" : login ? "等你扫码…" : "扫码登录"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
+    /* @__PURE__ */ h("div", { className: "ab-section-title", style: { marginTop: 4 } }, "机器人账号"),
+    /* @__PURE__ */ h(Row, { label: "抖音账号", hint: "建议用小号。扫一次码就行，登录状态存在专用浏览器里" }, /* @__PURE__ */ h("div", { style: { flex: 1, minWidth: 0, width: "100%" } }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: startLogin, disabled: !!busy || !!login }, busy === "login" ? "正在打开浏览器…" : login ? "等你扫码…" : "扫码登录"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       setBusy("check");
       const r = await get("/douyin/account");
       setBusy("");
       setS({ ...s || {}, account: r });
     }, disabled: !!busy }, busy === "check" ? "检查中…" : "检查登录"), acctText), login ? /* @__PURE__ */ h("div", { style: { marginTop: 10, display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" } }, login.shot ? /* @__PURE__ */ h("img", { src: login.shot, alt: "抖音登录", style: { maxWidth: 360, width: "100%", borderRadius: 10, border: "1px solid var(--ab-line)", background: "#fff" } }) : /* @__PURE__ */ h("div", { className: "ab-muted ab-small" }, "二维码还没出来，稍等…"), /* @__PURE__ */ h("div", { className: "ab-small", style: { flex: 1, minWidth: 160 } }, /* @__PURE__ */ h("div", null, login.message || "用抖音 App 扫码"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 8 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: true }) }, "显示浏览器窗口"), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setLogin(null) }, "先不登了")))) : null)),
     /* @__PURE__ */ h(Row, { label: "浏览器窗口", hint: "遇到验证码、扫码后要短信验证时，挪到屏幕上处理" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: true }), disabled: !!busy }, "显示浏览器窗口"), /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/window", "win", { visible: false }), disabled: !!busy }, "收起窗口"))),
-    /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 自动找 Edge（找不到再找 Chrome / Chromium）" }, f.text("douyin.browserPath", { size: "wide", placeholder: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" }))
-  ), /* @__PURE__ */ h(
-    Card,
-    {
-      title: "主人抖音号",
-      desc: "填你的抖音号或主页链接，点「核对」。核对过之后，她刷到特别想让你看的视频，会在评论里真的 @你（你会收到抖音通知；认不出你就不发，不会发假 @）。改了输入要重新核对。"
-    },
-    /* @__PURE__ */ h(Row, { label: "你的抖音号 / 主页链接" }, f.text("douyin.owner.input", { size: "wide", placeholder: "抖音号，或 https://www.douyin.com/user/…" })),
-    /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 4 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/confirm-owner", "confirm", { input: ((draft.douyin || {}).owner || {}).input || "" }), disabled: !!busy }, busy === "confirm" ? "核对中…" : "核对"), s && s.owner ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "已核对：", s.owner.nickname) : /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "还没核对（不核对就不会 @你）"))
+    /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 自动找 Edge（找不到再找 Chrome / Chromium）" }, f.text("douyin.browserPath", { size: "wide", placeholder: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" })),
+    /* @__PURE__ */ h("div", { className: "ab-section-title" }, "主人账号绑定"),
+    /* @__PURE__ */ h(Row, { label: "你的抖音号 / 主页链接", hint: "填你的抖音号或主页链接，点「核对」。核对后刷到好玩的视频会在评论里真的 @你（你会收到抖音通知；认不出你就不发）。" }, /* @__PURE__ */ h("div", { style: { flex: 1, minWidth: 0, width: "100%" } }, f.text("douyin.owner.input", { size: "wide", placeholder: "抖音号，或 https://www.douyin.com/user/…" }), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 6 } }, /* @__PURE__ */ h(Btn, { small: true, kind: "primary", onClick: act("/douyin/confirm-owner", "confirm", { input: ((draft.douyin || {}).owner || {}).input || "" }), disabled: !!busy }, busy === "confirm" ? "核对中…" : "核对"), s && s.owner ? /* @__PURE__ */ h("span", { className: "ab-small", style: { color: "var(--ab-ok)" } }, "已核对：", s.owner.nickname) : /* @__PURE__ */ h("span", { className: "ab-small ab-muted" }, "还没核对（不核对就不会 @你）"))))
   ), /* @__PURE__ */ h(
     Card,
     {
@@ -3378,10 +3719,10 @@ function Douyin({ draft, setDraft, toast }) {
     },
     /* @__PURE__ */ h(Row, { label: "回你的抖音私信" }, f.sw("douyin.ownerDm")),
     /* @__PURE__ */ h(Row, { label: "评论区接着聊", hint: "她在评论里 @ 过你、你回复那条评论之后，她会看到并用自己的口气接一句（新评论里真 @ 你）。默认关。" }, f.sw("douyin.commentReply")),
-    /* @__PURE__ */ h(Row, { label: "多久看一次评论回复" }, f.num("douyin.commentReplyPollMinutes", { min: 1, max: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
+    /* @__PURE__ */ h(Row, { label: "多久看一次评论回复" }, f.num("douyin.commentReplyPollMinutes", { min: 1, max: 60, fallback: 5 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")),
     /* @__PURE__ */ h(Row, { label: "分享卡片后补一句", hint: "抖音私信里发完视频卡片，再跟一句她自己想说的话（有概率触发，默认关）" }, f.sw("douyin.shareDmText")),
-    /* @__PURE__ */ h(Row, { label: "多久看一次" }, f.num("douyin.dmPollMinutes", { min: 1, max: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟"), /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/dms", "dms"), disabled: !!busy }, busy === "dms" ? "正在看…" : "现在看一次"))
-  ), /* @__PURE__ */ h(Card, { title: "怎么刷", desc: "只在「主动搭话」里设的醒着时间内自己刷。主人在 QQ 里让她「去刷会儿抖音」也行。" }, /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("douyin.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("douyin.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("douyin.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个" }, f.range("douyin.perRun", 1, 10, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "每天最多看" }, f.num("douyin.maxWatchPerDay", { min: 0, max: 200 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "个（含手动）")), /* @__PURE__ */ h(Row, { label: "每个视频停留", hint: "真的在播放；停得越短越不像真人" }, f.num("douyin.dwellMin", { min: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "～"), f.num("douyin.dwellMax", { min: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "分享到哪", hint: "抖音私信要先核对你的抖音号；没核对或者发不出去时会改发 QQ" }, f.choices("douyin.shareTo", [
+    /* @__PURE__ */ h(Row, { label: "多久看一次" }, f.num("douyin.dmPollMinutes", { min: 1, max: 60, fallback: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟"), /* @__PURE__ */ h(Btn, { small: true, onClick: act("/douyin/dms", "dms"), disabled: !!busy }, busy === "dms" ? "正在看…" : "现在看一次"))
+  ), /* @__PURE__ */ h(Card, { title: "怎么刷", desc: "只在「主动搭话」里设的醒着时间内自己刷。主人在 QQ 里让她「去刷会儿抖音」也行。" }, /* @__PURE__ */ h(Row, { label: "定时自己去刷" }, f.sw("douyin.autoBrowse")), /* @__PURE__ */ h(Row, { label: "多久刷一轮" }, f.range("douyin.intervalHours", 1, 24, 1, (v) => v + " 小时")), /* @__PURE__ */ h(Row, { label: "每天最多刷" }, f.range("douyin.maxRunsPerDay", 0, 12, 1, (v) => v + " 轮")), /* @__PURE__ */ h(Row, { label: "一轮看几个" }, f.range("douyin.perRun", 1, 10, 1, (v) => v + " 个")), /* @__PURE__ */ h(Row, { label: "每天最多看" }, f.num("douyin.maxWatchPerDay", { min: 0, max: 200, fallback: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "个（含手动）")), /* @__PURE__ */ h(Row, { label: "每个视频停留", hint: "真的在播放；停得越短越不像真人" }, f.num("douyin.dwellMin", { min: 3, fallback: 8 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "～"), f.num("douyin.dwellMax", { min: 3, fallback: 40 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "分享到哪", hint: "抖音私信要先核对你的抖音号；没核对或者发不出去时会改发 QQ" }, f.choices("douyin.shareTo", [
     { value: "douyin", label: "抖音私信", desc: "在抖音里把视频分享给你（只有视频卡片）" },
     { value: "qq", label: "QQ 私聊", desc: "她的话 + 视频链接" },
     { value: "both", label: "两边都发", desc: "抖音里收视频卡片，QQ 上看她说了什么" }
@@ -3389,7 +3730,7 @@ function Douyin({ draft, setDraft, toast }) {
     { value: "proactive", label: "积极", desc: "好看有趣就分享" },
     { value: "normal", label: "适中", desc: "觉得你会喜欢才分享" },
     { value: "stingy", label: "少分享", desc: "拿不准就不发" }
-  ]))), /* @__PURE__ */ h(Card, { title: "每天上限", desc: "刚登录的号前几天上限自动减半（新号猛点赞最容易被风控）。遇到验证码 / 操作频繁当天就停手，看还能看。权限在「权限」页单独设（默认仅主人）。" }, /* @__PURE__ */ h(Row, { label: "点赞" }, f.num("douyin.caps.like", { min: 0, max: 300 })), /* @__PURE__ */ h(Row, { label: "评论" }, f.num("douyin.caps.comment", { min: 0, max: 30 })), /* @__PURE__ */ h(Row, { label: "分享给你" }, f.num("douyin.caps.share", { min: 0, max: 30 })), /* @__PURE__ */ h(Row, { label: "评论里 @你", hint: "也算在评论次数里" }, f.num("douyin.caps.atOwner", { min: 0, max: 30 })), /* @__PURE__ */ h(Row, { label: "点赞 + 评论合计" }, f.num("douyin.gate.maxWritesPerDay", { min: 1, max: 500 })), /* @__PURE__ */ h(Row, { label: "两次点赞 / 评论间隔" }, f.num("douyin.gate.minWriteGapSec", { min: 0, max: 600 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "新号减半" }, f.num("douyin.gate.newAccountDays", { min: 0, max: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天"))), /* @__PURE__ */ h(
+  ]))), /* @__PURE__ */ h(Card, { title: "每天上限", desc: "刚登录的号前几天上限自动减半（新号猛点赞最容易被风控）。遇到验证码 / 操作频繁当天就停手，看还能看。权限在「权限」页单独设（默认仅主人）。" }, /* @__PURE__ */ h(Row, { label: "点赞" }, f.num("douyin.caps.like", { min: 0, max: 300, fallback: 30 })), /* @__PURE__ */ h(Row, { label: "评论" }, f.num("douyin.caps.comment", { min: 0, max: 30, fallback: 3 })), /* @__PURE__ */ h(Row, { label: "分享给你" }, f.num("douyin.caps.share", { min: 0, max: 30, fallback: 5 })), /* @__PURE__ */ h(Row, { label: "评论里 @你", hint: "也算在评论次数里" }, f.num("douyin.caps.atOwner", { min: 0, max: 30, fallback: 3 })), /* @__PURE__ */ h(Row, { label: "点赞 + 评论合计" }, f.num("douyin.gate.maxWritesPerDay", { min: 1, max: 500, fallback: 30 })), /* @__PURE__ */ h(Row, { label: "两次点赞 / 评论间隔" }, f.num("douyin.gate.minWriteGapSec", { min: 0, max: 600, fallback: 20 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "秒")), /* @__PURE__ */ h(Row, { label: "新号减半" }, f.num("douyin.gate.newAccountDays", { min: 0, max: 30, fallback: 7 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "天"))), /* @__PURE__ */ h(
     Card,
     {
       title: "她刷过什么",
@@ -3490,13 +3831,13 @@ function Heybox({ draft, setDraft, toast }) {
       right: f.sw("heybox.enabled"),
       desc: "用你的小黑盒账号逛游戏社区：定时看信息流、读帖子正文和热评，按性格决定点不点赞、评不评论；她自己会写帖子（先看热榜找角度，再看社区高赞帖在聊什么）。配图她自己准备：本机图片最多 4 张，传小黑盒图床插进正文，哪张传不上就跳过哪张、不影响发帖，发完把链接报给你。写操作各有权限（「权限」页，默认仅主人），每天有额度上限。"
     },
-    /* @__PURE__ */ h(Row, { label: "小黑盒账号", hint: "从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）" }, /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: checkAccount, disabled: !!busy }, busy === "account" ? "检查中…" : "检查登录"), acctText), /* @__PURE__ */ h("div", { style: { marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" } }, /* @__PURE__ */ h(
+    /* @__PURE__ */ h(Row, { label: "小黑盒账号", hint: "从浏览器登录后把整串 Cookie 粘到下面。pkey 必须有；想让它能点赞评论发帖，还要有 x_xhh_tokenid（F12 → Application → Cookies 里能复制到）" }, /* @__PURE__ */ h("div", { style: { flex: 1, minWidth: 0, width: "100%" } }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, onClick: checkAccount, disabled: !!busy }, busy === "account" ? "检查中…" : "检查登录"), acctText), /* @__PURE__ */ h("div", { style: { marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" } }, /* @__PURE__ */ h(
       "textarea",
       {
-        className: "ab-input",
+        className: "ab-textarea",
         rows: 3,
         spellCheck: false,
-        style: { flex: 1, minWidth: 260, fontFamily: "monospace", fontSize: 12 },
+        style: { flex: "1 1 220px", minHeight: 72 },
         placeholder: "pkey=…; heybox_id=…; x_xhh_tokenid=…",
         value: cookieText,
         onChange: (e) => setCookieText(e.target.value)
@@ -3508,9 +3849,9 @@ function Heybox({ draft, setDraft, toast }) {
       title: "每天上限",
       desc: "小黑盒的帖详情和搜索接口查太勤会弹验证码（还可能连坐浏览器登录态），所以额度别设太大。搜索被挡时她会自动降级去翻信息流，不会反复硬试。"
     },
-    /* @__PURE__ */ h(Row, { label: "点赞" }, f.num("heybox.likeDaily", { min: 0, max: 60 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次/天")),
-    /* @__PURE__ */ h(Row, { label: "评论" }, f.num("heybox.commentDaily", { min: 0, max: 30 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条/天")),
-    /* @__PURE__ */ h(Row, { label: "发帖" }, f.num("heybox.maxPostsPerDay", { min: 0, max: 5 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "篇/天（建议别超过 3）")),
+    /* @__PURE__ */ h(Row, { label: "点赞" }, f.num("heybox.likeDaily", { min: 0, max: 60, fallback: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "次/天")),
+    /* @__PURE__ */ h(Row, { label: "评论" }, f.num("heybox.commentDaily", { min: 0, max: 30, fallback: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "条/天")),
+    /* @__PURE__ */ h(Row, { label: "发帖" }, f.num("heybox.maxPostsPerDay", { min: 0, max: 5, fallback: 3 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "篇/天（建议别超过 3）")),
     /* @__PURE__ */ h(Row, { label: "发帖风格", hint: "她写帖时按这个口吻来。也可以让她单次换：跟她说「用日记风格发一篇」" }, f.select("heybox.postStyle", [
       { value: "diary", label: "大肥鱼日记", desc: "第一人称随手记，跟空间日记一个味，120-300字" },
       { value: "news", label: "热搜文", desc: "报道新闻体，摆具体数字，200-800字" },
@@ -3593,13 +3934,13 @@ function MultiParser({ draft, setDraft, toast }) {
     /* @__PURE__ */ h(Row, { label: "群聊里提供解析", hint: "关掉后群里发链接完全不管（不发卡片、不下载视频）。只想在私聊用就关掉它。" }, f.sw("multiParser.inGroups")),
     /* @__PURE__ */ h(Row, { label: "私聊里提供解析", hint: "关掉后私聊发链接也不解析，只有群聊生效。" }, f.sw("multiParser.inPrivate")),
     /* @__PURE__ */ h(Row, { label: "这些群不解析", hint: "群号用逗号或空格隔开。列在这里的群即使「群聊里提供解析」开着也不解析。" }, /* @__PURE__ */ h(
-      "input",
+      ListInput,
       {
-        className: "ab-input",
+        value: Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : [],
+        numbers: true,
         style: { width: "100%" },
         placeholder: "例如 123456789, 987654321",
-        value: (Array.isArray(draft.multiParser?.disabledGroups) ? draft.multiParser.disabledGroups : []).join(", "),
-        onChange: (e) => setDraft((prev) => setPath(prev, "multiParser.disabledGroups", String(e.target.value).split(/[\s,，;；]+/).map((s) => s.replace(/\D/g, "")).filter((s) => s.length >= 4)))
+        onChange: (list) => setDraft((prev) => setPath(prev, "multiParser.disabledGroups", list))
       }
     )),
     /* @__PURE__ */ h(Row, { label: "大模型上下文注入", hint: "开启后，自动将解析出的标题、作者、正文摘要喂给她，让她能看懂群友分享并自然接话讨论；关闭则仅作为纯工具运行。" }, f.sw("multiParser.feedToAi")),
@@ -3615,7 +3956,7 @@ function MultiParser({ draft, setDraft, toast }) {
     { value: "direct_link", label: "发送高速下载直链" },
     { value: "group_file", label: "上传至群文件 (群聊有效)" },
     { value: "notice", label: "仅发送超限文字通知" }
-  ], { width: 200 }))), /* @__PURE__ */ h(Card, { title: "支持平台独立开关", desc: "单独控制是否响应特定平台的链接。" }, /* @__PURE__ */ h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "8px 16px", padding: "6px 0" } }, platforms.map((p) => /* @__PURE__ */ h("div", { key: p.key, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--ab-line)" } }, /* @__PURE__ */ h("span", { style: { fontSize: 13 } }, p.label), f.sw(`multiParser.platforms.${p.key}`))))), /* @__PURE__ */ h(Card, { title: "平台 Cookies 配置（可选）", desc: "为部分平台提供登录后的 Cookie，以获取更高清晰度媒体、避免接口风控或解除未登录限制。留空的平台将走免登录公开接口。" }, [
+  ], { width: 200 }))), /* @__PURE__ */ h(Card, { title: "支持平台独立开关", desc: "单独控制是否响应特定平台的链接。" }, /* @__PURE__ */ h("div", { className: "ab-platform-grid" }, platforms.map((p) => /* @__PURE__ */ h("div", { key: p.key, className: "ab-platform-item" }, /* @__PURE__ */ h("span", null, p.label), f.sw(`multiParser.platforms.${p.key}`))))), /* @__PURE__ */ h(Card, { title: "平台 Cookies 配置（可选）", desc: "为部分平台提供登录后的 Cookie，以获取更高清晰度媒体、避免接口风控或解除未登录限制。留空的平台将走免登录公开接口。" }, [
     { key: "bilibili", label: "B站 Cookie", hint: "用于解析高清视频流及动态；留空自动复用「B站」页已配 Cookie", fallback: (d) => Boolean(d.bili?.cookie || d.bili?.sessdata) },
     { key: "weibo", label: "微博 Cookie", hint: "填写包含 SUB 的 Cookie，可避免微博移动端接口触发 403/418 风控" },
     { key: "redbook", label: "小红书 Cookie", hint: "填写包含 a1、web_session 的 Cookie，提升笔记图集提取稳定性" },
@@ -3631,11 +3972,11 @@ function MultiParser({ draft, setDraft, toast }) {
       type: "password",
       placeholder: isSet || isFallback ? "●●●●●●（已生效，留空保持不变）" : "粘贴整串 Cookie 或关键字段"
     }));
-  })), /* @__PURE__ */ h(Card, { title: "在线测试解析", desc: "粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。" }, /* @__PURE__ */ h("div", { style: { display: "flex", gap: 8, alignItems: "center" } }, /* @__PURE__ */ h(
+  })), /* @__PURE__ */ h(Card, { title: "在线测试解析", desc: "粘贴任意受支持的链接，实时测试解析效果并预览结果卡片。" }, /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(
     "input",
     {
       className: "ab-input",
-      style: { flex: 1 },
+      style: { flex: "1 1 220px" },
       placeholder: "例如 https://www.bilibili.com/video/BV... 或 微博/知乎/小红书链接",
       value: testUrl,
       onChange: (e) => setTestUrl(e.target.value)
@@ -3668,7 +4009,7 @@ function PaintGallery({ draft, setDraft, toast }) {
       desc: "画过的图都存在本机（不会自动删），这里只控制面板显示多少张。",
       right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: load }, "刷新"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => post("/image/open-folder").then((r) => toast(r.message, r.ok ? "ok" : "err")).catch(() => toast("打不开文件夹", "err")) }, "打开文件夹"))
     },
-    /* @__PURE__ */ h(Row, { label: "面板显示最近", hint: "最多 50 张；只影响面板显示，不删文件" }, f.num("imageGen.galleryShown", { min: 1, max: 50 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
+    /* @__PURE__ */ h(Row, { label: "面板显示最近", hint: "最多 50 张；只影响面板显示，不删文件" }, f.num("imageGen.galleryShown", { min: 1, max: 50, fallback: 20 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "张")),
     data && data.dir ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { margin: "4px 0 8px", wordBreak: "break-all" } }, "存图目录：", data.dir) : null,
     !data ? /* @__PURE__ */ h(Empty, { icon: "⏳", text: "加载中…" }) : data.items.length === 0 ? /* @__PURE__ */ h(Empty, { icon: "🎨", text: "她还没画过图。在聊天里说「画一张……」，画好的图会出现在这里。" }) : /* @__PURE__ */ h("div", { className: "ab-shots" }, data.items.map((it) => /* @__PURE__ */ h(PaintCell, { key: it.file, it, onDelete: () => del(it.file) })))
   );
@@ -3756,7 +4097,7 @@ function ImageGen({ draft, setDraft, toast }) {
         options: [{ value: "openai", label: "OpenAI 格式" }, { value: "custom", label: "自定义接口" }, { value: "codex", label: "Codex 订阅（实验性）" }]
       }
     )),
-    isCodex ? /* @__PURE__ */ h(CodexSub, { draft, setDraft, toast }) : isCustom ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "请求方式", hint: "GET 把参数都拼在地址上；POST 放进请求体" }, /* @__PURE__ */ h(Seg, { value: isPost ? "POST" : "GET", onChange: (v) => setDraft(setPath(draft, "imageGen.custom.method", v)), options: [{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }] })), /* @__PURE__ */ h(Row, { label: "接口地址", hint: "可以用 {prompt} {model} {size} {width} {height}" }, f.text("imageGen.custom.url", { size: "wide", placeholder: "https://image.pollinations.ai/prompt/{prompt}" })), /* @__PURE__ */ h(Row, { label: "API Key", hint: "会以 Authorization: Bearer 发出；不需要就留空" }, f.text("imageGen.apiKey", { type: "password", placeholder: c.apiKeySet ? "已保存（不改就留空）" : "没有就留空" })), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 12 } }, /* @__PURE__ */ h("b", { className: "ab-small" }, isPost ? "请求体参数" : "URL 参数"), /* @__PURE__ */ h("small", { className: "ab-muted" }, "参数名和值都自己填；值里可以用 ", "{prompt}")), params.length ? params.map((p, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-flex", style: { gap: 6, marginBottom: 6 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { width: 170 }, value: p.key || "", placeholder: "参数名，如 model", onChange: (e) => setP(i, "key", e.target.value) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: 1 }, value: p.value || "", placeholder: "值，可以用 {prompt}", onChange: (e) => setP(i, "value", e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setParams(params.filter((_, j) => j !== i)) }, "删"))) : /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "还没有参数 —— 比如 model=flux-anime、width=1080、height=1920、nologo=true"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 10 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setParams([...params, { key: "", value: "" }]) }, "＋ 加一个参数")), isPost ? /* @__PURE__ */ h(Row, { label: "请求体格式" }, /* @__PURE__ */ h(Seg, { value: custom.bodyType === "form" ? "form" : "json", onChange: (v) => setDraft(setPath(draft, "imageGen.custom.bodyType", v)), options: [{ value: "json", label: "JSON" }, { value: "form", label: "表单" }] })) : null, /* @__PURE__ */ h(Row, { label: "取值路径", hint: "接口直接回图片就留空；回 JSON 时填地址字段" }, f.text("imageGen.custom.responsePath", { size: "wide", placeholder: "如 data.0.url（留空自动找）" }))) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "一般以 /v1 结尾" }, f.text("imageGen.baseUrl", { size: "wide", placeholder: "https://api.siliconflow.cn/v1" })), /* @__PURE__ */ h(Row, { label: "API Key", hint: "只存在本机，不会显示出来" }, f.text("imageGen.apiKey", { type: "password", placeholder: c.apiKeySet ? "已保存（不改就留空）" : "没有就留空" })), /* @__PURE__ */ h(Row, { label: "模型" }, f.text("imageGen.model", { size: "wide", placeholder: "例如 Kwai-Kolors/Kolors" }))),
+    isCodex ? /* @__PURE__ */ h(CodexSub, { draft, setDraft, toast }) : isCustom ? /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "请求方式", hint: "GET 把参数都拼在地址上；POST 放进请求体" }, /* @__PURE__ */ h(Seg, { value: isPost ? "POST" : "GET", onChange: (v) => setDraft(setPath(draft, "imageGen.custom.method", v)), options: [{ value: "GET", label: "GET" }, { value: "POST", label: "POST" }] })), /* @__PURE__ */ h(Row, { label: "接口地址", hint: "可以用 {prompt} {model} {size} {width} {height}" }, f.text("imageGen.custom.url", { size: "wide", placeholder: "https://image.pollinations.ai/prompt/{prompt}" })), /* @__PURE__ */ h(Row, { label: "API Key", hint: "会以 Authorization: Bearer 发出；不需要就留空" }, f.text("imageGen.apiKey", { type: "password", placeholder: c.apiKeySet ? "已保存（不改就留空）" : "没有就留空" })), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 12 } }, /* @__PURE__ */ h("b", { className: "ab-small" }, isPost ? "请求体参数" : "URL 参数"), /* @__PURE__ */ h("small", { className: "ab-muted" }, "参数名和值都自己填；值里可以用 ", "{prompt}")), params.length ? params.map((p, i) => /* @__PURE__ */ h("div", { key: i, className: "ab-flex", style: { gap: 6, marginBottom: 6 } }, /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "1 1 130px" }, value: p.key || "", placeholder: "参数名，如 model", onChange: (e) => setP(i, "key", e.target.value) }), /* @__PURE__ */ h("input", { className: "ab-input", style: { flex: "2 1 160px" }, value: p.value || "", placeholder: "值，可以用 {prompt}", onChange: (e) => setP(i, "value", e.target.value) }), /* @__PURE__ */ h(Btn, { small: true, onClick: () => setParams(params.filter((_, j) => j !== i)) }, "删"))) : /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginBottom: 6 } }, "还没有参数 —— 比如 model=flux-anime、width=1080、height=1920、nologo=true"), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 10 } }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => setParams([...params, { key: "", value: "" }]) }, "＋ 加一个参数")), isPost ? /* @__PURE__ */ h(Row, { label: "请求体格式" }, /* @__PURE__ */ h(Seg, { value: custom.bodyType === "form" ? "form" : "json", onChange: (v) => setDraft(setPath(draft, "imageGen.custom.bodyType", v)), options: [{ value: "json", label: "JSON" }, { value: "form", label: "表单" }] })) : null, /* @__PURE__ */ h(Row, { label: "取值路径", hint: "接口直接回图片就留空；回 JSON 时填地址字段" }, f.text("imageGen.custom.responsePath", { size: "wide", placeholder: "如 data.0.url（留空自动找）" }))) : /* @__PURE__ */ h("div", null, /* @__PURE__ */ h(Row, { label: "服务地址", hint: "一般以 /v1 结尾" }, f.text("imageGen.baseUrl", { size: "wide", placeholder: "https://api.siliconflow.cn/v1" })), /* @__PURE__ */ h(Row, { label: "API Key", hint: "只存在本机，不会显示出来" }, f.text("imageGen.apiKey", { type: "password", placeholder: c.apiKeySet ? "已保存（不改就留空）" : "没有就留空" })), /* @__PURE__ */ h(Row, { label: "模型" }, f.text("imageGen.model", { size: "wide", placeholder: "例如 Kwai-Kolors/Kolors" }))),
     /* @__PURE__ */ h(Row, { label: "默认构图", hint: isCodex ? "通过构图提示引导，实际尺寸由服务端选择，不保证严格比例" : "聊天工具可指定本次构图。服务不支持所选尺寸时会报告失败，请换一种构图；自定义接口需使用尺寸占位符" }, f.select("imageGen.shape", [
       { value: "her", label: "让她选择", desc: isCodex ? "未指定时由服务端选择" : "未指定时沿用图片尺寸" },
       { value: "square", label: isCodex ? "方图 1:1" : "方图 1:1（1024 × 1024）" },
@@ -3796,7 +4137,7 @@ function Logs() {
     {
       title: "日志",
       desc: "所有后台动作都在这里，令牌和密码已自动打码。完整日志文件在 %USERPROFILE%\\\\.dsh\\\\plugins-data\\\\dsh-qq-hub\\\\logs\\\\（老安装为 aurabot\\\\）。",
-      right: /* @__PURE__ */ h("div", { className: "ab-flex" }, /* @__PURE__ */ h(Select, { value: level, onChange: setLevel, width: 110, options: [["debug", "全部"], ["info", "一般"], ["warn", "警告"], ["error", "错误"]].map(([value, label]) => ({ value, label })) }), /* @__PURE__ */ h(
+      right: /* @__PURE__ */ h("div", { className: "ab-toolbar" }, /* @__PURE__ */ h(Select, { value: level, onChange: setLevel, width: 110, options: [["debug", "全部"], ["info", "一般"], ["warn", "警告"], ["error", "错误"]].map(([value, label]) => ({ value, label })) }), /* @__PURE__ */ h(
         Select,
         {
           value: area,
@@ -3888,7 +4229,7 @@ function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
     } }, "看看有哪些 QQ 进程"), /* @__PURE__ */ h(Btn, { small: true, onClick: async () => {
       const r = await get("/onebot/test");
       toast(r.message);
-    } }, "测试连接")), sl.lastAttach && sl.lastAttach.at ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 8, color: sl.lastAttach.ok ? "var(--ab-ok)" : "var(--ab-warn)" } }, sl.lastAttach.message) : null, conn && login ? /* @__PURE__ */ h("div", { className: "ab-note", style: { marginTop: 10 } }, login.uin === st.config.botQQ ? "✓ 连上了：" + login.nickname + "（" + login.uin + "）" : "⚠ 连上的是 " + login.uin + "，不是机器人号") : /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 10 } }, "接入后需要十几秒识别登录状态，稍等一下会自动刷新。"), procs ? /* @__PURE__ */ h("table", { className: "ab-table", style: { marginTop: 10 } }, /* @__PURE__ */ h("tbody", null, procs.map((p) => /* @__PURE__ */ h("tr", { key: p.pid }, /* @__PURE__ */ h("td", null, p.pid), /* @__PURE__ */ h("td", null, p.uin || "识别不出"), /* @__PURE__ */ h("td", null, p.nickname || ""), /* @__PURE__ */ h("td", null, p.isBot ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "机器人号") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不会碰")))))) : null),
+    } }, "测试连接")), sl.lastAttach && sl.lastAttach.at ? /* @__PURE__ */ h("div", { className: "ab-small", style: { marginTop: 8, color: sl.lastAttach.ok ? "var(--ab-ok)" : "var(--ab-warn)" } }, sl.lastAttach.message) : null, conn && login ? /* @__PURE__ */ h("div", { className: "ab-note", style: { marginTop: 10 } }, login.uin === st.config.botQQ ? "✓ 连上了：" + login.nickname + "（" + login.uin + "）" : "⚠ 连上的是 " + login.uin + "，不是机器人号") : /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 10 } }, "接入后需要十几秒识别登录状态，稍等一下会自动刷新。"), procs ? /* @__PURE__ */ h("div", { className: "ab-table-wrap", style: { marginTop: 10 } }, /* @__PURE__ */ h("table", { className: "ab-table" }, /* @__PURE__ */ h("tbody", null, procs.map((p) => /* @__PURE__ */ h("tr", { key: p.pid }, /* @__PURE__ */ h("td", null, p.pid), /* @__PURE__ */ h("td", null, p.uin || "识别不出"), /* @__PURE__ */ h("td", null, p.nickname || ""), /* @__PURE__ */ h("td", null, p.isBot ? /* @__PURE__ */ h("span", { className: "ab-badge" }, "机器人号") : /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "不会碰"))))))) : null),
     // 4. 完成
     /* @__PURE__ */ h("div", { key: "s4" }, /* @__PURE__ */ h("p", { className: "ab-desc" }, "都准备好了！最后选一下她怎么上线："), /* @__PURE__ */ h(
       Choices,
@@ -3907,7 +4248,7 @@ function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
       await save({ ...draft, enabled: true, dryRun: live === "dry" });
     } }, "给我发一条自测消息")))
   ][step];
-  return /* @__PURE__ */ h("div", { className: "ab-card", style: { padding: "20px 22px" } }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("h3", { style: { margin: 0, fontSize: 16 } }, "设置向导"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "第 ", step + 1, " / ", WIZ_STEPS.length, " 步 · ", WIZ_STEPS[step]), /* @__PURE__ */ h("div", { className: "ab-spacer" }), st.config.setupDone && onClose ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onClose }, "关闭向导") : null), /* @__PURE__ */ h("div", { className: "ab-wiz-bar" }, WIZ_STEPS.map((s, i) => /* @__PURE__ */ h("button", { key: s, type: "button", className: cx("seg", i < step && "done", i === step && "on"), onClick: () => i <= step && go(i), title: s }, /* @__PURE__ */ h("span", null, s)))), verified && !st.config.setupDone ? /* @__PURE__ */ h("div", { className: "ab-note", style: { marginTop: 12 } }, "机器人号已经连接并核对通过。", " ", /* @__PURE__ */ h(Btn, { small: true, onClick: useExisting }, "使用现有连接，进入面板")) : null, /* @__PURE__ */ h("div", { style: { minHeight: 220, marginTop: 14 } }, body), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 16, borderTop: "1px solid var(--ab-line)", paddingTop: 12 } }, step > 0 ? /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => go(step - 1) }, "上一步") : null, /* @__PURE__ */ h("div", { className: "ab-spacer" }), step < WIZ_STEPS.length - 1 ? /* @__PURE__ */ h(Btn, { kind: "primary", disabled: !canNext, onClick: next }, "下一步") : /* @__PURE__ */ h(
+  return /* @__PURE__ */ h("div", { className: "ab-card ab-wiz-card" }, /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginBottom: 6 } }, /* @__PURE__ */ h("h3", { style: { margin: 0, fontSize: 16 } }, "设置向导"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, "第 ", step + 1, " / ", WIZ_STEPS.length, " 步 · ", WIZ_STEPS[step]), /* @__PURE__ */ h("div", { className: "ab-spacer" }), st.config.setupDone && onClose ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onClose }, "关闭向导") : null), /* @__PURE__ */ h("div", { className: "ab-wiz-bar" }, WIZ_STEPS.map((s, i) => /* @__PURE__ */ h("button", { key: s, type: "button", className: cx("seg", i < step && "done", i === step && "on"), onClick: () => i <= step && go(i), title: s }, /* @__PURE__ */ h("span", null, s)))), verified && !st.config.setupDone ? /* @__PURE__ */ h("div", { className: "ab-note", style: { marginTop: 12 } }, "机器人号已经连接并核对通过。", " ", /* @__PURE__ */ h(Btn, { small: true, onClick: useExisting }, "使用现有连接，进入面板")) : null, /* @__PURE__ */ h("div", { style: { minHeight: 220, marginTop: 14 } }, body), /* @__PURE__ */ h("div", { className: "ab-flex", style: { marginTop: 16, borderTop: "1px solid var(--ab-line)", paddingTop: 12 } }, step > 0 ? /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => go(step - 1) }, "上一步") : null, /* @__PURE__ */ h("div", { className: "ab-spacer" }), step < WIZ_STEPS.length - 1 ? /* @__PURE__ */ h(Btn, { kind: "primary", disabled: !canNext, onClick: next }, "下一步") : /* @__PURE__ */ h(
     Btn,
     {
       kind: "primary",
@@ -3944,6 +4285,8 @@ function QQHubPage() {
   });
   const [toastMsg, setToastMsg] = useState(null);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [find, setFind] = useState(null);
+  const rootRef = useRef(null);
   const toastTimer = useRef(null);
   const dirtyRef = useRef(false);
   const saveRef = useRef(null);
@@ -3973,14 +4316,22 @@ function QQHubPage() {
     const t = setInterval(reload, 5e3);
     return () => clearInterval(t);
   }, [reload]);
+  const scrollTop = () => {
+    const el = rootRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === "function") el.scrollTo({ top: 0, behavior: "smooth" });
+    else el.scrollTop = 0;
+  };
   const go = (id) => {
     setTab(id);
     try {
       localStorage.setItem("qq-hub.tab", id);
     } catch (e) {
     }
+    if (rootRef.current) rootRef.current.scrollTop = 0;
   };
   const tabsRef = useRef(null);
+  const hasNav = Boolean(st && st.config && st.config.setupDone && !wizardOpen);
   useEffect(() => {
     const el = tabsRef.current;
     if (!el) return;
@@ -3992,7 +4343,7 @@ function QQHubPage() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  });
+  }, [tab, hasNav]);
   useEffect(() => {
     tabsRef.current?.querySelector(".ab-tab.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [tab]);
@@ -4086,7 +4437,8 @@ function QQHubPage() {
     const flag = t.flag === "group" ? cfg.allow.groups.length > 0 : getPath(cfg, t.flag);
     return /* @__PURE__ */ h("i", { className: cx("ab-dot", flag && "ok"), title: flag ? "开着" : "关着", "aria-hidden": "true" });
   };
-  return /* @__PURE__ */ h("div", { className: "ab-root" }, /* @__PURE__ */ h("div", { className: "ab-wrap" }, /* @__PURE__ */ h("header", { className: "ab-topbar" }, /* @__PURE__ */ h("button", { type: "button", className: "ab-avatar-btn", title: "点击换头像", onClick: () => pickAvatar(toast, reload) }, /* @__PURE__ */ h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像" }), /* @__PURE__ */ h("span", { className: "ab-avatar-tip" }, "换头像")), /* @__PURE__ */ h("div", { className: "ab-topbar-main" }, /* @__PURE__ */ h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"), /* @__PURE__ */ h("div", { className: "ab-meta" }, "QQ ", cfg.botQQ, " · ", persona ? persona.name : "默认人格"), /* @__PURE__ */ h("div", { className: "ab-pills" }, /* @__PURE__ */ h(Pill, { kind: status.cls }, /* @__PURE__ */ h("i", { className: cx("ab-dot", status.cls) }), status.text), /* @__PURE__ */ h(Pill, null, "SnowLuma ", st.snowluma.installed ? st.snowluma.running ? "运行中" : "没启动" : "未安装"), /* @__PURE__ */ h(Pill, null, "QQ Hub v", st.version))), /* @__PURE__ */ h("div", { className: "ab-topbar-side" }, /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", null, "总开关"), /* @__PURE__ */ h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })), /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", { className: "ab-muted" }, "试运行"), /* @__PURE__ */ h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "开着时只写日志，不真的发到 QQ" })))), showWizard ? /* @__PURE__ */ h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null, showWizard ? null : /* @__PURE__ */ h(NavBar, { tabs, cur: curTab, go, mark, dirtyOf: tabDirty, subRef: tabsRef }), showWizard ? null : /* @__PURE__ */ h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })), showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser" && !(curTab.id === "memory" && m.id === "memory")).map((m) => /* @__PURE__ */ h("div", { key: "embed-" + m.id, style: { marginTop: 14 } }, /* @__PURE__ */ h(ExtPage, { ...props, mod: m.id, embedded: true }))), dirty && !showWizard ? /* @__PURE__ */ h("div", { className: "ab-savebar" }, /* @__PURE__ */ h("span", { className: "msg" }, "有改动还没保存"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small" }, /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Ctrl"), " + ", /* @__PURE__ */ h("span", { className: "ab-kbd" }, "S")), /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => setDraft(clone(st.config)) }, "撤销"), /* @__PURE__ */ h(Btn, { kind: "primary", onClick: () => save() }, "保存设置")) : null), toastMsg ? /* @__PURE__ */ h("div", { className: cx("ab-toast", toastMsg.kind), role: "status" }, toastMsg.text) : null);
+  const gwText = cfg.gateway === "onebot" ? "OneBot" : "SnowLuma " + (st.snowluma.installed ? st.snowluma.running ? "运行中" : "没启动" : "未安装");
+  return /* @__PURE__ */ h("div", { className: "ab-root", ref: rootRef }, /* @__PURE__ */ h("div", { className: "ab-wrap" }, /* @__PURE__ */ h("header", { className: "ab-topbar" }, /* @__PURE__ */ h("div", { className: "ab-topbar-id" }, /* @__PURE__ */ h("button", { type: "button", className: "ab-avatar-btn", title: "点击换头像", onClick: () => pickAvatar(toast, reload) }, /* @__PURE__ */ h("img", { className: "ab-avatar", src: avatarSrc(st), alt: "头像" }), /* @__PURE__ */ h("span", { className: "ab-avatar-tip" }, "换头像")), /* @__PURE__ */ h("div", { className: "ab-topbar-main" }, /* @__PURE__ */ h("div", { className: "ab-topbar-title" }, /* @__PURE__ */ h("h1", null, st.onebot.login && st.onebot.login.nickname || "大肥鱼"), /* @__PURE__ */ h(Pill, { kind: status.cls }, /* @__PURE__ */ h("i", { className: cx("ab-dot", status.cls) }), status.text)), /* @__PURE__ */ h("div", { className: "ab-meta" }, /* @__PURE__ */ h("span", null, "QQ ", cfg.botQQ || "未填"), /* @__PURE__ */ h("span", { className: "ab-meta-sep", "aria-hidden": "true" }, "·"), /* @__PURE__ */ h("span", null, persona ? persona.name : "默认人格"), /* @__PURE__ */ h("span", { className: "ab-meta-sep", "aria-hidden": "true" }, "·"), /* @__PURE__ */ h("span", null, gwText), /* @__PURE__ */ h("span", { className: "ab-meta-sep", "aria-hidden": "true" }, "·"), /* @__PURE__ */ h("span", null, "v", st.version))), !showWizard ? /* @__PURE__ */ h("button", { type: "button", className: "ab-mfind-trigger", "aria-label": "查找功能", title: "查找功能", onClick: () => setFind("") }, navIcon(SEARCH_ICON)) : null), /* @__PURE__ */ h("div", { className: "ab-topbar-side" }, /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", null, "总开关"), /* @__PURE__ */ h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle("enabled", v) })), /* @__PURE__ */ h("span", { className: "ab-topbar-div", "aria-hidden": "true" }), /* @__PURE__ */ h("div", { className: "ab-switch-row" }, /* @__PURE__ */ h("span", { className: "ab-muted" }, "试运行"), /* @__PURE__ */ h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle("dryRun", v), title: "开着时只写日志，不真的发到 QQ" })))), showWizard ? /* @__PURE__ */ h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null, showWizard ? null : /* @__PURE__ */ h(NavBar, { tabs, cur: curTab, go, onScrollTop: scrollTop, mark, dirtyOf: tabDirty, subRef: tabsRef, find, setFind }), showWizard ? null : /* @__PURE__ */ h("div", { className: "ab-page-body" }, /* @__PURE__ */ h(TabBoundary, { key: curTab.id, onHome: () => go("overview") }, h(body, { ...props, mod: curTab.ext })), curTab.ext ? null : mods.filter((m) => hasUi(m) && tabOf(m) === curTab.id && m.id !== "multi-parser" && !(curTab.id === "memory" && m.id === "memory")).map((m) => /* @__PURE__ */ h("div", { key: "embed-" + m.id, className: "ab-embed-wrap" }, /* @__PURE__ */ h(ExtPage, { ...props, mod: m.id, embedded: true })))), dirty && !showWizard ? /* @__PURE__ */ h("div", { className: "ab-savebar" }, /* @__PURE__ */ h("span", { className: "msg" }, "有改动还没保存"), /* @__PURE__ */ h("span", { className: "ab-muted ab-small ab-savebar-kbd" }, /* @__PURE__ */ h("span", { className: "ab-kbd" }, "Ctrl"), " + ", /* @__PURE__ */ h("span", { className: "ab-kbd" }, "S")), /* @__PURE__ */ h("div", { className: "ab-savebar-acts" }, /* @__PURE__ */ h(Btn, { kind: "ghost", onClick: () => setDraft(clone(st.config)) }, "撤销"), /* @__PURE__ */ h(Btn, { kind: "primary", onClick: () => save() }, "保存设置"))) : null), toastMsg ? /* @__PURE__ */ h("div", { className: cx("ab-toast", toastMsg.kind), role: "status" }, toastMsg.text) : null);
 }
 
 // client/src/entry.js

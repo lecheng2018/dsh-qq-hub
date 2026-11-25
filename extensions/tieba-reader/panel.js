@@ -7,6 +7,21 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
   const dirty = Object.keys({ ...settings, ...cfg }).some(key => JSON.stringify(settings[key]) !== JSON.stringify(cfg[key]));
   const editable = typeof setSettings === 'function';
   const set = (key, value) => { if (editable) setSettings({ [key]: value }); else toast('请更新 Aurabot 面板以支持底部统一保存。'); };
+  // 数字框的暂存：输入过程中不归一（能清空、能敲「1」再敲「0」），失焦才提交。
+  const [typed, setTyped] = useState({});
+  const numeric = (key) => (key in typed ? typed[key] : (cfg[key] ?? ''));
+  const commit = (key, min, max) => {
+    const text = String(numeric(key)).trim();
+    // 空 / 非数字 = 没填：存 ''（模块侧 bounded() 回落默认值 = 恢复默认），框里也保持空着
+    if (!text || !/^[-+]?(\d+(\.\d*)?|\.\d+)$/.test(text)) {
+      setTyped((t) => ({ ...t, [key]: '' }));
+      set(key, '');
+      return;
+    }
+    const v = Math.min(max, Math.max(min, Math.round(Number(text))));
+    setTyped((t) => ({ ...t, [key]: String(v) }));
+    set(key, v);
+  };
   const enabled = cfg.enabled !== false;
   const loginPending = Boolean(state?.browser?.loginPending);
   const account = state?.browser?.account;
@@ -22,7 +37,18 @@ return function Panel({ settings, draftSettings, setSettings, toast }) {
     catch(e) { toast(e.message); }
     finally { setBusy(''); }
   };
-  const number = (key, min, max) => h('input', { className: 'ab-input', type: 'number', min, max, step: 1, value: cfg[key] ?? '', onChange: e => set(key, e.target.value === '' ? '' : Number(e.target.value)), onBlur: e => set(key, Math.min(max, Math.max(min, Math.round(Number(e.target.value) || min)))), style: { width: 100 } });
+  // 数字框（2026-11-24 统一口径）：输入过程只进暂存，失焦 / 回车才提交。
+// 旧写法 onChange 逐键赋值、onBlur 又 `Number(v) || min` 夹一遍 —— 清空后失焦直接被夹回
+// 下限（浏览间隔跳成 10），框里那个数字删不掉；敲「1」再敲「0」的中间态也会被改写。
+// 现在：中间态保持原样，空值原样存 ''（模块侧 bounded() 会回落到默认值 = 恢复默认）。
+const number = (key, min, max) => h('input', {
+    className: 'ab-input', type: 'number', min, max, step: 1,
+    value: numeric(key),
+    onChange: (e) => setTyped((t) => ({ ...t, [key]: e.target.value })),
+    onBlur: () => commit(key, min, max),
+    onKeyDown: (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(key, min, max) } },
+    style: { width: 100 },
+  });
   const locked = Boolean(busy);
   return h('div', { className: 'ab-grid' },
     !editable ? h('p', { className: 'ab-note' }, '当前 Aurabot 面板缺少草稿接口，请更新面板后使用底部统一保存。') : null,

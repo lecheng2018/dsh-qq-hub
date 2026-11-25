@@ -44,12 +44,13 @@ function Douyin({ draft, setDraft, toast }) {
   return (
     <div className="ab-grid">
       <Card
-        title="刷抖音" right={f.sw('douyin.enabled')}
-        desc="她用一个专用浏览器（独立的登录资料，不碰你平时用的浏览器）刷抖音：定时打开推荐，一个个点开看，读标题、分类、内容摘要和热评，再决定点不点赞、评不评论（特别想让你看的会在评论里 @你）、要不要分享给你。总开关默认关：先扫码登录，再打开。"
+        title="抖音账号与绑定" right={f.sw('douyin.enabled')}
+        desc="使用专用浏览器（独立登录资料，不碰平时用的浏览器）登录机器人账号并绑定主人；支持评论区 @你、私信互动与分享。总开关默认关：先扫码登录，再打开。"
         more={'浏览器窗口放在屏幕外，不抢前台。你在 QQ 里发抖音链接，她也能点开看完再聊。'}
       >
+        <div className="ab-section-title" style={{ marginTop: 4 }}>机器人账号</div>
         <Row label="抖音账号" hint="建议用小号。扫一次码就行，登录状态存在专用浏览器里">
-          <div>
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
             <div className="ab-flex">
               <Btn small kind="primary" onClick={startLogin} disabled={!!busy || !!login}>{busy === 'login' ? '正在打开浏览器…' : login ? '等你扫码…' : '扫码登录'}</Btn>
               <Btn small onClick={async () => { setBusy('check'); const r = await get('/douyin/account'); setBusy(''); setS({ ...(s || {}), account: r }) }} disabled={!!busy}>{busy === 'check' ? '检查中…' : '检查登录'}</Btn>
@@ -78,16 +79,17 @@ function Douyin({ draft, setDraft, toast }) {
           </div>
         </Row>
         <Row label="浏览器路径" hint="留空 = 自动找 Edge（找不到再找 Chrome / Chromium）">{f.text('douyin.browserPath', { size: 'wide', placeholder: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' })}</Row>
-      </Card>
-      <Card
-        title="主人抖音号"
-        desc="填你的抖音号或主页链接，点「核对」。核对过之后，她刷到特别想让你看的视频，会在评论里真的 @你（你会收到抖音通知；认不出你就不发，不会发假 @）。改了输入要重新核对。"
-      >
-        <Row label="你的抖音号 / 主页链接">{f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })}</Row>
-        <div className="ab-flex" style={{ marginTop: 4 }}>
-          <Btn small kind="primary" onClick={act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' })} disabled={!!busy}>{busy === 'confirm' ? '核对中…' : '核对'}</Btn>
-          {s && s.owner ? <span className="ab-small" style={{ color: 'var(--ab-ok)' }}>已核对：{s.owner.nickname}</span> : <span className="ab-small ab-muted">还没核对（不核对就不会 @你）</span>}
-        </div>
+
+        <div className="ab-section-title">主人账号绑定</div>
+        <Row label="你的抖音号 / 主页链接" hint="填你的抖音号或主页链接，点「核对」。核对后刷到好玩的视频会在评论里真的 @你（你会收到抖音通知；认不出你就不发）。">
+          <div style={{ flex: 1, minWidth: 0, width: '100%' }}>
+            {f.text('douyin.owner.input', { size: 'wide', placeholder: '抖音号，或 https://www.douyin.com/user/…' })}
+            <div className="ab-flex" style={{ marginTop: 6 }}>
+              <Btn small kind="primary" onClick={act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' })} disabled={!!busy}>{busy === 'confirm' ? '核对中…' : '核对'}</Btn>
+              {s && s.owner ? <span className="ab-small" style={{ color: 'var(--ab-ok)' }}>已核对：{s.owner.nickname}</span> : <span className="ab-small ab-muted">还没核对（不核对就不会 @你）</span>}
+            </div>
+          </div>
+        </Row>
       </Card>
       <Card
         title="抖音私信"
@@ -99,13 +101,13 @@ function Douyin({ draft, setDraft, toast }) {
           {f.sw('douyin.commentReply')}
         </Row>
         <Row label="多久看一次评论回复">
-          {f.num('douyin.commentReplyPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
+          {f.num('douyin.commentReplyPollMinutes', { min: 1, max: 60, fallback: 5 })}<span className="ab-muted">分钟</span>
         </Row>
         <Row label="分享卡片后补一句" hint="抖音私信里发完视频卡片，再跟一句她自己想说的话（有概率触发，默认关）">
           {f.sw('douyin.shareDmText')}
         </Row>
         <Row label="多久看一次">
-          {f.num('douyin.dmPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
+          {f.num('douyin.dmPollMinutes', { min: 1, max: 60, fallback: 3 })}<span className="ab-muted">分钟</span>
           <Btn small onClick={act('/douyin/dms', 'dms')} disabled={!!busy}>{busy === 'dms' ? '正在看…' : '现在看一次'}</Btn>
         </Row>
       </Card>
@@ -114,9 +116,9 @@ function Douyin({ draft, setDraft, toast }) {
         <Row label="多久刷一轮">{f.range('douyin.intervalHours', 1, 24, 1, (v) => v + ' 小时')}</Row>
         <Row label="每天最多刷">{f.range('douyin.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')}</Row>
         <Row label="一轮看几个">{f.range('douyin.perRun', 1, 10, 1, (v) => v + ' 个')}</Row>
-        <Row label="每天最多看">{f.num('douyin.maxWatchPerDay', { min: 0, max: 200 })}<span className="ab-muted">个（含手动）</span></Row>
+        <Row label="每天最多看">{f.num('douyin.maxWatchPerDay', { min: 0, max: 200, fallback: 30 })}<span className="ab-muted">个（含手动）</span></Row>
         <Row label="每个视频停留" hint="真的在播放；停得越短越不像真人">
-          {f.num('douyin.dwellMin', { min: 3 })}<span className="ab-muted">～</span>{f.num('douyin.dwellMax', { min: 3 })}<span className="ab-muted">秒</span>
+          {f.num('douyin.dwellMin', { min: 3, fallback: 8 })}<span className="ab-muted">～</span>{f.num('douyin.dwellMax', { min: 3, fallback: 40 })}<span className="ab-muted">秒</span>
         </Row>
         <Row label="分享到哪" hint="抖音私信要先核对你的抖音号；没核对或者发不出去时会改发 QQ">
           {f.choices('douyin.shareTo', [
@@ -134,13 +136,13 @@ function Douyin({ draft, setDraft, toast }) {
         </Row>
       </Card>
       <Card title="每天上限" desc="刚登录的号前几天上限自动减半（新号猛点赞最容易被风控）。遇到验证码 / 操作频繁当天就停手，看还能看。权限在「权限」页单独设（默认仅主人）。">
-        <Row label="点赞">{f.num('douyin.caps.like', { min: 0, max: 300 })}</Row>
-        <Row label="评论">{f.num('douyin.caps.comment', { min: 0, max: 30 })}</Row>
-        <Row label="分享给你">{f.num('douyin.caps.share', { min: 0, max: 30 })}</Row>
-        <Row label="评论里 @你" hint="也算在评论次数里">{f.num('douyin.caps.atOwner', { min: 0, max: 30 })}</Row>
-        <Row label="点赞 + 评论合计">{f.num('douyin.gate.maxWritesPerDay', { min: 1, max: 500 })}</Row>
-        <Row label="两次点赞 / 评论间隔">{f.num('douyin.gate.minWriteGapSec', { min: 0, max: 600 })}<span className="ab-muted">秒</span></Row>
-        <Row label="新号减半">{f.num('douyin.gate.newAccountDays', { min: 0, max: 30 })}<span className="ab-muted">天</span></Row>
+        <Row label="点赞">{f.num('douyin.caps.like', { min: 0, max: 300, fallback: 30 })}</Row>
+        <Row label="评论">{f.num('douyin.caps.comment', { min: 0, max: 30, fallback: 3 })}</Row>
+        <Row label="分享给你">{f.num('douyin.caps.share', { min: 0, max: 30, fallback: 5 })}</Row>
+        <Row label="评论里 @你" hint="也算在评论次数里">{f.num('douyin.caps.atOwner', { min: 0, max: 30, fallback: 3 })}</Row>
+        <Row label="点赞 + 评论合计">{f.num('douyin.gate.maxWritesPerDay', { min: 1, max: 500, fallback: 30 })}</Row>
+        <Row label="两次点赞 / 评论间隔">{f.num('douyin.gate.minWriteGapSec', { min: 0, max: 600, fallback: 20 })}<span className="ab-muted">秒</span></Row>
+        <Row label="新号减半">{f.num('douyin.gate.newAccountDays', { min: 0, max: 30, fallback: 7 })}<span className="ab-muted">天</span></Row>
       </Card>
       <Card
         title="她刷过什么"

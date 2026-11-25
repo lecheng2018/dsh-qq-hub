@@ -85,6 +85,10 @@ const STYLE_INJECTION = `
   align-items: flex-end;
   flex-wrap: wrap;
 }
+.distill-history-grid .ab-row {
+  border-top: 0;
+  padding: 0;
+}
 @media (max-width: 720px) {
   .distill-meta-bar {
     flex-direction: column;
@@ -111,6 +115,9 @@ const STYLE_INJECTION = `
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
+  }
+  .distill-history-grid > div:last-child {
+    margin-left: 0 !important;
   }
   .distill-history-grid .ab-btn {
     width: 100%;

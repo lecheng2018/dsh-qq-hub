@@ -31,7 +31,7 @@ function PaintGallery({ draft, setDraft, toast }) {
         </div>
       )}
     >
-      <Row label="面板显示最近" hint="最多 50 张；只影响面板显示，不删文件">{f.num('imageGen.galleryShown', { min: 1, max: 50 })}<span className="ab-muted">张</span></Row>
+      <Row label="面板显示最近" hint="最多 50 张；只影响面板显示，不删文件">{f.num('imageGen.galleryShown', { min: 1, max: 50, fallback: 20 })}<span className="ab-muted">张</span></Row>
       {data && data.dir ? <div className="ab-muted ab-small" style={{ margin: '4px 0 8px', wordBreak: 'break-all' }}>存图目录：{data.dir}</div> : null}
       {!data
         ? <Empty icon="⏳" text="加载中…" />
@@ -160,8 +160,8 @@ function ImageGen({ draft, setDraft, toast }) {
             {params.length
               ? params.map((p, i) => (
                 <div key={i} className="ab-flex" style={{ gap: 6, marginBottom: 6 }}>
-                  <input className="ab-input" style={{ width: 170 }} value={p.key || ''} placeholder="参数名，如 model" onChange={(e) => setP(i, 'key', e.target.value)} />
-                  <input className="ab-input" style={{ flex: 1 }} value={p.value || ''} placeholder="值，可以用 {prompt}" onChange={(e) => setP(i, 'value', e.target.value)} />
+                  <input className="ab-input" style={{ flex: '1 1 130px' }} value={p.key || ''} placeholder="参数名，如 model" onChange={(e) => setP(i, 'key', e.target.value)} />
+                  <input className="ab-input" style={{ flex: '2 1 160px' }} value={p.value || ''} placeholder="值，可以用 {prompt}" onChange={(e) => setP(i, 'value', e.target.value)} />
                   <Btn small onClick={() => setParams(params.filter((_, j) => j !== i))}>删</Btn>
                 </div>
               ))

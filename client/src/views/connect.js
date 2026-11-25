@@ -127,6 +127,24 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
   )
   return (
     <div className="ab-grid">
+      <Card title="连接状态" desc="实时查看 QQ 网关通信状态与已接入的账号。">
+        <div className="ab-kv">
+          <span>QQ 网关</span>
+          <span>
+            <span className="ab-flex"><i className={cx('ab-dot', conn ? 'ok' : st.onebot.state === 'connecting' ? 'warn' : 'err')} />{STATE_TEXT[st.onebot.state] || st.onebot.state}</span>
+          </span>
+          <span>登录的号</span>
+          <span>{login ? login.nickname + '（' + login.uin + '）' + (login.uin !== draft.botQQ ? ' ⚠ 不是机器人号！' : '') : '—'}</span>
+          <span>HTTP</span><span>{st.onebot.endpoint.httpUrl || '—'}</span>
+          <span>WebSocket</span><span>{st.onebot.endpoint.wsUrl || '—'}</span>
+        </div>
+        {!conn && st.onebot.problem ? <div className="ab-note warn" style={{ marginTop: 10 }}>{st.onebot.problem}</div> : null}
+        <div className="ab-flex" style={{ marginTop: 10 }}>
+          <Btn small kind="primary" onClick={async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() }}>重新连接</Btn>
+          <Btn small onClick={async () => { const r = await get('/onebot/test'); toast(r.message) }}>测试连接</Btn>
+        </div>
+      </Card>
+
       <Card title="用什么接 QQ" right={openWizard ? <Btn small kind="ghost" onClick={openWizard}>重新走一遍设置向导</Btn> : null}>
         <GatewayChoice draft={draft} setDraft={setDraft} />
       </Card>
@@ -195,20 +213,22 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
           {procs ? (
             <div style={{ marginTop: 14 }}>
               {procs.length === 0 ? <div className="ab-muted">没找到 QQ 进程。</div> : (
-                <table className="ab-table">
-                  <thead><tr>{['进程', '登录的号', '昵称', '状态', ''].map((x) => <th key={x}>{x}</th>)}</tr></thead>
-                  <tbody>
-                    {procs.map((p) => (
-                      <tr key={p.pid}>
-                        <td>{p.pid}</td>
-                        <td>{p.uin || '识别不出'}</td>
-                        <td>{p.nickname || '—'}</td>
-                        <td>{p.injected ? (p.connected ? '已接入' : '已注入，连接中') : '未接入'}</td>
-                        <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="ab-table-wrap">
+                  <table className="ab-table">
+                    <thead><tr>{['进程', '登录的号', '昵称', '状态', ''].map((x) => <th key={x}>{x}</th>)}</tr></thead>
+                    <tbody>
+                      {procs.map((p) => (
+                        <tr key={p.pid}>
+                          <td>{p.pid}</td>
+                          <td>{p.uin || '识别不出'}</td>
+                          <td>{p.nickname || '—'}</td>
+                          <td>{p.injected ? (p.connected ? '已接入' : '已注入，连接中') : '未接入'}</td>
+                          <td>{p.isBot ? <span className="ab-badge">机器人号</span> : <span className="ab-muted ab-small">不会碰</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           ) : null}
@@ -216,7 +236,8 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
       )}
 
       <Card
-        title="QQ 会话放在哪"
+        collapse
+        title="QQ 会话放在哪（工作区路径）"
         desc="每个 QQ 私聊 / 群都是 DSH 里「QQ Hub」工作区下的一个会话，她在会话里读写文件也在这个文件夹。改了以后新开的会话放到新位置。"
         more={'想把她已有的会话全部挪到新位置：改完保存后去「概览」点「重新开始所有 QQ 会话」（旧会话在 DSH 侧栏的归档里还能找到）。'}
       >
@@ -226,27 +247,10 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
         <div className="ab-muted ab-small">现在用的：{st.workspaceDir || '—'}</div>
       </Card>
 
-      <Card title="连接状态">
-        <div className="ab-kv">
-          <span>QQ 网关</span>
-          <span>
-            <span className="ab-flex"><i className={cx('ab-dot', conn ? 'ok' : st.onebot.state === 'connecting' ? 'warn' : 'err')} />{STATE_TEXT[st.onebot.state] || st.onebot.state}</span>
-          </span>
-          <span>登录的号</span>
-          <span>{login ? login.nickname + '（' + login.uin + '）' + (login.uin !== draft.botQQ ? ' ⚠ 不是机器人号！' : '') : '—'}</span>
-          <span>HTTP</span><span>{st.onebot.endpoint.httpUrl || '—'}</span>
-          <span>WebSocket</span><span>{st.onebot.endpoint.wsUrl || '—'}</span>
-        </div>
-        {!conn && st.onebot.problem ? <div className="ab-note warn" style={{ marginTop: 10 }}>{st.onebot.problem}</div> : null}
-        <div className="ab-flex" style={{ marginTop: 10 }}>
-          <Btn small onClick={async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() }}>重新连接</Btn>
-        </div>
-      </Card>
-
       {external ? null : (
-        <Card title="高级" desc="一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。">
+        <Card collapse title="高级网关参数" desc="一般不用动：地址和令牌会自动从 SnowLuma 的配置里读。">
           <Row label="机器人 QQ 号">{f.text('botQQ')}</Row>
-          <Row label="控制台端口">{f.num('snowluma.webuiPort', { min: 1, max: 65535 })}</Row>
+          <Row label="控制台端口">{f.num('snowluma.webuiPort', { min: 1, max: 65535, fallback: 5099 })}</Row>
           <Row label="控制台密码" hint="默认由插件自动生成。想自己定一个就填在这里，保存后会真的改到 SnowLuma 上（至少 10 位，要有大小写字母和符号）">
             {f.text('snowluma.webuiPassword', { type: 'password', placeholder: draft.snowluma.webuiPasswordSet ? (draft.snowluma.passwordAuto ? '自动管理中（不改就留空）' : '已保存（不改就留空）') : '留空 = 自动' })}
           </Row>

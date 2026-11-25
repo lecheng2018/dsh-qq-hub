@@ -15,7 +15,7 @@ function Logs() {
       title="日志"
       desc="所有后台动作都在这里，令牌和密码已自动打码。完整日志文件在 %USERPROFILE%\\.dsh\\plugins-data\\dsh-qq-hub\\logs\\（老安装为 aurabot\\）。"
       right={(
-        <div className="ab-flex">
+        <div className="ab-toolbar">
           <Select value={level} onChange={setLevel} width={110} options={[['debug', '全部'], ['info', '一般'], ['warn', '警告'], ['error', '错误']].map(([value, label]) => ({ value, label }))} />
           <Select
             value={area} onChange={setArea} width={130}

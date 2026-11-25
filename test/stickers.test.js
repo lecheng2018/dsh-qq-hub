@@ -58,11 +58,11 @@ test('#31 面板改名字 / 标签：去掉 #、去重、最多 5 个，名字�
   const store = createStickerStore({ dsh: {}, getConfig: () => cfg, onebot: { call: async () => ({}) }, log })
   await store.collect({ type: 'image', data: { url: 'base64://' + gif(3).toString('base64'), sub_type: 1 } }, 'private:1')
   const md5 = store.library().items[0].md5
-  const r = store.rename(md5, '  一个特别特别长的表情名字超过十二个字  ', ['#开心', '开心', '卖萌', '', '一二三四五六七八九', 'a', 'b', 'c'])
+  const r = await store.rename(md5, '  一个特别特别长的表情名字超过十二个字  ', ['#开心', '开心', '卖萌', '', '一二三四五六七八九', 'a', 'b', 'c'])
   assert.equal(r.ok, true)
   assert.equal(r.item.name, '一个特别特别长的表情名字')
   assert.deepEqual(r.item.tags, ['开心', '卖萌', '一二三四五六七八', 'a', 'b'])
-  assert.equal(store.rename('nope', 'x').ok, false)
+  assert.equal((await store.rename('nope', 'x')).ok, false)
 })
 
 test('表情包双轨制：静态图上限5MB，GIF动图允许放宽至10MB以下', async () => {
