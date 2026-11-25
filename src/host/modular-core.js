@@ -967,7 +967,7 @@ export function createModularCore({
       }
     }
     const fresh = buf.filter((x) => !x.fed).slice(-20)
-    const older = buf.filter((x) => x.fed).slice(-8)
+    const older = buf.filter((x) => x.fed).slice(-4)
     // fed 不在这里标（缺陷：群缓冲静默丢消息）。旧版 `for (const x of buf) x.fed = true`
     // 有两个丢消息口子：① 一次把整段 buf 标 fed，突发超过 20 条时**未选中**的新消息也被
     // 标 fed，永远进不了上下文；② 标在 followup 之前，回合若在模型消费前失败，这些消息
@@ -1006,7 +1006,7 @@ export function createModularCore({
     const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
     const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(block).join('\n')}\n\n` : '') +
       `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
-      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
+      '把这一段当成整体来回：只接当下还在聊的最新话题，一般说一两句短话就好；已经翻篇的旧话或无关消息直接略过，不要把几个不同话题硬拼进一条回复，不要一条一条地挨个回。\n' +
       '若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。\n' +
       '下方缩进一行、以「↳ 转述」开头的，是这条发言人在引用别人的原话：那句话的主人是「↳ 转述」后面写的那个名字，不是写这条消息的人。要回应转述里的内容，就引用它真正的主人；不确定是谁就干脆不引用，在正文里点名说。\n' +
       '大多数时候直接说就行。只有想专门接上面方括号标出的某一条新消息时，才在那句话开头写 <reply:…>，会以「引用回复」发出；一次最多引用一条。写法三选一，都认：\n' +
