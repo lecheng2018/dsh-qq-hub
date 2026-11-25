@@ -16,6 +16,7 @@ import { join } from 'node:path'
 let createPurpose
 let purposeConfig
 let cleanReply
+let deliveryOutcome
 let engine
 const OWNER = '10000001'
 const MIN = 60_000
@@ -24,7 +25,7 @@ let dataRoot = ''
 before(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'aurabot-purpose-'))
   process.env.AURABOT_DATA_DIR = dataRoot
-  ;({ createPurpose, purposeConfig, cleanReply } = await import('../src/purpose/module.js'))
+  ;({ createPurpose, purposeConfig, cleanReply, deliveryOutcome } = await import('../src/purpose/module.js'))
   engine = await import('../src/purpose/engine.js')
 })
 
@@ -313,6 +314,43 @@ test('silent：模型回 [沉默] 时不投递、结局记 silent，但不白占
   assert.ok(s.nextFireAt >= Date.now() + 5 * MIN - 1000, '照常排下一枪')
 })
 
+// 真机 2026-11-25：08:00/09:40/12:32 三轮其实一条都没发出去，状态里却全是 sent，
+// 历史也记成「最近已经主动说过」。根因是 runOnce 用 `typeof r === 'object'` 判成功，
+// 而 reply-delivery 沉默（state:'silent'）与失败（state:'failed'）同样返回对象。
+test('投递回执：按 state 如实映射结局，沉默/失败不能说成 sent', () => {
+  assert.equal(deliveryOutcome({ state: 'sent', delivered: 2 }), 'sent')
+  assert.equal(deliveryOutcome({ state: 'partial', delivered: 1, failedCount: 1 }), 'sent', '部分送达也算发出去了')
+  assert.equal(deliveryOutcome({ state: 'silent', delivered: 0 }), 'silent', '她选择不说话')
+  assert.equal(deliveryOutcome({ state: 'skipped', delivered: 0 }), 'silent', '空回合等于没说')
+  assert.equal(deliveryOutcome({ state: 'failed', delivered: 0 }), 'delivery-failed')
+  assert.equal(deliveryOutcome(undefined), 'silent')
+  assert.equal(deliveryOutcome(null), 'silent')
+  assert.equal(deliveryOutcome({ missedAt: [] }), 'sent', '旧测试桩无 state 字段，兼容为 sent')
+})
+
+test('投递回执接线：deliver 返回 state:silent 时结局记 silent，不写进「最近已说过」', async () => {
+  const hub = makeHub({ reply: '今晚早点睡呀' })
+  // 模拟真实 reply-delivery：这一轮被判沉默（网关没发出去）
+  hub.deliver = async function (chatId, text) { this.delivered.push({ chatId, text }); return { state: 'silent', delivered: 0, items: [] } }
+  const { p } = makePurpose(hub)
+  await setupTick(p, hub)
+  assert.equal(hub.delivered.length, 1, '仍会尝试投递')
+  const s = JSON.parse(readFileSync(stateFile(), 'utf8'))
+  assert.equal(s.lastOutcome, 'silent', '没说出去就不能记 sent')
+  const sentHistory = (s.history || []).filter((h) => h.outcome === 'sent')
+  assert.equal(sentHistory.length, 0, '「最近已说过」不能混进没发出去的轮次')
+})
+
+test('投递回执接线：deliver 返回 state:failed 时结局记 delivery-failed 并进失败重试', async () => {
+  const hub = makeHub({ reply: '今晚早点睡呀' })
+  hub.deliver = async function (chatId, text) { this.delivered.push({ chatId, text }); return { state: 'failed', delivered: 0, items: [] } }
+  const { p } = makePurpose(hub)
+  await setupTick(p, hub)
+  const s = JSON.parse(readFileSync(stateFile(), 'utf8'))
+  assert.equal(s.lastOutcome, 'delivery-failed')
+  assert.ok(s.attempts >= 1, '投递失败进重试计数')
+})
+
 test('silent：模型只输出内部备忘（跳过）也被清洗成 silent', async () => {
   const raw = '【目的】无\n【需求】陪\n【类型】分享\n【状态】跳过\n【待续】无'
   assert.equal(cleanReply(raw), '')
@@ -326,6 +364,24 @@ test('清洗：去掉备忘段、引号和「角色名：」前缀', () => {
   assert.equal(cleanReply('大肥鱼：想你了', '大肥鱼'), '想你了')
   assert.equal(cleanReply('小鲸：想你了', '小鲸'), '想你了')
   assert.equal(cleanReply('小鲸：想你了', '大肥鱼'), '小鲸：想你了', '不认识的署名不当前缀乱洗')
+})
+
+// 真机 2026-11-25 08:00 / 09:40 / 12:32：这一轮的三条正文全都没发出去。
+// 根因：cleanReply 当时直接调 stripInternalMemo(raw)，而模型回包是
+// `<inner>【意图】…【闭环】…</inner>正文|||正文\n\n内部备忘\n【目的】…`。
+// stripInternalMemo 命中 <inner> 里的【意图】/【闭环】 后在正文前就切了，
+// 返回字面量 "<inner>"；随后 parseReply 把未闭合标签整段剥掉 → silent → 一字未发。
+test('清洗：带 <inner> 的 purpose 回包先剥独白，正文和 ||| 分条都要留下', () => {
+  const raw = '<inner>\n【意图】早八犯困无聊，随口戳老哥看他昨晚熬到一点半今天起没起得来\n【闭环】\n【情感】犯困、随性\n【备忘】无聊等他醒了唠嗑，昨天的插件还没说完\n</inner>早八要困死了|||昨晚熬那么晚你起得来吗\n\n内部备忘\n【目的】早八犯困无聊戳他一下看起没起床\n【需求】陪\n【情绪】早起犯困\n【类型】关心\n【状态】完成\n【待续】等他醒了再随口扯扯插件的事'
+  assert.equal(cleanReply(raw), '早八要困死了|||昨晚熬那么晚你起得来吗')
+  // 备忘实测照样能解析出来（清洗只影响要发的话，不影响状态机输入）
+  assert.equal(engine.parsePurposeMemo(raw).purpose, '早八犯困无聊戳他一下看起没起床')
+})
+
+test('清洗：整轮只有 <inner> 独白 + 内部备忘（跳过）时是沉默，不留 "<inner>" 残渣', () => {
+  const raw = '<inner>\n【意图】哥还没起，按计划不追了\n【闭环】\n【情感】平静\n【备忘】等下午看他冒不冒泡再说\n</inner>[沉默]\n\n内部备忘\n【目的】无\n【需求】陪\n【状态】跳过\n【待续】无'
+  assert.equal(cleanReply(raw), '')
+  assert.equal(engine.parsePurposeMemo(raw).status, '跳过')
 })
 
 // ---------- 素材适配（记忆 importance 0~1 → 0~100） ----------

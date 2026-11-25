@@ -62,10 +62,138 @@ export function hasInnerBlock(text) {
   return /<inner(?![A-Za-z0-9_-])[^>]*>/i.test(String(text ?? '')) && splitInnerBlocks(text).some((part) => part.type === 'inner')
 }
 
+// ---- 内部备忘块（purpose 回合的「内部备忘 + 【目的】…」）----
+//
+// 背景：目的引擎的提示词要求「发完在回合最后另起一段写『内部备忘』」，模型就把它写在
+// `</inner>` 之后的正文里（真机 2026-11-25 08:00 / 09:40 / 12:32）。它同样不该让主人
+// 在会话里读到，但也不在 <inner> 标签内，所以上面那套折叠管不到，这里单独认一份。
+//
+// 口径与出站清洗（src/chat/reply.js: stripInternalMemo）一致，只在显示层生效：
+// 认小标题（【内部备忘】/ 内部备忘： / 无冒号裸行「内部备忘」+ 换行或标签），
+// 也认「没有小标题、但出现两个以上行首标签」的兜底写法。
+
+/** 备忘块里会出现的结构化标签词。 */
+const MEMO_LABEL_WORD = String.raw`(?:目的|需求|情绪|情感|类型|状态|待续|意图|闭环|备忘|顺承前情)`
+/** 小标题：允许标题号、加粗、方括号、中英引号、「·说明」/「（不发）」后缀；
+ *  裸行写法后面必须紧跟换行/结尾/`|||`/备忘标签，否则「内部备忘发我看看」这类正常句子会被误折。 */
+const MEMO_HEADER_RE = new RegExp(
+  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?[ \t]*(?:`
+  + String.raw`[【\[]\s*[^】\]]{0,6}?备忘(?!录)[^】\]]{0,12}[】\]]`
+  + String.raw`|内部备忘(?!录)[^：:\n]{0,12}[：:]`
+  + String.raw`|(?:[「『]内部备忘(?!录)[^」』\n]{0,12}[」』]|内部备忘(?!录)(?:[ \t]*(?:[（(][^）)\n]{1,16}[）)]|[·•\-—/][^\s\n，。！？!?,;；【\[\]]{1,12}))?)`
+  + String.raw`)[ \t]*(?:\*\*|__)?[ \t]*(?=\r?\n|$|\|\|\||[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]])`,
+)
+/** 行首的结构化标签（兜底：一个不算，两个以上才当备忘块）。 */
+const MEMO_LABEL_RE = new RegExp(
+  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:\*\*|__)?[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]]`,
+  'g',
+)
+
+/**
+ * 这段文字里内部备忘块从哪儿开始（不是备忘块返回 -1）。
+ * 只做显示层切分，不改任何出站逻辑。
+ */
+export function findMemoStart(text) {
+  const s = String(text ?? '')
+  // 便宜的预筛：既没有「备忘」二字、也没有任何方括号，就不可能是备忘块。
+  if (!s.includes('备忘') && !s.includes('【') && !s.includes('[')) return -1
+  const header = MEMO_HEADER_RE.exec(s)
+  if (header) return header.index
+  MEMO_LABEL_RE.lastIndex = 0
+  const first = MEMO_LABEL_RE.exec(s)
+  const second = first ? MEMO_LABEL_RE.exec(s) : null
+  MEMO_LABEL_RE.lastIndex = 0
+  return second ? first.index : -1
+}
+
+/** 按内部备忘块切一刀：`[正文, 备忘]`；没有备忘块时整段都是正文。 */
+export function splitMemoBlocks(text) {
+  const start = findMemoStart(text)
+  if (start < 0) return [{ type: 'text', value: text }]
+  const parts = []
+  const head = String(text).slice(0, start)
+  if (head !== '') parts.push({ type: 'text', value: head })
+  parts.push({ type: 'memo', value: String(text).slice(start) })
+  return parts
+}
+
+/** 这段文字里有没有可折的内部备忘块。 */
+export function hasMemoBlock(text) {
+  return findMemoStart(text) >= 0
+}
+
+/** 心智独白 + 内部备忘，按出现顺序一起切开（显示层唯一的切分入口）。 */
+export function splitFoldableBlocks(text) {
+  const parts = []
+  for (const part of splitInnerBlocks(text)) {
+    if (part.type !== 'text') { parts.push(part); continue }
+    for (const sub of splitMemoBlocks(part.value)) parts.push(sub)
+  }
+  return parts
+}
+
+/** 这段文字里有没有任何可折的块。 */
+export function hasFoldableBlock(text) {
+  const s = String(text ?? '')
+  return hasInnerBlock(s) || hasMemoBlock(s)
+}
+
+// ---- QQ 协议标记的显示层渲染 ----
+//
+// 背景：`<face:白眼>` / `<sticker:开心>` / `<voice>…</voice>` / `<poke>` 是**出站协议**，
+// 她自己会说、也可能被主人写进对话里。DSH 的 Markdown 只会把它们当普通文字（`<face:白眼>`
+// 的冒号让 micromark 不认它是 HTML 标签，于是渲染成黑字），主人翻会话时看到的就是裸标签。
+//
+// 这里把标记换成一个带底色的 chip：让「这是表情/语音/戳一戳」一眼看得出来，
+// 又不去猜 QQ 到底会发哪一张图（那要查表情库，显示层不掺和）。
+// 仍然只改显示，不动会话记录，也不碰任何出站逻辑。
+
+/** 协议标记：`<face:名字>` / `<sticker:名字>` / `<voice>正文</voice>` / `<poke>`。 */
+const MARKUP_RE = /<(?:face|sticker)\s*:\s*([^<>|\n]{1,40}?)\s*(\/?)>(?:\s*<\/sticker>)?|<voice>\s*([\s\S]*?)\s*<\/voice>|<poke\s*\/?>/g
+
+/**
+ * 把一段正文按协议标记切开。
+ *
+ * @param {string} text 一段正文
+ * @returns {Array<{type: 'text'|'face'|'sticker'|'voice'|'poke', value: string}>}
+ */
+export function splitMarkupTags(text) {
+  const s = String(text ?? '')
+  const parts = []
+  let cursor = 0
+  let m
+  MARKUP_RE.lastIndex = 0
+  while ((m = MARKUP_RE.exec(s)) !== null) {
+    if (m.index > cursor) parts.push({ type: 'text', value: s.slice(cursor, m.index) })
+    if (m[1] !== undefined) {
+      parts.push({ type: m[0].toLowerCase().startsWith('<face') ? 'face' : 'sticker', value: m[1] })
+    } else if (m[3] !== undefined) {
+      parts.push({ type: 'voice', value: m[3] })
+    } else {
+      parts.push({ type: 'poke', value: '' })
+    }
+    cursor = m.index + m[0].length
+  }
+  MARKUP_RE.lastIndex = 0
+  if (!parts.length) return [{ type: 'text', value: s }]
+  if (cursor < s.length) parts.push({ type: 'text', value: s.slice(cursor) })
+  return parts
+}
+
+/** 这段文字里有没有协议标记（扫描用）。 */
+export function hasMarkupTag(text) {
+  const s = String(text ?? '')
+  if (!s.includes('<')) return false
+  MARKUP_RE.lastIndex = 0
+  const hit = MARKUP_RE.test(s)
+  MARKUP_RE.lastIndex = 0
+  return hit
+}
+
 /** 聊天流里的节点类型：这些不是「她这一轮说的话」，跳过。 */
 const SKIP_KINDS = new Set(['user', 'steering', 'context', 'turn-trigger', 'system-prompt', 'command'])
-/** 代码块里的 <inner> 是内容，不是独白。 */
-const SKIP_CLOSEST = 'pre, code, .qqhub-inner'
+/** 代码块里的 <inner> 是内容，不是独白；我们自己生成的折叠行 / chip 也不能再被扫一遍。 */
+const SKIP_CLOSEST = 'pre, code, .qqhub-inner, .qqhub-mark'
 const FOLD_ATTR = 'data-qqhub-fold'
 const STYLE_ID = 'qqhub-inner-fold-style'
 /** 折叠行的 class（清理孤儿/重复时按它找）。 */
@@ -73,6 +201,11 @@ const FOLD_CLASS = 'qqhub-inner'
 /** 折叠行记住「我这条盯的是哪个文本节点 / 哪段独白」，重渲染时据此判断该留还是该删。 */
 const FOLD_SRC = 'qqhubFoldSrc'
 const FOLD_SRC_TEXT = 'qqhubFoldText'
+/** 协议标记 chip 的属性与来源标记（重渲染时同样要能清理）。 */
+const MARK_ATTR = 'data-qqhub-mark'
+const MARK_CLASS = 'qqhub-mark'
+const MARK_SRC = 'qqhubMarkSrc'
+const MARK_SRC_TEXT = 'qqhubMarkText'
 
 /**
  * 折叠行的样式：跟 DSH 的「思考」行同一套口径（次级文字色 + 小箭头 + 缩进竖线），
@@ -110,11 +243,24 @@ const STYLE_TEXT = `
    display:block 按特异性盖掉，于是正文永远摊开、点箭头也没反应（真机 2026-11-24 13:07）。 */
 .qqhub-inner-body[hidden],
 .qqhub-inner-body[data-collapsed="true"] { display: none !important; }
+/* 协议标记 chip：底色用主题的 markdown tag 色（缺失时退回淡强调色），
+   描边用次级边框，字色跟正文一致——看起来像个「徽标」，不是句子里的一串尖括号。 */
+.qqhub-mark {
+  display: inline-flex; align-items: baseline; gap: 3px;
+  margin: 0 1px; padding: 0 5px; border-radius: 4px;
+  background: var(--dsw-alias-markdown-tag, color-mix(in srgb, currentColor 10%, transparent));
+  border: 1px solid var(--dsw-alias-border-l2, transparent);
+  color: var(--dsw-alias-label-primary, currentColor);
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  line-height: 1.6; vertical-align: baseline;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.qqhub-mark-icon { opacity: .75; font-size: 1em; }
 @media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
 `
 
-/** 建一个折叠行：一行「思考」+ 展开后的独白原文。只用 textContent，不碰 innerHTML。 */
-function createFold(doc, raw, srcNode) {
+/** 建一个折叠行：一行标题 + 展开后的原文。只用 textContent，不碰 innerHTML。 */
+function createFold(doc, raw, srcNode, title = '思考') {
   const wrap = doc.createElement('span')
   wrap.className = FOLD_CLASS
   wrap.setAttribute(FOLD_ATTR, '')
@@ -126,7 +272,7 @@ function createFold(doc, raw, srcNode) {
   head.type = 'button'
   head.className = 'qqhub-inner-head'
   head.setAttribute('aria-expanded', 'false')
-  head.textContent = '思考'
+  head.textContent = title
   const body = doc.createElement('span')
   body.className = 'qqhub-inner-body'
   // 默认折叠：hidden 属性 + data-collapsed 双保险（样式里两条选择器都写着 display:none），
@@ -146,6 +292,23 @@ function createFold(doc, raw, srcNode) {
   })
   wrap.append(head, body)
   return wrap
+}
+
+/** 建一个协议标记 chip（表情 / 语音 / 戳一戳）。只用 textContent，不碰 innerHTML。 */
+function createMark(doc, kind, value, srcNode) {
+  const chip = doc.createElement('span')
+  chip.className = MARK_CLASS
+  chip.setAttribute(MARK_ATTR, kind)
+  if (srcNode !== undefined) chip[MARK_SRC] = srcNode
+  chip[MARK_SRC_TEXT] = `${kind}:${value}`
+  // 图标只是个小提示符：不引入图片资源，纯文本也不会被当 emoji 字体覆盖。
+  const icon = doc.createElement('span')
+  icon.className = 'qqhub-mark-icon'
+  icon.textContent = kind === 'voice' ? '声' : (kind === 'poke' ? '戳' : '表')
+  const label = doc.createElement('span')
+  label.textContent = kind === 'poke' ? '戳一戳' : String(value ?? '')
+  chip.append(icon, label)
+  return chip
 }
 
 function removeNode(node) {
@@ -173,14 +336,15 @@ function isAttached(node) {
  * 若不清理，多次渲染会导致同一段独白堆叠出多个「思考」行。
  */
 function removeStaleSiblings(node) {
+  const isOurs = (el) => el.hasAttribute?.(FOLD_ATTR) || el.hasAttribute?.(MARK_ATTR)
   let prev = node.previousSibling
-  while (prev && prev.nodeType === 1 && prev.hasAttribute?.(FOLD_ATTR)) {
+  while (prev && prev.nodeType === 1 && isOurs(prev)) {
     const stale = prev
     prev = prev.previousSibling
     removeNode(stale)
   }
   let next = node.nextSibling
-  while (next && next.nodeType === 1 && next.hasAttribute?.(FOLD_ATTR)) {
+  while (next && next.nodeType === 1 && isOurs(next)) {
     const stale = next
     next = next.nextSibling
     removeNode(stale)
@@ -198,14 +362,20 @@ function removeStaleSiblings(node) {
  * 而「同一条消息渲染在两处（过程组 / 回复行）」是**不同的根**，各折各的，不会被这里误删。
  */
 function pruneFolds(root) {
+  // 孤儿清理对折叠行和标记 chip 一视同仁：它们盯着的源文本节点被 React 换掉/摘掉后，
+  // 留在页面上的就都是无主残留（chip 也一样会重复叠出来）。
+  const sweep = (selector, srcKey) => {
+    for (const span of root.querySelectorAll?.(selector) ?? []) {
+      const src = span[srcKey]
+      if (src === undefined || src === null || !isAttached(src)) removeNode(span)
+    }
+  }
+  sweep('.' + FOLD_CLASS, FOLD_SRC)
+  sweep('.' + MARK_CLASS, MARK_SRC)
+
   const latest = new Map()
   const order = []
   for (const span of root.querySelectorAll?.('.' + FOLD_CLASS) ?? []) {
-    const src = span[FOLD_SRC]
-    if (src === undefined || src === null || !isAttached(src)) {
-      removeNode(span)
-      continue
-    }
     const text = String(span[FOLD_SRC_TEXT] ?? '')
     if (!latest.has(text)) order.push(text)
     latest.set(text, span)
@@ -229,13 +399,27 @@ function pruneFolds(root) {
  */
 function foldTextNode(node, doc) {
   if (!node?.parentNode) return false
-  const parts = splitInnerBlocks(node.nodeValue)
-  if (!parts.some((part) => part.type === 'inner')) return false
-  const built = parts
-    .filter((part) => part.value !== '')
-    .map((part) => (part.type === 'inner'
-      ? { kind: 'inner', dom: createFold(doc, part.value, node) }
-      : { kind: 'text', dom: doc.createTextNode(part.value) }))
+  const parts = splitFoldableBlocks(node.nodeValue)
+  const hasFoldable = parts.some((part) => part.type === 'inner' || part.type === 'memo')
+  // 正文段里可能还有协议标记：折块之外的部分也要过一遍 chip，否则
+  // `<face:白眼>` 依旧以裸标签留在句子里（这次报障就是它）。
+  const hasMarkup = parts.some((part) => part.type === 'text' && hasMarkupTag(part.value))
+  if (!hasFoldable && !hasMarkup) return false
+  const built = []
+  for (const part of parts) {
+    if (part.type === 'inner') {
+      built.push({ kind: 'inner', dom: createFold(doc, part.value, node, '思考') })
+    } else if (part.type === 'memo') {
+      built.push({ kind: 'memo', dom: createFold(doc, part.value, node, '思考 · 内部备忘') })
+    } else {
+      // 正文：再按协议标记切一刀，标记变 chip、其余仍是纯文本节点。
+      for (const sub of splitMarkupTags(part.value)) {
+        if (sub.value === '' && sub.type !== 'poke') continue
+        if (sub.type === 'text') built.push({ kind: 'text', dom: doc.createTextNode(sub.value) })
+        else built.push({ kind: 'mark', dom: createMark(doc, sub.type, sub.value, node) })
+      }
+    }
+  }
   const first = built[0]
   const last = built[built.length - 1]
   if (first === undefined || last === undefined) return false
@@ -269,7 +453,8 @@ function foldWithin(root, doc) {
   const targets = []
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
     const value = node.nodeValue
-    if (!value || value.indexOf('<') === -1 || !hasInnerBlock(value)) continue
+    if (!value) continue
+    if (!hasFoldableBlock(value) && !hasMarkupTag(value)) continue
     if (node.parentElement?.closest(SKIP_CLOSEST)) continue
     targets.push(node)
   }
@@ -279,7 +464,7 @@ function foldWithin(root, doc) {
       if (foldTextNode(node, doc)) folded += 1
     } catch (error) {
       // 单个节点失败就当没折过，绝不让它连累聊天视图
-      console.warn('[qq-hub] 折叠 <inner> 独白失败：', error)
+      console.warn('[qq-hub] 折叠独白 / 内部备忘 / 渲染标记失败：', error)
     }
   }
   return folded

@@ -66,13 +66,94 @@ function splitInnerBlocks(text) {
 function hasInnerBlock(text) {
   return /<inner(?![A-Za-z0-9_-])[^>]*>/i.test(String(text ?? "")) && splitInnerBlocks(text).some((part) => part.type === "inner");
 }
+var MEMO_LABEL_WORD = String.raw`(?:目的|需求|情绪|情感|类型|状态|待续|意图|闭环|备忘|顺承前情)`;
+var MEMO_HEADER_RE = new RegExp(
+  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?[ \t]*(?:` + String.raw`[【\[]\s*[^】\]]{0,6}?备忘(?!录)[^】\]]{0,12}[】\]]` + String.raw`|内部备忘(?!录)[^：:\n]{0,12}[：:]` + String.raw`|(?:[「『]内部备忘(?!录)[^」』\n]{0,12}[」』]|内部备忘(?!录)(?:[ \t]*(?:[（(][^）)\n]{1,16}[）)]|[·•\-—/][^\s\n，。！？!?,;；【\[\]]{1,12}))?)` + String.raw`)[ \t]*(?:\*\*|__)?[ \t]*(?=\r?\n|$|\|\|\||[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]])`
+);
+var MEMO_LABEL_RE = new RegExp(
+  String.raw`(?:^|\n|\|\|\|)[ \t]*(?:\*\*|__)?[ \t]*[【\[]\s*` + MEMO_LABEL_WORD + String.raw`\s*[】\]]`,
+  "g"
+);
+function findMemoStart(text) {
+  const s = String(text ?? "");
+  if (!s.includes("备忘") && !s.includes("【") && !s.includes("[")) return -1;
+  const header = MEMO_HEADER_RE.exec(s);
+  if (header) return header.index;
+  MEMO_LABEL_RE.lastIndex = 0;
+  const first = MEMO_LABEL_RE.exec(s);
+  const second = first ? MEMO_LABEL_RE.exec(s) : null;
+  MEMO_LABEL_RE.lastIndex = 0;
+  return second ? first.index : -1;
+}
+function splitMemoBlocks(text) {
+  const start = findMemoStart(text);
+  if (start < 0) return [{ type: "text", value: text }];
+  const parts = [];
+  const head = String(text).slice(0, start);
+  if (head !== "") parts.push({ type: "text", value: head });
+  parts.push({ type: "memo", value: String(text).slice(start) });
+  return parts;
+}
+function hasMemoBlock(text) {
+  return findMemoStart(text) >= 0;
+}
+function splitFoldableBlocks(text) {
+  const parts = [];
+  for (const part of splitInnerBlocks(text)) {
+    if (part.type !== "text") {
+      parts.push(part);
+      continue;
+    }
+    for (const sub of splitMemoBlocks(part.value)) parts.push(sub);
+  }
+  return parts;
+}
+function hasFoldableBlock(text) {
+  const s = String(text ?? "");
+  return hasInnerBlock(s) || hasMemoBlock(s);
+}
+var MARKUP_RE = /<(?:face|sticker)\s*:\s*([^<>|\n]{1,40}?)\s*(\/?)>(?:\s*<\/sticker>)?|<voice>\s*([\s\S]*?)\s*<\/voice>|<poke\s*\/?>/g;
+function splitMarkupTags(text) {
+  const s = String(text ?? "");
+  const parts = [];
+  let cursor = 0;
+  let m;
+  MARKUP_RE.lastIndex = 0;
+  while ((m = MARKUP_RE.exec(s)) !== null) {
+    if (m.index > cursor) parts.push({ type: "text", value: s.slice(cursor, m.index) });
+    if (m[1] !== void 0) {
+      parts.push({ type: m[0].toLowerCase().startsWith("<face") ? "face" : "sticker", value: m[1] });
+    } else if (m[3] !== void 0) {
+      parts.push({ type: "voice", value: m[3] });
+    } else {
+      parts.push({ type: "poke", value: "" });
+    }
+    cursor = m.index + m[0].length;
+  }
+  MARKUP_RE.lastIndex = 0;
+  if (!parts.length) return [{ type: "text", value: s }];
+  if (cursor < s.length) parts.push({ type: "text", value: s.slice(cursor) });
+  return parts;
+}
+function hasMarkupTag(text) {
+  const s = String(text ?? "");
+  if (!s.includes("<")) return false;
+  MARKUP_RE.lastIndex = 0;
+  const hit = MARKUP_RE.test(s);
+  MARKUP_RE.lastIndex = 0;
+  return hit;
+}
 var SKIP_KINDS = /* @__PURE__ */ new Set(["user", "steering", "context", "turn-trigger", "system-prompt", "command"]);
-var SKIP_CLOSEST = "pre, code, .qqhub-inner";
+var SKIP_CLOSEST = "pre, code, .qqhub-inner, .qqhub-mark";
 var FOLD_ATTR = "data-qqhub-fold";
 var STYLE_ID = "qqhub-inner-fold-style";
 var FOLD_CLASS = "qqhub-inner";
 var FOLD_SRC = "qqhubFoldSrc";
 var FOLD_SRC_TEXT = "qqhubFoldText";
+var MARK_ATTR = "data-qqhub-mark";
+var MARK_CLASS = "qqhub-mark";
+var MARK_SRC = "qqhubMarkSrc";
+var MARK_SRC_TEXT = "qqhubMarkText";
 var STYLE_TEXT = `
 .qqhub-inner { display: block; margin: 2px 0; }
 .qqhub-inner-head {
@@ -105,9 +186,22 @@ var STYLE_TEXT = `
    display:block 按特异性盖掉，于是正文永远摊开、点箭头也没反应（真机 2026-11-24 13:07）。 */
 .qqhub-inner-body[hidden],
 .qqhub-inner-body[data-collapsed="true"] { display: none !important; }
+/* 协议标记 chip：底色用主题的 markdown tag 色（缺失时退回淡强调色），
+   描边用次级边框，字色跟正文一致——看起来像个「徽标」，不是句子里的一串尖括号。 */
+.qqhub-mark {
+  display: inline-flex; align-items: baseline; gap: 3px;
+  margin: 0 1px; padding: 0 5px; border-radius: 4px;
+  background: var(--dsw-alias-markdown-tag, color-mix(in srgb, currentColor 10%, transparent));
+  border: 1px solid var(--dsw-alias-border-l2, transparent);
+  color: var(--dsw-alias-label-primary, currentColor);
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  line-height: 1.6; vertical-align: baseline;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.qqhub-mark-icon { opacity: .75; font-size: 1em; }
 @media (prefers-reduced-motion: reduce) { .qqhub-inner-head::before { transition: none; } }
 `;
-function createFold(doc, raw, srcNode) {
+function createFold(doc, raw, srcNode, title = "思考") {
   const wrap = doc.createElement("span");
   wrap.className = FOLD_CLASS;
   wrap.setAttribute(FOLD_ATTR, "");
@@ -118,7 +212,7 @@ function createFold(doc, raw, srcNode) {
   head.type = "button";
   head.className = "qqhub-inner-head";
   head.setAttribute("aria-expanded", "false");
-  head.textContent = "思考";
+  head.textContent = title;
   const body = doc.createElement("span");
   body.className = "qqhub-inner-body";
   const setOpen = (next) => {
@@ -137,6 +231,20 @@ function createFold(doc, raw, srcNode) {
   wrap.append(head, body);
   return wrap;
 }
+function createMark(doc, kind, value, srcNode) {
+  const chip = doc.createElement("span");
+  chip.className = MARK_CLASS;
+  chip.setAttribute(MARK_ATTR, kind);
+  if (srcNode !== void 0) chip[MARK_SRC] = srcNode;
+  chip[MARK_SRC_TEXT] = `${kind}:${value}`;
+  const icon = doc.createElement("span");
+  icon.className = "qqhub-mark-icon";
+  icon.textContent = kind === "voice" ? "声" : kind === "poke" ? "戳" : "表";
+  const label = doc.createElement("span");
+  label.textContent = kind === "poke" ? "戳一戳" : String(value ?? "");
+  chip.append(icon, label);
+  return chip;
+}
 function removeNode(node) {
   if (typeof node?.remove === "function") {
     node.remove();
@@ -154,28 +262,32 @@ function isAttached(node) {
   return false;
 }
 function removeStaleSiblings(node) {
+  const isOurs = (el) => el.hasAttribute?.(FOLD_ATTR) || el.hasAttribute?.(MARK_ATTR);
   let prev = node.previousSibling;
-  while (prev && prev.nodeType === 1 && prev.hasAttribute?.(FOLD_ATTR)) {
+  while (prev && prev.nodeType === 1 && isOurs(prev)) {
     const stale = prev;
     prev = prev.previousSibling;
     removeNode(stale);
   }
   let next = node.nextSibling;
-  while (next && next.nodeType === 1 && next.hasAttribute?.(FOLD_ATTR)) {
+  while (next && next.nodeType === 1 && isOurs(next)) {
     const stale = next;
     next = next.nextSibling;
     removeNode(stale);
   }
 }
 function pruneFolds(root) {
+  const sweep = (selector, srcKey) => {
+    for (const span of root.querySelectorAll?.(selector) ?? []) {
+      const src = span[srcKey];
+      if (src === void 0 || src === null || !isAttached(src)) removeNode(span);
+    }
+  };
+  sweep("." + FOLD_CLASS, FOLD_SRC);
+  sweep("." + MARK_CLASS, MARK_SRC);
   const latest = /* @__PURE__ */ new Map();
   const order = [];
   for (const span of root.querySelectorAll?.("." + FOLD_CLASS) ?? []) {
-    const src = span[FOLD_SRC];
-    if (src === void 0 || src === null || !isAttached(src)) {
-      removeNode(span);
-      continue;
-    }
     const text = String(span[FOLD_SRC_TEXT] ?? "");
     if (!latest.has(text)) order.push(text);
     latest.set(text, span);
@@ -190,9 +302,24 @@ function pruneFolds(root) {
 }
 function foldTextNode(node, doc) {
   if (!node?.parentNode) return false;
-  const parts = splitInnerBlocks(node.nodeValue);
-  if (!parts.some((part) => part.type === "inner")) return false;
-  const built = parts.filter((part) => part.value !== "").map((part) => part.type === "inner" ? { kind: "inner", dom: createFold(doc, part.value, node) } : { kind: "text", dom: doc.createTextNode(part.value) });
+  const parts = splitFoldableBlocks(node.nodeValue);
+  const hasFoldable = parts.some((part) => part.type === "inner" || part.type === "memo");
+  const hasMarkup = parts.some((part) => part.type === "text" && hasMarkupTag(part.value));
+  if (!hasFoldable && !hasMarkup) return false;
+  const built = [];
+  for (const part of parts) {
+    if (part.type === "inner") {
+      built.push({ kind: "inner", dom: createFold(doc, part.value, node, "思考") });
+    } else if (part.type === "memo") {
+      built.push({ kind: "memo", dom: createFold(doc, part.value, node, "思考 · 内部备忘") });
+    } else {
+      for (const sub of splitMarkupTags(part.value)) {
+        if (sub.value === "" && sub.type !== "poke") continue;
+        if (sub.type === "text") built.push({ kind: "text", dom: doc.createTextNode(sub.value) });
+        else built.push({ kind: "mark", dom: createMark(doc, sub.type, sub.value, node) });
+      }
+    }
+  }
   const first = built[0];
   const last = built[built.length - 1];
   if (first === void 0 || last === void 0) return false;
@@ -225,7 +352,8 @@ function foldWithin(root, doc) {
   const targets = [];
   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
     const value = node.nodeValue;
-    if (!value || value.indexOf("<") === -1 || !hasInnerBlock(value)) continue;
+    if (!value) continue;
+    if (!hasFoldableBlock(value) && !hasMarkupTag(value)) continue;
     if (node.parentElement?.closest(SKIP_CLOSEST)) continue;
     targets.push(node);
   }
@@ -234,7 +362,7 @@ function foldWithin(root, doc) {
     try {
       if (foldTextNode(node, doc)) folded += 1;
     } catch (error) {
-      console.warn("[qq-hub] 折叠 <inner> 独白失败：", error);
+      console.warn("[qq-hub] 折叠独白 / 内部备忘 / 渲染标记失败：", error);
     }
   }
   return folded;

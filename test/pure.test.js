@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseReply, stripMarkdown, bubbleDelay } from '../src/chat/reply.js'
+import { parseReply, stripMarkdown, bubbleDelay, stripInternalMemo } from '../src/chat/reply.js'
 import { decideGroupReply, policyFor, inQuietHours, DEFAULT_GROUP_POLICY } from '../src/chat/group-policy.js'
 import { parseMessageEvent, isStickerSegment, stickerSizeOk, imageSize } from '../src/chat/inbound.js'
 import { checkAllowed, levelFor, presetFor, isOwner, profileToolVisible, profilePermits } from '../src/chat/access.js'
@@ -75,6 +75,41 @@ test('parseReply 只有备忘（小标题 + 标签）时沉默；只写了小标
 test('parseReply 漏写 <inner> 的独白标签（意图/情感/备忘）也不外发', () => {
   const r = parseReply('正文。\n【意图】接话\n【情感】轻松\n【备忘】他说明天发链接')
   assert.deepEqual(r.items.map((x) => x.value), ['正文。'])
+})
+
+// 真机 2026-11-25 08:00 / 09:40 / 12:32：purpose 提示词要求「另起一段写『内部备忘』」，
+// 模型照做，但写成**无方括号、无冒号的裸行** `内部备忘`，上一版小标题正则只认
+// 【内部备忘】/`内部备忘：`，于是这块没被切掉，`内部备忘` 四个字作为一条气泡漏进了私聊。
+test('parseReply 切掉无冒号裸行「内部备忘」小标题（真机 11-25 形状）', () => {
+  const raw = '早八要困死了|||昨晚熬那么晚你起得来吗\n\n内部备忘\n【目的】早八犯困无聊戳他一下看起没起床\n【需求】陪\n【状态】完成'
+  assert.deepEqual(parseReply(raw).items.map((x) => x.value), ['早八要困死了', '昨晚熬那么晚你起得来吗'])
+  // 裸行小标题后面紧跟标签（同一段没有空行）也要切
+  assert.deepEqual(parseReply('正文一句。\n内部备忘\n【目的】x\n【状态】完成').items.map((x) => x.value), ['正文一句。'])
+  // 加粗 / 标题号 / 引号 / 带说明后缀的裸行写法
+  assert.deepEqual(parseReply('正文。\n**内部备忘**\n【目的】x\n【状态】完成').items.map((x) => x.value), ['正文。'])
+  assert.deepEqual(parseReply('正文。\n### 内部备忘\n【目的】x\n【状态】完成').items.map((x) => x.value), ['正文。'])
+  assert.deepEqual(parseReply('正文。\n内部备忘·非QQ内容\n【目的】x\n【状态】完成').items.map((x) => x.value), ['正文。'])
+})
+
+// 上面那条的护栏：正文里正常提到「内部备忘」三个字不能被误删。
+test('parseReply 不误杀正文里正常出现的「内部备忘」', () => {
+  assert.deepEqual(parseReply('内部备忘发我看看').items.map((x) => x.value), ['内部备忘发我看看'])
+  assert.deepEqual(parseReply('你把内部备忘写哪了').items.map((x) => x.value), ['你把内部备忘写哪了'])
+  // 裸行但后面跟的是正常句子（不是标签、不是换行结尾）——当正文
+  assert.match(parseReply('内部备忘这词是谁想出来的\n\n我也想知道').items.map((x) => x.value).join('\n'), /内部备忘这词/)
+})
+
+// 真机 2026-11-25 08:00 的根因之一：stripInternalMemo 直接吃原始回包时，会命中
+// <inner> 里的【意图】【闭环】并从那里截断，把 </inner> 和正文一起切掉。
+// 现在已闭合的 <inner> 段整体遮蔽，正文照常留下。
+test('stripInternalMemo 跳过已闭合的 <inner> 段，不把正文一起切掉', () => {
+  const raw = '<inner>\n【意图】早八犯困\n【闭环】\n【情感】犯困\n【备忘】插件还没说完\n</inner>早八要困死了|||昨晚熬那么晚你起得来吗\n\n内部备忘\n【目的】戳他一下\n【需求】陪\n【状态】完成'
+  const cut = stripInternalMemo(raw)
+  assert.match(cut, /早八要困死了\|\|\|昨晚熬那么晚你起得来吗/, '正文必须留下')
+  assert.ok(!/【目的】|【状态】/.test(cut), '备忘标签必须切掉')
+  assert.ok(!/内部备忘/.test(cut.replace('</inner>', '')), '小标题本身不能留')
+  // 未闭合的 <inner>（泄漏形态）不遮蔽，仍按备忘截断处理（切点落在标签前的换行处）
+  assert.equal(stripInternalMemo('<inner>【意图】x\n【目的】y\n【状态】完成'), '<inner>【意图】x')
 })
 
 test('parseReply 识别语音和表情标记', () => {

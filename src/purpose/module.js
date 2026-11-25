@@ -10,7 +10,7 @@
 // 想换引擎的主人自己开关，迁移说明见 docs/PURPOSE_MODULE_API.md。
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
-import { stripInternalMemo } from '../chat/reply.js'
+import { isSilence, sanitizeOutbound } from '../chat/reply.js'
 import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from './engine/crucible.js'
 import { characterName, escapeRegExp } from '../persona/identity-context.js'
 import {
@@ -76,7 +76,10 @@ export function purposeConfig(cfg = {}) {
  * @param {string|string[]} [role] 当前角色名 / 她自己会用的称呼
  */
 export function cleanReply(raw, role = '') {
-  let s = stripInternalMemo(raw)
+  // 走完整出站清洗（先剥推理块与 <inner> 心智独白，再剥内部备忘）：
+  // 不能直接调 stripInternalMemo(raw) —— <inner> 里的【意图】【闭环】【备忘】会命中备忘截断，
+  // 把 </inner> 和正文全切掉，只留字面量 "<inner>"（真机事故 2026-11-25 08:00/09:40/12:32）。
+  let s = sanitizeOutbound(raw).trim()
   s = s.replace(/^[「“"'']+/, '').replace(/[」”"'']+$/, '')
   const names = (Array.isArray(role) ? role : [role]).map((n) => String(n ?? '').trim()).filter(Boolean)
   if (names.length) {
@@ -84,8 +87,24 @@ export function cleanReply(raw, role = '') {
     s = s.replace(new RegExp(`^(?:${alts})\\s*[:：]\\s*`), '')
   }
   s = s.trim()
-  if (!s || s.replace(/\s/g, '').startsWith(SILENCE)) return ''
+  if (isSilence(s) || s.replace(/\s/g, '').startsWith(SILENCE)) return ''
   return s
+}
+
+/**
+ * 把 hub.deliver 的回执映射成目的引擎的结局。
+ * reply-delivery 沉默/跳过/失败时也会返回结构化对象（带 state 字段），
+ * 不能只靠 `typeof r === 'object'` 判定成功（否则静默或失败也会谎报 sent 并误占历史/状态）。
+ * 旧测试桩只返回 `{ missedAt: [] }`（无 state 字段），仍兼容为 sent。
+ */
+export function deliveryOutcome(receipt) {
+  if (!receipt || typeof receipt !== 'object') return 'silent'
+  if (typeof receipt.state === 'string') {
+    if (receipt.state === 'sent' || receipt.state === 'partial') return 'sent'
+    if (receipt.state === 'failed') return 'delivery-failed'
+    return 'silent'
+  }
+  return 'sent'
 }
 
 export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, proactivelyMuted, crucible: injectedCrucible }) {
@@ -342,7 +361,8 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     } else {
       try {
         const r = await hub.deliver(chatIdOf(cfg), text, { own: true })
-        outcome = r && typeof r === 'object' ? 'sent' : 'silent' // deliver 吞错只返回 undefined / {missedAt}
+        outcome = deliveryOutcome(r)
+        if (outcome === 'delivery-failed') log?.warn?.('目的：投递未拿到网关回执（state=failed）')
       } catch (error) {
         outcome = 'delivery-failed'
         log?.warn?.('目的：投递失败：', error?.message)
