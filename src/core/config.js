@@ -366,7 +366,13 @@ function deepMerge(base, over) {
   return out
 }
 
+// 数字配置归一化。
+// 空值（'' / null / undefined）一律当「没填」，回落默认值 d —— 这是面板「清空 = 恢复默认」的落点。
+// 2026-11-24 修：旧写法 `Number('')` 是 0，且 `Number.isFinite(0)` 为真，于是清空过的框
+// 会被夹到下限（群里一条最长 → 10 而不是默认 40），面板上表现为「删掉的数字自己跳回来」。
+// 注意只把**空串**当未填：数字 0 是合法取值（很多开关型的「0 = 关掉」），照常走下界钳制。
 const num = (v, d, lo, hi) => {
+  if (v === '' || v === null || v === undefined) return d
   const n = Number(v)
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d
 }

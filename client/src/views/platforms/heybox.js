@@ -126,9 +126,9 @@ function Heybox({ draft, setDraft, toast }) {
         title="每天上限"
         desc="小黑盒的帖详情和搜索接口查太勤会弹验证码（还可能连坐浏览器登录态），所以额度别设太大。搜索被挡时她会自动降级去翻信息流，不会反复硬试。"
       >
-        <Row label="点赞">{f.num('heybox.likeDaily', { min: 0, max: 60 })}<span className="ab-muted">次/天</span></Row>
-        <Row label="评论">{f.num('heybox.commentDaily', { min: 0, max: 30 })}<span className="ab-muted">条/天</span></Row>
-        <Row label="发帖">{f.num('heybox.maxPostsPerDay', { min: 0, max: 5 })}<span className="ab-muted">篇/天（建议别超过 3）</span></Row>
+        <Row label="点赞">{f.num('heybox.likeDaily', { min: 0, max: 60, fallback: 10 })}<span className="ab-muted">次/天</span></Row>
+        <Row label="评论">{f.num('heybox.commentDaily', { min: 0, max: 30, fallback: 3 })}<span className="ab-muted">条/天</span></Row>
+        <Row label="发帖">{f.num('heybox.maxPostsPerDay', { min: 0, max: 5, fallback: 3 })}<span className="ab-muted">篇/天（建议别超过 3）</span></Row>
         <Row label="发帖风格" hint="她写帖时按这个口吻来。也可以让她单次换：跟她说「用日记风格发一篇」">
           {f.select('heybox.postStyle', [
             { value: 'diary', label: '大肥鱼日记', desc: '第一人称随手记，跟空间日记一个味，120-300字' },

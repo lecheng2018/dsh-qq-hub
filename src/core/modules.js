@@ -194,6 +194,26 @@ export function routePrefixFor(id, hasBuiltinDef) {
   return hasBuiltinDef || CORE_PANEL_IDS.has(id) ? '' : `/ext/${id}`
 }
 
+/**
+ * 模块设置的有效值：defaults 打底，ext 里的覆写盖上去 —— **空字符串当没填**。
+ *
+ * 面板的数字框（NumInput）清空后写的是 ''，语义是「恢复默认」。如果这里把 '' 原样盖上去，
+ * 模块读到的就是一个空串：`Number('') || 0` 会变成 0（比如「每日上限」直接哑掉），
+ * 而 `Number('')` 是 0、`Number.isFinite(0)` 又是 true，`bounded()` 之类的兜底也拦不住。
+ * 所以在入口统一处理：空串 / null 一律视作未设置，保留 defaults 里的值。
+ * 布尔 false、数字 0 照常覆盖（0 在这套设置里是有意义的取值）。
+ */
+export function resolveModuleSettings(def, override) {
+  const out = { ...(def?.defaults || {}) }
+  if (override && typeof override === 'object' && !Array.isArray(override)) {
+    for (const [k, v] of Object.entries(override)) {
+      if (v === '' || v === null) continue
+      out[k] = v
+    }
+  }
+  return out
+}
+
 export function createModules({ ctx, core, getConfig, setConfig, logger, version, builtins }) {
   const log = logger.child('modules')
   const builtinDefs = new Map(builtins.map((d) => [d.id, d]))
@@ -255,7 +275,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       // ---- 配置 ----
       config: () => getConfig(),
       setConfig: (patch) => setConfig(typeof patch === 'function' ? patch(getConfig()) : deepMerge(getConfig(), patch)),
-      settings: () => ({ ...(def.defaults || {}), ...(getConfig().ext?.[id] || {}) }),
+      settings: () => resolveModuleSettings(def, getConfig().ext?.[id]),
       saveSettings: (patch) => {
         const cfg = getConfig()
         setConfig({ ...cfg, ext: { ...cfg.ext, [id]: { ...(cfg.ext?.[id] || {}), ...patch } } })

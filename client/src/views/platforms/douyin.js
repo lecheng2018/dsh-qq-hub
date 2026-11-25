@@ -99,13 +99,13 @@ function Douyin({ draft, setDraft, toast }) {
           {f.sw('douyin.commentReply')}
         </Row>
         <Row label="多久看一次评论回复">
-          {f.num('douyin.commentReplyPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
+          {f.num('douyin.commentReplyPollMinutes', { min: 1, max: 60, fallback: 5 })}<span className="ab-muted">分钟</span>
         </Row>
         <Row label="分享卡片后补一句" hint="抖音私信里发完视频卡片，再跟一句她自己想说的话（有概率触发，默认关）">
           {f.sw('douyin.shareDmText')}
         </Row>
         <Row label="多久看一次">
-          {f.num('douyin.dmPollMinutes', { min: 1, max: 60 })}<span className="ab-muted">分钟</span>
+          {f.num('douyin.dmPollMinutes', { min: 1, max: 60, fallback: 3 })}<span className="ab-muted">分钟</span>
           <Btn small onClick={act('/douyin/dms', 'dms')} disabled={!!busy}>{busy === 'dms' ? '正在看…' : '现在看一次'}</Btn>
         </Row>
       </Card>
@@ -114,9 +114,9 @@ function Douyin({ draft, setDraft, toast }) {
         <Row label="多久刷一轮">{f.range('douyin.intervalHours', 1, 24, 1, (v) => v + ' 小时')}</Row>
         <Row label="每天最多刷">{f.range('douyin.maxRunsPerDay', 0, 12, 1, (v) => v + ' 轮')}</Row>
         <Row label="一轮看几个">{f.range('douyin.perRun', 1, 10, 1, (v) => v + ' 个')}</Row>
-        <Row label="每天最多看">{f.num('douyin.maxWatchPerDay', { min: 0, max: 200 })}<span className="ab-muted">个（含手动）</span></Row>
+        <Row label="每天最多看">{f.num('douyin.maxWatchPerDay', { min: 0, max: 200, fallback: 30 })}<span className="ab-muted">个（含手动）</span></Row>
         <Row label="每个视频停留" hint="真的在播放；停得越短越不像真人">
-          {f.num('douyin.dwellMin', { min: 3 })}<span className="ab-muted">～</span>{f.num('douyin.dwellMax', { min: 3 })}<span className="ab-muted">秒</span>
+          {f.num('douyin.dwellMin', { min: 3, fallback: 8 })}<span className="ab-muted">～</span>{f.num('douyin.dwellMax', { min: 3, fallback: 40 })}<span className="ab-muted">秒</span>
         </Row>
         <Row label="分享到哪" hint="抖音私信要先核对你的抖音号；没核对或者发不出去时会改发 QQ">
           {f.choices('douyin.shareTo', [
@@ -134,13 +134,13 @@ function Douyin({ draft, setDraft, toast }) {
         </Row>
       </Card>
       <Card title="每天上限" desc="刚登录的号前几天上限自动减半（新号猛点赞最容易被风控）。遇到验证码 / 操作频繁当天就停手，看还能看。权限在「权限」页单独设（默认仅主人）。">
-        <Row label="点赞">{f.num('douyin.caps.like', { min: 0, max: 300 })}</Row>
-        <Row label="评论">{f.num('douyin.caps.comment', { min: 0, max: 30 })}</Row>
-        <Row label="分享给你">{f.num('douyin.caps.share', { min: 0, max: 30 })}</Row>
-        <Row label="评论里 @你" hint="也算在评论次数里">{f.num('douyin.caps.atOwner', { min: 0, max: 30 })}</Row>
-        <Row label="点赞 + 评论合计">{f.num('douyin.gate.maxWritesPerDay', { min: 1, max: 500 })}</Row>
-        <Row label="两次点赞 / 评论间隔">{f.num('douyin.gate.minWriteGapSec', { min: 0, max: 600 })}<span className="ab-muted">秒</span></Row>
-        <Row label="新号减半">{f.num('douyin.gate.newAccountDays', { min: 0, max: 30 })}<span className="ab-muted">天</span></Row>
+        <Row label="点赞">{f.num('douyin.caps.like', { min: 0, max: 300, fallback: 30 })}</Row>
+        <Row label="评论">{f.num('douyin.caps.comment', { min: 0, max: 30, fallback: 3 })}</Row>
+        <Row label="分享给你">{f.num('douyin.caps.share', { min: 0, max: 30, fallback: 5 })}</Row>
+        <Row label="评论里 @你" hint="也算在评论次数里">{f.num('douyin.caps.atOwner', { min: 0, max: 30, fallback: 3 })}</Row>
+        <Row label="点赞 + 评论合计">{f.num('douyin.gate.maxWritesPerDay', { min: 1, max: 500, fallback: 30 })}</Row>
+        <Row label="两次点赞 / 评论间隔">{f.num('douyin.gate.minWriteGapSec', { min: 0, max: 600, fallback: 20 })}<span className="ab-muted">秒</span></Row>
+        <Row label="新号减半">{f.num('douyin.gate.newAccountDays', { min: 0, max: 30, fallback: 7 })}<span className="ab-muted">天</span></Row>
       </Card>
       <Card
         title="她刷过什么"

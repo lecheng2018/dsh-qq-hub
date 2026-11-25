@@ -159,9 +159,9 @@ function Stickers({ draft, setDraft, toast }) {
             ])}
           </Row>
         ) : null}
-        <Row label="每小时最多收">{f.num('stickers.maxPerHour', { min: 0 })}<span className="ab-muted">张 / 每个聊天</span></Row>
+        <Row label="每小时最多收">{f.num('stickers.maxPerHour', { min: 0, fallback: 20 })}<span className="ab-muted">张 / 每个聊天</span></Row>
         <Row label="表情库最多存" hint="超过这个数会先清掉最少用的「偷来的」；你自己加的、从 QQ/图包导入的不会被自动清理">
-          {f.num('stickers.maxLibrary', { min: 20, max: 2000 })}<span className="ab-muted">张</span>
+          {f.num('stickers.maxLibrary', { min: 20, max: 2000, fallback: 300 })}<span className="ab-muted">张</span>
         </Row>
         <Row label="看图起名" hint="收下后让模型看图起个 12 字以内的备注；起名前不会进自动配图池">{f.sw('stickers.caption')}</Row>
         <Row label="WebP 转 JPEG" hint="兼容优先：发送前转成 JPEG，会丢动画；原图仍保留">{f.sw('stickers.webpToJpeg')}</Row>

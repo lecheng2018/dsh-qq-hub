@@ -38,12 +38,12 @@ test('引擎侧：dailyMax 0 = 不限次（沿用值照常生效，0 才是「�
   assert.match(src, /config\.dailyMax > 0 && countToday >= config\.dailyMax/, 'dailyMax>0 才拦截')
 })
 
-test('面板：数字框支持 allowEmpty，非数字自动过滤', () => {
+test('面板：所有模块数字框都能留空（不再只放行 maxPerDay）', () => {
   const client = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
   assert.match(client, /allowEmpty/, '数字框要有允许留空的开关')
-  assert.match(client, /replace\(\/\[\^\\d\]\//, '非数字内容自动过滤')
-  // esbuild 产物统一双引号，断言对引号不敏感
-  assert.match(client, /s\.key === ["']maxPerDay["']/, '目的引擎每日上限允许留空')
+  // 2026-11-24：`allowEmpty: 只在 maxPerDay 上开` 的特例删掉了 —— 别的模块数字框
+  // 删空后又被默认值顶回来，根本清不掉。现在模块数字框一律可留空（后端把 '' 当未填）。
+  assert.doesNotMatch(client, /s\.key === ["']maxPerDay["']/, '不该再按 key 名特批可留空')
 })
 
 test('设置文案说清新口径', () => {

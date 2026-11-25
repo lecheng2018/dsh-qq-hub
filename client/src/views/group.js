@@ -1,8 +1,15 @@
 import { useState, Fragment, h } from '../core/react.js'
-import { Card, Row, Btn, ListInput, PercentRow, More } from '../ui/primitives.js'
+import { Card, Row, Btn, ListInput, NumInput, PercentRow, More } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath, cx } from '../core/utils.js'
 import { OwnerBrief } from './access.js'
+
+/** 静默时段某一位的小时数（缺省按默认 0 点，避免 draft 还没载入时读崩）。 */
+const quietAt = (d, i) => {
+  const raw = d && d.group && Array.isArray(d.group.quietHours) ? d.group.quietHours[i] : undefined
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : 0
+}
 
 /** 卡内可折叠小节：低频配置默认收起，标题行可点开。 */
 function FoldSection({ title, desc, right, defaultOpen = false, children }) {
@@ -42,12 +49,10 @@ function Group({ draft, setDraft }) {
         <Row label="群里停顿多久算一段" hint="群里你一句我一句，多等一会儿把一段话攒齐再回；她回上一段的时候，新消息也会先攒着">{f.range('merge.groupWaitSec', 1, 20, 1, (v) => v + ' 秒')}</Row>
         <Row label="群里最多等多久">{f.range('merge.groupMaxSec', 3, 60, 1, (v) => v + ' 秒')}</Row>
         <Row label="回合超时" hint="模型或工具长时间不结束时停止等待并提示你；超时的旧回复不会补发，你发下一条时新建会话。可设 1～120 分钟">
-          <input
-            className="ab-input sm" type="number" min={1} max={120} step={1}
-            value={Math.round((Number(draft.turnTimeoutMs) || 600000) / 60000)}
-            onChange={(e) => setDraft(setPath(draft, 'turnTimeoutMs', Number(e.target.value) * 60000))}
-          />
-          <span className="ab-muted">分钟</span>
+          {/* 显示分钟、存毫秒：旧写法在 onChange 里 Number('') * 60000 = 0，清空瞬间就被
+              下面的 `|| 600000` 顶回 10 分钟，框里那个数字删不掉。现在交给 NumInput，失焦才写回，
+              清空 = 恢复默认（1 分钟起步由 min 兜住，后端 normalize 也钳在 1～120 分钟）。 */}
+          {f.num('turnTimeoutMs', { min: 1, max: 120, scale: 60000, fallback: 10 })}<span className="ab-muted">分钟</span>
         </Row>
       </Card>
 
@@ -56,9 +61,9 @@ function Group({ draft, setDraft }) {
         desc="她写的 ||| 一定断开；空行算段落；句末标点会按下面的上限攒成条。句子太短不会单独成条，攒够一截才断。"
         more={'换行不代表换消息：一行一个要点的排版会攒成一条发；她真的一行一句话（每行都很短）时，换行就是分条。\n清单和汇报（带小标题、编号列表、代码块）整段发出，拆开会散——用下面的开关控制。'}
       >
-        <Row label="群里一条最长" hint="攒到这么长就断开；正常聊天她一般写得比这短">{f.num('reply.groupMaxChars', { min: 10, max: 500 })}<span className="ab-muted">字</span></Row>
-        <Row label="私聊一条最长" hint="私聊可以整段说，设大一点更像正常聊天">{f.num('reply.privateMaxChars', { min: 20, max: 2000 })}<span className="ab-muted">字</span></Row>
-        <Row label="一轮最多几条" hint="超过就均匀合并，不会把剩下的全塞进最后一条">{f.num('reply.maxBubbles', { min: 1, max: 12 })}<span className="ab-muted">条</span></Row>
+        <Row label="群里一条最长" hint="攒到这么长就断开；正常聊天她一般写得比这短">{f.num('reply.groupMaxChars', { min: 10, max: 500, fallback: 40 })}<span className="ab-muted">字</span></Row>
+        <Row label="私聊一条最长" hint="私聊可以整段说，设大一点更像正常聊天">{f.num('reply.privateMaxChars', { min: 20, max: 2000, fallback: 120 })}<span className="ab-muted">字</span></Row>
+        <Row label="一轮最多几条" hint="超过就均匀合并，不会把剩下的全塞进最后一条">{f.num('reply.maxBubbles', { min: 1, max: 12, fallback: 6 })}<span className="ab-muted">条</span></Row>
         <Row label="清单和汇报整段发" hint="开：带小标题、编号列表、代码块的内容整段发出，拆开会散。关：照样按上面的上限拆">{f.sw('reply.keepReports')}</Row>
       </Card>
 
@@ -74,13 +79,22 @@ function Group({ draft, setDraft }) {
           <Row label="她感兴趣的话题" hint="群里在聊这些（或她记得相关的事）时更容易插话；一行一个">{f.list('group.interests', { placeholder: '白米饭\n游戏\n追剧' })}</Row>
           <Row label="话题相关度门槛" hint="和她关系不大的话题就不插话；拉到 0 = 不看话题、纯随机">{f.range('group.minRelevance', 0, 1, 0.05, (v) => (v === 0 ? '不看话题' : Math.round(v * 100) + '%'))}</Row>
           <Row label="群冷清时不插话" hint="最近几分钟内消息少于这个数就不插">
-            {f.num('group.minRecentMessages', { min: 0 })}<span className="ab-muted">条 / </span>
-            {f.num('group.activeWindowSec', { min: 30 })}<span className="ab-muted">秒</span>
+            {f.num('group.minRecentMessages', { min: 0, fallback: 3 })}<span className="ab-muted">条 / </span>
+            {f.num('group.activeWindowSec', { min: 30, fallback: 300 })}<span className="ab-muted">秒</span>
           </Row>
           <Row label="静默时段" hint="这段时间不插话（被叫到还是会回）">
-            <input className="ab-input sm" type="number" min={0} max={23} value={draft.group.quietHours[0]} onChange={(e) => setDraft(setPath(draft, 'group.quietHours', [Number(e.target.value), draft.group.quietHours[1]]))} />
+            {/* 旧写法逐键 Number()：中间态被立刻改写、光标乱跳，两个框还都从渲染时的旧快照
+                取另一个值，连着改会互相覆盖。现在用 NumInput（失焦才提交）+ 函数式写回，
+                永远基于最新草稿改自己那一位，另一位原样保留。`quietHours` 是小时，清空按 0 落。 */}
+            <NumInput
+              value={quietAt(draft, 0)} min={0} max={23} step={1}
+              onChange={(v) => setDraft((prev) => setPath(prev, 'group.quietHours', [v === '' ? 0 : v, quietAt(prev, 1)]))}
+            />
             <span className="ab-muted">点 到</span>
-            <input className="ab-input sm" type="number" min={0} max={23} value={draft.group.quietHours[1]} onChange={(e) => setDraft(setPath(draft, 'group.quietHours', [draft.group.quietHours[0], Number(e.target.value)]))} />
+            <NumInput
+              value={quietAt(draft, 1)} min={0} max={23} step={1}
+              onChange={(v) => setDraft((prev) => setPath(prev, 'group.quietHours', [quietAt(prev, 0), v === '' ? 0 : v]))}
+            />
             <span className="ab-muted">点</span>
           </Row>
           <More label="加入话题之后怎么聊">
@@ -142,12 +156,12 @@ function Group({ draft, setDraft }) {
 
       <Card title="安全与文件" desc="收发文件与危险命令确认。平时用不到的话保持默认即可。">
         <FoldSection title="发文件" right={f.sw('files.enabled')} desc="打开后，你在私聊里可以让她把本机文件当文件发到 QQ，也能按你说的发给白名单里的人或群。">
-          <Row label="单个文件最大">{f.num('files.maxMB', { min: 1, max: 2048 })}<span className="ab-muted">MB</span></Row>
+          <Row label="单个文件最大">{f.num('files.maxMB', { min: 1, max: 2048, fallback: 50 })}<span className="ab-muted">MB</span></Row>
           <Row label="额外允许的目录" hint="一行一个完整路径。QQ 工作区里的文件一直允许，不用写；留空 = 只能发工作区里的">{f.list('files.dirs', { placeholder: 'D:\\Aurabot\\要发的文件' })}</Row>
           <div className="ab-muted ab-small" style={{ marginTop: 4 }}>限制：她只能发 QQ 工作区和上面目录里的文件；单个文件有大小上限；发过什么会记在日志里。</div>
         </FoldSection>
         <FoldSection title="收文件" desc="别人发来的文件，她会下载到 QQ 工作区的 qq-inbox 目录，再把路径告诉她（要看得用工具读）。这里管的是单个文件的大小上限。">
-          <Row label="单个文件最大" hint="文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB">{f.num('files.inboundMaxMB', { min: 1, max: 256 })}<span className="ab-muted">MB</span></Row>
+          <Row label="单个文件最大" hint="文件是整包读进内存的，一条消息最多取 3 个；调大要留意内存，上限 256MB">{f.num('files.inboundMaxMB', { min: 1, max: 256, fallback: 50 })}<span className="ab-muted">MB</span></Row>
           <div className="ab-muted ab-small" style={{ marginTop: 4 }}>超过这个大小的文件不会被下载，她只知道有人发了个文件。文本类（txt / md / json 等）下载后直接进上下文，太长只给前 6 万字；其它类型落盘，她要用工具才读得到。</div>
         </FoldSection>
         <FoldSection title="危险命令确认" right={f.sw('security.dangerConfirm')} desc="她在私聊里要执行终端危险命令之前，先发 QQ 私聊问你；你回复「确认」才执行，回复「取消」或 60 秒没回就拦下。默认关。">
