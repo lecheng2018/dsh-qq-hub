@@ -8,9 +8,9 @@ export function createMemoryReflection({
   insightsOf, setDerivedInsights, styleOf, setStyle,
   createGenerationSignal, generationOf, isActive,
 }) {
-  const personaGuard = () => {
+  const personaGuard = (chat = null) => {
     try {
-      const t = String(personaText?.() || '')
+      const t = String(personaText?.(chat) || '')
       if (!t) return ''
       const lines = t.split('\n').map((l) => l.trim()).filter((l) => l && l.length <= 80 && /禁止|不要|不许|不得|别成|别用|别刻意/.test(l))
       if (!lines.length) return ''
@@ -22,14 +22,16 @@ export function createMemoryReflection({
     const task = generationOf(genSignal)
     genSignal = task.signal
     try {
-      const key = chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : ''
+      // 群聊不做自动相处反思（易把多人技术/闲聊总结成客服说教 SOP）；私聊照常反思。
+      if (chat?.kind === 'group') return 0
+      const key = chat?.userId ? `qq:${chat.userId}` : ''
       if (!key || !isActive()) return 0
       if (genSignal && !genSignal.isValid()) return 0
       const old = insightsOf(key)
       const oldStyle = styleOf(key)
-      const who = chat.kind === 'group' ? '这个群' : '对方'
+      const who = '对方'
       const charName = resolveCharacterIdentity(chat, getConfig()).name
-      const guard = personaGuard()
+      const guard = personaGuard(chat)
       const sourceFingerprint = createHash('sha256').update(String(transcript)).digest('hex')
       const system = `你是「${charName}」，在回顾自己和` + who + '的相处。输出一个 JSON 对象 {"insights":[...],"style":[...]}。\n'
         + 'insights：「怎么相处更好」的经验。概括性的、可复用的相处之道（比如「他累的时候不想多聊，简单安慰就好」「喜欢被吐槽，不喜欢太正经」），不要记具体事件和事实细节；和已有经验重复的合并，过时或被证伪的删掉，不超过 8 条，每条不超过 30 字。\n'

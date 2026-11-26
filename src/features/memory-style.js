@@ -28,7 +28,8 @@ export function createMemoryStyle({
     try {
       if (!isActive()) return
       if (genSignal && !genSignal.isValid()) return
-      const pool = Object.entries(styles() || {}).filter(([key]) => key !== 'self').flatMap(([, list]) => list)
+      // 只从私聊（qq:*）汇总自我风格，绝不把群聊（group:*）黑话混进全局 self 导致跨群串味。
+      const pool = Object.entries(styles() || {}).filter(([key]) => key !== 'self' && !key.startsWith('group:')).flatMap(([, list]) => list)
       if (pool.length < 3) return
       const current = styleOf('self')
       const sourceFingerprint = createHash('sha256').update(JSON.stringify({ pool, current })).digest('hex')

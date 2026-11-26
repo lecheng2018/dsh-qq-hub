@@ -1,5 +1,5 @@
 import { createMemoryReflection } from '../../features/memory-reflection.js'
-import { currentPersonaText } from '../../persona/personas.js'
+import { currentPersonaText, personaIdFor } from '../../persona/personas.js'
 
 export const reflectionModule = {
   id: 'reflection',
@@ -38,7 +38,11 @@ export const reflectionModule = {
     const service = createMemoryReflection({
       dsh: api.dsh,
       getConfig: api.config,
-      personaText: () => currentPersonaText(api.config().persona.current),
+      personaText: (chat) => {
+        const cfg = api.config()
+        const id = chat ? personaIdFor(chat, cfg) : cfg.persona?.current
+        return currentPersonaText(id)
+      },
       log: api.log,
       insightsOf: (key) => memory.insightsOf(key),
       setDerivedInsights: (...args) => memory.setDerivedInsights(...args),
@@ -52,7 +56,9 @@ export const reflectionModule = {
     api.context(({ chat }) => {
       if (chat.kind === 'system') return ''
       const key = chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : ''
-      const list = key ? memory.insightsOf(key) : []
+      const raw = key ? memory.insightsOf(key) : []
+      // 群聊仅注入用户手工写下的相处约定（origin === 'manual'），不注入自动生成的说教 SOP；私聊照常全量生效。
+      const list = chat.kind === 'group' ? raw.filter((item) => item?.origin === 'manual') : raw
       if (!list.length) return ''
       const who = chat.kind === 'group' ? '这个群' : '对方'
       return `（和${who}相处的经验，照着做就好，不用说出来：${list.map((item) => item.text).join('；')}）`

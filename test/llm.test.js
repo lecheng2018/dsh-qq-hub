@@ -210,3 +210,33 @@ test('modelWithOverride 的产物能被 defaultModel 认出来（端到端：不
   assert.equal(calls[0].provider, 'fan', '留空时必须走主模型，不是宿主默认')
   assert.equal(calls[0].model, 'main-model')
 })
+
+test('网关把 reasoningEffort 拼成模型名后缀报不可用时，自动去掉思考强度重试一次', async () => {
+  clearReasoningCache()
+  let n = 0
+  const { dsh, calls } = fakeDsh({
+    reasoning: { efforts: [{ id: 'low' }, { id: 'high' }] },
+    async *stream (params) {
+      if (params.reasoningEffort && n++ === 0) {
+        yield {
+          type: 'finish',
+          reason: {
+            kind: 'error',
+            failure: {
+              code: 'invalid_request_error',
+              message: '400: {"message":"agy bridge: model m-low is unavailable: Unknown model ID: m-low"}',
+            },
+          },
+        }
+        return
+      }
+      yield { type: 'text-delta', text: '去掉 low 成功' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  })
+  const text = await askModel(dsh, { cfg: CFG, text: '在吗', reasoningEffort: 'low' })
+  assert.equal(text, '去掉 low 成功')
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].reasoningEffort, 'low')
+  assert.equal('reasoningEffort' in calls[1], false)
+})

@@ -1,5 +1,5 @@
 import { createMemoryStyle } from '../../features/memory-style.js'
-import { currentPersonaText } from '../../persona/personas.js'
+import { currentPersonaText, personaIdFor } from '../../persona/personas.js'
 
 export const styleModule = {
   id: 'style',
@@ -38,7 +38,11 @@ export const styleModule = {
     const service = createMemoryStyle({
       dsh: api.dsh,
       getConfig: api.config,
-      personaText: () => currentPersonaText(api.config().persona.current),
+      personaText: (chat) => {
+        const cfg = api.config()
+        const id = chat ? personaIdFor(chat, cfg) : cfg.persona?.current
+        return currentPersonaText(id)
+      },
       log: api.log,
       styles: () => memory.styles(),
       styleOf: (key) => memory.styleOf(key),
@@ -49,16 +53,23 @@ export const styleModule = {
     })
 
     api.on('style/observed', ({ key, list, sourceFingerprint }) => {
+      // 群聊不写入自动派生说话方式（避免与分群人设/群友蒸馏冲突）
+      if (String(key || '').startsWith('group:')) return
       if (key && Array.isArray(list) && typeof sourceFingerprint === 'string') service.noteStyle(key, list, sourceFingerprint)
     })
 
     api.context(({ chat }) => {
       if (chat.kind === 'system') return ''
-      const key = chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : ''
-      const current = key ? memory.styleOf(key) : []
-      const self = memory.styleOf('self')
+      const isGroup = chat.kind === 'group'
+      const key = isGroup ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : ''
+      const rawCurrent = key ? memory.styleOf(key) : []
+      // 群聊：① 不注入全局 self 风格（防跨群/跨人设串味）；② 仅当用户手工编辑保存了本群风格时才生效。
+      const current = isGroup
+        ? (memory.styleSourceOf?.(key)?.origin === 'manual' ? rawCurrent : [])
+        : rawCurrent
+      const self = isGroup ? [] : memory.styleOf('self')
       if (!current.length && !self.length) return ''
-      const learned = current.length ? `和${chat.kind === 'group' ? '这个群' : '对方'}聊久了，${current.join('；')}` : ''
+      const learned = current.length ? `和${isGroup ? '这个群' : '对方'}聊久了，${current.join('；')}` : ''
       const own = self.length ? `你平时不知不觉会用的说法：${self.join('、')}` : ''
       return '（说话方式：' + [learned, own].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）'
     })
