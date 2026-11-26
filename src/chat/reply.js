@@ -449,14 +449,63 @@ export function sanitizeOutbound(text) {
   return protectedText.restore(protectedJson.restore(sanitized))
 }
 
+/** 把 Markdown 表格（含 `| :--- |` 对齐行）转为手机 QQ 易读的逐条规格卡，消除 `| :--- |` 乱码。 */
+export function convertMarkdownTables(text) {
+  const lines = String(text || '').split('\n')
+  const out = []
+  const splitRow = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+  const isSepLine = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+  const isTableRow = (line) => {
+    const t = line.trim()
+    return t.includes('|') && (t.startsWith('|') || t.endsWith('|') || (t.match(/\|/g) || []).length >= 2)
+  }
+
+  let i = 0
+  while (i < lines.length) {
+    if (i + 1 < lines.length && isTableRow(lines[i]) && isSepLine(lines[i + 1])) {
+      const headers = splitRow(lines[i])
+      const rows = []
+      i += 2
+      while (i < lines.length && lines[i].trim() && isTableRow(lines[i]) && !isSepLine(lines[i])) {
+        rows.push(splitRow(lines[i]))
+        i += 1
+      }
+      if (rows.length > 0 && headers.length >= 2) {
+        const cards = rows.map((cells) => {
+          const title = cells[0] || ''
+          const fields = []
+          for (let j = 1; j < Math.max(headers.length, cells.length); j += 1) {
+            const val = cells[j] || ''
+            if (!val || val === '-' || val === '—') continue
+            const key = headers[j] || ''
+            fields.push(key ? `${key}：${val}` : val)
+          }
+          if (!title) return fields.join('｜')
+          if (!fields.length) return `▪ ${title}`
+          return `▪ ${title}\n${fields.join('｜')}`
+        })
+        out.push(cards.join('\n\n'))
+        continue
+      }
+    }
+    out.push(lines[i])
+    i += 1
+  }
+  return out.join('\n')
+}
+
 /** 去掉 Markdown 痕迹，转换为 QQ 友好的清晰排版。 */
 export function stripMarkdown(text) {
   let s = stripReasoning(text)
   s = s.replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, '$1')
   s = s.replace(/`([^`\n]+)`/g, '$1')
+  // 仅清掉因 Markdown 加粗语法而在「中文 ↔ 中文」之间多打的空格；保留中英文/数字间的自然半角空格，也不误伤平时口语打字的空格断句
+  s = s.replace(/([\u4e00-\u9fff])[ \t]+\*\*([\u4e00-\u9fff][^*\n]*)\*\*/g, '$1**$2**')
+  s = s.replace(/\*\*([^*\n]*[\u4e00-\u9fff])\*\*[ \t]+([\u4e00-\u9fff])/g, '**$1**$2')
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '$1')
   s = s.replace(/__([^_\n]+)__/g, '$1')
   s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+  s = convertMarkdownTables(s)
   s = s.replace(/^#{1,6}\s+/gm, '')
   s = s.replace(/^\s*[-*+]\s+/gm, '')
   s = s.replace(/^\s*>\s?/gm, '')
@@ -505,6 +554,16 @@ export function parseReply(text, rules = {}) {
     reportBody = stripMarkdown(reportMatch[1])
     raw = (raw.slice(0, reportMatch.index) + raw.slice(reportMatch.index + reportMatch[0].length)).trim()
     if (isSilence(raw) && isSilence(reportBody)) return { silent: true, items: [] }
+  }
+  // 文档型长回复（含 Markdown 表格 / 分割线 / 多级章节标题，且未用 ||| 聊天分条）：
+  // 直接按完整章节分成干净大段，绕过聊天切碎机与 capBubbles 暴力拼组，
+  // 避免表头/表体被劈开、或下一章标题被缝进上一条气泡尾巴（真机 2026-11-27 00:02）。
+  const hasMarkupTags = /<(?:poke|reply:|voice|sticker:)|!\[[^\]]*\]\(/.test(raw)
+  if (!reportBody && !rules.forceReport && rules.keepReports !== false && !raw.includes('|||') && !hasMarkupTags && isLongDocument(raw)) {
+    const sections = splitDocumentBySections(raw, bubbleLimit(rules, 1))
+    if (sections.length) {
+      return { silent: false, items: sections.map((value) => ({ kind: 'text', value })) }
+    }
   }
   // 她自己用 ||| 划出来的气泡数：这是**硬边界**，场景软顶（四态收尾礼让、群聊紧缩）只能压
   // 「自动切出来」的气泡，不能把她的边界粘回去。真机 2026-11-24 08:16：对方回短句 → 趋势
@@ -571,6 +630,106 @@ export function parseReply(text, rules = {}) {
 }
 
 const MAX_BUBBLES = 6
+
+/**
+ * 判断一段未剥离 Markdown 的原文是不是「文档/报告型长回复」。
+ * 命中后走按章节分大段，不进聊天气泡切碎机，也不被 capBubbles 按条数硬缝。
+ * 普通闲聊（无表格、无分割线、无多级 Markdown 标题）绝不命中。
+ */
+function isLongDocument(raw) {
+  const s = String(raw || '').trim()
+  if (s.length < 180) return false
+  // 含 Markdown 表格（表头 + `| :--- |` 对齐行）
+  if (/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(s)) return true
+  if (s.length < 260) return false
+  // 含独立分割线 `---` / `***`
+  if (/^\s*(?:[-*_]){3,}\s*$/m.test(s)) return true
+  // 含 2 个及以上 Markdown 标题行（# / ## / ### / ####）
+  const mdHeads = s.match(/^#{1,4}\s+\S/gm)
+  if (mdHeads && mdHeads.length >= 2) return true
+  // 含 2 个及以上中文大章节（一、 / 二、 / 三、）
+  const cnHeads = s.match(/^[一二三四五六七八九十]+、\S/gm)
+  if (cnHeads && cnHeads.length >= 2) return true
+  return false
+}
+
+/**
+ * 把文档型长回复按章节切分成干净的大段气泡：
+ * - 按 `---` 分割线和顶级标题（`### 一、` / `## ` 等）分章，丢弃多余的 `---` 横线；
+ * - 每章内部跑 `stripMarkdown`（含 Markdown 表格转规格卡、清加粗旁多余空格、保留小节空行）；
+ * - 单章超长（> 900 字）时再按二级小节（`#### 1.` / `1. ` / `2. `）自然切分；
+ * - 章节总数超过 `maxBubbles` 时，将较短的相邻章节用 `\n\n` 合并，绝不把下一章孤立标题缝到上一章尾巴。
+ */
+export function splitDocumentBySections(raw, maxBubbles = MAX_BUBBLES) {
+  const limit = Math.max(1, Math.round(Number(maxBubbles) || MAX_BUBBLES))
+  const lines = String(raw || '').replace(/\r\n/g, '\n').split('\n')
+  const isRule = (l) => /^\s*(?:[-*_]){3,}\s*$/.test(l)
+  const isMajorHead = (l) => /^#{1,3}\s+\S/.test(l) || /^[一二三四五六七八九十]+、\S/.test(l)
+  const isSubHead = (l) => /^#{4,6}\s+\S/.test(l) || /^\d+(?:\.(?!\d)|、)\s*\S/.test(l)
+
+  const rawSections = []
+  let buf = []
+  const flush = () => {
+    const joined = buf.join('\n').trim()
+    if (joined) rawSections.push(joined)
+    buf = []
+  }
+
+  for (const line of lines) {
+    if (isRule(line)) {
+      flush()
+      continue
+    }
+    if (isMajorHead(line) && buf.some((x) => x.trim())) {
+      flush()
+    }
+    buf.push(line)
+  }
+  flush()
+
+  // 超长章节（> 900 字）按二级小节自然切分，避免单条刷满整个手机屏幕
+  const expanded = []
+  for (const sec of rawSections) {
+    if (sec.length <= 900) {
+      expanded.push(sec)
+      continue
+    }
+    const sLines = sec.split('\n')
+    const chunks = []
+    let cur = []
+    for (const l of sLines) {
+      // 保留大标题跟着第 1 个小节一起，不在大标题后立刻切开
+      const hasBody = cur.some((x) => x.trim() && !isMajorHead(x))
+      if (isSubHead(l) && hasBody && cur.join('\n').length >= 260) {
+        chunks.push(cur.join('\n').trim())
+        cur = [l]
+      } else {
+        cur.push(l)
+      }
+    }
+    if (cur.join('\n').trim()) chunks.push(cur.join('\n').trim())
+    expanded.push(...chunks)
+  }
+
+  const cleaned = expanded
+    .map((sec) => stripMarkdown(sec))
+    .filter((sec) => sec && !isSilence(sec))
+
+  // 若仍超过气泡上限，优先合并相邻最短的两段（用 \n\n 分隔，绝不粘死）
+  while (cleaned.length > limit && cleaned.length > 1) {
+    let bestIdx = 0
+    let bestLen = Infinity
+    for (let i = 0; i < cleaned.length - 1; i += 1) {
+      const pairLen = cleaned[i].length + cleaned[i + 1].length
+      if (pairLen < bestLen) {
+        bestLen = pairLen
+        bestIdx = i
+      }
+    }
+    cleaned.splice(bestIdx, 2, `${cleaned[bestIdx]}\n\n${cleaned[bestIdx + 1]}`)
+  }
+  return cleaned
+}
 
 /**
  * 这一轮最多几条文字气泡。
