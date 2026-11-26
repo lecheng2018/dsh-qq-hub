@@ -648,8 +648,14 @@ export function segmentUnits(text) {
     if (quoteOpen.includes(ch)) quote += 1
     else if (quoteClose.includes(ch) && quote > 0) quote -= 1
     if (ch === '\n') {
-      // 单换行：不写进正文，只当弱边界候选
-      if (buf.trim()) { units.push({ text: buf.trim(), brk: 'nl' }); buf = '' } else buf = ''
+      // 单换行：不写进正文，只当弱边界候选；
+      // 若上一片刚以句末标点结束（如「……8核 64线程算。\n论坛/光猫圈说法：……」），
+      // 把上一片的边界升级为 nl，避免 mergeUnits 合并时用空串粘成同一行吃掉换行。
+      if (buf.trim()) { units.push({ text: buf.trim(), brk: 'nl' }); buf = '' }
+      else {
+        if (units.length > 0 && units[units.length - 1].brk === 'punct') units[units.length - 1].brk = 'nl'
+        buf = ''
+      }
       continue
     }
     buf += ch
@@ -671,8 +677,11 @@ export function segmentUnits(text) {
   //    合——一半概率把两句不同话题粘成一条带 \n 的消息（2026-11-06 线上实锤）。
   //  · **长行**（>30 字/行）或中行超过 3 行 → 长文排版（指标汇报一类）→ soft，能不拆就不拆。
   const lines0 = guarded.split('\n').map((x) => x.trim()).filter(Boolean)
-  const allShort = lines0.length > 1 && lines0.every((x) => x.length <= 15)
-  const fewMedium = lines0.length > 1 && lines0.length <= 3 && lines0.every((x) => x.length <= 30)
+  // 编号条目段落（如「1. G7615A（主控 ZX279132）\nNPU 核心数：…」）是标题+正文的整体，
+  // 绝不能被 fewMedium 当成聊天分行，把小标题单独劈成一条气泡。
+  const isNumberedBlock = /^\d+[.、)]/.test(lines0[0] || '')
+  const allShort = !isNumberedBlock && lines0.length > 1 && lines0.every((x) => x.length <= 15)
+  const fewMedium = !isNumberedBlock && lines0.length > 1 && lines0.length <= 3 && lines0.every((x) => x.length <= 30)
   for (const u of units) {
     if (u.brk !== 'nl') continue
     u.brk = (allShort || fewMedium) ? 'hard' : 'soft'
@@ -737,6 +746,13 @@ export function segmentBubbles(text, rules = {}) {
   const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
   const bubbles = []
   for (const p of paragraphs) {
+    // 编号条目段（如「1. 标题\n说明行1\n说明行2」）：在 keepReports 模式下作为完整条目保留内部换行，
+    // 不随机拆碎、不把小标题单独劈出去、也不拦腰切开子项。
+    const pLines = p.split('\n').map((x) => x.trim()).filter(Boolean)
+    if (rules.keepReports !== false && pLines.length > 1 && /^\d+[.、)]/.test(pLines[0]) && p.length <= 600) {
+      bubbles.push(pLines.join('\n'))
+      continue
+    }
     const units = segmentUnits(p)
     for (const b of mergeUnits(units, { cap, minBubble, rand })) {
       // 单片本身远超上限（英文长句、无标点堆栈）：退回按逗号/空格兜底切，绝不留半句

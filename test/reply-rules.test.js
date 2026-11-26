@@ -125,3 +125,31 @@ test('bubbleLimit：硬顶 ≥ 显式 ||| ≥ 软顶，非法值都有兜底', (
   assert.equal(bubbleLimit({ maxBubbles: Number.NaN, softMaxBubbles: -3 }, 2), 6, '非法值退回默认 6')
   assert.equal(bubbleLimit({}, 0), 6, '显式条数给 0 也至少按 1 条算，不会切出 0 条')
 })
+
+test('编号条目段不把小标题单独劈成一条气泡，且保留子项换行（2026-11-26 实测）', () => {
+  const raw = [
+    '查到的核心数如下：',
+    '',
+    '1. **G7615A（主控 ZX279132）**',
+    '   - **NPU 核心数**：**8核（64线程）**。',
+    '   - 资料比较透明，各路拆机都一致，没有争议。',
+    '',
+    '2. **G7615V2 / F7615（主控 ZX279133）**',
+    '   - 官方宣传页写着 8核 64线程 NPU，拆机评测也按 8核 64线程算。',
+    '   - 论坛老哥认为光猫版阉割成 1核 NPU，并非满血 8核。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 3, '开场白 + 第1点 + 第2点共 3 条：' + JSON.stringify(out))
+  assert.match(out[1], /^1\. G7615A（主控 ZX279132）\nNPU 核心数：8核（64线程）。\n资料比较透明/, '第 1 点小标题与正文保留在同一条内')
+  assert.match(out[2], /8核 64线程算。\n论坛老哥认为光猫版/, '第 2 点子项句号后的换行不被吃掉')
+})
+
+test('长文段落里句末标点紧跟换行时，合并保留换行不再把两行粘死', () => {
+  const raw = [
+    '官方说法：中兴在自家同芯片路由器宣传页明确写着 8核 64线程，拆机评测也按这个算。',
+    '论坛说法：部分老哥认为光猫版做了阉割，实际只有 1核。',
+  ].join('\n')
+  const out = texts(raw, { maxChars: 120, keepReports: false, rand: () => 0.99 })
+  assert.equal(out.length, 1)
+  assert.match(out[0], /也按这个算。\n论坛说法：/, '句号后的换行必须保留')
+})
