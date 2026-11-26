@@ -658,12 +658,16 @@ export async function textToSpeech(text, opt = {}, log) {
   if (!clean) throw new Error('没有要念的文字')
   let file = ''
   let engine = ''
+  let primaryError = null
+  const noFallback = Boolean(opt.noFallback)
   const local = { cosyvoice: cosyvoiceSynth, gptsovits: gptsovitsSynth, http: httpSynth, doubao: doubaoSynth, qwentts: qwenSynth, mimo: mimoSynth }[opt.engine]
   if (local) {
     try {
       file = await local(clean, opt[opt.engine] || {})
       engine = opt.engine
     } catch (error) {
+      if (noFallback) throw error
+      primaryError = error
       log?.warn(`${opt.engine} 失败：${error.message} → 改用 Windows 语音`)
     }
   } else if (opt.engine !== 'windows' && edgeInstalled()) {
@@ -671,11 +675,16 @@ export async function textToSpeech(text, opt = {}, log) {
       file = await edgeSynth(clean, opt.voice || 'zh-CN-XiaoyiNeural', opt.rate, opt.pitch)
       engine = 'edge'
     } catch (error) {
+      if (noFallback) throw error
+      primaryError = error
       log?.warn(error.message, '→ 改用 Windows 语音')
     }
   }
   if (!file) {
-    if (!WIN) throw new Error('语音没合成出来：Linux / macOS 上没有 Windows 自带语音可以兜底，先在「语音」页装好 edge-tts，或者用本地 TTS 服务')
+    if (!WIN) {
+      if (primaryError) throw primaryError
+      throw new Error('语音没合成出来：Linux / macOS 上没有 Windows 自带语音可以兜底，先在「语音」页装好 edge-tts，或者用本地 TTS 服务')
+    }
     file = await windowsSynth(clean)
     engine = 'windows'
   }

@@ -35,20 +35,23 @@ export default {
     const { hub, onebot, local, http } = api.core
     const cloudAsr = createCloudAsr({ getConfig: api.config, log: api.log })
 
-    async function speak(text) {
-      // 本地接口接管语音合成；出错退回内置
+    async function speak(text, { noFallback = false } = {}) {
+      // 本地接口接管语音合成；出错退回内置（试听时直接透出真实错误，不静默兜底）
       if (local.active('tts')) {
         try {
           const file = fileOf(await local.call('tts', { text }))
           if (file && existsSync(file)) return { file, engine: 'local' }
-        } catch (error) {}
+        } catch (error) {
+          if (noFallback) throw error
+        }
       }
-      return textToSpeech(text, api.config().voice, api.log)
+      const voiceOpt = api.config().voice
+      return textToSpeech(text, noFallback ? { ...voiceOpt, noFallback: true } : voiceOpt, api.log)
     }
 
     api.route('/voice/test', async (req) => {
       const b = await http.body(req)
-      const { file, engine } = await speak(String(b.text || `你好呀，我是${characterName('', api.config())}`))
+      const { file, engine } = await speak(String(b.text || `你好呀，我是${characterName('', api.config())}`), { noFallback: true })
       const buf = readFileSync(file)
       return { ok: true, engine, mime: file.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg', data: buf.toString('base64') }
     })

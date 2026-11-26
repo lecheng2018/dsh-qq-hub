@@ -467,3 +467,52 @@ test('S06：voice.http.headers/body 不再明文回显，留空保存保留原�
   const replaced = mergeFromPanel(current, { voice: { http: { headers: 'Authorization: Bearer;NEW' } } })
   assert.equal(replaced.voice.http.headers, 'Authorization: Bearer;NEW', '整段重填则覆盖')
 })
+
+test('textToSpeech：试听（noFallback）与非 Windows 下直接透出豆包 / 百炼 / MiMo 真实报错', async () => {
+  const { textToSpeech } = tts
+  // noFallback: true（面板 /voice/test 试听口径）：无论平台，直接抛出真实引擎错误
+  await assert.rejects(
+    () => textToSpeech('你好', { engine: 'doubao', doubao: { apiKey: '' }, noFallback: true }),
+    /豆包语音还没填 API Key/,
+  )
+  await assert.rejects(
+    () => textToSpeech('你好', { engine: 'qwentts', qwentts: { apiKey: '' }, noFallback: true }),
+    /百炼语音还没填 API Key/,
+  )
+  await assert.rejects(
+    () => textToSpeech('你好', { engine: 'mimo', mimo: { apiKey: 'sk-1', model: 'mimo-v2.5-tts-voiceclone', refAudio: '' }, noFallback: true }),
+    /MiMo 复刻音色要先在「语音」页填参考音频路径/,
+  )
+  // 非 Windows 即使未传 noFallback，也应抛出主引擎报错，不再被「没有 Windows 自带语音」盖住
+  if (process.platform !== 'win32') {
+    await assert.rejects(
+      () => textToSpeech('你好', { engine: 'mimo', mimo: { apiKey: 'sk-1', model: 'mimo-v2.5-tts-voiceclone', refAudio: '' } }),
+      /MiMo 复刻音色要先在「语音」页填参考音频路径/,
+    )
+    // 没有主引擎报错时（例如直接选了 windows），保留原提示
+    await assert.rejects(
+      () => textToSpeech('你好', { engine: 'windows' }),
+      /Linux \/ macOS 上没有 Windows 自带语音可以兜底/,
+    )
+  }
+})
+
+test('voice 模块 /voice/test 路由：失败时直接透出云端引擎真实报错', async () => {
+  const voiceMod = (await import('../src/modules/voice/index.js')).default
+  const routes = new Map()
+  voiceMod.setup({
+    config: () => ({ voice: { engine: 'mimo', mimo: { apiKey: 'sk-1', model: 'mimo-v2.5-tts-voiceclone', refAudio: '' } } }),
+    log: { warn() {}, info() {}, debug() {} },
+    dsh: { get: () => null },
+    core: {
+      hub: {},
+      onebot: {},
+      local: { active: () => false },
+      http: { body: async () => ({ text: '试听一句' }) },
+    },
+    route: (path, fn) => routes.set(path, fn),
+  })
+  const handler = routes.get('/voice/test')
+  assert.equal(typeof handler, 'function')
+  await assert.rejects(() => handler({}), /MiMo 复刻音色要先在「语音」页填参考音频路径/)
+})
