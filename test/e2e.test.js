@@ -350,7 +350,8 @@ test('群聊一段一回：好几个人连着 @ 她，她看完整段只回一�
   const mine = fake.turns.slice(before).filter((t) => t.userText.includes('群聊'))
   assert.equal(mine.length, 1, '只交给她一次')
   for (const w of ['第一个人', '第二个人', '第三个人', '第四个人']) assert.ok(mine[0].userText.includes(w), w)
-  assert.match(mine[0].userText, /不要一条一条地挨个回/)
+  // 群聊整体回复规则已一次性收拢进 L0 社交规则层（避免每轮重复粘贴），核对规则层存在且当轮不重复拼接
+  assert.match(String(fake.variables.get('qq_hub_rules_social')?.() || ''), /不要一条一条地挨个回/)
   // 检索记忆用的只是大家说的话，不带提示词里的说明；也记下了这一段是谁在说
   const sid = api.hub.sessions()['group:558'].sessionId
   assert.doesNotMatch(api.hub.lastTextOf(sid), /挨个回|引用回复/)

@@ -23,7 +23,7 @@ import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
 import { createSystemTurns } from '../chat/system-turns.js'
 import { createTurnController } from '../chat/turn-controller.js'
-import { createContextAssembly, createThreadProvider, createTimeScaleProvider, createAffectiveProvider, AFFECTIVE_PROVIDER_ID, TIME_SCALE_PROVIDER_ID, THREAD_PROVIDER_ID } from '../chat/context-assembly.js'
+import { createContextAssembly, createThreadProvider, createAffectiveProvider, AFFECTIVE_PROVIDER_ID } from '../chat/context-assembly.js'
 import { isChatKey } from '../chat/chat-key.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
@@ -737,26 +737,15 @@ export function createModularCore({
     throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
   }
 
-  // ---------- Context Assembly（模块上下文 + 人格 + 挂起线索 + 时空标尺） ----------
-  // 线索/标尺 provider 声明 scope='global' 但内部 perChat：宿主只建一个全局实例，
+  // ---------- Context Assembly（模块上下文 + 人格 + 挂起线索） ----------
+  // 线索 provider 声明 scope='global' 但内部 perChat：宿主只建一个全局实例，
   // 真正的聊天域由每次 assemble({ chatKey }) 带进来，并过 parseChatKey 校验。
-  // 优先级：persona(1000) > 线索(800) > 时空标尺(790) > 关系温度(780) > legacy(100)。
+  // 注：不再把每分钟跳字的 createTimeScaleProvider 塞进 qq-hub-context 静态快照——
+  // DSH runtimeContext.project() 会因内容变化每轮重印整坨 ~1.5KB <system-reminder>；
+  // 而每轮消息头已有 nowLine()（精确钟点 + 距上一条间隔）与 DSH time-context，无需重复投喂。
+  // 优先级：persona(1000) > 线索(800) > 关系温度(780) > legacy(100)。
   const threadProviders = threadLedger
-    ? [
-      createThreadProvider({ ledger: threadLedger, perChat: true, includeDormant: true }),
-      createTimeScaleProvider({
-        perChat: true,
-        // 上次互动时间戳：优先用会话登记表的 markTurn 记录，缺失就不注入（不编造时间）
-        // registry 没有 .get()，只读视图是 peek()；lastTurnAt 由 markTurn() 维护。
-        // 注意时序：assemble（:781）早于 turnAt（:823），所以这里读到的确是**上一轮**的时间戳。
-        resolveLastAt: (chatKey) => {
-          try {
-            const at = registry.peek(chatKey)?.lastTurnAt
-            return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : undefined
-          } catch { return undefined }
-        },
-      }),
-    ]
+    ? [createThreadProvider({ ledger: threadLedger, perChat: true, includeDormant: true })]
     : []
   // US-015 · 关系温度：图谱模块算出的 tone 必须真的影响一句话。
   // - 惰性现取（mods.use 每次问一次）：模块关掉/热重载/被替换都不会踩到旧导出；
@@ -933,17 +922,25 @@ export function createModularCore({
     })
     groups.setRefs(gid, refs)
     const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
-    const head = (older.length ? `【群聊 ${name}】之前在聊：\n${older.map(block).join('\n')}\n\n` : '') +
-      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${numbered.join('\n')}\n\n` +
-      '把这一段当成整体来回：一般说一两句就好，回给最需要回的那个人或者整个话题，不要一条一条地挨个回。\n' +
-      '若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。\n' +
-      '下方缩进一行、以「↳ 转述」开头的，是这条发言人在引用别人的原话：那句话的主人是「↳ 转述」后面写的那个名字，不是写这条消息的人。要回应转述里的内容，就引用它真正的主人；不确定是谁就干脆不引用，在正文里点名说。\n' +
-      '大多数时候直接说就行。只有想专门接上面方括号标出的某一条新消息时，才在那句话开头写 <reply:…>，会以「引用回复」发出；一次最多引用一条。写法三选一，都认：\n' +
-      '  · <reply:编号> —— 编号必须且只能是上面方括号里的数字，如 <reply:1>；\n' +
-      '  · <reply:昵称> —— 昵称就是方括号后面那个名字，如 <reply:初恋>；同名多条时取他最近的一条；\n' +
-      '  · <reply:QQ号> —— QQ 号就是名字后面括号里的数字，如 <reply:900000014>。\n' +
-      '括号说明里的数字、别人引用里的数字都不是编号，不要拿来当 <reply:…>。写错了不会挂错人，只会按普通消息发出去。\n' +
-      '要 @ 某个人（对方会收到提醒），写 <at:QQ号>，QQ 号就是上面名字后面括号里的数字。'
+    const olderText = older.length ? older.map(block).join('\n') : ''
+    const freshText = numbered.join('\n')
+    // 群聊完整协议（整体来回 / ↳ 转述 / <reply:> / <at:>）已一次性放进 L0 协议层，
+    // 每轮群消息不再重复粘贴 686 字说明书；仅在当轮真的出现图片占位或转述时附 1 行按需提醒。
+    const hasMediaOrPlaceholder = olderText.includes('（图片/表情）')
+      || freshText.includes('（图片/表情）')
+      || members.some((m) => (m?.segments ?? []).some((s) => s?.type === 'image' || s?.type === 'mface'))
+      || fresh.some((x) => Array.isArray(x.images) && x.images.length > 0)
+    const hasQuoteRelay = olderText.includes('↳ 转述') || freshText.includes('↳ 转述')
+    const tailHints = []
+    if (hasMediaOrPlaceholder) {
+      tailHints.push('若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。')
+    }
+    if (hasQuoteRelay) {
+      tailHints.push('（注：「↳ 转述」是引用别人的原话，原话主人是「↳ 转述」后面写的名字。）')
+    }
+    const head = (olderText ? `【群聊 ${name}】之前在聊：\n${olderText}\n\n` : '') +
+      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${freshText}` +
+      (tailHints.length ? `\n\n${tailHints.join('\n')}` : '')
     // 触发轮自身的图片一并附上；引用已由 quoteNote 挂在 block(x) 下方，不脱出做孤立段落。
     // 没触发回合的那几条群消息带的图也在这里补：群缓冲里挂着 image 块，否则她只看得到
     // 「（图片/表情）」文字，而触发轮 members 已经没有原始段可拼（真机：群里看不懂表情包）。

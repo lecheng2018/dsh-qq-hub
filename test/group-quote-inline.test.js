@@ -31,6 +31,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createModularCore } from '../src/host/modular-core.js'
+import { rulesText } from '../src/persona/personas.js'
+import { normalize } from '../src/core/config.js'
 
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -135,15 +137,15 @@ test('群聊提示词：引用说明必须内联在发言人行内，末尾不�
     assert.doesNotMatch(prompt, /蒸你们变坏了[^\n]*「豆包变了」/, '引用正文不得混进发言行本体')
 
     // 2. 验证末尾不再出现换行后脱离发言人的独立孤立引用段
-    // 提示词结尾在「QQ 号就是上面名字后面括号里的数字。」之后不应再有一整行单独的「（引用 ... 的消息」
-    const afterInstructions = prompt.split('QQ 号就是上面名字后面括号里的数字。')[1] || ''
-    assert.doesNotMatch(afterInstructions, /（引用 [^\n]* 的消息/, '提示词说明之后绝不能再有孤立脱离的引用段落')
+    assert.doesNotMatch(prompt, /\n（引用 [^\n]* 的消息/, '提示词末尾绝不能再有孤立脱离的引用段落')
+    assert.match(prompt, /「↳ 转述」是引用别人的原话/, '当轮含转述时附 1 行按需提醒')
 
-    // 3. 验证指示文案明确了编号/昵称/QQ号三种写法，以及 ↳ 转述 的主人是谁
-    assert.match(prompt, /编号必须且只能是上面方括号里的数字/, '提示词明确要求编号只能对应方括号标号')
-    assert.match(prompt, /<reply:昵称>/, '提示词给出按昵称引用的写法')
-    assert.match(prompt, /<reply:QQ号>/, '提示词给出按 QQ 号引用的写法')
-    assert.match(prompt, /以「↳ 转述」开头的[^\n]*真正的主人/, '提示词说明 ↳ 转述 后面才是那句话的主人')
+    // 3. 完整编号/昵称/QQ号三种写法与 ↳ 转述 归属说明已收拢进群聊 L0 协议层（避免每轮重复粘贴 686 字）
+    const socialRules = rulesText('social', normalize({ ownerQQ: '10000001' }))
+    assert.match(socialRules, /编号必须且只能是上面方括号里的数字/, '群聊协议层明确要求编号只能对应方括号标号')
+    assert.match(socialRules, /<reply:昵称>/, '群聊协议层给出按昵称引用的写法')
+    assert.match(socialRules, /<reply:QQ号>/, '群聊协议层给出按 QQ 号引用的写法')
+    assert.match(socialRules, /以「↳ 转述」开头的[^\n]*真正的主人/, '群聊协议层说明 ↳ 转述 后面才是那句话的主人')
   } finally {
     await core.dispose()
   }
