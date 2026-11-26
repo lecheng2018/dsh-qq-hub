@@ -20,6 +20,15 @@ import { createFakeDsh } from './helpers/fake-dsh.js'
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** 等待合流窗口（unref 定时器）唤醒执行：用 ref 定时器托住 Node 22 事件循环，避免误判排空（cancelledByParent）。 */
+function waitWithKeepAlive(promise, timeoutMs = 5000) {
+  let timer = null
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`等待回合进入执行超时（${timeoutMs}ms）`)), timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 let dataDir
 let previousDataDir
 let fixtures
@@ -183,7 +192,7 @@ test('在途 engaged 占用立即计入预算：模型思考期间连来多条�
   // 第 2 轮：engaged 放行（占用唯一 1 条额度），进入运行并卡在 brain
   const r2 = await f.core.dispatchLegacyEvent(groupMsg(102, '这个游戏真好玩'))
   assert.equal(r2.handled, 'offered')
-  await secondTurnRunning
+  await waitWithKeepAlive(secondTurnRunning)
 
   // 第 2 轮还在思考时连来两条相关消息：因为已有 1 个在途 engaged，必须直接拦下，绝不能再排新回合
   const r3 = await f.core.dispatchLegacyEvent(groupMsg(103, '游戏更新了吗'))
@@ -224,7 +233,7 @@ test('排队中的后序 engaged 回合：前序选 [沉默] 退场后不再回�
   // 第 2 轮：engaged 放行并进入 running
   const r2 = await f.core.dispatchLegacyEvent(groupMsg(202, '游戏还不错'))
   assert.equal(r2.handled, 'offered')
-  await secondTurnRunning
+  await waitWithKeepAlive(secondTurnRunning)
 
   // 第 2 轮思考期间，第 3 轮（额度第 2 条）合法排队进入队列
   const r3 = await f.core.dispatchLegacyEvent(groupMsg(203, '游戏卡顿了'))
