@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dataDir } from '../core/store.js'
 import { openMemoryFiles } from './memory-files.js'
-import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, agoText, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
+import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 import { visibleScopes, isValidScope } from './memory-scope.js'
 import { createVectorChannel, fuseRrf } from './memory-vector.js'
 import { createReranker } from './memory-rerank.js'
@@ -1018,9 +1018,24 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (sty.length || self.length) {
       parts.push('（说话方式：' + [sty.length ? '和' + (isGroupChat ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
     }
-    // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）
+    // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）。
+    // 超过 30 分钟改用固定钟点（HH:mm / 昨天 HH:mm），避免「1 小时前 → 2 小时前」每小时翻字
+    // 触发 DSH runtime-context 重印整段 <system-reminder> 快照。
+    const stableEventTime = (at, now = Date.now()) => {
+      if (!at) return ''
+      const m = Math.max(0, Math.round((now - at) / 60000))
+      if (m < 30) return '刚才'
+      const d = new Date(at)
+      const n = new Date(now)
+      const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+      const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+      const days = Math.round((day0(n) - day0(d)) / 86400_000)
+      if (days <= 0) return `${hm} `
+      if (days === 1) return `昨天 ${hm} `
+      return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm} `
+    }
     const recent = recentEvents(24, 4, chat)
-    if (recent.length) parts.push('（你最近做过的事：' + recent.map((m) => `${agoText(m.at)}${m.text}`).join('；') + '。聊到了可以自然提起。）')
+    if (recent.length) parts.push('（你最近做过的事：' + recent.map((m) => `${stableEventTime(m.at)}${m.text}`).join('；') + '。聊到了可以自然提起。）')
     // 注意：随每条消息变化的「相关记忆」不放在这里（#79）——运行时上下文快照每轮都会追加到历史，
     // 内容一变就多一份快照；放在用户消息里（recallHint）只占当轮，不会越滚越大。
     return parts.join('\n')
@@ -1088,6 +1103,48 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       + blocks.join('\n\n') + '\n【以上是最近群里的情况】'
   }
 
+  // 同会话记忆召回冷却：按 sessionId 记录最近注入过的记忆 ID，避免同一条高权记忆在连续 10 轮里
+  // 被重复粘贴 7 遍（真机审计：私聊近 10 轮记忆占比 72.9%，反复刷同一条「主人反感/约定」制造人机感）。
+  // 冷却只作用于传入 sessionId 的连续会话；换新会话（压缩/重置）自动清零；不传 sessionId 保持无状态。
+  const SESSION_RECALL_COOLDOWN_TURNS = 8
+  const SESSION_RECALL_MAX_SESSIONS = 200
+  const sessionRecall = new Map() // sessionId -> { turn: number, ids: Map<string, number> }
+
+  function recentSessionRecalled (sessionId) {
+    const sid = sessionId ? String(sessionId) : ''
+    if (!sid) return { ids: new Set(), hasPriorTurns: false }
+    const rec = sessionRecall.get(sid)
+    if (!rec) return { ids: new Set(), hasPriorTurns: false }
+    const nextTurn = rec.turn + 1
+    const ids = new Set()
+    for (const [id, lastTurn] of rec.ids) {
+      if (nextTurn - lastTurn < SESSION_RECALL_COOLDOWN_TURNS) ids.add(id)
+      else rec.ids.delete(id)
+    }
+    return { ids, hasPriorTurns: rec.turn > 0 }
+  }
+
+  function recordSessionRecalled (sessionId, memIds) {
+    const sid = sessionId ? String(sessionId) : ''
+    if (!sid) return
+    let rec = sessionRecall.get(sid)
+    if (!rec) {
+      if (sessionRecall.size >= SESSION_RECALL_MAX_SESSIONS) {
+        const oldest = sessionRecall.keys().next().value
+        if (oldest !== undefined) sessionRecall.delete(oldest)
+      }
+      rec = { turn: 0, ids: new Map() }
+      sessionRecall.set(sid, rec)
+    }
+    rec.turn += 1
+    for (const id of memIds) {
+      if (id) rec.ids.set(String(id), rec.turn)
+    }
+    for (const [id, lastTurn] of rec.ids) {
+      if (rec.turn - lastTurn >= SESSION_RECALL_COOLDOWN_TURNS) rec.ids.delete(id)
+    }
+  }
+
   /**
    * 这一轮聊到的事相关的记忆（#79）：内容随每条消息变化，所以由模块在「交给她的内容」里附上，
    * 不放进每轮都会追加的运行时上下文快照。最多 4 条、总长 ≤ 300 字。
@@ -1099,7 +1156,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!q) return ''
     const backdrop = groupBackdrop(chat, q)
     const recent = recentEvents(24, 4, chat)
-    const shown = new Set(recent.map((m) => m.id))
+    const { ids: cooledIds, hasPriorTurns } = recentSessionRecalled(sessionId)
+    const shown = new Set([...recent.map((m) => m.id), ...cooledIds])
     // 说话人消解（P2-2）：群聊里「他养了什么」的「他」是这一轮在说话的人 ——
     // 把 speakersOf 当 about 数组传下去，检索时关于这些人的记忆加分。
     const about = chat && chat.kind === 'private' ? chat.userId
@@ -1113,15 +1171,15 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const maxItems = Math.max(1, Math.min(20, Math.round(Number(memCfg.hintCount) || 8)))
     const maxChars = Math.max(120, Math.min(2000, Math.round(Number(memCfg.hintMaxChars) || 600)))
     const hits = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
-    return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars })
+    return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback: !hasPriorTurns })
   }
 
   /** 兜底 + 渲染（recallHint / recallHintFused 共用）。 */
-  function hintBody(hits, { chat, shown, backdrop, maxItems, maxChars }) {
+  function hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback = true }) {
     // 泛问兜底（P2-1）：「他最近怎么样」和记忆没有任何字词/概念重叠，recall 严格按相关性返回空，
     // 模型会完全失忆。注入场景退而求其次给这个作用域最近的重要记忆（明确检索/清空契约不受影响）。
-    if (!hits.length) {
-      const now = Date.now()
+    // 同一会话后续轮次（allowFallback=false）不再在无命中时强塞无关兜底记忆，避免每轮闲聊反复刷旧事。
+    if (!hits.length && allowFallback) {
       const fallback = (chat ? indexFor(chat).docs : [])
         .filter((d) => !d.it.invalidAt && !shown.has(d.it.id))
         .sort((a, b) => (Number(b.it.importance) || 0.5) - (Number(a.it.importance) || 0.5) || b.it.at - a.it.at)
@@ -1129,20 +1187,27 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
         .map((d) => ({ it: d.it, score: 0.3, why: ['（泛问兜底·最近重要）'] }))
       hits.push(...fallback)
     }
-    if (!hits.length) return backdrop
+    if (!hits.length) {
+      recordSessionRecalled(sessionId, [])
+      return backdrop
+    }
     // 按条收，不按字腰斩：以前 4 条压 300 字再 slice，一条记到一半被切断，
     // 她读到的就是半句话（2026-11-05 实测记忆平均 165 字，等于只能看见不到两条）。
     const lines = []
+    const emittedIds = []
     let used = 0
     for (const h of hits) {
       let line = memoryLine(h.it)
       if (line.length > 120) line = cutAtSentence(line, 120)
       if (lines.length && used + line.length + 1 > maxChars) break
       lines.push(line)
+      emittedIds.push(h.it.id)
       used += line.length + 1
     }
+    recordSessionRecalled(sessionId, emittedIds)
     const body = lines.join('\n')
-    return ['（你记得这些事，方括号里是什么时候的事，聊到相关的就自然用上，别把老事当新事说，也别说「根据记忆」：' + body + '）', backdrop].filter(Boolean).join('\n')
+    // 使用规则（方括号时间、别说「根据记忆」）已一次性写入系统提示词 L0 协议层，这里只留极简标题。
+    return ['（你记得这些事：\n' + body + '）', backdrop].filter(Boolean).join('\n')
   }
 
   /**
@@ -1160,7 +1225,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     try {
       const backdrop = groupBackdrop(chat, q)
       const recent = recentEvents(24, 4, chat)
-      const shown = new Set(recent.map((m) => m.id))
+      const { ids: cooledIds, hasPriorTurns } = recentSessionRecalled(sessionId)
+      const shown = new Set([...recent.map((m) => m.id), ...cooledIds])
       // 说话人消解（P2-2），与 recallHint 同口径。
       const about = chat && chat.kind === 'private' ? chat.userId
         : chat && chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3)
@@ -1195,7 +1261,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       vecHits.sort((a, b) => b.score - a.score)
       let hits = fuseRrf(bm25, vecHits, { limit: maxItems })
       hits = await reranker.rerank(q, hits)
-      return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars })
+      return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback: !hasPriorTurns })
     } catch (error) {
       return recallHint(chat, queryText, prevText, { sessionId }) // 任何意外：退回同步主路径
     }

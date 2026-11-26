@@ -4,7 +4,7 @@
 // 长文排版里的换行不算边界；句子按句末标点攒到「最短条长」才断；条数上限均匀分组。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bubbleLimit, parseReply, replyRules } from '../src/chat/reply.js'
+import { bubbleLimit, convertMarkdownTables, parseReply, replyRules } from '../src/chat/reply.js'
 
 const texts = (raw, rules) => parseReply(raw, rules).items.filter((i) => i.kind === 'text').map((i) => i.value)
 
@@ -124,4 +124,131 @@ test('bubbleLimit：硬顶 ≥ 显式 ||| ≥ 软顶，非法值都有兜底', (
   assert.equal(bubbleLimit({ maxBubbles: 2, softMaxBubbles: 1 }, 4), 2, '谁都不能越过面板硬顶')
   assert.equal(bubbleLimit({ maxBubbles: Number.NaN, softMaxBubbles: -3 }, 2), 6, '非法值退回默认 6')
   assert.equal(bubbleLimit({}, 0), 6, '显式条数给 0 也至少按 1 条算，不会切出 0 条')
+})
+
+test('编号条目段不把小标题单独劈成一条气泡，且保留子项换行（2026-11-26 实测）', () => {
+  const raw = [
+    '查到的核心数如下：',
+    '',
+    '1. **G7615A（主控 ZX279132）**',
+    '   - **NPU 核心数**：**8核（64线程）**。',
+    '   - 资料比较透明，各路拆机都一致，没有争议。',
+    '',
+    '2. **G7615V2 / F7615（主控 ZX279133）**',
+    '   - 官方宣传页写着 8核 64线程 NPU，拆机评测也按 8核 64线程算。',
+    '   - 论坛老哥认为光猫版阉割成 1核 NPU，并非满血 8核。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 3, '开场白 + 第1点 + 第2点共 3 条：' + JSON.stringify(out))
+  assert.match(out[1], /^1\. G7615A（主控 ZX279132）\nNPU 核心数：8核（64线程）。\n资料比较透明/, '第 1 点小标题与正文保留在同一条内')
+  assert.match(out[2], /8核 64线程算。\n论坛老哥认为光猫版/, '第 2 点子项句号后的换行不被吃掉')
+})
+
+test('长文段落里句末标点紧跟换行时，合并保留换行不再把两行粘死', () => {
+  const raw = [
+    '官方说法：中兴在自家同芯片路由器宣传页明确写着 8核 64线程，拆机评测也按这个算。',
+    '论坛说法：部分老哥认为光猫版做了阉割，实际只有 1核。',
+  ].join('\n')
+  const out = texts(raw, { maxChars: 120, keepReports: false, rand: () => 0.99 })
+  assert.equal(out.length, 1)
+  assert.match(out[0], /也按这个算。\n论坛说法：/, '句号后的换行必须保留')
+})
+
+test('小数开头（2.5G / 1.5W）不被误判成数字列表项强插空行把标题劈孤立', () => {
+  const raw = [
+    '### 1. 有线 & NPU 转发实测（4 台一致）',
+    '* **2.5G 线速能力**：两颗芯片在 64 字节小包下都能双向跑满 2.5G。',
+    '* **结论**：四台实测网速没区别。',
+    '',
+    '### 2. 功耗与发热',
+    '',
+    'G7615A 功耗最高，关闭 Wi-Fi 约降 1.5W。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 2, '应为 2 条完整编号气泡：' + JSON.stringify(out))
+  assert.match(out[0], /^1\. 有线 & NPU 转发实测（4 台一致）\n2\.5G 线速能力：/, '2.5G 不应触发空行拆出孤立标题')
+  assert.match(out[1], /^2\. 功耗与发热\nG7615A 功耗最高/, '模型自己在编号标题后多打空行时也应与正文合并')
+})
+
+test('长 Markdown 文档（含表格与分割线）：表格转规格卡、按章节干净分大段，绝不缝合下章标题', () => {
+  const raw = [
+    '好了，把你手头的 **烽火 HG5585F** 和 **星网锐捷 SG350H** 一次理清。',
+    '',
+    '---',
+    '',
+    '### 一、参数总表',
+    '',
+    '| 型号 | 主控 | 架构 |',
+    '| :--- | :--- | :--- |',
+    '| **中兴 G7615A** | ZX279132 | 4 核 A53 |',
+    '| **烽火 HG5585F** | 达发 AN7581 | 4 核 ARMv8 |',
+    '',
+    '---',
+    '',
+    '### 二、实测结论',
+    '',
+    '#### 1. 有线实测',
+    '- 两颗芯片在 **64 字节小包** 环境下都能跑满 2.5G。',
+    '',
+    '---',
+    '',
+    '### 三、选购建议',
+    '',
+    '直接用 **SG350H** 改桥接就行。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 4, '开场白 + 一 + 二 + 三 = 4 条干净气泡：' + JSON.stringify(out))
+  assert.doesNotMatch(out[0], /━━|一、/, '开场白不粘分割线和下章标题')
+  assert.match(out[0], /手头的烽火 HG5585F/, '中文加粗旁多余空格清理，且中英文间保留空格')
+  assert.match(out[1], /^一、参数总表[\s\S]*▪ 中兴 G7615A\n主控：ZX279132｜架构：4 核 A53/, 'Markdown 表格转成手机规格卡')
+  assert.doesNotMatch(out[1], /:---/, '不再把 | :--- | 乱码发到 QQ')
+  assert.match(out[2], /^二、实测结论[\s\S]*在 64 字节小包环境下/, '二章标题与正文在同一条，且 64 字节前保留自然空格')
+  assert.match(out[3], /^三、选购建议[\s\S]*直接用 SG350H 改桥接就行/, '三章标题与正文在同一条')
+})
+
+test('长 Markdown 文档不受 softMaxBubbles 收尾软顶压扁，仍按硬顶 maxBubbles 分章', () => {
+  const raw = [
+    '### 一、参数总表',
+    '| 型号 | 主控 |',
+    '| :--- | :--- |',
+    '| G7615A | ZX279132 |',
+    '| HG5585F | AN7581 |',
+    '',
+    '---',
+    '',
+    '### 二、实测结论',
+    '两颗芯片在 64 字节小包下都能跑满 2.5G 端口线速，功耗方面双核更低，长时间运行温度更稳。',
+    '',
+    '---',
+    '',
+    '### 三、结论建议',
+    '如果只是纯桥接拨号，优先选低功耗稳定款；如果要刷机跑插件，优先选四核大内存款。',
+  ].join('\n')
+  const out = texts(raw, { ...replyRules({}, false), softMaxBubbles: 1 })
+  assert.equal(out.length, 3, 'softMaxBubbles=1 不应把三章报告压成 1 条巨块：' + JSON.stringify(out))
+})
+
+test('长 Markdown 文档里的围栏代码块含 # 注释或 --- 时不被拦腰切开', () => {
+  const raw = [
+    '### 一、准备说明',
+    '下面这段配置里自带注释和 YAML 分隔线，直接复制即可运行，不需要拆成两段发。请先确认你的光猫已经开启 Telnet 并且备份过原厂分区配置，以免改坏后无法恢复默认桥接参数；另外如果是双千兆加 2.5G 口机型，记得提前记录好光猫背面的 LOID 与宽带 VLAN 参数。',
+    '',
+    '### 二、示例配置',
+    '```yaml',
+    '# 这里是代码块里的注释，绝不能当成一级标题切开',
+    '---',
+    'mode: bridge',
+    'port: 2500',
+    'vlan: 41',
+    '```',
+    '配置生效后重启接口即可，如果日志正常输出就说明桥接成功，可以继续测 2.5G 端口双向线速和长时烤机温度表现。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 2, '应保持两大章，不把代码块劈成多条：' + JSON.stringify(out))
+  assert.match(out[1], /这里是代码块里的注释[\s\S]*mode: bridge[\s\S]*port: 2500/, '代码块完整保留在第二章里')
+})
+
+test('convertMarkdownTables：仅有表头和对齐行、无数据行时原样保留，不丢行也不拼出 undefined', () => {
+  const src = '| 型号 | 主控 |\n| :--- | :--- |'
+  assert.equal(convertMarkdownTables(src), src)
 })
