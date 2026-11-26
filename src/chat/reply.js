@@ -470,8 +470,9 @@ export function stripMarkdown(text) {
   s = s.replace(/——+\s*$/gm, '')
   s = s.replace(/——+/g, '，')
 
-  // 核心排版：数字列表项（1. 2. 3. 等）前面如果不是空行，自动补空行，强制撑开呼吸感
-  s = s.replace(/([^\n])\r?\n(\d+[.、]\s*)/g, '$1\n\n$2')
+  // 核心排版：数字列表项（1. 2. 3. / 1、2、等）前面如果不是空行，自动补空行，强制撑开呼吸感；
+  // 排除小数开头（如 2.5G / 1.5W / 3.14），避免把「2.5G 线速能力」误认成第 2 条列表强插空行把上一行标题劈孤立。
+  s = s.replace(/([^\n])\r?\n(\d+(?:\.(?!\d)|、)\s*)/g, '$1\n\n$2')
 
   // 分割线转为清晰的 QQ 细分割线
   s = s.replace(/^[*-]{3,}$/gm, '━━━━━━━━━━━━━━')
@@ -679,7 +680,7 @@ export function segmentUnits(text) {
   const lines0 = guarded.split('\n').map((x) => x.trim()).filter(Boolean)
   // 编号条目段落（如「1. G7615A（主控 ZX279132）\nNPU 核心数：…」）是标题+正文的整体，
   // 绝不能被 fewMedium 当成聊天分行，把小标题单独劈成一条气泡。
-  const isNumberedBlock = /^\d+[.、)]/.test(lines0[0] || '')
+  const isNumberedBlock = /^\d+(?:\.(?!\d)|[、)])/.test(lines0[0] || '')
   const allShort = !isNumberedBlock && lines0.length > 1 && lines0.every((x) => x.length <= 15)
   const fewMedium = !isNumberedBlock && lines0.length > 1 && lines0.length <= 3 && lines0.every((x) => x.length <= 30)
   for (const u of units) {
@@ -726,7 +727,7 @@ function structuredReport(t) {
   if (heads && heads.length >= 2) return true
   const lines = t.split('\n').map((x) => x.trim()).filter(Boolean)
   if (lines.length < 3) return false
-  const items = lines.filter((x) => /^(\d+[.、)]|[-*•·])/.test(x)).length
+  const items = lines.filter((x) => /^(\d+(?:\.(?!\d)|[、)])|[-*•·])/.test(x)).length
   if (items * 2 < lines.length) return false
   const avg = lines.reduce((n, x) => n + x.length, 0) / lines.length
   return avg <= 40
@@ -742,14 +743,27 @@ export function segmentBubbles(text, rules = {}) {
   // 清单/汇报/指标整段发（拆开对应关系就散了）。判整段，不按段落判，
   // 否则「【结论】…」和下面的编号列表会被切成两条。
   if (rules.keepReports !== false && t.length <= 1200 && structuredReport(t)) return [t]
-  // 段落（空行）是硬边界：一段一条，段内再按句子攒
-  const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
+  // 段落（空行）是硬边界：一段一条，段内再按句子攒；
+  // 孤立单行编号标题（如模型自己在「### 1. 标题」后多敲了空行）自动并入下一段正文，不单独成条。
+  const rawParagraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
+  const paragraphs = []
+  const isNumberedHead = (s) => /^\d+(?:\.(?!\d)|[、)])\s*\S/.test(s)
+  for (let i = 0; i < rawParagraphs.length; i += 1) {
+    const p = rawParagraphs[i]
+    const next = rawParagraphs[i + 1]
+    if (rules.keepReports !== false && !p.includes('\n') && isNumberedHead(p) && p.length <= 40 && next && !isNumberedHead(next)) {
+      paragraphs.push(`${p}\n${next}`)
+      i += 1
+      continue
+    }
+    paragraphs.push(p)
+  }
   const bubbles = []
   for (const p of paragraphs) {
     // 编号条目段（如「1. 标题\n说明行1\n说明行2」）：在 keepReports 模式下作为完整条目保留内部换行，
     // 不随机拆碎、不把小标题单独劈出去、也不拦腰切开子项。
     const pLines = p.split('\n').map((x) => x.trim()).filter(Boolean)
-    if (rules.keepReports !== false && pLines.length > 1 && /^\d+[.、)]/.test(pLines[0]) && p.length <= 600) {
+    if (rules.keepReports !== false && pLines.length > 1 && isNumberedHead(pLines[0]) && p.length <= 600) {
       bubbles.push(pLines.join('\n'))
       continue
     }
