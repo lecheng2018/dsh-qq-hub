@@ -130,3 +130,17 @@ test('记忆分层和完整守卫默认开启（纯增益、不改她的回复�
   assert.equal(memoryPrivacy.defaults.enabled, true)
   assert.equal(completeGuard.defaults.enabled, true)
 })
+
+test('complete-guard：分点/分两段规则只在私聊注入，群聊不注入', () => {
+  let ruleFn = null
+  completeGuard.setup({
+    settings: () => ({ ...completeGuard.defaults }),
+    on: () => {},
+    rule: (fn) => { ruleFn = fn },
+    route: () => {},
+    log: { warn() {} },
+  })
+  assert.equal(typeof ruleFn, 'function')
+  assert.match(ruleFn('private'), /先说结论/)
+  assert.equal(ruleFn('social'), '', '群聊（social）不注入分点汇报规则')
+})

@@ -163,6 +163,16 @@ const isUnsupportedEffort = (error) => {
   return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort|reasoning effort/i.test(msg)
 }
 
+/** 网关把 reasoningEffort 拼成 `<model>-<effort>` 后报模型不存在/不可用（例如 `Unknown model ID: xxx-low`）。 */
+const isEffortModelUnavailable = (error, effort) => {
+  const e = String(effort || '').trim()
+  if (!e) return false
+  const msg = String((error && (error.message || error.code)) || '')
+  if (!msg) return false
+  const re = new RegExp(`-${e.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}(?:\\b|[^a-z0-9_-]|$)`, 'i')
+  return re.test(msg) && /unknown model id|unavailable|model_not_found|not available/i.test(msg)
+}
+
 /**
  * 这次报错是不是「模型不收图片」。各家措辞不同：
  *   OpenAI 系：Invalid content type / expected text / image_url is not supported
@@ -387,8 +397,8 @@ export async function askModel (dsh, o) {
       }
       return out
     } catch (error) {
-      // 能力探测没查到 / 模型临时不认：去掉思考强度再来一次
-      if (attempt === 0 && effort && isUnsupportedEffort(error)) {
+      // 能力探测没查到 / 模型临时不认 / 网关把 -low 拼进模型名报不可用：去掉思考强度再来一次
+      if (attempt === 0 && effort && (isUnsupportedEffort(error) || isEffortModelUnavailable(error, effort))) {
         cacheReasoning(t.provider, t.model, null)
         effort = undefined
         continue

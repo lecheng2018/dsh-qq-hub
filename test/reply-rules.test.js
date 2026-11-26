@@ -4,7 +4,7 @@
 // 长文排版里的换行不算边界；句子按句末标点攒到「最短条长」才断；条数上限均匀分组。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { bubbleLimit, parseReply, replyRules } from '../src/chat/reply.js'
+import { bubbleLimit, convertMarkdownTables, parseReply, replyRules } from '../src/chat/reply.js'
 
 const texts = (raw, rules) => parseReply(raw, rules).items.filter((i) => i.kind === 'text').map((i) => i.value)
 
@@ -204,4 +204,51 @@ test('长 Markdown 文档（含表格与分割线）：表格转规格卡、按�
   assert.doesNotMatch(out[1], /:---/, '不再把 | :--- | 乱码发到 QQ')
   assert.match(out[2], /^二、实测结论[\s\S]*在 64 字节小包环境下/, '二章标题与正文在同一条，且 64 字节前保留自然空格')
   assert.match(out[3], /^三、选购建议[\s\S]*直接用 SG350H 改桥接就行/, '三章标题与正文在同一条')
+})
+
+test('长 Markdown 文档不受 softMaxBubbles 收尾软顶压扁，仍按硬顶 maxBubbles 分章', () => {
+  const raw = [
+    '### 一、参数总表',
+    '| 型号 | 主控 |',
+    '| :--- | :--- |',
+    '| G7615A | ZX279132 |',
+    '| HG5585F | AN7581 |',
+    '',
+    '---',
+    '',
+    '### 二、实测结论',
+    '两颗芯片在 64 字节小包下都能跑满 2.5G 端口线速，功耗方面双核更低，长时间运行温度更稳。',
+    '',
+    '---',
+    '',
+    '### 三、结论建议',
+    '如果只是纯桥接拨号，优先选低功耗稳定款；如果要刷机跑插件，优先选四核大内存款。',
+  ].join('\n')
+  const out = texts(raw, { ...replyRules({}, false), softMaxBubbles: 1 })
+  assert.equal(out.length, 3, 'softMaxBubbles=1 不应把三章报告压成 1 条巨块：' + JSON.stringify(out))
+})
+
+test('长 Markdown 文档里的围栏代码块含 # 注释或 --- 时不被拦腰切开', () => {
+  const raw = [
+    '### 一、准备说明',
+    '下面这段配置里自带注释和 YAML 分隔线，直接复制即可运行，不需要拆成两段发。请先确认你的光猫已经开启 Telnet 并且备份过原厂分区配置，以免改坏后无法恢复默认桥接参数；另外如果是双千兆加 2.5G 口机型，记得提前记录好光猫背面的 LOID 与宽带 VLAN 参数。',
+    '',
+    '### 二、示例配置',
+    '```yaml',
+    '# 这里是代码块里的注释，绝不能当成一级标题切开',
+    '---',
+    'mode: bridge',
+    'port: 2500',
+    'vlan: 41',
+    '```',
+    '配置生效后重启接口即可，如果日志正常输出就说明桥接成功，可以继续测 2.5G 端口双向线速和长时烤机温度表现。',
+  ].join('\n')
+  const out = texts(raw, replyRules({}, false))
+  assert.equal(out.length, 2, '应保持两大章，不把代码块劈成多条：' + JSON.stringify(out))
+  assert.match(out[1], /这里是代码块里的注释[\s\S]*mode: bridge[\s\S]*port: 2500/, '代码块完整保留在第二章里')
+})
+
+test('convertMarkdownTables：仅有表头和对齐行、无数据行时原样保留，不丢行也不拼出 undefined', () => {
+  const src = '| 型号 | 主控 |\n| :--- | :--- |'
+  assert.equal(convertMarkdownTables(src), src)
 })

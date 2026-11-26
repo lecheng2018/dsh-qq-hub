@@ -463,6 +463,7 @@ export function convertMarkdownTables(text) {
   let i = 0
   while (i < lines.length) {
     if (i + 1 < lines.length && isTableRow(lines[i]) && isSepLine(lines[i + 1])) {
+      const start = i
       const headers = splitRow(lines[i])
       const rows = []
       i += 2
@@ -487,6 +488,7 @@ export function convertMarkdownTables(text) {
         out.push(cards.join('\n\n'))
         continue
       }
+      i = start
     }
     out.push(lines[i])
     i += 1
@@ -537,6 +539,8 @@ export function isSilence(text) {
   return t === '' || t === SILENCE || t === '［沉默］' || t === '(沉默)' || t === '（沉默）'
 }
 
+const MAX_BUBBLES = 6
+
 /**
  * 解析一轮回复。
  * @param {string} text 模型这一轮的最终正文
@@ -560,7 +564,9 @@ export function parseReply(text, rules = {}) {
   // 避免表头/表体被劈开、或下一章标题被缝进上一条气泡尾巴（真机 2026-11-27 00:02）。
   const hasMarkupTags = /<(?:poke|reply:|voice|sticker:)|!\[[^\]]*\]\(/.test(raw)
   if (!reportBody && !rules.forceReport && rules.keepReports !== false && !raw.includes('|||') && !hasMarkupTags && isLongDocument(raw)) {
-    const sections = splitDocumentBySections(raw, bubbleLimit(rules, 1))
+    // 文档型长回复使用硬顶 maxBubbles，不受四态收尾礼让 softMaxBubbles 压成 1 条巨块
+    const hardLimit = Math.max(1, Math.round(Number(rules.maxBubbles) || MAX_BUBBLES))
+    const sections = splitDocumentBySections(raw, hardLimit)
     if (sections.length) {
       return { silent: false, items: sections.map((value) => ({ kind: 'text', value })) }
     }
@@ -629,8 +635,6 @@ export function parseReply(text, rules = {}) {
   return { silent: false, items: finalItems }
 }
 
-const MAX_BUBBLES = 6
-
 /**
  * 判断一段未剥离 Markdown 的原文是不是「文档/报告型长回复」。
  * 命中后走按章节分大段，不进聊天气泡切碎机，也不被 capBubbles 按条数硬缝。
@@ -639,16 +643,18 @@ const MAX_BUBBLES = 6
 function isLongDocument(raw) {
   const s = String(raw || '').trim()
   if (s.length < 180) return false
+  // 去掉围栏代码块后再检测文档结构，避免单段脚本里的 `# 注释` / `---` 误触长文档分章
+  const prose = s.replace(/```[\s\S]*?```/g, '')
   // 含 Markdown 表格（表头 + `| :--- |` 对齐行）
-  if (/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(s)) return true
+  if (/^\s*\|?.+\|.+\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m.test(prose)) return true
   if (s.length < 260) return false
   // 含独立分割线 `---` / `***`
-  if (/^\s*(?:[-*_]){3,}\s*$/m.test(s)) return true
+  if (/^\s*(?:[-*_]){3,}\s*$/m.test(prose)) return true
   // 含 2 个及以上 Markdown 标题行（# / ## / ### / ####）
-  const mdHeads = s.match(/^#{1,4}\s+\S/gm)
+  const mdHeads = prose.match(/^#{1,4}\s+\S/gm)
   if (mdHeads && mdHeads.length >= 2) return true
   // 含 2 个及以上中文大章节（一、 / 二、 / 三、）
-  const cnHeads = s.match(/^[一二三四五六七八九十]+、\S/gm)
+  const cnHeads = prose.match(/^[一二三四五六七八九十]+、\S/gm)
   if (cnHeads && cnHeads.length >= 2) return true
   return false
 }
@@ -663,12 +669,14 @@ function isLongDocument(raw) {
 export function splitDocumentBySections(raw, maxBubbles = MAX_BUBBLES) {
   const limit = Math.max(1, Math.round(Number(maxBubbles) || MAX_BUBBLES))
   const lines = String(raw || '').replace(/\r\n/g, '\n').split('\n')
+  const isFence = (l) => /^\s*```/.test(l)
   const isRule = (l) => /^\s*(?:[-*_]){3,}\s*$/.test(l)
   const isMajorHead = (l) => /^#{1,3}\s+\S/.test(l) || /^[一二三四五六七八九十]+、\S/.test(l)
   const isSubHead = (l) => /^#{4,6}\s+\S/.test(l) || /^\d+(?:\.(?!\d)|、)\s*\S/.test(l)
 
   const rawSections = []
   let buf = []
+  let inFence = false
   const flush = () => {
     const joined = buf.join('\n').trim()
     if (joined) rawSections.push(joined)
@@ -676,12 +684,19 @@ export function splitDocumentBySections(raw, maxBubbles = MAX_BUBBLES) {
   }
 
   for (const line of lines) {
-    if (isRule(line)) {
-      flush()
+    if (isFence(line)) {
+      inFence = !inFence
+      buf.push(line)
       continue
     }
-    if (isMajorHead(line) && buf.some((x) => x.trim())) {
-      flush()
+    if (!inFence) {
+      if (isRule(line)) {
+        flush()
+        continue
+      }
+      if (isMajorHead(line) && buf.some((x) => x.trim())) {
+        flush()
+      }
     }
     buf.push(line)
   }
@@ -697,10 +712,16 @@ export function splitDocumentBySections(raw, maxBubbles = MAX_BUBBLES) {
     const sLines = sec.split('\n')
     const chunks = []
     let cur = []
+    let subInFence = false
     for (const l of sLines) {
-      // 保留大标题跟着第 1 个小节一起，不在大标题后立刻切开
+      if (isFence(l)) {
+        subInFence = !subInFence
+        cur.push(l)
+        continue
+      }
+      // 保留大标题跟着第 1 个小节一起，不在大标题后立刻切开；代码块内部绝不切分
       const hasBody = cur.some((x) => x.trim() && !isMajorHead(x))
-      if (isSubHead(l) && hasBody && cur.join('\n').length >= 260) {
+      if (!subInFence && isSubHead(l) && hasBody && cur.join('\n').length >= 260) {
         chunks.push(cur.join('\n').trim())
         cur = [l]
       } else {

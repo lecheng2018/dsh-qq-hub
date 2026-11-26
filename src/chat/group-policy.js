@@ -202,9 +202,12 @@ export function decideGroupReply(p) {
   if (p.now - last < pol.cooldownSec * 1000) return { reply: false, mode: 'none', reason: '插话冷却中' }
   const recent = (p.recentTimes || []).filter((t) => p.now - t < pol.activeWindowSec * 1000).length
   if (recent < pol.minRecentMessages) return { reply: false, mode: 'none', reason: '群里没在聊' }
-  // 话题和她有关才插，越相关越容易插（不传 relevance 时按「不看话题」处理，兼容旧调用）
+  // 话题和她有关才插，越相关越容易插（不传 relevance 时按「不看话题」处理，兼容旧调用）。
+  // 低概率档（<= 5%）表示用户明确要求极少插话，不再按相关度做最高 5 倍放大（否则设 1% 实测变成 5%）。
   if (minRel > 0 && rel < minRel) return { reply: false, mode: 'none', reason: `话题和她关系不大（相关度 ${rel.toFixed(2)}）` }
-  const chance = minRel > 0 ? Math.min(0.8, pol.interjectChance * (1 + 4 * rel)) : pol.interjectChance
+  const chance = minRel > 0 && pol.interjectChance > 0.05
+    ? Math.min(0.8, pol.interjectChance * (1 + 4 * rel))
+    : pol.interjectChance
   if (rand() < chance) return { reply: true, mode: 'interject', reason: `话题相关，插一句（相关度 ${rel.toFixed(2)}）` }
   return { reply: false, mode: 'none', reason: '这次不插话' }
 }

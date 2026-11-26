@@ -1007,12 +1007,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       })
       .filter(Boolean)
     if (profs.length) parts.push('（你对' + (chat.kind === 'group' ? '正在说话的人' : '对方') + '的印象：' + profs.map((p) => (chat.kind === 'group' && p.name ? p.name + '——' : '') + p.text).join('；') + '）')
-    const ins = reflectionContext ? insightsOf(personKey(chat), currentPersona) : []
-    if (ins.length) parts.push('（和' + (chat.kind === 'group' ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
-    const sty = styleContext ? styleOf(personKey(chat), currentPersona) : []
-    const self = styleContext ? styleOf('self', currentPersona) : []
+    const isGroupChat = chat.kind === 'group'
+    const pKey = personKey(chat)
+    const rawIns = reflectionContext ? insightsOf(pKey, currentPersona) : []
+    const ins = isGroupChat ? rawIns.filter((item) => item?.origin === 'manual') : rawIns
+    if (ins.length) parts.push('（和' + (isGroupChat ? '这个群' : '对方') + '相处的经验，照着做就好，不用说出来：' + ins.map((x) => x.text).join('；') + '）')
+    const rawSty = styleContext ? styleOf(pKey, currentPersona) : []
+    const sty = isGroupChat ? (styleSourceOf(pKey)?.origin === 'manual' ? rawSty : []) : rawSty
+    const self = (styleContext && !isGroupChat) ? styleOf('self', currentPersona) : []
     if (sty.length || self.length) {
-      parts.push('（说话方式：' + [sty.length ? '和' + (chat.kind === 'group' ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
+      parts.push('（说话方式：' + [sty.length ? '和' + (isGroupChat ? '这个群' : '对方') + '聊久了，' + sty.join('；') : '', self.length ? '你平时不知不觉会用的说法：' + self.join('、') : ''].filter(Boolean).join('。') + '。自然带一点就好，别刻意模仿，也别变成另一个人；若和人设里的硬性规则（尤其是「绝对禁止」）冲突，完全以人设为准，被禁的写法一条都不要用。）')
     }
     // 最近做过的事：不用等别人提，她自己记得（比如刚给你唱过歌）。
     // 超过 30 分钟改用固定钟点（HH:mm / 昨天 HH:mm），避免「1 小时前 → 2 小时前」每小时翻字

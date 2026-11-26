@@ -200,9 +200,11 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       }
       if (genSignal && !genSignal.isValid()) throw new Error('提炼任务已取消')
       log?.info?.(`从 ${chatId} 的${isQzone ? '空间动态' : '聊天'}里提炼了 ${added} 条新记忆`)
-      if (isQzone) return { ok: true, added, insights: 0 }
+      // 空间动态与群聊不做自动相处反思：群聊是多人并发讨论，把整个群当单人总结「相处之道」
+      // 极易产出客服式说教 SOP 并顺带生成群黑话风格；群聊仍照常提炼事实记忆与人物档案。
+      if (isQzone || chatId.startsWith('group:')) return { ok: true, added, insights: 0 }
       const [kind, id] = chatId.split(':')
-      const chat = kind === 'group' ? { kind, groupId: id, nickname: '' } : { kind: 'private', userId: id, nickname: talk.filter((line) => line.who !== 'bot').at(-1)?.who || '' }
+      const chat = { kind: 'private', userId: id, nickname: talk.filter((line) => line.who !== 'bot').at(-1)?.who || '' }
       const insights = await reflect(chat, talk.slice(-120).map((line) => `${line.who === 'bot' ? '我' : line.who}：${line.text}`).join('\n'), genSignal)
       return { ok: true, added, insights }
     } catch (error) {
@@ -271,7 +273,8 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
           days++
         }
       }
-      if ((days || insights || added) && genSignal.isValid()) await consolidation.learnSelfStyle(genSignal)
+      // 定时整理不再自动跑跨聊天的 learnSelfStyle，避免不同群/私聊口癖混成一个全局 self 桶串味
+      // （显式调用 store.learnSelfStyle() 仍保留兼容，且内部已排除群聊来源）。
       const live = consolidation.load()
       const touched = [...new Set(live.items
         .filter((item) => item.about && (item.at >= startedAt || (item.invalidAt || 0) >= startedAt))
