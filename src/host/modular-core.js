@@ -1533,12 +1533,19 @@ export function createModularCore({
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
         let lastText = ''
-        // 本回合每一「步」的定稿文本（按 step 顺序）。末步只剩控制标记时用它兜底：
+        let lastStepHasToolCall = false
+        // 同回合里被 steer（新 user/message）隔开的完整回复段：
+        // 真实 DSH 的 agent.steer() 不会中断正在生成的 step，而是等 step 1 正常定稿（无 tool-call）后，
+        // 在同一个 turn 里插入 user/message 跑 step 2。模型在 step 2 里默认对方已看到 step 1，
+        // 如果只取 lastText 会把 step 1 整段吞掉（真机 2026-11-26 12:51）。
+        let committedReplies = []
+        // 本段每一「步」的定稿文本（按 step 顺序）。末步只剩控制标记时用它兜底：
         // agent 回合里「写了正文又调工具」的那一步，正文会随着工具结果进入下一步，
         // 而末步往往只补一句标记收尾（真机 2026-11-23 15:01 就是这种形状）。
         let stepTexts = []
-        /** 末步没有人话时，回退到本回合上一条带人话的步（保留末步的控制标记，如表情）。 */
-        const resolveTurnText = () => {
+        const isSilenceMarker = (text) => /^\[沉默\]$/.test(visibleTextOf(text).trim())
+        /** 解析当前段文本：末步没有人话时，回退到本段上一条带人话的步（保留末步的控制标记，如表情）。 */
+        const resolveSegmentText = () => {
           const raw = String(lastText || '')
           if (visibleTextOf(raw)) return raw
           for (let i = stepTexts.length - 2; i >= 0; i -= 1) {
@@ -1546,6 +1553,13 @@ export function createModularCore({
             if (plain) return `${plain}\n${raw}`.trim()
           }
           return raw
+        }
+        const resolveTurnText = () => {
+          const tail = resolveSegmentText()
+          if (!committedReplies.length) return tail
+          const parts = [...committedReplies]
+          if (tail.trim() && !isSilenceMarker(tail)) parts.push(tail)
+          return parts.join('|||')
         }
         finishReply = () => {
           if (!completion) return
@@ -1566,16 +1580,38 @@ export function createModularCore({
         }
         off = dsh.on?.('session/event', (session, ev) => {
           if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call' && CONTENT_TOOL_RE.test(String(ev?.data?.name || ''))) {
-            turnReportHit.hit = true
+          if (ev?.type === 'tool/call') {
+            lastStepHasToolCall = true
+            if (CONTENT_TOOL_RE.test(String(ev?.data?.name || ''))) turnReportHit.hit = true
+            return
+          }
+          if (ev?.type === 'user/message') {
+            // runtime-context 是宿主上下文投影，不算用户中途 steer 进来的新消息
+            const kind = ev?.data?.source?.kind
+            if (kind !== 'runtime-context' && lastTurn !== null && lastText && !lastStepHasToolCall) {
+              const seg = resolveSegmentText()
+              if (seg.trim() && !isSilenceMarker(seg)) committedReplies.push(seg)
+              lastText = ''
+              stepTexts = []
+              lastStepHasToolCall = false
+            }
             return
           }
           if (ev?.type === 'assistant/message') {
             const d = ev?.data || {}
             if (d.interrupted) return
-            const t = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
+            const blocks = Array.isArray(d.message?.content) ? d.message.content : []
+            const hasToolCall = blocks.some((c) => c && (c.type === 'tool-call' || c.type === 'tool_call' || c.type === 'tool_use'))
+            const t = blocks.filter((c) => c.type === 'text').map((c) => c.text).join('')
+            if (d.turn !== lastTurn) {
+              lastTurn = d.turn
+              lastText = ''
+              stepTexts = []
+              committedReplies = []
+              lastStepHasToolCall = false
+            }
+            lastStepHasToolCall = hasToolCall
             if (t) {
-              if (d.turn !== lastTurn) { lastTurn = d.turn; stepTexts = [] }
               lastText = t
               stepTexts.push(t)
             }
