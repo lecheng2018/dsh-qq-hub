@@ -8,6 +8,18 @@ const owner = '10001'
 const ownerChat = `private:${owner}`
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 等一个「只由 unref 定时器兑现」的 promise 时，必须自己撑住事件循环。
+ *
+ * danger.js 的确认超时定时器是 `unref()` 的（生产语义正确：不为等一次确认撑住进程退出）。
+ * 测试里纯 `await` 这种 promise 时循环里没有 ref 句柄，Node 判定已排空，直接以
+ * `cancelledByParent` 取消整组用例 —— CI 上就是这么红的（本地同进程还有别的句柄，没暴露）。
+ */
+async function keepAlive(promise) {
+  const timer = setTimeout(() => {}, 120_000) // ref'd：故意不 unref
+  try { return await promise } finally { clearTimeout(timer) }
+}
+
 function makeGuard ({ enabled = true, timeoutMs = 5000 } = {}) {
   const delivered = []
   const cfg = { security: { dangerConfirm: enabled } }
@@ -87,7 +99,8 @@ test('主人回复「取消」/ 超时没回：都拦下（返回 deny）', asyn
   }
   {
     const { guard } = makeGuard({ timeoutMs: 30 })
-    const d = await guard.preExecute(execOf('shutdown /s'), () => 'NEXT')
+    // 30ms 确认超时的唯一 wake-up 是 danger.js 里 unref 掉的定时器，必须撑住事件循环
+    const d = await keepAlive(guard.preExecute(execOf('shutdown /s'), () => 'NEXT'))
     assert.equal(d.kind, 'deny')
   }
 })
