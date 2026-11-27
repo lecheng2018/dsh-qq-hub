@@ -29,6 +29,21 @@ const SESSION = 'sess-runner'
 const settle = (promise) => promise.then((value) => ({ value }), (error) => ({ error }))
 
 /**
+ * 等一个「只由 unref 定时器/外部事件兑现」的 promise 时，必须自己撑住事件循环。
+ *
+ * 执行器的超时定时器是 `unref()` 的（生产语义正确：不为了等一次超时去撑住进程退出）。
+ * 但测试里纯 `await` 这种 promise 时，事件循环里没有任何 ref 句柄 —— Node 判定已排空，
+ * 直接以 `cancelledByParent`（"Promise resolution is still pending but the event loop has
+ * already resolved"）取消整组用例。CI 上就是这么红的（本地因为同进程还有别的句柄没暴露）。
+ * 同一个坑 `src/chat/turn-controller.js` 的审计注释里写过，`test/m2d-outbox-ledger.test.js`
+ * 的 `gate()` 也是同款解法。
+ */
+async function keepAlive(promise) {
+  const timer = setTimeout(() => {}, 120_000) // ref'd：故意不 unref
+  try { return await promise } finally { clearTimeout(timer) }
+}
+
+/**
  * 可编程最小 DSH：只实现执行器用到的两个面（sessionController.resolveAgent + session/event 流）。
  * @param {{stream?: boolean, timeoutMs?: number, followup?: (ctx: {message: object, emit: Function}) => Promise<*>}} o
  */
@@ -159,7 +174,7 @@ test('prompt：turn/end 的 turn 与最后一条正文不一致时返回空串',
 
 test('超时：抛 TurnExecutionError（timedOut / timedOutForMs 正确），且监听器已摘', async () => {
   const { runner, listeners, detached } = scriptedDsh({ timeoutMs: 20, followup: () => new Promise(() => {}) })
-  const { error } = await settle(runner.runTurn({ sessionId: SESSION, message: MESSAGE, collect: { mode: 'chat' } }))
+  const { error } = await keepAlive(settle(runner.runTurn({ sessionId: SESSION, message: MESSAGE, collect: { mode: 'chat' } })))
   assert.ok(error instanceof TurnExecutionError, `应是 TurnExecutionError，实际：${error}`)
   assert.equal(error.kind, 'timedOut')
   assert.equal(error.timedOut, true, 'timedOut 字段供调用方决定是否 handleTurnTimeout')
@@ -175,9 +190,7 @@ test('取消：abort 后抛 name=AbortError 的 TurnExecutionError，且监听�
   const abort = new AbortController()
   const { runner, listeners, detached } = scriptedDsh({ followup: () => new Promise(() => {}) })
   const pending = runner.runTurn({ sessionId: SESSION, message: MESSAGE, collect: { mode: 'chat' }, signal: abort.signal })
-  await sleep(10)
-  abort.abort()
-  const { error } = await settle(pending)
+  const { error } = await keepAlive((async () => { await sleep(10); abort.abort(); return settle(pending) })())
   assert.ok(error instanceof TurnExecutionError)
   assert.equal(error.name, 'AbortError', 'turn-controller 按 error.name === AbortError 认「执行器尊重了取消」')
   assert.equal(error.kind, 'cancelled')
@@ -334,7 +347,8 @@ test('集成：running 回合被 cancel → execute 因 signal 提前抛错，�
     // 等回合终态：旧实现（execute 不读 signal）会一直挂着不落定 —— 这里用超时把它变成干净的断言失败。
     let guardId = null
     const guard = new Promise((resolve) => { guardId = setTimeout(() => resolve({ state: 'timeout' }), 3000) })
-    guardId.unref?.()
+    // 这个 guard 故意**不** unref：它是等「取消是否真的让回合落定」的唯一 wake-up，
+    // unref 掉会让事件循环排空、整组用例被判 cancelledByParent（CI 事故）。最多 3 秒就 clear。
     const settled = await Promise.race([core.controller.waitForTurn(turnId), guard])
     clearTimeout(guardId)
     assert.equal(settled.state, 'cancelled', 'execute 尊重 io.signal → 回合诚实落 cancelled（不谎报 succeeded，也不挂死）')
