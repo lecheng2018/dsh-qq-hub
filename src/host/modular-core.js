@@ -32,6 +32,7 @@ import { createInteractionState } from '../chat/interaction-state.js'
 import { createOutbound } from '../chat/outbound.js'
 import { createOutboundFiles } from '../chat/outbound-files.js'
 import { createTurnParticipants } from '../chat/turn-participants.js'
+import { createTurnRunner } from '../chat/dsh-turn-runner.js'
 import { createTurnStickers } from '../chat/turn-stickers.js'
 import { createPresence } from '../chat/presence.js'
 import { createCapture } from '../chat/capture.js'
@@ -67,7 +68,7 @@ import { createSessionLifecycle } from './core/session-lifecycle.js'
 import { createPromptContext } from './core/prompt-context.js'
 import { createToolsMount } from './core/tools-mount.js'
 import {
-  hydrateForwards, visibleTextOf, mediaOfInbound, aclMsgFromInbound,
+  hydrateForwards, mediaOfInbound, aclMsgFromInbound,
   textOfSegments, emitActivity, segmentsToContent,
 } from './core/inbound-prep.js'
 
@@ -588,6 +589,14 @@ export function createModularCore({
   // 入口此处不取出（两侧语义不同，串了就丢回执）。三个既有 handler 直接取模块实现。
   const { handleTurnTimeout, turnFailureLooksOversized, handleOversizedTurn, handleArchivedTurn } = turnFailure
 
+  // DSH 回合执行器（S2）：聊天主链（execute）与后台主动回合（runPromptTurn）共用同一套
+  // 事件机 / 超时 / 取消 / 失败分类。两条链独有的语义（typing、表情台账、群缓冲标 fed、
+  // 投递、steer 上下文拼装、模型与人设挂载）仍留在各自调用点，一行都没搬。
+  const turnRunner = createTurnRunner({
+    dsh, ctxGet, getConfig, log, debug,
+    classifyTurnFailure: turnFailure.classifyTurnFailure,
+  })
+
   // ---------- 回合失败回执（2026-11-27） ----------
   // 问题：413 / 超时 / blocked 都有回执，**其余失败一律静默** —— 上游内容策略 403、限流 429、
   // 模型抖动都会让这一轮在 QQ 侧一个字都不出现。用户只看到她「没听见」，只有翻后台日志
@@ -854,13 +863,15 @@ export function createModularCore({
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
       //    sessionController 只能走 ctx.get（真机报告 3：cordis 未声明 inject 的 .services 直接点会抛）
-      const ctrl = ctxGet('sessionController')
-      if (!ctrl?.resolveAgent) throw new Error('DSH 没有 sessionController（新核心无法驱动会话）')
-      const resolved = await ctrl.resolveAgent(sessionId)
-      const agent = resolved?.agent
-      if (!agent?.followup) throw new Error(`会话 ${sessionId} 没有 agent.followup（适配缺口，如实失败）`)
+      //    S2：resolveAgent 与 followup 守卫归 chat/dsh-turn-runner.js（两条链同一份文案）。
+      //    这里拿到的 agent 必须继续用下去（挂工具/模型/上下文），不能二次 resolve ——
+      //    宿主每轮返回新的包装对象，换一份就挂不上了。
+      const agent = await turnRunner.resolveAgentFor(sessionId)
       mountTools(agent, turn.chatKey, sessionId) // 模块工具（qq_send_*、记忆、B站、群管…）
       let activeSteers = 0
+      // 收尾函数：活跃 steer 全部落定后由这里驱动（即拆分前的 finishReply 变量，语义未变；
+      // 真正的实现由 turnRunner 通过 collect.onFinish 交回来）。
+      let finishReply = () => {}
       io.onSteer(async (inbound) => {
         activeSteers++
         try {
@@ -892,7 +903,9 @@ export function createModularCore({
           await agent.steer({ id: randomUUID(), role: 'user', content: admittedSteer, source: { kind: 'qq-hub' } })
         } finally {
           activeSteers--
-          if (followupDone && !activeSteers) finishReply()
+          // 收尾函数内部自己判「有没有 turn/end、followup 是否兑现、还有没有活跃 steer」，
+          // 与原 `if (followupDone && !activeSteers) finishReply()` 等价（闸门搬进执行器）。
+          finishReply()
         }
       })
 
@@ -953,132 +966,26 @@ export function createModularCore({
         } catch (error) { debug(`人设变量已存在，沿用宿主里那份：${error?.message || error}`) }
       }
 
-      // 5. 等**回合结束**（不是首个 assistant/message）：
+      // 5. 等**回合结束**（不是首个 assistant/message）：事件机（分段拼接 / 末步回退 / 报告标记 /
+      //    超时 / 取消 / 监听器摘除）统一归 chat/dsh-turn-runner.js 的 runTurn：
       //    - assistant/message：跳过 interrupted 的部分内容，记下本 turn 文本（可能多条取最后）；
-      //    - turn/end：completed 且有文本才 resolve；非 completed 如实失败（不发、释放调度槽）；
+      //    - turn/end：completed 且有文本才收尾；非 completed 如实失败（不发、释放调度槽）；
       //    - followup rejection：捕获，回合落定异常，finally 清理监听器（防句柄泄漏）。
-      let off = null
-      let followupDone = false
-      let completion = null
-      let finishReply = () => {}
+      //    这里只保留本链独有的两件事：报告标记本体（回合作用域）与「活跃 steer 未落定先不收尾」。
       // 审计 Q02：报告兜底标记改为**回合作用域**。
       // 过去是 `reportTurns: Map<chatId, true>`：tool/call 时 set，turn/end 时 delete，
       // 而投递发生 turn/end 之后 —— 于是兜底规则一次都没生效过。改成随这轮对象活到底，
       // 顺带消掉「上一轮的快照污染下一轮」这个跨回合泄漏。
       const turnReportHit = { hit: false }
-      const cleanupListener = () => { try { off?.() } catch {} off = null }
-      cleanupTurnListener = cleanupListener
-      const replyPromise = new Promise((resolve, reject) => {
-        let lastTurn = null
-        let lastText = ''
-        let lastStepHasToolCall = false
-        // 同回合里被 steer（新 user/message）隔开的完整回复段：
-        // 真实 DSH 的 agent.steer() 不会中断正在生成的 step，而是等 step 1 正常定稿（无 tool-call）后，
-        // 在同一个 turn 里插入 user/message 跑 step 2。模型在 step 2 里默认对方已看到 step 1，
-        // 如果只取 lastText 会把 step 1 整段吞掉（真机 2026-11-26 12:51）。
-        let committedReplies = []
-        // 本段每一「步」的定稿文本（按 step 顺序）。末步只剩控制标记时用它兜底：
-        // agent 回合里「写了正文又调工具」的那一步，正文会随着工具结果进入下一步，
-        // 而末步往往只补一句标记收尾（真机 2026-11-23 15:01 就是这种形状）。
-        let stepTexts = []
-        const isSilenceMarker = (text) => /^\[沉默\]$/.test(visibleTextOf(text).trim())
-        /** 解析当前段文本：末步没有人话时，回退到本段上一条带人话的步（保留末步的控制标记，如表情）。 */
-        const resolveSegmentText = () => {
-          const raw = String(lastText || '')
-          if (visibleTextOf(raw)) return raw
-          for (let i = stepTexts.length - 2; i >= 0; i -= 1) {
-            const plain = visibleTextOf(stepTexts[i])
-            if (plain) return `${plain}\n${raw}`.trim()
-          }
-          return raw
-        }
-        const resolveTurnText = () => {
-          const tail = resolveSegmentText()
-          if (!committedReplies.length) return tail
-          const parts = [...committedReplies]
-          if (tail.trim() && !isSilenceMarker(tail)) parts.push(tail)
-          return parts.join('|||')
-        }
-        finishReply = () => {
-          if (!completion) return
-          cleanupListener()
-          if (!completion.completed) {
-            let alreadyNotified = false
-            // 413 / 请求体过大：旧会话的历史每轮重放、之后必然继续失败 —— 记标记换新会话自愈，
-            // 而不是只「如实失败」后让这个聊天永久卡死（真机 2026-11-19：服务端按会话计的 64 MiB 上限）。
-            if (turnFailureLooksOversized(completion.failure)) {
-              handleOversizedTurn(turn.chatKey, completion.failure)
-              alreadyNotified = true
-            }
-            // `blocked` = DSH 归档门在 pre-step 就把这一回合拒了（一个模型调用都没发生）。
-            // 光记一条 warn 不够：映射还指着那个已归档会话，下一轮同样 blocked —— 必须换会话。
-            // 这里只记标记，真正 resetChat 放在下一次进入 execute 时做（与超时/413 同款时序：
-            // 此刻监听器还没走完，立刻归档容易和宿主自己的事件处理打架）。
-            if (completion.kind === 'blocked') {
-              handleArchivedTurn(turn.chatKey)
-              alreadyNotified = true
-            }
-            const err = new Error(`回合未正常结束：${completion.kind || '?'}`)
-            err.kind = completion.kind
-            err.failure = completion.failure
-            err._turnFailureHandled = alreadyNotified
-            reject(err)
-            return
-          }
-          resolve(completion.text)
-        }
-        off = dsh.on?.('session/event', (session, ev) => {
-          if (session?.id !== sessionId) return
-          if (ev?.type === 'tool/call') {
-            lastStepHasToolCall = true
-            if (CONTENT_TOOL_RE.test(String(ev?.data?.name || ''))) turnReportHit.hit = true
-            return
-          }
-          if (ev?.type === 'user/message') {
-            // runtime-context 是宿主上下文投影，不算用户中途 steer 进来的新消息
-            const kind = ev?.data?.source?.kind
-            if (kind !== 'runtime-context' && lastTurn !== null && lastText && !lastStepHasToolCall) {
-              const seg = resolveSegmentText()
-              if (seg.trim() && !isSilenceMarker(seg)) committedReplies.push(seg)
-              lastText = ''
-              stepTexts = []
-              lastStepHasToolCall = false
-            }
-            return
-          }
-          if (ev?.type === 'assistant/message') {
-            const d = ev?.data || {}
-            if (d.interrupted) return
-            const blocks = Array.isArray(d.message?.content) ? d.message.content : []
-            const hasToolCall = blocks.some((c) => c && (c.type === 'tool-call' || c.type === 'tool_call' || c.type === 'tool_use'))
-            const t = blocks.filter((c) => c.type === 'text').map((c) => c.text).join('')
-            if (d.turn !== lastTurn) {
-              lastTurn = d.turn
-              lastText = ''
-              stepTexts = []
-              committedReplies = []
-              lastStepHasToolCall = false
-            }
-            lastStepHasToolCall = hasToolCall
-            if (t) {
-              lastText = t
-              stepTexts.push(t)
-            }
-            return
-          }
-          if (ev?.type === 'turn/end') {
-            // 不在这里清标记：投递发生在本事件之后，标记必须活到 forceReport 被读取那一刻。
-            const d = ev?.data || {}
-            completion = { completed: d.reason?.kind === 'completed', kind: d.reason?.kind, text: lastTurn === d.turn ? resolveTurnText() : '', failure: d.reason?.error || d.reason?.failure || null }
-            if (followupDone) finishReply()
-          }
-        })
-        if (typeof off !== 'function') {
-          cleanupListener()
-          reject(new Error('DSH 没有 session/event 流，无法取回复文本'))
-        }
-      })
-      replyPromise.catch(() => {})
+      const collect = {
+        mode: 'chat',
+        // 内容型工具在 tool/call 时打在本轮对象上（CONTENT_TOOL_RE 只在装配根保留一份）
+        onToolCall: (ev) => { if (CONTENT_TOOL_RE.test(String(ev?.data?.name || ''))) turnReportHit.hit = true },
+        // 还有 steer 在跑就先不收尾（拆分前 finishReply 的 `!activeSteers` 闸）
+        holdSettle: () => activeSteers > 0,
+        // 把收尾函数交给调用方：steer 的 finally 要能驱动它（拆分前是同一个闭包变量）
+        onFinish: (finish) => { finishReply = finish },
+      }
       // 5.5 消息完整形状（真机报告 1：DSH agent-loop 的 isOwned(message) 读 message.source.kind，
       //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
       const admitted = await admitContent(content, {
@@ -1086,84 +993,35 @@ export function createModularCore({
         hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(), sessionId,
       })
       const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
-      // followup 的 rejected promise 必须捕获：否则 unhandledRejection + 回合永久 running 占死该聊天调度槽
       // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
       // 现网新核心此前不亮 typing（转正补齐的 e2e 平账项）。
-      const turnTimeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
-      let turnTimer = null
-      const timeoutPromise = new Promise((resolve, reject) => {
-        turnTimer = setTimeout(() => {
-          const error = new Error(`DSH 回合超过 ${Math.ceil(turnTimeoutMs / 1000)} 秒未结束；已释放等待，迟到回复不会投递`)
-          error.turnTimedOut = true
-          reject(error)
-        }, turnTimeoutMs)
-        turnTimer.unref?.()
-      })
-      const clearTurnTimer = () => { if (turnTimer) clearTimeout(turnTimer); turnTimer = null }
       activity.startTyping(String(sessionId), chat, getConfig(), pingTyping)
       // 回合起点清表情台账：工具直发（qq_send_sticker）与本回合正文去重是同一份账，
       // 不能让上一轮直发过的表情把这一轮的正常发表情误伤掉（见 chat/turn-stickers.js）。
       turnStickers.clear(turn.chatKey)
       steeringChats.add(turn.chatKey)
       const stopTyping = () => { try { activity.stopTyping(String(sessionId)) } catch {} }
-      let followupError = null
-      try {
-        await Promise.race([agent.followup(message), timeoutPromise])
-      } catch (error) {
-        followupError = error
-      }
-      if (followupError) {
-        clearTurnTimer()
-        steeringChats.delete(turn.chatKey)
-        cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
-        stopTyping()
-        if (followupError.turnTimedOut) {
-          handleTurnTimeout(turn.chatKey, turnTimeoutMs)
-        } else if (turnFailureLooksOversized(followupError?.failure || followupError)) {
-          // followup 先于 turn/end 拒绝时（stream 非 200 起步即 413）：错误本身可能带 LlmError.failure
-          //（HTTP status / code）。turn/end 路径之外唯一能拿到 status 的地方，同样要走自愈标记。
-          handleOversizedTurn(turn.chatKey, followupError?.failure || followupError)
-        } else if (followupError?.kind === 'blocked' || followupError?.failure?.kind === 'blocked') {
-          handleArchivedTurn(turn.chatKey)
-        } else {
-          // 非 413 / 非超时的失败要回执：上游内容策略、限流、模型抖动过去全是静默的（QQ 侧一个字都没有）。
-          // 413 已由上面 handleOversizedTurn 提示、超时由 handleTurnTimeout 提示，这里只补其余类别，
-          // 且内部按类别分类 + 5 分钟限频，不会刷屏。
-          handleTurnFailure(turn.chatKey, followupError)
-        }
-        const error = new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
-        error.cause = followupError
-        error._turnFailureHandled = true
-        throw error
-      }
-      followupDone = true
-      if (!activeSteers) finishReply()
       let reply
+      // S2 行为改动（唯一一处）：把 io.signal 交给执行器 —— 取消请求到达时回合立刻以 AbortError
+      // 落定（回合落 cancelled），迟到回复不再投递。拆分前这个信号「传了但没人读」。
       try {
-        reply = await Promise.race([replyPromise, timeoutPromise])
-        clearTurnTimer()
+        const result = await turnRunner.runTurn({ sessionId, message, collect, signal: io.signal, agent })
+        reply = result.text
         steeringChats.delete(turn.chatKey)
         stopTyping()
       } catch (error) {
-        clearTurnTimer()
         steeringChats.delete(turn.chatKey)
-        cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
-        // 这是**最常见的失败出口**：等待 replyPromise 期间 turn/end 落了 error 或超时
-        //（上游 403/429、模型抖动、超窗都在这里）。
-        //
-        // blocked（宿主归档门 pre-step 拒绝）和 413 已在 finishReply 内处理并标 _turnFailureHandled=true，
-        // 这里绝不重复发回执；超时必须恢复 handleTurnTimeout（发超时提示 + 登记换新会话）。
-        const failureKind = String(error?.kind || error?.failure?.kind || '')
-        const alreadyNotified = Boolean(error?._turnFailureHandled)
-          || failureKind === 'blocked'
-          || /回合未正常结束：blocked/.test(String(error?.message || ''))
-          || turnFailureLooksOversized(error?.failure || error)
-        if (error?.turnTimedOut) {
-          handleTurnTimeout(turn.chatKey, turnTimeoutMs)
-        } else if (!alreadyNotified) {
-          handleTurnFailure(turn.chatKey, error)
-        }
+        // 超时 / 请求体过大 / 归档门 / 其余失败：#263 的四个出口分工照旧，只是分类字段由执行器给出
+        //（`timedOut` / `oversized` / `archived`），不再靠 message 匹配。
+        if (error?.timedOut) handleTurnTimeout(turn.chatKey, error.timedOutForMs)
+        else if (error?.oversized) handleOversizedTurn(turn.chatKey, error.cause ?? error)
+        // `blocked` = DSH 归档门在 pre-step 就把这一回合拒了（一个模型调用都没发生）：
+        // 光记一条 warn 不够，映射还指着那个已归档会话，下一轮同样 blocked —— 必须换会话。
+        // 这里只记标记，真正 resetChat 放在下一次进入 execute 时做（与超时/413 同款时序）。
+        else if (error?.archived) handleArchivedTurn(turn.chatKey)
+        else handleTurnFailure(turn.chatKey, error.cause ?? error)
+        // 外层兜底靠这个标记去重（否则 413 / 超时会各发两遍提示）。
         if (error && typeof error === 'object') error._turnFailureHandled = true
         throw error
       }
@@ -1516,82 +1374,25 @@ export function createModularCore({
       // 与主链同款：上次上下文超窗也换新会话（主动任务共用同一份映射）。
       if (contextResetChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
-      const ctrl = ctxGet('sessionController')
-      const resolved = await ctrl?.resolveAgent?.(sessionId)
-      const agent = resolved?.agent
-      if (!agent?.followup) throw new Error('当前会话没有 agent.followup')
-      let off = null
-      const cleanup = () => { try { off?.() } catch {} off = null }
-      const result = new Promise((resolve, reject) => {
-        let lastTurn = null
-        let lastText = ''
-        off = dsh.on?.('session/event', (session, ev) => {
-          if (session?.id !== sessionId) return
-          // 主动回合只生成文本、由调用方自行投递，这里不设报告标记：
-          // 过去在这里 set 一个没人读的 Map 条目，纯属误导（投递走的是调用方那一次 deliver）。
-          if (ev?.type === 'tool/call') return
-          if (ev?.type === 'assistant/message') {
-            const d = ev.data || {}
-            if (d.interrupted) return
-            const value = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
-            if (value) { lastTurn = d.turn; lastText = value }
-          } else if (ev?.type === 'turn/end') {
-            const d = ev.data || {}
-            cleanup()
-            if (d.reason?.kind !== 'completed') {
-              const failure = d.reason?.error || d.reason?.failure || null
-              let handled = false
-              // 与主链同款：413 / 请求体过大也要自愈（后台会话同样会攒图攒上下文）。
-              // 主动任务没有人盯着看，notify=false：不往聊天里发提示（这轮本来就不投递）。
-              if (turnFailureLooksOversized(failure)) {
-                handleOversizedTurn(chatKey, failure, { notify: false })
-                handled = true
-              }
-              if (d.reason?.kind === 'blocked') {
-                handleArchivedTurn(chatKey)
-                handled = true
-              }
-              const err = new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`)
-              err.kind = d.reason?.kind
-              err.failure = failure
-              err._turnFailureHandled = handled
-              reject(err)
-              return
-            }
-            resolve(lastTurn === d.turn ? String(lastText || '') : '')
-          }
-        })
-        if (typeof off !== 'function') { cleanup(); reject(new Error('DSH 没有 session/event 流')) }
-      })
-      result.catch(() => {})
       const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(text || '') }], source: { kind: 'qq-hub' } }
-      const timeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
-      let timer = null
-      const timeout = new Promise((resolve, reject) => {
-        timer = setTimeout(() => {
-          const error = new Error(`主动回合超过 ${Math.ceil(timeoutMs / 1000)} 秒未结束`)
-          error.turnTimedOut = true
-          reject(error)
-        }, timeoutMs)
-        timer.unref?.()
-      })
       try {
-        await Promise.race([agent.followup(message), timeout])
-        return await Promise.race([result, timeout])
+        // S2：与主链共用 chat/dsh-turn-runner.js 的事件机 —— collect.mode='prompt' 只留最后一条
+        // 正文、忽略 tool/call、没有 steer 闸；signal 传 null（这条路本来就没有取消语义）。
+        // 主动回合只生成文本、由调用方自行投递，这里不设报告标记（投递走的是调用方那一次 deliver）。
+        const result = await turnRunner.runTurn({ sessionId, message, collect: { mode: 'prompt' }, signal: null })
+        return result.text
       } catch (error) {
-        cleanup()
-        if (error?.turnTimedOut) {
-          handleTurnTimeout(chatKey, timeoutMs, { notify: false })
-        } else if (!error?._turnFailureHandled && turnFailureLooksOversized(error?.failure || error)) {
-          handleOversizedTurn(chatKey, error?.failure || error, { notify: false })
-        } else if (!error?._turnFailureHandled && (error?.kind === 'blocked' || error?.failure?.kind === 'blocked')) {
-          handleArchivedTurn(chatKey)
-        } else if (!error?._turnFailureHandled && classifyTurnFailure(error).kind === 'context-window') {
+        // 与主链同款：413 / 请求体过大也要自愈（后台会话同样会攒图攒上下文）。
+        // 主动任务没有人盯着看，notify=false：不往聊天里发提示（这轮本来就不投递）。
+        if (error?.timedOut) handleTurnTimeout(chatKey, error.timedOutForMs, { notify: false })
+        else if (!error?._turnFailureHandled && error?.oversized) handleOversizedTurn(chatKey, error.cause ?? error, { notify: false })
+        // #263：blocked（归档门）同样要换会话，否则主动回合每轮都被拦（这条链原本没有自愈分支）。
+        else if (!error?._turnFailureHandled && error?.archived) handleArchivedTurn(chatKey)
+        // #263：上下文超窗在后台链只登记待重置（这条链不发回执）。
+        else if (!error?._turnFailureHandled && classifyTurnFailure(error.cause ?? error).kind === 'context-window') {
           if (chatKey) contextResetChats.add(String(chatKey))
         }
         throw error
-      } finally {
-        if (timer) clearTimeout(timer)
       }
     })
   }
