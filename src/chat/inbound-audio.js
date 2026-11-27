@@ -9,7 +9,7 @@ export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {
     const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
     const raw = info?.base64
       ? Buffer.from(info.base64, 'base64')
-      : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: true })
+      : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: false })
     return toMono16k(raw)
   }
 

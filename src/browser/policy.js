@@ -6,6 +6,8 @@
 //   3. 上游 browser-ops 的白名单是 fail-open（空白名单 = 全放行），这里是**反过来的**：
 //      空白名单 = 拒绝一切。宁可让主人手动填域名，也不能默认把浏览器开成任意 URL 出口。
 
+import { isPrivateIp } from '../core/net.js'
+
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/
 
 /** 是不是字面 IP（v4 或 v6）。字面 IP 一律拒：没法按域名白名单管，且极易指向内网。 */
@@ -22,20 +24,9 @@ export function isPrivateHost(host) {
   const h = String(host || '').replace(/^\[|\]$/g, '').toLowerCase()
   if (!h) return true
   if (h === 'localhost' || h.endsWith('.localhost')) return true
-  if (!IPV4_RE.test(h)) {
-    // IPv6 字面量
-    if (!h.includes(':')) return false
-    return h === '::1' || h === '::' || h.startsWith('fe80') || h.startsWith('fc') || h.startsWith('fd') ||
-      h.startsWith('::ffff:127.') || h.startsWith('::ffff:10.') || h.startsWith('::ffff:192.168.')
-  }
-  const [a, b] = h.split('.').map(Number)
-  if ([a, b].some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true
-  return a === 0 || a === 10 || a === 127 ||
-    (a === 169 && b === 254) || // 链路本地（云 metadata 服务就挂在这一段）
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) || // CGNAT
-    a >= 224
+  // 只有字面 IP 才走私网判定；域名交给白名单（否则 isPrivateIp 会把「不是 IP」当畸形值一律判内网）
+  if (!isLiteralIp(h)) return false
+  return isPrivateIp(h)
 }
 
 /** 域名尾段匹配：`douyin.com` 放行 `www.douyin.com`，但不放行 `evil-douyin.com`。 */

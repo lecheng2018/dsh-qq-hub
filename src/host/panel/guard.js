@@ -142,6 +142,16 @@ const SIDE_EFFECT_PATHS = new Set([
   '/sticker/delete',              // stickers:196 删表情（QQ 收藏里也删）
   '/purpose/fire',                // purpose:78 跑一轮目的引擎（可能真的发消息）
   '/speakup/fire',                // speakup:64 主动搭话（模型计费 + 私聊投递）
+
+  // ── 商店分发但仍挂无前缀路由的模块（routePrefixFor → CORE_PANEL_IDS）：
+  // bili / douyin / heybox / multi-parser / qzone-social 的写接口全部只认 POST。
+  '/bili/run', '/bili/replies', '/bili/shot/delete',
+  '/douyin/run', '/douyin/login', '/douyin/dms', '/douyin/confirm-owner',
+  '/heybox/run', '/heybox/clear-quota', '/heybox/risk/clear',
+  '/heybox/qr/start', '/heybox/qr/poll', '/heybox/verify/start', '/heybox/verify/finish',
+  '/heybox/login-cookie', '/heybox/post-plan',
+  '/multi-parser/test',
+  '/qzone/social/run',
 ])
 
 /** 从 Host 头里剥出主机名（处理 '127.0.0.1:8080' 与 '[::1]:8080' 两种形态）。 */
@@ -181,7 +191,7 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
   /**
    * @returns {{ok:true} | {ok:false, code:number, message:string}}
    */
-  function check(req) {
+  function check(req, { registeredSideEffect, isModuleRoute = false } = {}) {
     const h = req.headers || {}
     // 1. Host 白名单
     if (!hostAllowed(h.host)) {
@@ -202,16 +212,16 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
         return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
       }
     }
-    // 3. 改写型请求或模块自定义路由（/ext/*，可能挂 GET 副作用）且没带 Origin：
+    // 3. 改写型请求、模块自定义路由（/ext/*）或登记为副作用的路由，且没带 Origin：
     //    cross-site 证据（Sec-Fetch-Site）直接拒；两者都没有 = 非浏览器客户端（curl/脚本/测试）。
-    //    （缺陷：模块路由不在 SIDE_EFFECT_PATHS，跨站 <img>/链接 GET 可触发其副作用 → 一并查 cross-site）
-    else if ((MUTATING.has(method) || path.startsWith('/ext/')) && String(h['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    else if ((MUTATING.has(method) || isModuleRoute || path.startsWith('/ext/') || registeredSideEffect === true) && String(h['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
       debug('面板 CSRF 拒绝：Sec-Fetch-Site=cross-site 且无 Origin')
       return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
     }
     // 4. 副作用路径只认提交方法：GET/HEAD/OPTIONS/TRACE 等非提交方法一律 405，不进 handler
     //    （挡掉不带 Origin 的 <img>/顶层链接/prefetch 式触发；面板前端对这些全部用 POST）
-    if (!MUTATING.has(method) && SIDE_EFFECT_PATHS.has(path)) {
+    const isSideEffect = registeredSideEffect === true || (registeredSideEffect !== false && SIDE_EFFECT_PATHS.has(path))
+    if (!MUTATING.has(method) && isSideEffect) {
       debug(`面板副作用路径拒 GET 类方法：${method} ${path}`)
       return { ok: false, code: 405, message: `这个接口有副作用，不接受 ${method} 触发（请通过面板按钮以 POST 调用）` }
     }

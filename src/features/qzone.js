@@ -61,7 +61,9 @@ export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pic
     const imgs = []
     for (const src of images) {
       try {
-        imgs.push('base64://' + (await fetchImage(src, { maxBytes: 8 * 1024 * 1024, allowLocal: true })).toString('base64'))
+        // 模型工具传入的 images 只允许 http(s) / base64://，不读任意本机文件（防公开发布本地敏感文件）。
+        // 内部 writeDiary 的 pickImage() 挑出的本机画作/合规表情路径先读成 base64 再进 post()。
+        imgs.push('base64://' + (await fetchImage(src, { maxBytes: 8 * 1024 * 1024, allowLocal: false })).toString('base64'))
       } catch (error) {
         log.warn('说说配图读不到，跳过：', error.message)
       }
@@ -194,7 +196,11 @@ export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pic
       if (cfg.attachImage !== false) {
         try {
           const img = await pickImage?.()
-          if (img) images.push(img)
+          if (img) {
+            // 内部日记配图：本机画作/合规表情路径先读成 base64，再交给 post()（不开放外部本地路径）。
+            const { readFileSync } = await import('node:fs')
+            images.push('base64://' + readFileSync(img).toString('base64'))
+          }
         } catch (error) { log.warn('日记配图没挑成：', error.message) }
       }
       if (images.length) log.info(`日记配图：${images[0]}`)

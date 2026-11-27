@@ -182,11 +182,11 @@ export default {
       // 主人私聊（完整权限）才能往库里加图
       if (level === 'full') tools.push(defineTool({
         name: 'qq_add_sticker',
-        description: '把一张图片收进表情库并收藏到 QQ。source 是本地图片路径或图片网址；name 是不超过 12 个字的备注。',
-        properties: { source: str('本地路径或 http(s) 地址'), name: str('备注（≤12 字）'), tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈' } },
+        description: '把一张图片收进表情库并收藏到 QQ。source 是图片网址或 base64:// 数据；name 是不超过 12 个字的备注。',
+        properties: { source: str('图片网址或 base64:// 数据'), name: str('备注（≤12 字）'), tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈' } },
         required: ['source'],
         execute: async ({ source, name, tags }) => {
-          const buf = await fetchImage(String(source), { maxBytes: 10 * 1024 * 1024, allowLocal: true })
+          const buf = await fetchImage(String(source), { maxBytes: 10 * 1024 * 1024, allowLocal: false })
           const r = await store.addFromBuffer(buf, { name: name || '', tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
           return r.ok
             ? { ok: true, message: (r.existed ? '库里已经有这张了' : `收好了「${r.item.name || '未命名'}」`) + (r.warning ? '（' + r.warning + '，本地仍能发）' : '') }

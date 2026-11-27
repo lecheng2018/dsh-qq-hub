@@ -27,10 +27,10 @@ export default {
 
     api.tool(({ chat, level }) => (level === 'full' && chat.kind !== 'system' ? defineTool({
       name: 'qq_send_qzone',
-      description: '在你自己的 QQ 空间发一条说说。content 是正文（第一人称，口语）；images 可选，本地路径或网址。',
+      description: '在你自己的 QQ 空间发一条说说。content 是正文（第一人称，口语）；images 可选，图片网址或 base64:// 数据（不支持本地路径）。',
       properties: {
         content: str('说说正文'),
-        images: { type: 'array', items: { type: 'string' }, description: '可选，图片路径或网址，最多 4 张' },
+        images: { type: 'array', items: { type: 'string' }, description: '可选，图片网址或 base64:// 数据，最多 4 张' },
         visibility: {
           type: 'string',
           enum: ['all', 'friends', 'selected', 'self', 'excluded'],

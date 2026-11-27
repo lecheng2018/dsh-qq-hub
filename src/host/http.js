@@ -37,7 +37,7 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), isAuthorize
       }
     } catch (error) {}
     if (tooBig) throw new Error('请求体太大了（最多 2MB）')
-    try { return JSON.parse(s || '{}') } catch (error) { return {} }
+    try { return JSON.parse(s || '{}', (k, v) => (k === '__proto__' || k === 'constructor' || k === 'prototype') ? undefined : v) } catch (error) { return {} }
   }
   /** 原样读请求体（上传大文件用），超过 max 字节就报错。 */
   const readRaw = async (req, max) => {
@@ -69,10 +69,13 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), isAuthorize
   // prefix 传给 guard 用于剥前缀匹配副作用路径表。
   const guard = createPanelGuard({ getConfig, log, prefix, isAuthorized })
   const guardedAnswer = (res, req, fn) => answer(res, () => {
-    const g = guard.check(req)
+    const g = guard.check(req, { registeredSideEffect: fn.__sideEffect, isModuleRoute: fn.__isModuleRoute })
     if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
     return fn()
   })
-  const route = (path, handler) => ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: prefix + path, handler: (req, res) => guardedAnswer(res, req, () => handler(req, res)) }), `qq-hub: 路由 ${path}`)
+  const route = (path, handler, opts = {}) => {
+    if (opts.sideEffect !== undefined) handler.__sideEffect = opts.sideEffect
+    return ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: prefix + path, handler: (req, res) => guardedAnswer(res, req, () => handler(req, res)) }), `qq-hub: 路由 ${path}`)
+  }
   return { send, readBody, readRaw, query, answer, route, guard }
 }
