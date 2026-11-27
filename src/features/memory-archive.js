@@ -65,6 +65,9 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   session.bindHooks({
     onSaved: () => indexCache.invalidateAll(),
     onReload: () => indexCache.invalidateAll(),
+    // 向量通道也要跟着收尾：它自己持有防抖定时器与在飞 fetch。拆分前单体里
+    // dispose() 直接 `try { vec.dispose() } catch {}`，漏绑就是句柄泄漏。
+    onDispose: () => { try { vec.dispose?.() } catch { /* 向量通道清理异常不影响主链收尾 */ } },
   })
 
   // 9) extend（learning 扩展）
@@ -107,10 +110,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     reload: () => {
       if (session.isClosed()) throw new Error('记忆模块已关闭')
       session.reload()
+      // 学习模块（梦境/提炼）也要跟着重载：它在 extend 里自己持有 state，
+      // 不重载就会拿着重载前的旧快照继续跑。拆分前单体里就有这一行，漏了是真回归。
+      learning?.reload?.()
       indexCache.invalidateAll()
-      const state = session.load()
-      if (derivedFinal.staleAllIn(state)) { state.rev = (state.rev || 0) + 1; session.save(state) }
       const health = session.health()
+      // 只有健康时才回写 stale 标记：档案/状态损坏时用 load()+save() 落盘会把坏数据坐实。
+      if (health.ok) {
+        const state = session.load()
+        if (derivedFinal.staleAllIn(state)) { state.rev = (state.rev || 0) + 1; session.save(state) }
+      }
       const message = health.ok ? '记忆档案已重新载入，索引已更新' : '部分档案或状态损坏，请修复后重新载入；自动整理已暂停'
       log?.info?.(message)
       return { ok: health.ok, health, message }
