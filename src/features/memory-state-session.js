@@ -79,14 +79,25 @@ export function createMemoryStateSession({ log, vec } = {}) {
   }
 
   const pendingHitUpdates = new Map()
+  const HIT_FLUSH_BACKOFF_MS = [5_000, 30_000, 120_000]
   let hitFlushTimer = null
+  let hitFlushFailures = 0
+  let hitFlushCooldownUntil = 0
+
+  function resetHitFlushBackoff() {
+    hitFlushFailures = 0
+    hitFlushCooldownUntil = 0
+  }
 
   function scheduleFlushHits() {
     if (hitFlushTimer) return
+    const now = Date.now()
+    const baseDelay = HIT_FLUSH_BACKOFF_MS[Math.min(hitFlushFailures, HIT_FLUSH_BACKOFF_MS.length - 1)]
+    const delay = Math.max(baseDelay, hitFlushCooldownUntil > now ? hitFlushCooldownUntil - now : 0)
     hitFlushTimer = setTimeout(() => {
       hitFlushTimer = null
       try { flushHits() } catch (error) { log?.warn?.('记忆命中统计保存失败：', error.message) }
-    }, 5000)
+    }, delay)
     hitFlushTimer.unref?.()
   }
 
@@ -128,16 +139,18 @@ export function createMemoryStateSession({ log, vec } = {}) {
       }
     }
     store.save(s)
+    const currentScopes = new Set()
+    for (const m of s.items || []) {
+      const sc = String(m.scope || '').trim()
+      if (sc) currentScopes.add(sc)
+    }
     // 向量通道：整作用域对账入队（防抖 15s，只 embed 缺失/文本变更的条目）。失败只告警，不影响主路径。
     try {
       if (vec?.enabled()) {
         const byScope = new Map()
-        const currentScopes = new Set()
-        for (const m of s.items) {
+        for (const m of s.items || []) {
           const sc = String(m.scope || '').trim()
-          if (!sc) continue
-          currentScopes.add(sc)
-          if (m.invalidAt) continue
+          if (!sc || m.invalidAt) continue // 死条目不入队：flush 对账会顺手把旧向量摘掉
           const list = byScope.get(sc) || []
           list.push(m)
           byScope.set(sc, list)
@@ -146,10 +159,12 @@ export function createMemoryStateSession({ log, vec } = {}) {
         for (const gone of prevVectorScopes) {
           if (!currentScopes.has(gone)) vec.queueScope(gone, [])
         }
-        prevVectorScopes = currentScopes
       }
     } catch (error) { log?.debug?.('向量入队失败：' + (error && error.message)) }
+    // 无条件维护 prevVectorScopes：即使向量通道关闭，也保证 indexFor 缓存键与后续开启向量时的作用域集合准确
+    prevVectorScopes = currentScopes
     pendingHitUpdates.clear()
+    resetHitFlushBackoff()
     if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
     hooks.onSaved?.(s)
   }
@@ -193,7 +208,16 @@ export function createMemoryStateSession({ log, vec } = {}) {
   }
 
   function flushHits() {
-    if (pendingHitUpdates.size) mutate(() => true)
+    if (!pendingHitUpdates.size) return
+    try {
+      mutate(() => true)
+      resetHitFlushBackoff()
+    } catch (error) {
+      // 落盘持续失败时指数退避，避免 5s 一次的写盘风暴把进程拖垮
+      hitFlushFailures = Math.min(hitFlushFailures + 1, HIT_FLUSH_BACKOFF_MS.length - 1)
+      hitFlushCooldownUntil = Date.now() + HIT_FLUSH_BACKOFF_MS[hitFlushFailures]
+      throw error
+    }
   }
 
   function reload({ quiet = false } = {}) {
@@ -201,9 +225,15 @@ export function createMemoryStateSession({ log, vec } = {}) {
     activeGeneration++
     for (const ac of abortControllers) ac.abort(new Error('memory reloaded'))
     abortControllers.clear()
+    // reload 后旧的内存增量全部作废：清空待刷命中并重置退避，避免陈旧命中写回新状态
+    pendingHitUpdates.clear()
+    resetHitFlushBackoff()
     if (hitFlushTimer) { clearTimeout(hitFlushTimer); hitFlushTimer = null }
     store.reload()
     hooks.onReload?.()
+    try {
+      prevVectorScopes = new Set((load().items || []).map((m) => String(m.scope || '').trim()).filter(Boolean))
+    } catch { /* 重载后状态不可读：保留旧作用域集合，等下一次 save 重建 */ }
     const health = store.health()
     const message = health.ok ? '记忆档案已重新载入，索引已更新' : '部分档案或状态损坏，请修复后重新载入；自动整理已暂停'
     if (!quiet) log?.info?.(message)
@@ -244,5 +274,12 @@ export function createMemoryStateSession({ log, vec } = {}) {
     health: () => store.health(),
     rev: () => (typeof store?.rev === 'function' ? store.rev() : null),
     getVectorScopes: () => new Set(prevVectorScopes),
+    noteVectorScopes: (scopes) => {
+      if (!scopes) return
+      for (const sc of scopes) {
+        const trimmed = String(sc || '').trim()
+        if (trimmed) prevVectorScopes.add(trimmed)
+      }
+    },
   }
 }

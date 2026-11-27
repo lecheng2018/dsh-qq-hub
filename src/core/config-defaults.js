@@ -5,6 +5,9 @@ import { DEFAULT_GROUP_POLICY } from '../chat/group-policy.js'
 // 配置结构版本：改了字段语义/默认值要 +1，方便按版本迁移老配置，避免无版本标记时的幂等覆写问题。
 export const CONFIG_VERSION = 1
 
+/** profilePerms 语义版本。1 = douyinDm 从「回别人私信」改成「主动发私信」，老配置一次性回落默认。 */
+export const PROFILE_PERMS_VERSION = 1
+
 /** 在某次更新里新增、会替她公开发东西的功能。以后再加这类功能，把配置键名加到这里。 */
 export const OPT_IN_ON_UPDATE = ['qzoneSocial', 'bili', 'douyin']
 
@@ -40,6 +43,7 @@ export const DEFAULTS_RAW = {
   ownerQQ: '', // 主人 QQ 号（向导里填）
   ownerName: '主人',
   ownerLevel: 'full', // full | social | chat
+  profilePermsVersion: PROFILE_PERMS_VERSION,
   profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner', douyinBrowse: 'owner', douyinLike: 'owner', douyinComment: 'owner', douyinShareOwner: 'owner', douyinDm: 'owner' }, // 改资料类操作（含抖音浏览 / 点赞 / 评论 / 分享）的权限：off 关 / owner 仅主人私聊 / all 所有人。抖音项默认仅主人，总开关默认关
   longTasks: false, // 长任务模式：主人私聊（完整权限）额外挂 dsh-tool-jobs + dsh-tool-schedule，会多一点工具定义、稍慢
   turnTimeoutMs: 600000, // 单回合等待上限；超时释放调度槽，迟到回复不投递

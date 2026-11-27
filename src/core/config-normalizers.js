@@ -1,6 +1,6 @@
 // 按域拆分的配置归一化纯函数、主 normalize(raw) 编排与面板合并 mergeFromPanel。
 
-import { DEFAULTS, deepMerge, isObj } from './config-defaults.js'
+import { DEFAULTS, PROFILE_PERMS_VERSION, deepMerge, isObj } from './config-defaults.js'
 import { allSecrets, getAt, parentOf, splitBiliCookie } from './config-secrets.js'
 import { migrateConfig, stripLegacyKeys } from './config-migrations.js'
 import { DEFAULT_GROUP_POLICY } from '../chat/group-policy.js'
@@ -127,11 +127,18 @@ function normalizeBrowser(c) {
   c.browser.vncLan = bool(c.browser.vncLan, false)
 }
 
-function normalizeAccess(c) {
+function normalizeAccess(c, raw) {
   c.persona = normalizePersona(c.persona)
   c.profilePerms = Object.fromEntries(
     PROFILE_PERM_KEYS.map((k) => [k, PROFILE_PERM_LEVELS.includes(c.profilePerms?.[k]) ? c.profilePerms[k] : profilePermDefault(k)]),
   )
+  // 旧版 douyinDm 是「回别人私信」的权限，含义已不同（现在是主动发私信），仅旧版本迁移一次回到默认「仅主人」；
+  // 迁移后写入 profilePermsVersion，后续用户修改 douyinDm 不再被 normalize 强行覆写。
+  const rawPermsVersion = Number(raw?.profilePermsVersion || 0)
+  if (rawPermsVersion < PROFILE_PERMS_VERSION && isObj(raw?.profilePerms) && 'douyinDm' in raw.profilePerms) {
+    c.profilePerms.douyinDm = profilePermDefault('douyinDm')
+  }
+  c.profilePermsVersion = PROFILE_PERMS_VERSION
 }
 
 function normalizeFilesAndSecurity(c) {
@@ -346,11 +353,11 @@ function normalizeSocialAndDiary(c) {
   )].slice(0, 100)
 
   if (!isObj(c.speakUp)) c.speakUp = {}
-  c.speakUp.idleMinutes = num(c.speakUp.idleMinutes, 40, 5, 1440)
-  c.speakUp.nudge = bool(c.speakUp.nudge, true)
-  c.speakUp.minIntervalMinutes = num(c.speakUp.minIntervalMinutes, 90, 5, 1440)
-  c.speakUp.maxIntervalMinutes = Math.max(c.speakUp.minIntervalMinutes, num(c.speakUp.maxIntervalMinutes, 240, 5, 2880))
-  c.speakUp.maxPerDay = num(c.speakUp.maxPerDay, 3, 0, 20)
+  c.speakUp.idleMinutes = num(c.speakUp.idleMinutes, DEFAULTS.speakUp.idleMinutes, 5, 1440)
+  c.speakUp.nudge = bool(c.speakUp.nudge, DEFAULTS.speakUp.nudge)
+  c.speakUp.minIntervalMinutes = num(c.speakUp.minIntervalMinutes, DEFAULTS.speakUp.minIntervalMinutes, 5, 1440)
+  c.speakUp.maxIntervalMinutes = Math.max(c.speakUp.minIntervalMinutes, num(c.speakUp.maxIntervalMinutes, DEFAULTS.speakUp.maxIntervalMinutes, 5, 2880))
+  c.speakUp.maxPerDay = num(c.speakUp.maxPerDay, DEFAULTS.speakUp.maxPerDay, 0, 20)
 
   if (!isObj(c.qzoneSocial)) c.qzoneSocial = {}
   const q = c.qzoneSocial
@@ -528,7 +535,7 @@ export function normalize(raw) {
   normalizeCore(c)
   normalizeModelsAndSession(c)
   normalizeBrowser(c)
-  normalizeAccess(c)
+  normalizeAccess(c, raw)
   normalizeFilesAndSecurity(c)
   normalizeGroup(c)
   normalizeMergeAndReply(c)

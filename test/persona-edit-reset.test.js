@@ -14,7 +14,7 @@ const SAVE = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
 const HUB = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
 
 test('/persona/save 后重置所有正在用该人设的会话', () => {
-  assert.match(HOST, /entry\.personaId === b\.id/, '按 personaId 找会话')
+  assert.match(HOST, /entry\.personaId === p\.id/, '按 personaId 找会话')
   assert.match(HOST, /hub\.resetChat\(chatId\)/, '重置会话')
   assert.match(HOST, /reset > 0 [^]*个正在用的会话已重置|个正在用的会话已重置/, '返回消息说明重置了几个')
 })

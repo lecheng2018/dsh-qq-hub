@@ -9,10 +9,12 @@ import {
 } from '../src/features/memory-persona-track.js'
 
 // ---------------- 规范化 ----------------
-test('normalizePersonaId：合法 id 原样返回（含首尾空白修剪）', () => {
+test('normalizePersonaId：合法 id 原样返回（含首尾空白修剪与中文人设 id）', () => {
   assert.equal(normalizePersonaId('socrates'), 'socrates')
   assert.equal(normalizePersonaId('  dafeiyu  '), 'dafeiyu')
   assert.equal(normalizePersonaId('a-b_c1'), 'a-b_c1')
+  assert.equal(normalizePersonaId('中文人设'), '中文人设')
+  assert.equal(normalizePersonaId('苏格拉底_2'), '苏格拉底_2')
 })
 
 test('normalizePersonaId：非法输入一律返回空串（fail-closed）', () => {
@@ -21,8 +23,8 @@ test('normalizePersonaId：非法输入一律返回空串（fail-closed）', () 
   }
   assert.equal(normalizePersonaId('a'.repeat(65)), '', '超长（>64）丢弃')
   assert.equal(normalizePersonaId('has space'), '', '含空格丢弃')
-  assert.equal(normalizePersonaId('中文人设'), '', '非 ASCII 丢弃')
   assert.equal(normalizePersonaId('a/b'), '', '含斜杠丢弃')
+  assert.equal(normalizePersonaId('bad!id'), '', '含非法标点丢弃')
 })
 
 test('normalizePersonaId：正好 64 字符是边界内', () => {

@@ -245,15 +245,16 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
       // 先压缩快照（如果需要），保证主 JSON 与当前内存一致
       // critical 路径始终先写一次主快照（fail-closed 凭据），再追加 WAL；
       // 非关键路径达到阈值或 forceCompact 时才压缩。
+      // requireBackup 跟着 critical 走：关键落盘要求主文件与 .bak 都写成，任一失败即抛（fail-closed）。
       if (forceCompact || wal.needsCompact() || critical) {
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] })
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, { critical })
       }
       // 再追加本次事件到 WAL
       if (walEvent) {
         wal.append(walEvent, { critical })
       } else if (critical) {
         // 没有显式事件但要求关键落盘：直接全量压缩（fail-closed 路径）
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] })
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, { critical })
       }
     } catch (error) {
       onError(error)

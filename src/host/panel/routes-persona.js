@@ -26,7 +26,7 @@ export function registerPersonaRoutes({
     let reset = 0
     try {
       for (const [chatId, entry] of Object.entries(hub.sessions() || {})) {
-        if (entry.personaId === b.id) { hub.resetChat(chatId); reset++ }
+        if (entry.personaId === p.id) { hub.resetChat(chatId); reset++ }
       }
     } catch (error) {
       log.debug('人设保存后重置会话出错：', error.message)
@@ -142,7 +142,22 @@ export function registerPersonaRoutes({
 
   route('/persona/delete', async (req) => {
     const b = await readBody(req)
-    if (b.id === getConfig().persona.current) return { ok: false, message: '正在用的人格不能删' }
+    const rawId = String(b?.id || '').trim()
+    const card = readPersona(rawId)
+    const targetId = card?.id || rawId.replace(/[^\p{L}\p{N}_-]/gu, '').slice(0, 40)
+    const persona = getConfig()?.persona || {}
+    const inUse = new Set(
+      [
+        persona.current,
+        persona.privateDefault,
+        persona.groupDefault,
+        ...Object.values(persona.privates || {}),
+        ...Object.values(persona.groups || {}),
+      ].map((v) => String(v || '').trim()).filter(Boolean),
+    )
+    if ((targetId && inUse.has(targetId)) || (rawId && inUse.has(rawId))) {
+      return { ok: false, message: '正在用的人格不能删（请先在全局、默认或按聊天人设配置中解除使用）' }
+    }
     deletePersona(b.id)
     return { ok: true, list: listPersonas() }
   })

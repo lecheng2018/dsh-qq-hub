@@ -161,22 +161,40 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
       .filter((h) => !excluded || !excluded.has(String(h.it.id)))
       .slice(0, poolLimit)
 
+    // 所有可见作用域合并成一次向量检索（每个 scope 一次 embed 会成倍放大延迟）
     const targetScopes = vectorScopesFor(chat, scopes)
-    const vecSeen = new Set()
-    const vecHits = []
-    const now = Date.now()
+    const byScopeMap = new Map()
+    const activeScopes = []
     for (const scope of targetScopes) {
       const idx = indexFor(scope)
       if (!idx || !idx.docs || !idx.docs.length) continue
-      const byId = new Map(idx.docs.map((d) => [String(d.it.id), d.it]))
+      byScopeMap.set(scope, new Map(idx.docs.map((d) => [String(d.it.id), d.it])))
+      activeScopes.push(scope)
+    }
+    const vecSeen = new Set()
+    const vecHits = []
+    const now = Date.now()
+    if (activeScopes.length) {
+      // 短查询语义太泛：拼上上下文当检索语句（与 BM25 侧的 ctxText 口径一致）
+      const ctxStr = String(context || '').trim()
+      const vecQuery = (ctxStr && q.length < 12) ? `${ctxStr} ${q}` : q
       let raw = []
       try {
-        raw = await vec.searchScopes(q, [scope], { whitelistOf: () => new Set(byId.keys()), topK: poolLimit, timeoutMs: 2500, minCos })
-      } catch { continue }
+        raw = await vec.searchScopes(vecQuery, activeScopes, {
+          whitelistOf: (sc) => {
+            const m = byScopeMap.get(String(sc))
+            return m ? new Set(m.keys()) : new Set()
+          },
+          topK: poolLimit,
+          timeoutMs: 2500,
+          minCos,
+        })
+      } catch { raw = [] }
       for (const c of raw) {
         const id = String(c.id)
         if ((excluded && excluded.has(id)) || vecSeen.has(id)) continue
-        const it = byId.get(id)
+        const byId = byScopeMap.get(String(c.scope))
+        const it = byId ? byId.get(id) : null
         if (!it || it.invalidAt) continue
         if (chat ? (!scopeVisible(it.scope, chat) || !personaVisible(it, chat)) : !personaVisible(it, it.scope)) continue
         vecSeen.add(id)
@@ -186,16 +204,21 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
     }
     vecHits.sort((a, b) => b.score - a.score)
     let hits = fuseRrf(bm25, vecHits.slice(0, poolLimit), { limit: rerankCap })
+    let rerankFilteredAll = false
     if (rerankEnabled) {
+      const preCount = hits.length
       const argMinScore = parseMinScore(rerankMinScore)
       const cfgMinScore = reranker.current.status()?.minScore
       const effectiveMinScore = argMinScore !== undefined
         ? argMinScore
         : (cfgMinScore !== undefined ? cfgMinScore : DEFAULT_RERANK_MIN_SCORE)
       hits = await reranker.current.rerank(q, hits, { minScore: effectiveMinScore })
+      if (preCount > 0 && hits.length === 0) rerankFilteredAll = true
     }
     hits = hits.slice(0, max)
     recordRecallHits(hits, { where, query: q })
+    // 精排把候选全汰：标记给 hintBody，禁止再拿「泛问兜底」反塞无关记忆
+    if (rerankFilteredAll) Object.defineProperty(hits, 'rerankFilteredAll', { value: true, enumerable: false })
     return hits
   }
 
@@ -340,7 +363,7 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
   function hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback = true }) {
     if (!hits.length && allowFallback) {
       const fallback = (chat ? indexFor(chat).docs : [])
-        .filter((d) => !d.it.invalidAt && !shown.has(d.it.id))
+        .filter((d) => !d.it.invalidAt && !shown.has(d.it.id) && personaVisible(d.it, chat))
         .sort((a, b) => (Number(b.it.importance) || 0.5) - (Number(a.it.importance) || 0.5) || b.it.at - a.it.at)
         .slice(0, 2)
         .map((d) => ({ it: d.it, score: 0.3, why: ['（泛问兜底·最近重要）'] }))
@@ -391,7 +414,7 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
         chat,
         excludeIds: shown,
       })
-      return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback: !hasPriorTurns })
+      return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback: !hasPriorTurns && !hits.rerankFilteredAll })
     } catch (error) {
       return recallHint(chat, queryText, prevText, { sessionId })
     }
@@ -407,13 +430,13 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
       if (m.invalidAt || m.source === 'event' || m.source === 'diary') return false
       const sc = String(m.scope || '').trim()
       if (!sc) return false
-      if (sc === 'global') return true
-      return scope ? sc === scope : false
+      if (sc !== 'global' && !(scope && sc === scope)) return false
+      return personaVisible(m, chatId)
     })
     const out = items.filter((m) => m.about && ppl.has(String(m.about))).sort((a, b) => b.at - a.at).slice(0, 10)
     for (const h of search(indexFor(chatId), String(transcript).slice(-1500), { limit: 8, minScore: 0.5 })) {
       if (out.length >= 15) break
-      if (!out.some((m) => m.id === h.it.id) && h.it.source !== 'event' && h.it.source !== 'diary') out.push(h.it)
+      if (!out.some((m) => m.id === h.it.id) && h.it.source !== 'event' && h.it.source !== 'diary' && personaVisible(h.it, chatId)) out.push(h.it)
     }
     return out
   }
@@ -422,7 +445,7 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
     if (!chat) return 0
     const idx = indexFor(chat)
     if (!idx) return 0
-    const hits = search(idx, text, { limit: 1, minScore: 0.01 })
+    const hits = search(idx, text, { limit: Math.max(10, idx.N || 10), minScore: 0.01 }).filter((h) => personaVisible(h.it, chat))
     if (!hits.length) return 0
     const q = new Set(tokenize(text))
     const d = new Set(tokenize(hits[0].it?.text || ''))

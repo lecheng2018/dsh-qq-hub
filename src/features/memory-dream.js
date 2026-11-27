@@ -247,13 +247,22 @@ function groupKey(fact) {
   return `${fact.scope}|${fact.entity}|${fact.topic}`
 }
 
+/** 三态严格弱序比较器（负值 = a 优于 b，0 = 相等，正值 = b 优于 a）：pinned > 重要度高 > 时间新 > id 字典序。 */
+function compareFacts(a, b) {
+  if (a === b) return 0
+  if (!a && !b) return 0
+  if (!b) return -1
+  if (!a) return 1
+  if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+  if (a.importance !== b.importance) return a.importance > b.importance ? -1 : 1
+  if (a.at !== b.at) return a.at > b.at ? -1 : 1
+  if (a.id === b.id) return 0
+  return a.id < b.id ? -1 : 1
+}
+
 /** 挑选代表条目：pinned > 重要度高 > 时间新 > id 字典序（保证确定性）。 */
 function better(a, b) {
-  if (!b) return true
-  if (a.pinned !== b.pinned) return a.pinned
-  if (a.importance !== b.importance) return a.importance > b.importance
-  if (a.at !== b.at) return a.at > b.at
-  return a.id < b.id
+  return compareFacts(a, b) < 0
 }
 
 function clone(fact) {
@@ -494,7 +503,7 @@ export function consolidate(facts, options = {}) {
   for (const key of [...byGroup.keys()].sort()) {
     const list = byGroup.get(key)
     if (list.length < 2) continue
-    const ordered = [...list].sort((a, b) => (better(b.fact, a.fact) ? 1 : -1))
+    const ordered = [...list].sort((a, b) => compareFacts(a.fact, b.fact))
     const winner = ordered[0]
     const losers = []
     for (const cand of ordered.slice(1)) {
@@ -529,13 +538,13 @@ export function consolidate(facts, options = {}) {
     }
     const keywords = [...freq.entries()]
       .filter(([, n]) => n >= Math.max(2, Math.ceil(members.length / 2)))
-      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+      .sort((a, b) => b[1] - a[1] || (a[0] === b[0] ? 0 : (a[0] < b[0] ? -1 : 1)))
       .slice(0, 5)
       .map(([w]) => w)
     const label = members[0].topic || members[0].entity || '通用'
     const evidence = members
       .slice()
-      .sort((a, b) => (better(a, b) ? -1 : 1))
+      .sort((a, b) => compareFacts(a, b))
       .slice(0, maxEvidence)
       .map((m) => ({ id: m.id, text: m.text.slice(0, 120) }))
     experiences.push({
@@ -561,7 +570,7 @@ export function consolidate(facts, options = {}) {
   const outFacts = []
   const outExp = []
   let used = 0
-  const orderedFacts = [...keptFacts].sort((a, b) => (better(a, b) ? -1 : 1))
+  const orderedFacts = [...keptFacts].sort((a, b) => compareFacts(a, b))
   for (const fact of orderedFacts) {
     const cost = estimateTokens(fact.text)
     if (used + cost > budget) {

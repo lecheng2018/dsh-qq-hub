@@ -37,7 +37,15 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   let derived = null
 
   // 4) 索引缓存（依赖 derived 的 activePersonaId 等，稍后回填）
-  const indexCache = createMemoryIndexCache({ getConfig, load: session.load, getRev: () => session.rev(), derived: null })
+  const indexCache = createMemoryIndexCache({
+    getConfig,
+    load: session.load,
+    getRev: () => session.rev(),
+    derived: null,
+    // indexFor 的缓存键依赖「已知作用域集合」：override 放行域变化要能改变缓存键
+    getKnownScopes: () => session.getVectorScopes(),
+    noteVectorScopes: (scopes) => session.noteVectorScopes(scopes),
+  })
 
   // 重新创建 derived 以注入 indexCache
   const derivedFinal = createMemoryDerived({ session, indexCache, getConfig })
@@ -75,7 +83,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     dsh, getConfig, hub, chatLog, log, personaText,
     isActive: () => session.isActive(), createGenerationSignal: session.createGenerationSignal, generationOf: session.generationOf,
     load: session.load, save: session.save, health: () => session.health(), relatedTo: recall.relatedTo,
-    add: crud.add, addMany: crud.addMany, revise: crud.revise, supersede: crud.supersede, invalidate: crud.invalidate, listFor: crud.listFor, scopeFromChatId: indexCache.scopeFromChatId,
+    add: crud.add, addMany: crud.addMany, revise: crud.revise, supersede: crud.supersede, invalidate: crud.invalidate, invalidateMany: crud.invalidateMany, listFor: crud.listFor, scopeFromChatId: indexCache.scopeFromChatId,
     profileOf: derivedFinal.profileOf, setProfile: derivedFinal.setProfile, setDerivedProfile: derivedFinal.setDerivedProfile, profileKeyOf: derivedFinal.profileKeyOf,
     insightsOf: derivedFinal.insightsOf, setInsights: derivedFinal.setInsights, setDerivedInsights: derivedFinal.setDerivedInsights, styleOf: derivedFinal.styleOf, setStyle: derivedFinal.setStyle, setDerivedStyle: derivedFinal.setDerivedStyle, personKey: derivedFinal.personKey,
   })
@@ -89,7 +97,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vectorBackfill: (items) => vec.backfill(items),
     rerankStatus: () => { try { return reranker.status() } catch { return { enabled: false } } },
     scopeOfChat: indexCache.scopeOfChat, scopeVisible: indexCache.scopeVisible, registerScopeOverride: indexCache.registerScopeOverride,
-    add: crud.add, addMany: crud.addMany, addEvent: crud.addEvent, supersede: crud.supersede, invalidate: crud.invalidate, recentEvents: crud.recentEvents, recentEventsFor: crud.recentEventsFor, update: crud.update, remove: crud.remove, restore: crud.restore, recall: recall.recall, recallFused: recall.recallFused, contextFor: recall.contextFor, topicScore: recall.topicScore, importCommit: crud.importCommit, clearScope: crud.clearScope, clearScopeEntries: crud.clearScopeEntries, clearProfilesInScope: derivedFinal.clearProfilesInScope, relatedTo: recall.relatedTo, indexFor: indexCache.indexFor, indexAll: indexCache.indexAll, reassignOwner: crud.reassignOwner, reportMiss: crud.reportMiss, listFor: crud.listFor,
+    add: crud.add, addMany: crud.addMany, addEvent: crud.addEvent, supersede: crud.supersede, invalidate: crud.invalidate, invalidateMany: crud.invalidateMany, recentEvents: crud.recentEvents, recentEventsFor: crud.recentEventsFor, update: crud.update, remove: crud.remove, restore: crud.restore, recall: recall.recall, recallFused: recall.recallFused, contextFor: recall.contextFor, topicScore: recall.topicScore, importCommit: crud.importCommit, clearScope: crud.clearScope, clearScopeEntries: crud.clearScopeEntries, clearProfilesInScope: derivedFinal.clearProfilesInScope, relatedTo: recall.relatedTo, indexFor: indexCache.indexFor, indexAll: indexCache.indexAll, reassignOwner: crud.reassignOwner, reportMiss: crud.reportMiss, listFor: crud.listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
     profiles: derivedFinal.profiles,
     profileOf: derivedFinal.profileOf, profileKeyOf: derivedFinal.profileKeyOf, setProfile: derivedFinal.setProfile,

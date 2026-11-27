@@ -74,12 +74,14 @@ function personKeyToScope(key) {
   return 'global'
 }
 
+let tmpTextSeq = 0
+
 /**
  * 原子写入文本文件（写 tmp -> fsync -> rename）
  */
 export function writeTextAtomic(filePath, text) {
   mkdirSync(dirname(filePath), { recursive: true })
-  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}-${++tmpTextSeq}`
   const fd = openSync(tmp, 'w', 0o644)
   // 同 store.js writeJson：fnOS 部署环境 umask 077 会把 mode 参数砍成 0o600，open 的 mode
   // 只是上限。没有这一步，memory.md 每次落盘都重新变成 Harness 私有，面板授权第二天失效。
@@ -149,6 +151,37 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   let stateSnapshot = emptyState()
   let stateError = null
   let stateRaw = null
+  let lastStateMergeWarnAt = 0
+  const STATE_MERGE_WARN_INTERVAL_MS = 60_000
+
+  function parseValidDiskState(raw) {
+    if (typeof raw !== 'string') return null
+    try {
+      const clean = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
+      const parsed = JSON.parse(clean)
+      if (!validState(parsed)) return null
+      return { ...emptyState(), ...parsed }
+    } catch {
+      return null
+    }
+  }
+
+  function mergeRecordDelta(prevMap, diskMap, callerMap) {
+    if (!isRecord(callerMap)) return diskMap
+    const prev = isRecord(prevMap) ? prevMap : {}
+    const merged = structuredClone(isRecord(diskMap) ? diskMap : {})
+    for (const k of Object.keys(prev)) {
+      if (!(k in callerMap) && JSON.stringify(merged[k]) === JSON.stringify(prev[k])) {
+        delete merged[k]
+      }
+    }
+    for (const [k, v] of Object.entries(callerMap)) {
+      if (!(k in prev) || JSON.stringify(v) !== JSON.stringify(prev[k])) {
+        merged[k] = v
+      }
+    }
+    return merged
+  }
 
   function reloadAllScopes() {
     if (closed) throw new Error('记忆存储已关闭')
@@ -382,9 +415,24 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   }
 
   function commitState(next) {
-    writeJsonWithBackup(stateFile, next, { validate: validState, label: '记忆运行状态', onError: (err) => log.warn?.(err.message) })
-    stateSnapshot = next
-    stateRaw = readFileSync(stateFile, 'utf8')
+    try {
+      writeJsonWithBackup(stateFile, next, { validate: validState, label: '记忆运行状态', onError: (err) => log.warn?.(err.message) })
+      stateSnapshot = next
+      stateRaw = readFileSync(stateFile, 'utf8')
+    } catch (error) {
+      // 若主文件已落盘且合法，立刻同步内存镜像，避免后续所有保存因 stateRaw 失步陷入死锁
+      try {
+        if (existsSync(stateFile)) {
+          const diskRaw = readFileSync(stateFile, 'utf8')
+          const diskObj = parseValidDiskState(diskRaw)
+          if (diskObj) {
+            stateSnapshot = diskObj
+            stateRaw = diskRaw
+          }
+        }
+      } catch {}
+      throw error
+    }
   }
 
   return {
@@ -405,31 +453,71 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     save: (s) => {
       if (closed) throw new Error('记忆存储已关闭')
       if (stateError) throw new Error(`记忆运行状态不可用: ${stateError}`)
-      if ((existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null) !== stateRaw) {
-        throw new Error('记忆运行状态已在外部被修改，请先重载档案')
+      const diskStateRaw = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null
+      const prevBase = stateSnapshot
+      let baseState = stateSnapshot
+      let mergedExternal = false
+      if (diskStateRaw !== stateRaw) {
+        // state.json 是纯机器运行态（与用户可手改的 memory.md 区分）：
+        // 若磁盘 state.json 经 validState 校验合法，自动重载并合并当前运行态增量，不再永久砖化；
+        // 仅当磁盘 state.json 缺失、损坏或结构非法时才抛错。
+        const diskState = parseValidDiskState(diskStateRaw)
+        if (!diskState) {
+          throw new Error('记忆运行状态已在外部被修改，请先重载档案')
+        }
+        baseState = diskState
+        mergedExternal = true
+        const nowWarn = Date.now()
+        if (nowWarn - lastStateMergeWarnAt >= STATE_MERGE_WARN_INTERVAL_MS) {
+          lastStateMergeWarnAt = nowWarn
+          log.warn?.('记忆运行状态 state.json 在外部发生合法变更，已自动重载并合并当前运行态增量')
+        }
       }
       s = structuredClone(s)
       const stateChanges = {}
-      if (s.insightNames) stateChanges.insightNames = s.insightNames
-      if (s.processed) stateChanges.processed = s.processed
-      if (s.processedSources) stateChanges.processedSources = s.processedSources
-      if (s.extractionBatches) stateChanges.extractionBatches = s.extractionBatches
-      if (s.runs) stateChanges.runs = s.runs
-      if (s.lastConsolidate) stateChanges.lastConsolidate = s.lastConsolidate
+      const recordKeys = ['insightNames', 'processed', 'processedSources', 'extractionBatches', 'runs']
+      for (const key of recordKeys) {
+        if (!s[key]) continue
+        stateChanges[key] = mergedExternal
+          ? mergeRecordDelta(prevBase[key], baseState[key], s[key])
+          : s[key]
+      }
+      if (s.lastConsolidate) {
+        if (!mergedExternal || JSON.stringify(s.lastConsolidate) !== JSON.stringify(prevBase.lastConsolidate || {})) {
+          stateChanges.lastConsolidate = s.lastConsolidate
+        }
+      }
 
-      const hitsMap = structuredClone(stateSnapshot.hits || {})
+      const hitsMap = structuredClone(baseState.hits || {})
       let hitsChanged = false
       for (const it of s.items || []) {
-        if (it.hits || it.lastHit) {
-          const old = hitsMap[it.id]
-          if (!old || old.hits !== it.hits || old.lastHit !== it.lastHit || old.hitDays !== it.hitDays) {
-            hitsMap[it.id] = { hits: it.hits, lastHit: it.lastHit, hitDays: it.hitDays }
+        if (it.hits || it.lastHit || it.hitDays) {
+          const old = (prevBase.hits || {})[it.id]
+          const callerChanged = !old || old.hits !== it.hits || old.lastHit !== it.lastHit || old.hitDays !== it.hitDays
+          if (!mergedExternal) {
+            if (callerChanged) {
+              hitsMap[it.id] = { hits: it.hits, lastHit: it.lastHit, hitDays: it.hitDays }
+              hitsChanged = true
+            }
+          } else if (callerChanged) {
+            const curDisk = hitsMap[it.id]
+            if (curDisk) {
+              const dHits = Math.max(0, (Number(it.hits) || 0) - (Number(old?.hits) || 0))
+              const dDays = Math.max(0, (Number(it.hitDays) || 0) - (Number(old?.hitDays) || 0))
+              hitsMap[it.id] = {
+                hits: dHits > 0 ? (Number(curDisk.hits) || 0) + dHits : Math.max(Number(curDisk.hits) || 0, Number(it.hits) || 0),
+                hitDays: dDays > 0 ? (Number(curDisk.hitDays) || 0) + dDays : Math.max(Number(curDisk.hitDays) || 0, Number(it.hitDays) || 0),
+                lastHit: Math.max(Number(curDisk.lastHit) || 0, Number(it.lastHit) || 0),
+              }
+            } else {
+              hitsMap[it.id] = { hits: it.hits, lastHit: it.lastHit, hitDays: it.hitDays }
+            }
             hitsChanged = true
           }
         }
       }
-      if (hitsChanged) stateChanges.hits = hitsMap
-      const nextState = { ...stateSnapshot, ...stateChanges, updatedAt: Date.now() }
+      if (hitsChanged || mergedExternal) stateChanges.hits = hitsMap
+      const nextState = { ...baseState, ...stateChanges, updatedAt: Date.now() }
       if (!validState(nextState)) throw new Error('记忆运行状态结构不符合预期，拒绝写入')
 
       const byScope = new Map()
@@ -559,6 +647,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         if (JSON.stringify(oldSnap?.entries) !== JSON.stringify(newEntries)) pending.push(doc)
       }
       for (const doc of pending) commitScopeDocument(doc)
+      const currentStateRaw = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null
+      if (currentStateRaw !== diskStateRaw) {
+        throw new Error('记忆运行状态已在外部被修改，请先重载档案')
+      }
       commitState(nextState)
       return rev
     },

@@ -28,6 +28,7 @@ export function saveConfig(cfg) {
 
 export {
   CONFIG_VERSION,
+  PROFILE_PERMS_VERSION,
   DEFAULTS,
   OPT_IN_ON_UPDATE,
   GROUP_BUDGET_VERSION,
