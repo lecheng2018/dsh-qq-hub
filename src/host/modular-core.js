@@ -1237,6 +1237,12 @@ export function createModularCore({
   // 持续挂掉时每轮刷屏（同聊天一个窗口内最多提示一次）。
 
   const FAILURE_NOTICE_WINDOW_MS = 5 * 60_000
+  /**
+   * 「模型通道整体挂了」这一类失败：不是某条消息的内容问题，也不是某个群的偶发抖动，
+   * 而是她所有回复都会失败、且**需要主人动手**（查余额 / 调限制器 / 换模型）。
+   * 群聊里遇到这类失败不能沉默 —— 改投主人私聊（见 handleTurnFailure 的收件人选择）。
+   */
+  const GATEWAY_LEVEL_KINDS = new Set(['rate-limit'])
   const failureNoticedAt = new Map() // `${chatKey}::${kind}` → 上次发失败回执的时间（LRU 顺序）
 
   /** 上游内容策略拦截：只认「被服务端判敏感/不让答」这类，绝不是功能坏了。 */
@@ -1326,11 +1332,25 @@ export function createModularCore({
     // 兑现「下一条消息重新开始」的承诺（群聊虽不发提示也要能自愈，避免一直卡死）。
     if (key && kind === 'context-window') contextResetChats.add(key)
     if (!notify || !key) return { kind, sent: false }
-    // 主人私聊以外的群聊不发：群里一条失败回执等于当众解释技术故障，观感很差。
-    // 私聊（含主人）才发 —— 那是「她的对话被掐了」，应该让人知道。
-    if (!key.startsWith('private:')) return { kind, sent: false }
+    // 收件人选择：
+    //   · 私聊 → 发给对方（「她的对话被掐了」，对方该知道）；
+    //   · 群聊 → **默认不发**（在群里解释技术故障对群友是噪音），
+    //     但「模型通道整体挂了」这类**不是某个群的问题、且需要主人动手**的故障，
+    //     改投**主人私聊** —— 否则群里的失败对主人完全不可见，要翻后台日志才知道
+    //     （真机 2026-11-27 21:45~22:09：某个群连续 7 轮
+    //      503「所有启用中的账号都被限制器拦下，无账号可转发」，全程零提示）。
+    let targetKey = key
+    let rateKey = `${key}::${kind}`
+    if (!key.startsWith('private:')) {
+      if (!GATEWAY_LEVEL_KINDS.has(kind)) return { kind, sent: false }
+      const ownerQQ = String(getConfig()?.ownerQQ || '')
+      if (!ownerQQ) return { kind, sent: false }
+      targetKey = `private:${ownerQQ}`
+      // 网关级故障是**全局**的：同一段时间里多个群都会失败。按 kind 全局限频，
+      // 避免主人被「每个群各发一条」刷屏。
+      rateKey = `__gateway__::${kind}`
+    }
     const now = Date.now()
-    const rateKey = `${key}::${kind}`
     const last = Number(failureNoticedAt.get(rateKey) || 0)
     if (last && now - last < FAILURE_NOTICE_WINDOW_MS) {
       // 命中热 key 时刷新 LRU 顺序，避免活跃条目被误淘汰
@@ -1357,9 +1377,11 @@ export function createModularCore({
       }
     }
     try {
+      // 群聊改投主人私聊时补一句「哪个群」，否则主人不知道去看哪儿。
+      const body = targetKey === key ? text : `${text}\n（${key} 这一轮没回成）`
       Promise.resolve(outbox.request({
-        chatKey: key, sourceModuleId: 'core',
-        segments: [{ type: 'text', data: { text } }],
+        chatKey: targetKey, sourceModuleId: 'core',
+        segments: [{ type: 'text', data: { text: body } }],
       })).then((res) => {
         if (res && (res.ok === false || res.state === 'failed')) rollbackRate()
       }, (err) => {
