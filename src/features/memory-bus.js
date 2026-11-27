@@ -172,6 +172,21 @@ export function createMemoryBus({ store, log } = {}) {
     }
   }
 
+  async function recallFused(query, o = {}) {
+    if (!store) return []
+    const hasChat = Boolean(o.chat)
+    const hasScopes = o.scopes !== undefined && o.scopes !== null
+    const scopes = hasScopes ? (Array.isArray(o.scopes) ? o.scopes : [o.scopes]) : (hasChat ? visibleScopes(o.chat) : null)
+    try {
+      if (typeof store.recallFused === 'function') return (await store.recallFused(query, { ...o, scopes })) || []
+      if (typeof store.recall === 'function') return store.recall(query, { ...o, scopes }) || []
+      return []
+    } catch (error) {
+      warn('记忆总线：recallFused 失败', error)
+      return []
+    }
+  }
+
   /** 后台任务专用读：显式声明可见域的事实记忆（不给域一律空，fail-closed）。 */
   function listFor(scopes, opts) {
     if (!store || typeof store.listFor !== 'function') return []
@@ -196,7 +211,7 @@ export function createMemoryBus({ store, log } = {}) {
   }
 
   return {
-    add, addEvent, supersede, invalidate, recall, listFor, recentEventsFor, list, remove,
+    add, addEvent, supersede, invalidate, recall, recallFused, listFor, recentEventsFor, list, remove,
     /** 作用域口径的唯一真相（转发 memory-privacy 的纯函数） */
     scopeOf: (chat) => scopeOf(chat),
     visibleScopes: (chat) => visibleScopes(chat),

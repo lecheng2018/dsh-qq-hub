@@ -10,7 +10,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MEM = readFileSync(join(ROOT, 'src/features/memory-archive.js'), 'utf8')
 const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
 const MOD = readFileSync(join(ROOT, 'src/modules/memory/index.js'), 'utf8')
-const TG = readFileSync(join(ROOT, 'src/modules/token-guardian/index.js'), 'utf8')
 const CLIENT = readFileSync(join(ROOT, 'client/client.js'), 'utf8')
 
 test('#2 提取门槛：3 行不再触发，纯寒暄不进模型', () => {
@@ -35,11 +34,6 @@ test('#5 召回负反馈：说「记错了」降权最近注入的记忆', () =>
   assert.match(MEM, /function reportMiss\(/, 'memory 有 reportMiss')
   assert.match(MEM, /before \* 0\.8/, '降权 8 折')
   assert.match(MOD, /api\.on\('activity'[^]*?reportMiss/s, '挂进 in 消息')
-})
-
-test('#6 估算系数：中文 1 字 ≈ 1.4 token，不再 chars/1.2 低估三成', () => {
-  assert.match(TG, /CHARS_TO_TOKEN = 1\.4/)
-  assert.doesNotMatch(TG, /\/ 1\.2/, '旧的 chars/1.2 已清除')
 })
 
 test('主人换号迁移真实落入 Markdown 主库', async (t) => {

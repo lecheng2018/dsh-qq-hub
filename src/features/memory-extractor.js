@@ -66,7 +66,7 @@ export function parseMemoryJsonArray(out) {
   throw new Error('模型未返回有效的记忆 JSON 数组')
 }
 
-export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
+export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, addMany, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
   let consolidationBusy = false
   const dayKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
   async function extractFacts(chatId, transcript, genSignal = null) {
@@ -137,14 +137,30 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
     let added = 0
     try {
       // 8 条是提示词软目标；模型若完整多返，沿用原来的 12 条硬上限，不能因调低目标静默截尾。
+      // 纯新增一律先入队 batch，循环结束后一次性 addMany —— 过去每条 add() 都 load()+save()，
+      // 一次整理 373 条就是 373 次全库序列化 + fsync（还夹带 52 条淘汰日志刷屏）。
+      const batch = typeof addMany === 'function' ? [] : null
       for (const item of entries.slice(0, 12)) {
-        if (!item || !item.text) continue
+        if (!item || !String(item.text || '').trim()) continue
         // 「关于她自己」的条目不该落成关于别人的事实：自称正则和唤醒词都由身份中枢给。
         const aboutText = String(item.about || '')
         if (identity.selfRefRegex.test(aboutText) || identity.wakeWords.includes(aboutText.trim())) continue
         const qq = String(item.about_qq ?? '').replace(/\D/g, '')
         const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
-        if (await commit(item, { chatId, cfg, known, about })) added++
+        const before = batch ? batch.length : 0
+        const committed = await commit(item, { chatId, cfg, known, about, batch })
+        const queued = batch && batch.length > before
+        // 入队项要等 addMany 真正落盘后再计入 added，避免 addMany 抛错时误把未落盘条数算成 factsCommitted。
+        if (!queued && committed) added++
+      }
+      if (batch && batch.length) {
+        const r = addMany(batch)
+        // 仅当整体拒绝（如模块已关闭、无任何跳过或写入）才抛错；局部条目校验跳过与单条 add() 口径一致，不锁死批次。
+        if (r.ok === false && !r.added && !r.updated && !r.skipped) {
+          throw new Error(r.message || '批量写入记忆失败')
+        }
+        if (r.skipped > 0) log?.debug?.(`批量提炼跳过 ${r.skipped} 条无效条目：${r.message}`)
+        added += (Number(r.added) || 0) + (Number(r.updated) || 0)
       }
     } catch (error) {
       error.factsCommitted = added
@@ -293,7 +309,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         })
         .sort((a, b) => b[1] - a[1])
         .map(([key]) => key)
-      const targets = [...new Set([...touched, ...missing])].slice(0, 8)
+      const targets = [...new Set([...touched, ...missing])].slice(0, 20)
       for (const key of targets) {
         if (!genSignal.isValid()) break
         const at = key.lastIndexOf('@')
@@ -317,6 +333,23 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       const before = state.items.length
       state.items = state.items.filter((item) => !shouldForget({ ...item, ownerQQ: getConfig()?.ownerQQ || '' }))
       const forgot = before - state.items.length
+      // 清理已完成的旧提炼批次（保留 14 天内且最多 500 条 done；pending/running/failed 永不自动清，避免破坏恢复状态）
+      if (state.extractionBatches && typeof state.extractionBatches === 'object') {
+        const cutoff = now - 14 * 86400_000
+        const doneEntries = []
+        const keptBatches = {}
+        for (const [id, b] of Object.entries(state.extractionBatches)) {
+          if (!b || typeof b !== 'object') continue
+          if (b.status !== 'done') {
+            keptBatches[id] = b
+          } else if (Number(b.at || 0) >= cutoff) {
+            doneEntries.push([id, b])
+          }
+        }
+        doneEntries.sort((a, b) => Number(b[1].at || 0) - Number(a[1].at || 0))
+        for (const [id, b] of doneEntries.slice(0, 500)) keptBatches[id] = b
+        state.extractionBatches = keptBatches
+      }
       if (forgot || blurred) state.rev = (state.rev || 0) + 1
       state.lastConsolidate = {
         day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles, failed: failedChats,

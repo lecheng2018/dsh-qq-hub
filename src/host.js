@@ -152,12 +152,20 @@ export function apply(ctx) {
     if (personaFallbackWarned.has(key)) return
     personaFallbackWarned.add(key)
     const line = `人设回落全局卡：会话 ${key.slice(-8)} ${why}｜该会话的分群/群默认人设本次不生效`
-    logger?.warn?.(line)
+    // 根 logger 只有 child/recent/onEntry，没有 warn —— 旧的 logger?.warn?.(line) 是空操作。
+    // 日志文件靠 log（= logger.child('core')）这一条落盘，面板「日志」页也读它。
     log?.warn?.(line)
   }
 
   function resolvePersonaForContext(context) {
     const sid = context?.agent?.session?.id || context?.session?.id || context?.sessionId
+    // 这个变量是**全局**注册的，DSH 每次组装会对所有会话无条件求值（不只是 QQ Hub 的三个 preset），
+    // 所以 subagent / 别的插件的会话也会走到这里。它们本来就不该有分群/群默认人设 ——
+    // 过去一律打「映射缺失」告警，每天几十条全是噪音（真机 11-27：19 条/天，解开会话元数据
+    // 确认全是 origin=subagent / agentPreset=standard）。只有 QQ Hub 自己的 preset
+    // 才可能出现「本该有分群人设但没解析到」这种真问题，其余安静返回全局卡即可。
+    const preset = String(context?.agent?.session?.agentPreset || context?.session?.agentPreset || context?.agentPreset || '')
+    const isQqHubSession = preset.startsWith('qq-hub-')
     try {
       if (sid && hub?.chatOfSession) {
         const chatKey = hub.chatOfSession(sid)
@@ -175,15 +183,18 @@ export function apply(ctx) {
           } else {
             notePersonaFallback(sid, `按 ${chatKey} 没选出人设卡`)
           }
-        } else if (!hub?.isSystemSession?.(sid)) {
+        } else if (isQqHubSession && !hub?.isSystemSession?.(sid)) {
+          // 只有 QQ Hub 自己的会话才可能「本该有」分群人设；非 QQ 会话反查不到是常态，不告警。
           notePersonaFallback(sid, '反查不到它属于哪个聊天（会话映射缺失）')
         }
-      } else if (!hub?.chatOfSession) {
+      } else if (isQqHubSession && !hub?.chatOfSession) {
         notePersonaFallback(sid, '当前核心没有 chatOfSession 反查接口')
       }
     } catch (e) {
-      logger?.debug?.(`按会话解析人设变量失败：${e?.message || e}`)
-      notePersonaFallback(sid, `解析时出错：${e?.message || e}`)
+      // 根 logger 没有 debug/warn 方法（只有 child/recent/onEntry），旧写法 logger?.debug?.() 是
+      // 永远不触发的空操作 —— 统一走 log（= logger.child('core')）。
+      log?.debug?.(`按会话解析人设变量失败：${e?.message || e}`)
+      if (isQqHubSession) notePersonaFallback(sid, `解析时出错：${e?.message || e}`)
     }
     return rewrite('persona', currentPersonaText(getConfig().persona.current))
   }

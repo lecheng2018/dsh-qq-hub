@@ -100,9 +100,6 @@ const SIDE_EFFECT_PATHS = new Set([
   // 能直接触发它们：清空记忆分区、重置用量、安装组件、触发日记对外发布。
   // 逐条按「写持久状态 / 删数据 / 派生进程或下载 / 对外发布 / 触发计费」收进来
   // （与上面面板条目同一口径）；面板前端对这些全部走 POST，合法流程不受影响。
-  '/compact-now',                 // token-guardian 立即压缩（触发模型调用＝计费）
-  '/token-guardian/compact-now',  // 同上（模块内注册路径）
-  '/token-guardian/reset-usage',  // 重置用量
   '/token-usage/reset',           // 重置用量（报告点名）
   '/diary/run',                   // 对外发布说说（高危）
   '/image/codex/cancel',          // 写任务态
@@ -145,7 +142,6 @@ const SIDE_EFFECT_PATHS = new Set([
   '/sticker/delete',              // stickers:196 删表情（QQ 收藏里也删）
   '/purpose/fire',                // purpose:78 跑一轮目的引擎（可能真的发消息）
   '/speakup/fire',                // speakup:64 主动搭话（模型计费 + 私聊投递）
-  '/reset-usage',                 // token-guardian:581 重置用量（与 /token-guardian/reset-usage 同一 handler 的短别名）
 ])
 
 /** 从 Host 头里剥出主机名（处理 '127.0.0.1:8080' 与 '[::1]:8080' 两种形态）。 */

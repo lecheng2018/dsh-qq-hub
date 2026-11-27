@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createFakeDsh } from './helpers/fake-dsh.js'
 
 let fake, api
-const NEW_MODS = ['token-guardian', 'memory-privacy', 'complete-guard']  // security-lock 已移除
+const NEW_MODS = ['token-billing', 'memory-privacy', 'complete-guard']  // security-lock / token-guardian 已移除
 
 before(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'panel-vis-'))
@@ -40,7 +40,7 @@ test('内置模块的设置项能透出去（否则面板渲染不出开关）',
 test('前端按模块来源拼出的路由能命中真实路由', () => {
   const list = api.modules.status()
   const paths = {
-    'token-guardian': '/token-guardian/status',
+    'token-billing': '/token-usage',
     'memory-privacy': '/memory-privacy/stats',
     'complete-guard': '/complete-guard/last',
   }

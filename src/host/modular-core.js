@@ -1007,6 +1007,17 @@ export function createModularCore({
   const personaBound = new Set() // 已注册过 persona 变量的 sessionId
   const ctxFallback = new Set() // 宿主已占用同名 context：退回「把背景拼进消息」
   const ctxFallbackDone = new Set() // 已经投过一次的会话（避免每轮重复注入）
+  const lastInboundText = new Map() // chatKey -> 上一轮入站查询文本（供记忆短句追问 prevText 使用）
+  function rememberInboundText(chatKey, query) {
+    const text = String(query || '').slice(-300)
+    if (!text) return
+    lastInboundText.delete(chatKey)
+    if (lastInboundText.size >= 500) {
+      const oldest = lastInboundText.keys().next().value
+      if (oldest !== undefined) lastInboundText.delete(oldest)
+    }
+    lastInboundText.set(chatKey, text)
+  }
   const activeChatBySessionId = new Map() // sessionId -> chatKey（即时反查，为人设变量/工具判定提供毫秒级保障）
 
   /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
@@ -1278,12 +1289,14 @@ export function createModularCore({
         }
       }
       const previousTurnAt = turnAt(turn.chatKey)
+      let promptQuery = textOfSegments(io.members.flatMap((m) => m.segments || []))
       if (inGroup) {
         const gp = groupPromptContent(turn.chatKey, members, previousTurnAt, offeredMode)
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
         groupFedItems = gp.fedItems
+        if (gp.query) promptQuery = gp.query
         try { participants.note(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
       } else {
         content = segmentsToContent(members)
@@ -1309,13 +1322,15 @@ export function createModularCore({
           }),
         }, ...content]
       }
+      const prevPromptText = lastInboundText.get(turn.chatKey) || ''
       if (typeof moduleHooks?.prompt === 'function') {
         const next = await moduleHooks.prompt(content, {
-          chat, sessionId, senderId: chat.userId, prevText: '', queryText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
+          chat, sessionId, senderId: chat.userId, prevText: prevPromptText, queryText: promptQuery,
         })
         if (next == null) return null
         content = next
       }
+      rememberInboundText(turn.chatKey, promptQuery)
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
       //    sessionController 只能走 ctx.get（真机报告 3：cordis 未声明 inject 的 .services 直接点会抛）
@@ -1342,12 +1357,14 @@ export function createModularCore({
           const stickerPick = stickerPicks.get(inbound)
           if (stickerPick) steerContent.push({ type: 'text', text: stickerHint(stickerPick) })
           const steerQuery = textOfSegments(inbound.segments)
+          const prevSteerText = lastInboundText.get(turn.chatKey) || ''
           try { participants.note(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
           if (typeof moduleHooks?.prompt === 'function') {
-            const next = await moduleHooks.prompt(steerContent, { chat, sessionId, senderId: chat.userId, prevText: '', queryText: steerQuery, steer: true })
+            const next = await moduleHooks.prompt(steerContent, { chat, sessionId, senderId: chat.userId, prevText: prevSteerText, queryText: steerQuery, steer: true })
             if (next == null) return
             steerContent = next
           }
+          rememberInboundText(turn.chatKey, steerQuery)
           const admittedSteer = await admitContent(steerContent, {
             nickname: inbound.sender?.nickname || inbound.sender?.userId,
             hint: textOfSegments(inbound.segments), cfg: getConfig(), sessionId,
@@ -1973,6 +1990,7 @@ export function createModularCore({
       for (const off of mounted.offs) { try { off?.() } catch {} }
     }
     mountedTools.clear()
+    lastInboundText.clear()
     await systemTurns.dispose()
     await registry.dispose()
     await controller.dispose()
@@ -1993,6 +2011,7 @@ export function createModularCore({
     cleanupSession(entry.sessionId)
     participants.clear(entry.sessionId)
     sessionPersonas.delete(key)
+    lastInboundText.delete(key)
     try { registry.forget?.(key) } catch { /* ignore */ }
     debug(`会话已重置（新核心）：${key}`)
     return true
