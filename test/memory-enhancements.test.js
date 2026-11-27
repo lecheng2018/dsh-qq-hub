@@ -1,0 +1,271 @@
+// 记忆补强与 token-guardian 移除回归测试：
+// 1. 向量 + RRF 真双通道叠加、minCos 噪点过滤、rerankTopN 候选池与低分截断、向量命中记账；
+// 2. 分聊天人设隔离（personaIdFor）；
+// 3. 人物小档案纯新增 append-stale 降级可读，破坏性变更保持失效；
+// 4. 梦境巩固传递真实 at / pinned（新事实胜出，不再按随机 UUID 字典序）；
+// 5. biliLike 仅作用于涉 B 站条目，不误伤同作用域其他条目；
+// 6. extractionBatches 过期 done 批次自动清理；
+// 7. token-guardian 已彻底从 BUILTINS 移除。
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { createMemoryStore } from '../src/features/memory.js'
+import { BUILTINS } from '../src/modules/index.js'
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
+
+function withTempData(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'mem-enh-'))
+  mkdirSync(join(dir, 'memory'), { recursive: true })
+  writeFileSync(join(dir, 'memory', 'migration.json'), JSON.stringify({ status: 'success' }))
+  writeFileSync(join(dir, 'memory', 'state.json'), JSON.stringify({ version: 1, hits: {}, processed: {}, processedSources: {}, extractionBatches: {}, runs: {}, lastConsolidate: {}, insightNames: {} }))
+  const prev = process.env.DSH_QQ_HUB_DATA_DIR
+  process.env.DSH_QQ_HUB_DATA_DIR = dir
+  t.after(() => {
+    if (prev === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
+    else process.env.DSH_QQ_HUB_DATA_DIR = prev
+    rmSync(dir, { recursive: true, force: true })
+  })
+  return dir
+}
+
+test('token-guardian 已彻底移除：BUILTINS 与模块目录均不存在', () => {
+  assert.equal(BUILTINS.some((m) => m.id === 'token-guardian'), false)
+  assert.equal(existsSync(join(ROOT, 'src/modules/token-guardian')), false)
+})
+
+test('recallFused：RRF 真双通道叠加 + minCos 过滤低分噪声 + 向量命中记账 recallLog/hits', async (t) => {
+  withTempData(t)
+  // 向量构造：
+  //   query -> [1, 0, 0, ...]
+  //   mDual (双通道命中：含「咖啡」且 cos=0.9) -> [0.9, 0.43589, 0...]
+  //   mBm25 (仅 BM25 命中：含「咖啡」但 cos=0.1 < 0.35 被滤) -> [0.1, 0.99499, 0...]
+  //   mVec  (仅向量命中：不含「咖啡」但 cos=0.95) -> [0.95, 0.31225, 0...]
+  //   mNoise (低相关噪声：不含「咖啡」且 cos=0.2 < 0.35 应被 minCos 滤掉) -> [0.2, 0.9798, 0...]
+  const vecOf = (text) => {
+    const v = new Array(64).fill(0)
+    if (text.includes('双通道咖啡')) { v[0] = 0.9; v[1] = Math.sqrt(1 - 0.81) }
+    else if (text.includes('纯字面咖啡')) { v[0] = 0.1; v[1] = Math.sqrt(1 - 0.01) }
+    else if (text.includes('拿铁拉花')) { v[0] = 0.95; v[1] = Math.sqrt(1 - 0.95 * 0.95) }
+    else if (text.includes('无关拖拉机')) { v[0] = 0.2; v[1] = Math.sqrt(1 - 0.04) }
+    else { v[0] = 1 } // query
+    return v
+  }
+  const fakeFetch = async (url, opts) => {
+    const body = JSON.parse(opts.body)
+    const inputs = Array.isArray(body.input) ? body.input : [body.input]
+    return { ok: true, json: async () => ({ data: inputs.map((text) => ({ embedding: vecOf(String(text)) })) }) }
+  }
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({
+      ownerQQ: '10001',
+      memory: { enabled: true, recallCount: 6 },
+      ext: {
+        memory: {
+          vectorEnabled: true, vectorUrl: 'https://mock/embeddings', vectorApiKey: 'k', vectorModel: 'm', vectorDim: 64,
+        },
+      },
+    }),
+    log: { info() {}, warn() {} },
+    vectorFetchImpl: fakeFetch,
+  })
+  t.after(() => store.dispose())
+
+  const chat = { kind: 'private', userId: '10002', chatId: 'private:10002' }
+  const idBm25 = store.add({ text: '纯字面咖啡咖啡咖啡最爱', about: '10003', scope: 'private:10002', importance: 0.7 }).id
+  const idDual = store.add({ text: '双通道咖啡香醇', about: '10003', scope: 'private:10002', importance: 0.6 }).id
+  const idVec = store.add({ text: '拿铁拉花教程', about: '10003', scope: 'private:10002', importance: 0.6 }).id
+  const idNoise = store.add({ text: '无关拖拉机修理', about: '10003', scope: 'private:10002', importance: 0.6 }).id
+  await store.vectorBackfill(store.list(''))
+
+  const hits = await store.recallFused('喝咖啡', { chat, limit: 4, where: 'private:10002' })
+  const ids = hits.map((h) => h.it.id)
+  assert.equal(ids[0], idDual, '双通道共同命中应经 RRF 叠加排在首位')
+  assert.ok(ids.includes(idBm25), 'BM25 命中保留')
+  assert.ok(ids.includes(idVec), '高相似纯向量命中保留')
+  assert.ok(!ids.includes(idNoise), 'cos < 0.35 的低相关向量噪声应被 minCos 过滤')
+
+  // 向量命中同样记入 recallLog，且触发 hits 更新
+  const lastLog = store.recalls()[0]
+  assert.ok(lastLog.hits.some((h) => h.id === idVec), '纯向量命中必须写入 recallLog 以便负反馈和面板观察')
+})
+
+test('recallFused + rerank：送入完整 rerankTopN 候选池并在 rerank 后按 minScore 截断', async (t) => {
+  withTempData(t)
+  const prevFetch = globalThis.fetch
+  let rerankDocCount = 0
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url)
+    const body = JSON.parse(opts.body)
+    if (u.includes('/embeddings')) {
+      const inputs = Array.isArray(body.input) ? body.input : [body.input]
+      return { ok: true, json: async () => ({ data: inputs.map(() => ({ embedding: [1, ...Array(63).fill(0)] })) }) }
+    }
+    if (u.includes('/rerank')) {
+      rerankDocCount = body.documents.length
+      // 第 4 条（index 3）给最高分，其余给极低分 0.01（低于 minScore 0.05 应被过滤）
+      return {
+        ok: true,
+        json: async () => ({
+          results: body.documents.map((doc, idx) => ({
+            index: idx,
+            relevance_score: doc.includes('目标第四条') ? 0.92 : 0.01,
+          })),
+        }),
+      }
+    }
+    throw new Error('unexpected url: ' + u)
+  }
+  t.after(() => { globalThis.fetch = prevFetch })
+
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({
+      ownerQQ: '10001',
+      memory: { enabled: true, recallCount: 2 },
+      ext: {
+        memory: {
+          vectorEnabled: true, vectorUrl: 'https://mock/embeddings', vectorApiKey: 'k', vectorModel: 'em', vectorDim: 64,
+          rerankEnabled: true, rerankUrl: 'https://mock/rerank', rerankApiKey: 'rk', rerankModel: 'rm', rerankTopN: 10,
+        },
+      },
+    }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const chat = { kind: 'private', userId: '10002', chatId: 'private:10002' }
+  store.add({ text: '周一清晨去公园慢跑五公里', about: '10003', scope: 'private:10002' })
+  store.add({ text: '周二超市买了新鲜草莓蓝莓', about: '10003', scope: 'private:10002' })
+  store.add({ text: '周三找师傅清洗客厅空调滤网', about: '10003', scope: 'private:10002' })
+  store.add({ text: '目标第四条藏在后面计划学钢琴', about: '10003', scope: 'private:10002' })
+  await store.vectorBackfill(store.list(''))
+
+  // limit=2，但 rerankTopN=10：精排应看到全部 4 条（不是先截成 2 条），并筛出高分的目标第四条且踢掉 0.01 噪声
+  const hits = await store.recallFused('随便问问', { chat, limit: 2 })
+  assert.equal(rerankDocCount, 4, '精排前候选池不应被提前截断到 limit=2')
+  assert.equal(hits.length, 1, '低于 minScore 的 0.01 噪声条目应被剔除')
+  assert.match(hits[0].it.text, /目标第四条/)
+})
+
+test('分聊天人设隔离：私聊默认人设与群聊默认人设的经验/风格/档案各自落款互不串味', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: { llm: { stream: async function* () { yield { type: 'text-delta', text: '妹妹视角的小档案。' } } } },
+    getConfig: () => ({
+      ownerQQ: '10001',
+      model: { provider: 'p', model: 'm' },
+      persona: {
+        current: 'persona-group-card',
+        groupDefault: 'persona-group-card',
+        privateDefault: 'persona-private-sister',
+      },
+      memory: { enabled: true, recallCount: 6 },
+    }),
+    reflectionContext: true,
+    styleContext: true,
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  store.setDerivedInsights('qq:10001', [{ id: 'i1', text: '私聊温柔一点', at: Date.now() }], '主人', { sourceFingerprint: 'fp1' }) /* pii-scan:ignore */
+  store.setDerivedStyle('qq:10001', ['私聊常用呀'], { sourceFingerprint: 'fp1' }) /* pii-scan:ignore */
+
+  // 写入落款应为私聊人设 persona-private-sister，而不是全局 current persona-group-card
+  const savedIns = store.insights().find((x) => x.key === 'qq:10001')?.list?.[0] /* pii-scan:ignore */
+  assert.equal(savedIns?.personaId, 'persona-private-sister')
+  assert.equal(store.styleSourceOf('qq:10001')?.personaId, 'persona-private-sister') /* pii-scan:ignore */
+
+  const privCtx = store.contextFor({ kind: 'private', userId: '10001', chatId: 'private:10001' })
+  assert.match(privCtx, /私聊温柔一点/)
+  assert.match(privCtx, /私聊常用呀/)
+
+  // 人物小档案按作用域解析人设落款
+  for (const text of ['主人喜欢猫', '主人住杭州', '主人爱喝茶']) {
+    store.add({ text, about: '10001', aboutName: '主人', scope: 'private:10001' })
+  }
+  assert.equal(await store.buildProfile('10001', 'private:10001'), true)
+  const prof = store.profileOf('10001', 'private:10001')
+  assert.equal(prof?.personaId, 'persona-private-sister')
+})
+
+test('人物小档案：纯新增 append-stale 保持降级可读，破坏性删改立刻失效停止注入', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: { llm: { stream: async function* () { yield { type: 'text-delta', text: '小李喜欢打羽毛球。' } } } },
+    getConfig: () => ({ ownerQQ: '10001', model: { provider: 'p', model: 'm' }, memory: { enabled: true, recallCount: 4 } }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const ids = []
+  for (const text of ['小李喜欢打羽毛球', '小李在上海工作', '小李不吃香菜']) {
+    ids.push(store.add({ text, about: '10002', aboutName: '小李', scope: 'private:10002' }).id)
+  }
+  assert.equal(await store.buildProfile('10002', 'private:10002'), true)
+
+  // 纯新增一条记忆：档案标 stale+staleReason:'append'，待整理刷新，但期间仍可读不失明
+  store.add({ text: '小李买了一把新球拍', about: '10002', aboutName: '小李', scope: 'private:10002' })
+  const rawAfterAdd = store.profiles().find((p) => p.qq === '10002')
+  assert.equal(rawAfterAdd.stale, true)
+  assert.equal(rawAfterAdd.staleReason, 'append')
+  assert.equal(store.profileOf('10002', 'private:10002')?.text, '小李喜欢打羽毛球。')
+
+  // 破坏性删除一条旧事实：立刻升级为破坏性 stale，profileOf 返回 null
+  store.remove(ids[0])
+  const rawAfterDel = store.profiles().find((p) => p.qq === '10002')
+  assert.equal(rawAfterDel.stale, true)
+  assert.equal(rawAfterDel.staleReason, undefined)
+  assert.equal(store.profileOf('10002', 'private:10002'), null)
+})
+
+test('梦境巩固：传递真实 at 与 pinned，同重要度冲突按时间新者胜出且不伤 pinned', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  // 两条同重要度、极性相反的事实：先加旧的，延迟确保 at 更晚再加新的
+  const oldAdd = store.add({ text: '小明喜欢吃辣', about: '10002', aboutName: '小明', scope: 'private:10002', importance: 0.6 })
+  await new Promise((r) => setTimeout(r, 15))
+  const newAdd = store.add({ text: '小明不喜欢吃辣', about: '10002', aboutName: '小明', scope: 'private:10002', importance: 0.6 })
+
+  const res = await store.dreamConsolidate()
+  assert.equal(res.ok, true)
+  const live = store.listFor(['private:10002'])
+  assert.ok(live.some((m) => m.id === newAdd.id), '较新的事实必须胜出')
+  assert.ok(!live.some((m) => m.id === oldAdd.id), '较旧的冲突事实应被立墓碑')
+
+  // pinned（落盘后为数字 1）：即便更旧，也不能被梦境证伪
+  const pinnedAdd = store.add({ text: '小红喜欢喝咖啡', about: '10003', aboutName: '小红', scope: 'private:10003', importance: 0.6, pinned: true })
+  await new Promise((r) => setTimeout(r, 15))
+  store.add({ text: '小红不喜欢喝咖啡', about: '10003', aboutName: '小红', scope: 'private:10003', importance: 0.6 })
+  await store.dreamConsolidate()
+  const livePinned = store.listFor(['private:10003'])
+  assert.ok(livePinned.some((m) => m.id === pinnedAdd.id), 'pinned=1 的事实不得被梦境立墓碑')
+})
+
+test('biliLike 去重收紧只针对涉 B 站条目，不再误伤同作用域普通记忆', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  // 先放一条带 B站 标签的记忆
+  store.add({ text: 'B站教程讲Docker部署要点', tags: ['B站'], scope: 'private:10001' })
+  // 再放两条相似度在 [0.5, 0.6) 之间的普通非 B 站记忆（不应被压成一条）
+  const r1 = store.add({ text: '周末去西湖边散步喝龙井茶', scope: 'private:10001' })
+  const r2 = store.add({ text: '周末去西湖边散步拍照看日落', scope: 'private:10001' })
+  assert.ok(r1.id && r2.id && r1.id !== r2.id, '同作用域存在 B站 记忆不应误把普通记忆去重阈值降到 0.5')
+})

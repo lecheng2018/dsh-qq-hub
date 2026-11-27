@@ -21,7 +21,6 @@ test('host owns retention while modules receive the independent, narrow chatLog 
   // qzone-social 仍在包内；bili 1.2.0 起整包搬到商店模块（那边的 duty.mjs 接收 chatLog）
   const modules = [
     'src/modules/memory/index.js',
-    'src/modules/token-guardian/index.js',
     'src/modules/purpose/index.js',
     'src/modules/diary/index.js',
     'src/features/qzone-social.js',

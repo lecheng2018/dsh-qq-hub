@@ -19,15 +19,38 @@ import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, buildIndex, clarityOf, contradi
 import { visibleScopes, isValidScope } from './memory-scope.js'
 import { createVectorChannel, fuseRrf } from './memory-vector.js'
 import { createReranker } from './memory-rerank.js'
+import { personaIdFor } from '../persona/personas.js'
+import { chatViewFromKey } from '../chat/adapters/legacy-context.js'
 
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
 export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend, vectorFlushDebounceMs, vectorFetchImpl }) {
-  /** 当前激活的人设 id（主观条目只对同人设可见；客观事实恒可见）。 */
-  const activePersonaId = () => String(getConfig()?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
-  /** 读取侧隔离：主观自传按人设过滤，客观事实跨人设共享。 */
-  const personaVisible = (item) => isEntryVisibleToPersona(item, activePersonaId())
+  /** 解析指定聊天（或全局）当前激活的人设 id：支持按群/按私聊分设人设（personaIdFor）。 */
+  const activePersonaId = (chatOrKey = null) => {
+    try {
+      const cfg = getConfig() || {}
+      if (chatOrKey) {
+        let view = null
+        if (typeof chatOrKey === 'object') {
+          view = chatOrKey
+        } else {
+          const raw = String(chatOrKey).trim()
+          const key = raw.startsWith('qq:') ? `private:${raw.slice(3)}` : raw
+          if (key.startsWith('private:') || key.startsWith('group:')) view = chatViewFromKey(key)
+        }
+        if (view) {
+          const resolved = String(personaIdFor(view, cfg) || '').trim()
+          if (resolved) return resolved
+        }
+      }
+      return String(cfg?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
+    } catch {
+      return DEFAULT_PERSONA_ID
+    }
+  }
+  /** 读取侧隔离：主观自传按当前聊天人设过滤，客观事实跨人设共享。 */
+  const personaVisible = (item, chatOrKey = null) => isEntryVisibleToPersona(item, activePersonaId(chatOrKey))
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -353,9 +376,9 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       ...(personaId ? { personaId: String(personaId).trim() } : {}),
     }
 
-    // US-017 · 双轨记忆：主观条目（insight/style/profile）打上当前人设，客观事实剥除。
+    // US-017 · 双轨记忆：主观条目（insight/style/profile）打上当前聊天实际人设，客观事实剥除。
     // 未标注的历史条目按默认人设处理（只读共享不丢弃）。
-    const activePersona = String(getConfig()?.persona?.current || '').trim() || DEFAULT_PERSONA_ID
+    const activePersona = activePersonaId(finalScope)
     const normalizedItem = withPersonaId(item, activePersona)
 
     // 去重：很像的就更新旧的（同人设主观或客观事实才合并，不同人设主观不可合并）
@@ -379,11 +402,15 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       return effectivePersonaId(m, activePersona) === itemPid
     }
 
-    // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增
-    const biliLike = t.includes('B站') || tags.includes('B站') || scopeItems.some((m) => (m.tags || '').includes('B站'))
-    const dupAt = biliLike ? 0.5 : 0.6
-    const dup = scopeItems.find((m) => maybe(m) && samePersonaTrack(m) && similarity(m.text, t) >= dupAt
-      && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || '')))
+    // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增。
+    // 仅当新条目或候选条目自身涉 B 站时收紧到 0.5，避免同作用域里有一条 B 站记忆就误伤全作用域去重阈值。
+    const isBiliEntry = (textVal, tagList) => String(textVal || '').includes('B站') || (Array.isArray(tagList) && tagList.includes('B站'))
+    const entryIsBili = isBiliEntry(t, tags)
+    const dup = scopeItems.find((m) => {
+      const dupAt = (entryIsBili || isBiliEntry(m.text, m.tags)) ? 0.5 : 0.6
+      return maybe(m) && samePersonaTrack(m) && similarity(m.text, t) >= dupAt
+        && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || ''))
+    })
     if (dup) {
       dup.text = t.length >= dup.text.length ? t : dup.text
       dup.at = Date.now()
@@ -404,7 +431,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
     s.items.push(normalizedItem)
     evictIfNeeded(s, finalScope)
-    staleProfilesIn(s, String(about || ''), finalScope)
+    // 纯新增事实不推翻旧事实：标记待刷新（staleReason:'append'），整理时会重建，期间仍降级可读避免人物档案大面积失明。
+    staleProfilesIn(s, String(about || ''), finalScope, { reason: 'append' })
     s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
     save(s)
     return { ok: true, message: '✓', id: normalizedItem.id }
@@ -510,7 +538,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!chat) return []
     return load().items
       .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since)
-      .filter((m) => scopeVisible(m.scope, chat) && personaVisible(m))
+      .filter((m) => scopeVisible(m.scope, chat) && personaVisible(m, chat))
       .sort((a, b) => b.at - a.at)
       .slice(0, limit)
   }
@@ -520,7 +548,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   function listFor(scopes, { limit = 200 } = {}) {
     const want = [...(Array.isArray(scopes) ? scopes : scopes ? [scopes] : [])].map((x) => String(x ?? '').trim()).filter(Boolean)
     if (!want.length) return []
-    const items = load().items.filter((m) => !m.invalidAt && want.includes(String(m.scope || '')) && personaVisible(m))
+    const items = load().items.filter((m) => !m.invalidAt && want.includes(String(m.scope || '')) && personaVisible(m, m.scope))
     return items.sort((a, b) => (Number(b.importance) || 0) - (Number(a.importance) || 0) || b.at - a.at).slice(0, limit)
   }
 
@@ -671,14 +699,45 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   const recallLog = [] // 最近几次想起了什么（给面板看）
-  function recall(query, { about, limit, where = '', context = '', chat = null, scopes = null } = {}) {
+  function recordRecallHits(hits, { where = '', query = '' } = {}) {
+    recallLog.unshift({
+      at: Date.now(),
+      where,
+      query: String(query).slice(0, 120),
+      hits: hits.map((h) => ({ id: h.it.id, text: h.it.text, score: Number(Number(h.score || 0).toFixed(2)), why: h.why || [] })),
+    })
+    recallLog.length = Math.min(recallLog.length, 20)
+    if (hits.length) {
+      const now = Date.now()
+      const todayStr = new Date().toDateString()
+      for (const h of hits) {
+        const id = h.it.id
+        const cur = pendingHitUpdates.get(id) || {
+          hits: 0,
+          lastHit: 0,
+          hitDays: 0,
+          lastDayStr: h.it.lastHit ? new Date(h.it.lastHit).toDateString() : '',
+        }
+        cur.hits += 1
+        cur.lastHit = now
+        if (cur.lastDayStr !== todayStr) {
+          cur.hitDays += 1
+          cur.lastDayStr = todayStr
+        }
+        pendingHitUpdates.set(id, cur)
+      }
+      scheduleFlushHits()
+    }
+  }
+
+  function recallBm25(query, { about, limit, context = '', chat = null, scopes = null } = {}) {
     const max = limit ?? getConfig().memory.recallCount
     // 传了 chat 就只留这个聊天可见的，后台调用必须显式声明 scopes。
     // 后台任务（没有 chat 概念）必须显式传 scopes 数组声明可见域（如 ['global','private:10000001']），
     // 否则一律拒绝（fail-closed）——防止后台路径拿到全库。
     const inScopes = (scope) => Array.isArray(scopes) && scopes.includes(String(scope))
-    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat) && personaVisible(h.it))
-      : Array.isArray(scopes) ? list.filter((h) => inScopes(h.it.scope) && personaVisible(h.it))
+    const scoped = (list) => (chat ? list.filter((h) => scopeVisible(h.it.scope, chat) && personaVisible(h.it, chat))
+      : Array.isArray(scopes) ? list.filter((h) => inScopes(h.it.scope) && personaVisible(h.it, h.it.scope))
       : [])
     // 索引本身就按作用域建：传了 chat 只检索它看得见的条目（双保险，scoped 再滤一次）
     // scopes 数组模式：逐个作用域取索引合并检索（候选仍然只有声明过的域，不会碰到别的私聊）
@@ -714,29 +773,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
         if (!have.has(h.it.id)) hits.push({ ...h, score: h.score * 0.6, why: [...(h.why || []), '（上一句）'] })
       }
     }
-    recallLog.unshift({ at: Date.now(), where, query: String(query).slice(0, 120), hits: hits.map((h) => ({ id: h.it.id, text: h.it.text, score: Number(h.score.toFixed(2)), why: h.why || [] })) })
-    recallLog.length = Math.min(recallLog.length, 20)
-    if (hits.length) {
-      const now = Date.now()
-      const todayStr = new Date().toDateString()
-      for (const h of hits) {
-        const id = h.it.id
-        const cur = pendingHitUpdates.get(id) || {
-          hits: 0,
-          lastHit: 0,
-          hitDays: 0,
-          lastDayStr: h.it.lastHit ? new Date(h.it.lastHit).toDateString() : ''
-        }
-        cur.hits += 1
-        cur.lastHit = now
-        if (cur.lastDayStr !== todayStr) {
-          cur.hitDays += 1
-          cur.lastDayStr = todayStr
-        }
-        pendingHitUpdates.set(id, cur)
-      }
-      scheduleFlushHits()
-    }
+    return hits
+  }
+
+  function recall(query, { about, limit, where = '', context = '', chat = null, scopes = null } = {}) {
+    const hits = recallBm25(query, { about, limit, context, chat, scopes })
+    recordRecallHits(hits, { where, query })
     return hits
   }
 
@@ -768,7 +810,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   }
 
   const personKey = (chat) => (chat.kind === 'group' ? `group:${chat.groupId}` : chat.userId ? `qq:${chat.userId}` : '')
-  function insightsOf(key, persona = activePersonaId()) {
+  function insightsOf(key, persona = activePersonaId(key)) {
     const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
     return ((load().insights || {})[key] || [])
       .filter((item) => !item.stale)
@@ -792,10 +834,8 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    // 缺陷 1 写入侧：没显式指定人设时，按「此刻激活的人设」落款。
-    // 不落款的话，新条目在读取侧会被当成历史存量归到默认人设，
-    // 于是非默认人设写下的经验自己都读不回来（写了等于白写）。
-    const defaultPid = normalizePersonaId((typeof opts === 'object' && opts?.personaId) || (typeof name === 'object' && name?.personaId) || '') || activePersonaId()
+    // 缺陷 1 写入侧：没显式指定人设时，按「该聊天当前激活的人设」落款。
+    const defaultPid = normalizePersonaId((typeof opts === 'object' && opts?.personaId) || (typeof name === 'object' && name?.personaId) || '') || activePersonaId(key)
     s.insights[key] = list.slice(0, 8).map((item) => {
       const pid = normalizePersonaId(item.personaId || defaultPid)
       return { ...item, origin: 'manual', ...(pid ? { personaId: pid } : {}) }
@@ -809,7 +849,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     s.insights = s.insights || {}
     s.insightNames = s.insightNames || {}
-    const pid = normalizePersonaId(personaId) || activePersonaId()
+    const pid = normalizePersonaId(personaId) || activePersonaId(key)
     const mapped = list.slice(0, 8).map((item) => {
       const itemPid = normalizePersonaId(item.personaId || pid)
       return {
@@ -848,17 +888,17 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
    */
   const SELF_STYLE_KEY = 'self'
   const isSelfStyleKey = (key) => key === SELF_STYLE_KEY
-  /** 说话方式的落款：self 桶默认不落款（全局共享），其余按当前人设落款。 */
+  /** 说话方式的落款：self 桶默认不落款（全局共享），其余按该聊天当前激活人设落款。 */
   function stylePidFor(key, personaId) {
     const explicit = normalizePersonaId(personaId)
     if (explicit) return explicit
-    return isSelfStyleKey(key) ? '' : activePersonaId()
+    return isSelfStyleKey(key) ? '' : activePersonaId(key)
   }
 
   function styleSourceOf(key) {
     return (load().styleSources || {})[key] || null
   }
-  function styleOf(key, persona = activePersonaId()) {
+  function styleOf(key, persona = activePersonaId(key)) {
     const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
     const src = styleSourceOf(key)
     if (src?.stale) return []
@@ -912,24 +952,37 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!q) return ''
     return `${q}@${scope || 'global'}`
   }
-  function staleProfilesIn(s, qq = '', scope = '') {
+  function staleProfilesIn(s, qq = '', scope = '', { reason = 'mutate' } = {}) {
     let changed = 0
     for (const p of Object.values(s.profiles || {})) {
-      if (p.origin === 'manual' || p.stale) continue
+      if (p.origin === 'manual') continue
       if (qq && String(p.qq) !== String(qq)) continue
       if (scope && String(p.scope || 'global') !== String(scope)) continue
+      // 破坏性变更（删/改/替代/重载）必须覆盖掉旧的 append 降级态；
+      // 纯增量新增（append）不推翻旧事实，也不得把破坏性失效的档案降回可读态。
+      if (p.stale) {
+        if (reason !== 'append' && p.staleReason === 'append') {
+          delete p.staleReason
+          p.staleAt = Date.now()
+          changed++
+        }
+        continue
+      }
       p.stale = true
       p.staleAt = Date.now()
+      if (reason === 'append') p.staleReason = 'append'
+      else delete p.staleReason
       changed++
     }
     return changed
   }
   /** 取这个 QQ 在某个作用域下的档案；scope 为空时返回 global 那份（面板/兼容用）。 */
-  function profileOf(qq, scope, persona = activePersonaId()) {
+  function profileOf(qq, scope, persona = activePersonaId(scope)) {
     const active = normalizePersonaId(persona) || DEFAULT_PERSONA_ID
     const all = load().profiles || {}
     const key = profileKeyOf(qq, scope)
-    const prof = key && all[key] && !all[key].stale ? all[key] : (!scope ? (all[String(qq)] && !all[String(qq)].stale ? all[String(qq)] : null) : null)
+    const isReadable = (p) => Boolean(p && (!p.stale || p.staleReason === 'append'))
+    const prof = key && isReadable(all[key]) ? all[key] : (!scope ? (isReadable(all[String(qq)]) ? all[String(qq)] : null) : null)
     if (!prof) return null
     const pid = normalizePersonaId(prof.personaId || prof.persona)
     if (pid && pid !== active) return null
@@ -979,7 +1032,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const cfg = getConfig().memory
     if (!cfg.enabled) return ''
     const parts = []
-    const currentPersona = activePersonaId()
+    const currentPersona = activePersonaId(chat)
     // 对这个人（群里是正在说话的几个人）的印象，不用等关键词碰上
     const people = chat.kind === 'group' ? (hub?.speakersOf?.(sessionId) || []).slice(0, 3) : chat.userId ? [chat.userId] : []
     // 档案按当前聊天作用域取：群聊只拿本群里认识的印象，私聊只拿这个私聊的，
@@ -1210,6 +1263,87 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     return ['（你记得这些事：\n' + body + '）', backdrop].filter(Boolean).join('\n')
   }
 
+  /** 计算向量通道的可见作用域清单：与 indexFor/scopeVisible 同口径（支持 memory-privacy 的 override）。 */
+  function vectorScopesFor(chat, scopes) {
+    if (Array.isArray(scopes)) {
+      return [...new Set(scopes.map((sc) => String(sc || '').trim()).filter(Boolean))]
+    }
+    if (!chat) return []
+    const out = new Set(visibleScopes(chat))
+    if (scopeOverrideFn) {
+      const candidates = new Set(prevVectorScopes)
+      const ownerQQ = String(getConfig()?.ownerQQ || '').trim()
+      if (ownerQQ) candidates.add(`private:${ownerQQ}`)
+      for (const sc of candidates) {
+        if (!sc || out.has(sc)) continue
+        try { if (scopeOverrideFn(sc, chat)) out.add(sc) } catch {}
+      }
+    }
+    return [...out]
+  }
+
+  /**
+   * 融合召回（BM25 + 向量 RRF + 可选 cross-encoder 精排）：
+   *   1. BM25 与向量通道各自取足量候选（不剔除交集），让双通道共同命中在 RRF 中真正叠加提权；
+   *   2. 向量通道带最低相似度下限（minCos），过滤“哈哈/嗯嗯”这类低相关噪声；
+   *   3. 精排开启时送入完整 rerankTopN 候选，再用 minScore 剔除明显无关条目，最后按 limit 截断；
+   *   4. 统一把最终命中的全部条目（含纯向量召回）计入 recallLog 与 hits/hitDays/lastHit。
+   */
+  const DEFAULT_VEC_MIN_COS = 0.35
+  const DEFAULT_RERANK_MIN_SCORE = 0.05
+
+  async function recallFused(query, { about, limit, where = '', context = '', chat = null, scopes = null, excludeIds = null, minCos = DEFAULT_VEC_MIN_COS, rerankMinScore = DEFAULT_RERANK_MIN_SCORE } = {}) {
+    const q = String(query || '').trim()
+    if (!q) return []
+    const max = limit ?? getConfig().memory.recallCount
+    const excluded = excludeIds instanceof Set ? excludeIds : (Array.isArray(excludeIds) ? new Set(excludeIds.map(String)) : null)
+    if (!vec.enabled()) {
+      const hits = recallBm25(q, { about, limit: excluded?.size ? max + excluded.size : max, context, chat, scopes })
+        .filter((h) => !excluded || !excluded.has(String(h.it.id)))
+        .slice(0, max)
+      recordRecallHits(hits, { where, query: q })
+      return hits
+    }
+    const rerankEnabled = reranker.enabled()
+    const rerankCap = rerankEnabled ? Math.max(max, Number(reranker.status()?.topN) || 20) : max
+    const poolLimit = Math.max(max * 2, rerankCap)
+    const bm25 = recallBm25(q, { about, limit: poolLimit, context, chat, scopes })
+      .filter((h) => !excluded || !excluded.has(String(h.it.id)))
+      .slice(0, poolLimit)
+
+    const targetScopes = vectorScopesFor(chat, scopes)
+    const vecSeen = new Set()
+    const vecHits = []
+    const now = Date.now()
+    for (const scope of targetScopes) {
+      const idx = indexFor(scope)
+      if (!idx || !idx.docs || !idx.docs.length) continue
+      const byId = new Map(idx.docs.map((d) => [String(d.it.id), d.it]))
+      let raw = []
+      try {
+        raw = await vec.searchScopes(q, [scope], { whitelistOf: () => new Set(byId.keys()), topK: poolLimit, timeoutMs: 2500, minCos })
+      } catch { continue }
+      for (const c of raw) {
+        const id = String(c.id)
+        if ((excluded && excluded.has(id)) || vecSeen.has(id)) continue
+        const it = byId.get(id)
+        if (!it || it.invalidAt) continue
+        if (chat ? (!scopeVisible(it.scope, chat) || !personaVisible(it, chat)) : !personaVisible(it, it.scope)) continue
+        vecSeen.add(id)
+        const w = (0.6 + 0.8 * (Number(it.importance) || 0.5)) * (0.55 + 0.45 * retention(it, now))
+        vecHits.push({ it, score: c.cos * w, why: ['（语义召回）'] })
+      }
+    }
+    vecHits.sort((a, b) => b.score - a.score)
+    let hits = fuseRrf(bm25, vecHits.slice(0, poolLimit), { limit: rerankCap })
+    if (rerankEnabled) {
+      hits = await reranker.rerank(q, hits, { minScore: rerankMinScore })
+    }
+    hits = hits.slice(0, max)
+    recordRecallHits(hits, { where, query: q })
+    return hits
+  }
+
   /**
    * recallHint 的向量融合版（1.4.4，异步）：BM25 主通道不变，语义通道加成；任何失败退回同步 recallHint。
    * 只给 prompt 钩子（modules 层 filter 会 await 异步 handler）用 —— recall / recallHint 的同步契约
@@ -1234,33 +1368,14 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const ctxText = q.length < 12 ? String(prevText || '').slice(-300) : ''
       const maxItems = Math.max(1, Math.min(20, Math.round(Number(cfg.hintCount) || 8)))
       const maxChars = Math.max(120, Math.min(2000, Math.round(Number(cfg.hintMaxChars) || 600)))
-      const bm25 = recall(q, { about, where: (chat && chat.chatId) || '', context: ctxText, chat }).filter((h) => !shown.has(h.it.id)).slice(0, maxItems)
-      const bm25Ids = new Set(bm25.map((h) => String(h.it.id)))
-      // 语义通道：每个可见作用域各自取候选，乘上与 BM25 同款的重要度×遗忘曲线权重后进 RRF。
-      const vecSeen = new Set()
-      const vecHits = []
-      const now = Date.now()
-      for (const scope of visibleScopes(chat)) {
-        const idx = indexFor(scope)
-        if (!idx || !idx.docs || !idx.docs.length) continue
-        const byId = new Map(idx.docs.map((d) => [String(d.it.id), d.it]))
-        let raw = []
-        try {
-          raw = await vec.searchScopes(q, [scope], { whitelistOf: () => new Set(byId.keys()), topK: maxItems * 2, timeoutMs: 2500 })
-        } catch { continue }
-        for (const c of raw) {
-          const id = String(c.id)
-          if (shown.has(id) || bm25Ids.has(id) || vecSeen.has(id)) continue
-          const it = byId.get(id)
-          if (!it || it.invalidAt || !personaVisible(it)) continue
-          vecSeen.add(id)
-          const w = (0.6 + 0.8 * (Number(it.importance) || 0.5)) * (0.55 + 0.45 * retention(it, now))
-          vecHits.push({ it, score: c.cos * w, why: ['（语义召回）'] })
-        }
-      }
-      vecHits.sort((a, b) => b.score - a.score)
-      let hits = fuseRrf(bm25, vecHits, { limit: maxItems })
-      hits = await reranker.rerank(q, hits)
+      const hits = await recallFused(q, {
+        about,
+        limit: maxItems,
+        where: (chat && chat.chatId) || '',
+        context: ctxText,
+        chat,
+        excludeIds: shown,
+      })
       return hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback: !hasPriorTurns })
     } catch (error) {
       return recallHint(chat, queryText, prevText, { sessionId }) // 任何意外：退回同步主路径
@@ -1430,7 +1545,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vectorBackfill: (items) => vec.backfill(items),
     rerankStatus: rerankStatusSafe,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, contextFor, topicScore, importCommit, clearScope, clearScopeEntries, clearProfilesInScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, recallFused, contextFor, topicScore, importCommit, clearScope, clearScopeEntries, clearProfilesInScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
     profiles: () => {
       const s = load()

@@ -190,12 +190,15 @@ export function createScopeVectorFile(filePath, dim, { log = console } = {}) {
   }
 
   /** 暴力余弦 top-K。whitelist 是允许参与的 id 集合 —— scope/persona/invalid 过滤由调用方先做完。 */
-  function search(qv, whitelist, topK = 10) {
+  function search(qv, whitelist, topK = 10, minCos = 0) {
     const map = load()
+    const floor = Number.isFinite(Number(minCos)) ? Number(minCos) : 0
     const scored = []
     for (const [id, e] of map) {
       if (whitelist && !whitelist.has(id)) continue
-      scored.push({ id, cos: cosine(qv, e.vec) })
+      const cos = cosine(qv, e.vec)
+      if (floor > 0 && cos < floor) continue
+      scored.push({ id, cos })
     }
     scored.sort((a, b) => b.cos - a.cos)
     return scored.slice(0, Math.max(1, topK))
@@ -355,7 +358,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
    * 多作用域语义召回。whitelistOf(scope) 返回该作用域允许参与的 id 集合
    * （调用方从 indexFor(scope) 取 —— 那里已经做完 invalid 过滤；persona 在调用方再过一遍）。
    */
-  async function searchScopes(queryText, scopes, { whitelistOf, topK = 12, timeoutMs = 3000 } = {}) {
+  async function searchScopes(queryText, scopes, { whitelistOf, topK = 12, timeoutMs = 3000, minCos = 0 } = {}) {
     const cfg = cfgOf()
     if (!cfg) return []
     const qv = await embedQuery(queryText, { timeoutMs })
@@ -366,7 +369,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
       if (!file) continue
       let wl = null
       try { wl = whitelistOf ? whitelistOf(scope) : null } catch { wl = null }
-      for (const h of file.search(qv, wl, topK)) out.push({ scope: String(scope), id: h.id, cos: h.cos })
+      for (const h of file.search(qv, wl, topK, minCos)) out.push({ scope: String(scope), id: h.id, cos: h.cos })
     }
     return out.sort((a, b) => b.cos - a.cos)
   }

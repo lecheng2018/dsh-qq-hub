@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 
 import { looksLikeUnfinished } from '../src/modules/complete-guard/index.js'
 import { visibleScopes, isVisible, scopeOf } from '../src/modules/memory-privacy/index.js'
-import tokenGuardian from '../src/modules/token-guardian/index.js'
 import completeGuard from '../src/modules/complete-guard/index.js'
 import memoryPrivacy from '../src/modules/memory-privacy/index.js'
 import { BUILTINS } from '../src/modules/index.js'
@@ -13,14 +12,15 @@ import { BUILTINS } from '../src/modules/index.js'
 // ---------- 1. 模块清单 ----------
 test('移植模块都注册进了 BUILTINS，id 不重复', () => {
   const ids = BUILTINS.map((m) => m.id)
-  for (const id of ['token-guardian', 'complete-guard', 'memory-privacy']) {
+  for (const id of ['complete-guard', 'memory-privacy']) {
     assert.ok(ids.includes(id), `${id} 没注册`)
   }
+  assert.ok(!ids.includes('token-guardian'), 'token-guardian 已移除')
   assert.equal(new Set(ids).size, ids.length, 'id 有重复')
 })
 
 test('每个模块的定义完整：id / name / api / setup / settings', () => {
-  for (const def of [tokenGuardian, completeGuard, memoryPrivacy]) {
+  for (const def of [completeGuard, memoryPrivacy]) {
     assert.match(def.id, /^[a-z][a-z0-9-]{1,39}$/)
     assert.ok(def.name && def.name.length > 0)
     assert.equal(def.api, 1)
@@ -107,23 +107,6 @@ test('scopeOf 按聊天给出正确的作用域，null 不炸', () => {
   assert.equal(scopeOf({ kind: 'group', groupId: '2' }), 'group:2')
   assert.equal(scopeOf({ kind: 'system' }), 'global')
   assert.equal(scopeOf(null), 'global')
-})
-
-// ---------- 6. 预算守门员（dsh-qq auto-compact.js） ----------
-test('token 估算：字符数换算成 token，空值算 0', () => {
-  const est = tokenGuardian.setup.length ? null : null
-  // estimate 是模块内部函数，这里按同样的公式验一遍口径
-  const estimate = (chars) => Math.round(Number(chars || 0) / 1.2)
-  assert.equal(estimate(1200), 1000)
-  assert.equal(estimate(0), 0)
-  assert.equal(estimate(null), 0)
-  assert.equal(estimate(undefined), 0)
-})
-
-test('默认阈值是 30 万 token，冷却 120 分钟，关闭状态', () => {
-  assert.equal(tokenGuardian.defaults.threshold, 300000)
-  assert.equal(tokenGuardian.defaults.cooldownMinutes, 120)
-  assert.equal(tokenGuardian.defaults.enabled, false)
 })
 
 test('记忆分层和完整守卫默认开启（纯增益、不改她的回复）', () => {

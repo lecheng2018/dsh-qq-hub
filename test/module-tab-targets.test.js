@@ -35,13 +35,13 @@ test('内置模块写的 tab 必须真实存在（悬空 tab = 掉进散装页�
   assert.deepEqual(offenders, [], `这些模块的 tab 悬空，会掉进散装标签页：\n${offenders.join('\n')}`)
 })
 
-test('「用量」页收着 token 系三个模块，模型页不再挂它们', () => {
+test('「用量」页收着 token 系两个模块，模型页不再挂它们', () => {
   const byId = (id) => BUILTINS.find((m) => m.id === id)
-  for (const id of ['token-billing', 'token-guardian', 'complete-guard']) {
+  for (const id of ['token-billing', 'complete-guard']) {
     assert.equal(byId(id)?.tab, 'token', `${id} 应该嵌在「用量」页`)
   }
   const src = readFileSync(join(ROOT, 'client/src/domain/nav.js'), 'utf8')
-  assert.match(src, /token: \['token-billing', 'token-guardian', 'complete-guard'\]/, 'TAB_MODS.token 要绑这三个模块（都没跑就整页隐藏）')
+  assert.match(src, /token: \['token-billing', 'complete-guard'\]/, 'TAB_MODS.token 要绑这两个模块（都没跑就整页隐藏）')
   // 只锁「用量排在模型之后」这条相对顺序——中间还可能插别的页，别锁整串字面量
   const sysTabs = (src.match(/id: 'system'[\s\S]*?tabs: \[([^\]]*)\]/) || [])[1] || ''
   const order = [...sysTabs.matchAll(/'([A-Za-z0-9_]+)'/g)].map((m) => m[1])
