@@ -159,7 +159,7 @@ test('回复按行拆成多条气泡；列表、代码、长文不拆；最多 6
   // 超过 6 条时**均匀分组**（以前是把剩下的全塞进最后一条，出现「4 条极短 + 1 坨巨块」）
   const seven = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].join(NL)
   assert.equal(parseReply(seven).items.length, 6)
-  assert.equal(parseReply(seven).items[0].value, ['a', 'b'].join(NL))
+  assert.equal(parseReply(seven).items[0].value, ['a', 'b'].join('\n\n'))
 })
 
 const base = (o) => ({

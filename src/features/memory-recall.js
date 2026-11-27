@@ -462,7 +462,10 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
       if (q.has(t)) W += r
     }
     if (!W || !Q || !D) return 0
-    return Math.max(0, Math.min(1, W / Q + W / D))
+    // F1 的调和平均：召回率与精确率都要高才得高分，避免「查询很长 → 加分」的虚高
+    const p = W / Q
+    const r = W / D
+    return Math.max(0, Math.min(1, (2 * p * r) / (p + r)))
   }
 
   return {

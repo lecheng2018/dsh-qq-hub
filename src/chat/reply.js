@@ -46,7 +46,6 @@ export {
   segmentUnits,
   mergeUnits,
   segmentBubbles,
-  splitLines,
   replyRules,
   wantsVoice,
   bubbleDelay,

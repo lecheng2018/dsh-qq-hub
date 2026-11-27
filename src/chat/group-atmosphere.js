@@ -55,7 +55,48 @@ const DEESCALATE = /(?:别|不要|甭|少)(?:再|老是|总是)?(?:吵|骂|打|�
 
 // 连打两个以上的问号/叹号 = 情绪上头（「滚！！」「你什么意思？？」）。单发的不算。
 const SHOUT = /[!！?？]{2,}/
-const CAPS = /[A-Z]{4,}/
+// 连续 2 个及以上非常见技术缩写的全大写英文词才算「咆哮」（如 "SHUT UP" / "GET OUT"），
+// 排除单个大写词、URL、代码块、全大写常量名（SNAKE_CASE）以及技术群常见缩写，减少技术群误判。
+const CAPS_PHRASE = /\b[A-Z]{2,}(?:[ \t]+[A-Z]{2,})+\b/g
+const TECH_ACRONYMS = new Set([
+  'API', 'SDK', 'CLI', 'GUI', 'TUI', 'IDE', 'URL', 'URI', 'DOM', 'SSR', 'CSR', 'RSC', 'SPA', 'PWA',
+  'CDN', 'WAF', 'VPN', 'SSH', 'TLS', 'SSL', 'TCP', 'UDP', 'DNS', 'HTTP', 'HTTPS', 'JSON', 'HTML',
+  'CSS', 'YAML', 'TOML', 'CORS', 'CSRF', 'XSS', 'GRPC', 'REST', 'CRUD', 'UUID', 'CUDA', 'LLVM',
+  'WASM', 'SIMD', 'NVME', 'SATA', 'BIOS', 'UEFI', 'DHCP', 'SMTP', 'IMAP', 'OAUTH', 'JWT', 'ACID',
+  'MVCC', 'WAL', 'RAFT', 'PAXOS', 'ETCD', 'K8S', 'DOCKER', 'NGINX', 'REDIS', 'MYSQL', 'PGSQL',
+  'SQLITE', 'GRAPHQL', 'ASYNC', 'AWAIT', 'TODO', 'FIXME', 'WARN', 'ERROR', 'INFO', 'DEBUG', 'NULL',
+  'TRUE', 'FALSE', 'VOID', 'ENUM', 'BASH', 'TMUX', 'NVIM', 'GIT', 'ANSI', 'UTF8', 'ASCII', 'BASE64',
+  'SHA256', 'HMAC', 'SUDO', 'CHMOD', 'GREP', 'CURL', 'WGET', 'VITE', 'BABEL', 'ESLINT', 'REACT',
+  'NODE', 'DENO', 'RUST', 'CARGO', 'JAVA', 'SWIFT', 'CLANG', 'CMAKE', 'POSIX', 'LINUX', 'MACOS',
+  'UBUNTU', 'DEBIAN', 'VSCODE', 'NVIDIA', 'INTEL', 'RYZEN', 'DDR5', 'PCIE', 'HDMI', 'OLED', 'VRAM',
+  'FLOPS', 'TOPS', 'BF16', 'FP16', 'INT8', 'GGUF', 'VLLM', 'OLLAMA', 'OPENAI', 'QWEN', 'DEEPSEEK',
+  'CLAUDE', 'GEMINI', 'LLAMA', 'QUIC', 'CIDR', 'VLAN', 'OSPF', 'MPLS', 'MTTR', 'MTBF', 'HELM',
+  'KAFKA', 'NATS', 'PRISMA', 'TRPC', 'DJANGO', 'FLASK', 'SPRING', 'NETTY', 'TOKIO', 'ACTIX',
+  'SERDE', 'AXUM', 'RAILS', 'ESBUILD', 'WEBPACK', 'TYPESCRIPT', 'JAVASCRIPT', 'PYTHON', 'POSTGRES',
+  'MONGODB', 'LOCALHOST', 'README', 'CHANGELOG', 'STDIN', 'STDOUT', 'STDERR', 'SIGINT', 'SIGTERM',
+  'SIGKILL', 'REGEX', 'CPU', 'GPU', 'NPU', 'TPU', 'RAM', 'ROM', 'SSD', 'HDD', 'USB', 'WSL', 'XML',
+  'CSV', 'TSV', 'PDF', 'PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'AVIF', 'HEIC', 'TTS', 'ASR', 'LLM',
+  'NLP', 'RAG', 'MCP', 'SSE', 'RPC', 'SQL', 'ORM', 'MVC', 'MVVM', 'OOM', 'EOF', 'TTY', 'PID',
+  'UID', 'GID', 'IPC', 'ABI', 'FFI', 'JIT', 'AOT', 'PR', 'CI', 'CD', 'UI', 'UX', 'QA', 'SRE',
+  'FPS', 'DPI', 'RGB', 'HDR', 'VRR', 'DLSS', 'FSR', 'RTX', 'GTX', 'AMD', 'ARM', 'IOS', 'APK',
+  'EXE', 'DLL', 'DMG', 'TAR', 'ZIP', 'GZIP', 'ZSTD', 'OK',
+])
+
+function hasCapsShout (text) {
+  const stripped = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, ' ')
+    .replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g, ' ')
+  for (const m of stripped.matchAll(CAPS_PHRASE)) {
+    let streak = 0
+    for (const w of m[0].trim().split(/\s+/)) {
+      if (TECH_ACRONYMS.has(w)) streak = 0
+      else if (++streak >= 2) return true
+    }
+  }
+  return false
+}
 
 // 热闹信号：笑、起哄、梗
 const CHEER = new RegExp('[哈嘿嘻]{2,}|[hH]{3,}|233+|awsl|笑死|xswl|好耶|yyds')
@@ -278,7 +319,7 @@ function isHostile (text) {
 
 function isShouting (text) {
   const s = String(text || '')
-  return (SHOUT.test(s) || CAPS.test(s)) && !QUESTION_TAIL.test(s)
+  return (SHOUT.test(s) || hasCapsShout(s)) && !QUESTION_TAIL.test(s)
 }
 
 function isQuestion (text) {

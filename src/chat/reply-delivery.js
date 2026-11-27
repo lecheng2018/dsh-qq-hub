@@ -3,6 +3,7 @@ import { stripInvisible } from './inbound.js'
 import { parseReply, bubbleDelay, replyRules } from './reply.js'
 import { updateClosureState } from './conversation-closure.js'
 import { calculateTypingCadence, typingWaitAfter, typingCadenceEnabled } from './reply-cadence.js'
+import { policyFor, resolveEngagedBudget } from './group-policy.js'
 
 // AC-2 的字面要求：律动计算从投递模块表面也能直接取到。
 // 真身仍然只有一份，定义在 reply-cadence.js（纯函数，便于单测与复用），这里只是 re-export。
@@ -25,6 +26,7 @@ export function createReplyDelivery({
   // 这里的 replyRules(cfg, inGroup) 重新算一遍而失效。
   const closureStates = new Map()
   const CLOSURE_LEN_WINDOW = 6
+  const MAX_CLOSURE_STATES = 500
   const CLOSED_STATE = 'closed'
 
   /** 依据「对方这轮说的话」推出本轮发言处方。异常时退回 null（不施加约束）。 */
@@ -33,16 +35,23 @@ export function createReplyDelivery({
     if (!key) return null
     try {
       const prev = closureStates.get(key) || null
-      const prevLengths = Array.isArray(prev?.lengths) ? prev.lengths : []
       const text = String(incomingText ?? '').trim()
-      const nextLengths = text ? [...prevLengths, Array.from(text).length].slice(-CLOSURE_LEN_WINDOW) : prevLengths
-      const next = updateClosureState(prev?.state || null, { lengths: nextLengths, ...(text ? { text } : {}) })
+      // 空 userText（主动发言/纯媒体/内部触发）不推进也不污染会话收尾状态
+      if (!text) return prev ? { ...prev.state, closedAt: prev.closedAt } : null
+      const prevLengths = Array.isArray(prev?.lengths) ? prev.lengths : []
+      const nextLengths = [...prevLengths, Array.from(text).length].slice(-CLOSURE_LEN_WINDOW)
+      const next = updateClosureState(prev?.state || null, { lengths: nextLengths, text })
       // CLOSED 的静默是有期限的（模块只给出时长 muteLockMs，不给时间戳），
       // 所以接线方必须自己记「什么时候关的」，否则一次「晚安」会把该会话永久锁死。
       const closedAt = next.state === CLOSED_STATE
         ? (prev?.state?.state === CLOSED_STATE ? (prev?.closedAt || Date.now()) : Date.now())
         : 0
+      closureStates.delete(key)
       closureStates.set(key, { state: next, lengths: nextLengths, closedAt })
+      if (closureStates.size > MAX_CLOSURE_STATES) {
+        const oldest = closureStates.keys().next().value
+        if (oldest !== undefined) closureStates.delete(oldest)
+      }
       return { ...next, closedAt }
     } catch {
       return null
@@ -53,19 +62,20 @@ export function createReplyDelivery({
   function deliver(chatId, text, opts = {}) {
     if (opts.simulate || isCaptured?.()) return deliverNow(chatId, text, opts)
     // 嵌套调用（本轮气泡里又触发了一次 deliver，比如戳回去、语音退回文字）：
-    // 直接复用外层的票，**不再 reserve**。否则会新建一道闸，而外层的闸要等本轮气泡
-    // 结束才放行 → 外层等内层、内层等外层，死锁。
+    // 仅当外层上下文仍处于 active 时才复用外层的票、**不再 reserve**；
+    // 若非 send hook 里的延迟回调（!reusing.inSendHook），不再挂回外层所在的 deliveryChains
+    // （否则外层 await 内层、内层 await 外层 → 永久自死锁）。
     const outer = deliveryContext.getStore()
-    const reusing = outer && outer.chatId === chatId ? outer : null
+    const reusing = outer && outer.chatId === chatId && outer.active ? outer : null
     const reservation = reusing ? null : (outbox?.()?.reserve?.(chatId) || null)
     const run = () => {
-      const context = { chatId, active: true, ticket: reusing ? reusing.ticket : reservation?.ticket }
+      const context = { chatId, active: true, ticket: reusing ? reusing.ticket : reservation?.ticket, inSendHook: false }
       return deliveryContext.run(context, () => deliverNow(chatId, text, opts).finally(() => {
         context.active = false
         reservation?.release?.()
       }))
     }
-    // 复用外层票时，本次发送仍要排在外层已入队的气泡之后 —— 走外层同一条 deliveryChains 队
+    if (reusing && !reusing.inSendHook) return run()
     const previous = deliveryChains.get(chatId)
     const current = previous ? previous.catch(() => {}).then(run) : run()
     deliveryChains.set(chatId, current)
@@ -104,21 +114,21 @@ export function createReplyDelivery({
     // 主人那边看到的就是「||| 不生效」（08:18、08:21 同款）。
     // 位置很关键 —— 必须在 replyRules 之后（否则被重算覆盖），在语音转换之前
     // （否则会改到语音路径，语音用例会整片挂掉）。
-    const closurePlan = closurePlanFor(chatId, opts.userText || '')
+    // 群聊不套用私聊的四态紧缩：仅对私聊计算与推进 closureStates。
+    const closurePlan = !inGroup ? closurePlanFor(chatId, opts.userText || '') : null
     // 触发门槛：单条短句不足以判「对方没劲」——中文 3~4 字（「好的」「第一句」）
     // 是正常回话，按模块默认的 lastLen<=4 会把大量正常轮次压成 1 条气泡。
-    // 所以只有「连续 2 条以上短句/趋势向下」或「明确道别」才真正施加约束。
-    const closureActive = closurePlan && (
+    // 所以只有「连续 2 条以上附和/趋势向下」或「明确道别」才真正施加约束。
+    const closureActive = Boolean(!inGroup && closurePlan && (
       closurePlan.state === 'closed'
-      || Number(closurePlan.ackStreak) >= 1
+      || Number(closurePlan.ackStreak) >= 2
       || String(closurePlan.trend || '') === 'down'
-    )
+    ))
     // 注意：CLOSED 的 muteLockMs 是**主动搭话硬锁，不锁入站回复**（模块注释第 24 行）。
     // 用户说完「晚安」又来找她，她必须回；把 CLOSED 用在回复静默上是接错了语义。
-    // 所以这里不因 CLOSED 直接 return，只收紧「这条回复怎么说」（气泡数/问句）。
-    // 群聊不套用私聊的四态紧缩：群里有多个发言者，isAck/trend 是按单会话算的，
-    // 套到群里会把正常群回复压成 1 条。群侧已有 groupLimit（见下方）做合并约束。
-    if (closureActive && !inGroup && Number.isFinite(Number(closurePlan.maxBubbles))) {
+    // 当本轮回复本身是长内容（≥260 字）时，解除 softMaxBubbles = 1 压制，避免把长答复硬焊成一坨糊脸。
+    const rawReplyLen = String(text || '').trim().length
+    if (closureActive && Number.isFinite(Number(closurePlan.maxBubbles)) && rawReplyLen < 260) {
       const soft = Math.max(1, Number(closurePlan.maxBubbles))
       rules.softMaxBubbles = Math.min(Number(rules.maxBubbles) || soft, soft)
     }
@@ -247,6 +257,7 @@ export function createReplyDelivery({
     // 真机根因：行内出现「↳转述自某人」时，模型常常把「谁说的」和「被转述的人」搞混，
     // 让它按昵称/QQ 号直接指名比让它数编号可靠得多。
     const cleanNick = (s) => stripInvisible(String(s ?? '')).trim()
+    const ownerLabel = String(cfg.ownerName || '主人').trim()
     const resolveRef = (token) => {
       const want = String(token ?? '').trim()
       if (!want) return null
@@ -255,13 +266,17 @@ export function createReplyDelivery({
       if (cleanWant && refs[cleanWant]) return refs[cleanWant]
       const lower = want.toLowerCase()
       const lowerClean = cleanWant.toLowerCase()
+      const wantsOwner = want === '主人' || cleanWant === '主人' || (ownerLabel && (want === ownerLabel || cleanWant === ownerLabel))
       // 昵称：同一个昵称在一段里可能有多条，取**最后**一条（模型想回的是这个人最近那句）。
       let byNick = null
       // QQ 号：直接对 uid；对上就取该人最后一条。
       let byUid = null
+      // 主人称呼（<reply:主人>）：按 ref.owner === true 兜底，解决群提示词里把主人显示为「主人」导致按昵称 100% 失配的问题。
+      let byOwner = null
       for (const key of Object.keys(refs)) {
         const ref = refs[key]
         if (!ref) continue
+        if (wantsOwner && ref.owner === true) byOwner = ref
         const uid = String(ref.uid ?? '').trim()
         const nick = String(ref.nick ?? '')
         const cNick = cleanNick(nick)
@@ -269,7 +284,7 @@ export function createReplyDelivery({
         else if (nick && (nick === want || nick.toLowerCase() === lower)) byNick = ref
         else if (cNick && (cNick === cleanWant || cNick.toLowerCase() === lowerClean)) byNick = ref
       }
-      return byUid || byNick
+      return byUid || byNick || byOwner
     }
     // 「模型点了名」这件事按 replyTo 是否存在判定：写错的引用也照样算它点过名——
     // 于是它按普通消息发出去，绝不再退回 autoReply 挂到「本轮唯一 @ 她的人」身上
@@ -366,11 +381,12 @@ export function createReplyDelivery({
       if (wasSent && inGroup) {
         const gid = chatId.slice(6)
         groups.noteSpeak(gid)
-        // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算（真机刷屏根因：
-        // 续聊也刷新话题窗口 → 自我续期永不离场，1% 摇号只管进门不管出去）。
-        // must/interject/其它路径的发言照旧算「加入话题」。
+        // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算；
+        // 若该群已把 engagedMaxReplies / engagedMaxMs 设为 0（关闭连聊），则根本不入场（不调 noteSpokeInGroup）。
+        const gPol = policyFor(cfg.group, cfg.group?.overrides, gid)
+        const { maxReplies, maxMs } = resolveEngagedBudget(gPol)
         if (opts.topicMode === 'engaged') groups.noteEngagedReply?.(gid)
-        else groups.noteSpokeInGroup(gid)
+        else if (maxReplies > 0 && maxMs > 0) groups.noteSpokeInGroup(gid, Date.now(), maxMs)
       }
       const said = deliveredParts.join(' ')
       // 一条都没实发就不记流水/旁白（没发出去的话不该出现在「她说过什么」里）。

@@ -75,7 +75,8 @@ export function createGroupQuota({ getConfig = () => ({}), now = Date.now, sleep
       const list = prune(gid, now())
       if (list.length >= limit) {
         const wait = Math.max(0, cfg.windowMs - (now() - list[0]) + 250)
-        if (wait > 0 && wait <= cfg.windowMs) {
+        // 允许 250ms 缓冲余量（最高 +500ms），避免同毫秒突发时 wait = windowMs + 250 越界跳过等待
+        if (wait > 0 && wait <= cfg.windowMs + 500) {
           log?.info?.(`群 ${gid}：1 分钟内已发 ${list.length} 条（QQ 上限 ${cfg.perMinute}），等 ${Math.ceil(wait / 1000)}s 再发`)
           await sleep(wait)
           waitedMs += wait
@@ -89,6 +90,10 @@ export function createGroupQuota({ getConfig = () => ({}), now = Date.now, sleep
         prune(gid, now()).push(now())
         return { ok: true, result, waitedMs, retries }
       } catch (error) {
+        // 投递结果不明（unknown）绝不自动重试，防止重复发言
+        if (error?.unknown === true) {
+          return { ok: false, waitedMs, retries, error }
+        }
         const limited = isGroupRateLimited(error?.message)
         if (!limited || retries >= cfg.maxRetries) {
           return { ok: false, waitedMs, retries, error }

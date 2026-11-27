@@ -26,10 +26,10 @@ import { legacyEventToNormalized } from '../src/chat/adapters/legacy-inbound.js'
 
 // ---------- 纯库层 ----------
 
-test('isCommandLike：斜杠命令、全角斜杠、4-8 位动态码、审批词（可带编号）都要拦', () => {
-  const blocked = ['/reset', '／status', '通过 123', '同意#12', '拒绝 456。', '123456', 'pass 1', 'no', 'ok']
+test('isCommandLike：斜杠命令、全角斜杠、4-8 位动态码（排除年份）、审批词（ok 需带编号）都要拦', () => {
+  const blocked = ['/reset', '／status', '通过 123', '同意#12', '拒绝 456。', '123456', 'pass 1', 'no', 'ok #1', '#2 ok']
   for (const t of blocked) assert.equal(isCommandLike(t), true, `应判为命令类：${t}`)
-  const allowed = ['你好呀', '今天天气不错', '112', '123456789', '通过一下嘛再聊两句', '', 'confirm']
+  const allowed = ['你好呀', '今天天气不错', '112', '123456789', '通过一下嘛再聊两句', '', 'confirm', 'ok', 'OK!', '2025', '2026'] /* pii-scan:ignore */
   for (const t of allowed) assert.equal(isCommandLike(t), false, `不应误拦：${t}`)
 })
 

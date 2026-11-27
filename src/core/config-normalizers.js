@@ -190,15 +190,48 @@ function applyGroupPolicyFields(target, source, { partial }) {
   }
 }
 
-/** 统一归一化按群覆盖 `group.overrides[gid]`：群号只留数字、字段复用群策略上下界、空对象不落盘。 */
-export function normalizeGroupOverrides(rawOverrides) {
+/**
+ * 单群覆盖的数值字段上下界：与全局群策略同口径，但 maxPerHour / engagedMaxReplies / burstMax
+ * 放宽上限——单群可以自己调得更激进（面板已暴露连聊与爆发预算）。
+ */
+const GROUP_OVERRIDE_NUM_SPECS = GROUP_POLICY_NUM_SPECS.map(([key, defVal, lo, hi]) => {
+  const wide = { maxPerHour: 10000, engagedMaxReplies: 10000, burstMax: 200 }[key]
+  return [key, defVal, lo, wide ?? hi]
+})
+
+/** 覆盖项里「像数字」的值：空串 / 纯空白 / 布尔都不算填了——避免面板清空后被落成一条默认值。 */
+const hasGroupOverrideNum = (v) => v !== '' && v !== null && v !== undefined
+  && typeof v !== 'boolean' && !(typeof v === 'string' && !v.trim())
+
+/**
+ * 统一归一化按群覆盖 `group.overrides[gid]`：群号只留数字、数值字段以「全局群策略当前值」为兜底、
+ * 字段上下界复用群策略（上表放宽三项）、空对象不落盘。
+ */
+export function normalizeGroupOverrides(rawOverrides, group = {}) {
   if (!isObj(rawOverrides)) return {}
+  const g = isObj(group) ? group : {}
   const out = {}
   for (const [rawId, raw] of Object.entries(rawOverrides)) {
     const gid = qq(rawId)
     if (!gid || !isObj(raw)) continue
     const o = {}
-    applyGroupPolicyFields(o, raw, { partial: true })
+    for (const [key, defVal, lo, hi] of GROUP_OVERRIDE_NUM_SPECS) {
+      if (!hasGroupOverrideNum(raw[key])) continue
+      const groupVal = g[key]
+      const fallback = hasGroupOverrideNum(groupVal) && Number.isFinite(Number(groupVal)) ? groupVal : defVal
+      o[key] = num(raw[key], fallback, lo, hi)
+    }
+    if (Array.isArray(raw.quietHours) && raw.quietHours.length === 2) {
+      o.quietHours = raw.quietHours.map((h) => num(h, 0, 0, 23))
+    }
+    if (raw.wakeWords !== undefined) {
+      const ww = strList(raw.wakeWords)
+      if (ww.length || Array.isArray(raw.wakeWords)) o.wakeWords = ww
+    }
+    if (raw.interests !== undefined) {
+      const ints = strList(raw.interests)
+      if (ints.length || Array.isArray(raw.interests)) o.interests = ints
+    }
     if (Object.keys(o).length) out[gid] = o
   }
   return out
@@ -214,7 +247,7 @@ function normalizeGroup(c) {
   g.quota.reserve = num(g.quota.reserve, 1, 0, 10)
   if (!isObj(g.fishGuard)) g.fishGuard = { enabled: true }
   g.fishGuard.enabled = bool(g.fishGuard.enabled, true)
-  g.overrides = normalizeGroupOverrides(g.overrides)
+  g.overrides = normalizeGroupOverrides(g.overrides, g)
   if (!isObj(g.ownerBrief)) g.ownerBrief = { enabled: false, lines: 12, groups: [] }
   g.ownerBrief.enabled = bool(g.ownerBrief.enabled, false)
   g.ownerBrief.lines = num(g.ownerBrief.lines, 12, 1, 30)

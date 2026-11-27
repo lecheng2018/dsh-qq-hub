@@ -11,7 +11,7 @@
 // getController 延迟取回 turn controller（它在本模块装配之后才创建，与原闭包语义一致）。
 
 import { resolveCharacterIdentity } from '../../persona/identity-context.js'
-import { policyFor, topicRelevance, withRoleWakeWords } from '../../chat/group-policy.js'
+import { policyFor, topicRelevance, withRoleWakeWords, isOfficialBotSender } from '../../chat/group-policy.js'
 import { decideGroupReplyWithAtmosphere } from '../../chat/group-atmosphere-gate.js'
 import { isOwner } from '../../chat/access.js'
 
@@ -85,7 +85,7 @@ export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosph
    * 门禁只在这一处接：第 1/2/4 步仍是 decideGroupReply 本身，
    * 开关关时返回值与改造前逐字段一致。
    */
-  function decideGroupReplyFor({ chatKey, text, mentioned, userId, repliedToBot = false }) {
+  function decideGroupReplyFor({ chatKey, text, mentioned, userId, nick = '', repliedToBot = false }) {
     const cfg = getConfig()
     const now = Date.now()
     const gid = chatKey.slice(6)
@@ -93,7 +93,9 @@ export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosph
     // 唤醒词不只认配置里那几个固定词：她自己卡上的名字也该叫得动，
     // 否则换了卡就变成「在群里喊她新名字没反应」——和身份中枢认的名字劈叉。
     const pol = withRoleWakeWords(pol0, resolveCharacterIdentity(`group:${gid}`, cfg))
-    const recentTexts = groups.buffer(gid).filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
+    // 排除 QQ 官方系统机器人（Q群管家等），避免污染活跃度、相关度与氛围判定
+    const humanBuf = groups.buffer(gid).filter((x) => !x.officialBot)
+    const recentTexts = humanBuf.filter((x) => now - x.t < pol.activeWindowSec * 1000).slice(-6).map((x) => x.text)
     let memScore = 0
     try {
       const memChat = { chatId: chatKey, kind: 'group', groupId: gid }
@@ -103,7 +105,7 @@ export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosph
     const inFlightEng = inFlightEngaged.get(gid)?.size || 0
     const inFlightInj = inFlightInterject.get(gid) ? [...inFlightInterject.get(gid).values()] : []
     const decision = decideGroupReplyWithAtmosphere({
-      messages: groups.buffer(gid),
+      messages: humanBuf,
       policy: pol,
       relevance: topicRelevance(recentTexts, pol.interests, memScore),
       engagedUntil: groups.engagedUntil(gid),
@@ -113,13 +115,16 @@ export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosph
       mentioned: !!mentioned,
       repliedToBot: !!repliedToBot,
       fromOwner: isOwner(cfg, userId),
+      fromOfficialBot: isOfficialBotSender(userId, nick),
       text,
       now,
       hour: new Date().getHours(),
-      recentTimes: groups.buffer(gid).map((x) => x.t),
+      recentTimes: humanBuf.map((x) => x.t),
       interjectTimes: inFlightInj.length ? [...groups.interjectTimes(gid), ...inFlightInj] : groups.interjectTimes(gid),
       botReplyTimes: groups.speakTimes(gid),
     }, { gate: atmosphereGate })
+    // 连聊预算用尽/超时后立刻清掉 engaged，让后续消息可以正常重新走冷却 + 插话摇号，不再死锁
+    if (decision.leaveTopic) groups.leaveTopic(gid)
     // 氛围快照只在门禁开启时存在：进日志，排障时能直接看到「为什么没插嘴」。
     if (decision.atmosphere) debug(`群 ${gid} 氛围：张力 ${decision.atmosphere.tension.toFixed(2)}、热度 ${decision.atmosphere.energy.toFixed(2)}（${decision.atmosphere.advice}）`)
     return decision

@@ -53,7 +53,7 @@ import { personaIdFor, personaHash } from '../persona/personas.js'
 import { workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { readJson, writeJson } from '../core/store.js'
-import { policyFor, decideGroupReply } from '../chat/group-policy.js'
+import { policyFor, decideGroupReply, isOfficialBotSender } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
 import { gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
@@ -816,6 +816,9 @@ export function createModularCore({
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
       let turnMode = null
       let autoReply = null
+      let groupTriggerReply = null
+      let groupFreshLast = null
+      let groupFreshLastAt = 0
       // 本轮选中、待模型消费后才标 fed 的群缓冲条目（缺陷：群缓冲静默丢消息）。
       let groupFedItems = null
       let content
@@ -845,6 +848,9 @@ export function createModularCore({
         content = gp.blocks
         turnMode = gp.mode
         autoReply = gp.autoReply
+        groupTriggerReply = gp.triggerReply
+        groupFreshLast = gp.freshLast
+        groupFreshLastAt = gp.freshLastAt
         groupFedItems = gp.fedItems
         if (gp.query) promptQuery = gp.query
         try { participants.note(String(sessionId), gp.speakers, { chatId: turn.chatKey, queryText: gp.query }) } catch {}
@@ -1069,6 +1075,24 @@ export function createModularCore({
       // 执行；而且第一次解析出的 replyItems 只喂给了线索账本，线索看到的内容可能不是实际
       // 发出的内容。现在唯一的执行点就是 deliver()，它把「实际发出的条目」作为 items 交回来。
       if (!reply) return null
+      // 群聊 interject/engaged 发前滞后漂移复核：生成期间若群里又刷了很多新消息，
+      // 防止没有引用的回复变成「穿越发言」；中等漂移（2~5 条）自动补挂引用指向触发消息。
+      if (inGroup && (turnMode === 'interject' || turnMode === 'engaged')) {
+        const curBuf = groups.buffer(chat.groupId)
+        const anchorIdx = groupFreshLast ? curBuf.lastIndexOf(groupFreshLast) : -1
+        const afterAnchor = anchorIdx >= 0
+          ? curBuf.slice(anchorIdx + 1)
+          : curBuf.filter((x) => Number(x.t || 0) > groupFreshLastAt)
+        const drift = afterAnchor.filter((x) => !x.self && !x.officialBot).length
+        const hasExplicitReply = /<reply[:：]\s*[^<>|\n]{1,40}?>|\[reply[:：]\s*[^\]\[|\n]{1,40}?\]/.test(reply)
+        if (drift >= 6 && !hasExplicitReply) {
+          log.info(`${turn.chatKey}：生成期间群里已新增 ${drift} 条消息且回复未带引用，放弃发送以免穿越发言`)
+          return null
+        }
+        if (drift >= 2 && !hasExplicitReply && !autoReply && groupTriggerReply) {
+          autoReply = groupTriggerReply
+        }
+      }
       // 这一轮真正进模型的用户原话：投递、线索、关系信号三处都用同一份（不再各算一次）。
       const turnUserText = textOfSegments(io.members.flatMap((m) => m.segments || []))
       try {
@@ -1263,6 +1287,8 @@ export function createModularCore({
     const inGroup = inbound.chatKey.startsWith('group:')
     const text = textOfSegments(inbound.segments)
     const userId = String(inbound?.sender?.userId ?? '')
+    const nick = String(inbound?.sender?.nickname || '')
+    const officialBot = isOfficialBotSender(userId, nick)
     // 群缓冲（legacy 同款：群里的每条消息都记，给上下文和「群里在不在聊」用；ACL 后、闸前）
     let mentioned = false
     let buffered = null
@@ -1273,7 +1299,7 @@ export function createModularCore({
       const self = String(ev.self_id || getConfig().botQQ || '')
       mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
       const gid = inbound.chatKey.slice(6)
-      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick: String(inbound?.sender?.nickname || ''), text, self: userId === self, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
+      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick, text, self: userId === self, officialBot, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
       try { interaction.rememberSpeaker(inbound.chatKey, userId) } catch {}
     }
     const fromOwner = isOwner(cfg, userId)
@@ -1303,12 +1329,13 @@ export function createModularCore({
             // 一并喂给 pair/密度判定。不写回缓冲，避免污染群提示词上下文。
             const botQQ = String(getConfig().botQQ || '')
             const selfMsgs = groups.speakTimes(gid, now).map((t) => ({ sender: '她', userId: botQQ, time: t, isSelf: true }))
-            const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, isSelf: x.self === true })), ...selfMsgs]
+            const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, text: x.text, isSelf: x.self === true })), ...selfMsgs]
               .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
             if (userId !== String(getConfig().ownerQQ || '')) {
               const calmUntil = pairCalmUntil.get(pairKey) || 0
               if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
-              const pairMsgs = dedupConvo(fishMsgs.filter((x) => x.userId && (x.isSelf === true || String(x.userId) === userId)))
+              // 保留 fg.windowMs 窗口内完整发言序列（含其他群友，供 assessPairLoop 正确识别真人插话重置）
+              const pairMsgs = dedupConvo(fishMsgs.filter((x) => Number(x.time || 0) > now - fg.windowMs))
               const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
               if (loop.blocked) {
                 pairCalmSweep(now)
@@ -1319,7 +1346,7 @@ export function createModularCore({
               }
             }
             const direct = decision.mode === 'must'
-            const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid })
+            const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid, groupName: groups.name(gid) })
             if (density.blocked) {
               const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
               if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
@@ -1353,10 +1380,10 @@ export function createModularCore({
             if (repliedToBot) buffered.direct = true
             if (quoted) buffered.quoteNote = quoteNote(quoted)
           }
-          return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, repliedToBot }))
+          return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, nick, repliedToBot }))
         })
       }
-      return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId }))
+      return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, nick }))
     }
     emitActivity(mods, inbound, { direct: true, owner: fromOwner })
     const running = controller.runningTurnOf(inbound.chatKey)
