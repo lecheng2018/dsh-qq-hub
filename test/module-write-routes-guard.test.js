@@ -21,10 +21,6 @@ const WRITE_ROUTES = [
   '/memory-privacy/clear-main',
   '/memory-privacy/set-override',
   '/token-usage/reset',
-  '/token-guardian/reset-usage',
-  '/token-guardian/compact-now',
-  '/compact-now',
-  '/reset-usage',
   '/speakup/fire',
   '/purpose/fire',
   '/voice/install',
@@ -57,13 +53,6 @@ test('S04 · 清单里的每条写接口都真的被判为副作用路径（防�
     const r = guard.check(req('GET', `/qq-hub/api${path}`))
     assert.equal(r.ok, false, `${path} 的 GET 必须被拒`)
     assert.equal(r.code, 405, `${path} 的 GET 应是 405 方法约束，实际 ${r.code}`)
-  }
-})
-
-test('S04 · 短别名与同 handler 的重复注册路径一视同仁（/reset-usage 不能漏）', () => {
-  // token-guardian 把同一个 handler 注册了长短两条路径，只收长名等于留了后门
-  for (const path of ['/reset-usage', '/token-guardian/reset-usage', '/compact-now', '/token-guardian/compact-now']) {
-    assert.equal(guard.check(req('GET', `/qq-hub/api${path}`)).code, 405, `${path} 必须 405`)
   }
 })
 

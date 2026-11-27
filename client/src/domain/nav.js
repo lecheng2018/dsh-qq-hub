@@ -28,8 +28,8 @@ const TAB_MODS = {
   voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'],
   speakup: ['speakup', 'purpose'], memory: ['memory', 'reflection', 'style', 'memory-privacy'],
   bili: ['bili'], douyin: ['douyin'], heybox: ['heybox'], multiParser: ['multi-parser'],
-  // 用量页：token 系三个模块任一在跑才显示
-  token: ['token-billing', 'token-guardian', 'complete-guard'],
+  // 用量页：token 系两个模块任一在跑才显示
+  token: ['token-billing', 'complete-guard'],
 }
 const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
 

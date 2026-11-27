@@ -963,8 +963,8 @@ var TAB_MODS = {
   douyin: ["douyin"],
   heybox: ["heybox"],
   multiParser: ["multi-parser"],
-  // 用量页：token 系三个模块任一在跑才显示
-  token: ["token-billing", "token-guardian", "complete-guard"]
+  // 用量页：token 系两个模块任一在跑才显示
+  token: ["token-billing", "complete-guard"]
 };
 var modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running);
 var NAV_GROUPS = [
@@ -2364,7 +2364,6 @@ function Model({ st, draft, setDraft, toast }) {
 // client/src/views/token.js
 var ITEMS = [
   { id: "token-billing", name: "Token 记账", desc: "今天烧了多少、还剩多少、每个会话分到多少；预算在这里改，烧完只熔断主动开口" },
-  { id: "token-guardian", name: "预算守门员", desc: "某个会话上下文涨太多时提前压缩历史，省下重复读取的钱" },
   { id: "complete-guard", name: "话说完没", desc: "回复停在「因为」「1.」这种半截上时，提醒她把话说完" }
 ];
 function Token({ st }) {
@@ -2374,7 +2373,7 @@ function Token({ st }) {
     Card,
     {
       title: "Token 用量与守卫",
-      desc: "这一页管三件事：今天花了多少 Token、上下文什么时候压缩、回复被截断时怎么补。三件事都在下面各自的卡里改，改完点「保存设置」。",
+      desc: "这一页管两件事：今天花了多少 Token、回复被截断时怎么补。都在下面各自的卡里改，改完点「保存设置」（会话上下文压缩由宿主 DSH 原生负责）。",
       more: "说清楚一件事：每日预算烧完，只会熔断「她主动开口」（主动搭话 / 目的引擎），你正常问她不受影响；跨日自动恢复。模块开关在「系统 → 扩展」，这里只给设置。"
     },
     /* @__PURE__ */ h("div", { className: "ab-list" }, ITEMS.map((it) => /* @__PURE__ */ h("div", { key: it.id, className: "ab-li ab-li-col" }, /* @__PURE__ */ h("div", { className: "ab-li-head" }, /* @__PURE__ */ h("b", null, it.name), /* @__PURE__ */ h("span", { className: cx("ab-badge", !running(it.id) && "dim") }, running(it.id) ? "在跑" : "没在跑")), /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, it.desc))))
@@ -3178,7 +3177,7 @@ var EXT_GROUPS = [
   { id: "express", label: "表达与内容", ids: ["voice", "stickers", "imagegen", "diary", "qzone-social"] },
   { id: "platform", label: "平台", ids: ["bili", "douyin", "heybox", "multi-parser"] },
   { id: "memory", label: "记忆与主动", ids: ["memory", "reflection", "style", "memory-privacy", "speakup", "purpose"] },
-  { id: "govern", label: "治理与工具", ids: ["token-guardian", "token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts"] }
+  { id: "govern", label: "治理与工具", ids: ["token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts"] }
 ];
 var EXT_OTHER = { id: "other", label: "其他", ids: [] };
 var CORE_PAGES = ["连接", "权限", "人格", "聊天", "模型", "记忆", "本地接口"];

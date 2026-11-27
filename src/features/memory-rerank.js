@@ -23,12 +23,14 @@ export function normalizeRerankConfig(ext = {}) {
  * 按 rerank 结果重排 hits 的前 topN 条（纯函数，可单测）。
  * results 里的 index 指向 documents（即前 topN 条）的下标；非法/越界/重复 index 丢弃，
  * 未被结果覆盖的候选保持原相对顺序排在重排块末尾；topN 之后的 hits 原样不动。
+ * 若显式传入 minScore（如 0.05），被精排打分低于该阈值的明显无关候选会被剔除。
  */
-export function applyRerankOrder(hits, results, topN) {
+export function applyRerankOrder(hits, results, topN, { minScore = null } = {}) {
   const list = Array.isArray(hits) ? hits : []
   const n = Math.max(0, Math.min(Number(topN) || 0, list.length))
   if (!n || !Array.isArray(results) || !results.length) return list
   const head = list.slice(0, n)
+  const floor = typeof minScore === 'number' && Number.isFinite(minScore) ? minScore : null
   const seen = new Set()
   const ranked = []
   const scored = results
@@ -37,6 +39,8 @@ export function applyRerankOrder(hits, results, topN) {
   for (const r of scored) {
     if (seen.has(r.index)) continue
     seen.add(r.index)
+    const rel = Number(r.relevance_score) || 0
+    if (floor !== null && rel < floor) continue
     ranked.push(head[r.index])
   }
   for (let i = 0; i < n; i += 1) if (!seen.has(i)) ranked.push(head[i])
@@ -57,7 +61,7 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
     return { enabled: Boolean(c), model: c ? c.model : '', topN: c ? c.topN : 0, lastError }
   }
   /** 精排只重排、不扩可见性；失败/超时/未启用一律原样返回（fail-open）。 */
-  async function rerank(query, hits, { timeoutMs = 10000 } = {}) {
+  async function rerank(query, hits, { timeoutMs = 10000, minScore = null } = {}) {
     const c = conf()
     const list = Array.isArray(hits) ? hits : []
     if (!c || list.length < 2) return list
@@ -73,7 +77,7 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
       })
       if (!res.ok) throw new Error(`rerank HTTP ${res.status}`)
       const data = await res.json()
-      const out = applyRerankOrder(list, data && data.results, c.topN)
+      const out = applyRerankOrder(list, data && data.results, c.topN, { minScore })
       lastError = ''
       return out
     } catch (error) {

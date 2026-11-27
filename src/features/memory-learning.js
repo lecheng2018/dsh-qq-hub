@@ -6,7 +6,7 @@ import { createMemoryExtractor } from './memory-extractor.js'
 import { similarity, whenText } from './memory-core.js'
 import { createMemoryReflection } from './memory-reflection.js'
 import { createMemoryStyle } from './memory-style.js'
-import { characterName } from '../persona/identity-context.js'
+import { characterName, resolveCharacterIdentity } from '../persona/identity-context.js'
 
 export const CONSOLIDATION_MAX_ATTEMPTS = 3
 export const CONSOLIDATION_RETRY_DELAYS_MS = Object.freeze([5 * 60_000, 15 * 60_000, 30 * 60_000])
@@ -118,7 +118,8 @@ export function createMemoryLearning({
     if (mine.length < 3) return false
     const name = mine.filter((m) => m.aboutName).at(-1)?.aboutName || ''
     const old = profileOf(qq, scope)?.text || ''
-    const charName = characterName('', cfg)
+    const identity = resolveCharacterIdentity(scope, cfg)
+    const charName = identity.name
     let out = ''
     try {
       out = await askModel(dsh, {
@@ -140,7 +141,7 @@ export function createMemoryLearning({
     if (/编程助手|请告诉我你要|需要我帮你做什么|没有收到具体的/.test(text)) {
       throw new Error('模型未按要求生成人物小档案')
     }
-      return setDerivedProfile(qq, text, name, scope, mine, sourceRev)
+      return setDerivedProfile(qq, text, name, scope, mine, sourceRev, identity.id || '')
     } finally {
       task.cleanup()
     }
@@ -293,9 +294,12 @@ export function createMemoryLearning({
           scope: String(f.scope || ''),
           topic: String(f.topic || ''),
           entity: String(f.entity || ''),
+          about: String(f.about || ''),
+          aboutName: String(f.aboutName || ''),
+          at: Number(f.at) || 0,
           importance: Number(f.importance) || 0.5,
           tags: Array.isArray(f.tags) ? f.tags : [],
-          pinned: f.pinned === true,
+          pinned: Boolean(f.pinned),
         }))
       if (!facts.length) return { ok: true, skipped: 'no-facts' }
 

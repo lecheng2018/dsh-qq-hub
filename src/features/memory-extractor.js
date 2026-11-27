@@ -293,7 +293,7 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         })
         .sort((a, b) => b[1] - a[1])
         .map(([key]) => key)
-      const targets = [...new Set([...touched, ...missing])].slice(0, 8)
+      const targets = [...new Set([...touched, ...missing])].slice(0, 20)
       for (const key of targets) {
         if (!genSignal.isValid()) break
         const at = key.lastIndexOf('@')
@@ -317,6 +317,23 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       const before = state.items.length
       state.items = state.items.filter((item) => !shouldForget({ ...item, ownerQQ: getConfig()?.ownerQQ || '' }))
       const forgot = before - state.items.length
+      // 清理已完成的旧提炼批次（保留 14 天内且最多 500 条 done；pending/running/failed 永不自动清，避免破坏恢复状态）
+      if (state.extractionBatches && typeof state.extractionBatches === 'object') {
+        const cutoff = now - 14 * 86400_000
+        const doneEntries = []
+        const keptBatches = {}
+        for (const [id, b] of Object.entries(state.extractionBatches)) {
+          if (!b || typeof b !== 'object') continue
+          if (b.status !== 'done') {
+            keptBatches[id] = b
+          } else if (Number(b.at || 0) >= cutoff) {
+            doneEntries.push([id, b])
+          }
+        }
+        doneEntries.sort((a, b) => Number(b[1].at || 0) - Number(a[1].at || 0))
+        for (const [id, b] of doneEntries.slice(0, 500)) keptBatches[id] = b
+        state.extractionBatches = keptBatches
+      }
       if (forgot || blurred) state.rev = (state.rev || 0) + 1
       state.lastConsolidate = {
         day: today, at: Date.now(), added, insights, days, forgot, blurred, profiles, failed: failedChats,

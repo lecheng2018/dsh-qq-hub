@@ -258,6 +258,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             sourceRev: e.sourceRev || undefined,
             stale: e.stale || undefined,
             staleAt: e.staleAt || undefined,
+            staleReason: e.staleReason || undefined,
             personaId: e.personaId || undefined,
           }
         } else if (kind === 'insight') {
@@ -461,6 +462,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
           sourceRev: p.sourceRev || undefined,
           stale: p.stale || undefined,
           staleAt: p.staleAt || undefined,
+          staleReason: p.staleReason || undefined,
           personaId: p.personaId || undefined,
         })
       }

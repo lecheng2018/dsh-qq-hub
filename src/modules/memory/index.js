@@ -117,7 +117,11 @@ export default {
           execute: async ({ query }) => {
             // chat 一定要传：不传就跨作用域召回，群里能把私聊记的事翻出来
             const activeMem = api.use('memory')?.store || globalThis.qqHub?.modules?.use('memory')?.store || memory
-            const hits = activeMem.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat })
+            const q = String(query || '')
+            const opts = { about: chat.userId, limit: 8, where: current + '（翻记忆）', chat }
+            const hits = typeof activeMem.recallFused === 'function' && activeMem.vectorEnabled?.()
+              ? await activeMem.recallFused(q, opts)
+              : activeMem.recall(q, opts)
             return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
           },
         }),
