@@ -265,7 +265,7 @@ test('413 自愈：真·上下文窗口超限不误判成 413（走 context-wind
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '失败当轮保留映射，下一条消息再重建') /* pii-scan:ignore */
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
-    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', 'context-window 兑现承诺：下一条消息换新会话') /* pii-scan:ignore */
+assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', 'context-window 兑现承诺：下一条消息换新会话') /* pii-scan:ignore */
     assert.ok((dshRaw.workspaces.archived || []).includes('sess-1'), '旧会话已归档')
   } finally { await core.dispose() }
 })
