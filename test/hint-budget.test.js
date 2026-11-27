@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SRC = readFileSync(join(ROOT, 'src/features/memory-archive.js'), 'utf8')
 const EXTRACTOR = readFileSync(join(ROOT, 'src/features/memory-extractor.js'), 'utf8')
-const CFG = readFileSync(join(ROOT, 'src/core/config.js'), 'utf8')
+const CFG = readFileSync(join(ROOT, 'src/core/config-defaults.js'), 'utf8')
 
 test('单条记忆超长的截法：在句读处收，不从半句中间断', async () => {
   const { cutAtSentence } = await import('../src/features/memory.js')
@@ -38,7 +38,7 @@ test('配置默认值与夹值', async () => {
   const b = normalize({ memory: { hintCount: 99, hintMaxChars: 5 } })
   assert.equal(b.memory.hintCount, 20)
   assert.equal(b.memory.hintMaxChars, 120)
-  assert.match(CFG, /hintCount: 8/, '默认值写在 config.js 里，面板能看到')
+  assert.match(CFG, /hintCount: 8/, '默认值写在 config-defaults.js 里，面板能看到')
 })
 
 test('提炼提示词：知识要记、要说清是谁说的、不要字段标签', () => {
