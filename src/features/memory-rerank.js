@@ -16,7 +16,14 @@ export function normalizeRerankConfig(ext = {}) {
   const url = String(e.rerankUrl || '').trim() || DEFAULT_URL
   if (!/^https?:\/\//i.test(url)) return null
   const topN = Math.max(2, Math.min(50, Math.round(Number(e.rerankTopN) || 20)))
-  return { url, apiKey, model: String(e.rerankModel || '').trim() || DEFAULT_MODEL, topN }
+  let minScore
+  if (e.rerankMinScore === null || e.rerankMinScore === false) {
+    minScore = null
+  } else if (e.rerankMinScore !== undefined && e.rerankMinScore !== '') {
+    const n = Number(e.rerankMinScore)
+    if (Number.isFinite(n)) minScore = n
+  }
+  return { url, apiKey, model: String(e.rerankModel || '').trim() || DEFAULT_MODEL, topN, minScore }
 }
 
 /**
@@ -58,13 +65,16 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
   function enabled() { return Boolean(conf()) }
   function status() {
     const c = conf()
-    return { enabled: Boolean(c), model: c ? c.model : '', topN: c ? c.topN : 0, lastError }
+    return { enabled: Boolean(c), model: c ? c.model : '', topN: c ? c.topN : 0, minScore: c ? c.minScore : undefined, lastError }
   }
   /** 精排只重排、不扩可见性；失败/超时/未启用一律原样返回（fail-open）。 */
-  async function rerank(query, hits, { timeoutMs = 10000, minScore = null } = {}) {
+  async function rerank(query, hits, { timeoutMs = 10000, minScore } = {}) {
     const c = conf()
     const list = Array.isArray(hits) ? hits : []
-    if (!c || list.length < 2) return list
+    const rawFloor = minScore !== undefined ? minScore : (c ? c.minScore : undefined)
+    const floor = typeof rawFloor === 'number' && Number.isFinite(rawFloor) ? rawFloor : null
+    // 只有纯重排（未启用阈值下限）时才在少于 2 条时跳过；存在阈值过滤时单候选也需打分判无关
+    if (!c || !list.length || (floor === null && list.length < 2)) return list
     const docs = list.slice(0, c.topN).map((h) => String((h && h.it && h.it.text) || ''))
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -77,7 +87,7 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
       })
       if (!res.ok) throw new Error(`rerank HTTP ${res.status}`)
       const data = await res.json()
-      const out = applyRerankOrder(list, data && data.results, c.topN, { minScore })
+      const out = applyRerankOrder(list, data && data.results, c.topN, { minScore: floor })
       lastError = ''
       return out
     } catch (error) {

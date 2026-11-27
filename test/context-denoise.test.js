@@ -175,7 +175,7 @@ test('精简回归：移除 affective-graph、<inner> 独白协议与 purpose �
 
   const purposePrompt = buildPurposePrompt({
     ownerName: '主人',
-    ownerUin: '10000001',
+    ownerUin: '10001',
     drives: { share: 0.7, connect: 0.6 },
     selected: {
       need: 'connect',
@@ -188,4 +188,70 @@ test('精简回归：移除 affective-graph、<inner> 独白协议与 purpose �
   })
   assert.doesNotMatch(purposePrompt, /心里隐约有点|说这句话时你心里有点|心里挺平静的/, 'purpose 提示词不再塞入关键词硬猜的情绪演戏提示')
   assert.match(purposePrompt, /问问主人最近忙不忙/, '保留真实目标与素材方向')
+})
+
+
+test('modular-core：被 prompt 钩子拦截的回合不污染下一轮 prevText', async () => {
+  const seenPrevTexts = []
+  const listeners = new Set()
+  const session = { id: 'sess-prevtext-guard' }
+  let turnNo = 0
+  const agent = {
+    id: session.id,
+    ctx: { get: () => null },
+    followup() {
+      const n = ++turnNo
+      for (const fn of [...listeners]) fn(session, { type: 'assistant/message', data: { turn: n, message: { content: [{ type: 'text', text: '嗯' }] } } })
+      for (const fn of [...listeners]) fn(session, { type: 'turn/end', data: { turn: n, reason: { kind: 'completed' } } })
+      return Promise.resolve()
+    },
+  }
+  const ctrl = { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) }
+  const dsh = {
+    on(name, fn) { if (name !== 'session/event') return () => {}; listeners.add(fn); return () => listeners.delete(fn) },
+    get(name) {
+      if (name === 'sessionController') return ctrl
+      if (name === 'workspaceRegistry') return { list: () => [{ id: 'ws-1', path: 'ws-1' }], create: async () => ({ id: 'ws-1', path: 'ws-1' }) }
+      return null
+    },
+  }
+  const cfg = {
+    enabled: true, dryRun: false, botQQ: '20002', ownerQQ: '10001', ownerName: '主人',
+    allow: { private: ['10001'], groups: [] }, longTasks: false,
+    merge: { waitSec: 0.01, maxSec: 0.04, groupWaitSec: 0.01, groupMaxSec: 0.04 },
+    security: { identityGuard: { enabled: false } },
+    voice: { enabled: false, autoChance: 0 }, stickers: { enabled: false, faces: false, autoChance: 0 },
+    reply: { groupMaxChars: 500, maxBubbles: 3, cadence: { enabled: false } },
+  }
+  const core = createModularCore({
+    dsh,
+    onebot: { call: async () => ({ message_id: 1 }) },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    moduleHooks: {
+      prompt(content, info) {
+        seenPrevTexts.push({ query: info.queryText, prev: info.prevText })
+        if (String(info.queryText || '').includes('拦截这句')) return null
+        return content
+      },
+    },
+    getConfig: () => cfg, logger: noopLog, log: noopLog,
+  })
+  try {
+    const sendPriv = (id, text) => core.dispatchLegacyEventSettled({
+      post_type: 'message', message_type: 'private', sub_type: 'friend',
+      self_id: 20002, user_id: 10001, message_id: id, time: Math.floor(Date.now() / 1000),
+      sender: { user_id: 10001, nickname: '主人' },
+      message: [{ type: 'text', data: { text } }],
+    })
+    await sendPriv(2001, '第一句正常话')
+    await sendPriv(2002, '拦截这句敏感词')
+    await sendPriv(2003, '第三句追问')
+    assert.deepEqual(seenPrevTexts, [
+      { query: '第一句正常话', prev: '' },
+      { query: '拦截这句敏感词', prev: '第一句正常话' },
+      { query: '第三句追问', prev: '第一句正常话' },
+    ])
+  } finally {
+    await core.dispose()
+  }
 })

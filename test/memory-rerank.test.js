@@ -157,3 +157,26 @@ test('集成：recallHintFused 走精排重排，精排失败退回 RRF', async 
   assert.equal(hint2.includes('红苹果甲'), true)
   assert.equal(hint2.indexOf('红苹果甲') < hint2.indexOf('紫橘子丙'), true, 'fail-open 退回 RRF')
 })
+
+
+test('normalizeRerankConfig & createReranker：支持 rerankMinScore 且带阈值时单候选也过精排过滤', async () => {
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k' }).minScore, undefined)
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k', rerankMinScore: -3.5 }).minScore, -3.5)
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k', rerankMinScore: null }).minScore, null)
+
+  let calls = 0
+  const r = createReranker({
+    getConfig: () => ({ ext: { memory: { rerankEnabled: true, rerankApiKey: 'k', rerankUrl: 'https://mock/rerank' } } }),
+    fetchImpl: async () => {
+      calls += 1
+      return { ok: true, json: async () => ({ results: [{ index: 0, relevance_score: 0.01 }] }) }
+    },
+  })
+  // 未启用阈值（纯重排模式）：单候选仍短路，不发 HTTP
+  assert.deepEqual((await r.rerank('q', [hit('only')])).map((h) => h.it.id), ['only'])
+  assert.equal(calls, 0)
+
+  // 显式传 minScore：单候选也必须送精排并被 0.01 < 0.05 过滤
+  assert.deepEqual(await r.rerank('q', [hit('only')], { minScore: 0.05 }), [])
+  assert.equal(calls, 1)
+})

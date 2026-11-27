@@ -269,3 +269,70 @@ test('biliLike 去重收紧只针对涉 B 站条目，不再误伤同作用域�
   const r2 = store.add({ text: '周末去西湖边散步拍照看日落', scope: 'private:10001' })
   assert.ok(r1.id && r2.id && r1.id !== r2.id, '同作用域存在 B站 记忆不应误把普通记忆去重阈值降到 0.5')
 })
+
+
+test('recallFused + rerank：单向量候选也受 minScore 过滤，并支持配置 rerankMinScore（如负 logits）', async (t) => {
+  withTempData(t)
+  const prevFetch = globalThis.fetch
+  let nextScore = 0.01
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url)
+    const body = JSON.parse(opts.body)
+    if (u.includes('/embeddings')) {
+      const inputs = Array.isArray(body.input) ? body.input : [body.input]
+      return { ok: true, json: async () => ({ data: inputs.map(() => ({ embedding: [1, ...Array(63).fill(0)] })) }) }
+    }
+    if (u.includes('/rerank')) {
+      return { ok: true, json: async () => ({ results: [{ index: 0, relevance_score: nextScore }] }) }
+    }
+    throw new Error('unexpected url: ' + u)
+  }
+  t.after(() => { globalThis.fetch = prevFetch })
+
+  let minScoreCfg
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({
+      ownerQQ: '10001',
+      memory: { enabled: true, recallCount: 4 },
+      ext: {
+        memory: {
+          vectorEnabled: true, vectorUrl: 'https://mock/embeddings', vectorApiKey: 'k', vectorModel: 'em', vectorDim: 64,
+          rerankEnabled: true, rerankUrl: 'https://mock/rerank', rerankApiKey: 'rk', rerankModel: 'rm', rerankTopN: 10,
+          rerankMinScore: minScoreCfg,
+        },
+      },
+    }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const chat = { kind: 'private', userId: '10002', chatId: 'private:10002' }
+  store.add({ text: '唯一一条擦线向量记忆', about: '10003', scope: 'private:10002' })
+  await store.vectorBackfill(store.list(''))
+
+  // 默认阈值 0.05：仅 1 条向量候选且 rerankScore=0.01 时也应被剔除，recallLog 命中为空且不计 hits
+  const dropped = await store.recallFused('完全无关问句', { chat, limit: 4 })
+  assert.equal(dropped.length, 0)
+  assert.equal(store.recalls()[0].hits.length, 0)
+
+  // 配成负 logits 阈值 -5：score=-1.2 允许通过
+  minScoreCfg = -5
+  nextScore = -1.2
+  const kept = await store.recallFused('完全无关问句', { chat, limit: 4 })
+  assert.equal(kept.length, 1)
+})
+
+test('biliLike 去重兼容字符串格式 tags', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const first = store.add({ text: '周末一起去看新番电影吧很开心', tags: 'B站,日常', scope: 'private:10001' })
+  const second = store.add({ text: '周末一起去看新番电影吧还行', scope: 'private:10001' })
+  assert.equal(second.updated, first.id, '字符串格式 tags 含 B站 时也应触发 0.5 去重合并')
+})

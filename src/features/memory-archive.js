@@ -404,7 +404,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
     // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增。
     // 仅当新条目或候选条目自身涉 B 站时收紧到 0.5，避免同作用域里有一条 B 站记忆就误伤全作用域去重阈值。
-    const isBiliEntry = (textVal, tagList) => String(textVal || '').includes('B站') || (Array.isArray(tagList) && tagList.includes('B站'))
+    const hasBiliTag = (tagList) => (
+      Array.isArray(tagList)
+        ? tagList.includes('B站')
+        : String(tagList || '').split(/[,\s，]+/).includes('B站')
+    )
+    const isBiliEntry = (textVal, tagList) => String(textVal || '').includes('B站') || hasBiliTag(tagList)
     const entryIsBili = isBiliEntry(t, tags)
     const dup = scopeItems.find((m) => {
       const dupAt = (entryIsBili || isBiliEntry(m.text, m.tags)) ? 0.5 : 0.6
@@ -1292,7 +1297,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   const DEFAULT_VEC_MIN_COS = 0.35
   const DEFAULT_RERANK_MIN_SCORE = 0.05
 
-  async function recallFused(query, { about, limit, where = '', context = '', chat = null, scopes = null, excludeIds = null, minCos = DEFAULT_VEC_MIN_COS, rerankMinScore = DEFAULT_RERANK_MIN_SCORE } = {}) {
+  async function recallFused(query, { about, limit, where = '', context = '', chat = null, scopes = null, excludeIds = null, minCos = DEFAULT_VEC_MIN_COS, rerankMinScore } = {}) {
     const q = String(query || '').trim()
     if (!q) return []
     const max = limit ?? getConfig().memory.recallCount
@@ -1337,7 +1342,11 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vecHits.sort((a, b) => b.score - a.score)
     let hits = fuseRrf(bm25, vecHits.slice(0, poolLimit), { limit: rerankCap })
     if (rerankEnabled) {
-      hits = await reranker.rerank(q, hits, { minScore: rerankMinScore })
+      const cfgMinScore = reranker.status()?.minScore
+      const effectiveMinScore = rerankMinScore !== undefined
+        ? rerankMinScore
+        : (cfgMinScore !== undefined ? cfgMinScore : DEFAULT_RERANK_MIN_SCORE)
+      hits = await reranker.rerank(q, hits, { minScore: effectiveMinScore })
     }
     hits = hits.slice(0, max)
     recordRecallHits(hits, { where, query: q })

@@ -14,7 +14,7 @@
 // 失败哲学：这里的一切错误都不许往召回路径抛 —— 向量通道挂了最多退回纯 BM25，
 // 绝不能砸了回复。对外 async 方法统一吞错 + 限频告警。
 
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { writeTextAtomic, scopeToVecFilePath } from './memory-files.js'
@@ -374,7 +374,24 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     return out.sort((a, b) => b.cos - a.cos)
   }
 
-  /** 面板手动触发：把传入条目按 scope 分组强推入队（只补缺失/文本变更的；要全量重建先删 vectors.bin）。 */
+  function scanVectorScopes() {
+    const out = []
+    if (!memoryDir || !existsSync(memoryDir)) return out
+    try {
+      if (existsSync(join(memoryDir, 'global', 'vectors.bin'))) out.push('global')
+      for (const kind of ['private', 'group', 'system']) {
+        const dir = join(memoryDir, kind)
+        if (!existsSync(dir)) continue
+        for (const ent of readdirSync(dir, { withFileTypes: true })) {
+          if (!ent.isDirectory()) continue
+          if (existsSync(join(dir, ent.name, 'vectors.bin'))) out.push(`${kind}:${ent.name}`)
+        }
+      }
+    } catch {}
+    return out
+  }
+
+  /** 面板手动触发：把传入条目按 scope 分组强推入队，并同步对账清理孤儿作用域的死向量。 */
   async function backfill(items) {
     if (disposed) return { ok: false, message: '向量通道已停用' }
     if (!enabled()) return { ok: false, message: '向量通道未启用：面板「记忆」页模块设置或 memory.embeddings' }
@@ -386,6 +403,10 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
       const pend = byScope.get(sc) || new Map()
       pend.set(String(m.id), embedKeyOf(m))
       byScope.set(sc, pend)
+    }
+    // 向量关闭期间被删空的作用域，或启动前遗留的孤儿 vectors.bin，补全时一并入队空对账摘除死向量
+    for (const sc of new Set([...files.keys(), ...scanVectorScopes()])) {
+      if (!byScope.has(sc)) dirty.set(sc, new Map())
     }
     for (const [sc, pend] of byScope) dirty.set(sc, pend)
     const embedded = await flush()

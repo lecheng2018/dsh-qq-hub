@@ -30,6 +30,7 @@ export default {
     rerankApiKey: '',
     rerankModel: 'BAAI/bge-reranker-v2-m3',
     rerankTopN: 20,
+    rerankMinScore: 0.05,
   },
   settings: [
     { key: 'vectorEnabled', label: '语义召回（向量通道）', type: 'switch', hint: 'BM25 检不出「没有共同字词」的提问时，用 embedding 语义兜底并融合排序。需要自备 OpenAI 兼容 /embeddings 端点（如 SiliconFlow 的 BAAI/bge-m3）。保存后立即生效，无需重启；开启后存量记忆在下次写入或点「补全向量」时自动补齐' },
@@ -42,6 +43,7 @@ export default {
     { key: 'rerankApiKey', label: 'Rerank API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
     { key: 'rerankModel', label: 'Rerank 模型名', type: 'text', placeholder: 'BAAI/bge-reranker-v2-m3' },
     { key: 'rerankTopN', label: '精排候选数', type: 'number', min: 2, max: 50, step: 1, hint: 'RRF 融合后取前 N 条送精排，其余保持原顺序' },
+    { key: 'rerankMinScore', label: '精排相关性阈值', type: 'number', min: -20, max: 1, step: 0.01, hint: '低于此分的候选在精排后剔除（BGE 默认 0.05；输出负 logits 的模型可调低）' },
   ],
   setup(api) {
     const { hub, http } = api.core
