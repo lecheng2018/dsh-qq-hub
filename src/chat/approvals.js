@@ -64,6 +64,16 @@ export function parseApprovalCommand(text) {
   return null
 }
 
+function extractDisplayReason(displayReason) {
+  if (typeof displayReason === 'string' && displayReason.trim()) return displayReason.trim()
+  if (displayReason && typeof displayReason === 'object') {
+    const picked = displayReason['zh-CN'] || displayReason.zh || displayReason['zh-Hans'] || displayReason.en
+      || Object.values(displayReason).find((v) => typeof v === 'string' && v.trim())
+    if (typeof picked === 'string' && picked.trim()) return picked.trim()
+  }
+  return ''
+}
+
 /**
  * 创建审批管理器
  */
@@ -74,7 +84,7 @@ export function createApprovalRegistry({ deliver, ownerQQ, timeoutMs = 60_000, l
   /**
    * 注册一项审批请求并返回 Promise<'allowed-once'|'rejected'>
    */
-  async function request(req, { chatId, sessionId, command, args } = {}) {
+  async function request(req, { chatId, sessionId, command, args, reason } = {}) {
     const id = nextApprovalId++
     const owner = typeof ownerQQ === 'function' ? ownerQQ() : ownerQQ
     // fail-closed（缺陷：ownerQQ 空值降级）：未配置主人时直接拒绝，绝不把审批卡发进
@@ -86,13 +96,14 @@ export function createApprovalRegistry({ deliver, ownerQQ, timeoutMs = 60_000, l
       return 'rejected'
     }
 
+    const resolvedReason = String(reason || extractDisplayReason(req?.displayReason) || req?.reason || '').trim()
     const entry = {
       id,
-      toolName: req.toolName || 'unknown',
-      reason: req.reason || '',
-      command: command || req.arguments?.command || '',
-      args: args || req.arguments || null,
-      callId: req.callId,
+      toolName: req?.toolName || 'unknown',
+      reason: resolvedReason,
+      command: command || req?.arguments?.command || '',
+      args: args || req?.arguments || null,
+      callId: req?.callId,
       sessionId,
       chatId: targetChat,
       createdAt: Date.now()

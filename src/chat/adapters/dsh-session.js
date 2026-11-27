@@ -13,9 +13,12 @@
  * @param {(chatKey: string) => string|Promise<string>} [o.titleOf] 会话标题（真机报告 9：不命名则面板全是
  *   「未命名」；legacy hub.js:327 建会话后立刻 rename）。可以是 async（群名要查网关）。
  */
-export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleOf }) {
+const TITLED_MAX = 500
+
+export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleOf, onCreated, maxTitled = TITLED_MAX }) {
   if (!dsh) throw new TypeError('dsh 必填')
   if (typeof presetOf !== 'function') throw new TypeError('presetOf 必填')
+  const titleCap = Math.max(1, Math.floor(Number(maxTitled) || TITLED_MAX))
   // cordis 的 dsh.services 是「未声明 inject 直接点会抛」的 getter（真机报告 3）；只走 ctx.get，try/catch 兜住
   const controller = () => {
     try { return dsh?.get?.('sessionController') ?? null } catch { return null }
@@ -32,32 +35,48 @@ export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleO
     } catch { return undefined }
   }
 
-  /** 已命名缓存：DSH 的 rename 同值也会落一条新 session/title 事件，重复回填会刷屏；
+  /** 已命名缓存（带 LRU 上限）：DSH 的 rename 同值也会落一条新 session/title 事件，重复回填会刷屏；
    *  进程重启后内存缓存是空的，再用回读当前标题兜一层（跨重启幂等）。 */
   const titled = new Map()
+  function rememberTitle(sessionId, title) {
+    const key = String(sessionId || '')
+    if (!key) return
+    titled.delete(key)
+    titled.set(key, title)
+    while (titled.size > titleCap) {
+      const oldest = titled.keys().next().value
+      if (oldest === undefined) break
+      titled.delete(oldest)
+    }
+  }
   /** 给会话起名（titleOf 可同步可 async——群名要去网关查；缺省不命名）。失败静默，只是显示问题。 */
   async function renameSession(ctrl, sessionId, chatKey) {
     if (typeof titleOf !== 'function') return
     let title
     try { title = String(await titleOf(chatKey) || '').trim() } catch { return }
     if (!title) return
-    if (titled.get(sessionId) === title) return
+    if (titled.get(sessionId) === title) { rememberTitle(sessionId, title); return }
     const current = await currentTitle(ctrl, sessionId)
-    if (current && current === title) { titled.set(sessionId, title); return }
+    if (current && current === title) { rememberTitle(sessionId, title); return }
     try {
       await ctrl?.rename?.({ sessionId, title })
-      titled.set(sessionId, title)
+      rememberTitle(sessionId, title)
     } catch { /* 只影响显示 */ }
   }
 
   return {
     /** 面板/回填用：给已存在的会话补名字。 */
     renameExisting: async (sessionId, chatKey) => renameSession(controller(), sessionId, chatKey),
+    /** 会话重置/归档时清理标题缓存。 */
+    forgetTitle: (sessionId) => { titled.delete(String(sessionId || '')) },
+    /** 卸载时清空标题缓存。 */
+    clearTitles: () => { titled.clear() },
     /** SessionRegistry.createSession 注入点签名。 */
     async createSession(chatKey, hint = {}) {
       const ctrl = controller()
       if (!ctrl?.create) throw new Error('DSH 没有 sessionController.create（适配失败，fail-closed）')
-      const { agentPreset, workspaceId: presetWs } = { ...presetOf(chatKey), ...hint }
+      const { onCreated: hintOnCreated, ...restHint } = hint || {}
+      const { agentPreset, workspaceId: presetWs } = { ...presetOf(chatKey), ...restHint }
       let workspaceId = presetWs
       if (!workspaceId && typeof ensureWorkspace === 'function') {
         try { workspaceId = (await ensureWorkspace(chatKey))?.id } catch { workspaceId = undefined }
@@ -65,6 +84,12 @@ export function createDshSessionAdapter({ dsh, presetOf, ensureWorkspace, titleO
       const created = await ctrl.create({ ...(workspaceId ? { workspaceId } : {}), agentPreset })
       if (!created?.sessionId) throw new Error('DSH 创建会话未返回 sessionId')
       const sessionId = String(created.sessionId)
+      // 在 renameSession（内部会 resolveAgent 触发系统提示词装配）之前立刻通知调用方登记映射，
+      // 消除会话创建期反查不到 chatKey 导致人设回落全局卡的竞态。
+      const createdCb = typeof hintOnCreated === 'function' ? hintOnCreated : onCreated
+      if (typeof createdCb === 'function') {
+        try { await createdCb(sessionId, created) } catch {}
+      }
       // [修复] 新核心建完会话不命名 → 面板里全是「未命名」。legacy 建会话后立刻 rename（hub.js:327），
       // 这里补上同一动作；命名失败只影响显示，绝不让建会话失败。
       await renameSession(ctrl, sessionId, chatKey)

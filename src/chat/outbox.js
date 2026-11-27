@@ -41,9 +41,12 @@ export { newDeliveryId }
  * @param {() => boolean} [o.enabled] 全局总开关注入（出队时动态读取；false = 不发）
  * @param {(delivery: object) => {ok: boolean, message?: string}} [o.guard] 身份泄露闸注入
  */
-export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, currentTicket } = {}) {
+const DEFAULT_MAX_PRIVATE_SOURCES = 500
+
+export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, currentTicket, maxPrivateSources = DEFAULT_MAX_PRIVATE_SOURCES } = {}) {
   if (typeof send !== 'function') throw new TypeError('send 必须是函数')
   const book = ledger || createDeliveryLedger({})
+  const privateSourceCap = Math.max(1, Math.floor(Number(maxPrivateSources) || DEFAULT_MAX_PRIVATE_SOURCES))
   /** chatKey -> Promise（发送串行链，保证每聊天 FIFO） */
   const chains = new Map()
   /** 还没出队的 deliveryId（dispose 清理对象） */
@@ -222,6 +225,10 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
       const parsed = parseChatKey(chatKey)
       action = parsed.kind === 'group' ? 'send_group_msg' : 'send_private_msg'
       const sourceGroupId = parsed.kind === 'private' ? privateSources.get(parsed.id) : ''
+      if (sourceGroupId) {
+        privateSources.delete(parsed.id)
+        privateSources.set(parsed.id, sourceGroupId)
+      }
       params = parsed.kind === 'group'
         ? { group_id: Number(parsed.id), message: req.segments }
         : { user_id: Number(parsed.id), ...(sourceGroupId ? { group_id: Number(sourceGroupId) } : {}), message: req.segments }
@@ -291,12 +298,25 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
     return id
   }
 
-  /** 登记临时会话来源群（仅 ACL 放行后调用）；last-source-wins，空值不清除（同上游）。 */
+  /** 登记临时会话来源群（仅 ACL 放行后调用）；last-source-wins，空值/非法值不覆盖；超出上限按 LRU 淘汰。 */
   function notePrivateSource(userId, groupId) {
     const u = String(userId || '')
     const g = String(groupId || '')
-    if (u && g && /^\d+$/.test(g)) privateSources.set(u, g)
+    if (!u || !g || !/^\d+$/.test(g)) return
+    privateSources.delete(u)
+    privateSources.set(u, g)
+    while (privateSources.size > privateSourceCap) {
+      const oldest = privateSources.keys().next().value
+      if (oldest === undefined) break
+      privateSources.delete(oldest)
+    }
   }
 
-  return { request, reserve, cancel, dispose, recordExternal, notePrivateSource, ledger: book }
+  /** 收到普通好友私聊（sub_type === 'friend'）时清除旧临时会话来源群，避免继续附带旧 group_id。 */
+  function clearPrivateSource(userId) {
+    const u = String(userId || '')
+    if (u) privateSources.delete(u)
+  }
+
+  return { request, reserve, cancel, dispose, recordExternal, notePrivateSource, clearPrivateSource, ledger: book }
 }

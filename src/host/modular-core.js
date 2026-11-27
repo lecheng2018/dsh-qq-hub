@@ -147,12 +147,6 @@ export function createModularCore({
     } catch { /* 查群名是锦上添花：失败就退回群号 */ }
     return groupNames.get(id) || id
   }
-  /** 预取白名单群的群名：建会话/回填时命名更准。 */
-  function prefetchGroupNames() {
-    const ids = (() => { try { return (getConfig().allow?.groups || []).map(String) } catch { return [] } })()
-    Promise.resolve().then(async () => { for (const gid of ids) await groupNameOf(gid) }).catch(() => {})
-  }
-
   const inboundRateLimit = createRatelimitMiddleware({ ...ratelimitOptionsFromEnv() })
   function rateAllowed(inbound) {
     const key = `${inbound.chatKey}:${String(inbound?.sender?.userId || '')}`
@@ -354,24 +348,15 @@ export function createModularCore({
       baseSessionStore.save(enriched)
     },
   }
-  // 群名是异步查到的：建会话时可能还退着群号，拿到真名后补一次 rename（适配器内有去重，不会刷屏）。
-  function refreshGroupTitles(reg) {
-    Promise.resolve().then(async () => {
-      for (const [chatKey, entry] of Object.entries(reg.snapshot?.() || {})) {
-        if (!chatKey.startsWith('group:') || !entry?.sessionId) continue
-        const gid = chatKey.slice(6)
-        const name = await groupNameOf(gid)
-        if (!name || name === gid) continue
-        await sessionAdapter.renameExisting?.(entry.sessionId, chatKey).catch(() => {})
-      }
-    }).catch(() => {})
-  }
   // 启动后给已有映射补标题（老映射是未命名时代建的）；无存量映射就不打网关查询
   const backfillTitles = (reg) => {
     Promise.resolve().then(async () => {
       const entries = Object.entries(reg.snapshot?.() || {}).filter(([, e]) => e?.sessionId)
       if (!entries.length) return
-      prefetchGroupNames() // 先拿群名，回填才能用真名
+      // 先查齐群名再逐条顺序 renameExisting（原本并发的 prefetchGroupNames + refreshGroupTitles 会重复 rename）
+      for (const [chatKey] of entries) {
+        if (chatKey.startsWith('group:')) await groupNameOf(chatKey.slice(6))
+      }
       for (const [chatKey, entry] of entries) {
         await sessionAdapter.renameExisting?.(entry.sessionId, chatKey).catch(() => {})
       }
@@ -379,26 +364,32 @@ export function createModularCore({
   }
   const registry = createSessionRegistry({
     createSession: async (chatKey, hint) => {
-      // 先取目标再建会话：DSH 在 create 期间就可能装配系统提示词，
-      // 记的必须是「这一刻按哪张卡渲染的」，不是建完再补算一次。
+      // 先取目标再建会话：DSH 在 create 期间（及随后的 renameSession → resolveAgent）就可能装配系统提示词，
+      // 记的必须是「这一刻按哪张卡渲染的」，且通过 onCreated 在 renameSession 之前立刻登记反查表，
+      // 彻底消除创建期 chatOfSession(sid) 反查不到导致人设回落全局卡的竞态。
       const want = currentPersonaTarget(chatKey)
-      const created = await sessionAdapter.createSession(chatKey, hint)
-      if (created?.sessionId) {
-        sessionPersonas.set(chatKey, { sessionId: String(created.sessionId), personaId: want.id, personaHash: want.hash })
+      const registerCreated = (sid) => {
+        const id = String(sid || '')
+        if (!id) return
+        sessionPersonas.set(chatKey, { sessionId: id, personaId: want.id, personaHash: want.hash })
         // 反查表立刻登记：装配期间 chatOfSession(sid) 必须能对上，否则渲染期会回落全局卡。
-        activeChatBySessionId.set(String(created.sessionId), chatKey)
+        activeChatBySessionId.set(id, chatKey)
       }
+      const created = await sessionAdapter.createSession(chatKey, { ...hint, onCreated: (sid) => registerCreated(sid) })
+      if (created?.sessionId) registerCreated(created.sessionId)
       return created
     },
     ...(sessionStore ? { store: sessionStore } : {}),
     onError: (e) => log.warn('session 映射持久化异常：', e.message),
   })
   backfillTitles(registry)
-  refreshGroupTitles(registry)
   const systemTurns = createSystemTurns({
     createSession: async ({ key, title, noTools }) => {
       systemTitles.set(key, String(title || 'QQ · 后台'))
-      const created = await sessionAdapter.createSession(key, { agentPreset: presetFor(noTools ? 'chat' : 'social', getConfig()) })
+      const created = await sessionAdapter.createSession(key, {
+        agentPreset: presetFor(noTools ? 'chat' : 'social', getConfig()),
+        onCreated: (sid) => { if (sid) systemSessionIds.add(String(sid)) },
+      })
       if (created?.sessionId) systemSessionIds.add(String(created.sessionId))
       return created
     },
@@ -562,6 +553,8 @@ export function createModularCore({
   // 会话生命周期（清理 / 重置 / 人设变更重置 / 全量重置 / 孤儿巡检 / 清单 / 反查 / 会话取用）
   // 归子模块（core/session-lifecycle.js）。会话状态表是 Map/Set 活引用：核心主链与它读写同一份；
   // 人设目标以 currentPersonaTarget 取数注入（会话映射那一侧也读同一个，不复制快照）。
+  // resetChat 的归档是异步的：这张表记录「刚归档、尚未落地」的会话，供人设变量求值时免误报
+  const recentlyArchivedSessions = new Map() // sessionId -> expiresAt
   const sessionLifecycle = createSessionLifecycle({
     dsh, getConfig, log, debug, onResetChat, ctxGet, chatViewFor,
     currentPersonaTarget,
@@ -569,10 +562,11 @@ export function createModularCore({
     sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
     ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
     mountedTools, slowNoticeSent, selectedModels, pendingResets,
+    recentlyArchivedSessions, sessionAdapter,
   })
   const {
     cleanupSession, resetChat, resetChatsForPersonaChange, resetAllSessions,
-    sweepOrphanSessions, knownChats, chatKeyOfSession, sessionForChat,
+    sweepOrphanSessions, knownChats, chatKeyOfSession, isArchivingSession, sessionForChat,
   } = sessionLifecycle
 
   // 会话取用 / 轮换 / 归档探测（sessionForChat）同样在子模块里：它是「每一轮的唯一入口」
@@ -1252,10 +1246,15 @@ export function createModularCore({
     }
     presence.noteIncoming(inbound.chatKey, String(inbound?.sender?.userId || ''), cfg)
     // 临时会话（SnowLuma 能力补齐）：ACL 放行的私聊若来自群临时会话，记住来源群，
-    // 回复经 outbox 时带 group_id 才能送进临时会话。普通私聊不带、行为不变。
-    if (String(inbound.chatKey || '').startsWith('private:') && ev?.sub_type === 'group') {
-      const sg = String(ev?.sender?.group_id ?? '')
-      if (/^\d+$/.test(sg) && Number(sg) > 0) outbox.notePrivateSource(inbound?.sender?.userId, sg)
+    // 回复经 outbox 时带 group_id 才能送进临时会话。
+    // 若收到普通好友私聊（sub_type === 'friend'），清除旧的临时会话来源群，避免继续带旧 group_id。
+    if (String(inbound.chatKey || '').startsWith('private:')) {
+      if (ev?.sub_type === 'group') {
+        const sg = String(ev?.sender?.group_id ?? '')
+        if (/^\d+$/.test(sg) && Number(sg) > 0) outbox.notePrivateSource(inbound?.sender?.userId, sg)
+      } else if (ev?.sub_type === 'friend') {
+        outbox.clearPrivateSource?.(inbound?.sender?.userId)
+      }
     }
     // 旁路指令（审批批复 / 等待中的交互提问回答）：命中即消费，不进回合
     if (typeof interceptInteraction === 'function') {
@@ -1459,6 +1458,8 @@ export function createModularCore({
     lastInboundText.clear()
     pendingResets.clear()
     failureNoticedAt.clear()
+    recentlyArchivedSessions.clear()
+    sessionAdapter.clearTitles?.()
     await systemTurns.dispose()
     await registry.dispose()
     await controller.dispose()
@@ -1570,6 +1571,7 @@ export function createModularCore({
     markTurnAt: (chatKey, now) => registry.markTurn(chatKey, now),
     chatKeyOfSession,
     isSystemSession: (sid) => systemSessionIds.has(String(sid || '')),
+    isArchivingSession,
     resetChat,
     resetChatsForPersonaChange,
     dispatchBackfill,

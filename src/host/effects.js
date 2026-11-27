@@ -23,109 +23,128 @@ export function createHostEffects({
 
   const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
 
+  const resolveDisplayReason = (req) => {
+    const dr = req?.displayReason
+    if (typeof dr === 'string' && dr.trim()) return dr.trim()
+    if (dr && typeof dr === 'object') {
+      const picked = dr['zh-CN'] || dr.zh || dr['zh-Hans'] || dr.en
+        || Object.values(dr).find((v) => typeof v === 'string' && v.trim())
+      if (typeof picked === 'string' && picked.trim()) return picked.trim()
+    }
+    return String(req?.reason || '').trim()
+  }
+
   // ---------- 通用工具审批流 (approval/request) ----------
-  // 接入 DSH 官方 approval seam：当模型调用敏感工具触发审批时，向主人 QQ 发送审批卡
+  // 接入 DSH 官方 approval/request waterfall（Cordis 4 插件 ctx 直接挂 prepend 监听；
+  // 不碰 ctx.root，不 monkey-patch ApprovalService.request 绕过审计对）。
   function installApprovalFlow() {
     ctx.effect(() => {
       let off = null
-      let unpatchApproval = null
       try {
-        // 必须带 { global: true }：DSH 用 agent 作用域的 waterfall 派发审批
-        // （dsh-user-approval: ctx.waterfall(scopeTarget(agent, agent), 'approval/request', …)），
-        // 不带 global 的监听器收不到 → 审批只能弹在 GUI，QQ 永远没有卡（真机实测）。
-        const rootCtx = ctx.root ?? ctx
-        log.debug(`审批监听挂载位置：${rootCtx === ctx ? '插件 ctx（root 不可用）' : 'ctx.root'}`)
-        off = rootCtx.on('approval/request', async (req, next) => {
-          try {
-            const rawSid = req.agent?.session?.id || req.agent?.id || ''
+        if (typeof ctx.on === 'function') {
+          off = ctx.on('approval/request', async (req, next) => {
+            const rawSid = req?.agent?.session?.id || req?.agent?.id || ''
             const sid = sessionKey(rawSid)
             const chatId = chatOfSession(sid)
-            // 诊断（真机排查用）：审批事件到底有没有进来、反查到哪个 chat（2026-11-09）
             log.debug(`审批事件到达：rawSid=${String(rawSid)} sid=${sid} chatId=${chatId || '(空)'} tool=${String(req?.toolName || req?.name || req?.tool || '?')}`)
-            // 非 QQ 会话的 agent 请求，委托给下一个应答者
+            // 非 QQ 会话的 agent 请求，委托给下一个应答者（如 GUI）
             if (!chatId) return next()
 
-            let command = ''
-            let args = null
-            if (req.arguments) {
-              args = req.arguments
-              command = req.arguments.command || ''
+            try {
+              const args = req?.arguments || null
+              const command = args?.command || ''
+              const reason = resolveDisplayReason(req)
+              const toolName = String(req?.toolName || req?.name || req?.tool || 'tool')
+              log.info(`审批请求：${toolName} → ${chatId}`)
+              const out = await interactions.approvals.request(
+                { ...req, toolName, reason: reason || req?.reason || '' },
+                { chatId, sessionId: sid, command, args, reason },
+              )
+              log.info(`审批结果：${out}（${toolName}）`)
+              return out
+            } catch (error) {
+              log.warn('审批处理异常：', error.message)
+              return 'rejected'
             }
-            return await interactions.approvals.request(req, {
-              chatId,
-              sessionId: sid,
-              command,
-              args
-            })
-          } catch (error) {
-            log.warn('审批处理异常：', error.message)
-            return 'rejected'
-          }
-        }, { global: true })
+          }, { prepend: true })
+          log.info('已挂接 approval/request：QQ 会话的审批走 QQ 卡片')
+        } else {
+          log.debug('插件上下文缺少 ctx.on，跳过通用审批流挂接')
+        }
       } catch (error) {
         log.debug('挂通用审批流失败：', error.message)
       }
-      // 兜底（真机实测：waterfall 监听在 root/agent 作用域都收不到本版本派发的事件）：
-      // 直接拿 approval 服务实例，把 request() 包一层——它内部才是真正派发 waterfall 的地方。
-      // 命中 QQ 会话就自己发卡等批复，不命中就原样交回（GUI 照旧）。
-      try {
-        const svc = ctx.get?.('approval')
-        if (svc && typeof svc.request === 'function') {
-          const orig = svc.__qqhubOrigRequest || svc.request.bind(svc)
-          svc.__qqhubOrigRequest = orig
-          const wrapped = async (req) => {
-            try {
-              const raw = req?.agent?.session?.id || req?.agent?.id || ''
-              const chatId = chatOfSession(sessionKey(raw))
-              if (chatId) {
-                const args = req?.arguments || null
-                log.info(`审批请求：${String(req?.toolName || 'tool')} → ${chatId}`)
-                const out = await interactions.approvals.request(req, { chatId, sessionId: raw, command: args?.command || '', args })
-                log.info(`审批结果：${out}（${String(req?.toolName || 'tool')}）`)
-                return out
-              }
-            } catch (error) { log.warn('QQ 审批处理失败，回退 GUI：', error.message) }
-            return orig(req)
-          }
-          svc.request = wrapped
-          log.info('已接管 approval 服务：QQ 会话的审批走 QQ 卡片')
-          unpatchApproval = () => {
-            if (svc.request === wrapped) {
-              svc.request = orig
-              delete svc.__qqhubOrigRequest
-            }
-          }
-        } else {
-          log.debug('拿不到 approval 服务实例，审批只弹 GUI')
-        }
-      } catch (error) { log.debug('接管 approval 服务失败：', error.message) }
       return () => {
-        try { if (typeof off === 'function') off() } catch (error) {}
-        try { if (typeof unpatchApproval === 'function') unpatchApproval() } catch (error) {}
+        try { if (typeof off === 'function') off() } catch {}
       }
     }, 'qq-hub: 通用工具审批')
   }
 
   // ---------- 交互式提问 (userQuestions / ask_user_question) ----------
-  // 当前 DSH 的稳定入口是 userQuestions.ask() 服务方法；provider/registerProvider 不是该服务的公开 API。
+  // 优先走 DSH 官方 user-questions/request waterfall（{ prepend: true }）；
+  // 若宿主无事件总线但提供 userQuestions 服务，通过 ctx.inject(['userQuestions'], ...) 惰性挂载避免启动竞态。
   function setupUserQuestions() {
-    let uq = null
-    try { uq = ctx.get?.('userQuestions') } catch (error) {
-      log.debug('DSH 没提供 userQuestions（跳过交互提问桥接）：', error.message)
-    }
-    if (!uq || typeof uq.ask !== 'function') return
     ctx.effect(() => {
-      const original = uq.ask.bind(uq)
-      const wrapped = async (req) => {
-        const sid = sessionKey(req?.agent?.session?.id || req?.agent?.id)
-        const chatId = chatOfSession(sid)
-        if (chatId) return await interactions.questions.ask(chatId, req)
-        return await original(req)
+      let off = null
+      let uninject = null
+      if (typeof ctx.on === 'function') {
+        try {
+          off = ctx.on('user-questions/request', async (req, next) => {
+            const rawSid = req?.agent?.session?.id || req?.agent?.id || ''
+            const sid = sessionKey(rawSid)
+            const chatId = chatOfSession(sid)
+            if (!chatId) return next()
+            return await interactions.questions.ask(chatId, req)
+          }, { prepend: true })
+          log.info('已挂接 user-questions/request：QQ 会话的提问走 QQ 卡片')
+        } catch (error) {
+          log.debug('挂接 user-questions/request 失败：', error.message)
+        }
       }
-      uq.ask = wrapped
-      log.info('已接管 userQuestions 服务：QQ 会话的提问走 QQ 卡片')
+      if (!off) {
+        const attachService = (uq) => {
+          if (!uq || typeof uq.ask !== 'function') return null
+          const original = uq.ask.bind(uq)
+          const wrapped = async (req) => {
+            const sid = sessionKey(req?.agent?.session?.id || req?.agent?.id)
+            const chatId = chatOfSession(sid)
+            if (chatId) return await interactions.questions.ask(chatId, req)
+            return await original(req)
+          }
+          uq.ask = wrapped
+          log.info('已接管 userQuestions 服务：QQ 会话的提问走 QQ 卡片')
+          return () => {
+            if (uq.ask === wrapped) uq.ask = original
+          }
+        }
+        if (typeof ctx.inject === 'function') {
+          try {
+            let disposeInner = null
+            const stopInject = ctx.inject(['userQuestions'], (subCtx) => {
+              let uq = null
+              try { uq = subCtx?.get?.('userQuestions') ?? subCtx?.userQuestions ?? null } catch {}
+              disposeInner = attachService(uq)
+              if (disposeInner) subCtx?.effect?.(() => () => { try { disposeInner?.() } catch {} disposeInner = null })
+            })
+            uninject = () => {
+              try { disposeInner?.() } catch {}
+              disposeInner = null
+              try { if (typeof stopInject === 'function') stopInject() } catch {}
+            }
+          } catch (error) {
+            log.debug('惰性挂载 userQuestions 失败：', error.message)
+          }
+        } else {
+          let uq = null
+          try { uq = ctx.get?.('userQuestions') } catch (error) {
+            log.debug('DSH 没提供 userQuestions（跳过交互提问桥接）：', error.message)
+          }
+          uninject = attachService(uq)
+        }
+      }
       return () => {
-        if (uq.ask === wrapped) uq.ask = original
+        try { if (typeof off === 'function') off() } catch {}
+        try { if (typeof uninject === 'function') uninject() } catch {}
       }
     }, 'qq-hub: QQ交互提问服务')
   }
@@ -200,8 +219,8 @@ export function createHostEffects({
     const everyMs = Math.max(1, Number(cfg?.orphanSweep?.intervalHours) || 6) * 3600_000
     if (lastSweepAt && Date.now() - lastSweepAt < everyMs) return
     lastSweepAt = Date.now() // 先占位：单轮失败也不要每 30 秒重试
-    const r = await hub.sweepOrphanSessions()
-    if (r?.archived) log.info(`孤儿会话巡检：本轮归档 ${r.archived} 个（扫描 ${r.scanned}，跳过 ${r.skipped}）`)
+    // 具体归档日志统一由 hub.sweepOrphanSessions() 内部输出，避免重复打两条
+    return await hub.sweepOrphanSessions()
   }
   function installOrphanSweeper() {
     const cfg = getConfig()

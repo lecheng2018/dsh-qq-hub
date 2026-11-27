@@ -24,15 +24,15 @@ function insideRoots(file, roots) {
 }
 
 export function createOutboundFiles({ getConfig, log, outbox, sendSegments, captureOnly, onStats, deliveryContext }) {
-  async function sendVoiceFile(chatId, file, note) {
+  async function sendVoiceFile(chatId, file, note, opts = {}) {
     const b64 = readFileSync(file).toString('base64')
-    const result = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], note || '[语音]')
+    const result = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], note || '[语音]', { sourceModuleId: opts?.sourceModuleId })
     if (result || getConfig().dryRun || !getConfig().enabled) onStats?.('voice')
     if (!result && getConfig().enabled && !getConfig().dryRun) throw new Error('网关没接受这条语音')
     return result
   }
 
-  async function sendFile(chatId, file, name) {
+  async function sendFile(chatId, file, name, opts = {}) {
     const cfg = getConfig()
     const target = parseChatKey(chatId)
     if (!cfg.files?.enabled) throw new Error('发文件没打开（面板「聊天」页 → 发文件），打开后才能发')
@@ -62,7 +62,7 @@ export function createOutboundFiles({ getConfig, log, outbox, sendSegments, capt
     const callFile = async (next) => {
       const result = await outbox.request({
         chatKey: chatId, action, params: next, opts: { timeoutMs: FILE_TIMEOUT_MS }, receipt: 'optional',
-        note: `[文件] ${label}`, sourceModuleId: 'core', _outboxTicket: deliveryContext?.getStore()?.ticket,
+        note: `[文件] ${label}`, sourceModuleId: opts?.sourceModuleId || 'core', _outboxTicket: deliveryContext?.getStore()?.ticket,
       })
       if (result?.state === 'sent') return result.raw ?? result
       if (result?.state === 'cancelled') return null

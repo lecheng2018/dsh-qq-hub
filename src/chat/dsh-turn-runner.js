@@ -172,8 +172,11 @@ export function createTurnRunner({
    */
   async function runTurn({ sessionId, message, collect = {}, signal = null, agent: resolvedAgent = null } = {}) {
     const strategy = strategyFor(collect)
-    if (signal?.aborted) throw cancelledError()
     const agent = resolvedAgent || await resolveAgentFor(sessionId, [message])
+    if (signal?.aborted) {
+      try { Promise.resolve(agent.cancel?.({ kind: 'user' })).catch(() => {}) } catch { /* 取消失败不影响落定 */ }
+      throw cancelledError()
+    }
 
     const timeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
     let off = null
@@ -196,9 +199,15 @@ export function createTurnRunner({
       abortHandler = null
     }
 
+    // 让宿主把这一回合真正停掉：否则「已释放等待」的回合还在后台生成，白烧 token 也白占槽。
+    const cancelAgent = () => {
+      try { Promise.resolve(agent.cancel?.({ kind: 'user' })).catch(() => {}) } catch { /* 取消失败不影响落定 */ }
+    }
+
     // 超时：内部自己建 Promise（timer unref，绝不撑住进程退出）。默认 10 分钟，配置可覆盖。
     const timeoutPromise = new Promise((resolve, reject) => {
       timer = setTimeout(() => {
+        cancelAgent()
         const error = new TurnExecutionError(strategy.timeoutMessage(Math.ceil(timeoutMs / 1000)), {
           kind: 'timedOut', timedOut: true, timedOutForMs: timeoutMs,
         })
@@ -214,7 +223,7 @@ export function createTurnRunner({
     let abortPromise = null
     if (signal) {
       abortPromise = new Promise((resolve, reject) => {
-        abortHandler = () => reject(cancelledError())
+        abortHandler = () => { cancelAgent(); reject(cancelledError()) }
         signal.addEventListener('abort', abortHandler, { once: true })
       })
       abortPromise.catch(() => {})
@@ -222,6 +231,8 @@ export function createTurnRunner({
 
     const replyPromise = new Promise((resolve, reject) => {
       let done = false
+      // 本轮 turn 号（turn/start 给出）：用来拒绝旧轮迟到的 assistant/message 与 turn/end 串台。
+      let activeTurn = null
       let lastTurn = null
       let lastText = ''
       let lastStepHasToolCall = false
@@ -283,6 +294,10 @@ export function createTurnRunner({
 
       off = dsh.on?.('session/event', (session, ev) => {
         if (session?.id !== sessionId) return
+        if (ev?.type === 'turn/start') {
+          if (ev?.data?.turn !== undefined) activeTurn = ev.data.turn
+          return
+        }
         if (ev?.type === 'tool/call') {
           // 主动回合只要正文：工具调用不参与收集，也没有报告标记（原 B 语义）。
           if (strategy.mode !== 'chat') return
@@ -306,6 +321,8 @@ export function createTurnRunner({
         if (ev?.type === 'assistant/message') {
           const d = ev?.data || {}
           if (d.interrupted) return
+          // 已见过 turn/start 时只认本轮消息：上一轮迟到的 assistant/message 混进来会把正文写串
+          if (activeTurn !== null && d.turn !== undefined && d.turn !== activeTurn) return
           if (strategy.mode !== 'chat') {
             // 主动回合：只留最后一条有正文的 assistant/message（原 B 逐行等价）
             const value = (d.message?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('')
@@ -332,6 +349,15 @@ export function createTurnRunner({
         if (ev?.type === 'turn/end') {
           // 不在这里清任何标记：投递发生在 turn/end 之后（报告兜底标记由调用方持有）。
           const d = ev?.data || {}
+          // 绑定本轮 turn 号：见过 turn/start 时只认本轮 turn/end（旧轮迟到的一律忽略，不当时本轮完成）；
+          // 宿主/夹具没发 turn/start 时退化为「只挡旧轮」——d.turn 比本轮最后一条正文更旧才忽略，
+          // 更新的 turn/end 仍按原口径收尾（下面 sameTurn 校验保证旧正文不会当成本轮回复返回）。
+          if (activeTurn !== null && d.turn !== undefined && d.turn !== activeTurn) return
+          if (activeTurn === null && lastTurn !== null && d.turn !== undefined) {
+            const incoming = Number(d.turn)
+            const seen = Number(lastTurn)
+            if (Number.isFinite(incoming) && Number.isFinite(seen) && incoming < seen) return
+          }
           const kind = d.reason?.kind
           const failure = d.reason?.error || d.reason?.failure || null
           const { oversized, archived } = failureFlags(kind, failure)

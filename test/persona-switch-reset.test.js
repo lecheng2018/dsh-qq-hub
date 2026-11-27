@@ -21,8 +21,9 @@ test('当前会话注册表记下建会话时生效的人设（含正文指纹�
   // 2026-11-23：只记 personaId 会漏掉「卡没换、正文改了」——那种情况旧正文早就
   // 烧进系统提示词了，只看 id 永远等不到重建。记 id + hash 才能判出「同一张卡的旧版本」。
   assert.match(CORE, /const want = currentPersonaTarget\(chatKey\)/, '建会话前先取目标（id + 指纹）')
-  assert.match(CORE, /sessionPersonas\.set\(chatKey, \{ sessionId: String\(created\.sessionId\), personaId: want\.id, personaHash: want\.hash \}\)/)
-  assert.match(CORE, /activeChatBySessionId\.set\(String\(created\.sessionId\), chatKey\)/, '建完会话立刻登记反查，装配期才能按对卡渲染')
+  assert.match(CORE, /sessionPersonas\.set\(chatKey, \{ sessionId: id, personaId: want\.id, personaHash: want\.hash \}\)/)
+  assert.match(CORE, /activeChatBySessionId\.set\(id, chatKey\)/, '建完会话立刻登记反查，装配期才能按对卡渲染')
+  assert.match(CORE, /onCreated:\s*\(sid\)\s*=>\s*registerCreated\(sid\)/, 'createSession 期间通过 onCreated 提前登记，消除创建期竞态')
   assert.match(CORE, /personaHashAssumed/, '老映射按当前指纹做基线时要有 assumed 标记')
 })
 

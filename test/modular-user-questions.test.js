@@ -74,3 +74,92 @@ test('userQuestions：主人私聊 preset 声明提问工具，social 不声明'
   }
   assert.doesNotMatch(presetBlock('qq-hub-social'), /dsh-tool-ask-user/, '群聊不开放提问卡')
 })
+
+test('userQuestions：Cordis 4 优先通过 ctx.on("user-questions/request", ..., { prepend: true }) 挂载', async () => {
+  const listeners = []
+  const effects = []
+  const calls = []
+  const ctx = {
+    get root() { throw new Error('cannot get property "root" without inject') },
+    effect(fn) { effects.push(fn) },
+    on(event, fn, opts) {
+      assert.equal(event, 'user-questions/request')
+      assert.equal(opts?.prepend, true)
+      listeners.push(fn)
+      return () => {
+        const i = listeners.indexOf(fn)
+        if (i >= 0) listeners.splice(i, 1)
+      }
+    },
+  }
+  const effectsApi = createHostEffects({
+    ctx, logger: log, log, getConfig: () => ({}), hub: {},
+    interactions: {
+      questions: {
+        async ask(chatId, req) { calls.push({ chatId, req }); return { answers: [{ id: 'q1', selected: ['A'] }] } },
+      },
+    },
+    mods: {}, use: () => null, snowluma: {}, onebot: {}, gatewayState: {},
+    chatKeyOfSession: (sid) => (sid === 'qq-session' ? 'private:10001' : ''),
+  })
+  effectsApi.setupUserQuestions()
+  const cleanup = effects[0]()
+  assert.equal(listeners.length, 1)
+
+  const qqRes = await listeners[0]({ agent: { id: 'session-qq-session' }, questions: [] }, async () => ({ answers: [] }))
+  assert.deepEqual(qqRes, { answers: [{ id: 'q1', selected: ['A'] }] })
+  assert.equal(calls.length, 1)
+
+  let nextCalled = false
+  const otherRes = await listeners[0]({ agent: { id: 'session-other' }, questions: [] }, async () => {
+    nextCalled = true
+    return { answers: [{ id: 'q1', selected: ['GUI'] }] }
+  })
+  assert.equal(nextCalled, true)
+  assert.deepEqual(otherRes, { answers: [{ id: 'q1', selected: ['GUI'] }] })
+
+  cleanup()
+  assert.equal(listeners.length, 0)
+})
+
+test('userQuestions：无 ctx.on 时通过 ctx.inject(["userQuestions"], ...) 惰性挂载避免启动竞态', async () => {
+  const effects = []
+  let injectCb = null
+  const calls = []
+  const service = {
+    async ask(req) {
+      calls.push(['original', req])
+      return { source: 'original' }
+    },
+  }
+  const ctx = {
+    effect(fn) { effects.push(fn) },
+    inject(deps, cb) {
+      assert.deepEqual(deps, ['userQuestions'])
+      injectCb = cb
+      return () => { injectCb = null }
+    },
+  }
+  const effectsApi = createHostEffects({
+    ctx, logger: log, log, getConfig: () => ({}), hub: {},
+    interactions: {
+      questions: {
+        async ask(chatId, req) { calls.push(['qq', chatId, req]); return { source: 'qq' } },
+      },
+    },
+    mods: {}, use: () => null, snowluma: {}, onebot: {}, gatewayState: {},
+    chatKeyOfSession: (sid) => (sid === 'qq-session' ? 'private:10001' : ''),
+  })
+  effectsApi.setupUserQuestions()
+  const cleanup = effects[0]()
+  assert.equal(typeof injectCb, 'function')
+
+  // 服务后到时触发 inject 回调
+  injectCb({ get: (name) => (name === 'userQuestions' ? service : null) })
+  const res = await service.ask({ agent: { id: 'qq-session' } })
+  assert.equal(res.source, 'qq')
+
+  cleanup()
+  const after = await service.ask({ agent: { id: 'qq-session' } })
+  assert.equal(after.source, 'original')
+})

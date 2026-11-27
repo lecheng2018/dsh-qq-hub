@@ -73,12 +73,13 @@ export function createWalWriter(file, { threshold = DEFAULT_WAL_COMPACT_THRESHOL
   /**
    * 压缩：由调用方提供当前完整状态快照，写入主文件并截断 WAL。
    * critical=true 时走 requireBackup：主文件与 .bak 都必须写成，任一失败即抛给调用方 fail-closed。
+   * compact=true 写紧凑 JSON（台账快照不给人读，省一半体积）；precheck=false 跳过写前双读预检（启动已校验）。
    */
-  function compact(snapshot, { critical = false } = {}) {
+  function compact(snapshot, { critical = false, compact = true, precheck = true } = {}) {
     ensureDir(dirname(file))
     // 走既有 writeJsonWithBackup：保留「损坏原件隔离 + .bak 同步 + 失败即抛」语义，
     // 避免自行 writeFileSync 破坏 state-corruption 契约（无法隔离时必须 fail-closed）。
-    writeJsonWithBackup(file, snapshot, { validate, label, onError, requireBackup: critical })
+    writeJsonWithBackup(file, snapshot, { validate, label, onError, requireBackup: critical, compact, precheck })
     // 截断 WAL
     try { unlinkSync(walFile) } catch {}
     pendingEvents = 0

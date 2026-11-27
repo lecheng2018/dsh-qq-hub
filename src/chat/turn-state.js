@@ -10,7 +10,7 @@ export const TURN_STATES = Object.freeze(['pending', 'merging', 'running', 'succ
 
 /** 合法迁移表：键 = 当前态，值 = 允许迁往的态集合。 */
 const TRANSITIONS = Object.freeze({
-  pending: new Set(['merging', 'running', 'cancelled']),
+  pending: new Set(['merging', 'running', 'failed', 'cancelled']),
   merging: new Set(['pending', 'running', 'cancelled']),
   running: new Set(['succeeded', 'failed', 'cancelled']),
   succeeded: new Set(),

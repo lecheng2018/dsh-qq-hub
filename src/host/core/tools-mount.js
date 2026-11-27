@@ -116,6 +116,7 @@ export function createToolsMount({
     if (prev && prev.agent === agent && prev.key === key) return
     if (prev) for (const off of prev.offs) { try { off?.() } catch {} }
     const offs = []
+    let mounted = 0 // 真正新挂上的工具数：restrict 的 disposer 不计入（否则日志「新挂 N」虚高）
     try {
       const off = agent.ctx?.tools?.restrict?.({ deny: denied })
       if (typeof off === 'function') offs.push(off)
@@ -147,7 +148,10 @@ export function createToolsMount({
       }
       try {
         const off = agent.ctx?.tools?.register?.(registration)
-        if (typeof off === 'function') offs.push(off)
+        if (typeof off === 'function') {
+          offs.push(off)
+          mounted++
+        }
       } catch (error) {
         const msg = String(error?.message || error)
         if (msg.includes('already registered')) {
@@ -160,6 +164,7 @@ export function createToolsMount({
               const offRetry = agent.ctx?.tools?.register?.(registration)
               if (typeof offRetry === 'function') {
                 offs.push(offRetry)
+                mounted++
                 continue
               }
             }
@@ -172,7 +177,7 @@ export function createToolsMount({
       }
     }
     mountedTools.set(sessionId, { agent, key, offs })
-    debug(`模块工具 → ${chatKey}：新挂 ${offs.length}、已存在 ${already}、失败 ${failed}（清单 ${tools.length} 个）`)
+    debug(`模块工具 → ${chatKey}：新挂 ${mounted}、已存在 ${already}、失败 ${failed}（清单 ${tools.length} 个）`)
   }
 
   async function hydrateInboundFiles(members, chatKey) {
