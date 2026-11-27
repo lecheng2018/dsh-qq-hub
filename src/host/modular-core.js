@@ -1226,6 +1226,95 @@ export function createModularCore({
     log.warn(`回合被宿主归档门拦下（blocked）：${chatKey} 的会话已归档，下一条消息将换新会话`)
   }
 
+  // ---------- 回合失败回执（2026-11-27） ----------
+  // 问题：413 / 超时 / blocked 都有回执，**其余失败一律静默** —— 上游内容策略 403、限流 429、
+  // 模型抖动都会让这一轮在 QQ 侧一个字都不出现。用户只看到她「没听见」，只有翻后台日志
+  // 才知道被拒了（真机 11-27 14:29/14:30：两条「你不能帮我查保修吗」被网关
+  // codearts_upstream 403 判成非编程话题，QQ 上全程沉默）。
+  //
+  // 这里给「分类 + 限频回执」：让用户知道这轮没成、且不是她的态度问题，同时避免模型
+  // 持续挂掉时每轮刷屏（同聊天一个窗口内最多提示一次）。
+
+  const FAILURE_NOTICE_WINDOW_MS = 5 * 60_000
+  const failureNoticedAt = new Map() // chatKey → 上次发失败回执的时间
+
+  /** 上游内容策略拦截：只认「被服务端判敏感/不让答」这类，绝不是功能坏了。 */
+  const MODERATION_TEXT = /content.?policy|content_filter|finish_reason:\s*content_filter|input.?new.?sensitive|敏感内容|内容.{0,4}(审核|合规|敏感)|risk.?control|security_check|inappropriate|prohibited|无法提供|不能提供关于|not\s+able\s+to\s+(help|assist|provide)|"(?:1026|1027|2013)"/i
+  /** 限流 / 配额：等一会儿或换模型就能恢复，不是 permanente。 */
+  const RATE_LIMIT_TEXT = /429|rate.?limit|频率限制|quota|限额|额度|余额|冷却|reset_at|routing_cooldown|overloaded|capacity|限制器|无账号可转发/i
+  /** 上下文超窗（模型窗口不够，不是请求体字节过大）：提示用户会话已重置即可。 */
+  const CONTEXT_WINDOW_TEXT = /context.?window|上下文.{0,6}(超|满|不够|溢出)|maximum\s+context|too\s+many\s+tokens|CONTEXT_WINDOW_EXCEEDED/i
+
+  /**
+   * 把回合失败归类成用户能懂的一类。
+   * @param {unknown} error 失败原因（Error 或 DSH 的 failure 对象）
+   * @returns {{kind: string, text: string}} kind 用于日志/面板，text 是要发给用户的原话
+   */
+  function classifyTurnFailure(error) {
+    const msg = String(error?.failure?.message || error?.message || error || '')
+    const status = Number(error?.failure?.status || error?.status) || 0
+    if (MODERATION_TEXT.test(msg)) {
+      return {
+        kind: 'moderation',
+        text: '这条被模型服务端的内容审核拦了（不是我不理你，是上游直接拒了），换个说法再说一次？',
+      }
+    }
+    if (RATE_LIMIT_TEXT.test(msg) || status === 429) {
+      return {
+        kind: 'rate-limit',
+        text: '模型这会儿限流了，等一会儿再找我（或者换一个模型）。',
+      }
+    }
+    if (CONTEXT_WINDOW_TEXT.test(msg)) {
+      return {
+        kind: 'context-window',
+        text: '会话攒得太长，模型的窗口装不下了。你发下一条消息时我会重新开始（旧对话还归档着）。',
+      }
+    }
+    return {
+      kind: 'error',
+      text: '这轮没跑成（网络或模型那边抖了一下），再跟我说一次？',
+    }
+  }
+
+  /**
+   * 回合非 413 / 非超时 / 非 blocked 的失败：按类别发一条诚实的回执（限频）。
+   *
+   * 只锁「同一聊天 5 分钟一次」：模型持续挂掉时用户连续发消息不会刷屏；
+   * 但换了新消息时效过期，回执会再发一次 —— 不能让「沉默」长期成为默认。
+   * @param {string} chatKey 聊天键
+   * @param {unknown} error 失败原因
+   * @param {{notify?: boolean}} [opts] notify=false 时只记日志不发消息（试探/测试路径用）
+   * @returns {{kind: string, sent: boolean}} 分类结果与是否真的发出
+   */
+  function handleTurnFailure(chatKey, error, { notify = true } = {}) {
+    const key = String(chatKey || '')
+    const { kind, text } = classifyTurnFailure(error)
+    const detail = String(error?.failure?.message || error?.message || error || '').replace(/\s+/g, ' ').slice(0, 160)
+    log.warn(`回合失败（${kind}）：${key}${detail ? '：' + redact(detail) : ''}`)
+    if (!notify || !key) return { kind, sent: false }
+    // 主人私聊以外的群聊不发：群里一条失败回执等于当众解释技术故障，观感很差。
+    // 私聊（含主人）才发 —— 那是「她的对话被掐了」，应该让人知道。
+    if (!key.startsWith('private:')) return { kind, sent: false }
+    const now = Date.now()
+    const last = Number(failureNoticedAt.get(key) || 0)
+    if (last && now - last < FAILURE_NOTICE_WINDOW_MS) {
+      debug(`失败回执限频：${key} 距上次提示不足 ${Math.round(FAILURE_NOTICE_WINDOW_MS / 60000)} 分钟，只记日志`)
+      return { kind, sent: false }
+    }
+    failureNoticedAt.set(key, now)
+    if (failureNoticedAt.size > 200) {
+      // 环形自愈：删掉最早的一条，避免聊天数无限增长
+      const oldest = failureNoticedAt.keys().next().value
+      if (oldest !== undefined) failureNoticedAt.delete(oldest)
+    }
+    Promise.resolve(outbox.request({
+      chatKey: key, sourceModuleId: 'core',
+      segments: [{ type: 'text', data: { text } }],
+    })).catch((err) => debug(`失败回执没发出去：${err?.message || err}`))
+    return { kind, sent: true }
+  }
+
   const controller = createTurnController({
     log,
     maxQueue: Math.max(1, Number(process.env.QQHUB_MAX_QUEUE) || 50),
@@ -1588,6 +1677,10 @@ export function createModularCore({
         // followup 先于 turn/end 拒绝时（stream 非 200 起步即 413）：错误本身可能带 LlmError.failure
         //（HTTP status / code）。turn/end 路径之外唯一能拿到 status 的地方，同样要走自愈标记。
         if (turnFailureLooksOversized(followupError?.failure || followupError)) handleOversizedTurn(turn.chatKey, followupError?.failure || followupError)
+        // 非 413 / 非超时的失败要回执：上游内容策略、限流、模型抖动过去全是静默的（QQ 侧一个字都没有）。
+        // 413 已由上面 handleOversizedTurn 提示、超时由 handleTurnTimeout 提示，这里只补其余类别，
+        // 且内部按类别分类 + 5 分钟限频，不会刷屏。
+        else if (!followupError.turnTimedOut) handleTurnFailure(turn.chatKey, followupError)
         throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
       }
       followupDone = true
@@ -1603,7 +1696,19 @@ export function createModularCore({
         steeringChats.delete(turn.chatKey)
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
-        if (error.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
+        // 这是**最常见的失败出口**：等待 replyPromise 期间 turn/end 落了 error
+        //（上游 403/429、模型抖动都在这里）。之前只有 followupError 与 execute 最外层
+        // catch 补了回执，漏了这里 —— 真机 16:10 的 403 就走这条路，用户仍然看到静默。
+        //
+        // 但 **blocked 不能发**：那是宿主归档门在 pre-step 就拒了（一个模型调用都没发生），
+        // 属于「会话已归档 → 下一条消息自动换新会话」的自愈路径，本来就不该打扰用户
+        //（本轮的 handleArchivedTurn 已记标记 + 日志）。413 与超时同理各有专门回执。
+        const failureKind = String(error?.kind || error?.failure?.kind || '')
+        const alreadyNotified = error?.turnTimedOut
+          || failureKind === 'blocked'
+          || /回合未正常结束：blocked/.test(String(error?.message || ''))
+          || turnFailureLooksOversized(error?.failure || error)
+        if (!alreadyNotified) handleTurnFailure(turn.chatKey, error)
         throw error
       }
 
@@ -1667,6 +1772,14 @@ export function createModularCore({
         return { state, via: 'reply-delivery', failedCount: failed, attempted: delivered?.attempted, delivered: delivered?.delivered }
       } catch (error) {
         log.warn(`回复发送失败：${error?.message || error}`)
+        // 这里的 error 来自「回合没正常结束」（turn/end kind=error）或投递抛错。
+        // 413/超时/blocked 各自已有专门处理与回执，其余（上游内容审核 403、限流 429、
+        // 模型抖动）过去完全静默 —— 补一条分类回执，让用户知道这轮没成而不是「她不理人」。
+        try {
+          if (!error?.turnTimedOut && !turnFailureLooksOversized(error?.failure || error)) {
+            handleTurnFailure(turn.chatKey, error)
+          }
+        } catch { /* 回执失败绝不影响回合终态 */ }
         throw error
       }
       } finally {
@@ -2297,6 +2410,11 @@ export function createModularCore({
     services,
     // 测试出口：装配主链本身。
     assemblyForTest: assembly,
+    // 测试出口：回合失败分类与回执。
+    // 只抛分类器（纯函数）和回执器，让回归能直接验证「403→moderation」「429→rate-limit」
+    // 以及「群聊不发 / 私聊限频」这几条契约，不必真跑一轮模型。
+    classifyTurnFailure,
+    handleTurnFailure,
     dispatchLegacyEvent,
     dispatchLegacyEventSettled,
     runPromptTurn,
