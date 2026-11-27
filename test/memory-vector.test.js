@@ -250,3 +250,24 @@ test('cosine / l2normalize / embedKeyOf 口径', () => {
   const key = embedKeyOf({ text: '喜欢猫', tags: ['B站', '知识'], aboutName: '主人', entity: '', topic: '' })
   assert.ok(key.includes('喜欢猫') && key.includes('B站') && key.includes('主人'))
 })
+
+
+test('向量通道：alias 作用域（qq:10001 / private:10001）共用规范路径，backfill 不冲突', async () => {
+  const memDir = join(dir, 'channel-alias')
+  mkdirSync(memDir, { recursive: true })
+  const getConfig = () => ({ memory: { embeddings: { enabled: true, url: 'https://x', model: 'm', dim: 64, batch: 8 } } })
+  const ch = createVectorChannel({ memoryDir: memDir, getConfig, log: { warn: () => {} }, fetchImpl: fakeFetch })
+
+  ch.queueScope('private:10001', itemsOf([{ id: 'm1', text: '主人喜欢养猫', importance: 0.6 }]))
+  await ch.flush()
+
+  // backfill 传入 qq:10001 与 private:10001 映射到同一 vectors.bin，不应先删再重算
+  const bf = await ch.backfill(itemsOf([
+    { id: 'm1', text: '主人喜欢养猫', scope: 'qq:10001' },
+  ]))
+  assert.equal(bf.ok, true)
+  assert.equal(bf.embedded, 0, '同一规范路径下 hash 未变，不应误清后重算')
+  const hits = await ch.searchScopes('猫', ['private:10001'], { whitelistOf: () => new Set(['m1']), topK: 5 })
+  assert.equal(hits.length, 1)
+  ch.dispose()
+})

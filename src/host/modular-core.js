@@ -1008,6 +1008,16 @@ export function createModularCore({
   const ctxFallback = new Set() // 宿主已占用同名 context：退回「把背景拼进消息」
   const ctxFallbackDone = new Set() // 已经投过一次的会话（避免每轮重复注入）
   const lastInboundText = new Map() // chatKey -> 上一轮入站查询文本（供记忆短句追问 prevText 使用）
+  function rememberInboundText(chatKey, query) {
+    const text = String(query || '').slice(-300)
+    if (!text) return
+    lastInboundText.delete(chatKey)
+    if (lastInboundText.size >= 500) {
+      const oldest = lastInboundText.keys().next().value
+      if (oldest !== undefined) lastInboundText.delete(oldest)
+    }
+    lastInboundText.set(chatKey, text)
+  }
   const activeChatBySessionId = new Map() // sessionId -> chatKey（即时反查，为人设变量/工具判定提供毫秒级保障）
 
   /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
@@ -1313,13 +1323,6 @@ export function createModularCore({
         }, ...content]
       }
       const prevPromptText = lastInboundText.get(turn.chatKey) || ''
-      if (promptQuery) {
-        if (lastInboundText.size >= 500 && !lastInboundText.has(turn.chatKey)) {
-          const oldest = lastInboundText.keys().next().value
-          if (oldest !== undefined) lastInboundText.delete(oldest)
-        }
-        lastInboundText.set(turn.chatKey, String(promptQuery).slice(-300))
-      }
       if (typeof moduleHooks?.prompt === 'function') {
         const next = await moduleHooks.prompt(content, {
           chat, sessionId, senderId: chat.userId, prevText: prevPromptText, queryText: promptQuery,
@@ -1327,6 +1330,7 @@ export function createModularCore({
         if (next == null) return null
         content = next
       }
+      rememberInboundText(turn.chatKey, promptQuery)
       const ctxText = fragments.map((f) => f.content).join('\n')
       // 4. 驱动 DSH 会话轮次（resolveAgent → followup；steer 输入注册给后续转向）
       //    sessionController 只能走 ctx.get（真机报告 3：cordis 未声明 inject 的 .services 直接点会抛）
@@ -1354,13 +1358,13 @@ export function createModularCore({
           if (stickerPick) steerContent.push({ type: 'text', text: stickerHint(stickerPick) })
           const steerQuery = textOfSegments(inbound.segments)
           const prevSteerText = lastInboundText.get(turn.chatKey) || ''
-          if (steerQuery) lastInboundText.set(turn.chatKey, String(steerQuery).slice(-300))
           try { participants.note(String(sessionId), [String(inbound.sender?.userId || '')].filter(Boolean), { chatId: turn.chatKey, queryText: steerQuery }) } catch {}
           if (typeof moduleHooks?.prompt === 'function') {
             const next = await moduleHooks.prompt(steerContent, { chat, sessionId, senderId: chat.userId, prevText: prevSteerText, queryText: steerQuery, steer: true })
             if (next == null) return
             steerContent = next
           }
+          rememberInboundText(turn.chatKey, steerQuery)
           const admittedSteer = await admitContent(steerContent, {
             nickname: inbound.sender?.nickname || inbound.sender?.userId,
             hint: textOfSegments(inbound.segments), cfg: getConfig(), sessionId,
