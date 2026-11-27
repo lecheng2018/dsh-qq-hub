@@ -58,7 +58,6 @@ import { createHttpKit } from './host/http.js'
 import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { createModularCore } from './host/modular-core.js'
-import { createThreadLedger } from './chat/thread-ledger.js'
 import { createCurrentHub } from './host/current-hub.js'
 import { createModuleSendBridge } from './host/module-send-bridge.js'
 import { createHostEffects } from './host/effects.js'
@@ -333,51 +332,6 @@ export function apply(ctx) {
     return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
   }
 
-  // US-004 · 挂起线索账本：modular-core 只认 peek/resolve/advance 契约（不 import 实现），
-  // 由宿主在这里注入。不传的话 core 会「优雅降级」不注册线索 Provider——
-  // 那等于 602 行账本 + 时空延续 Provider 全部空转，所以这里必须给。
-  // 落盘的 dormant 归档交给 memory：线索沉淀进长期记忆，而不是单独再存一份文件。
-  const threadLedger = createThreadLedger({
-    onDormant: (payload) => {
-      try { use('memory')?.addEvent?.({ ...payload, kind: 'thread-dormant' }) } catch { /* 记忆模块关着就只丢归档，不影响线索本身 */ }
-    },
-  })
-  // 快照持久化（缺陷：账本纯内存，重启丢全部 active/extended 活线索）：
-  // 账本本体保持零 I/O，落盘在上层接驳——变更 debounce 落盘，启动时恢复重推。
-  // 只存活线索（active/extended）；dormant 已归档进记忆、resolved 已闭环，都不必存。
-  const threadFile = () => dataDir('threads.json')
-  let threadSaveTimer = null
-  const saveThreads = () => {
-    try {
-      const live = threadLedger.list({ status: ['active', 'extended'] })
-      writeJson(threadFile(), { version: 1, savedAt: Date.now(), threads: live })
-    } catch (error) { try { logger.debug?.('线索账本落盘失败：', error?.message || error) } catch { /* 不影响主链 */ } }
-  }
-  const scheduleThreadSave = () => {
-    if (threadSaveTimer) clearTimeout(threadSaveTimer)
-    threadSaveTimer = setTimeout(() => { threadSaveTimer = null; saveThreads() }, 2000)
-    threadSaveTimer.unref?.() // 落盘定时器不拖住进程退出
-  }
-  for (const method of ['push', 'advance', 'resolve', 'pruneExpired']) {
-    const orig = threadLedger[method]
-    threadLedger[method] = (...args) => {
-      const r = orig(...args)
-      scheduleThreadSave()
-      return r
-    }
-  }
-  // 启动恢复：重推快照里的活线索（createdAt/ttl 保真，过期条目由 pruneExpired 自然退役；
-  // recurrence 计数不保真——push 恢复从 1 起算，线索本身不失）。
-  try {
-    const saved = readJson(threadFile(), null)
-    for (const t of Array.isArray(saved?.threads) ? saved.threads : []) {
-      try {
-        if (!t?.chatKey || !t.type || !t.summary) continue
-        threadLedger.push({ chatKey: t.chatKey, type: t.type, summary: t.summary, ttlMs: t.ttlMs, createdAt: t.createdAt, id: t.id })
-      } catch { /* 单条坏数据不挡整体恢复 */ }
-    }
-  } catch { /* 读不到快照按空账本启动 */ }
-
   const modularCoreApi = createModularCore({
         dsh: ctx,
         onebot,
@@ -406,7 +360,6 @@ export function apply(ctx) {
         sessionStoreFile: dataDir('modular-sessions.json'),
         // 群刹车/话题状态落盘：重启后 said/interjects/engaged 不清零，避免重启即刷屏
         groupStateFile: dataDir('group-state.json'),
-        threadLedger,
         // 真机审计补齐：群闸的话题相关度（与 hub 同源注入）、静音、旁路指令、按聊天人设
         memoryScore: (text, chat) => { try { return use('memory')?.topicScore?.(text, chat) ?? 0 } catch { return 0 } },
         isMuted: (chatId) => mutes.muted(chatId),
@@ -512,10 +465,6 @@ export function apply(ctx) {
     listModels: models.listModels,
     defaultModel: () => defaultModel(ctx, { model: {} }),
     http: { body: readBody, raw: readRaw, query, send },
-    // 挂起线索账本的**只读**视图（list / stats）：模块能看「还有什么事没结」，
-    // 但写入仍走核心自己的 wiring（push/resolve/advance），避免模块把状态改坏。
-    // token-guardian 压缩时用它把「还没了结的事」并入摘要的 pending。
-    threads: threadLedger ? Object.freeze({ list: (o) => threadLedger.list(o), stats: () => threadLedger.stats() }) : undefined,
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }
@@ -597,7 +546,6 @@ export function apply(ctx) {
   ctx.effect(() => () => {
     interactions.questions.dispose('插件卸载')
     interactions.approvals.clear('插件卸载')
-    try { saveThreads() } catch { /* 线索账本收尾落盘失败不影响退出 */ }
     hub.disposeRecentMedia()
     mods.dispose()
     // 共享浏览器：先让模块停完（上面的 mods.dispose），再关浏览器和虚拟屏。

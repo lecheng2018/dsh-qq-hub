@@ -1,8 +1,7 @@
-// 回归（目的治理与线索持久化）：
+// 回归（目的治理）：
 // ① purpose 手动 fire 受配额熔断 / 道别静默期约束（不再绕过治理）
 // ② tick 配额耗尽时不追问也不开口（nudge 排在熔断判定之后）
 // ③ 熔炉素材挂 scope（私聊素材不再变 global，隐私单向流动）
-// ④ 线索账本快照语义（只存活线索、恢复重推）+ host 接线锁
 import { test, before, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
@@ -10,13 +9,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const OWNER = '10000001'
-const MIN = 60_000
 let createPurpose
-let createThreadLedger
 
 before(async () => {
   ;({ createPurpose } = await import('../src/purpose/module.js'))
-  ;({ createThreadLedger } = await import('../src/chat/thread-ledger.js'))
 })
 
 beforeEach(() => {
@@ -125,32 +121,4 @@ test('熔炉：私聊/记忆素材挂主人私聊 scope，不再落成 global', 
   for (const e of ingested) {
     assert.equal(e.scope, `private:${OWNER}`, `素材应挂主人私聊 scope（实际 ${e.scope || '（无）'}）：${e.title?.slice(0, 20)}`)
   }
-})
-
-// ---- ④ 线索快照 ----
-test('线索账本：快照只取活线索，恢复重推后可 peek', () => {
-  const a = createThreadLedger({})
-  a.push({ chatKey: 'private:10001', type: 'promise', summary: '约定明天分享新歌' })
-  a.push({ chatKey: 'private:10001', type: 'temporary_leave', summary: '去洗澡了稍后回来' })
-  const doneId = a.push({ chatKey: 'group:555', type: 'topic_postponed', summary: '话题被打断' }).id
-  a.resolve(doneId)
-  const snapshot = a.list({ status: ['active', 'extended'] })
-  assert.equal(snapshot.length, 2, '快照只含活线索（resolved 不入）')
-
-  const b = createThreadLedger({})
-  for (const t of snapshot) {
-    b.push({ chatKey: t.chatKey, type: t.type, summary: t.summary, ttlMs: t.ttlMs, createdAt: t.createdAt, id: t.id })
-  }
-  // peek 返回该聊天最近**一条**未闭环线索（单条或 null），不是数组
-  const hit = b.peek('private:10001')
-  assert.ok(hit, '恢复后可 peek')
-  assert.ok(['新歌', '洗澡'].some((w) => String(hit.summary).includes(w)), '恢复的线索内容保真')
-})
-
-test('线索接线：host 挂快照落盘、变更防抖、启动恢复', () => {
-  const src = readFileSync(new URL('../src/host.js', import.meta.url), 'utf8')
-  assert.match(src, /threadLedger\.list\(\{ status: \['active', 'extended'\] \}\)/, '快照只存活线索')
-  assert.match(src, /\['push', 'advance', 'resolve', 'pruneExpired'\]/, '变更点挂防抖落盘')
-  assert.match(src, /saveThreads\(\)/, 'dispose 收尾落盘')
-  assert.match(src, /readJson\(threadFile\(\), null\)/, '启动恢复读快照')
 })

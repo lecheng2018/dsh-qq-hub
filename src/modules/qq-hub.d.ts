@@ -221,14 +221,6 @@ export interface Api {
     local: any
     groupRoles: any
     mutes: { muted(chatId: string): boolean; set(chatId: string, minutes: number): void; clear(chatId: string): void }
-    /**
-     * 挂起线索账本的只读视图（「还有什么事没结」）。写入走核心自己的接线。
-     * 核心没挂线时可能是 undefined，用之前先判空。
-     */
-    threads?: {
-      list(o?: { chatKey?: string; status?: string | string[]; limit?: number; since?: number }): ThreadRecord[]
-      stats(): { threads: number; active: number; extended: number; dormant: number; resolved: number; pendingArchive: number; capacity: number }
-    }
     logger: any
     ask(opts: any): Promise<string>
     listModels(): Promise<{ provider: string; model: string; name: string }[]>

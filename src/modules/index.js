@@ -27,10 +27,9 @@ import profile from './profile/index.js'
 import contacts from './contacts/index.js'
 import tokenGuardian from './token-guardian/index.js'
 import tokenBilling from './token-billing/index.js'
-import affectiveGraph from './affective-graph/index.js'
 import completeGuard from './complete-guard/index.js'
 import memoryPrivacy from './memory-privacy/index.js'
 
 export const BUILTINS = [stickers, voice, memory, reflectionModule, styleModule, qqTools, groupAdmin, imagegen, diary, speakup, purpose, profile, contacts,
-  // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock 已按主人要求移除）
-  tokenGuardian, tokenBilling, affectiveGraph, completeGuard, memoryPrivacy]
+  // 移植自 h-D-ACE/dsh-qq 的增强套件（security-lock、affective-graph 已按主人要求移除）
+  tokenGuardian, tokenBilling, completeGuard, memoryPrivacy]

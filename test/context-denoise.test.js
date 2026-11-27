@@ -13,6 +13,8 @@ import { createMemoryStore } from '../src/features/memory.js'
 import { rulesText } from '../src/persona/personas.js'
 import { normalize } from '../src/core/config.js'
 import { createModularCore } from '../src/host/modular-core.js'
+import { BUILTINS } from '../src/modules/index.js'
+import { buildPurposePrompt } from '../src/purpose/engine/prompt.js'
 
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -160,4 +162,30 @@ test('群聊去噪：纯文字群消息尾巴不再重复贴 686 字协议说明
   } finally {
     await core.dispose()
   }
+})
+
+test('精简回归：移除 affective-graph、<inner> 独白协议与 purpose 硬猜情绪提示', () => {
+  assert.ok(!BUILTINS.some((m) => m.id === 'affective-graph'), 'BUILTINS 不再包含 affective-graph')
+
+  const protoPrivate = rulesText(normalize({ ownerName: '主人', voice: { enabled: false }, stickers: { faces: false } }), false)
+  const protoGroup = rulesText(normalize({ ownerName: '主人', voice: { enabled: false }, stickers: { faces: false } }), true)
+  for (const proto of [protoPrivate, protoGroup]) {
+    assert.doesNotMatch(proto, /心里先过一遍|<inner>|【顺承前情】/, 'L0 协议不再要求每轮写 <inner> 独白')
+  }
+
+  const purposePrompt = buildPurposePrompt({
+    ownerName: '主人',
+    ownerUin: '10000001',
+    drives: { share: 0.7, connect: 0.6 },
+    selected: {
+      need: 'connect',
+      action: 'confide',
+      text: '问问主人最近忙不忙',
+      emotion: 'lonely',
+      emotionLabel: '寂寞',
+      evidence: '两天没聊',
+    },
+  })
+  assert.doesNotMatch(purposePrompt, /心里隐约有点|说这句话时你心里有点|心里挺平静的/, 'purpose 提示词不再塞入关键词硬猜的情绪演戏提示')
+  assert.match(purposePrompt, /问问主人最近忙不忙/, '保留真实目标与素材方向')
 })

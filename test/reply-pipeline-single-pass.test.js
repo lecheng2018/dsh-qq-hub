@@ -225,7 +225,7 @@ test('Q06 · 试运行不产生已发副作用', async () => {
   assert.deepEqual(deliveredEvents, [])
 })
 
-test('P2 · 投递层返回钩子改写后的 replyRaw 与 innerMeta，下游消费改写后的内容', async () => {
+test('P2 · 投递层返回钩子改写后的 replyRaw，下游消费改写后的内容', async () => {
   const config = makeConfig()
   const delivery = createReplyDelivery({
     getConfig: () => config,
@@ -238,5 +238,4 @@ test('P2 · 投递层返回钩子改写后的 replyRaw 与 innerMeta，下游消
   })
   const res = await delivery.deliverNow('private:9', '<inner>【备忘】明天发你链接\n</inner>原始回答', { own: true })
   assert.equal(res.replyRaw, '改写后的回答')
-  assert.equal(res.innerMeta.memo, '')
 })

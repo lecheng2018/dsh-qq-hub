@@ -3178,7 +3178,7 @@ var EXT_GROUPS = [
   { id: "express", label: "表达与内容", ids: ["voice", "stickers", "imagegen", "diary", "qzone-social"] },
   { id: "platform", label: "平台", ids: ["bili", "douyin", "heybox", "multi-parser"] },
   { id: "memory", label: "记忆与主动", ids: ["memory", "reflection", "style", "memory-privacy", "speakup", "purpose"] },
-  { id: "govern", label: "治理与工具", ids: ["token-guardian", "token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts", "affective-graph"] }
+  { id: "govern", label: "治理与工具", ids: ["token-guardian", "token-billing", "complete-guard", "group-admin", "qq-tools", "profile", "contacts"] }
 ];
 var EXT_OTHER = { id: "other", label: "其他", ids: [] };
 var CORE_PAGES = ["连接", "权限", "人格", "聊天", "模型", "记忆", "本地接口"];
