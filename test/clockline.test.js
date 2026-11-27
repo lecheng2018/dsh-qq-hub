@@ -5,7 +5,11 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { stamp, formatGap, nowLine, agoLabel } from '../src/chat/clockline.js'
 
+// modular-core 拆出会话生命周期子模块后，「会话列表读持久化时间」这条实现落在
+// core/session-lifecycle.js（knownChats）——装配根 + 子模块拼起来才是完整的当前核心，
+// 与 test/hint-budget.test.js 的 SRC 拼接口径一致。
 const CORE = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
+  + '\n' + readFileSync(new URL('../src/host/core/session-lifecycle.js', import.meta.url), 'utf8')
 
 // 用一个固定时刻，免得测试跑在跨天/跨周时抖动（2026-11-05 是周四）
 const AT = new Date(2026, 10, 5, 22, 3, 0).getTime()
