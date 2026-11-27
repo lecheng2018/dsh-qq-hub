@@ -62,7 +62,7 @@ import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
-import { createTurnFailure } from './core/turn-failure.js'
+import { createTurnFailure, takePendingReset } from './core/turn-failure.js'
 import { createSessionLifecycle } from './core/session-lifecycle.js'
 import { createPromptContext } from './core/prompt-context.js'
 import { createToolsMount } from './core/tools-mount.js'
@@ -186,10 +186,9 @@ export function createModularCore({
   }
   const systemSessionIds = new Set() // systemTurns 后台会话 id（不进 chatOfSession，但供人设解析免误报回落告警）
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
-  const timedOutChats = new Set() // 超时时保留映射；下一条消息到来再归档重建
+  /** chatKey -> 'timedOut' | 'oversized' | 'archived'（下一次进入该聊天的回合时统一归档重建） */
+  const pendingResets = new Map()
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
-  const oversizedChats = new Set() // 服务端拒绝请求体过大（413/插件内存上限）；下一条消息到来再归档重建
-  const archivedChats = new Set() // 回合被 DSH 归档门拒绝（blocked）；下一条消息到来再换新会话（真机 2026-11-21）
   const contextResetChats = new Set() // 上下文超窗（context-window）：下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
@@ -580,11 +579,13 @@ export function createModularCore({
   // 与 execute 主链看同一份（拆的是实现，不是状态）。
 
   // 回合失败（超时 / 请求体过大 / 被归档门拦下）的标记与提示归子模块（core/turn-failure.js）。
-  // 三个「待归档」标记集合以活引用传入：execute / runPromptTurn 读的仍是同一份。
+  // 待重置标记表以活引用传入：execute / runPromptTurn 读的仍是同一份。
   const turnFailure = createTurnFailure({
     log, debug, getOutbox: () => outbox,
-    timedOutChats, oversizedChats, archivedChats,
+    pendingResets,
   })
+  // 注意：`handleTurnFailure` 这个名字已归 #263 的分类回执（本文件内定义）；子模块的统一分派
+  // 入口此处不取出（两侧语义不同，串了就丢回执）。三个既有 handler 直接取模块实现。
   const { handleTurnTimeout, turnFailureLooksOversized, handleOversizedTurn, handleArchivedTurn } = turnFailure
 
   // ---------- 回合失败回执（2026-11-27） ----------
@@ -753,16 +754,15 @@ export function createModularCore({
       // #263 的外层兜底要用它摘监听；本 commit 的收尾逻辑仍在装配根里（S2 才搬进执行器）。
       let cleanupTurnListener = () => {}
       try {
-      if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
-      // 上一轮因 413 / 请求体过大失败：归档旧会话重建。旧历史每轮重放必然再 413，只有换会话能救。
-      if (oversizedChats.delete(turn.chatKey)) {
+      // 上一轮失败留下的待重置标记：统一取出（取出即清除，同一个理由只 reset 一次）。
+      // 理由只决定要不要留原文案：413 与归档门各有一条既有 info（文案一字未改），超时原来不打日志。
+      const pendingReset = takePendingReset(pendingResets, turn.chatKey)
+      if (pendingReset) {
+        // 413 / 请求体过大：旧历史每轮重放必然再 413，只有换会话能救。
+        // 归档门 blocked：映射还指着已归档会话，不换就每轮都被拦。
         resetChat(turn.chatKey)
-        log.info(`请求体过大自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
-      }
-      // 上一轮被 DSH 归档门拦成 blocked：映射还指着已归档会话，不换就每轮都被拦。
-      if (archivedChats.delete(turn.chatKey)) {
-        resetChat(turn.chatKey)
-        log.info(`归档自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+        if (pendingReset === 'oversized') log.info(`请求体过大自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+        else if (pendingReset === 'archived') log.info(`归档自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
       }
       // 上一轮因模型上下文超窗（context-window）失败：归档旧会话重建，兑现「下一条消息重新开始」。
       if (contextResetChats.delete(turn.chatKey)) {
@@ -1508,11 +1508,11 @@ export function createModularCore({
   /** 主动任务共用一个 QQ/DSH 会话，只生成文本，不在这里自动投递（调用方仍走统一 Outbox）。 */
   async function runPromptTurn(chatKey, text) {
     return controller.runExclusive(chatKey, async () => {
-      if (timedOutChats.delete(chatKey)) resetChat(chatKey)
-      // 与主链同款：上次 413 失败的标记在下次进入时归档重建（后台任务也走同一份会话映射）。
-      if (oversizedChats.delete(chatKey)) resetChat(chatKey)
-      // 与主链同款：上次被归档门拦成 blocked 也换新会话（主动任务共用同一份映射）。
-      if (archivedChats.delete(chatKey)) resetChat(chatKey)
+      // 与主链同款：上次失败留下的待重置标记（超时 / 413 / 归档门 blocked）在下次进入时统一
+      // 取出并归档重建（后台任务共用同一份会话映射）。取出只做取出：这三个分支原本都不打日志，
+      // 这里也不打（文案差异留在 execute 那一侧，runPromptTurn 保持无声）。
+      const pendingReset = takePendingReset(pendingResets, chatKey)
+      if (pendingReset) resetChat(chatKey)
       // 与主链同款：上次上下文超窗也换新会话（主动任务共用同一份映射）。
       if (contextResetChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
