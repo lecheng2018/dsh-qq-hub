@@ -53,7 +53,7 @@ export async function hydrateForwards(members, onebot, log) {
 
 /** 这段文本里有没有「人话」：只有 `<sticker:…>` / `<poke>` / `![](…)` 这类控制标记时返回 ''。
  *
- *  真机 2026-11-23 15:01（群 900000001）：模型在**同一步**里写了正文、又调了 qq_send_sticker
+ *  真机 2026-11-23 15:01（群 900000001）：模型在**同一步**里写了正文、又调了 qq_send_sticker（pii-scan:ignore 示例群号）
  *  （工具立即直发一张表情），下一步收尾又把 `<sticker:无语>` 当正文 —— 旧实现只留末步文本，
  *  上一步已经写好的「就写点后端 天天看日志」凭空消失，群里只剩两张纯表情、一个字都没有。 */
 export function visibleTextOf(text) {

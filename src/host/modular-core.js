@@ -40,7 +40,7 @@ import { createDeliveryLedger } from '../chat/delivery-ledger.js'
 import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
-import { parseMessageEvent, cardText, neutralizeInboundDsl, stripInvisible } from '../chat/inbound.js'
+import { parseMessageEvent, neutralizeInboundDsl } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
@@ -48,25 +48,26 @@ import { wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor, personaHash } from '../persona/personas.js'
-import { workspaceDirOf, workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
+import { workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { readJson, writeJson } from '../core/store.js'
 import { policyFor, decideGroupReply } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
 import { gateFromEnv } from '../chat/group-atmosphere-gate.js'
 import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
-import { agoLabel, nowLine } from '../chat/clockline.js'
+import { nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
-import { readInboundFiles, inboundFileBlocks, inboundFileMaxBytes } from '../chat/inbound-files.js'
 import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
 import { createTurnFailure } from './core/turn-failure.js'
 import { createSessionLifecycle } from './core/session-lifecycle.js'
+import { createPromptContext } from './core/prompt-context.js'
+import { createToolsMount } from './core/tools-mount.js'
 import {
-  hydrateForwards, visibleTextOf, MAX_GROUP_MEDIA, mediaOfInbound, aclMsgFromInbound,
+  hydrateForwards, visibleTextOf, mediaOfInbound, aclMsgFromInbound,
   textOfSegments, emitActivity, segmentsToContent,
 } from './core/inbound-prep.js'
 
@@ -250,68 +251,6 @@ export function createModularCore({
     return true
   }
 
-  // ---------- 图片进历史的预算（按会话累计） ----------
-  // 服务端对「会话累计上下文 + 图片字节」有硬上限（真机 2026-11-19：413 plugin_request_too_large，
-  // 请求约 5.8 MiB、插件内存上限 64 MiB）。关键点：图片块一旦进历史，**之后每一轮都会重新发一遍**，
-  // 所以额度得按会话累加着算 —— 每轮重置等于没管。
-  //
-  // 额度用完后的新图不再进上下文，只留一句占位文字（不说「看不到」是骗人：确实没带进去）。
-  // 计数在 admit 之前累加（fail-closed）：admit 失败时那几张图也不会进历史，多算一点更安全。
-  //
-  // 已知边界：计数在内存里、按 sessionId 记；插件热重载/重启后从 0 重新算（历史里的图说不清大小）。
-  // 所以它只是「延缓增长」，兜底仍然是 413 自愈换会话。
-  const imageBudget = new Map() // sessionId → { images, bytes }
-  const IMAGE_BLOCK_DEFAULT_BYTES = 400 * 1024 // 只有 http(s) 地址、还没下载的图，按 400 KB 估
-  const imageBlockBytes = (block) => {
-    // 未下载的入站图分两种：已带 data（测试/本地已取字节）、url 是 base64://（内联）。两者都能算准；
-    // http(s) 地址此刻还没取字节，只能估 —— 真实字节由 inbound-images 下载后才知道，这里不追着改。
-    const encoded = typeof block?.data === 'string' && block.data
-      ? block.data
-      : typeof block?.url === 'string' && block.url.startsWith('base64://')
-        ? block.url.slice('base64://'.length)
-        : ''
-    if (encoded) return Math.ceil(encoded.length * 3 / 4)
-    const n = Number(block?.bytes)
-    return Number.isFinite(n) && n > 0 ? n : IMAGE_BLOCK_DEFAULT_BYTES
-  }
-  /** 按会话额度裁掉超出的图片块；返回裁剪后的内容与本次计入的用量。 */
-  function trimToImageBudget(content, sessionId, cfg) {
-    const budgetCfg = cfg?.imageBudget
-    if (!sessionId || budgetCfg?.enabled === false) return { content, added: { images: 0, bytes: 0 } }
-    if (!Array.isArray(content) || !content.some((b) => b?.type === 'image')) return { content, added: { images: 0, bytes: 0 } }
-    // 配置可能来自 normalize 之前（老配置文件 / 直接注入的 cfg）：缺字段时按默认额度来，
-    // 绝不能因为「没写 imageBudget」就当成 maxImages=0 把所有图都裁掉（那等于凭空关掉看图能力）。
-    const maxImages = budgetCfg?.maxImages === undefined ? 24 : Math.max(0, Number(budgetCfg.maxImages) || 0)
-    const maxMiB = budgetCfg?.maxMiB === undefined ? 12 : Math.max(0, Number(budgetCfg.maxMiB) || 0)
-    const maxBytes = maxMiB * 1024 * 1024
-    const used = imageBudget.get(sessionId) || { images: 0, bytes: 0 }
-    let images = used.images
-    let bytes = used.bytes
-    let dropped = 0
-    const kept = []
-    for (const block of content) {
-      if (block?.type !== 'image') { kept.push(block); continue }
-      const cost = imageBlockBytes(block)
-      // 已经超了就别再加；额度足够才收（同一轮里多张图按顺序收，先到先得）
-      if (images + 1 > maxImages || bytes + cost > maxBytes) { dropped++; continue }
-      images++
-      bytes += cost
-      kept.push(block)
-    }
-    const added = { images: images - used.images, bytes: bytes - used.bytes }
-    if (added.images > 0) imageBudget.set(sessionId, { images, bytes })
-    if (!dropped) return { content: kept, added }
-    kept.push({ type: 'text', text: `（这一轮有 ${dropped} 张图没带进上下文：本会话的图片额度用完了，只看得到文字。想让她看新图，可以让她重开一个会话。）` })
-    return { content: kept, added }
-  }
-  /** 让一个会话的图片额度归零（换会话/重置时调用）。 */
-  function resetImageBudget(sessionId) { if (sessionId) imageBudget.delete(String(sessionId)) }
-
-  const admitContent = async (content, context = {}) => {
-    const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
-    return inboundVision.admit(trimmed, context)
-  }
-
   const replyIdOf = (member) => String((member?.segments || []).find((s) => s?.type === 'reply')?.data?.id ?? '')
   const quotedInfo = (replyId, chatKey) => quotedMessages.get(replyId, chatKey)
 
@@ -324,22 +263,6 @@ export function createModularCore({
     // 引用正文挤进同一行后，模型读到了待回的内容，却按「这一行是谁发的」取编号，
     // 于是把对 A 的回应挂到 B 头上（`[20] o：5.3flash不好用` → 回给了 o，正文却答的是别人的 120token/s）。
     return `↳ 转述 ${who} 的话：「${body}」${q.media.length ? `，另有 ${q.media.length} 张图片/表情包` : ''}`
-  }
-
-  async function hydrateQuotes(members, chatKey) {
-    const out = []
-    for (const member of Array.isArray(members) ? members : []) {
-      const replyId = replyIdOf(member)
-      if (!replyId) { out.push(member); continue }
-      const quoted = await quotedInfo(replyId, chatKey)
-      const note = quoteNote(quoted)
-      out.push({
-        ...member,
-        quoteNote: note,
-        segments: [...(member.segments || []), { type: 'text', data: { text: `\n${note}` } }, ...quoted.media],
-      })
-    }
-    return out
   }
 
   // ---------- Session Registry（DSH 适配；preset 走 legacy levelFor/presetFor 语义） ----------
@@ -595,117 +518,6 @@ export function createModularCore({
     isCaptured: capture.isCaptured,
   })
 
-  // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
-  /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
-   *  未投喂最近 20 条 + 已投喂 8 条，带发言人标记与相对时间；主人只标「主人」不落号码。
-   *  引用正文由 quotedInfo 水合；<reply:n>/<at:> 与富媒体出站统一经当前 reply-delivery。 */
-  function groupPromptContent(chatKey, members, previousTurnAt, modeOverride) {
-    const gid = chatKey.slice(6)
-    const buf = groups.buffer(gid)
-    for (const m of (members || [])) {
-      if (m?.quoteNote && m?.messageId) {
-        const hit = buf.findLast?.((x) => String(x.mid) === String(m.messageId))
-        if (hit) hit.quoteNote = m.quoteNote
-      }
-    }
-    const fresh = buf.filter((x) => !x.fed).slice(-20)
-    const older = buf.filter((x) => x.fed).slice(-4)
-    // fed 不在这里标（缺陷：群缓冲静默丢消息）。旧版 `for (const x of buf) x.fed = true`
-    // 有两个丢消息口子：① 一次把整段 buf 标 fed，突发超过 20 条时**未选中**的新消息也被
-    // 标 fed，永远进不了上下文；② 标在 followup 之前，回合若在模型消费前失败，这些消息
-    // 已 fed，下轮不再喂。现只把**选中的 fresh** 作为 fedItems 返回，由 execute 在拿到回复
-    // （模型确实消费了这段输入）后才标 fed；失败路径不标 → 下轮重新作为 fresh 喂入。
-    const mode = modeOverride || 'must'
-    const nowAt = Date.now()
-    const ownerQQ = String(getConfig().ownerQQ || '')
-    // 昵称也是不可信原文：群昵称可被改成 `<inner>…</inner>`，它会拼进 `昵称(uid)：正文`
-  // 前缀里，绕过「只中和 segments[].data.text」的全部 4 层。所以这里过一遍中和。
-  // 同时清洗不可见字符（2026-11-23 事故：群友昵称带 \u200b，导致模型按视觉文本写 <reply:☆> 时严格比对失效）。
-  const safeNick = (v) => stripInvisible(neutralizeInboundDsl(String(v ?? ''))).trim() || String(v ?? '')
-  const whoOf = (x) => (ownerQQ && String(x.uid) === ownerQQ ? '主人' : `${safeNick(x.nick || x.uid)}(${x.uid})`)
-    // 群缓冲里的 x.text 是入站原文，同样必须中和（同 §4.3 防线；否则伪造标签从群聊路径进上下文）。
-    // 前情引用**挂在发言人那一块的下方**，用 `↳ 转述` 明确标出「这是别人的话」：
-    //   ① 不脱出成提示词末尾的孤立段落（那会造成编号错位，见 2026-11-16 事故）；
-    //   ② 也不挤进同一行（那会让模型把转述内容当成发言人自己说的，见 2026-11-20 事故）。
-    const block = (x) => {
-      const text = neutralizeInboundDsl(x.text)
-      const head = `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${text || (x.quoteNote ? '（本条没有正文，只在转述下面这条）' : '（图片/表情）')}`
-      if (!x.quoteNote) return head
-      return `${head}\n    ${neutralizeInboundDsl(x.quoteNote)}`
-    }
-    const name = groupNames.get(gid) || gid
-    const hint = mode === 'interject' ? '（没人叫你。只有你对这个话题真有话说、能自然接上时才插一句：接着话题说，别突然开新话题；接不上就只回 [沉默]）'
-      : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
-      : '（有人在叫你，看完这一段再回）'
-    const refs = {}
-    const numbered = fresh.map((x, i) => {
-      // nick 一并存进引用表：模型可以直接写 <reply:昵称> / <reply:QQ号> 而不必算编号
-      // （行内有「↳转述」时按名字引用真正说话的人，比数编号不容易挂错人）。
-      if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid, nick: safeNick(x.nick || x.uid), ...(ownerQQ && String(x.uid) === ownerQQ ? { owner: true } : {}) }
-      return `[${i + 1}] ${block(x)}`
-    })
-    groups.setRefs(gid, refs)
-    const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
-    const olderText = older.length ? older.map(block).join('\n') : ''
-    const freshText = numbered.join('\n')
-    // 群聊完整协议（整体来回 / ↳ 转述 / <reply:> / <at:>）已一次性放进 L0 协议层，
-    // 每轮群消息不再重复粘贴 686 字说明书；仅在当轮真的出现图片占位或转述时附 1 行按需提醒。
-    const hasMediaOrPlaceholder = olderText.includes('（图片/表情）')
-      || freshText.includes('（图片/表情）')
-      || members.some((m) => (m?.segments ?? []).some((s) => s?.type === 'image' || s?.type === 'mface'))
-      || fresh.some((x) => Array.isArray(x.images) && x.images.length > 0)
-    const hasQuoteRelay = olderText.includes('↳ 转述') || freshText.includes('↳ 转述')
-    const tailHints = []
-    if (hasMediaOrPlaceholder) {
-      tailHints.push('若只看到「图片/表情」占位，或明确提示当前模型看不了图，不得猜图中的人物、动作或内容；可以回应已有文字，没什么可说就只回 [沉默]。')
-    }
-    if (hasQuoteRelay) {
-      tailHints.push('（注：「↳ 转述」是引用别人的原话，原话主人是「↳ 转述」后面写的名字。）')
-    }
-    const head = (olderText ? `【群聊 ${name}】之前在聊：\n${olderText}\n\n` : '') +
-      `【群聊 ${name}】刚才新说的（${fresh.length} 条）${hint}\n${timeHead}\n${freshText}` +
-      (tailHints.length ? `\n\n${tailHints.join('\n')}` : '')
-    // 触发轮自身的图片一并附上；引用已由 quoteNote 挂在 block(x) 下方，不脱出做孤立段落。
-    // 没触发回合的那几条群消息带的图也在这里补：群缓冲里挂着 image 块，否则她只看得到
-    // 「（图片/表情）」文字，而触发轮 members 已经没有原始段可拼（真机：群里看不懂表情包）。
-    const extras = []
-    const seenMedia = new Set()
-    let mediaCount = 0
-    const addMedia = (block) => {
-      const url = String(block?.url || '')
-      if (!url || seenMedia.has(url) || mediaCount >= MAX_GROUP_MEDIA) return
-      seenMedia.add(url)
-      mediaCount++
-      extras.push(block)
-    }
-    for (const m of members) for (const s of (m?.segments ?? [])) {
-      if (s?.type === 'image' || s?.type === 'mface') addMedia({ type: 'image', url: String(s.data?.url || s.data?.file || '') })
-      // 收进来的文件正文/文件名同属入站原文，同样要中和（§4.3 第四落点在 groupPromptContent）。
-      // 注：这一层是**深度防御里的冗余层**——实测摘掉它测试全红不了，因为同一段文本
-      // 已在 :759（源头整块中和）中和过、且 neutralizeInboundDsl 幂等，此处的二次调用
-      // 结果完全相同。保留它是为了「extras 这一路将来若接入别处原文时仍有兜底」，
-      // 不是为了让某项测试变红。真正被断言锁住的是 :759（见 P1-d4/P1-d5）。
-      else if (s?.type === 'text' && s.data?.inboundFile) extras.push({ type: 'text', text: neutralizeInboundDsl(String(s.data.text || '')) })
-      else if (s?.type === 'json') extras.push({ type: 'text', text: neutralizeInboundDsl(cardText(s.data?.data)) })
-      else if (s?.type === 'xml') extras.push({ type: 'text', text: '[卡片消息]' })
-      else if (s?.type && !['text', 'reply', 'at', 'forward'].includes(s.type)) extras.push({ type: 'text', text: `\n[${s.type}]\n` })
-    }
-    // 同一段群里、没单独触发回复的消息也带图：随缓冲条目一起交给模型，最多 4 张。
-    // 取完即清，下一段 older 背景里不会把同一张图反复投喂。
-    const triggerMemberIds = new Set(members.map((m) => String(m?.messageId || '')).filter(Boolean))
-    for (const x of fresh) {
-      // 触发轮自己的图已在上面从 members 拼过，别按 URL 再补一份。
-      if (!triggerMemberIds.has(String(x.mid || ''))) for (const block of x.media || []) addMedia(block)
-      delete x.media
-    }
-    const direct = fresh.filter((x) => x.direct)
-    const directSenders = new Set(direct.map((x) => x.uid))
-    const target = directSenders.size === 1 ? direct.at(-1) : null
-    const autoReply = target ? { mid: target.mid, uid: target.uid } : null
-    const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
-    const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
-    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, query, speakers, fedItems: fresh }
-  }
   // 上下文/人设挂载：agent 级一次性注册（legacy mount 同型），text 闭包每轮读最新
   // 键必须是**会话 id**：resolveAgent 每轮返回新的 agent 包装对象，用对象做键永远不命中
   const ctxBoxes = new Map() // sessionId -> { text }
@@ -726,13 +538,33 @@ export function createModularCore({
   }
   const activeChatBySessionId = new Map() // sessionId -> chatKey（即时反查，为人设变量/工具判定提供毫秒级保障）
 
-  /** 每个会话挂一次模块工具（= legacy hub.mount 的工具部分；名字清单变了就整套重挂）。 */
-  const mountedTools = new Map() // sessionId -> { agent, key, offs }
-  const slowNoticeSent = new Set()
-  // 会话生命周期（清理 / 重置 / 人设变更重置 / 全量重置 / 孤儿巡检 / 清单 / 反查）归子模块
-  // （core/session-lifecycle.js）。会话状态表是 Map/Set 活引用：核心主链与它读写同一份。
+  // ---------- 工具挂载 / 入站补水 / 按会话图片额度（core/tools-mount.js） ----------
+  // 这三类只服务回合执行路径：把模块工具挂到 agent、把入站文件/引用水合成文本、按会话裁图进上下文。
+  // 状态表（mountedTools / slowNoticeSent / imageBudget）随实现搬进子模块，但以**活引用**交回这里 ——
+  // session-lifecycle 的 cleanupSession 与下面的 dispose / stats 读写的是同一份（搬实现，不复制状态）。
+  const toolsMount = createToolsMount({
+    getConfig, debug, log, onebot, chatViewFor, buildTools, toolsGeneration, moduleHooks,
+    // outbox 在本函数后面才装配：与原闭包一致，取用时才读（延迟读取，不抓快照）
+    getOutbox: () => outbox,
+    // 引用三件套留在装配根（入站主链 routeInboundCore 也要用），这里只把判定传过去
+    replyIdOf, quotedInfo, quoteNote,
+  })
+  const {
+    mountTools, hydrateInboundFiles, hydrateQuotes, trimToImageBudget, resetImageBudget,
+    mountedTools, slowNoticeSent,
+  } = toolsMount
+
+  const admitContent = async (content, context = {}) => {
+    const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
+    return inboundVision.admit(trimmed, context)
+  }
+
+  // 会话生命周期（清理 / 重置 / 人设变更重置 / 全量重置 / 孤儿巡检 / 清单 / 反查 / 会话取用）
+  // 归子模块（core/session-lifecycle.js）。会话状态表是 Map/Set 活引用：核心主链与它读写同一份；
+  // 人设目标以 currentPersonaTarget 取数注入（会话映射那一侧也读同一个，不复制快照）。
   const sessionLifecycle = createSessionLifecycle({
     dsh, getConfig, log, debug, onResetChat, ctxGet, chatViewFor,
+    currentPersonaTarget,
     registry, systemTurns, participants, groupNames, resetImageBudget,
     sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
     ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
@@ -740,195 +572,13 @@ export function createModularCore({
   })
   const {
     cleanupSession, resetChat, resetChatsForPersonaChange, resetAllSessions,
-    sweepOrphanSessions, knownChats, chatKeyOfSession,
+    sweepOrphanSessions, knownChats, chatKeyOfSession, sessionForChat,
   } = sessionLifecycle
 
-  // 会话取用 / 轮换 / 归档探测留在装配根：它是「每一轮的唯一入口」（execute 与 runPromptTurn
-  // 都过这里），必须与 execute 的会话状态（人设指纹、回合计数、图片额度）在同一处看。
+  // 会话取用 / 轮换 / 归档探测（sessionForChat）同样在子模块里：它是「每一轮的唯一入口」
+  // （execute 与 runPromptTurn 都过这里）；它读的人设指纹、回合计数、图片额度都是活引用，
+  // 与 execute 主链看同一份（拆的是实现，不是状态）。
 
-  /** 这个会话该不该退休：回合数或年龄任一超过阈值就算该换（填 0 的那一项不参与判定）。 */
-  function sessionRetired(entry, cfg) {
-    const rot = cfg?.sessionRotation
-    if (!rot || rot.enabled === false) return ''
-    const turns = sessionTurns.get(String(entry.sessionId)) || 0
-    const maxTurns = Number(rot.maxTurns) || 0
-    if (maxTurns > 0 && turns >= maxTurns) return `${turns} 轮（上限 ${maxTurns}）`
-    const maxAgeMs = (Number(rot.maxAgeHours) || 0) * 3600_000
-    const createdAt = Number(entry.createdAt) || 0
-    if (maxAgeMs > 0 && createdAt > 0 && Date.now() - createdAt >= maxAgeMs) {
-      return `会话已 ${Math.round((Date.now() - createdAt) / 3600_000)} 小时（上限 ${Math.round(maxAgeMs / 3600_000)} 小时）`
-    }
-    return ''
-  }
-
-  /**
-   * 这个会话是不是已经被 DSH 归档了。
-   *
-   * DSH 有一个常驻、关不掉的 `archived-session-gate`（dsh-api-session-controller）：
-   * 对已归档会话的**每一步**返回 `{ kind: 'reject' }`，agent-loop 随即把回合落成
-   * `turn/end reason.kind === 'blocked'` —— 一个模型调用都不会发生。
-   *
-   * 本插件此前从不问这件事：映射里存着的 sessionId 一旦在 DSH 侧被归档（用户手动归档/
-   * 批量归档/第三方插件），之后每一轮都必然 blocked，而且 blocked 不命中超时自愈也不命中
-   * 413 自愈，于是这个聊天**永久卡死**（真机 2026-11-21：群 900000003 连续 5 轮 blocked，
-   * 会话日志里 turn/start 与 turn/end 之间没有 step/start）。
-   *
-   * 归档是「侧栏里藏起来」而不是删除：会话文件还在，随时能找回。所以这里只做**分流**——
-   * 已归档 → 映射作废、开新会话，旧会话原样留在归档里可检索。
-   * @param {string} sessionId 待查会话。
-   * @returns {boolean} 是否已归档。
-   */
-  function isSessionArchived(sessionId) {
-    const sid = String(sessionId || '')
-    if (!sid) return false
-    try {
-      const reg = ctxGet('workspaceRegistry')
-      const ids = reg?.archivedSessionIds
-      if (!ids) return false
-      return typeof ids.includes === 'function' ? ids.includes(sid) : Array.from(ids).includes(sid)
-    } catch { return false } // 查不到就当没归档，绝不因为探测失败而误换会话
-  }
-
-  async function sessionForChat(chatKey) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const entry = await registry.sessionFor(chatKey)
-      if (registry.peek(chatKey)?.sessionId !== entry.sessionId) continue
-      const want = currentPersonaTarget(chatKey)
-      let persona = sessionPersonas.get(chatKey)
-      if (!persona || persona.sessionId !== entry.sessionId) {
-        persona = { sessionId: entry.sessionId, personaId: want.id, personaHash: want.hash }
-        sessionPersonas.set(chatKey, persona)
-      }
-      // 归档判定放在人设/轮换之前：已归档的会话不管用得多新，**根本跑不了回合**，
-      // 换不换人设都没有意义（而且不先救这一条，下面的人设分支也会一直 continue 到抛异常）。
-      if (isSessionArchived(entry.sessionId)) {
-        log.info(`会话已被 DSH 归档：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 跑不了回合，重开新会话`)
-        resetChat(chatKey)
-        continue
-      }
-      if (!personaStale(persona, entry.sessionId, want)) {
-        // 会话轮换：用太久/聊太多轮就归档重开。判在 sessionForChat 里是因为它是**每一轮的唯一入口**
-        // （execute 与 runPromptTurn 都过这里），放别处会漏掉主动回合。
-        // 放在人设判定之后：人设不对本来就该换，不必再谈退休。
-        const retired = sessionRetired(entry, getConfig())
-        if (retired) {
-          log.info(`会话轮换：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 已用 ${retired}，归档重开`)
-          resetChat(chatKey)
-          continue
-        }
-        sessionTurns.set(String(entry.sessionId), (sessionTurns.get(String(entry.sessionId)) || 0) + 1)
-        return entry
-      }
-      resetChat(chatKey)
-    }
-    throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
-  }
-  function mountTools(agent, chatKey, sessionId) {
-    slowNoticeSent.delete(sessionId)
-    if (typeof buildTools !== 'function') return
-    const cfg = getConfig()
-    const level = levelFor(cfg, aclMsgFromInbound({ chatKey }))
-    if (level === 'chat') return // 系统会话不挂业务工具（同 legacy）
-    const parts = String(chatKey).split(':')
-    const chat = parts[0] === 'group'
-      ? { chatId: chatKey, kind: 'group', groupId: parts[1], userId: '', nickname: '' }
-      : { chatId: chatKey, kind: 'private', userId: parts[1], groupId: '', nickname: cfg.ownerName || '' }
-    let tools = []
-    try { tools = buildTools({ chat, level, sessionId }) || [] } catch (error) { debug(`工具生成失败：${error?.message || error}`); return }
-    let gen = 0
-    try { gen = typeof toolsGeneration === 'function' ? Number(toolsGeneration()) || 0 : 0 } catch { gen = 0 }
-    let denied = []
-    try { denied = moduleHooks?.deniedTools?.() || [] } catch {}
-    const key = `${tools.map((t) => t.name).sort().join(',')}|gen:${gen}|deny:${[...denied].sort().join(',')}`
-    const prev = mountedTools.get(sessionId)
-    if (prev && prev.agent === agent && prev.key === key) return
-    if (prev) for (const off of prev.offs) { try { off?.() } catch {} }
-    const offs = []
-    try {
-      const off = agent.ctx?.tools?.restrict?.({ deny: denied })
-      if (typeof off === 'function') offs.push(off)
-    } catch (error) { debug(`联动工具屏蔽失败：${error?.message || error}`) }
-    let already = 0
-    let failed = 0
-    for (const tool of tools) {
-      let registration = tool
-      if (tool.slow) {
-        const { slow, ...base } = tool
-        const notice = typeof slow === 'string' ? slow : '好，我这就去做，做完跟你说一声。'
-        registration = {
-          ...base,
-          async execute(args, exec) {
-            let fired = false
-            const timer = setTimeout(() => {
-              if (fired || slowNoticeSent.has(sessionId)) return
-              fired = true
-              slowNoticeSent.add(sessionId)
-              Promise.resolve(outbox.request({
-                chatKey, sourceModuleId: 'core',
-                segments: [{ type: 'text', data: { text: notice } }],
-              })).catch((error) => debug(`慢工具提示没发出去：${error?.message || error}`))
-            }, 1500)
-            timer.unref?.()
-            try { return await tool.execute(args, exec) } finally { clearTimeout(timer) }
-          },
-        }
-      }
-      try {
-        const off = agent.ctx?.tools?.register?.(registration)
-        if (typeof off === 'function') offs.push(off)
-      } catch (error) {
-        const msg = String(error?.message || error)
-        if (msg.includes('already registered')) {
-          try {
-            // 热重载保护：若会话作用域内残留同名工具，从作用域层强制移除旧登记项并重挂新实例
-            const scope = agent.ctx?._scope || agent.ctx
-            const layer = agent.ctx?.tools?.layers?.peek?.(scope)
-            if (layer?.tools?.data?.has?.(tool.name)) {
-              layer.tools.data.delete(tool.name)
-              const offRetry = agent.ctx?.tools?.register?.(registration)
-              if (typeof offRetry === 'function') {
-                offs.push(offRetry)
-                continue
-              }
-            }
-          } catch {}
-          already++
-        } else {
-          failed++
-          debug(`工具 ${tool?.name} 挂载失败：${msg}`)
-        }
-      }
-    }
-    mountedTools.set(sessionId, { agent, key, offs })
-    debug(`模块工具 → ${chatKey}：新挂 ${offs.length}、已存在 ${already}、失败 ${failed}（清单 ${tools.length} 个）`)
-  }
-  async function hydrateInboundFiles(members, chatKey) {
-    const out = []
-    // 入站单文件上限跟随面板里的 files.maxMB（和出站发文件同一个开关，默认 50MB）。
-    // 原先这里吃 readInboundFiles 写死的 20MB 默认值，而面板只调得到出站，于是主人发个
-    // 37MB 的包会被直接挡在下载前（2026-11-22 实测：「文件太大了（37MB > 20MB）」）。
-    const inboundMaxBytes = inboundFileMaxBytes(getConfig())
-    for (const member of members) {
-      const fileSegments = (member.segments || []).filter((segment) => segment?.type === 'file')
-      if (!fileSegments.length) { out.push(member); continue }
-      const memberChat = chatViewFor(chatKey, [member])
-      const files = await readInboundFiles({
-        kind: memberChat.kind, userId: memberChat.userId, groupId: memberChat.groupId, files: fileSegments,
-      }, { onebot, workspaceDir: workspaceDirOf(getConfig()), log, maxBytes: inboundMaxBytes })
-      if (files.length) log.info(`${chatKey} 收到 ${files.length} 个文件：` + files.map((file) => file.name).join('、'))
-      out.push({
-        ...member,
-        segments: [
-          ...(member.segments || []).filter((segment) => segment?.type !== 'file'),
-          // 文件块是「抬头 + 正文」一整段，正文是纯入站原文：必须在源头就整块中和，
-          // 否则换个下游渲染点（如私聊 steer）就漏出裸 DSL。此处与 groupPromptContent 的
-          // inboundFile 落点构成双保险（neutralizeInboundDsl 幂等，不会二次转义）。
-          ...inboundFileBlocks(files, member.sender?.nickname || memberChat.userId).map((block) => ({ type: 'text', data: { text: neutralizeInboundDsl(block.text), inboundFile: true } })),
-        ],
-      })
-    }
-    return out
-  }
   // 回合失败（超时 / 请求体过大 / 被归档门拦下）的标记与提示归子模块（core/turn-failure.js）。
   // 三个「待归档」标记集合以活引用传入：execute / runPromptTurn 读的仍是同一份。
   const turnFailure = createTurnFailure({
@@ -1083,6 +733,11 @@ export function createModularCore({
     }
     return { kind, sent: true }
   }
+  // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
+  // 群聊上下文拼接归子模块（core/prompt-context.js 的 groupPromptContent）：它读的群缓冲 /
+  // 群名缓存都是活引用，execute 主链拿到的 blocks / refs / fedItems 与拆分前是同一份对象。
+  const promptContext = createPromptContext({ getConfig, groups, groupNames })
+  const { groupPromptContent } = promptContext
 
   const controller = createTurnController({
     log,

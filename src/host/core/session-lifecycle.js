@@ -1,4 +1,5 @@
-// 会话生命周期：清理、重置、人设变更重置、全量重置、孤儿巡检、聊天清单、会话反查。
+// 会话生命周期：清理、重置、人设变更重置、全量重置、孤儿巡检、聊天清单、会话反查，
+// 以及「每一轮的唯一入口」会话取用 / 轮换 / 归档探测。
 //
 // 从 host/modular-core.js 原样搬出（纯结构重构，行为逐行一致）。
 // 这些函数原来直接读写核心闭包里的会话状态表（mountedTools / ctxBoxes / personaBound /
@@ -15,6 +16,7 @@ import { workspaceDirOf } from '../../chat/workspace.js'
 
 export function createSessionLifecycle({
   dsh, getConfig, log, debug, onResetChat, ctxGet, chatViewFor,
+  currentPersonaTarget,
   registry, systemTurns, participants, groupNames, resetImageBudget,
   sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
   ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
@@ -252,6 +254,96 @@ export function createSessionLifecycle({
     return ''
   }
 
+  // ---------- 会话取用 / 轮换 / 归档探测（第二轮从装配根搬入） ----------
+  // 这三件事是「每一轮的唯一入口」（execute 与 runPromptTurn 都过 sessionForChat），
+  // 读的人设指纹 / 回合计数都是本模块已有的活引用（sessionPersonas / sessionTurns），
+  // currentPersonaTarget 以取数函数注入（它同时被装配根的会话映射读写，不复制）。
+  // 实现按行原样搬出，未改任何判定顺序、错误文案或日志文本。
+
+  /** 会话里固化的那份 vs 现在该用的那份：id 或正文指纹任一不同就算过期。 */
+  const personaStale = (persona, sessionId, want) => !persona
+    || String(persona.sessionId || '') !== String(sessionId || '')
+    || String(persona.personaId || '') !== want.id
+    || String(persona.personaHash || '') !== want.hash
+
+  /** 这个会话该不该退休：回合数或年龄任一超过阈值就算该换（填 0 的那一项不参与判定）。 */
+  function sessionRetired(entry, cfg) {
+    const rot = cfg?.sessionRotation
+    if (!rot || rot.enabled === false) return ''
+    const turns = sessionTurns.get(String(entry.sessionId)) || 0
+    const maxTurns = Number(rot.maxTurns) || 0
+    if (maxTurns > 0 && turns >= maxTurns) return `${turns} 轮（上限 ${maxTurns}）`
+    const maxAgeMs = (Number(rot.maxAgeHours) || 0) * 3600_000
+    const createdAt = Number(entry.createdAt) || 0
+    if (maxAgeMs > 0 && createdAt > 0 && Date.now() - createdAt >= maxAgeMs) {
+      return `会话已 ${Math.round((Date.now() - createdAt) / 3600_000)} 小时（上限 ${Math.round(maxAgeMs / 3600_000)} 小时）`
+    }
+    return ''
+  }
+
+  /**
+   * 这个会话是不是已经被 DSH 归档了。
+   *
+   * DSH 有一个常驻、关不掉的 `archived-session-gate`（dsh-api-session-controller）：
+   * 对已归档会话的**每一步**返回 `{ kind: 'reject' }`，agent-loop 随即把回合落成
+   * `turn/end reason.kind === 'blocked'` —— 一个模型调用都不会发生。
+   *
+   * 本插件此前从不问这件事：映射里存着的 sessionId 一旦在 DSH 侧被归档（用户手动归档/
+   * 批量归档/第三方插件），之后每一轮都必然 blocked，而且 blocked 不命中超时自愈也不命中
+   * 413 自愈，于是这个聊天**永久卡死**（真机 2026-11-21：群 900000003 连续 5 轮 blocked，pii-scan:ignore 示例群号，
+   * 会话日志里 turn/start 与 turn/end 之间没有 step/start）。
+   *
+   * 归档是「侧栏里藏起来」而不是删除：会话文件还在，随时能找回。所以这里只做**分流**——
+   * 已归档 → 映射作废、开新会话，旧会话原样留在归档里可检索。
+   * @param {string} sessionId 待查会话。
+   * @returns {boolean} 是否已归档。
+   */
+  function isSessionArchived(sessionId) {
+    const sid = String(sessionId || '')
+    if (!sid) return false
+    try {
+      const reg = ctxGet('workspaceRegistry')
+      const ids = reg?.archivedSessionIds
+      if (!ids) return false
+      return typeof ids.includes === 'function' ? ids.includes(sid) : Array.from(ids).includes(sid)
+    } catch { return false } // 查不到就当没归档，绝不因为探测失败而误换会话
+  }
+
+  async function sessionForChat(chatKey) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const entry = await registry.sessionFor(chatKey)
+      if (registry.peek(chatKey)?.sessionId !== entry.sessionId) continue
+      const want = currentPersonaTarget(chatKey)
+      let persona = sessionPersonas.get(chatKey)
+      if (!persona || persona.sessionId !== entry.sessionId) {
+        persona = { sessionId: entry.sessionId, personaId: want.id, personaHash: want.hash }
+        sessionPersonas.set(chatKey, persona)
+      }
+      // 归档判定放在人设/轮换之前：已归档的会话不管用得多新，**根本跑不了回合**，
+      // 换不换人设都没有意义（而且不先救这一条，下面的人设分支也会一直 continue 到抛异常）。
+      if (isSessionArchived(entry.sessionId)) {
+        log.info(`会话已被 DSH 归档：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 跑不了回合，重开新会话`)
+        resetChat(chatKey)
+        continue
+      }
+      if (!personaStale(persona, entry.sessionId, want)) {
+        // 会话轮换：用太久/聊太多轮就归档重开。判在 sessionForChat 里是因为它是**每一轮的唯一入口**
+        // （execute 与 runPromptTurn 都过这里），放别处会漏掉主动回合。
+        // 放在人设判定之后：人设不对本来就该换，不必再谈退休。
+        const retired = sessionRetired(entry, getConfig())
+        if (retired) {
+          log.info(`会话轮换：${chatKey} 的会话 ${String(entry.sessionId).slice(-8)} 已用 ${retired}，归档重开`)
+          resetChat(chatKey)
+          continue
+        }
+        sessionTurns.set(String(entry.sessionId), (sessionTurns.get(String(entry.sessionId)) || 0) + 1)
+        return entry
+      }
+      resetChat(chatKey)
+    }
+    throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
+  }
+
   return {
     cleanupSession,
     resetChat,
@@ -260,5 +352,8 @@ export function createSessionLifecycle({
     sweepOrphanSessions,
     knownChats,
     chatKeyOfSession,
+    sessionForChat,
+    isSessionArchived,
+    sessionRetired,
   }
 }

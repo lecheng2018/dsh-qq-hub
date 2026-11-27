@@ -10,7 +10,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
+// 会话守卫（personaStale）已随第二轮拆分搬进 core/session-lifecycle.js：
+// 断言目标按「装配根 + 子模块」拼接扫，与 test/clockline.test.js 的 CORE 拼接口径一致。
 const CORE = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
+  + '\n' + readFileSync(join(ROOT, 'src/host/core/session-lifecycle.js'), 'utf8')
 const HOST = readFileSync(join(ROOT, 'src/host.js'), 'utf8')
 const PERSONAS = readFileSync(join(ROOT, 'src/persona/personas.js'), 'utf8')
 
