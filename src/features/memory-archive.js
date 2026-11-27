@@ -350,7 +350,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     const s = load()
     const r = applyAdd(s, entry)
     if (!r.ok) return r
-    if (!r.deduped) s.rev = (s.rev || 0) + 1
+    s.rev = (s.rev || 0) + 1
     save(s)
     return { ok: true, message: '✓', ...(r.updated ? { updated: r.updated } : { id: r.id }) }
   }
@@ -376,7 +376,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     let skipped = 0
     let rejected = null
     for (const entry of list) {
-      const r = applyAdd(s, entry)
+      const r = applyAdd(s, entry, { evict: false })
       if (!r.ok) {
         skipped++
         rejected ||= r.message // 留住第一条拒绝原因，便于面板/日志排查
@@ -402,7 +402,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
    * 保证两条路径的去重/配额/作用域口径完全一致）。
    * @returns {{ok:boolean, message?:string, id?:string, updated?:string, deduped?:boolean, scope?:string}}
    */
-  function applyAdd(s, entry = {}) {
+  function applyAdd(s, entry = {}, { evict = true } = {}) {
     const {
       text, about = '', aboutName = '', tags = [], importance = 0.5,
       source = 'tool', sourceId = '', chatId = '', scope = '',
@@ -517,7 +517,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
     s.items.push(normalizedItem)
     // 单条路径要立刻淘汰（不留超额）；批量路径由 addMany 在最后统一淘汰一次，省掉 O(n²)。
-    if (s.items.length > quotaForScope(finalScope)) evictIfNeeded(s, finalScope)
+    if (evict && s.items.length > quotaForScope(finalScope)) evictIfNeeded(s, finalScope)
     // 纯新增事实不推翻旧事实：标记待刷新（staleReason:'append'），整理时会重建，期间仍降级可读避免人物档案大面积失明。
     staleProfilesIn(s, String(about || ''), finalScope, { reason: 'append' })
     return { ok: true, message: '✓', id: normalizedItem.id, scope: finalScope }

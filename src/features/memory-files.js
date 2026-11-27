@@ -239,7 +239,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             retention: Number(e.retention || 0),
             embeddedAt: Number(e.embeddedAt || 0),
             supersededBy: e.supersededBy || undefined,
-            history: Array.isArray(e.history) ? e.history.slice() : undefined,
+            history: Array.isArray(e.history) ? e.history.map((h) => (h && typeof h === 'object' ? { ...h } : h)) : undefined,
             ephemeral: e.ephemeral ? 1 : undefined,
             title: e.title || undefined,
             evidence: e.evidence || undefined,
@@ -309,6 +309,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
     // 上面 items/profiles/insights/... 每个元素本来就是新建对象，深拷贝 815 条纯属白花
     // 4.9ms/次，而 load() 是每轮聊天 + 每条群消息都要走的固定税。
     const shallow = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : (v || {}))
+    const lastConsolidate = shallow(stateSnapshot.lastConsolidate)
+    if (lastConsolidate.retry && typeof lastConsolidate.retry === 'object') {
+      lastConsolidate.retry = { ...lastConsolidate.retry }
+    }
     return {
       items,
       profiles,
@@ -320,7 +324,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       processedSources: shallow(stateSnapshot.processedSources),
       extractionBatches: shallow(stateSnapshot.extractionBatches),
       runs: shallow(stateSnapshot.runs),
-      lastConsolidate: shallow(stateSnapshot.lastConsolidate),
+      lastConsolidate,
       rev,
     }
   }

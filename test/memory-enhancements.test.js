@@ -334,15 +334,19 @@ test('addMany：一次落盘，不会为每条都写一遍（整理 373 条不�
   })
   t.after(() => store.dispose())
 
-  // 塞满一个作用域配额（private 配额 300）
-  for (let i = 0; i < 300; i++) store.add({ text: `预置${i}号${'甲乙丙丁戊己庚辛壬癸'[i % 10]}类事项`, scope: 'private:10009' })
+  // 塞满一个作用域配额（private 配额 300）：用互不重合的整词编码确保真正留存 300 条而不去重合并
+  for (let i = 0; i < 300; i++) {
+    store.add({ text: `seed_${i}_tok_${(i * 2654435761 >>> 0).toString(36)}`, scope: 'private:10009' })
+  }
+  assert.equal(store.listFor(['private:10009'], { limit: 400 }).length, 300, '预置应真正装满 300 条')
   infos.length = 0 // 清掉预置阶段的日志
   store.addMany(Array.from({ length: 60 }, (_, i) => ({
-    text: `批量新增第${i}号${String(i * 7919).split('').map((d) => '零一二三四五六七八九'[+d]).join('')}记录`,
+    text: `batch_${i}_tok_${((i + 1000) * 2654435761 >>> 0).toString(36)}`,
     scope: 'private:10009', importance: 0.6, source: 'auto',
   })))
+  assert.equal(store.listFor(['private:10009'], { limit: 400 }).length, 300, '超出配额后应裁回 300 条')
   const evictLogs = infos.filter((l) => l.includes('淘汰'))
-  assert.ok(evictLogs.length <= 1, `淘汰日志应合并成一条，实际 ${evictLogs.length} 条：${JSON.stringify(evictLogs.slice(0, 3))}`)
+  assert.equal(evictLogs.length, 1, `淘汰日志应合并成一条，实际 ${evictLogs.length} 条：${JSON.stringify(evictLogs.slice(0, 3))}`)
 })
 
 test('load() 去掉深拷贝后：数组字段仍是副本，原地改返回值不能污染内存快照', async (t) => {
@@ -360,4 +364,38 @@ test('load() 去掉深拷贝后：数组字段仍是副本，原地改返回值�
 
   const second = store.listFor(['private:10001'])[0]
   assert.deepEqual(second.tags, ['原标签'], 'tags 必须是副本，原地改不能回流到内存快照')
+})
+
+test('add() 去重合并同样更新索引；lastConsolidate().retry 改动不污染内部快照', async (t) => {
+  const dir = withTempData(t)
+  writeFileSync(join(dir, 'memory', 'state.json'), JSON.stringify({
+    version: 1,
+    hits: {},
+    processed: {},
+    processedSources: {},
+    extractionBatches: {},
+    runs: {},
+    lastConsolidate: { at: 12345, retry: { count: 1, nextAt: 999 } },
+    insightNames: {},
+  }))
+  const store = createMemoryStore({
+    dsh: {}, getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }), log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const r1 = store.add({ text: '小李在杭州西湖边工作平时很喜欢喝龙井茶', scope: 'private:10004' })
+  assert.ok(r1.id)
+  const chat = { kind: 'private', userId: '10004' }
+  // 先建一次作用域索引缓存
+  assert.equal(store.recall('杭州', { chat }).length, 1)
+  // 命中去重并补充新词：索引缓存必须失效，新词可立即召回
+  const r2 = store.add({ text: '小李在杭州西湖边工作平时很喜欢喝龙井茶和碧螺春', scope: 'private:10004' })
+  assert.equal(r2.updated, r1.id)
+  const hits = store.recall('碧螺春', { chat })
+  assert.equal(hits.length, 1, '去重更新正文后新词必须可召回')
+
+  // lastConsolidate.retry 也应做浅拷贝，外部改动不回流到快照
+  const lc = store.lastConsolidate()
+  lc.retry.count = 99
+  assert.equal(store.lastConsolidate().retry.count, 1)
 })

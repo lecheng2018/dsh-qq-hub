@@ -139,21 +139,28 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
       // 8 条是提示词软目标；模型若完整多返，沿用原来的 12 条硬上限，不能因调低目标静默截尾。
       // 纯新增一律先入队 batch，循环结束后一次性 addMany —— 过去每条 add() 都 load()+save()，
       // 一次整理 373 条就是 373 次全库序列化 + fsync（还夹带 52 条淘汰日志刷屏）。
-      const batch = []
+      const batch = typeof addMany === 'function' ? [] : null
       for (const item of entries.slice(0, 12)) {
-        if (!item || !item.text) continue
+        if (!item || !String(item.text || '').trim()) continue
         // 「关于她自己」的条目不该落成关于别人的事实：自称正则和唤醒词都由身份中枢给。
         const aboutText = String(item.about || '')
         if (identity.selfRefRegex.test(aboutText) || identity.wakeWords.includes(aboutText.trim())) continue
         const qq = String(item.about_qq ?? '').replace(/\D/g, '')
         const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
-        if (await commit(item, { chatId, cfg, known, about, batch })) added++
+        const before = batch ? batch.length : 0
+        const committed = await commit(item, { chatId, cfg, known, about, batch })
+        const queued = batch && batch.length > before
+        // 入队项要等 addMany 真正落盘后再计入 added，避免 addMany 抛错时误把未落盘条数算成 factsCommitted。
+        if (!queued && committed) added++
       }
-      // batch 里的条目在 commit 阶段已算进 added（返 true），这里只负责真正落盘。
-      if (batch.length) {
-        if (typeof addMany !== 'function') throw new Error('记忆库缺少 addMany（版本不匹配）')
+      if (batch && batch.length) {
         const r = addMany(batch)
-        if (r.ok === false) throw new Error(r.message || '批量写入记忆失败')
+        // 仅当整体拒绝（如模块已关闭、无任何跳过或写入）才抛错；局部条目校验跳过与单条 add() 口径一致，不锁死批次。
+        if (r.ok === false && !r.added && !r.updated && !r.skipped) {
+          throw new Error(r.message || '批量写入记忆失败')
+        }
+        if (r.skipped > 0) log?.debug?.(`批量提炼跳过 ${r.skipped} 条无效条目：${r.message}`)
+        added += (Number(r.added) || 0) + (Number(r.updated) || 0)
       }
     } catch (error) {
       error.factsCommitted = added

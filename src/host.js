@@ -164,7 +164,7 @@ export function apply(ctx) {
     // 过去一律打「映射缺失」告警，每天几十条全是噪音（真机 11-27：19 条/天，解开会话元数据
     // 确认全是 origin=subagent / agentPreset=standard）。只有 QQ Hub 自己的 preset
     // 才可能出现「本该有分群人设但没解析到」这种真问题，其余安静返回全局卡即可。
-    const preset = String(context?.agent?.session?.agentPreset || context?.agentPreset || '')
+    const preset = String(context?.agent?.session?.agentPreset || context?.session?.agentPreset || context?.agentPreset || '')
     const isQqHubSession = preset.startsWith('qq-hub-')
     try {
       if (sid && hub?.chatOfSession) {
