@@ -214,3 +214,90 @@ test('S13 · 失败回填仍保留「摘除」语义：重试成功时死向量�
     assert.equal(disk.has('A'), true, '存活条目应保留')
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+
+test('S13 · 向量关闭期间删空作用域后，重启前开启向量并执行 vectorBackfill 会清理孤儿向量', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'vec-backfill-orphan-'))
+  const prevDir = process.env.DSH_QQ_HUB_DATA_DIR
+  process.env.DSH_QQ_HUB_DATA_DIR = dir
+  let vecEnabled = true
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => normalize({
+      ownerQQ: '10001',
+      model: { provider: 'p', model: 'm' },
+      memory: { enabled: true, embeddings: { enabled: vecEnabled, url: 'https://emb.example', model: 'm', dim: 64, batch: 8 } },
+    }),
+    hub: { chatLogOf: () => [], chatLogDays: () => [] },
+    log,
+    personaText: () => '',
+    vectorFlushDebounceMs: 5,
+    vectorFetchImpl: fakeFetch,
+  })
+  t.after(() => {
+    store.dispose()
+    if (prevDir === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
+    else process.env.DSH_QQ_HUB_DATA_DIR = prevDir
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  store.add({ text: '群里待清理的旧记忆', scope: 'group:777', source: 'manual' })
+  store.add({ text: '全局仍存活的记忆', scope: 'global', source: 'manual' })
+  await store.vectorBackfill(store.list(''))
+
+  const orphanReader = readerOf(dir, 'group:777')
+  const liveReader = readerOf(dir, 'global')
+  assert.equal(orphanReader.load().size, 1)
+  assert.equal(liveReader.load().size, 1)
+
+  // 运行期先关闭向量并删空 group:777，随后重新打开向量并手动触发补全
+  vecEnabled = false
+  store.clearScope({ kind: 'group', chatId: 'group:777', groupId: '777' })
+  vecEnabled = true
+
+  const res = await store.vectorBackfill(store.list(''))
+  assert.equal(res.ok, true)
+  assert.equal(orphanReader.load().size, 0, '孤儿作用域的 vectors.bin 应被清空')
+  assert.equal(liveReader.load().size, 1, '存活作用域的向量应完整保留')
+})
+
+
+test('S13 · 冷启动前磁盘遗留孤儿向量（含 custom/ 与别名）及 vectorBackfill 统一清理', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'vec-cold-orphan-'))
+  const prevDir = process.env.DSH_QQ_HUB_DATA_DIR
+  process.env.DSH_QQ_HUB_DATA_DIR = dir
+
+  // 进程启动前直接在磁盘构造两个孤儿 vectors.bin（含 custom/ 作用域）
+  const preCustom = createScopeVectorFile(join(dir, 'memory', scopeToVecFilePath('custom:legacy')), 64, { log: { warn() {} } })
+  preCustom.save(new Map([['dead-1', { vec: Array(64).fill(0.1), hash: 'h1' }]]))
+  const preGroup = createScopeVectorFile(join(dir, 'memory', scopeToVecFilePath('group:999')), 64, { log: { warn() {} } })
+  preGroup.save(new Map([['dead-2', { vec: Array(64).fill(0.1), hash: 'h2' }]]))
+
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => normalize({
+      ownerQQ: '10001',
+      model: { provider: 'p', model: 'm' },
+      memory: { enabled: true, embeddings: { enabled: true, url: 'https://emb.example', model: 'm', dim: 64, batch: 8 } },
+    }),
+    hub: { chatLogOf: () => [], chatLogDays: () => [] },
+    log,
+    personaText: () => '',
+    vectorFlushDebounceMs: 5,
+    vectorFetchImpl: fakeFetch,
+  })
+  t.after(() => {
+    store.dispose()
+    if (prevDir === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
+    else process.env.DSH_QQ_HUB_DATA_DIR = prevDir
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const added = store.add({ text: '私聊存活记忆', scope: 'private:10001', source: 'manual' })
+  assert.equal(added.ok, true)
+  const res = await store.vectorBackfill(store.list(''))
+  assert.equal(res.ok, true)
+  assert.equal(preCustom.load().size, 0, '冷启动孤儿 custom/ 向量应被清空')
+  assert.equal(preGroup.load().size, 0, '冷启动孤儿 group:999 向量应被清空')
+  assert.equal(readerOf(dir, 'private:10001').load().size, 1, '存活作用域的向量应保留')
+})

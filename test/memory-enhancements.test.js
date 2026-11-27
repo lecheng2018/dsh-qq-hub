@@ -270,6 +270,151 @@ test('biliLike 去重收紧只针对涉 B 站条目，不再误伤同作用域�
   assert.ok(r1.id && r2.id && r1.id !== r2.id, '同作用域存在 B站 记忆不应误把普通记忆去重阈值降到 0.5')
 })
 
+test('recallFused + rerank：单向量候选也受 minScore 过滤，并支持配置 rerankMinScore（如负 logits）', async (t) => {
+  withTempData(t)
+  const prevFetch = globalThis.fetch
+  let nextScore = 0.01
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url)
+    const body = JSON.parse(opts.body)
+    if (u.includes('/embeddings')) {
+      const inputs = Array.isArray(body.input) ? body.input : [body.input]
+      return { ok: true, json: async () => ({ data: inputs.map(() => ({ embedding: [1, ...Array(63).fill(0)] })) }) }
+    }
+    if (u.includes('/rerank')) {
+      return { ok: true, json: async () => ({ results: [{ index: 0, relevance_score: nextScore }] }) }
+    }
+    throw new Error('unexpected url: ' + u)
+  }
+  t.after(() => { globalThis.fetch = prevFetch })
+
+  let minScoreCfg
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({
+      ownerQQ: '10001',
+      memory: { enabled: true, recallCount: 4 },
+      ext: {
+        memory: {
+          vectorEnabled: true, vectorUrl: 'https://mock/embeddings', vectorApiKey: 'k', vectorModel: 'em', vectorDim: 64,
+          rerankEnabled: true, rerankUrl: 'https://mock/rerank', rerankApiKey: 'rk', rerankModel: 'rm', rerankTopN: 10,
+          rerankMinScore: minScoreCfg,
+        },
+      },
+    }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const chat = { kind: 'private', userId: '10002', chatId: 'private:10002' }
+  store.add({ text: '唯一一条擦线向量记忆', about: '10003', scope: 'private:10002' })
+  await store.vectorBackfill(store.list(''))
+
+  // 默认阈值 0.05：仅 1 条向量候选且 rerankScore=0.01 时也应被剔除，recallLog 命中为空且不计 hits
+  const dropped = await store.recallFused('完全无关问句', { chat, limit: 4 })
+  assert.equal(dropped.length, 0)
+  assert.equal(store.recalls()[0].hits.length, 0)
+
+  // 配成负 logits 阈值 -5：score=-1.2 允许通过
+  minScoreCfg = -5
+  nextScore = -1.2
+  const kept = await store.recallFused('完全无关问句', { chat, limit: 4 })
+  assert.equal(kept.length, 1)
+})
+
+test('biliLike 去重兼容字符串格式 tags', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const first = store.add({ text: '周末一起去看新番电影吧很开心', tags: 'B站,日常', scope: 'private:10001' })
+  const second = store.add({ text: '周末一起去看新番电影吧还行', scope: 'private:10001' })
+  assert.equal(second.updated, first.id, '字符串格式 tags 含 B站 时也应触发 0.5 去重合并')
+})
+
+
+test('recallFused + rerank：空白/布尔无效 rerankMinScore 回落默认阈值 0.05，0 值可正常生效', async (t) => {
+  withTempData(t)
+  const prevFetch = globalThis.fetch
+  let score = 0.01
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url)
+    const body = JSON.parse(opts.body)
+    if (u.includes('/embeddings')) {
+      const inputs = Array.isArray(body.input) ? body.input : [body.input]
+      return { ok: true, json: async () => ({ data: inputs.map(() => ({ embedding: [1, ...Array(63).fill(0)] })) }) }
+    }
+    if (u.includes('/rerank')) {
+      return { ok: true, json: async () => ({ results: [{ index: 0, relevance_score: score }] }) }
+    }
+    throw new Error('unexpected url: ' + u)
+  }
+  t.after(() => { globalThis.fetch = prevFetch })
+
+  let minScoreCfg = '   '
+  const store = createMemoryStore({
+    dsh: {},
+    getConfig: () => ({
+      ownerQQ: '10001',
+      memory: { enabled: true, recallCount: 4 },
+      ext: {
+        memory: {
+          vectorEnabled: true, vectorUrl: 'https://mock/embeddings', vectorApiKey: 'k', vectorModel: 'em', vectorDim: 64,
+          rerankEnabled: true, rerankUrl: 'https://mock/rerank', rerankApiKey: 'rk', rerankModel: 'rm', rerankTopN: 10,
+          rerankMinScore: minScoreCfg,
+        },
+      },
+    }),
+    log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  const chat = { kind: 'private', userId: '10002', chatId: 'private:10002' }
+  store.add({ text: '阈值回落验证条目', about: '10003', scope: 'private:10002' })
+  await store.vectorBackfill(store.list(''))
+
+  // 空白配置与空串参数都应回落到默认 0.05，过滤 0.01
+  assert.equal((await store.recallFused('无关词', { chat, rerankMinScore: '' })).length, 0)
+  minScoreCfg = true
+  assert.equal((await store.recallFused('无关词', { chat })).length, 0)
+  // minScore=0 时保留 0.01，过滤 -0.1
+  minScoreCfg = 0
+  assert.equal((await store.recallFused('无关词', { chat })).length, 1)
+  score = -0.1
+  assert.equal((await store.recallFused('无关词', { chat })).length, 0)
+})
+
+test('biliLike 去重与 tags 归一化：支持长串、顿号分隔、非字符串容错且重载后持久保留', async (t) => {
+  const dir = withTempData(t)
+  const cfg = () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } })
+  const store1 = createMemoryStore({ dsh: {}, getConfig: cfg, log: { info() {}, warn() {} } })
+
+  // 超 5 字字符串与顿号：归一化为数组后保留 B站 标签且不截断丢字
+  const a = store1.add({ text: '晚上在家一起看电影纪录片真好看', tags: '美食,日常,B站', scope: 'private:10001' })
+  const aDup = store1.add({ text: '晚上在家一起看电影纪录片一般', scope: 'private:10001' })
+  assert.equal(aDup.updated, a.id, '长字符串 tags 里的 B站 不应被 slice(0,5) 截断')
+
+  const b = store1.add({ text: '周末去公园划船喝奶茶晒太阳聊天', tags: 'B站、随记', scope: 'private:10002' })
+  const bDup = store1.add({ text: '周末去公园划船喝奶茶晒太阳吹风', scope: 'private:10002' })
+  assert.equal(bDup.updated, b.id, '顿号分隔的 B站 标签也应触发 0.5 去重')
+
+  // 非数组非字符串 tags 不抛 TypeError
+  const c = store1.add({ text: '测试非标准标签字段容错能力', tags: 12345, scope: 'private:10003' })
+  assert.equal(c.ok, true)
+  store1.dispose()
+
+  // 重载磁盘 Markdown 后标签仍完整保留
+  const store2 = createMemoryStore({ dsh: {}, getConfig: cfg, log: { info() {}, warn() {} } })
+  t.after(() => store2.dispose())
+  const loaded = store2.listFor(['private:10001']).find((x) => x.id === a.id)
+  assert.deepEqual(loaded.tags, ['美食', '日常', 'B站'])
+  assert.equal(dir.length > 0, true)
+})
+
 // ---------------------------------------------------------------------------
 // 性能相关回归（2026-11-27）：load 不再全库深拷贝、indexFor 不再物化整库、
 // contextFor 一轮共用一份快照、addMany 批量写入语义与 add 一致。
@@ -336,12 +481,12 @@ test('addMany：一次落盘，不会为每条都写一遍（整理 373 条不�
 
   // 塞满一个作用域配额（private 配额 300）：用互不重合的整词编码确保真正留存 300 条而不去重合并
   for (let i = 0; i < 300; i++) {
-    store.add({ text: `seed_${i}_tok_${(i * 2654435761 >>> 0).toString(36)}`, scope: 'private:10009' })
+    store.add({ text: `seed_${i}_tok_${(i * 0x9e3779b1 >>> 0).toString(36)}`, scope: 'private:10009' })
   }
   assert.equal(store.listFor(['private:10009'], { limit: 400 }).length, 300, '预置应真正装满 300 条')
   infos.length = 0 // 清掉预置阶段的日志
   store.addMany(Array.from({ length: 60 }, (_, i) => ({
-    text: `batch_${i}_tok_${((i + 1000) * 2654435761 >>> 0).toString(36)}`,
+    text: `batch_${i}_tok_${((i + 1000) * 0x9e3779b1 >>> 0).toString(36)}`,
     scope: 'private:10009', importance: 0.6, source: 'auto',
   })))
   assert.equal(store.listFor(['private:10009'], { limit: 400 }).length, 300, '超出配额后应裁回 300 条')

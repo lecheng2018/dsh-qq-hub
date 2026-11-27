@@ -169,7 +169,6 @@ export default {
 |---|---|
 | `hub` | 聊天中枢：`deliver(chatId, text)` `sendText` `sendVoice(chatId, 文字)` `sendVoiceFile(chatId, 音频文件)` `sendImage` `sendSticker(chatId, 名字)` `sendSegments` `runSystemTurn(名字, 标题, 提示词)` `pushToSession(...)` `resetChat(chatId)` `groupName(群号)` `turnHasOwner(sessionId)` `chatOfSession(sessionId)` `stats()` `sessions()` `lastChatAt` `lastOwnerChatAt` …… |
 | `chatLog` | 共享聊天流水：`append(chatId, who, text, uid?)` `listDays()` `readDay(day)` `readDaySnapshot(day)`；模块可追加/读取，但不能删除流水或控制定时器；过期清理由宿主统一管理。 |
-| `threads` | 挂起线索账本的**只读**视图：`list({ chatKey, status, limit })` `stats()`。`status` 可用 `active` / `extended` / `dormant` / `resolved` / `unresolved`（= 前三者）/ `all`，`limit` 不传则不限。每条带 `type`（`temporary_leave` / `promise` / `question_pending` / `topic_postponed`）、`summary`、`createdAt`、`status`。写入（新增/解决/推进）仍走核心自己的接线，模块只用来读「还有什么事没结」——比如压缩摘要时并进未完事项。核心没挂线时可能是 `undefined`。 |
 | `onebot` | QQ 网关：`call(action, params, { timeoutMs })`、`state` |
 | `snowluma` | SnowLuma 管理：`running()` `start()` `stop()` `detect()` …… |
 | `local` | 本地接口（「本地接口」页那四项）：`active(slot)` `call(slot, 参数)` |
@@ -262,7 +261,7 @@ export default {
 | 事件 | 参数 | 改的是什么 |
 |---|---|---|
 | `group/decide` | `decision, { msg, policy, recentTexts, memScore }` | 群里这条消息（没被 `message` 接管的）她**回不回、怎么回**。返回 `null` 在这里无效（等于不改）。`decision` 是 `{ reply, mode, reason }`，mode 是 `must`（被叫到）/ `engaged`（正在参与话题）/ `interject`（插话）。返回 `{ reply: true, mode: 'must' }` 就让她必回，`{ reply: false }` 就让她不理。想整套换掉插话策略就在这里写 |
-| `prompt` | `content, { chat, senderId, queryText }` | **交给她的内容**：`[{ type: 'text', text }, { type: 'image', … }]`。可以加背景信息、改格式、去掉图片；返回 `null` 这次不交给她 |
+| `prompt` | `content, { chat, sessionId, senderId, prevText, queryText, steer }` | **交给她的内容**：`[{ type: 'text', text }, { type: 'image', … }]`。可以加背景信息、改格式、去掉图片；返回 `null` 这次不交给她 |
 | `reply/items` | `items, { chatId, text, userText }` | 她的回复**拆好之后**（哪条发语音、配不配表情都已经决定了）：每条 `{ kind: 'text' \| 'voice' \| 'sticker' \| 'poke' \| 'image', value, replyTo }`。可以改顺序、全部变语音、去掉表情、加图片 |
 | `send` | `message, { chatId, note, force }` | **最终发给 QQ 的消息段**（OneBot 格式）。所有发出去的消息都经过这里：她的回复、命令回复、模块发的。加签名、过滤词、抄送到别处都在这里 |
 | `model` | `selection, chat` | **这个聊天用哪个模型**（同步，不能 async）：返回 `{ provider, model, reasoningEffort }`。比如群里用便宜的、私聊用好的。`selection` 是面板选的（没选时是 DSH 默认，拿不到时是 `null`），主人在面板里「按聊天选模型」设过的话，已经按那个聊天算好了；模块在它之后还可以再改。换了之后从这个聊天的下一条消息起生效 |

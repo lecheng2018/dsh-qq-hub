@@ -13,19 +13,6 @@ export interface ChatLogEntry {
   text: string
 }
 
-/** 挂起线索（「说了但还没了结」的事）。状态机 active → extended → dormant → resolved。 */
-export interface ThreadRecord {
-  id: string
-  chatKey: string
-  type: 'temporary_leave' | 'promise' | 'question_pending' | 'topic_postponed'
-  summary: string
-  status: 'active' | 'extended' | 'dormant' | 'resolved'
-  createdAt: number
-  updatedAt: number
-  ttlMs?: number
-  pendingArchive?: boolean
-}
-
 export interface Chat {
   chatId: ChatId
   kind: 'private' | 'group' | 'system'
@@ -133,7 +120,7 @@ export interface Events {
   /** 群里这条消息她回不回：返回对象覆盖决定，比如 { reply: true, mode: 'must' }（返回 null 无效，等于不改） */
   'group/decide': (decision: GroupDecision, info: { msg: Message; policy: any; recentTexts: string[]; memScore: number }) => Partial<GroupDecision> | void | Promise<Partial<GroupDecision> | void>
   /** 交给她的内容（[{ type: 'text', text }, { type: 'image', ... }]）：返回新数组改写，null 这次不交给她 */
-  prompt: (content: any[], info: { chat: Chat; senderId: string; queryText?: string }) => any[] | null | void | Promise<any[] | null | void>
+  prompt: (content: any[], info: { chat: Chat; sessionId: string; senderId?: string; prevText?: string; queryText?: string; steer?: boolean }) => any[] | null | void | Promise<any[] | null | void>
   /** 这个聊天用哪个模型（同步）：返回 { provider, model, reasoningEffort } */
   model: (selection: ModelSelection | null, chat: Chat) => ModelSelection | void
   /** 她的人格全文（同步）：返回新文字改写 */

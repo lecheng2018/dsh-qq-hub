@@ -7,6 +7,20 @@
 const DEFAULT_URL = 'https://api.siliconflow.cn/v1/rerank'
 const DEFAULT_MODEL = 'BAAI/bge-reranker-v2-m3'
 
+/** 归一化精排分数阈值：null/false 表示显式关闭；有限数字或数字字符串生效；空白/布尔 true/非法值返回 undefined。 */
+export function parseMinScore(value) {
+  if (value === null || value === false) return null
+  if (value === undefined || typeof value === 'boolean') return undefined
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    const n = Number(trimmed)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
 /** 面板设置（ext.memory.rerank*）→ 归一配置；未开启/缺 key 返回 null。 */
 export function normalizeRerankConfig(ext = {}) {
   const e = ext || {}
@@ -16,7 +30,8 @@ export function normalizeRerankConfig(ext = {}) {
   const url = String(e.rerankUrl || '').trim() || DEFAULT_URL
   if (!/^https?:\/\//i.test(url)) return null
   const topN = Math.max(2, Math.min(50, Math.round(Number(e.rerankTopN) || 20)))
-  return { url, apiKey, model: String(e.rerankModel || '').trim() || DEFAULT_MODEL, topN }
+  const minScore = parseMinScore(e.rerankMinScore)
+  return { url, apiKey, model: String(e.rerankModel || '').trim() || DEFAULT_MODEL, topN, minScore }
 }
 
 /**
@@ -58,13 +73,17 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
   function enabled() { return Boolean(conf()) }
   function status() {
     const c = conf()
-    return { enabled: Boolean(c), model: c ? c.model : '', topN: c ? c.topN : 0, lastError }
+    return { enabled: Boolean(c), model: c ? c.model : '', topN: c ? c.topN : 0, minScore: c ? c.minScore : undefined, lastError }
   }
   /** 精排只重排、不扩可见性；失败/超时/未启用一律原样返回（fail-open）。 */
-  async function rerank(query, hits, { timeoutMs = 10000, minScore = null } = {}) {
+  async function rerank(query, hits, { timeoutMs = 10000, minScore } = {}) {
     const c = conf()
     const list = Array.isArray(hits) ? hits : []
-    if (!c || list.length < 2) return list
+    const argFloor = parseMinScore(minScore)
+    const rawFloor = argFloor !== undefined ? argFloor : (c ? c.minScore : undefined)
+    const floor = typeof rawFloor === 'number' && Number.isFinite(rawFloor) ? rawFloor : null
+    // 只有纯重排（未启用阈值下限）时才在少于 2 条时跳过；存在阈值过滤时单候选也需打分判无关
+    if (!c || !list.length || (floor === null && list.length < 2)) return list
     const docs = list.slice(0, c.topN).map((h) => String((h && h.it && h.it.text) || ''))
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -77,7 +96,7 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
       })
       if (!res.ok) throw new Error(`rerank HTTP ${res.status}`)
       const data = await res.json()
-      const out = applyRerankOrder(list, data && data.results, c.topN, { minScore })
+      const out = applyRerankOrder(list, data && data.results, c.topN, { minScore: floor })
       lastError = ''
       return out
     } catch (error) {

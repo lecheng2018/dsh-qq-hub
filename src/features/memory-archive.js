@@ -18,10 +18,18 @@ import { openMemoryFiles } from './memory-files.js'
 import { CLARITY_STEPS, SCOPE_QUOTAS, TOTAL_CAP, buildIndex, clarityOf, contradicts, cutAtSentence, evictScopeItems, isOwnerMemory, memoryLine, parseReflection, quotaForScope, retention, search, shouldForget, similarity, whenText, tokenize } from './memory-core.js'
 import { visibleScopes, isValidScope } from './memory-scope.js'
 import { createVectorChannel, fuseRrf } from './memory-vector.js'
-import { createReranker } from './memory-rerank.js'
+import { createReranker, parseMinScore } from './memory-rerank.js'
 import { personaIdFor } from '../persona/personas.js'
 import { chatViewFromKey } from '../chat/adapters/legacy-context.js'
 
+
+const TAG_SPLIT_RE = /[,\s，、]+/
+function normalizeTags(tags) {
+  const raw = Array.isArray(tags)
+    ? tags
+    : (typeof tags === 'string' ? tags.split(TAG_SPLIT_RE) : [])
+  return raw.map((t) => String(t ?? '').trim()).filter(Boolean).slice(0, 5)
+}
 
 // ---------------- 纯函数层（1.3.48 拆到 memory-core.js，这里原样 re-export，对外入口不变） ----------------
 
@@ -441,7 +449,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       perspective: perspective ? String(perspective) : (isSubjective ? 'self' : ''),
       about: String(about || ''),
       aboutName: String(aboutName || ''),
-      tags: (tags || []).slice(0, 5),
+      tags: normalizeTags(tags),
       importance: Math.max(0, Math.min(1, Number(importance) || 0.5)),
       source,
       sourceId,
@@ -491,8 +499,14 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
     // B站「知识」条目同质化高（同一个视频反复被提炼）：相似度阈值收紧，二次提炼更容易合并而不是新增。
     // 仅当新条目或候选条目自身涉 B 站时收紧到 0.5，避免同作用域里有一条 B 站记忆就误伤全作用域去重阈值。
-    const isBiliEntry = (textVal, tagList) => String(textVal || '').includes('B站') || (Array.isArray(tagList) && tagList.includes('B站'))
-    const entryIsBili = isBiliEntry(t, tags)
+    const hasBiliTag = (tagList) => {
+      const arr = Array.isArray(tagList)
+        ? tagList
+        : (typeof tagList === 'string' ? tagList.split(TAG_SPLIT_RE) : [])
+      return arr.some((tag) => String(tag ?? '').trim() === 'B站')
+    }
+    const isBiliEntry = (textVal, tagList) => String(textVal || '').includes('B站') || hasBiliTag(tagList)
+    const entryIsBili = isBiliEntry(t, item.tags)
     const dup = scopeItems.find((m) => {
       const dupAt = (entryIsBili || isBiliEntry(m.text, m.tags)) ? 0.5 : 0.6
       return maybe(m) && samePersonaTrack(m) && similarity(m.text, t) >= dupAt
@@ -548,7 +562,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       text: t,
       about: String(about || target.about || ''),
       aboutName: String(aboutName || target.aboutName || ''),
-      tags: (tags && tags.length ? tags : target.tags || []).slice(0, 5),
+      tags: (() => {
+        const nextTags = normalizeTags(tags)
+        return nextTags.length ? nextTags : normalizeTags(target.tags)
+      })(),
       importance: Math.max(0, Math.min(1, Number(importance ?? target.importance ?? 0.5))),
       source,
       sourceId,
@@ -1382,7 +1399,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   const DEFAULT_VEC_MIN_COS = 0.35
   const DEFAULT_RERANK_MIN_SCORE = 0.05
 
-  async function recallFused(query, { about, limit, where = '', context = '', chat = null, scopes = null, excludeIds = null, minCos = DEFAULT_VEC_MIN_COS, rerankMinScore = DEFAULT_RERANK_MIN_SCORE } = {}) {
+  async function recallFused(query, { about, limit, where = '', context = '', chat = null, scopes = null, excludeIds = null, minCos = DEFAULT_VEC_MIN_COS, rerankMinScore } = {}) {
     const q = String(query || '').trim()
     if (!q) return []
     const max = limit ?? getConfig().memory.recallCount
@@ -1427,7 +1444,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vecHits.sort((a, b) => b.score - a.score)
     let hits = fuseRrf(bm25, vecHits.slice(0, poolLimit), { limit: rerankCap })
     if (rerankEnabled) {
-      hits = await reranker.rerank(q, hits, { minScore: rerankMinScore })
+      const argMinScore = parseMinScore(rerankMinScore)
+      const cfgMinScore = reranker.status()?.minScore
+      const effectiveMinScore = argMinScore !== undefined
+        ? argMinScore
+        : (cfgMinScore !== undefined ? cfgMinScore : DEFAULT_RERANK_MIN_SCORE)
+      hits = await reranker.rerank(q, hits, { minScore: effectiveMinScore })
     }
     hits = hits.slice(0, max)
     recordRecallHits(hits, { where, query: q })
