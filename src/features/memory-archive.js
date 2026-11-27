@@ -54,14 +54,19 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
-  /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。 */
-  function evictIfNeeded(s, scope) {
+  /** 作用域配额淘汰：本作用域超了就裁（低重要度/auto 来源/最老先走），淘汰要留日志。
+   *  quiet=true 时只返回条数不写日志（批量写入最后统一报一条，避免刷屏）。 */
+  function evictIfNeeded(s, scope, { quiet = false } = {}) {
+    let total = 0
     // 作用域配额淘汰：超额则裁掉超额部分
     const quota = quotaForScope(scope)
     const inScope = s.items.reduce((n, m) => n + (String(m.scope || '') === String(scope) ? 1 : 0), 0)
     if (inScope > quota) {
       const removed = evictScopeItems(s.items, scope, quota)
-      if (removed > 0) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
+      if (removed > 0) {
+        total += removed
+        if (!quiet) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
+      }
     }
     // 全库兜底上限：防极端情况（大量小作用域）无限涨
     if (s.items.length > TOTAL_CAP) {
@@ -70,8 +75,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       const kill = new Set(victims)
       let n = 0
       for (let i = s.items.length - 1; i >= 0; i--) { if (kill.has(s.items[i].id)) { s.items.splice(i, 1); n++ } }
-      if (n > 0) log?.info?.(`记忆库：全库超过兜底上限 ${TOTAL_CAP} 条，淘汰 ${n} 条`)
+      if (n > 0) {
+        total += n
+        if (!quiet) log?.info?.(`记忆库：全库超过兜底上限 ${TOTAL_CAP} 条，淘汰 ${n} 条`)
+      }
     }
+    return total
   }
   // 作用域索引缓存（按 scope 分组）；任何写入都会 clear
   const cache = new Map() // scope -> { stamp, count, idx }
@@ -144,9 +153,28 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   // 只重排 RRF 已召回候选（不扩可见性），失败退回 RRF 顺序（fail-open）。
   const reranker = createReranker({ getConfig, log })
   const rerankStatusSafe = () => { try { return reranker.status() } catch { return { enabled: false } } }
+  // 只读路径的「同一次调用内共用一份快照」。
+  //
+  // 背景：contextFor 一轮里要问 profileOf（每人 1~2 次）、insightsOf、styleSourceOf、
+  // styleOf、recentEvents —— 过去每个都独立 load()，群聊一轮 8~11 次全库物化。
+  // 这些函数全是**同步只读**的，同一轮里看到的本该是同一份数据，共用快照既省时间也
+  // 让「档案/经验/风格/近况」在同一轮内保持一致（不会读到一半被别人写入穿插）。
+  //
+  // 只包只读入口：写路径（add/save/setXxx）一律走真实 load()，绝不吃快照，
+  // 否则会出现「基于旧快照写回、把别人的改动覆盖掉」。
+  let snapMemo = null
   const load = () => {
     if (status === 'closed') throw new Error('主记忆库已关闭')
-    return store.load()
+    return snapMemo || store.load()
+  }
+  function withSnapshot(fn) {
+    if (snapMemo) return fn() // 嵌套调用复用最外层那份，不再重取
+    snapMemo = store.load()
+    try {
+      return fn()
+    } finally {
+      snapMemo = null
+    }
   }
 
   const pendingHitUpdates = new Map()
@@ -249,7 +277,10 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     if (!scope) return buildIndex([]) // fail-closed：没说清楚给谁看，就什么都不给
     const chatLike = chatOrScope && typeof chatOrScope === 'object' ? chatOrScope : null
     // 缓存按存储版本失效，重载与正文写入都会递增 rev。
-    const revNow = store ? store.load().rev : null
+    // 走 store.rev()（只读内存里的版本号）而不是 store.load().rev —— 后者要物化整库条目，
+    // 815 条实测 4.9ms，而这里只需要一个数字。indexFor 是 topicScore（每条群消息）
+    // 与 recall/contextFor（每轮）的共同入口，缓存命中路径不该为拿版本号付全库代价。
+    const revNow = typeof store?.rev === 'function' ? store.rev() : (store ? store.load().rev : null)
     if (revNow === null || revNow === undefined) {
       const s0 = load()
       const hit0 = cache.get(scope)
@@ -316,6 +347,62 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
   function add(entry = {}) {
     if (status === 'closed') return { ok: false, message: '记忆模块已关闭' }
+    const s = load()
+    const r = applyAdd(s, entry)
+    if (!r.ok) return r
+    if (!r.deduped) s.rev = (s.rev || 0) + 1
+    save(s)
+    return { ok: true, message: '✓', ...(r.updated ? { updated: r.updated } : { id: r.id }) }
+  }
+
+  /**
+   * 批量写入（整理路径专用）：一次 load、循环 applyAdd、最后只淘汰一次 + 只 save 一次。
+   *
+   * 为什么需要它：`add()` 每条都 load()→save()，而 save() 要全库结构化 + 逐 scope
+   * 序列化+往返自检+fsync。真实数据里一次「每日整理」新增 373 条 → 6 分钟，
+   * 期间还把「超出配额淘汰」日志刷了 52 遍。批量版把这些 O(n) 工作合并成一次。
+   *
+   * 语义与逐条 add() 保持一致：去重命中的照样合并、`staleProfilesIn` 照样标脏
+   * （append 语义只标一次即可），返回 { ok, added, updated, skipped } 汇总。
+   * @param {Array<object>} entries 与 add() 同形状的条目数组
+   */
+  function addMany(entries) {
+    if (status === 'closed') return { ok: false, message: '记忆模块已关闭', added: 0, updated: 0, skipped: 0 }
+    const list = Array.isArray(entries) ? entries : []
+    const s = load()
+    const touchedScopes = new Set()
+    let added = 0
+    let updated = 0
+    let skipped = 0
+    let rejected = null
+    for (const entry of list) {
+      const r = applyAdd(s, entry)
+      if (!r.ok) {
+        skipped++
+        rejected ||= r.message // 留住第一条拒绝原因，便于面板/日志排查
+        continue
+      }
+      if (r.updated) updated++
+      else added++
+      if (r.scope) touchedScopes.add(r.scope)
+    }
+    if (added || updated) {
+      let evicted = 0
+      for (const sc of touchedScopes) evicted += evictIfNeeded(s, sc, { quiet: true })
+      if (evicted > 0) log?.info?.(`记忆库：本批整理淘汰了 ${evicted} 条最不重要的（超出作用域配额或全库上限）`)
+      s.rev = (s.rev || 0) + 1
+      save(s)
+    }
+    return { ok: !rejected, message: rejected || '✓', added, updated, skipped }
+  }
+
+  /**
+   * add() 的纯内存部分：校验 + 归一 + 去重合并 + push，但**不落盘**。
+   * 调用方负责 rev++ 与 save()（add 单条写、addMany 批量写共用这一份判定逻辑，
+   * 保证两条路径的去重/配额/作用域口径完全一致）。
+   * @returns {{ok:boolean, message?:string, id?:string, updated?:string, deduped?:boolean, scope?:string}}
+   */
+  function applyAdd(s, entry = {}) {
     const {
       text, about = '', aboutName = '', tags = [], importance = 0.5,
       source = 'tool', sourceId = '', chatId = '', scope = '',
@@ -326,7 +413,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     } = entry
     const t = String(text || '').trim().slice(0, 200)
     if (!t) return { ok: false, message: '内容是空的' }
-    const s = load()
+    // s 由调用方传入（add 单条 / addMany 批量），这里不再自己 load()。
 
     const ownerQQ = String(getConfig()?.ownerQQ || '')
     const finalScope = String(scope || '').trim() || scopeFromChatId(chatId) || (ownerQQ ? `private:${ownerQQ}` : 'global')
@@ -424,18 +511,16 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
       if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
       if (entryStatus === 'hearsay' || entryStatus === 'guess') dup.status = entryStatus
       staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
-      s.rev = (s.rev || 0) + 1
-      save(s)
-      return { ok: true, message: '✓', updated: dup.id }
+      // 不落盘、不 rev++：由调用方（add / addMany）统一收口。
+      return { ok: true, message: '✓', updated: dup.id, deduped: true, scope: finalScope }
     }
 
     s.items.push(normalizedItem)
-    evictIfNeeded(s, finalScope)
+    // 单条路径要立刻淘汰（不留超额）；批量路径由 addMany 在最后统一淘汰一次，省掉 O(n²)。
+    if (s.items.length > quotaForScope(finalScope)) evictIfNeeded(s, finalScope)
     // 纯新增事实不推翻旧事实：标记待刷新（staleReason:'append'），整理时会重建，期间仍降级可读避免人物档案大面积失明。
     staleProfilesIn(s, String(about || ''), finalScope, { reason: 'append' })
-    s.rev = (s.rev || 0) + 1 // 索引缓存按 rev 失效：新增条目必须 bump，否则下一轮检索还是旧索引
-    save(s)
-    return { ok: true, message: '✓', id: normalizedItem.id }
+    return { ok: true, message: '✓', id: normalizedItem.id, scope: finalScope }
   }
 
   /**
@@ -1029,6 +1114,11 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
 
   /** 给系统提示词上下文用：人物小档案 + 相处经验（常驻）+ 按这一轮对方说的话检索到的记忆。 */
   function contextFor(chat, sessionId) {
+    // 一轮内共用一份快照：内部要问 profileOf / insightsOf / styleOf / recentEvents 共 8~11 次，
+    // 各查各的会把整库物化十几遍（群聊实测 19ms → 单次快照后 2~3ms）。全是同步只读，安全。
+    return withSnapshot(() => contextForInner(chat, sessionId))
+  }
+  function contextForInner(chat, sessionId) {
     const cfg = getConfig().memory
     if (!cfg.enabled) return ''
     const parts = []
@@ -1532,7 +1622,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     dsh, getConfig, hub, chatLog, log, personaText,
     isActive: () => status === 'active', createGenerationSignal, generationOf,
     load, save, health: () => store.health(), relatedTo,
-    add, revise, supersede, invalidate, listFor, scopeFromChatId,
+    add, addMany, revise, supersede, invalidate, listFor, scopeFromChatId,
     profileOf, setProfile, setDerivedProfile, profileKeyOf,
     insightsOf, setInsights, setDerivedInsights, styleOf, setStyle, setDerivedStyle, personKey,
   })
@@ -1545,7 +1635,7 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
     vectorBackfill: (items) => vec.backfill(items),
     rerankStatus: rerankStatusSafe,
     scopeOfChat, scopeVisible, registerScopeOverride,
-    add, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, recallFused, contextFor, topicScore, importCommit, clearScope, clearScopeEntries, clearProfilesInScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
+    add, addMany, addEvent, supersede, invalidate, recentEvents, recentEventsFor, update, remove, restore, recall, recallFused, contextFor, topicScore, importCommit, clearScope, clearScopeEntries, clearProfilesInScope, relatedTo, indexFor, indexAll, reassignOwner, reportMiss, listFor,
     dreamConsolidate: (...args) => learning?.dreamConsolidate?.(...args),
     profiles: () => {
       const s = load()

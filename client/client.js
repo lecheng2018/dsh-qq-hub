@@ -3366,9 +3366,9 @@ function ExtPage({ st, draft, setDraft, toast, reload, mod, embedded }) {
   return /* @__PURE__ */ h("div", { className: "ab-grid" }, (m.settings || []).length || (m.errors || []).length || !m.panel ? /* @__PURE__ */ h(Card, { title: m.name, desc: m.description, right: /* @__PURE__ */ h("span", { className: "ab-badge mine" }, embedded ? "扩展模块 · " + m.id : m.id) }, (m.settings || []).map((s) => /* @__PURE__ */ h(Row, { key: s.key, label: s.label || s.key, hint: s.hint }, field(s))), (m.settings || []).length ? /* @__PURE__ */ h("div", { className: "ab-small ab-muted" }, "改完点下面的「保存设置」。") : null, (m.errors || []).length ? /* @__PURE__ */ h("div", { className: "ab-note err", style: { marginTop: 8 } }, "最近的报错：", m.errors[0].message) : null) : null, m.panel ? /* @__PURE__ */ h(ExtPanel, { m, settings, draftSettings, setSettings, toast, reload, draft, setDraft }) : null);
 }
 
-// client/src/views/mood.js
+// client/src/views/memory.js
 var SOURCE = { tool: "她自己记的", auto: "每日整理", diary: "空间日记", panel: "你加的", event: "她的经历", import: "导入的" };
-function Mood({ st, draft, setDraft, toast }) {
+function Memory({ st, draft, setDraft, toast }) {
   const f = useField(draft, setDraft);
   const [mem, setMem] = useState(null);
   const [stats, setStats] = useState(null);
@@ -4615,7 +4615,7 @@ function QQHubPage() {
     imagegen: ImageGen,
     diary: Diary,
     speakup: SpeakUp,
-    memory: Mood,
+    memory: Memory,
     bili: Bili,
     douyin: Douyin,
     heybox: Heybox,

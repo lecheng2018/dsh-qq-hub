@@ -269,3 +269,95 @@ test('biliLike 去重收紧只针对涉 B 站条目，不再误伤同作用域�
   const r2 = store.add({ text: '周末去西湖边散步拍照看日落', scope: 'private:10001' })
   assert.ok(r1.id && r2.id && r1.id !== r2.id, '同作用域存在 B站 记忆不应误把普通记忆去重阈值降到 0.5')
 })
+
+// ---------------------------------------------------------------------------
+// 性能相关回归（2026-11-27）：load 不再全库深拷贝、indexFor 不再物化整库、
+// contextFor 一轮共用一份快照、addMany 批量写入语义与 add 一致。
+// ---------------------------------------------------------------------------
+
+test('load() 返回的对象改动不会污染内存快照（运行状态字段浅拷贝足够）', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {}, getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }), log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+  store.add({ text: '小林喜欢喝乌龙茶', about: '10002', aboutName: '小林', scope: 'private:10002' })
+  store.setDerivedInsights('qq:10002', [{ id: 'a', text: '慢慢聊', at: Date.now() }], '小林', { sourceFingerprint: 'f' }) /* pii-scan:ignore */
+
+  // 通过只读接口拿到内部状态后改它，不能让下一次读取看到脏数据
+  const snap = store.insights().find((x) => x.key === 'qq:10002') /* pii-scan:ignore */
+  snap.list.push({ id: 'evil', text: '这条不该出现在库里' })
+  const again = store.insights().find((x) => x.key === 'qq:10002') /* pii-scan:ignore */
+  assert.equal(again.list.some((i) => i.id === 'evil'), false, '改返回值不能污染库内数据')
+})
+
+test('addMany：批量写入与逐条 add 语义一致（同样的输入得到同样的库状态）', async (t) => {
+  const batch = [
+    { text: '小周喜欢爬山看日出', scope: 'private:10003', aboutName: '小周', importance: 0.6 },
+    { text: '小周周末常去郊区爬山看日出', scope: 'private:10003', aboutName: '小周', importance: 0.6 },
+    { text: '小周养了一只橘猫', scope: 'private:10003', aboutName: '小周', importance: 0.7 },
+    { text: '小周最近开始学吉他', scope: 'private:10003', aboutName: '小周', importance: 0.5 },
+    { text: '', scope: 'private:10003' }, // 空正文 → 跳过
+    { text: '非法作用域应被拒', scope: 'not-a-scope' },
+  ]
+  const mk = () => {
+    withTempData(t)
+    return createMemoryStore({
+      dsh: {}, getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }), log: { info() {}, warn() {} },
+    })
+  }
+  // 逐条 add
+  const one = mk()
+  const oneResults = batch.map((e) => one.add({ ...e }))
+  const oneLive = one.listFor(['private:10003']).map((m) => m.text).sort()
+  const oneOk = oneResults.filter((r) => r.ok).length
+  one.dispose()
+
+  // 批量 addMany
+  const many = mk()
+  const r = many.addMany(batch.map((e) => ({ ...e })))
+  const manyLive = many.listFor(['private:10003']).map((m) => m.text).sort()
+  many.dispose()
+
+  assert.deepEqual(manyLive, oneLive, '两种写法必须得到完全相同的库状态')
+  assert.equal(r.added + r.updated, oneOk, '成功条数与逐条写法一致')
+  assert.equal(r.skipped, 2, '空正文与非法作用域都应跳过')
+  assert.ok(manyLive.every((text) => typeof text === 'string' && text.length > 0))
+})
+
+test('addMany：一次落盘，不会为每条都写一遍（整理 373 条不再刷屏淘汰日志）', async (t) => {
+  withTempData(t)
+  const infos = []
+  const store = createMemoryStore({
+    dsh: {}, getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }),
+    log: { info: (m) => infos.push(String(m)), warn() {} },
+  })
+  t.after(() => store.dispose())
+
+  // 塞满一个作用域配额（private 配额 300）
+  for (let i = 0; i < 300; i++) store.add({ text: `预置${i}号${'甲乙丙丁戊己庚辛壬癸'[i % 10]}类事项`, scope: 'private:10009' })
+  infos.length = 0 // 清掉预置阶段的日志
+  store.addMany(Array.from({ length: 60 }, (_, i) => ({
+    text: `批量新增第${i}号${String(i * 7919).split('').map((d) => '零一二三四五六七八九'[+d]).join('')}记录`,
+    scope: 'private:10009', importance: 0.6, source: 'auto',
+  })))
+  const evictLogs = infos.filter((l) => l.includes('淘汰'))
+  assert.ok(evictLogs.length <= 1, `淘汰日志应合并成一条，实际 ${evictLogs.length} 条：${JSON.stringify(evictLogs.slice(0, 3))}`)
+})
+
+test('load() 去掉深拷贝后：数组字段仍是副本，原地改返回值不能污染内存快照', async (t) => {
+  withTempData(t)
+  const store = createMemoryStore({
+    dsh: {}, getConfig: () => ({ ownerQQ: '10001', memory: { enabled: true, recallCount: 4 } }), log: { info() {}, warn() {} },
+  })
+  t.after(() => store.dispose())
+  store.add({ text: '带标签的记忆条目', scope: 'private:10001', tags: ['原标签'] })
+
+  // 用户动手改返回值里的数组（面板/模块都可能这么干）→ 库里不能跟着变
+  const first = store.listFor(['private:10001'])[0]
+  assert.ok(Array.isArray(first.tags))
+  first.tags.push('污染标签')
+
+  const second = store.listFor(['private:10001'])[0]
+  assert.deepEqual(second.tags, ['原标签'], 'tags 必须是副本，原地改不能回流到内存快照')
+})

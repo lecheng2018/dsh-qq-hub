@@ -22,7 +22,7 @@ import { Voice } from '../views/voice.js'
 import { Stickers } from '../views/stickers.js'
 import { Diary } from '../views/diary.js'
 import { SpeakUp } from '../views/speakup.js'
-import { Mood } from '../views/mood.js'
+import { Memory } from '../views/memory.js'
 import { LocalApi, Modules, ExtPage } from '../views/modules.js'
 import { Bili } from '../views/platforms/bili.js'
 import { Douyin } from '../views/platforms/douyin.js'
@@ -148,7 +148,8 @@ function QQHubPage() {
   // 老条件 m.running === 'user' 把内置模块全挡掉了 —— 这正是「五个面板一片空白、配置项一个都不出现」的根因。
   const hasUi = (m) => Boolean(m.running) && ((m.settings || []).length > 0 || m.panel)
   // 写了 tab 的模块嵌进那个内置标签页；没写（或写的页不存在）的单独一页
-  // 老扩展若还写着心情页的旧 tab 名，归一成 memory（别名兜底）
+  // 老扩展若还写着「心情」页的旧 tab 名，归一成 memory（别名兜底）；
+  // 心情系统 1.4.0 已删除，这个别名只为兼容第三方扩展里遗留的 tab: 'mood'。
   const TAB_ALIAS = { mood: 'memory' }
   const tabOf = (m) => TAB_ALIAS[m.tab] || m.tab
   const intoTab = (m) => Boolean(m.tab && TABS.some((t) => t.id === tabOf(m)))
@@ -158,7 +159,7 @@ function QQHubPage() {
   const curTab = tabs.find((t) => t.id === tab) || tabs[0]
   const body = curTab.ext ? ExtPage : {
     overview: Overview, connect: Connect, persona: Persona, access: Access, group: Group, model: Model, voice: Voice,
-    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Mood, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, browser: Browser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
+    stickers: Stickers, imagegen: ImageGen, diary: Diary, speakup: SpeakUp, memory: Memory, bili: Bili, douyin: Douyin, heybox: Heybox, multiParser: MultiParser, browser: Browser, token: Token, local: LocalApi, modules: Modules, logs: Logs,
   }[curTab.id] || Overview
   // 哪些标签有没保存的改动
   const tabDirty = (id) => {

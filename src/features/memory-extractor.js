@@ -66,7 +66,7 @@ export function parseMemoryJsonArray(out) {
   throw new Error('模型未返回有效的记忆 JSON 数组')
 }
 
-export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
+export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isActive, addMany, reflect, batchState, scopeOf, recoveryError, log, consolidation }) {
   let consolidationBusy = false
   const dayKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
   async function extractFacts(chatId, transcript, genSignal = null) {
@@ -137,6 +137,9 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
     let added = 0
     try {
       // 8 条是提示词软目标；模型若完整多返，沿用原来的 12 条硬上限，不能因调低目标静默截尾。
+      // 纯新增一律先入队 batch，循环结束后一次性 addMany —— 过去每条 add() 都 load()+save()，
+      // 一次整理 373 条就是 373 次全库序列化 + fsync（还夹带 52 条淘汰日志刷屏）。
+      const batch = []
       for (const item of entries.slice(0, 12)) {
         if (!item || !item.text) continue
         // 「关于她自己」的条目不该落成关于别人的事实：自称正则和唤醒词都由身份中枢给。
@@ -144,7 +147,13 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         if (identity.selfRefRegex.test(aboutText) || identity.wakeWords.includes(aboutText.trim())) continue
         const qq = String(item.about_qq ?? '').replace(/\D/g, '')
         const about = qq.length >= 5 && qq !== String(cfg.botQQ) ? qq : chatId.startsWith('private:') ? chatId.slice(8) : ''
-        if (await commit(item, { chatId, cfg, known, about })) added++
+        if (await commit(item, { chatId, cfg, known, about, batch })) added++
+      }
+      // batch 里的条目在 commit 阶段已算进 added（返 true），这里只负责真正落盘。
+      if (batch.length) {
+        if (typeof addMany !== 'function') throw new Error('记忆库缺少 addMany（版本不匹配）')
+        const r = addMany(batch)
+        if (r.ok === false) throw new Error(r.message || '批量写入记忆失败')
       }
     } catch (error) {
       error.factsCommitted = added

@@ -3,25 +3,25 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 const src = readFileSync(new URL('../client/client.js', import.meta.url), 'utf8')
-const body = src.slice(src.indexOf('function Mood('), src.indexOf('/** 人物小档案'))
+const body = src.slice(src.indexOf('function Memory('), src.indexOf('/** 人物小档案'))
 
 function render({ health = null, reloading = false, personaTab = 'profiles', ins = null, styles = {}, post = async () => ({ ok: true, message: '已重新载入' }) } = {}) {
-  // 顺序与 Mood 里的 useState 一一对应：
+  // 顺序与 Memory 里的 useState 一一对应：
   // mem / stats / q / ins / adding / addOpen / browseOpen / personaTab / health / reloading / vec / vecBusy / rerank / styles / profileRev
   const states = [null, null, '', ins, { text: '', aboutName: '', importance: 0.6 }, false, false, personaTab, health, reloading, null, false, null, styles, 0]
   const updates = [], toasts = [], requests = []
   let slot = 0
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((x) => x != null && x !== false) })
   const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'ProfilesList', 'InsightRow', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff', 'ExtPage']
-  const factory = new Function('h', 'useState', 'useEffect', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Mood`)
-  const Mood = factory(h, (initial) => {
+  const factory = new Function('h', 'useState', 'useEffect', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Memory`)
+  const Memory = factory(h, (initial) => {
     const i = slot++
     return [i < states.length ? states[i] : initial, (value) => updates.push({ slot: i, value })]
   }, () => {}, () => ({ sw: () => null, range: () => null }), (_, name) => name === 'memory',
   async (path) => { requests.push(path); return path === '/insights' ? { items: [], styles: {} } : { items: [], stats: {}, health: { ok: true } } },
   post, () => {}, () => '', ...names)
   const draft = { memory: {} }
-  const tree = Mood({ st: { config: draft }, draft, setDraft() {}, toast: (...args) => toasts.push(args) })
+  const tree = Memory({ st: { config: draft }, draft, setDraft() {}, toast: (...args) => toasts.push(args) })
   const all = (node) => typeof node === 'object' && node !== null ? [node, ...node.children.flatMap(all)] : []
   return { nodes: all(tree), updates, toasts, requests }
 }
