@@ -46,7 +46,7 @@ export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
-  add, revise, supersede, invalidate, scopeFromChatId, listFor,
+  add, addMany, revise, supersede, invalidate, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
   reflectImpl, styleImpl,
@@ -164,7 +164,7 @@ export function createMemoryLearning({
     return reflectImpl ? reflectImpl(chat, transcript, genSignal) : defaultReflection.reflect(chat, transcript, genSignal)
   }
 
-  function commitExtracted(x, { chatId, cfg, known, about }) {
+  function commitExtracted(x, { chatId, cfg, known, about, batch = null }) {
     const op = String(x.op || 'add')
     const target = known.get(String(x.id || '').replace(/^#/, ''))
     if (op === 'update' && target && target.source !== 'panel') return revise(target.id, x.text, x.importance)
@@ -185,7 +185,7 @@ export function createMemoryLearning({
       }).ok
     }
     const tags = Array.isArray(x.tags) ? x.tags.map((tag) => String(tag).slice(0, 8)).slice(0, 2) : []
-    const result = add({
+    const entry = {
       text: x.text,
       aboutName: x.about || '',
       about,
@@ -198,7 +198,11 @@ export function createMemoryLearning({
       evidence: x.evidence,
       entity: x.entity,
       topic: x.topic,
-    })
+    }
+    // 批量模式（整理路径）：纯新增只入队、不立刻落盘，由调用方最后一次性 addMany。
+    // update / outdated 仍然即时执行 —— 它们要读旧条目、语义上是「改这一条」，不能攒。
+    if (batch) { batch.push(entry); return true }
+    const result = add(entry)
     return result.ok && (result.id || result.updated)
   }
 
@@ -240,7 +244,7 @@ export function createMemoryLearning({
     },
   }
   const extractor = createMemoryExtractor({
-    dsh, getConfig, relatedTo, commit: commitExtracted, isActive,
+    dsh, getConfig, relatedTo, commit: commitExtracted, isActive, addMany,
     reflect, batchState, scopeOf: scopeFromChatId, recoveryError: () => batchRecoveryError, log,
     consolidation: {
       health, load, save, chatLogDays, chatLogSnapshot,

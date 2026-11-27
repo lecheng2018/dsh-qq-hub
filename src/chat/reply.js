@@ -108,17 +108,15 @@ export function stripUnmarkedThinking(text) {
 
 /**
  * 心智独白的解析预算（计划书 v3.4 §4.3「150 Token 预算兜底」）。
- * 超过这个字数的 inner 块视为「模型跑飞的损坏内心流」：整块丢弃、正文照常输出，
- * 并且闭环标志强制为 continue —— 坏掉的内心流不允许关掉未完成的线索（no-close 保护）。
+ * 超过这个字数的 inner 块视为「模型跑飞的损坏内心流」：整块丢弃、正文照常输出。
+ *
+ * 注（2026-11-27）：提示词里教模型写 <inner> 的整段协议已于 #258 移除，所以正常情况下
+ * 不会再收到独白。这里保留**剥离**能力是防御性的 —— 老会话历史、模型惯性、以及
+ * 入站伪造标签都可能让 <inner> 出现在出站文本里，剥掉才不会把标签发进 QQ。
+ * 但 `parseInnerMeta` / `normalizeClosure`（把独白解析成【意图】【闭环】等结构化字段）
+ * 的消费者（挂起线索账本 inner-thread-link）已在同一 PR 删除，因此这块解析逻辑一并精简。
  */
 export const MAX_INNER_CHARS = 500
-
-/** 闭环标志对外只有两种语义：'close' 可以收线，'continue' 一律不许收线。 */
-const INNER_CLOSE = 'close'
-const INNER_CONTINUE = 'continue'
-
-/** 内心独白里的元数据标签 → 字段名（计划书要求 4 行；顺承前情是给挂起线索账本用的）。 */
-const INNER_FIELDS = { 意图: 'intent', 闭环: 'closure', 情感: 'emotion', 备忘: 'memo', 顺承前情: 'carried' }
 
 /** 在 s[i] 处识别开/闭合/自闭合的 inner 标签：容忍属性、大小写，以及流式输出被掐断的半截标签。 */
 function innerTagAt(s, i) {
@@ -150,38 +148,22 @@ function innerTagAt(s, i) {
   return { end, close: false }
 }
 
-/** 从独白原文里读元数据（【意图】【闭环】【情感】【备忘】【顺承前情】）。 */
-function parseInnerMeta(raw) {
-  const meta = { intent: '', closure: '', emotion: '', memo: '', carried: '' }
-  const re = /【\s*(意图|闭环|情感|备忘|顺承前情)\s*】\s*([^【]*)/g
-  let m
-  while ((m = re.exec(raw)) !== null) {
-    const key = INNER_FIELDS[m[1]]
-    const value = m[2].trim()
-    // 多段独白：后写的覆盖先写的（后一段是对前一段的修正）
-    if (key && value) meta[key] = value
-  }
-  return meta
-}
-
-/** 闭环标志归一：只认明确的 close 词，空值/乱码/未知词一律 fail-closed 成 continue。 */
-function normalizeClosure(value) {
-  const v = String(value || '').trim().toLowerCase()
-  if (!v) return INNER_CONTINUE
-  return /^(close|closed|closing|done|finished|finish|end|over|关闭|结束|收线|收尾|闭环)/.test(v) ? INNER_CLOSE : INNER_CONTINUE
-}
-
 /**
- * 双向解析并 100% 剥离心智独白标签 <inner>…</inner>（计划书 v3.4 Phase 1）。
+ * 双向解析并 100% 剥离心智独白标签 <inner>…</inner>。
  *
+ * 只做**剥离**（这是安全需求，不能删）：
  * - 标签在开头 / 中间 / 多段都支持；多层嵌套按深度配对，外层整段剥离；
  * - 没有闭合的独白（模型输出被截断）从开标签一路剥到结尾，绝不漏半个字进正文；
  * - 破损拼接（例如 <inn<inner>er>）里的假标签碎片一并清掉，残片不能和真标签拼成正常文字；
  * - 只拿走 inner 块本身：||| 分条与 <voice>/<sticker:>/<face>/<report>/<poke> 协议标记原样保留；
- * - 超长块（> MAX_INNER_CHARS，按 code point 数）整块丢弃，closure 强制 continue。
+ * - 超长块（> MAX_INNER_CHARS，按 code point 数）整块丢弃。
+ *
+ * 结构化字段（intent/closure/emotion/memo/carried）已随挂起线索账本在 #258 一起移除 ——
+ * 那些字段的唯一消费者是 inner-thread-link，它已不存在。这里只返回 `{ text, inner: { raw, overBudget, blocks } }`，
+ * 供排障与「超预算丢整块」这一条语义使用。
  *
  * @param {string} text 模型这一轮的原始输出
- * @returns {{text: string, inner: {raw: string, intent: string, closure: 'close'|'continue', emotion: string, memo: string, carried: string, overBudget: boolean, blocks: number}}}
+ * @returns {{text: string, inner: {raw: string, overBudget: boolean, blocks: number}}}
  */
 export function extractAndStripInnerMonologue(text) {
   const source = String(text ?? '')
@@ -230,16 +212,10 @@ export function extractAndStripInnerMonologue(text) {
   const raws = blocks.map((b) => b.replace(/<\/?inner(?![A-Za-z0-9_-])[^>]*>?/gi, '').trim())
   // 按 code point 计数：emoji 不能被算成两个字，超预算的块整块丢弃
   const overBudget = raws.some((b) => Array.from(b).length > MAX_INNER_CHARS)
-  const meta = overBudget ? {} : parseInnerMeta(raws.join('\n'))
   return {
     text: kept.join('').trim(),
     inner: {
       raw: overBudget ? '' : raws.join('\n').trim(),
-      intent: meta.intent || '',
-      closure: normalizeClosure(meta.closure),
-      emotion: meta.emotion || '',
-      memo: meta.memo || '',
-      carried: meta.carried || '',
       overBudget,
       blocks: blocks.length,
     },

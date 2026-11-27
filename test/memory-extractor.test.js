@@ -171,3 +171,74 @@ test('extractLines 跳过 bili 等无合法作用域的非聊天会话', async (
   assert.equal(res.skipped, true)
   assert.equal(called, 0)
 })
+
+test('extractFacts 批量模式：addMany 抛错时不虚报 factsCommitted，仅统计已即时落盘的条目', async () => {
+  // 1) 纯入队批量写入时 addMany 抛错：factsCommitted 必须为 0（不可误锁 pending）
+  const pureAddExtractor = createMemoryExtractor({
+    dsh: dshWithText('[{"text":"小明喜欢吃苹果","about":"小明"},{"text":"小明养了猫","about":"小明"}]'),
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: (item, { batch }) => { batch.push({ text: item.text }); return true },
+    addMany: () => { throw new Error('磁盘写入失败') },
+    isActive: () => true,
+  })
+  await assert.rejects(pureAddExtractor.extractFacts('private:10002', '内容'), (error) => {
+    assert.equal(error.message, '磁盘写入失败')
+    assert.equal(error.factsCommitted, 0)
+    return true
+  })
+
+  // 2) 若前面有一条 update 即时落盘、后续 add 入队后 addMany 抛错：factsCommitted 应精确为 1
+  const mixedExtractor = createMemoryExtractor({
+    dsh: dshWithText('[{"op":"update","id":"1","text":"已更新事实"},{"text":"入队新增事实"}]'),
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: (item, { batch }) => {
+      if (item.op === 'update') return true
+      batch.push({ text: item.text })
+      return true
+    },
+    addMany: () => { throw new Error('批量落盘异常') },
+    isActive: () => true,
+  })
+  await assert.rejects(mixedExtractor.extractFacts('private:10002', '内容'), (error) => {
+    assert.equal(error.message, '批量落盘异常')
+    assert.equal(error.factsCommitted, 1)
+    return true
+  })
+})
+
+test('extractFacts 批量模式：空白正文与局部跳过不误锁批次，模块关闭等整体拒绝才抛错', async () => {
+  // 局部条目跳过（例如其中一条作用域不合法，另一条已写入）：返回实际写入数，不抛错
+  const batches = []
+  const partialExtractor = createMemoryExtractor({
+    dsh: dshWithText('[{"text":"   "},{"text":"有效事实"},{"text":"另一条会被跳过的条目"}]'),
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: (item, { batch }) => { batch.push({ text: item.text }); return true },
+    addMany: (batch) => {
+      batches.push(batch)
+      return { ok: false, message: '作用域不合法', added: 1, updated: 0, skipped: 1 }
+    },
+    isActive: () => true,
+    log: { info() {}, warn() {}, debug() {} },
+  })
+  const added = await partialExtractor.extractFacts('private:10002', '内容')
+  assert.equal(added, 1)
+  assert.equal(batches[0].length, 2, '纯空白 text 应在入队前过滤掉')
+
+  // 整体拒绝（added=0, updated=0, skipped=0）：必须抛错且 factsCommitted=0
+  const closedExtractor = createMemoryExtractor({
+    dsh: dshWithText('[{"text":"有效事实"}]'),
+    getConfig: () => ({ ownerQQ: '10001', botQQ: '20002', model: { provider: 'test', model: 'm' } }),
+    relatedTo: () => [],
+    commit: (item, { batch }) => { batch.push({ text: item.text }); return true },
+    addMany: () => ({ ok: false, message: '记忆模块已关闭', added: 0, updated: 0, skipped: 0 }),
+    isActive: () => true,
+  })
+  await assert.rejects(closedExtractor.extractFacts('private:10002', '内容'), (error) => {
+    assert.equal(error.message, '记忆模块已关闭')
+    assert.equal(error.factsCommitted, 0)
+    return true
+  })
+})

@@ -9,7 +9,7 @@ import { ExtPage } from './modules.js'
 
 const SOURCE = { tool: '她自己记的', auto: '每日整理', diary: '空间日记', panel: '你加的', event: '她的经历', import: '导入的' }
 
-function Mood({ st, draft, setDraft, toast }) {
+function Memory({ st, draft, setDraft, toast }) {
   const f = useField(draft, setDraft)
   const [mem, setMem] = useState(null)
   const [stats, setStats] = useState(null)
@@ -486,6 +486,6 @@ function MemoryRow({ m, onChanged, toast }) {
 }
 
 export {
-  Mood, ProfilesList, ProfileRow, RecallLog, OwnerMigrate, MemoryImport,
+  Memory, ProfilesList, ProfileRow, RecallLog, OwnerMigrate, MemoryImport,
   StyleEditor, InsightRow, MemoryRow, SOURCE
 }

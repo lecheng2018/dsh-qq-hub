@@ -34,6 +34,21 @@ export function readJson(file, fallback) {
   }
 }
 
+// 真睡眠等一会儿（Windows 上 rename 撞 EPERM/EBUSY 极常见，fnOS 的 SMB/NFS 卷也会）。
+// 不能用 `while (Date.now() < end) {}` 忙等：那是同步空转，会把这 25ms 白白烧在 CPU 上
+// 且**阻塞整个事件循环** —— 而这个函数在记忆/会话/台账的每一次落盘路径上。
+// Atomics.wait 是运行时层面的真睡眠，不占 CPU。
+const sleepBuf = new Int32Array(new SharedArrayBuffer(4))
+function shortSleep (ms) {
+  try {
+    Atomics.wait(sleepBuf, 0, 0, ms)
+  } catch (error) {
+    // 极端环境不支持 Atomics.wait（个别 worker 主线程限制）：退回最小让步，仍不忙等
+    const end = Date.now() + ms
+    while (Date.now() < end) { /* 兜底：宁可忙等也不让 rename 立即失败 */ }
+  }
+}
+
 export function renameWithRetry(from, to, attempts = 4) {
   for (let i = 0; i < attempts; i++) {
     try {
@@ -41,8 +56,7 @@ export function renameWithRetry(from, to, attempts = 4) {
       return
     } catch (err) {
       if (i === attempts - 1 || (err.code !== 'EPERM' && err.code !== 'EBUSY')) throw err
-      const end = Date.now() + 25
-      while (Date.now() < end) {}
+      shortSleep(25)
     }
   }
 }

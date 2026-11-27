@@ -217,7 +217,10 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             perspective: e.perspective || undefined,
             about: e.about || '',
             aboutName: e.aboutName || '',
-            tags: e.tags || [],
+            // tags / history 是**数组**，必须复制：过去 load() 靠外层 structuredClone 兜住，
+            // 现在 load() 不再深拷贝（为了性能），共享 has 的话调用方 `listFor(...)[0].tags.push(x)`
+            // 就会原地改到 scopeSnapshots 里的条目 —— 等于污染内存快照，写盘后还会变成脏数据。
+            tags: Array.isArray(e.tags) ? e.tags.slice() : [],
             importance: typeof e.importance === 'number' ? e.importance : 0.5,
             source: e.source || 'tool',
             sourceId: e.sourceId || '',
@@ -236,7 +239,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             retention: Number(e.retention || 0),
             embeddedAt: Number(e.embeddedAt || 0),
             supersededBy: e.supersededBy || undefined,
-            history: e.history || undefined,
+            history: Array.isArray(e.history) ? e.history.map((h) => (h && typeof h === 'object' ? { ...h } : h)) : undefined,
             ephemeral: e.ephemeral ? 1 : undefined,
             title: e.title || undefined,
             evidence: e.evidence || undefined,
@@ -254,7 +257,7 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
             text: e.text || '',
             at: typeof e.at === 'number' ? e.at : Date.now(),
             origin: e.origin || undefined,
-            sourceFactIds: e.sourceFactIds || undefined,
+            sourceFactIds: Array.isArray(e.sourceFactIds) ? e.sourceFactIds.slice() : undefined,
             sourceRev: e.sourceRev || undefined,
             stale: e.stale || undefined,
             staleAt: e.staleAt || undefined,
@@ -300,18 +303,28 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
       }
     }
 
+    // 运行状态字段是 stateSnapshot 的**共享引用**：调用方改它就会污染内存快照。
+    // 这里一律浅拷贝一层（这几个都是普通对象，浅拷贝足够：调用方只会整体替换 map/字段，
+    // 不会深改某个值的内部结构）。这样 load() 就不必再对整个条目数组做 structuredClone ——
+    // 上面 items/profiles/insights/... 每个元素本来就是新建对象，深拷贝 815 条纯属白花
+    // 4.9ms/次，而 load() 是每轮聊天 + 每条群消息都要走的固定税。
+    const shallow = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : (v || {}))
+    const lastConsolidate = shallow(stateSnapshot.lastConsolidate)
+    if (lastConsolidate.retry && typeof lastConsolidate.retry === 'object') {
+      lastConsolidate.retry = { ...lastConsolidate.retry }
+    }
     return {
       items,
       profiles,
       insights,
       styles,
       styleSources,
-      insightNames: stateSnapshot.insightNames || {},
-      processed: stateSnapshot.processed || {},
-      processedSources: stateSnapshot.processedSources || {},
-      extractionBatches: stateSnapshot.extractionBatches || {},
-      runs: stateSnapshot.runs || {},
-      lastConsolidate: stateSnapshot.lastConsolidate || {},
+      insightNames: shallow(stateSnapshot.insightNames),
+      processed: shallow(stateSnapshot.processed),
+      processedSources: shallow(stateSnapshot.processedSources),
+      extractionBatches: shallow(stateSnapshot.extractionBatches),
+      runs: shallow(stateSnapshot.runs),
+      lastConsolidate,
       rev,
     }
   }
@@ -377,7 +390,16 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
   return {
     load: () => {
       if (closed) throw new Error('记忆存储已关闭')
-      return structuredClone(assembleState())
+      // 不再 structuredClone：assembleState() 产出的 items/profiles/insights/... 全是新建对象，
+      // 运行状态字段在 assembleState 里已做浅拷贝。深拷贝 815 条要 4.9ms，而 load() 是
+      // indexFor / topicScore / recall / contextFor 的共同入口，每轮聊天与每条群消息都要付。
+      return assembleState()
+    },
+
+    /** 轻量版本号：只读内存 rev，不构造 items（indexFor 的缓存判定用它，避免整库物化）。 */
+    rev: () => {
+      if (closed) throw new Error('记忆存储已关闭')
+      return rev
     },
 
     save: (s) => {

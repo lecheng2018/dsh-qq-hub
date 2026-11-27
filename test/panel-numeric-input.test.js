@@ -129,7 +129,7 @@ test('multiparser 的群号名单改成 ListInput（逗号/空格不再被逐键
 })
 
 test('记忆页的整理时间照实显示（清空后不再假装还是 04:00）', () => {
-  const src = readFileSync(join(ROOT, 'client/src/views/mood.js'), 'utf8')
+  const src = readFileSync(join(ROOT, 'client/src/views/memory.js'), 'utf8')
   assert.doesNotMatch(stripComments(src), /value=\{times\[0\] \|\| '04:00'\}/, '框里不该塞一个没写进草稿的默认值')
   assert.ok(/value=\{times\[0\] \|\| ''\}/.test(src))
 })
