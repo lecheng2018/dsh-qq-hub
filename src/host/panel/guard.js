@@ -145,11 +145,17 @@ const SIDE_EFFECT_PATHS = new Set([
 
   // ── 商店分发但仍挂无前缀路由的模块（routePrefixFor → CORE_PANEL_IDS）：
   // bili / douyin / heybox / multi-parser / qzone-social 的写接口全部只认 POST。
+  // 收录口径：**该 handler 真的会产生副作用**（改配置/落库/驱动浏览器/删文件/对外发送），
+  // 且面板本身用 POST/act 调用。面板用 GET 调的只读路由（/xxx/state、/xxx/account、
+  // /xxx/shots、/douyin/login/status、/multi-parser/status …）绝不收录，否则会把面板打断。
   '/bili/run', '/bili/replies', '/bili/shot/delete',
   '/douyin/run', '/douyin/login', '/douyin/dms', '/douyin/confirm-owner',
+  '/douyin/window',               // douyin:99 显示/收起浏览器窗口（驱动宿主浏览器）
   '/heybox/run', '/heybox/clear-quota', '/heybox/risk/clear',
   '/heybox/qr/start', '/heybox/qr/poll', '/heybox/verify/start', '/heybox/verify/finish',
-  '/heybox/login-cookie', '/heybox/post-plan',
+  '/heybox/login-cookie',
+  '/heybox/topics/refresh',       // heybox:186 重拉分区表并落盘
+  '/heybox/acts/refresh',         // heybox:194 重拉话题表并落盘
   '/multi-parser/test',
   '/qzone/social/run',
 ])

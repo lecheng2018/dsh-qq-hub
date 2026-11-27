@@ -226,3 +226,43 @@ test('S9：GitHub 兜底源固定版本并带 sha256，不再 latest/download', 
   }
   assert.ok(UV_SOURCES.some((s) => s.url.includes('astral-sh/uv/releases/download/0.13.5/')), 'GitHub 源固定到 0.13.5')
 })
+// ---------- S4 补：副作用表与面板实际调用方法的一致性 ----------
+//
+// 这一层专门防「凭印象列清单」：清单漏一条 = 跨站 GET 仍能打穿；
+// 清单多列一条只读路由 = 面板自己用 GET 调就被 405 打断。两个方向都测。
+
+test('S4：副作用表不得收录面板用 GET 调用的只读路由（否则面板被打断）', () => {
+  const guard = src('src/host/panel/guard.js')
+  const panelGet = [
+    '/bili/account', '/bili/shots', '/bili/state',
+    '/douyin/account', '/douyin/login/status', '/douyin/state',
+    '/heybox/account', '/heybox/state', '/heybox/topics',
+    '/multi-parser/status', '/qzone/social/state',
+  ]
+  for (const route of panelGet) {
+    assert.doesNotMatch(guard, new RegExp(`'${route.replace(/\//g, '\\/')}'`), `${route} 是面板 GET 只读路由，不能进副作用表`)
+  }
+})
+
+test('S4：有真实副作用且面板用 POST 调用的路由必须全部收录', () => {
+  const guard = src('src/host/panel/guard.js')
+  const mustHave = [
+    '/bili/run', '/bili/replies', '/bili/shot/delete',
+    '/douyin/run', '/douyin/login', '/douyin/dms', '/douyin/confirm-owner', '/douyin/window',
+    '/heybox/run', '/heybox/clear-quota', '/heybox/risk/clear',
+    '/heybox/qr/start', '/heybox/qr/poll', '/heybox/verify/start', '/heybox/verify/finish',
+    '/heybox/login-cookie', '/heybox/topics/refresh', '/heybox/acts/refresh',
+    '/multi-parser/test', '/qzone/social/run',
+  ]
+  for (const route of mustHave) {
+    assert.match(guard, new RegExp(`'${route.replace(/\//g, '\\/')}'`), `${route} 必须有副作用保护`)
+  }
+})
+
+test('S4：只读路由确实不会被 405 拦（负面用例，防清单扩散）', () => {
+  const guard = src('src/host/panel/guard.js')
+  // 纯粹的状态读取路由不该出现在任何副作用清单里
+  for (const route of ['/heybox/post-plan']) {
+    assert.doesNotMatch(guard, new RegExp(`'${route.replace(/\//g, '\\/')}'`), `${route} 只读（postPlanState），不该被强制 POST`)
+  }
+})
