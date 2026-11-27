@@ -10,8 +10,19 @@ export function dshHome() {
 
 /** 插件所有数据放这儿：优先 ~/.dsh/plugins-data/dsh-qq-hub/，自动兼容继承老用户历史数据 */
 export function dataDir(...parts) {
-  const envDir = process.env.DSH_QQ_HUB_DATA_DIR || process.env.AURABOT_DATA_DIR
+  const primary = process.env.DSH_QQ_HUB_DATA_DIR
+  const legacy = process.env.AURABOT_DATA_DIR
+  const isolated = process.env.QQHUB_TEST_ISOLATION_DIR
+  // 全局测试隔离会同时把 DSH_QQ_HUB_DATA_DIR 与 AURABOT_DATA_DIR 设为基线临时目录；
+  // 若单个用例只覆盖了老变量 AURABOT_DATA_DIR，应以用例显式指定的目录为准。
+  let envDir = primary || legacy
+  if (isolated && primary === isolated && legacy && legacy !== isolated) {
+    envDir = legacy
+  }
   if (envDir) return join(envDir, ...parts)
+  if (process.env.NODE_TEST_CONTEXT && process.env.QQHUB_ALLOW_DEFAULT_DATA_DIR_IN_TEST !== '1') {
+    throw new Error('测试环境禁止在未设置 DSH_QQ_HUB_DATA_DIR / AURABOT_DATA_DIR 时访问默认数据目录（若有意测试默认路径，请设置 QQHUB_ALLOW_DEFAULT_DATA_DIR_IN_TEST=1）')
+  }
   const home = join(dshHome(), 'plugins-data')
   const newBase = join(home, 'dsh-qq-hub')
   const legacyBase = join(home, 'aurabot')

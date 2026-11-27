@@ -98,13 +98,20 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
     const today = new Date().toDateString()
     if (s.day !== today) Object.assign(s, { day: today, count: 0 })
     if (!s.nextAt) schedule(s, c)
-    const h = new Date().getHours()
-    const awake = h >= c.awakeFrom && h < c.awakeTo
-    const idleOk = Date.now() - lastPrivateAt() > c.idleMinutes * 60_000
+    const now = Date.now()
+    const h = new Date(now).getHours()
+    const awakeFrom = Number(c.awakeFrom) || 0
+    const awakeTo = Number(c.awakeTo ?? 24)
+    const awake = (awakeFrom === 0 && awakeTo >= 24) || (awakeFrom % 24) === (awakeTo % 24)
+      ? true
+      : awakeFrom < awakeTo
+        ? (h >= awakeFrom && h < awakeTo)
+        : (h >= awakeFrom || h < awakeTo)
+    const idleOk = now - lastPrivateAt() > c.idleMinutes * 60_000
     // 早安 / 晚安：固定时间点，不参与「随机间隔」的抽签。
     // （参考 surfcore 的 greeting-schedule：用户反馈「早上八点的问候没成功」——因为它是纯随机的，
     //   醒来那一刻只有 1/N 的概率撞上。这里改成到点必发一次，且每天只发一次。）
-    const greet = greetingDue(cfg, s)
+    const greet = greetingDue(cfg, s, now, lastPrivateAt())
     if (awake && greet) {
       s.greeted = { ...(s.greeted || {}), [greet.kind]: today }
       save(s)

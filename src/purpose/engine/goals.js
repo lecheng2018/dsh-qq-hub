@@ -26,6 +26,9 @@ function detectStance(text) {
 function subjectOf(material) {
   if (material?.kind === 'owner') return 'owner';
   if (material?.kind === 'self' || material?.kind === 'thought' || material?.kind === 'memory') return 'self';
+  if (material?.kind === 'crucible') {
+    return material?.source === 'bili' || material?.source === 'rss' ? 'media' : 'self';
+  }
   if (material?.kind === 'member') return 'member';
   if (material?.kind === 'video' || material?.kind === 'dynamic') return 'media';
   return 'media';

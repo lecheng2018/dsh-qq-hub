@@ -132,21 +132,50 @@ async function findOrFetchUv(log) {
   return existsSync(local) ? local : ''
 }
 
+/**
+ * 提取子进程（特别是 Python 3.11+ traceback）的有效错误摘要：
+ * 过滤纯 `^^^` / `~~~` 指示行，优先提取最终异常行，避免 `.slice(-200)` 截出无意义的源码碎片。
+ */
+export function summarizeSubprocessError(stderr, stdout = '', maxLen = 200) {
+  const cleanLines = (raw) => String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^[~^]+$/.test(line))
+
+  let lines = cleanLines(stderr)
+  if (!lines.length) lines = cleanLines(stdout)
+  if (!lines.length) return '未知错误'
+
+  // 优先自底向上找真正的异常行（如 NoAudioReceived: ... / UnicodeDecodeError: ...）
+  const excRe = /^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit|Failure|Timeout|NoAudioReceived)\b(?::.*)?$/
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (excRe.test(lines[i])) return lines[i].slice(0, maxLen)
+  }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^[A-Za-z_][\w.]*:\s*.+/.test(lines[i]) && !/^Traceback\b/i.test(lines[i])) {
+      return lines[i].slice(0, maxLen)
+    }
+  }
+  return lines[lines.length - 1].slice(0, maxLen)
+}
+
+export function pcm16ToInt16Array(buf) {
+  const aligned = buf.byteOffset % 2 === 0 ? buf : Buffer.from(buf)
+  return new Int16Array(aligned.buffer, aligned.byteOffset, Math.floor(aligned.length / 2))
+}
+
 async function edgeSynth(text, voice, rate, pitch) {
   const file = join(outDir(), `${randomUUID()}.mp3`)
-  // 文字走 stdin 的临时文件，避免命令行里的引号 / 编码问题
-  const txt = join(outDir(), `${randomUUID()}.txt`)
-  const { writeFileSync } = await import('node:fs')
-  writeFileSync(txt, text, 'utf8')
-  const args = ['-I', '-m', 'edge_tts', '--voice', voice, '--file', txt, '--write-media', file]
+  // 文字直接走 stdin（--file -）并以 -X utf8 启动 Python：避免临时 .txt 文件与竞态，
+  // 且不再用 -I（会屏蔽 PYTHONUTF8，导致 Windows GBK 环境读 UTF-8 报错）。
+  const args = ['-X', 'utf8', '-m', 'edge_tts', '--voice', voice, '--file', '-', '--write-media', file]
   const SAFE_RATE_RE = /^[+-]?\d+%(?:\s*)$/
   const SAFE_PITCH_RE = /^[+-]?\d+Hz(?:\s*)$/
   if (rate && rate !== '+0%' && SAFE_RATE_RE.test(rate)) args.push(`--rate=${rate.trim()}`)
   if (pitch && pitch !== '+0Hz' && SAFE_PITCH_RE.test(pitch)) args.push(`--pitch=${pitch.trim()}`)
-  const r = await run(pyExe(), args, { timeoutMs: 60000 })
-  try { unlinkSync(txt) } catch (error) {}
+  const r = await run(pyExe(), args, { timeoutMs: 60000, input: text })
   if (r.code !== 0 || !existsSync(file) || statSync(file).size < 500) {
-    throw new Error('edge-tts 失败：' + (r.err || r.out).slice(-200))
+    throw new Error('edge-tts 失败：' + summarizeSubprocessError(r.err, r.out))
   }
   return file
 }
@@ -161,7 +190,7 @@ async function windowsSynth(text) {
     'if($zh){$s.SelectVoice($zh.VoiceInfo.Name)};' +
     `$s.SetOutputToWaveFile('${file.replace(/'/g, "''")}');$s.Speak($t);$s.Dispose()`
   const r = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::InputEncoding=[Text.Encoding]::UTF8;${script}`], { timeoutMs: 60000, input: text })
-  if (!existsSync(file) || statSync(file).size < 1000) throw new Error('Windows 语音失败：' + r.err.slice(-200))
+  if (!existsSync(file) || statSync(file).size < 1000) throw new Error('Windows 语音失败：' + summarizeSubprocessError(r.err, r.out))
   return file
 }
 
@@ -181,8 +210,8 @@ function saveAudio(buf, sampleRate) {
   const isOgg = buf.toString('ascii', 0, 4) === 'OggS'
   let out = buf
   let ext = isWav ? 'wav' : isMp3 ? 'mp3' : isOgg ? 'ogg' : 'wav'
-  // 裸 PCM16（CosyVoice 官方 FastAPI 就是这样流式返回的）：包一个 WAV 头
-  if (!isWav && !isMp3 && !isOgg) out = buildWav(new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2)), sampleRate)
+  // 裸 PCM16（CosyVoice 官方 FastAPI 就是这样流式返回的）：包一个 WAV 头（先对齐奇数 byteOffset）
+  if (!isWav && !isMp3 && !isOgg) out = buildWav(pcm16ToInt16Array(buf), sampleRate)
   const file = join(outDir(), `${randomUUID()}.${ext}`)
   writeFileSync(file, out)
   return file
@@ -656,6 +685,7 @@ export const voiceConverters = []
 export async function textToSpeech(text, opt = {}, log) {
   const clean = String(text || '').trim()
   if (!clean) throw new Error('没有要念的文字')
+  if (opt.engine === 'none') throw new Error('语音合成已关闭（engine=none）')
   let file = ''
   let engine = ''
   let primaryError = null
@@ -668,7 +698,7 @@ export async function textToSpeech(text, opt = {}, log) {
     } catch (error) {
       if (noFallback) throw error
       primaryError = error
-      log?.warn(`${opt.engine} 失败：${error.message} → 改用 Windows 语音`)
+      log?.warn(WIN ? `${opt.engine} 失败：${error.message} → 改用 Windows 语音` : `${opt.engine} 失败：${error.message}`)
     }
   } else if (opt.engine !== 'windows' && edgeInstalled()) {
     try {
@@ -677,7 +707,7 @@ export async function textToSpeech(text, opt = {}, log) {
     } catch (error) {
       if (noFallback) throw error
       primaryError = error
-      log?.warn(error.message, '→ 改用 Windows 语音')
+      log?.warn(WIN ? `${error.message} → 改用 Windows 语音` : error.message)
     }
   }
   if (!file) {

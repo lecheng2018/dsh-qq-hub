@@ -512,13 +512,23 @@ export function apply(ctx) {
     log: logger.child('危险命令'),
     deliver: (chatId, text) => hub.sendText(chatId, text),
     chatOfSession: (sessionId) => { try { return hub.chatOfSession?.(sessionId) || '' } catch (error) { return '' } },
+    isQqSession: (sessionId, exec) => {
+      try { if (sessionId && hub.chatOfSession?.(sessionId)) return true } catch {}
+      const preset = String(exec?.agent?.session?.agentPreset || exec?.session?.agentPreset || exec?.agentPreset || '')
+      if (preset.startsWith('qq-hub-')) return true
+      try { if (sessionId && hub.isSystemSession?.(sessionId)) return true } catch {}
+      return false
+    },
     ownerQQ: () => cfg.ownerQQ,
   })
   core.dangerGuard = dangerGuard
   ctx.effect(() => {
     let off = null
     try { off = ctx.on('tools/pre-execute', (exec, next) => dangerGuard.preExecute(exec, next)) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
-    return () => { try { if (typeof off === 'function') off() } catch (error) {} }
+    return () => {
+      try { if (typeof off === 'function') off() } catch (error) {}
+      try { dangerGuard.dispose?.() } catch (error) {}
+    }
   }, 'qq-hub: 危险命令确认')
 
   // ---------- 宿主旁路 seam（审批流/交互提问/会话监听/看门狗，见 host/effects.js） ----------

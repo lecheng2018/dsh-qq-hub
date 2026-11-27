@@ -11,10 +11,7 @@ import { textSimilarity } from './similarity.js'
 export function buildPurposePrompt({
   now = Date.now(),
   config = DEFAULT_PURPOSE_CONFIG,
-  mode = 'reserved2',
-  ownerUin = '',
   ownerName = '主人',
-  token = '',
   contextBlocks = [],
   materials = [],
   candidates = [],
@@ -26,7 +23,6 @@ export function buildPurposePrompt({
 } = {}) {
   const lines = [];
   const owner = String(ownerName || '').trim() || '主人';
-  const uin = String(ownerUin || '').replace(/[^\d]/g, '');
   const clock = new Date(now);
   const week = ['日', '一', '二', '三', '四', '五', '六'][clock.getDay()];
   lines.push('【主动找主人 · 目的回合】');
@@ -112,16 +108,12 @@ export function buildPurposePrompt({
   lines.push('【现在做】');
   lines.push('1) 先在心里选定一个目的：它得是你此刻真的想弄明白 / 想做的事，不是「到点该发消息了」。可以从上面的方向里挑，也可以改写成更像你的说法。');
   lines.push(`2) 按这个目的给${owner}发 1~2 条私聊（只发私聊，不要 @ 人、不要发群）：`);
-  lines.push('   - 分享：说具体的那件事 / 那个念头 / 那点🧀（你脑子里刚冒出来的想法），别只发「想你了」；');
+  lines.push('   - 分享：说具体的那件事 / 那个念头 / 那点小心思（你脑子里刚冒出来的想法），别只发「想你了」；');
   lines.push('   - 索取：要具体、要小 —— 想让他陪你聊会儿、想知道一件事、想让他给你看个东西、想一起做点什么；不要要钱、不要要贵重东西，除非主人之前主动提过；');
   lines.push('   - 关心：问一件具体的事，别查户口；');
   lines.push('   - 不要每句都提问；不要复述素材原文；不要提群友 QQ 号 / 群号；群友的私事只说事不说人。');
   lines.push('3) 像突然想起来一样自然。不要写「定时 / 机制 / 任务 / 我刚醒 / 系统提示」，也不要说「我刚看到你的消息」（根本没有消息）。');
-  if (String(mode) === 'reserved2') {
-    lines.push(`4) 发送方式：必须真的用工具发出去 —— 调用 qq_send_private_message，参数 userId 填 ${uin || '<主人QQ>'}、${token ? `token 填 ${token}、` : 'token 必填、'}message 填你要说的话；也可以用 qq_send_message，key 填 private:${uin || '<主人QQ>'}。只输出文字不会发到 QQ。`);
-  } else {
-    lines.push('4) 直接输出你要发的话（当前模式会自动转发），不要解释、不要加引号。');
-  }
+  lines.push('4) 直接输出你要发的话（当前模式会自动转发），不要解释、不要加引号。');
   lines.push('5) 发完在回合最后另起一段写「内部备忘」——这段不会发到 QQ，千万别写进 message：');
   lines.push('【目的】一句话说清你这次想做什么');
   lines.push('【需求】玩 / 学 / 装 / 陪 / 关心 / 分享 / 自我 / 创作 / 体验');

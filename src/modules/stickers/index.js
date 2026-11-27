@@ -2,7 +2,7 @@
 // 导出的就是表情库（createStickerStore 的返回值），聊天中枢发表情、偷表情都找它。
 
 import { readFileSync, existsSync } from 'node:fs'
-import { createStickerStore, stickerPath } from '../../features/stickers.js'
+import { createStickerStore, stickerPath, PROTECTED_FROM } from '../../features/stickers.js'
 import { defineTool, int, str } from '../../tools/tools.js'
 import { fetchImage, segmentBytes } from '../../core/net.js'
 import { resolvePainting } from '../../features/paintings.js'
@@ -68,8 +68,8 @@ export default {
             const item = found.item
             const label = item.name || item.md5.slice(0, 8)
             if (del) {
-              // 主人亲手加的表情，主人开口才删
-              if ((item.from === 'manual' || item.from === 'panel' || item.from === 'pack') && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
+              // 主人亲手加/导入的表情（含 manual/panel/qq/tool/pack），主人开口才删
+              if (PROTECTED_FROM.has(String(item.from || '')) && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
               const r = await store.remove(item.md5)
               return r.ok ? { ok: true, message: `删掉了「${label}」` } : { ok: false, message: r.reason || '没删成' }
             }
@@ -199,7 +199,7 @@ export default {
     api.route('/stickers', async () => {
       const items = store.library().items.slice().reverse()
       const max = Number(api.config().stickers.maxLibrary) || 300
-      const protectedCount = items.filter((i) => ['manual', 'panel', 'qq', 'tool', 'pack'].includes(String(i.from || ''))).length
+      const protectedCount = items.filter((i) => PROTECTED_FROM.has(String(i.from || ''))).length
       return { ok: true, items, max, protectedCount, over: Math.max(0, items.length - max) }
     })
     api.route('/sticker/image', async (req, res) => {

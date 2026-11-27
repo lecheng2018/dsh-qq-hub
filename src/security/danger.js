@@ -152,19 +152,37 @@ function shellCommands (text) {
   return commands
 }
 
+const WRAPPER_OPTS_WITH_ARG = {
+  sudo: new Set(['-u', '-g', '-h', '-p', '-C', '-T', '-r', '-t', '--user', '--group', '--host', '--prompt']),
+  env: new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string']),
+  command: new Set([]),
+  nohup: new Set([]),
+  timeout: new Set(['-k', '-s', '--kill-after', '--signal']),
+  nice: new Set(['-n', '--adjustment']),
+  ionice: new Set(['-c', '-n', '-p', '-P', '-u', '--class', '--classdata']),
+  time: new Set(['-f', '-o', '--format', '--output']),
+  exec: new Set(['-a']),
+  builtin: new Set([]),
+  setsid: new Set([]),
+  stdbuf: new Set(['-i', '-o', '-e', '--input', '--output', '--error']),
+}
+
 function commandWords (words) {
   let i = 0
   while (i < words.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue }
     if (['if', 'then', 'elif', 'else', 'do', 'while', 'until', '!', '{'].includes(words[i])) { i++; continue }
     const name = words[i].split('/').pop()
-    if (!['sudo', 'env', 'command'].includes(name)) break
+    const optsWithArg = WRAPPER_OPTS_WITH_ARG[name]
+    if (!optsWithArg) break
     i++
     while (i < words.length && words[i].startsWith('-')) {
       const option = words[i++]
       if (option === '--') break
-      if (['-u', '-g', '-h', '-p', '--user', '--group', '--unset'].includes(option)) i++
+      if (optsWithArg.has(option)) i++
     }
+    // timeout [opts] <duration> <cmd...>：跳掉必选的时长位置参数
+    if (name === 'timeout' && i < words.length) i++
   }
   return words.slice(i)
 }
@@ -175,8 +193,28 @@ function rootTarget (target) {
 }
 
 function systemTarget (target) {
+  if (!target || target.startsWith('-')) return false
   const normalized = path.posix.normalize(target)
   return rootTarget(target) || /^\/(?:etc|usr|bin|sbin|boot|lib|lib64)(?:\/|$)/.test(normalized)
+}
+
+function shellCommandArg (args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '--') return null
+    if (arg === '--command' || /^-[^-]*c/.test(arg)) {
+      let j = i + 1
+      while (j < args.length && args[j] === '--') j++
+      return j < args.length ? args[j] : null
+    }
+  }
+  return null
+}
+
+function evalArgsText (args) {
+  let start = 0
+  while (start < args.length && args[start] === '--') start++
+  return args.slice(start).join(' ')
 }
 
 function callArguments (text, start, parenthesized) {
@@ -211,12 +249,15 @@ function callArguments (text, start, parenthesized) {
 function literalString (expression) {
   const text = expression.trim()
   const quote = text[0]
-  if (quote !== "'" && quote !== '"') return null
+  if (quote !== "'" && quote !== '"' && quote !== '`') return null
   let value = ''
   for (let i = 1; i < text.length; i++) {
     if (text[i] === '\\' && i + 1 < text.length) value += text[++i]
-    else if (text[i] === quote) return text.slice(i + 1).trim() ? null : value
-    else value += text[i]
+    else if (text[i] === quote) {
+      if (text.slice(i + 1).trim()) return null
+      if (quote === '`' && value.includes('${')) return null
+      return value
+    } else value += text[i]
   }
   return null
 }
@@ -229,23 +270,36 @@ function literalList (expression) {
   return values.every((value) => value !== null) ? values : null
 }
 
-function maskStrings (code) {
+function maskStrings (code, language = 'shell') {
   let masked = ''
   let quote = ''
-  let comment = false
+  let lineComment = false
+  let blockComment = false
+  const isJs = language === 'node'
   for (let i = 0; i < code.length; i++) {
     const ch = code[i]
-    if (comment) {
-      if (ch === '\n') { comment = false; masked += '\n' } else masked += ' '
+    if (blockComment) {
+      if (ch === '*' && code[i + 1] === '/') { blockComment = false; masked += '  '; i++ }
+      else masked += ch === '\n' ? '\n' : ' '
+    } else if (lineComment) {
+      if (ch === '\n') { lineComment = false; masked += '\n' } else masked += ' '
     } else if (quote) {
       masked += ' '
       if (ch === '\\' && i + 1 < code.length) { masked += ' '; i++ }
       else if (ch === quote) quote = ''
-    } else if (ch === "'" || ch === '"') {
+    } else if (ch === "'" || ch === '"' || (isJs && ch === '`')) {
       quote = ch
       masked += ' '
-    } else if (ch === '#') {
-      comment = true
+    } else if (isJs && ch === '/' && code[i + 1] === '/') {
+      lineComment = true
+      masked += '  '
+      i++
+    } else if (isJs && ch === '/' && code[i + 1] === '*') {
+      blockComment = true
+      masked += '  '
+      i++
+    } else if (!isJs && ch === '#') {
+      lineComment = true
       masked += ' '
     } else masked += ch
   }
@@ -253,7 +307,39 @@ function maskStrings (code) {
 }
 
 function inspectCode (code, language, depth) {
-  const masked = maskStrings(code)
+  const masked = maskStrings(code, language)
+  if (language === 'node') {
+    const execCalls = /\b(?:execSync|exec|spawnSync|spawn|execFileSync|execFile)\s*\(/g
+    for (const match of masked.matchAll(execCalls)) {
+      const fn = match[0].replace(/\s*\($/, '')
+      const args = callArguments(code, match.index + match[0].length, true)
+      if (!args.length) continue
+      const first = literalString(args[0])
+      if (first === null) continue
+      if (fn === 'exec' || fn === 'execSync') {
+        const danger = inspectShell(first, depth + 1)
+        if (danger) return danger
+      } else {
+        const argv = args.length > 1 ? literalList(args[1]) : null
+        const danger = argv ? inspectWords([first, ...argv], depth + 1) : inspectShell(first, depth + 1)
+        if (danger) return danger
+      }
+    }
+    const fsDeleteCalls = /\b(?:rmSync|rm|rmdirSync|rmdir|unlinkSync|unlink|truncateSync|truncate)\s*\(/g
+    for (const match of masked.matchAll(fsDeleteCalls)) {
+      const args = callArguments(code, match.index + match[0].length, true)
+      const first = args.length ? literalString(args[0]) : null
+      if (first !== null && systemTarget(first)) return { label: '递归删除根目录/系统目录' }
+    }
+    return null
+  }
+  if (language === 'python') {
+    for (const match of masked.matchAll(/\b(?:shutil\.)?rmtree\s*\(/g)) {
+      const args = callArguments(code, match.index + match[0].length, true)
+      const first = args.length ? literalString(args[0]) : null
+      if (first !== null && systemTarget(first)) return { label: '递归删除根目录/系统目录' }
+    }
+  }
   const calls = language === 'python'
     ? /\b(?:os\.(?:system|popen|exec(?:l|le|lp|lpe|v|ve|vp|vpe))|subprocess\.(?:run|call|check_call|check_output|Popen))\s*\(/g
     : /\b(?:system|exec)\b/g
@@ -299,12 +385,16 @@ function inspectWords (input, depth) {
   if (!words.length) return null
   const name = words[0].split('/').pop()
   const args = words.slice(1)
+  if (name === 'eval') {
+    const script = evalArgsText(args)
+    return script ? inspectShell(script, depth + 1) : null
+  }
   const normalized = [name, ...args].join(' ')
   for (const rule of DANGER_RULES) {
     const match = rule.re.exec(normalized)
     if (match && match.index === 0) return { label: rule.label }
   }
-  if (name === 'rm' && args.some((arg) => arg === '--recursive' || (/^-[^-]+$/.test(arg) && /[rR]/.test(arg))) && args.some(rootTarget)) {
+  if (name === 'rm' && args.some((arg) => arg === '--recursive' || (/^-[^-]+$/.test(arg) && /[rR]/.test(arg))) && args.some(systemTarget)) {
     return { label: '递归删除根目录/盘符' }
   }
   if (name === 'find' && args.includes('-delete')) {
@@ -314,7 +404,7 @@ function inspectWords (input, depth) {
       if (arg.startsWith('-') || arg === '!' || arg === '(') break
       paths.push(arg)
     }
-    if (paths.some(rootTarget)) return { label: '递归删除根目录' }
+    if (paths.some(systemTarget)) return { label: '递归删除根目录/系统目录' }
   }
   if (name === 'truncate') {
     let zeroSize = false
@@ -332,8 +422,8 @@ function inspectWords (input, depth) {
     return { label: '强制改系统目录权限' }
   }
   if (/^(?:ba|da|z|k|a)?sh$/.test(name)) {
-    const index = args.findIndex((arg) => arg === '--command' || /^-[^-]*c/.test(arg))
-    if (index >= 0 && args[index + 1] !== undefined) return inspectShell(args[index + 1], depth + 1)
+    const script = shellCommandArg(args)
+    if (script !== null) return inspectShell(script, depth + 1)
   }
   if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(name)) {
     if (args.some((arg, i) => /^-(?:ep|ExecutionPolicy)$/i.test(arg) && /^(?:Bypass|Unrestricted)$/i.test(args[i + 1] || ''))) return { label: 'pwsh 绕过执行策略' }
@@ -347,6 +437,10 @@ function inspectWords (input, depth) {
     const index = args.indexOf('-c')
     if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'python', depth + 1)
   }
+  if (/^node(?:\.exe)?$/i.test(name)) {
+    const index = args.findIndex((arg) => arg === '-e' || arg === '--eval' || arg === '-p' || arg === '--print')
+    if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'node', depth + 1)
+  }
   if (/^perl(?:\d+(?:\.\d+)*)?$/.test(name)) {
     const index = args.findIndex((arg) => /^-[^-]*[eE]$/.test(arg))
     if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'perl', depth + 1)
@@ -359,6 +453,10 @@ const SHELL_NAME = /^(?:ba|da|z|k|a)?sh$/i
 function producerRisk (input, depth) {
   const [executable = '', ...args] = commandWords(input)
   const name = executable.split('/').pop().toLowerCase()
+  if (name === 'eval') {
+    const script = evalArgsText(args)
+    return script ? inspectShell(script, depth + 1, true) : null
+  }
   if (['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 'invoke-restmethod'].includes(name)) return { label: '下载后直接执行' }
   if (['base64', 'openssl'].includes(name) && args.some((arg) => /^-(?:d|D|-[Dd]ecode)$/.test(arg))) return { label: 'bash 解码后执行' }
   if ((name === 'xxd' && args.some((arg) => /^-[rp]/.test(arg))) ||
@@ -375,9 +473,14 @@ function tokenIsCommand (script, token, depth) {
   return shellCommands(script).some(({ words }) => {
     const command = commandWords(words)
     if (command[0]?.includes(token)) return true
-    if (!SHELL_NAME.test((command[0] || '').split('/').pop())) return false
-    const index = command.findIndex((arg, i) => i > 0 && (arg === '--command' || /^-[^-]*c/.test(arg)))
-    return index >= 0 && tokenIsCommand(command[index + 1] || '', token, depth + 1)
+    const name = (command[0] || '').split('/').pop()
+    if (name === 'eval') {
+      const body = evalArgsText(command.slice(1))
+      return Boolean(body && tokenIsCommand(body, token, depth + 1))
+    }
+    if (!SHELL_NAME.test(name)) return false
+    const shellScript = shellCommandArg(command.slice(1))
+    return shellScript !== null && tokenIsCommand(shellScript, token, depth + 1)
   })
 }
 
@@ -386,23 +489,33 @@ function inspectShell (text, depth = 0, outputExecuted = false) {
   // This operator pattern must ignore quoted examples and comments.
   if (/:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/.test(maskStrings(text))) return { label: 'forkshell 炸弹' }
   const commands = shellCommands(text)
+  let pipelineDanger = null
   for (let i = 0; i < commands.length; i++) {
     const { words, substitutions, redirects, operator } = commands[i]
     const command = commandWords(words)
     const name = (command[0] || '').split('/').pop()
-    const shellIndex = SHELL_NAME.test(name) ? command.findIndex((arg, index) => index > 0 && (arg === '--command' || /^-[^-]*c/.test(arg))) : -1
+    const shellScript = SHELL_NAME.test(name) ? shellCommandArg(command.slice(1)) : null
+    const evalScript = name === 'eval' ? evalArgsText(command.slice(1)) : null
     for (const sub of substitutions) {
       // Inspect the commands inside both substitution forms. A process
       // substitution supplies a file path, not command-substitution output.
-      const executed = !sub.processSubstitution && (command[0]?.includes(sub.token) || (shellIndex >= 0 && tokenIsCommand(command[shellIndex + 1] || '', sub.token, depth + 1)))
+      const executed = !sub.processSubstitution && (
+        command[0]?.includes(sub.token)
+        || (shellScript !== null && tokenIsCommand(shellScript, sub.token, depth + 1))
+        || (evalScript !== null && tokenIsCommand(evalScript, sub.token, depth + 1))
+      )
       const danger = inspectShell(sub.code, depth + 1, Boolean(executed))
       if (danger) return danger
     }
-    if (redirects.some((target) => /^\/dev\/(?:sd|nvme|disk)/.test(target))) return { label: '直接写磁盘' }
-    const nextName = (commandWords(commands[i + 1]?.words || [])[0] || '').split('/').pop()
-    if (outputExecuted || (operator === '|' && SHELL_NAME.test(nextName))) {
-      const danger = producerRisk(words, depth)
-      if (danger) return danger
+    if (redirects.some((target) => /^\/dev\/(?:sd|nvme|disk|vd|xvd|mmcblk|md|mapper\/)/.test(target))) return { label: '直接写磁盘' }
+    if (pipelineDanger && SHELL_NAME.test(name)) return pipelineDanger
+    const prodDanger = (outputExecuted || operator === '|') ? producerRisk(words, depth) : null
+    if (outputExecuted && prodDanger) return prodDanger
+    if (operator === '|') {
+      pipelineDanger = pipelineDanger || prodDanger
+    } else {
+      if (outputExecuted && pipelineDanger) return pipelineDanger
+      pipelineDanger = null
     }
     const danger = inspectWords(words, depth)
     if (danger) return danger
@@ -465,11 +578,12 @@ const clip = (text, n = 300) => (text.length > n ? text.slice(0, n) + '…' : te
  * @param {() => object} o.getConfig 读最新配置（每次工具调用都重新判断开关）
  * @param {(chatId:string, text:string) => Promise<any>} o.deliver 发 QQ 消息（主人私聊）
  * @param {(sessionId:string) => string} o.chatOfSession DSH session → QQ chatId
+ * @param {(sessionId:string, exec:object) => boolean} [o.isQqSession] 判定是否属于 QQ Hub 会话；普通 DSH 网页会话返回 false 直接放行
  * @param {() => string} o.ownerQQ 主人 QQ 号
  * @param {number} [o.timeoutMs] 等确认的超时（默认 60 秒）
  * @param {object} [o.log]
  */
-export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ, timeoutMs = 60_000, log } = {}) {
+export function createDangerGuard ({ getConfig, deliver, chatOfSession, isQqSession, ownerQQ, timeoutMs = 60_000, log } = {}) {
   const pending = new Map() // chatId → { resolve, timer }
 
   function cleanup (chatId, value) {
@@ -481,6 +595,10 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     return true
   }
 
+  function dispose () {
+    for (const chatId of [...pending.keys()]) cleanup(chatId, false)
+  }
+
   /**
    * 工具执行前：命中危险规则就发 QQ 问主人，等回复；确认才放行。
    * next() 返回 allow；返回 deny 时 DSH 会把 reason 给模型。
@@ -490,10 +608,12 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     if (!cfg.security || cfg.security.dangerConfirm !== true) return next()
     const tool = String(exec && exec.name || '')
     if (tool !== 'bash' && tool !== 'pwsh') return next()
+    const sessionId = exec.agent && exec.agent.session && exec.agent.session.id
+    // 普通 DSH 网页端会话与 QQ Hub 无关：只有 QQ 会话或 qq-hub-* preset 才进入危险命令守卫。
+    if (typeof isQqSession === 'function' && !isQqSession(sessionId, exec)) return next()
     const command = String(exec.arguments && exec.arguments.command || '')
     const danger = isDangerousCommand(command)
     if (!danger) return next()
-    const sessionId = exec.agent && exec.agent.session && exec.agent.session.id
     const chatId = chatOfSession ? String(chatOfSession(sessionId) || '') : ''
     const owner = String(ownerQQ ? ownerQQ() : '')
     const ownerChat = owner ? `private:${owner}` : ''
@@ -515,11 +635,29 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     let ok = false
     try {
       const asked = new Promise((resolve) => {
-        // 注意别 unref：系统就在等这个确认（工具调用被挂住），计时器必须撑着
         const timer = setTimeout(() => { cleanup(chatId, false); log?.warn?.(`危险命令确认超时，已拦下：${clip(command, 120)}`) }, timeoutMs)
+        timer.unref?.()
         pending.set(chatId, { resolve, timer })
       })
-      ;(async () => { try { await deliver(ownerChat, question) } catch (error) { log?.warn?.('危险命令确认消息没发出去：', error.message); cleanup(chatId, false) } })()
+      ;(async () => {
+        try {
+          if (typeof deliver !== 'function') {
+            log?.warn?.('危险命令确认消息没发出去：未配置发送通道')
+            cleanup(chatId, false)
+            return
+          }
+          const res = await deliver(ownerChat, question)
+          // hub.sendText 发送失败时返回 null/false（不抛错），立即快速拒绝而非静默挂死 60 秒；
+          // 显式排除 undefined 以兼容无返回值的异步回调。
+          if (res !== undefined && !res) {
+            log?.warn?.('危险命令确认消息没发出去（发送返回空/失败），已立即拦下')
+            cleanup(chatId, false)
+          }
+        } catch (error) {
+          log?.warn?.('危险命令确认消息没发出去：', error.message)
+          cleanup(chatId, false)
+        }
+      })()
       ok = await asked
     } catch (error) {
       log?.warn?.('危险命令确认出错：', error.message)
@@ -550,6 +688,7 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
   return {
     preExecute,
     handleReply,
+    dispose,
     /** 等确认中的数量（测试/排查用） */
     get pendingCount () { return pending.size },
   }

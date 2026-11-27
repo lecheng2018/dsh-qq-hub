@@ -9,7 +9,7 @@
 // 接口说明给写模块的人看：src/modules/API.md（每次启动复制到数据目录 modules/ 里）。
 
 import { existsSync, readdirSync, statSync, mkdirSync, copyFileSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
-import { join, dirname, relative, resolve, sep } from 'node:path'
+import { join, dirname, relative, resolve, sep, isAbsolute } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { dataDir } from './store.js'
 import { registerSecretField } from './config.js'
@@ -42,6 +42,14 @@ const libCache = new Map()
  *   直接引用会 ReferenceError（实测：panel.js 含 JSX 必然 import 失败，
  *   catch 分支里的日志语句把整个 boot 炸掉，模块一个都起不来）。
  */
+function isExcludedLibKey(key) {
+  const base = key.split('/').pop() || ''
+  if (/^panel.*\.js$/i.test(base)) return true
+  if (key === 'host.js') return true
+  if (/^modules\/[^/]+\/index\.js$/.test(key)) return true
+  return false
+}
+
 export async function loadLib(log = null) {
   if (libCache.size) return libCache
   const files = []
@@ -55,9 +63,12 @@ export async function loadLib(log = null) {
   walk(SRC)
   for (const f of files) {
     const key = relative(SRC, f).split(sep).join('/')
-    // 审计 Q19：这里过去是空 catch——内部文件缺失/语法错只能等到 lib() 被调时才暴露。
-    // 补一行 debug（不动语义：单个文件挂了照样跳过）。注意 panel.js 含 JSX，
-    // 在这里 import 必然失败，属于预期内的跳过，不该升级成 warn。
+    // 显式排除面板脚本（含顶层 return / JSX）、宿主入口 host.js 与内置模块入口 modules/*/index.js，
+    // 消除启动期 Illegal return statement 噪声，也不向用户模块暴露内部宿主入口。
+    if (isExcludedLibKey(key)) {
+      log?.debug?.(`lib 跳过（宿主/面板/模块入口不开放）：${key}`)
+      continue
+    }
     try { libCache.set(key, await import(pathToFileURL(f).href)) } catch (error) { log?.debug?.(`lib 跳过（非 ES 模块或语法不支持）：${key}：${error?.message || error}`) }
   }
   return libCache
@@ -639,10 +650,13 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         const u = users.find((x) => x.id === id)
         if (!want) { if (rec) stop(id); continue }
         if (want === 'builtin') {
+          if (!planned.has(id)) {
+            if (rec) stop(id)
+            continue // 计划判它不该跑（缺依赖/冲突/无 GUI），运行中的也要及时停掉
+          }
           if (rec && rec.source === 'builtin') continue
           if (rec) stop(id)
           if (errors.get(id)?.source === 'builtin' && !rec) continue // 内置的启动失败过，别每 3 秒重试
-          if (!planned.has(id)) continue // 计划判它不该跑（缺依赖/冲突/无 GUI），别再绕过计划启动
           startSync(builtinDefs.get(id))
           continue
         }
@@ -844,6 +858,14 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     return names
   }
 
+  function isInsideDir(baseDir, targetFile) {
+    const rel = relative(resolve(baseDir), resolve(targetFile))
+    if (!rel) return false
+    if (isAbsolute(rel)) return false
+    if (rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || rel.startsWith('..\\')) return false
+    return true
+  }
+
   /**
    * 模块的面板代码（panel.js），面板拿去执行。
    * 自己写的模块从数据目录读；内置模块从插件 src/modules/<id>/ 读（内置的自定义面板也是这个机制，接口 v1 内只加不改）。
@@ -855,13 +877,13 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const u = userSeen.get(id)
       if (!u) return null
       const file = typeof rec.def.panel === 'string' ? resolve(u.dir, rec.def.panel) : join(u.dir, 'panel.js')
-      if (!file.startsWith(u.dir) || !existsSync(file)) return null
+      if (!isInsideDir(u.dir, file) || !existsSync(file)) return null
       return readFileSync(file, 'utf8')
     }
     if (rec.source !== 'builtin') return null
     const base = join(BUILTIN_DIR, id)
     const file = typeof rec.def.panel === 'string' ? resolve(base, rec.def.panel) : join(base, 'panel.js')
-    if (!file.startsWith(base) || !existsSync(file)) return null
+    if (!isInsideDir(base, file) || !existsSync(file)) return null
     return readFileSync(file, 'utf8')
   }
 

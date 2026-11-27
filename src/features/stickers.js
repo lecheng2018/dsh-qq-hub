@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
-import { dataDir, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
+import { dataDir, readJsonWithBackup, writeJsonWithBackup, renameWithRetry } from '../core/store.js'
 import { imageSize, mimeOf, stickerSizeOk } from '../chat/inbound.js'
 import { segmentBytes, fetchImage } from '../core/net.js'
 import { askModel, canSeeImages } from '../core/llm.js'
@@ -22,13 +22,20 @@ const ext = (mime) => ({ 'image/png': 'png', 'image/gif': 'gif', 'image/webp': '
 
 export const DEFAULT_TAGS = ['开心', '卖萌', '生气', '委屈', '无语', '嘲讽', '疑惑', '早晚安']
 const GENERIC_NAMES = new Set(['动画表情', '表情', '图片', '贴纸'])
-// 这些来源是主人亲手加/导入的，库满时优先淘汰「偷来的」，不悄悄清掉自己的收藏。
-const PROTECTED_FROM = new Set(['manual', 'panel', 'qq', 'tool', 'pack'])
+// 这些来源是主人亲手加/导入的，库满时优先淘汰「偷来的」，且非主人发言时禁止工具删除。
+export const PROTECTED_FROM = new Set(['manual', 'panel', 'qq', 'tool', 'pack'])
+
+function isSafeStickerFilename(name) {
+  if (typeof name !== 'string' || !name) return false
+  return !name.includes('..') && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+}
 
 function validLibrary(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.items)
     && value.items.every((item) => item && typeof item === 'object' && !Array.isArray(item)
-      && typeof item.md5 === 'string' && item.md5 && typeof item.file === 'string' && item.file
+      && typeof item.md5 === 'string' && item.md5
+      && isSafeStickerFilename(item.file)
+      && (item.sendFile === undefined || item.sendFile === '' || isSafeStickerFilename(item.sendFile))
       && (item.name === undefined || typeof item.name === 'string')
       && (item.tags === undefined || (Array.isArray(item.tags) && item.tags.every((tag) => typeof tag === 'string')))))
 }
@@ -154,6 +161,22 @@ function pickNearTop(candidates, now, rand) {
   return near[near.length - 1].item
 }
 
+const NEGATION_PREFIX_RE = /(?:不|别|没|没有|不太|不算|并不|不是|并非|不要|别太|没太|不怎么|没那么|一点都不|未曾)$/
+
+/** 判断文本中是否存在未被「不/别/没」等否定前缀修饰的正向词命中。 */
+function hasPositiveMention(text, word) {
+  if (!word) return false
+  let from = 0
+  while (from <= text.length - word.length) {
+    const idx = text.indexOf(word, from)
+    if (idx < 0) return false
+    const prefix = text.slice(Math.max(0, idx - 4), idx)
+    if (!NEGATION_PREFIX_RE.test(prefix)) return true
+    from = idx + word.length
+  }
+  return false
+}
+
 /**
  * 自动配表情：先按回复里的词匹配，匹配不到随机挑一张。
  * 未起名（pending）的表情不参与自动配图：它们还没有语义，发出去等于随机丢图。
@@ -164,10 +187,10 @@ export function pickForReply(items, replyText, opts = {}) {
   if (!usable.length) return null
   const now = Number(opts.now) || Date.now()
   const rand = typeof opts.rand === 'function' ? opts.rand : Math.random
-  const words = DEFAULT_TAGS.concat(usable.flatMap((i) => i.tags || []))
+  const words = [...new Set(DEFAULT_TAGS.concat(usable.flatMap((i) => i.tags || [])).filter(Boolean))]
   const text = String(replyText ?? '')
   for (const w of words) {
-    if (!w || !text.includes(w)) continue
+    if (!hasPositiveMention(text, w)) continue
     // 同一个词可能命中多张：以前直接取最高分那张，等于「这个情绪永远配这一张」。
     // 现在把够格的都收进来，用「刚用过的降权 + 相近分抽样」挑一张。
     const candidates = []
@@ -206,7 +229,7 @@ function num(value, fallback, min, max) {
   return Math.min(max, Math.max(min, n))
 }
 
-export function createStickerStore({ dsh, getConfig, onebot, log }) {
+export function createStickerStore({ dsh, getConfig, onebot, log, captionFailThreshold = 3, captionCooldownMs = 10 * 60_000 }) {
   const warn = (error) => log?.warn ? log.warn(error.message) : console.warn(error.message)
   const load = () => loadLibrary(warn)
   const save = (lib) => saveLibrary(lib, warn)
@@ -335,19 +358,35 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
   }
 
   // ---------------- 起名队列 ----------------
-  // 附件服务把图登记成附件时失败（例如工作区目录不可写 → EACCES），
-  // 逐张重试只会刷满日志、一张也起不了名。失败一次就熔断，进程重启前不再试。
-  let captionBlocked = ''
+  // 附件服务或视觉模型临时出错时，不能失败一次就永久熔断到重启；改为连续失败阈值 + 冷却自动恢复。
+  let captionFailStreak = 0
+  let captionBlockedUntil = 0
   let captionChain = Promise.resolve()
+  const thumbInFlight = new Map()
   let sharpPromise = null
   const getSharp = () => {
     if (!sharpPromise) sharpPromise = findSharp().catch(() => null)
     return sharpPromise
   }
 
+  function noteCaptionFailure(reason) {
+    captionFailStreak++
+    if (captionFailStreak >= captionFailThreshold) {
+      captionBlockedUntil = Date.now() + captionCooldownMs
+      log.warn(`看图起名连续失败 ${captionFailStreak} 次，暂停 ${Math.max(1, Math.round(captionCooldownMs / 60_000))} 分钟后自动重试（${reason}）`)
+    } else {
+      log.warn(`看图起名失败（${captionFailStreak}/${captionFailThreshold}）：${reason}`)
+    }
+  }
+
   async function caption(buf, mime, hint) {
     try {
-      if (captionBlocked) return { name: '', tags: [] }
+      const now = Date.now()
+      if (captionBlockedUntil > now) return { name: '', tags: [] }
+      if (captionBlockedUntil && now >= captionBlockedUntil) {
+        captionBlockedUntil = 0
+        captionFailStreak = 0
+      }
       // 模型看不了图就别硬发：会报错，名字也起不出来
       if ((await canSeeImages(dsh, getConfig())) === false) {
         log.debug?.('模型不支持看图，跳过表情起名')
@@ -362,10 +401,8 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       const text = await askModel(dsh, {
         cfg: getConfig(),
         onImageError: (error) => {
-          // 图登记不进去，这一批都别再试了，只记一条
           imageFailed = error?.message || '图片登记失败'
-          captionBlocked = imageFailed
-          log.warn(`看图起名停用：图片没能交给模型（${imageFailed}）。修好工作区目录或重启后再试。`)
+          noteCaptionFailure(imageFailed)
         },
         system: '你给表情包起名字。只输出一行：不超过 12 个字的中文备注，描述这个表情表达的情绪或内容（例如「委屈巴巴的小猫」「得意地叉腰」）。然后空格，再写 1~3 个标签，从这些里挑：' + DEFAULT_TAGS.join('、') + '。格式：备注 #标签1 #标签2',
         text: hint ? `QQ 给的描述是「${hint}」。请看图起名。` : '请看图起名。',
@@ -376,20 +413,36 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       })
       // 模型根本没看到图：这时它回的名字是瞎猜的，宁可不起名
       if (imageFailed) return { name: '', tags: [] }
+      captionFailStreak = 0
+      captionBlockedUntil = 0
       if (!text) log.warn('看图起名：模型没给出文字')
       const line = text.split(/\r?\n/).map((s) => s.trim()).find(Boolean) || ''
       const tags = [...line.matchAll(/#\s*([^\s#]+)/g)].map((m) => m[1]).filter((t) => t.length <= 6).slice(0, 3)
       const name = line.replace(/#\s*[^\s#]+/g, '').replace(/[「」"'“”]/g, '').trim().slice(0, 12)
       return { name, tags }
     } catch (error) {
-      log.warn('看图起名失败：', error.message)
+      noteCaptionFailure(error?.message || String(error))
       return { name: '', tags: [] }
     }
   }
 
-  async function captionAndSave(md5, buf, mime, hint) {
+  async function captionAndSave(md5, hint = '') {
     const current = load().items.find((i) => i.md5 === md5)
     if (!current || current.name) return
+    const file = stickerPath(current)
+    let buf
+    try {
+      if (!existsSync(file)) throw new Error('原图文件缺失')
+      buf = readFileSync(file)
+    } catch {
+      await withLock(async () => {
+        const lib = load()
+        const it = lib.items.find((i) => i.md5 === md5)
+        if (it && it.pending) { it.pending = false; save(lib) }
+      })
+      return
+    }
+    const mime = mimeOf(buf)
     const { name, tags } = await caption(buf, mime, hint)
     let desc = ''
     let emojiId = ''
@@ -419,9 +472,10 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     if (desc) log.info(`表情 ${md5.slice(0, 8)} 起名「${desc}」${tags.length ? ' #' + tags.join(' #') : ''}`)
   }
 
-  function scheduleCaption(md5, buf, mime, hint) {
+  // 按 md5 懒读盘起名：队列闭包不再持有原图 Buffer，批量导入数百张表情也不会常驻大内存。
+  function scheduleCaption(md5, hint = '') {
     captionChain = captionChain
-      .then(() => captionAndSave(md5, buf, mime, hint))
+      .then(() => captionAndSave(md5, hint))
       .catch((error) => log.warn('表情起名收尾出错：', error.message))
     return captionChain
   }
@@ -517,7 +571,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         log.warn('收藏到 QQ 失败（本地已留档）：', error.message)
       }
     }
-    if (pre.item.pending) scheduleCaption(md5, buf, mime, pre.item.summary)
+    if (pre.item.pending) scheduleCaption(md5, pre.item.summary)
     return { ok: true, item: pre.item, ...(warning ? { warning } : {}) }
   }
 
@@ -529,19 +583,10 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     const now = Date.now()
     const clean = cleanName(name)
     const wantCaption = !skipCaption && !clean && Boolean(stickerConfig().caption)
-    // WebP 兼容优先：只在用户明确打开时转 JPEG；原文件保留，发送时用 sendFile。
-    let sendFile = ''
-    if (mime === 'image/webp' && stickerConfig().webpToJpeg) {
-      const jpg = await toJpeg(buf)
-      if (jpg) sendFile = `send-${md5}.jpg`
-      if (jpg) {
-        try {
-          mkdirSync(dir(), { recursive: true })
-          writeFileSync(join(dir(), sendFile), jpg)
-        } catch (error) {
-          sendFile = ''
-        }
-      }
+    // WebP 兼容优先：先检查是否已存在，避免重复转码；落盘推迟到锁内通过容量检查之后，避免残留孤儿 send-*.jpg。
+    let jpgBuf = null
+    if (mime === 'image/webp' && stickerConfig().webpToJpeg && !load().items.some((i) => i.md5 === md5)) {
+      jpgBuf = await toJpeg(buf)
     }
     const pre = await withLock(async () => {
       const lib = load()
@@ -552,6 +597,15 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
       mkdirSync(dir(), { recursive: true })
       const file = `manual-${md5}.${ext(mime)}`
       writeFileSync(join(dir(), file), buf)
+      let sendFile = ''
+      if (jpgBuf) {
+        sendFile = `send-${md5}.jpg`
+        try {
+          writeFileSync(join(dir(), sendFile), jpgBuf)
+        } catch {
+          sendFile = ''
+        }
+      }
       const { width, height } = imageSize(buf)
       const item = {
         md5, file, name: clean, tags: cleanTags(tags), from, at: now, width, height,
@@ -594,7 +648,7 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         log.warn('收藏到 QQ 失败（本地已留档）：', error.message)
       }
     }
-    if (pre.item.pending) scheduleCaption(md5, buf, mime, '')
+    if (pre.item.pending) scheduleCaption(md5, '')
     return { ok: true, item: pre.item, ...(warning ? { warning } : {}) }
   }
 
@@ -694,25 +748,43 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
     return { type: 'image', data: { file: 'base64://' + readFileSync(file).toString('base64'), sub_type: 1, summary: `[${item.name || '表情'}]` } }
   }
 
-  /** 面板缩略图：优先用 ffmpeg / DSH 自带 sharp 缩到 256，失败就退回原图。 */
+  /** 面板缩略图：优先用 ffmpeg / DSH 自带 sharp 缩到 256，失败就退回原图；并发去重 + 临时文件原子 rename。 */
   async function thumbFor(md5) {
-    const item = load().items.find((i) => i.md5 === md5)
-    if (!item) return null
-    const source = item.sendFile && existsSync(join(dir(), item.sendFile)) ? join(dir(), item.sendFile) : stickerPath(item)
-    if (!existsSync(source)) return null
-    const thumb = join(dir(), `thumb-${md5}.jpg`)
-    if (existsSync(thumb)) return { buf: readFileSync(thumb), mime: 'image/jpeg' }
-    let buf
-    try { buf = readFileSync(source) } catch (error) { return null }
-    let small = null
-    const ffmpeg = findFfmpeg(config().bili?.ffmpegPath || '')
-    if (ffmpeg) small = await shrinkImage(buf, 256, ffmpeg)
-    if (!small) small = await shrinkWithSharp(await getSharp(), buf, 256)
-    if (small) {
-      try { writeFileSync(thumb, small) } catch (error) {}
-      return { buf: small, mime: 'image/jpeg' }
+    const key = String(md5 || '')
+    if (!key) return null
+    const thumb = join(dir(), `thumb-${key}.jpg`)
+    if (existsSync(thumb)) {
+      try { return { buf: readFileSync(thumb), mime: 'image/jpeg' } } catch {}
     }
-    return { buf, mime: mimeOf(buf) }
+    if (thumbInFlight.has(key)) return thumbInFlight.get(key)
+    const task = (async () => {
+      const item = load().items.find((i) => i.md5 === key)
+      if (!item) return null
+      const source = item.sendFile && existsSync(join(dir(), item.sendFile)) ? join(dir(), item.sendFile) : stickerPath(item)
+      if (!existsSync(source)) return null
+      if (existsSync(thumb)) {
+        try { return { buf: readFileSync(thumb), mime: 'image/jpeg' } } catch {}
+      }
+      let buf
+      try { buf = readFileSync(source) } catch (error) { return null }
+      let small = null
+      const ffmpeg = findFfmpeg(config().bili?.ffmpegPath || '')
+      if (ffmpeg) small = await shrinkImage(buf, 256, ffmpeg)
+      if (!small) small = await shrinkWithSharp(await getSharp(), buf, 256)
+      if (small) {
+        const tmp = `${thumb}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        try {
+          writeFileSync(tmp, small)
+          renameWithRetry(tmp, thumb)
+        } catch {
+          try { unlinkSync(tmp) } catch {}
+        }
+        return { buf: small, mime: 'image/jpeg' }
+      }
+      return { buf, mime: mimeOf(buf) }
+    })().finally(() => { thumbInFlight.delete(key) })
+    thumbInFlight.set(key, task)
+    return task
   }
 
   /** 按名字/标签/md5 找一张；多张同分且不是 md5/全名精确命中时判为歧义。 */
@@ -759,13 +831,13 @@ export function createStickerStore({ dsh, getConfig, onebot, log }) {
         if (r.ok && r.existed) existed++
         else if (r.ok) {
           added++
-          named.push({ md5: r.item.md5, buf, mime: mimeOf(buf) })
+          named.push(r.item.md5)
         } else if (/表情库满了/.test(String(r.reason || ''))) skipped++
         else { failed++; log.warn('导入单张没存成：', r.reason || '未知原因') }
       }
       log.info(`从 QQ 收藏导入表情：新加 ${added} 张，已有 ${existed} 张${skipped ? `，库满跳过 ${skipped} 张` : ''}${failed ? `，${failed} 张失败` : ''}`)
       if (named.length && stickerConfig().caption) {
-        for (const { md5, buf, mime } of named) scheduleCaption(md5, buf, mime, '')
+        for (const md5 of named) scheduleCaption(md5, '')
       }
       return {
         ok: true, added, existed, failed, skipped, total: urls.length,

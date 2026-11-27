@@ -228,12 +228,13 @@ export function applyPurposeOutcome(state, {
   state.lastRunAt = now;
   state.lastOutcome = String(outcome ?? 'sent').slice(0, 24);
   state.lastPurpose = clip(memo?.purpose || planned?.text || state.lastPurpose || '', 120);
-  state.lastText = clip(text || state.lastText || '', 200);
+  const entryText = state.lastOutcome === 'sent' ? clip(text || '', 200) : '';
+  if (entryText) state.lastText = entryText;
   const need = PURPOSE_NEEDS.includes(memo?.need) ? memo.need : (PURPOSE_NEEDS.includes(planned?.need) ? planned.need : '');
   const action = memo?.action || planned?.action || '';
-  const emotion = memo?.emotionText ? '' : (planned?.emotion || '');
-  state.lastEmotion = String(emotion || planned?.emotion || state.lastEmotion || '').slice(0, 20);
-  state.lastEmotionText = clip(memo?.emotionText || state.lastEmotionText || '', 30);
+  const emotion = memo?.emotionText ? '' : String(planned?.emotion || '').slice(0, 20);
+  state.lastEmotion = emotion;
+  state.lastEmotionText = clip(memo?.emotionText || '', 30);
   // 目标假设记账：这次主动说了/没说，都会影响下一次的置信度；主人回复在 formGoalHypotheses 里结算。
   const goalId = String(planned?.goalId || '').slice(0, 24);
   const goal = goalId ? (Array.isArray(state.goals) ? state.goals : []).find((g) => g?.id === goalId) : null;
@@ -292,9 +293,9 @@ export function applyPurposeOutcome(state, {
     kind: clip(memo?.kind || planned?.kind || '', 20),
     need,
     action,
-    emotion: emotion || planned?.emotion || '',
+    emotion,
     purpose: state.lastPurpose,
-    text: state.lastText,
+    text: entryText,
     planned: clip(planned?.text || '', 120),
     sourceId: clip(planned?.sourceId || '', 80),
     goalId,

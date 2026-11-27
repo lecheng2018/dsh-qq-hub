@@ -8,11 +8,13 @@ import { redact } from './redact.js'
 const RING = 500
 const LEVELS = ['debug', 'info', 'warn', 'error']
 
-export function createLogger({ dsh, retainDays = 14 } = {}) {
+export function createLogger({ dsh, retainDays = 14, dir: fixedDir } = {}) {
   const ring = []
   const listeners = new Set()
   const chmodDone = new Set() // 当天已 chmod 过的日志文件（append 创建新文件时 umask 077 会锁 0o600）
-  const dir = () => ensureDir(dataDir('logs'))
+  // 构造时固化日志目录：即使测试 afterEach 恢复/清空环境变量，异步尾日志也不会漂移写回真实生产目录。
+  const baseDir = fixedDir || dataDir('logs')
+  const dir = () => ensureDir(baseDir)
   let lastCleanup = 0
 
   function cleanup() {
@@ -38,7 +40,9 @@ export function createLogger({ dsh, retainDays = 14 } = {}) {
     if (ring.length > RING) ring.shift()
     try {
       const logFile = join(dir(), `qq-hub-${day}.log`)
-      appendFileSync(logFile, `${day} ${time} [${level}] [${area}] ${text}\n`, 'utf8')
+      // 写盘前把多行文本折叠为单行，确保 1 条日志严格占 1 行，避免堆栈/多行回复污染日志行结构。
+      const lineText = String(text).replace(/\r?\n/g, ' ↵ ')
+      appendFileSync(logFile, `${day} ${time} [${level}] [${area}] ${lineText}\n`, 'utf8')
       // 同 store.js：umask 077 部署环境新建的日志是 Harness 私有，运维放开组读活不过次日。
       // 每个日志文件只在当天第一次写入后 chmod 一次。
       if (!chmodDone.has(logFile)) {

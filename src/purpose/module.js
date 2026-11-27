@@ -9,7 +9,7 @@
 // 现有的「主动搭话」模块（speakup，src/features/companion.js）保持默认实现不变，
 // 想换引擎的主人自己开关，迁移说明见 docs/PURPOSE_MODULE_API.md。
 
-import { dataDir, readJson, writeJson } from '../core/store.js'
+import { dataDir, readJson, writeJson, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { isSilence, sanitizeOutbound } from '../chat/reply.js'
 import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from './engine/crucible.js'
 import { characterName, escapeRegExp } from '../persona/identity-context.js'
@@ -18,12 +18,13 @@ import {
   normalizePurposeConfig, createPurposeState, normalizePurposeState,
   ensurePurposeDay, ensurePurposeSchedule, planNextFire, evaluatePurposeTick,
   markPurposeDelivered, markPurposeSkip, applyPurposeOutcome,
-  collectMaterials, analyzePersona, deriveDrives, formGoalHypotheses,
+  collectMaterials, enrichMaterial, analyzePersona, deriveDrives, formGoalHypotheses,
   minePurposeSeeds, selectPurpose, buildPurposePrompt, parsePurposeMemo,
-  summarizePurposeState,
+  summarizePurposeState, inQuietHours,
 } from './engine.js'
 
 const MINUTE = 60_000
+const CRUCIBLE_INTERVAL_MS = 15 * MINUTE
 const SILENCE = '[沉默]'
 
 const pad2 = (n) => String(n).padStart(2, '0')
@@ -31,6 +32,7 @@ const clampInt = (v, d, lo, hi) => {
   const n = Number(v)
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d
 }
+const isPurposeState = (v) => Boolean(v && typeof v === 'object' && !Array.isArray(v))
 
 /**
  * 把 QQ Hub 配置映射成引擎配置。
@@ -42,10 +44,11 @@ export function purposeConfig(cfg = {}) {
   const ext = (cfg.ext && cfg.ext.purpose) || {}
   const awakeFrom = clampInt(ext.awakeFrom ?? su.awakeFrom, 8, 0, 24)
   const awakeTo = clampInt(ext.awakeTo ?? su.awakeTo, 23, 0, 24)
-  // awake 窗口为全天（awakeTo>=24 或区间非法）时，安静时段关闭（start===end 视为不启用）
-  const quiet = awakeTo >= 24 || awakeFrom >= awakeTo
+  // 全天醒着（0~24 或起止点模 24 相同）时关闭安静时段；其余（含跨午夜如 20~4）均按 [awakeTo, awakeFrom) 推导安静时段
+  const fullDay = (awakeFrom === 0 && awakeTo >= 24) || (awakeFrom % 24) === (awakeTo % 24)
+  const quiet = fullDay
     ? { quietStart: '00:00', quietEnd: '00:00' }
-    : { quietStart: `${pad2(awakeTo % 24)}:00`, quietEnd: `${pad2(awakeFrom)}:00` }
+    : { quietStart: `${pad2(awakeTo % 24)}:00`, quietEnd: `${pad2(awakeFrom % 24)}:00` }
   return normalizePurposeConfig({
     // 总开关只看本模块自己的设置（ext.purpose.enabled，默认 false）；
     // 与旧的「主动搭话」互不影响——两套同时开会重复打扰，迁移说明里提醒主人别同时开。
@@ -107,7 +110,7 @@ export function deliveryOutcome(receipt) {
   return 'sent'
 }
 
-export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, proactivelyMuted, crucible: injectedCrucible }) {
+export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, proactivelyMuted, crucible: injectedCrucible, crucibleIntervalMs = CRUCIBLE_INTERVAL_MS }) {
   // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
   const roleOf = (cfg = getConfig()) => characterName('', cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
@@ -116,10 +119,26 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   const stateFile = () => dataDir('purpose', 'purpose-state.json')
   const nudgeFile = () => dataDir('purpose', 'nudge.json')
   let bothEnabledWarned = false // 与「主动搭话」同开的告警只发一次
+  let inFlight = null // 单飞锁：tick 与手动 fire 互斥，避免并发重入双发或覆盖在途状态
+  let bootRecovered = false // 仅在实例首次启动加载状态时做 pending -> interrupted 崩溃恢复
+  let lastCrucibleAt = 0
+
+  const readRawState = () => readJsonWithBackup(stateFile(), {
+    validate: isPurposeState,
+    label: '目的引擎状态',
+    fallback: () => null,
+    onError: (err) => log?.warn?.(err.message),
+  }).value
+
+  const saveState = (state) => writeJsonWithBackup(stateFile(), state, {
+    validate: isPurposeState,
+    label: '目的引擎状态',
+    onError: (err) => log?.warn?.(err.message),
+  })
 
   // ---------- 状态 ----------
-  function loadState(config, now = Date.now()) {
-    const raw = readJson(stateFile(), null)
+  function loadState(config, now = Date.now(), { persistRecovery = false } = {}) {
+    const raw = readRawState()
     const state = normalizePurposeState(raw, now)
     if (!raw) {
       // 旧 speakup.json 只读迁移当日次数，之后弃用
@@ -127,15 +146,18 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       const legacyCount = Number(legacy?.count) || 0
       if (legacy?.day === new Date(now).toDateString() && legacyCount > 0) state.countToday = legacyCount
     }
-    if (state.lastOutcome === 'pending') { // 重启不补发：上次在途改判 interrupted，归零重排
-      state.lastOutcome = 'interrupted'
-      state.nextFireAt = 0
+    if (!bootRecovered) {
+      if (state.lastOutcome === 'pending') { // 重启不补发：上次在途改判 interrupted，归零重排
+        state.lastOutcome = 'interrupted'
+        state.nextFireAt = 0
+        if (persistRecovery) saveState(state)
+      }
+      if (persistRecovery || state.lastOutcome !== 'pending') bootRecovered = true
     }
     ensurePurposeDay(state, now)
     ensurePurposeSchedule(state, { now, config })
     return state
   }
-  const saveState = (state) => writeJson(stateFile(), state)
 
   // US-012 · 潜伏素材熔炉：素材先沉淀，到期发酵，按会话兴趣打分取用。
   // 池子随 purpose state 一起落盘（同目录同生命周期），重启不丢。
@@ -260,12 +282,15 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
       if (chatKey !== 'private:' && interests.length) {
         const hits = crucible.match(chatKey, interests, { now, limit: 5 })
         for (const hit of (Array.isArray(hits) ? hits : [])) {
-          materials.items.push({
+          materials.items.push(enrichMaterial({
+            id: `crucible:${hit.fingerprint}`,
+            source: hit.source || 'crucible',
             kind: 'crucible',
+            who: '记忆',
             fingerprint: hit.fingerprint,
             text: String(hit.title || hit.summary || ''),
             at: Number(hit.capturedAt) || 0,
-          })
+          }, role))
         }
       }
     } catch (error) {
@@ -306,79 +331,88 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
 
   // ---------- 生成 + 投递 + 回执（hub.deliver 内部吞错，成功判定看返回值） ----------
   async function runOnce({ reason = '定时', config, state, force = false } = {}) {
-    const cfg = getConfig()
-    const now = Date.now()
-    ensurePurposeDay(state, now)
-    const ctx = prepare(cfg, config, state, now)
-    state.drives = ctx.drives
-    state.drivesAt = now
-    state.goals = ctx.goals
-    state.observations = ctx.observations
-
-    const hasEnough = ctx.materials.items.length >= config.minMaterials
-      || state.pending.length > 0 || ctx.persona.hasText
-    if (!hasEnough) {
-      markPurposeSkip(state, { now, reason: 'materials', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
-      saveState(state)
-      log?.info?.(`目的（${reason}）：素材太少，改约下一次`)
-      return { outcome: 'skipped-materials' }
-    }
-
-    const picked = selectPurpose({
-      seeds: ctx.seeds, goals: ctx.goals, pending: state.pending, history: state.history,
-      config, drives: ctx.drives, now, lastMasterAt: ctx.lastMasterAt,
-    })
-    state.lastMaterialCount = ctx.materials.items.length
-    state.lastCandidateCount = picked.candidates.length
-    if (!picked.purpose) {
-      markPurposeSkip(state, { now, reason: 'no-candidate', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
-      saveState(state)
-      log?.info?.(`目的（${reason}）：这轮没选出目的，改约下一次`)
-      return { outcome: 'skipped-no-candidate' }
-    }
-
-    const prompt = promptFor(cfg, config, picked.purpose, { ...ctx, candidates: picked.candidates }, state, now)
-    // 投递即占今日次数（模型回合已经花钱了）；引擎随后按真结局结算
-    markPurposeDelivered(state, { now, planned: picked.purpose })
-    saveState(state)
-
-    let raw = ''
-    let genError = null
+    if (inFlight) return { outcome: 'busy' }
+    let release
+    inFlight = new Promise((r) => { release = r })
     try {
-      log?.info?.(`目的（${reason}）：${picked.purpose.text}`)
-      raw = typeof hub.runPromptTurn === 'function'
-        ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
-        : await hub.runSystemTurn('purpose', 'QQ · 主动搭话（目的回合）', prompt, { timeoutMs: 180000, noTools: true })
-    } catch (error) {
-      genError = error
-      log?.warn?.('目的：生成出错：', error?.message)
-    }
-    const memo = parsePurposeMemo(raw)
-    // 主动搭话不走回复链路的线索顺承（applyThreadContinuation），这里先剥完 <inner> 与备忘再交给投递层
-    const text = cleanReply(raw, roleOf(cfg))
-    let outcome
-    if (!text) {
-      outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 不硬发
-    } else {
-      try {
-        const r = await hub.deliver(chatIdOf(cfg), text, { own: true })
-        outcome = deliveryOutcome(r)
-        if (outcome === 'delivery-failed') log?.warn?.('目的：投递未拿到网关回执（state=failed）')
-      } catch (error) {
-        outcome = 'delivery-failed'
-        log?.warn?.('目的：投递失败：', error?.message)
+      const cfg = getConfig()
+      const now = Date.now()
+      ensurePurposeDay(state, now)
+      const ctx = prepare(cfg, config, state, now)
+      state.drives = ctx.drives
+      state.drivesAt = now
+      state.goals = ctx.goals
+      state.observations = ctx.observations
+
+      const hasEnough = ctx.materials.items.length >= config.minMaterials
+        || state.pending.length > 0 || ctx.persona.hasText
+      if (!hasEnough) {
+        markPurposeSkip(state, { now, reason: 'materials', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
+        saveState(state)
+        log?.info?.(`目的（${reason}）：素材太少，改约下一次`)
+        return { outcome: 'skipped-materials' }
       }
+
+      const picked = selectPurpose({
+        seeds: ctx.seeds, goals: ctx.goals, pending: state.pending, history: state.history,
+        config, drives: ctx.drives, now, lastMasterAt: ctx.lastMasterAt,
+      })
+      state.lastMaterialCount = ctx.materials.items.length
+      state.lastCandidateCount = picked.candidates.length
+      if (!picked.purpose) {
+        markPurposeSkip(state, { now, reason: 'no-candidate', nextFireAt: planNextFire({ now, config, lastRunAt: state.lastRunAt, countToday: state.countToday }) })
+        saveState(state)
+        log?.info?.(`目的（${reason}）：这轮没选出目的，改约下一次`)
+        return { outcome: 'skipped-no-candidate' }
+      }
+
+      const prompt = promptFor(cfg, config, picked.purpose, { ...ctx, candidates: picked.candidates }, state, now)
+      // 投递即占今日次数（模型回合已经花钱了）；引擎随后按真结局结算
+      markPurposeDelivered(state, { now, planned: picked.purpose })
+      saveState(state)
+
+      let raw = ''
+      let genError = null
+      try {
+        log?.info?.(`目的（${reason}）：${picked.purpose.text}`)
+        raw = typeof hub.runPromptTurn === 'function'
+          ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
+          : await hub.runSystemTurn('purpose', 'QQ · 主动搭话（目的回合）', prompt, { timeoutMs: 180000, noTools: true })
+      } catch (error) {
+        genError = error
+        log?.warn?.('目的：生成出错：', error?.message)
+      }
+      const memo = parsePurposeMemo(raw)
+      // 主动搭话不走回复链路的线索顺承（applyThreadContinuation），这里先剥完 <inner> 与备忘再交给投递层
+      const text = cleanReply(raw, roleOf(cfg))
+      let outcome
+      if (!text || memo?.status === '跳过') {
+        outcome = genError ? 'failed' : 'silent' // 模型有权跳过（【状态】跳过 / [沉默]），silent 绝不把过渡语发出去
+      } else {
+        try {
+          const r = await hub.deliver(chatIdOf(cfg), text, { own: true })
+          outcome = deliveryOutcome(r)
+          if (outcome === 'delivery-failed') log?.warn?.('目的：投递未拿到网关回执（state=failed）')
+        } catch (error) {
+          outcome = 'delivery-failed'
+          log?.warn?.('目的：投递失败：', error?.message)
+        }
+      }
+      // 只有真的发出去时才把本轮文案写入 state.lastText，沉默/投递失败不能污染面板与「最近发言」
+      applyPurposeOutcome(state, { now: Date.now(), config, outcome, text: outcome === 'sent' ? text : '', memo, planned: picked.purpose })
+      saveState(state)
+      log?.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
+      return { outcome, text: outcome === 'sent' ? text : '', memo }
+    } finally {
+      inFlight = null
+      release?.()
     }
-    // 只有真的发出去时才把本轮文案写入 state.lastText，沉默/投递失败不能污染面板与「最近发言」
-    applyPurposeOutcome(state, { now: Date.now(), config, outcome, text: outcome === 'sent' ? text : '', memo, planned: picked.purpose })
-    saveState(state)
-    log?.info?.(`目的：回合结束 ${outcome}（今天第 ${state.countToday} 次）`)
-    return { outcome, text, memo }
   }
 
 
   // ---------- 追问（沿用旧 speakup 的「轻轻追一句」，不占今日次数） ----------
-  async function maybeNudge(cfg, state, now = Date.now()) {
+  async function maybeNudge(cfg, config, state, now = Date.now()) {
+    if (inQuietHours(now, config)) return false
     const su = cfg.speakUp || {}
     if (!su.nudge) return false
     const lb = hub.lastBotToOwner || { at: 0, text: '' }
@@ -470,14 +504,18 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
   }
 
   async function tick() {
+    if (inFlight) return
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled || !cfg.ownerQQ) return
-    try { crucibleCycle(cfg, Date.now()) } catch { /* 已在内部兜住 */ }
+    const now = Date.now()
+    if (!lastCrucibleAt || now - lastCrucibleAt >= crucibleIntervalMs) {
+      lastCrucibleAt = now
+      try { crucibleCycle(cfg, now) } catch { /* 已在内部兜住 */ }
+    }
     const chatId = chatIdOf(cfg)
     if (isMuted?.(chatId)) return
-    const now = Date.now()
-    const state = loadState(config, now)
+    const state = loadState(config, now, { persistRecovery: true })
     // Token 熔断（缺陷 D）：这条主动开口路径必须和 speakup 受同一份每日配额约束，
     // 否则「目的引擎」会绕开配额无限花钱。账本由接线层注入（modules/purpose/index.js
     // 从 token-billing 暴露的 ledger 拿来），本文件不 import 记账模块 —— 避免循环依赖。
@@ -498,7 +536,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     } catch { /* 判定坏掉就按没锁处理，绝不永久掐话 */ }
     // 追问也要烧一次模型调用：配额耗尽时不追问（缺陷：nudge 排在熔断判定之前），
     // 交给下面的 evaluatePurposeTick 走 budget 分支如实记 skip 与下次开火时间。
-    if (!budgetBlocked && await maybeNudge(cfg, state, now)) return
+    if (!budgetBlocked && await maybeNudge(cfg, config, state, now)) return
     // 「主动搭话」与「目的引擎」二选一（缺陷：无互锁，同开双份打扰）：至少明确告警一次。
     if (!bothEnabledWarned && (cfg.speakUp || {}).enabled !== false) {
       bothEnabledWarned = true
@@ -522,6 +560,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
    *  也**不跳过** Token 配额熔断与道别静默期（缺陷：手动 fire 绕过治理闸门）——
    *  与 speakup 的 /speakup/fire 同口径：配额判定失败按未熔断（不永久掐话）。 */
   async function fire(reason = '手动') {
+    if (inFlight) return { outcome: 'busy' }
     const cfg = getConfig()
     const config = purposeConfig(cfg)
     if (!config.enabled) return { outcome: 'disabled' }
@@ -534,13 +573,13 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     try {
       if (typeof proactivelyMuted === 'function' && proactivelyMuted(chatId) === true) return { outcome: 'muted' }
     } catch { /* 判定坏掉按没锁处理 */ }
-    const state = loadState(config)
+    const state = loadState(config, Date.now(), { persistRecovery: true })
     return runOnce({ reason, config, state, force: true })
   }
 
   /** 同步返回（host.js:401 / 概览页依赖），至少含 count。 */
   function state() {
-    const s = readJson(stateFile(), null)
+    const s = readRawState()
     const normalized = normalizePurposeState(s)
     return {
       count: normalized.countToday,
@@ -592,7 +631,7 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     const cfg = getConfig()
     if (cfg.enabled === false) return ''
     if (!((cfg.ext && cfg.ext.purpose) || {}).enabled) return '' // 引擎没开就不往提示词里掺驱动
-    const s = readJson(stateFile(), null)
+    const s = readRawState()
     if (!s) return ''
     const drives = s.drives || {}
     const top = PURPOSE_NEEDS

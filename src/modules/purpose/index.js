@@ -24,7 +24,7 @@ export default {
     initialDelayMinutes: 15, // 启动后的第一枪延迟
     maxCandidates: 6,
     promptMaxChars: 16000,
-    maxPerDay: 3, // 每日上限。留空/0/未设都沿用「主动搭话」的 maxPerDay；填大于 0 的数才用这里自己的
+    maxPerDay: 0, // 每日上限。0 或留空都沿用「主动搭话」的 maxPerDay；填大于 0 的数才用这里自己的
   },
   settings: [
     { key: 'enabled', label: '启用目的引擎', type: 'switch', hint: '默认关。开启后她会按目的主动找主人；建议先关掉「主动搭话」总开关，避免两套同时打扰' },
@@ -80,6 +80,7 @@ export default {
       const r = await purpose.fire('手动')
       if (!r) return { ok: false, message: '没有结果' }
       if (r.outcome === 'sent') return { ok: true, message: '已经去找你了' }
+      if (r.outcome === 'busy') return { ok: false, message: '上一轮还在想，稍等一下再试' }
       if (r.outcome === 'silent') return { ok: true, message: '她这轮想了想，决定不说（不硬发）' }
       if (r.outcome === 'muted') return { ok: false, message: '主人在私聊里让她闭嘴了' }
       if (r.outcome === 'disabled') return { ok: false, message: '目的引擎开关是关的' }
