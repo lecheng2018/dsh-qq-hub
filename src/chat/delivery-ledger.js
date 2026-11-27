@@ -9,7 +9,8 @@
 //   - 状态机与 ADR 六态一致：queued/sending/sent/failed/unknown/cancelled。
 
 import { createHash } from 'node:crypto'
-import { readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
+import { readJsonWithBackup, writeJsonWithBackup, quarantineCorruptFile } from '../core/store.js'
+import { createWalWriter } from './delivery-wal.js'
 import { assertDelivery, CONTRACT_VERSION } from '../kernel/modular-contracts.js'
 
 const LEDGER_VERSION = 1
@@ -112,13 +113,17 @@ let seq = 0
  * @param {string} [o.file] 台账文件路径（缺省 = 纯内存）
  * @param {(error: Error) => void} [o.onError] 持久化错误出口
  */
-export function createDeliveryLedger({ file, onError = (error) => console.warn(error.message), maxRecords = DEFAULT_MAX_RECORDS } = {}) {
+export function createDeliveryLedger({ file, onError = (error) => console.warn(error.message), maxRecords = DEFAULT_MAX_RECORDS, wal: walOpts } = {}) {
   const options = { validate: validLedgerDocument, label: '投递台账', onError }
   /** deliveryId -> record */
   const records = new Map()
   const limit = Math.max(1, Math.floor(Number(maxRecords) || DEFAULT_MAX_RECORDS))
   let crashedSending = 0
   let recovered = false
+  const wal = file ? createWalWriter(file, { onError, validate: validLedgerDocument, label: '投递台账', ...walOpts }) : null
+  // 启动时若主文件已损坏且无法隔离（无法 rename 走），readJsonWithBackup 会读出备份但留下 unquarantinedFiles。
+  // 此时禁止任何后续写入覆盖原件（fail-closed），与既有 state-corruption 契约一致。
+  let writeBlocked = false
 
   function prune() {
     let removed = 0
@@ -135,6 +140,14 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
     try {
       const loaded = readJsonWithBackup(file, { ...options, fallback: () => ({ version: LEDGER_VERSION, deliveries: [] }), repairPrimary: false })
       if (loaded.fromBackup) recovered = true
+      if (loaded.unquarantinedFiles?.length) {
+        writeBlocked = true
+        // 与原始 writeJsonWithBackup 语义一致：损坏原件无法隔离时，
+        // 启动阶段也要再尝试一次隔离（让「permission denied」等底层错误如实暴露给 onError）。
+        for (const badFile of loaded.unquarantinedFiles) {
+          try { quarantineCorruptFile(badFile) } catch (error) { onError(error) }
+        }
+      }
       for (const rec of loaded.value.deliveries) {
         if (rec.state === 'sending') {
           // 崩溃恢复红线：sending → unknown（副作用可能已发生），留审计原因，绝不重发
@@ -171,31 +184,77 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
         }
         records.set(String(rec.deliveryId), rec)
       }
+      // 重放 WAL 中尚未压缩进主快照的增量事件（含崩溃恢复：WAL 里的 sending 同样要转 unknown）
+      for (const ev of wal.readEvents()) {
+        if (ev.op === 'enqueue' && ev.record?.deliveryId && !records.has(ev.record.deliveryId)) {
+          records.set(ev.record.deliveryId, ev.record)
+        } else if (ev.op === 'mark') {
+          const target = records.get(ev.deliveryId)
+          if (target) {
+            Object.assign(target, ev.patch)
+            if (target.state === 'sending') {
+              target.state = 'unknown'
+              target.unknownAt = target.unknownAt || Date.now()
+              target.unknownReason = target.unknownReason || 'crash-recovery: 落盘时处于 sending，副作用未知'
+              target.recoveredAt = Date.now()
+              crashedSending++
+              recovered = true
+            } else if (target.state === 'queued') {
+              target.state = 'cancelled'
+              target.cancelReason = 'crash-recovery: 崩溃前仍未出队，未恢复发送'
+              target.recoveredAt = Date.now()
+              recovered = true
+            }
+          }
+        }
+      }
       if (prune() > 0) recovered = true
-      if (recovered) persist()
+      // 启动恢复后立即压缩一次，保证主 JSON 与内存状态一致（既有测试直接读 file 断言）
+      persist({ forceCompact: true })
     } catch (error) {
       if (error?.code !== 'ENOENT') onError(error) // 首次无文件 = 正常
     }
   }
 
   /**
-   * 落盘。critical=true（queued/sending 关键迁移）时失败必须 **fail-closed**：
+   * 落盘。默认只追加 WAL（单条事件），达到阈值或显式 forceCompact 时才全量压缩快照。
+   * critical=true（queued/sending 关键迁移）时立即 fsync WAL，失败必须 **fail-closed**：
    * 抛错让调用方中止——没有台账凭据就不许发生物理副作用。
    * 非关键（终态）写入失败只报告：副作用已发生，回滚状态反而是谎。
    */
-  function persist({ critical = false } = {}) {
+  function persist({ critical = false, forceCompact = false, walEvent = null } = {}) {
     if (!file) return
-    try {
+      // 若主文件损坏且无法隔离（writeBlocked），后续任何关键写入都必须 fail-closed 抛出，
+      // 让调用方立刻知道「台账不可信」——不能静默吞掉错误后假装已登记。
+      if (writeBlocked && critical) {
+        const err = new Error('台账主文件损坏且无法隔离，后续写入已 fail-closed（不覆盖原件）')
+        onError(err)
+        throw err
+      }
+      // 非关键路径（启动恢复/终态写入）在 writeBlocked 时只报告、不覆盖原件。
+      if (writeBlocked) {
+        onError(new Error('台账主文件损坏且无法隔离，已跳过本次写入（不覆盖原件）'))
+        return
+      }
+      try {
       const now = Date.now()
       for (const [id, rec] of records) {
         const trimmed = trimTerminalContent(rec, now)
         if (trimmed !== rec) records.set(id, trimmed)
       }
-      writeJsonWithBackup(file, {
-        version: LEDGER_VERSION,
-        savedAt: now,
-        deliveries: [...records.values()],
-      }, options)
+      // 先压缩快照（如果需要），保证主 JSON 与当前内存一致
+      // critical 路径始终先写一次主快照（fail-closed 凭据），再追加 WAL；
+      // 非关键路径达到阈值或 forceCompact 时才压缩。
+      if (forceCompact || wal.needsCompact() || critical) {
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] })
+      }
+      // 再追加本次事件到 WAL
+      if (walEvent) {
+        wal.append(walEvent, { critical })
+      } else if (critical) {
+        // 没有显式事件但要求关键落盘：直接全量压缩（fail-closed 路径）
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] })
+      }
     } catch (error) {
       onError(error)
       if (critical) throw new Error(`台账落盘失败（fail-closed）：${error?.message || error}`, { cause: error })
@@ -236,7 +295,7 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
     prune()
     // queued 是关键落盘：失败回滚并抛出（fail-closed，调用方中止发送）
     try {
-      persist({ critical: true })
+      persist({ critical: true, walEvent: { op: 'enqueue', record } })
     } catch (error) {
       records.delete(record.deliveryId)
       throw error
@@ -277,7 +336,7 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
     if (state === 'cancelled') rec.cancelReason = String(reason || '')
     // sending 是关键落盘（物理发送前的凭据）：失败回滚状态并抛出，outbox 据此不发起发送
     try {
-      persist({ critical: state === 'sending' })
+      persist({ critical: state === 'sending', walEvent: { op: 'mark', deliveryId, patch: { state, attemptCount: rec.attemptCount, gatewayMessageId: rec.gatewayMessageId, unknownAt: rec.unknownAt, unknownReason: rec.unknownReason, failReason: rec.failReason, cancelReason: rec.cancelReason } } })
     } catch (error) {
       rec.state = prevState
       if (state === 'sending') rec.attemptCount--
