@@ -7,6 +7,20 @@
 const DEFAULT_URL = 'https://api.siliconflow.cn/v1/rerank'
 const DEFAULT_MODEL = 'BAAI/bge-reranker-v2-m3'
 
+/** 归一化精排分数阈值：null/false 表示显式关闭；有限数字或数字字符串生效；空白/布尔 true/非法值返回 undefined。 */
+export function parseMinScore(value) {
+  if (value === null || value === false) return null
+  if (value === undefined || typeof value === 'boolean') return undefined
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    const n = Number(trimmed)
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
 /** 面板设置（ext.memory.rerank*）→ 归一配置；未开启/缺 key 返回 null。 */
 export function normalizeRerankConfig(ext = {}) {
   const e = ext || {}
@@ -16,13 +30,7 @@ export function normalizeRerankConfig(ext = {}) {
   const url = String(e.rerankUrl || '').trim() || DEFAULT_URL
   if (!/^https?:\/\//i.test(url)) return null
   const topN = Math.max(2, Math.min(50, Math.round(Number(e.rerankTopN) || 20)))
-  let minScore
-  if (e.rerankMinScore === null || e.rerankMinScore === false) {
-    minScore = null
-  } else if (e.rerankMinScore !== undefined && e.rerankMinScore !== '') {
-    const n = Number(e.rerankMinScore)
-    if (Number.isFinite(n)) minScore = n
-  }
+  const minScore = parseMinScore(e.rerankMinScore)
   return { url, apiKey, model: String(e.rerankModel || '').trim() || DEFAULT_MODEL, topN, minScore }
 }
 
@@ -71,7 +79,8 @@ export function createReranker({ getConfig, log = console, fetchImpl = globalThi
   async function rerank(query, hits, { timeoutMs = 10000, minScore } = {}) {
     const c = conf()
     const list = Array.isArray(hits) ? hits : []
-    const rawFloor = minScore !== undefined ? minScore : (c ? c.minScore : undefined)
+    const argFloor = parseMinScore(minScore)
+    const rawFloor = argFloor !== undefined ? argFloor : (c ? c.minScore : undefined)
     const floor = typeof rawFloor === 'number' && Number.isFinite(rawFloor) ? rawFloor : null
     // 只有纯重排（未启用阈值下限）时才在少于 2 条时跳过；存在阈值过滤时单候选也需打分判无关
     if (!c || !list.length || (floor === null && list.length < 2)) return list

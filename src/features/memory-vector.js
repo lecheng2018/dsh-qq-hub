@@ -224,17 +224,19 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     if (t - lastWarn > WARN_INTERVAL_MS) { lastWarn = t; log?.warn?.(`向量通道：${msg}`) }
   }
 
-  const files = new Map() // scope -> createScopeVectorFile(...)
-  const fileOf = (scope) => {
+  // 以规范相对向量路径（scopeToVecFilePath）为键，消除 qq:<id> / private:<id> 等别名缓存分裂
+  const files = new Map() // vecRelPath -> createScopeVectorFile(...)
+  const fileByRel = (rel) => {
     const cfg = cfgOf()
-    if (!cfg || !memoryDir) return null
-    if (!files.has(scope)) {
-      files.set(scope, createScopeVectorFile(join(memoryDir, scopeToVecFilePath(scope)), cfg.dim, { log }))
+    if (!cfg || !memoryDir || !rel) return null
+    if (!files.has(rel)) {
+      files.set(rel, createScopeVectorFile(join(memoryDir, rel), cfg.dim, { log }))
     }
-    return files.get(scope)
+    return files.get(rel)
   }
+  const fileOf = (scope) => fileByRel(scopeToVecFilePath(scope))
 
-  // 待处理对账队列：scope -> Map<id, embedKey>（save 时全量入队，flush 时只补缺失/文本变更的）
+  // 待处理对账队列：vecRelPath -> Map<id, embedKey>（save 时全量入队，flush 时只补缺失/文本变更的）
   const dirty = new Map()
   let flushTimer = null
   let flushing = false
@@ -249,12 +251,13 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     // 过去复用 dirty 里已有的 Map 且只增不减：连续两次 remove（第二次删空作用域、
     // 传空数组）时，第一次留下的 key 仍在，空对账退化成部分对账，死向量残留。
     // 改为每次新建 pend 覆盖。
+    const rel = scopeToVecFilePath(scope)
     const pend = new Map()
     for (const m of items || []) {
       if (!m || m.invalidAt) continue // 死条目不入队；flush 时对账会顺手把旧向量摘掉
       pend.set(String(m.id), embedKeyOf(m))
     }
-    dirty.set(scope, pend)
+    dirty.set(rel, pend)
     scheduleFlush()
   }
 
@@ -277,11 +280,11 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     try {
       const batches = [...dirty]
       dirty.clear()
-      for (const [scope, pend] of batches) {
+      for (const [rel, pend] of batches) {
         // 中止后（停用/期间被 dispose）不再碰这个 scope，pending 已经由 dispose 清空
         if (disposed) break
         try {
-          const file = fileOf(scope)
+          const file = fileByRel(rel)
           if (!file) continue
           // 审计 S13 复核：**事务化**。file.load() 返回的是模块内缓存的同一个 Map，
           // 过去直接在它上面 pruned / set 再分批 await —— 一旦中途某批失败，
@@ -318,9 +321,9 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
           warnOnce(`flush 失败（退回纯 BM25，稍后重试）：${error.message}`)
           // 回填时也要保留「本次快照要求摘除」的语义：只回填存活条目，
           // 这样下一次 flush 的对账仍会摘掉已死的向量。
-          const back = dirty.get(scope) || new Map()
+          const back = dirty.get(rel) || new Map()
           for (const [id, key] of pend) if (!back.has(id)) back.set(id, key)
-          dirty.set(scope, back)
+          dirty.set(rel, back)
         }
       }
     } finally {
@@ -374,41 +377,45 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     return out.sort((a, b) => b.cos - a.cos)
   }
 
-  function scanVectorScopes() {
+  function scanVectorRelPaths() {
     const out = []
     if (!memoryDir || !existsSync(memoryDir)) return out
-    try {
-      if (existsSync(join(memoryDir, 'global', 'vectors.bin'))) out.push('global')
-      for (const kind of ['private', 'group', 'system']) {
-        const dir = join(memoryDir, kind)
-        if (!existsSync(dir)) continue
-        for (const ent of readdirSync(dir, { withFileTypes: true })) {
-          if (!ent.isDirectory()) continue
-          if (existsSync(join(dir, ent.name, 'vectors.bin'))) out.push(`${kind}:${ent.name}`)
+    function walk(dir, relPrefix) {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (ent.isDirectory()) {
+          if (!relPrefix && (ent.name === 'quarantine' || ent.name === 'backup')) continue
+          walk(join(dir, ent.name), relPrefix ? join(relPrefix, ent.name) : ent.name)
+        } else if (ent.isFile() && ent.name === 'vectors.bin' && relPrefix) {
+          out.push(join(relPrefix, 'vectors.bin'))
         }
       }
-    } catch {}
+    }
+    try { walk(memoryDir, '') } catch {}
     return out
   }
 
-  /** 面板手动触发：把传入条目按 scope 分组强推入队，并同步对账清理孤儿作用域的死向量。 */
+  /**
+   * 面板手动触发：补全全库存活条目向量，并同步对账清理孤儿作用域的死向量。
+   * 注意：items 须为全库各作用域的完整存活快照（如 memory.list('')），缺席的作用域会被视为已清空而摘除向量。
+   */
   async function backfill(items) {
     if (disposed) return { ok: false, message: '向量通道已停用' }
     if (!enabled()) return { ok: false, message: '向量通道未启用：面板「记忆」页模块设置或 memory.embeddings' }
-    const byScope = new Map()
+    const byRel = new Map()
     for (const m of items || []) {
       if (!m || m.invalidAt) continue
       const sc = String(m.scope || '').trim()
       if (!sc) continue
-      const pend = byScope.get(sc) || new Map()
+      const rel = scopeToVecFilePath(sc)
+      const pend = byRel.get(rel) || new Map()
       pend.set(String(m.id), embedKeyOf(m))
-      byScope.set(sc, pend)
+      byRel.set(rel, pend)
     }
-    // 向量关闭期间被删空的作用域，或启动前遗留的孤儿 vectors.bin，补全时一并入队空对账摘除死向量
-    for (const sc of new Set([...files.keys(), ...scanVectorScopes()])) {
-      if (!byScope.has(sc)) dirty.set(sc, new Map())
+    // 向量关闭期间被删空的作用域，或启动前遗留的孤儿 vectors.bin（含 custom/），补全时一并入队空对账摘除死向量
+    for (const rel of new Set([...files.keys(), ...scanVectorRelPaths()])) {
+      if (!byRel.has(rel)) dirty.set(rel, new Map())
     }
-    for (const [sc, pend] of byScope) dirty.set(sc, pend)
+    for (const [rel, pend] of byRel) dirty.set(rel, pend)
     const embedded = await flush()
     return { ok: true, embedded: embedded || 0 }
   }

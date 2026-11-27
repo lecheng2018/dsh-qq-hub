@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { normalizeRerankConfig, applyRerankOrder, createReranker } from '../src/features/memory-rerank.js'
+import { normalizeRerankConfig, parseMinScore, applyRerankOrder, createReranker } from '../src/features/memory-rerank.js'
 
 const hit = (id, text = 't' + id) => ({ it: { id, text }, score: 1, why: [] })
 
@@ -179,4 +179,36 @@ test('normalizeRerankConfig & createReranker：支持 rerankMinScore 且带阈�
   // 显式传 minScore：单候选也必须送精排并被 0.01 < 0.05 过滤
   assert.deepEqual(await r.rerank('q', [hit('only')], { minScore: 0.05 }), [])
   assert.equal(calls, 1)
+})
+
+
+test('parseMinScore 与单候选 fail-open 边界：不误转布尔/空白，空 results 或 HTTP 失败原样返回', async () => {
+  assert.equal(parseMinScore(0), 0)
+  assert.equal(parseMinScore('0'), 0)
+  assert.equal(parseMinScore(' -2.5 '), -2.5)
+  assert.equal(parseMinScore(''), undefined)
+  assert.equal(parseMinScore('   '), undefined)
+  assert.equal(parseMinScore(true), undefined)
+  assert.equal(parseMinScore(false), null)
+  assert.equal(parseMinScore(null), null)
+
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k', rerankMinScore: true }).minScore, undefined)
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k', rerankMinScore: '   ' }).minScore, undefined)
+  assert.equal(normalizeRerankConfig({ rerankEnabled: true, rerankApiKey: 'k', rerankMinScore: 0 }).minScore, 0)
+
+  let mode = 'empty'
+  const r = createReranker({
+    getConfig: () => ({ ext: { memory: { rerankEnabled: true, rerankApiKey: 'k', rerankUrl: 'https://mock/rerank', rerankMinScore: 0.05 } } }),
+    log: { warn() {} },
+    fetchImpl: async () => {
+      if (mode === 'http500') return { ok: false, status: 500 }
+      return { ok: true, json: async () => ({ results: [] }) }
+    },
+  })
+  const single = [hit('only')]
+  assert.deepEqual(await r.rerank('q', single), single, '空 results 时单候选 fail-open 原样保留')
+  mode = 'http500'
+  assert.deepEqual(await r.rerank('q', single), single, 'HTTP 500 时单候选 fail-open 原样保留')
+  // 显式传 false/null 可关闭配置的阈值，单候选恢复短路
+  assert.deepEqual(await r.rerank('q', single, { minScore: null }), single)
 })

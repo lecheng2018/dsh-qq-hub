@@ -255,3 +255,83 @@ test('modular-core：被 prompt 钩子拦截的回合不污染下一轮 prevText
     await core.dispose()
   }
 })
+
+
+test('modular-core：onSteer 被 prompt 钩子拦截不污染 prevText，放行则正常推进', async () => {
+  const seen = []
+  const listeners = new Set()
+  const session = { id: 'sess-steer-prevtext' }
+  let releaseTurn1 = null
+  const turn1Gate = new Promise((r) => { releaseTurn1 = r })
+  let turnNo = 0
+  const agent = {
+    id: session.id,
+    ctx: { get: () => null },
+    steer: async () => {},
+    async followup() {
+      const n = ++turnNo
+      if (n === 1) await turn1Gate
+      for (const fn of [...listeners]) fn(session, { type: 'assistant/message', data: { turn: n, message: { content: [{ type: 'text', text: '好' }] } } })
+      for (const fn of [...listeners]) fn(session, { type: 'turn/end', data: { turn: n, reason: { kind: 'completed' } } })
+    },
+  }
+  const ctrl = { create: async () => ({ sessionId: session.id }), resolveAgent: async () => ({ agent }) }
+  const dsh = {
+    on(name, fn) { if (name !== 'session/event') return () => {}; listeners.add(fn); return () => listeners.delete(fn) },
+    get(name) {
+      if (name === 'sessionController') return ctrl
+      if (name === 'workspaceRegistry') return { list: () => [{ id: 'ws-1', path: 'ws-1' }], create: async () => ({ id: 'ws-1', path: 'ws-1' }) }
+      return null
+    },
+  }
+  const cfg = {
+    enabled: true, dryRun: false, botQQ: '20002', ownerQQ: '10001', ownerName: '主人',
+    allow: { private: ['10001'], groups: [] }, longTasks: false,
+    merge: { waitSec: 0.01, maxSec: 0.03, groupWaitSec: 0.01, groupMaxSec: 0.03 },
+    security: { identityGuard: { enabled: false } },
+    voice: { enabled: false, autoChance: 0 }, stickers: { enabled: false, faces: false, autoChance: 0 },
+    reply: { groupMaxChars: 500, maxBubbles: 3, cadence: { enabled: false } },
+  }
+  const core = createModularCore({
+    dsh,
+    onebot: { call: async () => ({ message_id: 1 }) },
+    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    moduleHooks: {
+      prompt(content, info) {
+        seen.push({ query: info.queryText, prev: info.prevText, steer: Boolean(info.steer) })
+        if (String(info.queryText || '').includes('拦截插话')) return null
+        return content
+      },
+    },
+    getConfig: () => cfg, logger: noopLog, log: noopLog,
+  })
+  try {
+    const ev = (id, text) => ({
+      post_type: 'message', message_type: 'private', sub_type: 'friend',
+      self_id: 20002, user_id: 10001, message_id: id, time: Math.floor(Date.now() / 1000),
+      sender: { user_id: 10001, nickname: '主人' },
+      message: [{ type: 'text', data: { text } }],
+    })
+    const firstTurn = core.dispatchLegacyEventSettled(ev(3001, '第一轮基准话'))
+    // 等第一轮进入 followup（prompt 钩子已放行）
+    while (seen.length < 1) await sleep(10)
+    // 发起一条被拦截的 steer 与一条放行的 steer
+    core.dispatchLegacyEvent(ev(3002, '拦截插话'))
+    while (seen.length < 2) await sleep(10)
+    core.dispatchLegacyEvent(ev(3003, '放行插话'))
+    while (seen.length < 3) await sleep(10)
+    releaseTurn1()
+    await firstTurn
+    await core.dispatchLegacyEventSettled(ev(3004, '下一轮追问'))
+
+    assert.deepEqual(seen, [
+      { query: '第一轮基准话', prev: '', steer: false },
+      { query: '拦截插话', prev: '第一轮基准话', steer: true },
+      { query: '放行插话', prev: '第一轮基准话', steer: true },
+      { query: '下一轮追问', prev: '放行插话', steer: false },
+    ])
+  } finally {
+    releaseTurn1?.()
+    await core.dispose()
+  }
+})

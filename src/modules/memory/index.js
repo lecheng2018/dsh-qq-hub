@@ -43,7 +43,7 @@ export default {
     { key: 'rerankApiKey', label: 'Rerank API Key', type: 'password', hint: '保存在配置文件里（面板不回显，留空保存不会清掉已填的）' },
     { key: 'rerankModel', label: 'Rerank 模型名', type: 'text', placeholder: 'BAAI/bge-reranker-v2-m3' },
     { key: 'rerankTopN', label: '精排候选数', type: 'number', min: 2, max: 50, step: 1, hint: 'RRF 融合后取前 N 条送精排，其余保持原顺序' },
-    { key: 'rerankMinScore', label: '精排相关性阈值', type: 'number', min: -20, max: 1, step: 0.01, hint: '低于此分的候选在精排后剔除（BGE 默认 0.05；输出负 logits 的模型可调低）' },
+    { key: 'rerankMinScore', label: '精排相关性阈值', type: 'number', min: -20, max: 20, step: 0.01, hint: '低于此分的候选在精排后剔除（BGE 默认 0.05；输出原始 logits 的模型可按需调整）' },
   ],
   setup(api) {
     const { hub, http } = api.core
