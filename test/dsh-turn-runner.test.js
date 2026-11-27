@@ -16,7 +16,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createTurnRunner, TurnExecutionError } from '../src/chat/dsh-turn-runner.js'
-import { classifyTurnFailure } from '../src/host/core/turn-failure.js'
+import { classifyFailureKind } from '../src/host/core/turn-failure.js'
 import { createModularCore } from '../src/host/modular-core.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -57,7 +57,7 @@ function scriptedDsh({ stream = true, timeoutMs = 5000, followup = null } = {}) 
     dsh,
     ctxGet: (name) => dsh.get(name),
     getConfig: () => ({ turnTimeoutMs: timeoutMs }),
-    classifyTurnFailure,
+    classifyFailureKind,
   })
   return { runner, agent, emit, listeners, detached }
 }
@@ -232,6 +232,19 @@ test('turn/end 非 completed：blocked（归档门）→ archived=true，且没�
   assert.equal(error.kind, 'blocked')
   assert.equal(error.archived, true, 'blocked 只能认 kind，不能靠文案')
   assert.equal(error.oversized, false)
+})
+
+test('followup 直接拒绝带 kind=blocked（#263 的防御分支）：archived=true，不误标 oversized', async () => {
+  // #263 在 followupError 出口认过 `followupError?.kind === 'blocked'`：归档门在 pre-step 就拒时
+  // followup 本身会拒绝，不经过 turn/end。S2 起这条分类要由执行器给出，否则调用点无从自愈。
+  const rejected = Object.assign(new Error('会话已归档'), { kind: 'blocked' })
+  const { runner, listeners } = scriptedDsh({ followup: () => Promise.reject(rejected) })
+  const { error } = await settle(runner.runTurn({ sessionId: SESSION, message: MESSAGE, collect: { mode: 'chat' } }))
+  assert.ok(error instanceof TurnExecutionError, `应是 TurnExecutionError，实际：${error}`)
+  assert.equal(error.kind, 'followup')
+  assert.equal(error.archived, true, 'followup 的 blocked 也要按归档门自愈（下一条消息换会话）')
+  assert.equal(error.oversized, false, 'blocked 不得被当成 413')
+  assert.equal(listeners.size, 0, '失败路径同样摘监听')
 })
 
 test('turn/end 非 completed：普通错误两类都不命中（如实失败，不误标自愈）', async () => {

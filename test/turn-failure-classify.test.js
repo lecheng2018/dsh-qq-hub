@@ -1,9 +1,9 @@
 // S1 · 回合失败分类 + 待重置标记（pendingResets）。
 //
 // 覆盖三件事：
-//   1. classifyTurnFailure 的四类判定（请求体过大 / 归档门 blocked / 超时 / 普通失败），
+//   1. classifyFailureKind 的四类判定（请求体过大 / 归档门 blocked / 超时 / 普通失败），
 //      并且「请求体过大」的判定与既有 turnFailureLooksOversized **逐例等价**（不许放宽收紧）；
-//   2. pendingResets 的优先级合并：archived > oversized > timedOut，后写入的低优先级不得覆盖；
+//   2. pendingResets 的优先级合并：archived > context-window > oversized > timedOut，后写入的低优先级不得覆盖；
 //   3. takePendingReset 取出即清除（同一个标记只触发一次 resetChat），
 //      以及同一 chatKey 连续两轮 413 时两轮各 reset 一次（不能只 reset 一次就丢标记）。
 //
@@ -13,16 +13,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyTurnFailure, markPendingReset, takePendingReset, turnFailureLooksOversized } from '../src/host/core/turn-failure.js'
+import { classifyFailureKind, markPendingReset, takePendingReset, turnFailureLooksOversized } from '../src/host/core/turn-failure.js'
 import { createModularCore } from '../src/host/modular-core.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const noopLog = { info() {}, warn() {}, debug() {}, error() {}, child: () => noopLog }
 
-// ---------- 1. classifyTurnFailure：四类判定 ----------
+// ---------- 1. classifyFailureKind：四类判定 ----------
 
 test('分类：413 结构化失败码 → oversized', () => {
-  const c = classifyTurnFailure({ code: 'INVALID_REQUEST', status: 413, message: '本次对话上下文或图片过大' })
+  const c = classifyFailureKind({ code: 'INVALID_REQUEST', status: 413, message: '本次对话上下文或图片过大' })
   assert.equal(c.kind, 'oversized')
   assert.equal(c.oversized, true)
   assert.equal(c.archived, false)
@@ -30,18 +30,18 @@ test('分类：413 结构化失败码 → oversized', () => {
 })
 
 test('分类：只有中文文案（无 status）也 → oversized', () => {
-  const c = classifyTurnFailure({ code: 'INVALID_REQUEST', message: '413 {"code":"plugin_request_too_large","message":"本次对话上下文或图片过大：请求约 5.8 MiB，插件内存上限 64 MiB"}' })
+  const c = classifyFailureKind({ code: 'INVALID_REQUEST', message: '413 {"code":"plugin_request_too_large","message":"本次对话上下文或图片过大：请求约 5.8 MiB，插件内存上限 64 MiB"}' })
   assert.equal(c.kind, 'oversized')
   assert.equal(c.oversized, true)
 })
 
 test('分类：pi-ai 误判成 CONTEXT_WINDOW_EXCEEDED 仍 → oversized（文案优先）', () => {
-  const c = classifyTurnFailure({ code: 'CONTEXT_WINDOW_EXCEEDED', message: '413: {"code":"plugin_request_too_large","message":"请求约 5.3 MiB，插件内存上限 64 MiB"}' })
+  const c = classifyFailureKind({ code: 'CONTEXT_WINDOW_EXCEEDED', message: '413: {"code":"plugin_request_too_large","message":"请求约 5.3 MiB，插件内存上限 64 MiB"}' })
   assert.equal(c.kind, 'oversized')
 })
 
 test('分类：归档门 blocked → archived', () => {
-  const c = classifyTurnFailure({ kind: 'blocked' })
+  const c = classifyFailureKind({ kind: 'blocked' })
   assert.equal(c.kind, 'archived')
   assert.equal(c.archived, true)
   assert.equal(c.oversized, false)
@@ -49,7 +49,7 @@ test('分类：归档门 blocked → archived', () => {
 })
 
 test('分类：本地等待超时 → timedOut，并带出时长', () => {
-  const c = classifyTurnFailure({ turnTimedOut: true, timedOutForMs: 600_000 })
+  const c = classifyFailureKind({ turnTimedOut: true, timedOutForMs: 600_000 })
   assert.equal(c.kind, 'timedOut')
   assert.equal(c.timedOutForMs, 600_000)
   assert.equal(c.oversized, false)
@@ -58,7 +58,7 @@ test('分类：本地等待超时 → timedOut，并带出时长', () => {
 
 test('分类：普通失败（429 / 空 / 字符串）→ other，不误触发自愈', () => {
   for (const failure of [{ code: 'RATE_LIMIT', status: 429, message: 'rate limit exceeded' }, { code: 'CONTEXT_WINDOW_EXCEEDED', message: 'prompt is too long: 213462 tokens > 200000 maximum' }, null, undefined, '', 'error']) {
-    const c = classifyTurnFailure(failure)
+    const c = classifyFailureKind(failure)
     assert.equal(c.kind, 'other', `${JSON.stringify(failure)} 应归 other`)
     assert.equal(c.oversized, false)
     assert.equal(c.archived, false)
@@ -91,7 +91,7 @@ test('分类：oversized 判定与既有 turnFailureLooksOversized 逐例等价�
   ]
   for (const failure of matrix) {
     assert.equal(
-      classifyTurnFailure(failure).oversized,
+      classifyFailureKind(failure).oversized,
       turnFailureLooksOversized(failure),
       `413 判定必须与 turnFailureLooksOversized 等价：${JSON.stringify(failure)}`,
     )
@@ -129,6 +129,25 @@ test('pendingResets 优先级：timedOut 不覆盖 oversized，oversized 不覆�
   markPendingReset(b, 'private:3', 'archived')
   markPendingReset(b, 'private:3', 'oversized')
   assert.equal(b.get('private:3'), 'archived', 'oversized 比 archived 弱，不得覆盖')
+})
+
+test('pendingResets 优先级：context-window（#263 的第 4 个理由）夹在 archived 与 oversized 之间', () => {
+  // 归档门 blocked > 上下文超窗 > 请求体过大 > 超时。context-window 比 oversized 强：
+  // 两者都会换会话，但「模型窗口装不下」比「请求体字节过大」更具体，日志该按前者说。
+  const a = new Map()
+  markPendingReset(a, 'private:4', 'timedOut')
+  markPendingReset(a, 'private:4', 'context-window')
+  assert.equal(a.get('private:4'), 'context-window', 'context-window 覆盖 timedOut')
+  markPendingReset(a, 'private:4', 'oversized')
+  assert.equal(a.get('private:4'), 'context-window', 'oversized 不得覆盖 context-window')
+  markPendingReset(a, 'private:4', 'archived')
+  assert.equal(a.get('private:4'), 'archived', 'archived 覆盖 context-window')
+  assert.equal(markPendingReset(a, 'private:4', 'context-window'), 'archived', 'context-window 不得覆盖 archived')
+
+  const b = new Map()
+  markPendingReset(b, 'private:5', 'context-window')
+  assert.equal(takePendingReset(b, 'private:5'), 'context-window', 'context-window 能被取出（下一条消息换会话）')
+  assert.equal(b.has('private:5'), false, '取出即清除，不留永远不清的条目')
 })
 
 test('pendingResets 按 chatKey 分开记，互不影响', () => {

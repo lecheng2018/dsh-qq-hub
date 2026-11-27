@@ -3,7 +3,8 @@
 //
 // 从 host/modular-core.js 原样搬出（纯结构重构，行为逐行一致）。
 // 这些函数原来直接读写核心闭包里的会话状态表（mountedTools / ctxBoxes / personaBound /
-// sessionPersonas / lastInboundText / sessionTurns / activeChatBySessionId / selectedModels …）。
+// sessionPersonas / lastInboundText / sessionTurns / activeChatBySessionId / selectedModels /
+// pendingResets …）。
 // 拆出来时这些表**以活引用传入**（Map/Set 是引用类型，核心与本模块读写同一份，不会漂移）；
 // registry / systemTurns / participants / groupNames 同理。判定用的 getConfig 是取数函数 →
 // 每轮读最新配置，与拆分前一致。
@@ -20,7 +21,7 @@ export function createSessionLifecycle({
   registry, systemTurns, participants, groupNames, resetImageBudget,
   sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
   ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
-  mountedTools, slowNoticeSent, selectedModels,
+  mountedTools, slowNoticeSent, selectedModels, pendingResets,
 }) {
   function cleanupSession(sessionId) {
     const sid = String(sessionId || '')
@@ -45,6 +46,10 @@ export function createSessionLifecycle({
   /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
   function resetChat(chatKey) {
     const key = String(chatKey || '')
+    // #263 的 `contextResetChats.delete(key)` 移植到这张统一标记表：重置即把这个聊天攒下的
+    // 待重置理由清掉。会话都要换新了，旧理由再留着只会让下一条消息多归档一次（而且那些理由
+    // 描述的是**这个旧会话**的失败）。放在 onResetChat 之前，与 #263 的时序一致。
+    pendingResets.delete(key)
     try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false

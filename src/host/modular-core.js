@@ -47,6 +47,7 @@ import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
 import { wantsVoice } from '../chat/reply.js'
 import { defaultModel, pickReasoningEffort, modelVision } from '../core/llm.js'
+import { redact } from '../core/redact.js'
 import { resolveChatModel } from '../chat/chat-model.js'
 import { personaIdFor, personaHash } from '../persona/personas.js'
 import { workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
@@ -63,7 +64,7 @@ import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
-import { createTurnFailure, takePendingReset } from './core/turn-failure.js'
+import { createTurnFailure, markPendingReset, takePendingReset } from './core/turn-failure.js'
 import { createSessionLifecycle } from './core/session-lifecycle.js'
 import { createPromptContext } from './core/prompt-context.js'
 import { createToolsMount } from './core/tools-mount.js'
@@ -187,10 +188,9 @@ export function createModularCore({
   }
   const systemSessionIds = new Set() // systemTurns 后台会话 id（不进 chatOfSession，但供人设解析免误报回落告警）
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
-  /** chatKey -> 'timedOut' | 'oversized' | 'archived'（下一次进入该聊天的回合时统一归档重建） */
+  /** chatKey -> 'archived' | 'context-window' | 'oversized' | 'timedOut'（下一次进入该聊天的回合时统一归档重建） */
   const pendingResets = new Map()
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
-  const contextResetChats = new Set() // 上下文超窗（context-window）：下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
@@ -568,7 +568,7 @@ export function createModularCore({
     registry, systemTurns, participants, groupNames, resetImageBudget,
     sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
     ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
-    mountedTools, slowNoticeSent, selectedModels,
+    mountedTools, slowNoticeSent, selectedModels, pendingResets,
   })
   const {
     cleanupSession, resetChat, resetChatsForPersonaChange, resetAllSessions,
@@ -594,7 +594,7 @@ export function createModularCore({
   // 投递、steer 上下文拼装、模型与人设挂载）仍留在各自调用点，一行都没搬。
   const turnRunner = createTurnRunner({
     dsh, ctxGet, getConfig, log, debug,
-    classifyTurnFailure: turnFailure.classifyTurnFailure,
+    classifyFailureKind: turnFailure.classifyFailureKind,
   })
 
   // ---------- 回合失败回执（2026-11-27） ----------
@@ -694,7 +694,7 @@ export function createModularCore({
     log.warn(`回合失败（${kind}）：${key}${detail ? '：' + redact(detail) : ''}`)
     // 上下文超窗（模型窗口不够）：无论私聊还是群聊，只要 key 非空即登记待重置，
     // 兑现「下一条消息重新开始」的承诺（群聊虽不发提示也要能自愈，避免一直卡死）。
-    if (key && kind === 'context-window') contextResetChats.add(key)
+    if (key && kind === 'context-window') markPendingReset(pendingResets, key, 'context-window')
     if (!notify || !key) return { kind, sent: false }
     // 主人私聊以外的群聊不发：群里一条失败回执等于当众解释技术故障，观感很差。
     // 私聊（含主人）才发 —— 那是「她的对话被掐了」，应该让人知道。
@@ -760,8 +760,10 @@ export function createModularCore({
     },
     execute: async (turn, io) => {
       const offeredMode = groupGate.turnModeOf(turn.turnId)
-      // #263 的外层兜底要用它摘监听；本 commit 的收尾逻辑仍在装配根里（S2 才搬进执行器）。
-      let cleanupTurnListener = () => {}
+      // #263 的外层兜底在失败时调它摘监听。S2 起监听器归执行器（成功 / 失败 / 取消 / 超时四条路径
+      // 都在 runTurn 里摘干净），所以这里恒为空操作 —— 保留这处接线只为让 #263 那段兜底的结构
+      // 与语义一字不变（不新增、也不删掉一层清理）。
+      const cleanupTurnListener = () => {}
       try {
       // 上一轮失败留下的待重置标记：统一取出（取出即清除，同一个理由只 reset 一次）。
       // 理由只决定要不要留原文案：413 与归档门各有一条既有 info（文案一字未改），超时原来不打日志。
@@ -772,11 +774,8 @@ export function createModularCore({
         resetChat(turn.chatKey)
         if (pendingReset === 'oversized') log.info(`请求体过大自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
         else if (pendingReset === 'archived') log.info(`归档自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
-      }
-      // 上一轮因模型上下文超窗（context-window）失败：归档旧会话重建，兑现「下一条消息重新开始」。
-      if (contextResetChats.delete(turn.chatKey)) {
-        resetChat(turn.chatKey)
-        log.info(`上下文超窗自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+        // 上一轮因模型上下文超窗（context-window）失败：归档旧会话重建，兑现「下一条消息重新开始」。
+        else if (pendingReset === 'context-window') log.info(`上下文超窗自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
       }
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
@@ -1012,6 +1011,14 @@ export function createModularCore({
       } catch (error) {
         steeringChats.delete(turn.chatKey)
         stopTyping()
+        // 取消（AbortError，S2 的 io.signal）：回合落 cancelled、零投递，**不发任何回执** ——
+        // 这是用户/宿主主动中止，不是故障，#263 的「失败回执」只针对故障。先标 _turnFailureHandled，
+        // 让外层兜底也跳过（否则会补发一条「这轮没跑成」）。分类字段不带 timedOut/oversized/archived，
+        // 不标这个的话后面每个分支都会把它当成普通 error。
+        if (error?.name === 'AbortError' || error?.kind === 'cancelled') {
+          if (error && typeof error === 'object') error._turnFailureHandled = true
+          throw error
+        }
         // 超时 / 请求体过大 / 归档门 / 其余失败：#263 的四个出口分工照旧，只是分类字段由执行器给出
         //（`timedOut` / `oversized` / `archived`），不再靠 message 匹配。
         if (error?.timedOut) handleTurnTimeout(turn.chatKey, error.timedOutForMs)
@@ -1371,8 +1378,6 @@ export function createModularCore({
       // 这里也不打（文案差异留在 execute 那一侧，runPromptTurn 保持无声）。
       const pendingReset = takePendingReset(pendingResets, chatKey)
       if (pendingReset) resetChat(chatKey)
-      // 与主链同款：上次上下文超窗也换新会话（主动任务共用同一份映射）。
-      if (contextResetChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
       const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(text || '') }], source: { kind: 'qq-hub' } }
       try {
@@ -1390,7 +1395,7 @@ export function createModularCore({
         else if (!error?._turnFailureHandled && error?.archived) handleArchivedTurn(chatKey)
         // #263：上下文超窗在后台链只登记待重置（这条链不发回执）。
         else if (!error?._turnFailureHandled && classifyTurnFailure(error.cause ?? error).kind === 'context-window') {
-          if (chatKey) contextResetChats.add(String(chatKey))
+          if (chatKey) markPendingReset(pendingResets, String(chatKey), 'context-window')
         }
         throw error
       }
@@ -1403,7 +1408,7 @@ export function createModularCore({
     }
     mountedTools.clear()
     lastInboundText.clear()
-    contextResetChats.clear()
+    pendingResets.clear()
     failureNoticedAt.clear()
     await systemTurns.dispose()
     await registry.dispose()

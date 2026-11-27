@@ -9,25 +9,30 @@
 // `pendingResets`（chatKey → 理由）由核心持有并**以活引用传入**——execute / runPromptTurn
 // 读同一份标记决定是否换会话，复制一份就会漂移。
 //
-// 结构（S1）：三类失败共用一张 `pendingResets` 表 + 一个分类函数 `classifyTurnFailure`，
+// 结构（S1）：四类失败共用一张 `pendingResets` 表 + 一个分类函数 `classifyFailureKind`，
 // 一个统一入口 `handleTurnFailure` 按分类分派到下面三个既有处理函数。分派不改变任何一条
 // 既有文案、notify 语义与时序：本文件里每个 handler 的日志文本与拆分前逐字相同。
+//
+// 命名注意：本模块导出的 `handleTurnFailure`（分派壳）**不要在装配根里同名解构** ——
+// #263 在 host/modular-core.js 里另有一个 `handleTurnFailure`（分类回执，语义完全不同）。
+// 装配根只取下面三个既有 handler，按 #263 的四个出口分工显式调用。
 
 import { redact } from '../../core/redact.js'
 
-// ---------- 待重置标记：pendingResets（S1 合并三个 Set） ----------
-// 拆分前是三个独立 Set（timedOutChats / oversizedChats / archivedChats），允许同一个 chatKey
-// 同时被标上多条理由。合并成 Map 后 `set` 会覆盖，所以这里显式定强弱：
-//   归档门拦下（archived）> 请求体过大（oversized）> 超时（timedOut）。
+// ---------- 待重置标记：pendingResets（S1 合并三个 Set，rebase 并入第 4 个） ----------
+// 拆分前是三个独立 Set（timedOutChats / oversizedChats / archivedChats），#263 又加了第四个
+// （contextResetChats：模型上下文超窗）。同一个 chatKey 允许被标上多条理由，合并成 Map 后
+// `set` 会覆盖，所以这里显式定强弱：
+//   归档门拦下（archived）> 上下文超窗（context-window）> 请求体过大（oversized）> 超时（timedOut）。
 // 后写入的低优先级**不得**覆盖已存在的高优先级 —— 重复标记不能把更强的自愈理由丢掉。
-const PENDING_RESET_RANK = { timedOut: 0, oversized: 1, archived: 2 }
+const PENDING_RESET_RANK = { timedOut: 0, oversized: 1, 'context-window': 2, archived: 3 }
 const rankOf = (reason) => PENDING_RESET_RANK[reason] ?? -1
 
 /**
  * 记一条待重置标记（优先级合并，不降级）。
  * @param {Map<string, string>} pendingResets 待重置标记表。
  * @param {string} chatKey 聊天键。
- * @param {'timedOut'|'oversized'|'archived'} reason 自愈理由。
+ * @param {'timedOut'|'oversized'|'context-window'|'archived'} reason 自愈理由。
  * @returns {string} 合并后表里实际生效的理由（被高优先级挡住时原样返回旧值）。
  */
 export function markPendingReset(pendingResets, chatKey, reason) {
@@ -43,7 +48,7 @@ export function markPendingReset(pendingResets, chatKey, reason) {
  * 只负责取，打不打日志、通知不通知由调用点各自决定（execute 有文案，runPromptTurn 没有）。
  * @param {Map<string, string>} pendingResets 待重置标记表。
  * @param {string} chatKey 聊天键。
- * @returns {'timedOut'|'oversized'|'archived'|null} 理由；没有标记时返回 null。
+ * @returns {'timedOut'|'oversized'|'context-window'|'archived'|null} 理由；没有标记时返回 null。
  */
 export function takePendingReset(pendingResets, chatKey) {
   const key = String(chatKey || '')
@@ -87,7 +92,7 @@ const SERVER_OVERSIZE_TEXT = /plugin_request_too_large|request_too_large|context
 /**
  * 失败是否「请求体过大」（413 / 插件内存上限）。
  *
- * 判定条件与拆分前**逐字相同**（只是从工厂内部提到模块作用域，供 classifyTurnFailure 复用；
+ * 判定条件与拆分前**逐字相同**（只是从工厂内部提到模块作用域，供 classifyFailureKind 复用；
  * 工厂仍返回同一个函数引用，调用方拿到的行为不变）。
  * @param {object|null} failure 失败对象（可能只有 code / status / message 之一）。
  * @returns {boolean} 是否按请求体过大处理。
@@ -110,6 +115,10 @@ export function turnFailureLooksOversized(failure) {
 /**
  * 把一次回合失败归类（纯函数，不看状态、不打日志）。
  *
+ * 名字刻意叫 `classifyFailureKind`：#263 在 host/modular-core.js 里有一个 `classifyTurnFailure`，
+ * 它把失败归成 moderation / rate-limit / context-window / error 并发用户回执。两者语义完全不同，
+ * 同名会串；本函数只回答「这一轮要不要换会话、按什么理由换」。
+ *
  * 四类：`oversized`（服务端 413 / 请求体过大）、`archived`（DSH 归档门 blocked）、
  * `timedOut`（本地等待超时）、`other`（其余一律原样如实失败）。
  *
@@ -119,7 +128,7 @@ export function turnFailureLooksOversized(failure) {
  * @param {object|string|null} failure 失败对象 / 失败标记。
  * @returns {{kind: 'oversized'|'archived'|'timedOut'|'other', oversized: boolean, archived: boolean, timedOutForMs: number}}
  */
-export function classifyTurnFailure(failure) {
+export function classifyFailureKind(failure) {
   if (turnFailureLooksOversized(failure)) return { kind: 'oversized', oversized: true, archived: false, timedOutForMs: 0 }
   const kind = typeof failure === 'string' ? failure : String(failure?.kind || '')
   if (kind === 'blocked') return { kind: 'archived', oversized: false, archived: true, timedOutForMs: 0 }
@@ -174,7 +183,8 @@ export function createTurnFailure({ log, debug, getOutbox, pendingResets }) {
   }
 
   /**
-   * 统一入口：按 classifyTurnFailure 分派到上面三个既有 handler。
+   * 统一入口：按 classifyFailureKind 分派到上面三个既有 handler（'context-window' 由 #263 那一侧
+   * 分类后直接 markPendingReset，不进本入口）。
    *
    * 分派是**薄壳**：每个 handler 自己的日志文案、通知语义、标记优先级一字未改；
    * `other` 不做任何事（调用点原本就没有对应分支，如实失败由调用点自己上抛）。
@@ -185,12 +195,12 @@ export function createTurnFailure({ log, debug, getOutbox, pendingResets }) {
    */
   function handleTurnFailure(chatKey, failure, opts = {}) {
     const notify = opts.notify !== false
-    const classified = classifyTurnFailure(failure)
+    const classified = classifyFailureKind(failure)
     if (classified.kind === 'oversized') return handleOversizedTurn(chatKey, failure, { notify })
     if (classified.kind === 'archived') return handleArchivedTurn(chatKey)
     if (classified.kind === 'timedOut') return handleTurnTimeout(chatKey, classified.timedOutForMs, { notify })
     return null
   }
 
-  return { handleTurnTimeout, turnFailureLooksOversized, handleOversizedTurn, handleArchivedTurn, classifyTurnFailure, handleTurnFailure }
+  return { handleTurnTimeout, turnFailureLooksOversized, handleOversizedTurn, handleArchivedTurn, classifyFailureKind, handleTurnFailure }
 }

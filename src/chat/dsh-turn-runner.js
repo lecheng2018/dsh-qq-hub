@@ -96,8 +96,8 @@ function cancelledError() {
  * @param {() => object} o.getConfig 取配置（turnTimeoutMs）。
  * @param {object} [o.log] 日志器（本模块**不新增任何日志**，保留签名只为与其它子模块同形）。
  * @param {(m: string) => void} [o.debug] 调试日志（同上，本轮不使用：铁律「不改日志文本」）。
- * @param {(failure: object|string|null) => {oversized?: boolean, archived?: boolean}} o.classifyTurnFailure
- *   回合失败分类器（host/core/turn-failure.js 的 classifyTurnFailure）。**必须注入**：413 与归档门
+ * @param {(failure: object|string|null) => {oversized?: boolean, archived?: boolean}} o.classifyFailureKind
+ *   回合失败分类器（host/core/turn-failure.js 的 classifyFailureKind）。**必须注入**：413 与归档门
  *   的自愈判定口径只允许有一处，本模块不自己写正则。
  * @param {(error: TurnExecutionError) => void} [o.onTimeout] 可选旁路观察钩子（超时）。不写标记、不发通知。
  * @param {(error: TurnExecutionError) => void} [o.onOversized] 可选旁路观察钩子（请求体过大）。
@@ -105,10 +105,10 @@ function cancelledError() {
  * @returns {{runTurn: Function, resolveAgentFor: Function}}
  */
 export function createTurnRunner({
-  dsh, ctxGet, getConfig, log, debug, classifyTurnFailure,
+  dsh, ctxGet, getConfig, log, debug, classifyFailureKind,
   onTimeout = null, onOversized = null, onArchived = null,
 } = {}) {
-  if (typeof classifyTurnFailure !== 'function') throw new TypeError('createTurnRunner 需要 classifyTurnFailure（回合失败分类）')
+  if (typeof classifyFailureKind !== 'function') throw new TypeError('createTurnRunner 需要 classifyFailureKind（回合失败分类）')
   void log
   void debug
 
@@ -154,7 +154,7 @@ export function createTurnRunner({
       ? { code: failure.code, status: failure.status, message: failure.message, kind, error: failure }
       : { kind }
     let classified = null
-    try { classified = classifyTurnFailure(probe) } catch { classified = null }
+    try { classified = classifyFailureKind(probe) } catch { classified = null }
     return { oversized: Boolean(classified?.oversized), archived: Boolean(classified?.archived) }
   }
 
@@ -378,11 +378,15 @@ export function createTurnRunner({
         })
       }
       const failure = followupError?.failure || followupError
-      const { oversized } = failureFlags(null, failure)
+      // 与 #263 对齐：followup 直接拒绝也可能带 kind === 'blocked'（宿主归档门在 pre-step 就把这一回合
+      // 拒了，一个模型调用都没发生）。#263 在 followupError 出口专门认过这一条；这里同样要把 kind
+      // 交给分类器，否则只判 oversized 会把它悄悄归成「普通失败」，下一条消息还指着已归档会话。
+      const { oversized, archived } = failureFlags(followupError?.kind ?? failure?.kind ?? null, failure)
       const error = new TurnExecutionError(strategy.followupMessage(followupError?.message || String(followupError)), {
-        kind: 'followup', oversized, cause: failure,
+        kind: 'followup', oversized, archived, cause: failure,
       })
       if (oversized) observe(onOversized, error)
+      if (archived) observe(onArchived, error)
       throw error
     }
     // followup 已兑现：turn/end 早到的那种形状（真机/夹具都会）此刻补收尾
