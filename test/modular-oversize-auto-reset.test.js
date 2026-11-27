@@ -57,6 +57,7 @@ function scriptedFakeDsh({ script = [] } = {}) {
 
 function mkCore(dshRaw, cfgOver = {}) {
   const sent = []
+  const sentTexts = []
   const cfg = {
     enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', ownerName: '主人',
     allow: { private: ['10000001'], groups: ['777'] }, longTasks: false,
@@ -65,11 +66,21 @@ function mkCore(dshRaw, cfgOver = {}) {
   }
   const core = createModularCore({
     dsh: dshRaw.ctx,
-    onebot: { call: async (action) => { if (action.startsWith('send_')) sent.push(action); return { message_id: String(sent.length) } } },
+    onebot: {
+      call: async (action, params) => {
+        if (action.startsWith('send_')) {
+          sent.push(action)
+          const segs = Array.isArray(params?.message) ? params.message : []
+          const txt = segs.map((s) => s?.data?.text || '').join('') || (typeof params?.message === 'string' ? params.message : '')
+          sentTexts.push(txt)
+        }
+        return { message_id: String(sent.length) }
+      },
+    },
     mods: { contextFor: async () => '', commands: () => [], use: () => null },
     getConfig: () => cfg, logger: noopLog, log: noopLog,
   })
-  return { core, sent }
+  return { core, sent, sentTexts }
 }
 
 const msgEv = (over = {}) => ({
@@ -91,18 +102,22 @@ test('413 自愈：turn/end INVALID_REQUEST+413 → 本轮不发 + 提示 + 下�
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core, sent } = mkCore(dshRaw)
+  const { core, sent, sentTexts } = mkCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
     await sleep(300)
-    // 回复不发（error 结束），但自愈提示要发出去
-    assert.ok(!sent.includes('send_private_msg') || sent.length >= 1, '自愈提示发出（回复本身不发）')
+    // 回复不发（error 结束），但自愈提示只发 1 条（绝不能再双发通用「抖了一下」回执）
+    assert.equal(sent.length, 1, '413 失败只发 1 条自愈提示，不能双发')
+    assert.equal(sent[0], 'send_private_msg')
+    assert.match(sentTexts[0], /64 MiB|上下文和图片太多/, '发出的是 413 专用提示')
+    assert.doesNotMatch(sentTexts[0], /看不到的话|抖了一下/, '不发半截回复、也不混入通用失败提示')
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '失败后映射保留（下一条消息才重建）')
     // 下一条消息：自动归档旧会话、新建并回复
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', '下一条消息进入 → 换新会话')
-    assert.ok(sent.includes('send_private_msg'), '新会话正常回复')
+    assert.equal(sent.length, 2, '1 条 413 提示 + 1 条新会话回复')
+    assert.match(sentTexts[1], /新会话的回复/, '新会话正常回复')
     const archived = dshRaw.workspaces.archived || []
     assert.ok(archived.includes('sess-1'), '旧会话已归档（侧栏可找回）')
   } finally { await core.dispose() }
@@ -136,11 +151,14 @@ test('413 自愈：普通错误（非 413）不换会话 —— 不误伤正常�
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core, sent } = mkCore(dshRaw)
+  const { core, sent, sentTexts } = mkCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
     await sleep(300)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '普通失败不换会话（429 该走重试，不该归档重建）')
+    assert.equal(sent.length, 1, '429 回合只发 1 条限流回执')
+    assert.match(sentTexts[0], /限流/, '429 回执必须准确命中 rate-limit（含「限流」），不能退回通用「抖了一下」')
+    assert.doesNotMatch(sentTexts[0], /抖了一下/)
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '第二个回合仍在同一会话')
@@ -148,7 +166,8 @@ test('413 自愈：普通错误（非 413）不换会话 —— 不误伤正常�
     //（真机：上游 403/429 过去在 QQ 侧一个字都没有，用户以为她不理人）。
     // 但「不换会话」这条 413 自愈契约不变：429 该走重试，不该归档重建。
     const sends = sent.filter((a) => a === 'send_private_msg').length
-    assert.equal(sends, 2, '429 回合给 1 条失败回执 + 第二个回合 1 条正常回复')
+    assert.equal(sends, 2, '429 回合给 1 条限流回执 + 第二个回合 1 条正常回复')
+    assert.match(sentTexts[1], /新会话的回复/)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '仍然不换会话')
   } finally { await core.dispose() }
 })
@@ -206,11 +225,13 @@ test('413 自愈：pi-ai 把 plugin_request_too_large 误判成 CONTEXT_WINDOW_E
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core, sent } = mkCore(dshRaw)
+  const { core, sent, sentTexts } = mkCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
     await sleep(300)
-    assert.ok(sent.includes('send_private_msg'), '发一句人话提示（这轮确实没回）')
+    assert.equal(sent.length, 1, '413 只发 1 条人话提示（绝不双发）')
+    assert.equal(sent[0], 'send_private_msg')
+    assert.match(sentTexts[0], /64 MiB|上下文和图片太多/, '仍走 413 提示而非通用失败')
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', 'code 是 CONTEXT_WINDOW_EXCEEDED 也要换会话')
@@ -218,24 +239,33 @@ test('413 自愈：pi-ai 把 plugin_request_too_large 误判成 CONTEXT_WINDOW_E
   } finally { await core.dispose() }
 })
 
-test('413 自愈：真·上下文窗口超限（无请求体过大文案）不被误判成换会话', async () => {
+test('413 自愈：真·上下文窗口超限不误判成 413（走 context-window 提示并兑现换新会话）', async () => {
+  // 区分两条链路：
+  //   · 413（字节/图片过大）→ handleOversizedTurn，提示「超过 64 MiB 上限 / 图片类内容也会少带一些」；
+  //   · 真·token 超窗（turn/end 落 error 且 code=CONTEXT_WINDOW_EXCEEDED）→ handleTurnFailure 归类
+  //     context-window，提示「模型的窗口装不下了。你发下一条消息时我会重新开始」，并登记
+  //     contextResetChats 在下一条消息到来时真正归档重建会话（兑现承诺）。
   const dshRaw = scriptedFakeDsh({ script: [
     [{ type: 'turn/end', data: { reason: { kind: 'error', error: {
       code: 'CONTEXT_WINDOW_EXCEEDED',
-      message: "prompt is too long: 213462 tokens > 200000 maximum",
+      message: 'prompt is too long: 213462 tokens > 200000 maximum',
     } } } }],
     [
-      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '还是同一会话' }] } } },
+      { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '新会话的回复' }] } } },
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core } = mkCore(dshRaw)
+  const { core, sent, sentTexts } = mkCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1 }))
     await sleep(300)
+    assert.equal(sent.length, 1, '只发 1 条超窗提示')
+    assert.match(sentTexts[0], /窗口装不下/, '走 context-window 分类提示')
+    assert.doesNotMatch(sentTexts[0], /64 MiB|图片/, '不被误判为 413 字节/图片过大')
+    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '失败当轮保留映射，下一条消息再重建') /* pii-scan:ignore */
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
-    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '真 token 超限走压缩重试，不该被当成字节超限换会话')
-    assert.deepEqual(dshRaw.workspaces.archived || [], [])
+    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-2', 'context-window 兑现承诺：下一条消息换新会话') /* pii-scan:ignore */
+    assert.ok((dshRaw.workspaces.archived || []).includes('sess-1'), '旧会话已归档')
   } finally { await core.dispose() }
 })

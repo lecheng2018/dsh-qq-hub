@@ -311,83 +311,88 @@ export function createReplyDelivery({
     // 于是「3 条挂了 2 条」时聊天流水/旁白仍记满 3 条，仿佛都发出去了。现在只把
     // 真正拿到回执的气泡收进来，与 delivered 计数同口径（mixed 整泡拿到回执才算其全部 parts）。
     const deliveredParts = []
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i]
-      const selected = it.replyTo ? resolvedRef(it) : (!explicit && i === firstSendable ? opts.autoReply : null)
-      const replyId = selected?.mid
-      const userId = selected && opts.autoReply?.uid === selected.uid ? selected.uid : undefined
-      if (it.replyTo && !replyId) log.debug(`${chatId}：引用的「${it.replyTo}」对不上，正常发`)
-      // 每个分支都拿到返回值：真对象 = 网关确认；null = 没发出去（含「无内容可发」的空跳过，
-      // 那种情况本来就极少，按「未确认」计也更诚实）。
-      let receipt = null
-      let counted = true
-      if (it.kind === 'text') receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
-      else if (it.kind === 'voice') {
-        if (cfg.voice?.enabled) receipt = await sendVoice(chatId, it.value, replyId, userId)
-        else receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
-      } else if (it.kind === 'sticker') receipt = await sendSticker(chatId, it.value, replyId, userId)
-      else if (it.kind === 'poke') { counted = false; if (!opts.simulate) await pokeBack(chatId) }
-      else if (it.kind === 'image') receipt = await sendImage(chatId, it.value, replyId, userId)
-      else if (it.kind === 'mixed') receipt = await sendMixed(chatId, it.parts, replyId, missedAt, userId)
-      if (counted && !opts.simulate) {
-        attempted += 1
-        if (receipt) {
-          delivered += 1
-          for (const part of (it.kind === 'mixed' ? it.parts : [it])) {
-            deliveredParts.push(part.kind === 'text' || part.kind === 'voice' ? part.value : `[${part.kind}]`)
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        const selected = it.replyTo ? resolvedRef(it) : (!explicit && i === firstSendable ? opts.autoReply : null)
+        const replyId = selected?.mid
+        const userId = selected && opts.autoReply?.uid === selected.uid ? selected.uid : undefined
+        if (it.replyTo && !replyId) log.debug(`${chatId}：引用的「${it.replyTo}」对不上，正常发`)
+        // 每个分支都拿到返回值：真对象 = 网关确认；null = 没发出去（含「无内容可发」的空跳过，
+        // 那种情况本来就极少，按「未确认」计也更诚实）。
+        let receipt = null
+        let counted = true
+        if (it.kind === 'text') receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
+        else if (it.kind === 'voice') {
+          if (cfg.voice?.enabled) receipt = await sendVoice(chatId, it.value, replyId, userId)
+          else receipt = await sendText(chatId, it.value, replyId, missedAt, userId)
+        } else if (it.kind === 'sticker') receipt = await sendSticker(chatId, it.value, replyId, userId)
+        else if (it.kind === 'poke') { counted = false; if (!opts.simulate) await pokeBack(chatId) }
+        else if (it.kind === 'image') receipt = await sendImage(chatId, it.value, replyId, userId)
+        else if (it.kind === 'mixed') receipt = await sendMixed(chatId, it.parts, replyId, missedAt, userId)
+        if (counted && !opts.simulate) {
+          attempted += 1
+          if (receipt) {
+            delivered += 1
+            for (const part of (it.kind === 'mixed' ? it.parts : [it])) {
+              deliveredParts.push(part.kind === 'text' || part.kind === 'voice' ? part.value : `[${part.kind}]`)
+            }
+          } else if (!dryRun) {
+            // 只有「本该发却拿不到回执」才算未确认；试运行/关闸是 cancelled，不算失败。
+            unconfirmed += 1
           }
-        } else if (!dryRun) {
-          // 只有「本该发却拿不到回执」才算未确认；试运行/关闸是 cancelled，不算失败。
-          unconfirmed += 1
         }
+        if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
       }
-      if (i < items.length - 1 && !opts.simulate) await wait(waitBefore(i + 1))
+      // 试运行 / 被捕获：什么都没真发，但编排结果（条目计划）仍然要交给调用方——
+      // 面板预览、试运行日志、测试都靠它，不能因为「没发」就把计划丢了。
+      // simulate / captured 仍然返回条目数组（既有契约：面板「模拟」与 6 个回归测试都按数组用）。
+      if (opts.simulate) return items
+      // 三态如实上报（缺陷：零尝试也曾记 sent）。
+      //   skipped：这一轮根本没有可发条目（空回复、全是控制条目）—— 没发就是没发；
+      //   failed ：有可发条目，但一条回执都没拿到；
+      //   partial：拿到一部分回执；
+      //   sent   ：可发条目全部拿到回执。
+      // 关键点：**只有真发出去的状态才允许产生「已发」的副状态**（群活跃、出站事件、
+      // 主人最近收到、插话配额）。过去这里无条件刷新，于是「网关全拒」也会让她在
+      // 面板上显得刚说过话。
+      const state = attempted === 0 ? 'skipped'
+        // 试运行/关闸：请求被 outbox 判成 cancelled，属于「有意不发」，不报 failed。
+        : dryRun && delivered === 0 ? 'skipped'
+          : delivered === 0 ? 'failed'
+            : unconfirmed > 0 ? 'partial'
+              : 'sent'
+      const wasSent = state === 'sent' || state === 'partial'
+      if (wasSent && inGroup) {
+        const gid = chatId.slice(6)
+        groups.noteSpeak(gid)
+        // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算（真机刷屏根因：
+        // 续聊也刷新话题窗口 → 自我续期永不离场，1% 摇号只管进门不管出去）。
+        // must/interject/其它路径的发言照旧算「加入话题」。
+        if (opts.topicMode === 'engaged') groups.noteEngagedReply?.(gid)
+        else groups.noteSpokeInGroup(gid)
+      }
+      const said = deliveredParts.join(' ')
+      // 一条都没实发就不记流水/旁白（没发出去的话不该出现在「她说过什么」里）。
+      if (said) logChat?.(chatId, 'bot', said)
+      // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
+      if (!opts.own && said) interaction.queueAside(chatId, said)
+      // 有气泡没拿到回执就必须让调用方知道（不是致命错误：剩下的已经发出去了，
+      // 也不该重发——那会重复说话）。调用方据此把 turn 记成部分送达而不是 sent。
+      if (unconfirmed > 0 && attempted > 0) {
+        log.warn(`${chatId}：本轮 ${attempted} 条气泡里有 ${unconfirmed} 条没拿到网关回执（已发出的不回滚、不重发）`)
+      }
+      // 副状态只跟随「真的说出去了」：这两条分别是 presence（主人最近收到什么）
+      // 与联动事件流（别的 AI 看到她说的话）。零尝试/全失败都不该写。
+      if (wasSent) {
+        onDelivered?.({ chatId, items, cfg })
+        onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
+      }
+      return { missedAt, attempted, delivered, failedCount: unconfirmed, items, state, replyRaw: text }
+    } catch (error) {
+      if (error && typeof error === 'object' && delivered > 0) error.delivered = delivered
+      throw error
     }
-    // 试运行 / 被捕获：什么都没真发，但编排结果（条目计划）仍然要交给调用方——
-    // 面板预览、试运行日志、测试都靠它，不能因为「没发」就把计划丢了。
-    // simulate / captured 仍然返回条目数组（既有契约：面板「模拟」与 6 个回归测试都按数组用）。
-    if (opts.simulate) return items
-    // 三态如实上报（缺陷：零尝试也曾记 sent）。
-    //   skipped：这一轮根本没有可发条目（空回复、全是控制条目）—— 没发就是没发；
-    //   failed ：有可发条目，但一条回执都没拿到；
-    //   partial：拿到一部分回执；
-    //   sent   ：可发条目全部拿到回执。
-    // 关键点：**只有真发出去的状态才允许产生「已发」的副状态**（群活跃、出站事件、
-    // 主人最近收到、插话配额）。过去这里无条件刷新，于是「网关全拒」也会让她在
-    // 面板上显得刚说过话。
-    const state = attempted === 0 ? 'skipped'
-      // 试运行/关闸：请求被 outbox 判成 cancelled，属于「有意不发」，不报 failed。
-      : dryRun && delivered === 0 ? 'skipped'
-        : delivered === 0 ? 'failed'
-          : unconfirmed > 0 ? 'partial'
-            : 'sent'
-    const wasSent = state === 'sent' || state === 'partial'
-    if (wasSent && inGroup) {
-      const gid = chatId.slice(6)
-      groups.noteSpeak(gid)
-      // 「正聊得起劲」的续聊不入场、不续期，只进连聊预算（真机刷屏根因：
-      // 续聊也刷新话题窗口 → 自我续期永不离场，1% 摇号只管进门不管出去）。
-      // must/interject/其它路径的发言照旧算「加入话题」。
-      if (opts.topicMode === 'engaged') groups.noteEngagedReply?.(gid)
-      else groups.noteSpokeInGroup(gid)
-    }
-    const said = deliveredParts.join(' ')
-    // 一条都没实发就不记流水/旁白（没发出去的话不该出现在「她说过什么」里）。
-    if (said) logChat?.(chatId, 'bot', said)
-    // 不是这个聊天自己那一轮发的（主人在私聊里让她去群里说、扩展模块代发）：记下来，下次这个聊天交给她时告诉她自己说过什么
-    if (!opts.own && said) interaction.queueAside(chatId, said)
-    // 有气泡没拿到回执就必须让调用方知道（不是致命错误：剩下的已经发出去了，
-    // 也不该重发——那会重复说话）。调用方据此把 turn 记成部分送达而不是 sent。
-    if (unconfirmed > 0 && attempted > 0) {
-      log.warn(`${chatId}：本轮 ${attempted} 条气泡里有 ${unconfirmed} 条没拿到网关回执（已发出的不回滚、不重发）`)
-    }
-    // 副状态只跟随「真的说出去了」：这两条分别是 presence（主人最近收到什么）
-    // 与联动事件流（别的 AI 看到她说的话）。零尝试/全失败都不该写。
-    if (wasSent) {
-      onDelivered?.({ chatId, items, cfg })
-      onActivity?.({ kind: 'out', chatId, reply: text, userText: opts.userText || '' })
-    }
-    return { missedAt, attempted, delivered, failedCount: unconfirmed, items, state, replyRaw: text }
   }
 
   /**

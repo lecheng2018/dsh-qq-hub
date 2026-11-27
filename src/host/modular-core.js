@@ -371,6 +371,7 @@ export function createModularCore({
   const sessionTurns = new Map() // sessionId → 这个会话已经跑过多少回合（会话轮换用）
   const oversizedChats = new Set() // 服务端拒绝请求体过大（413/插件内存上限）；下一条消息到来再归档重建
   const archivedChats = new Set() // 回合被 DSH 归档门拒绝（blocked）；下一条消息到来再换新会话（真机 2026-11-21）
+  const contextResetChats = new Set() // 上下文超窗（context-window）：下一条消息到来再归档重建
   const backfillMeta = new WeakMap() // inbound → 网关实测断线时长/最早消息年龄
   const stickerPicks = new WeakMap()
   const stickerHint = (n) => `（这轮里夹着 ${n} 张表情，是你自己看到的。有中意的就用 qq_collect_sticker ${n > 1 ? `1~${n}` : '1'} 收进自己库；收表情是你自己的小爱好，不用每张都跟对方说，偶尔提一句也行。）`
@@ -1236,14 +1237,24 @@ export function createModularCore({
   // 持续挂掉时每轮刷屏（同聊天一个窗口内最多提示一次）。
 
   const FAILURE_NOTICE_WINDOW_MS = 5 * 60_000
-  const failureNoticedAt = new Map() // chatKey → 上次发失败回执的时间
+  const failureNoticedAt = new Map() // `${chatKey}::${kind}` → 上次发失败回执的时间（LRU 顺序）
 
   /** 上游内容策略拦截：只认「被服务端判敏感/不让答」这类，绝不是功能坏了。 */
-  const MODERATION_TEXT = /content.?policy|content_filter|finish_reason:\s*content_filter|input.?new.?sensitive|敏感内容|内容.{0,4}(审核|合规|敏感)|risk.?control|security_check|inappropriate|prohibited|无法提供|不能提供关于|not\s+able\s+to\s+(help|assist|provide)|"(?:1026|1027|2013)"/i
-  /** 限流 / 配额：等一会儿或换模型就能恢复，不是 permanente。 */
-  const RATE_LIMIT_TEXT = /429|rate.?limit|频率限制|quota|限额|额度|余额|冷却|reset_at|routing_cooldown|overloaded|capacity|限制器|无账号可转发/i
-  /** 上下文超窗（模型窗口不够，不是请求体字节过大）：提示用户会话已重置即可。 */
-  const CONTEXT_WINDOW_TEXT = /context.?window|上下文.{0,6}(超|满|不够|溢出)|maximum\s+context|too\s+many\s+tokens|CONTEXT_WINDOW_EXCEEDED/i
+  const MODERATION_TEXT = /content.?policy|content_filter|finish_reason:\s*content_filter|input.?new.?sensitive|敏感内容|内容.{0,4}(?:审核|合规|敏感)|risk.?control|security_check|inappropriate|prohibited|PROHIBITED_CONTENT|safety.?filter|data_inspection_failed|codearts_upstream|无法提供(?:关于|该|此|任何)?[^\n]{0,16}(?:建议|帮助|内容|回答|信息)|不能提供关于|not\s+able\s+to\s+(?:help|assist|provide)|(?:"code"\s*:\s*"?(?:1026|1027|2013)"?|"(?:1026|1027|2013)")/i
+  const MODERATION_CODE = /^(?:codearts_upstream|data_inspection_failed|prohibited_content|content_filter|content_policy|safety_filter|1026|1027|2013)$/i
+  /** 纯认证 / 权限类 403：不是内容审核，避免误导用户「换个说法」。 */
+  const AUTH_FORBIDDEN_TEXT = /invalid[_\s-]*api[_\s-]*key|api[_\s-]*key|unauthorized|unauthenticated|authentication|auth[_\s-]*failed|invalid[_\s-]*token|expired[_\s-]*token|forbidden[_\s-]*token|access[_\s-]*denied|permission[_\s-]*denied|not[_\s-]*authorized|no[_\s-]*permission|invalid[_\s-]*credentials|account[_\s-]*(?:disabled|suspended|locked)|认证失败|鉴权|密钥无效|无权限|权限不足/i
+  const AUTH_FORBIDDEN_CODE = /^(?:AUTH_ERROR|AUTHENTICATION_ERROR|UNAUTHORIZED|INVALID_API_KEY|PERMISSION_DENIED|FORBIDDEN_TOKEN)$/i
+  /** 欠费 / 余额不足（非限流）：等一会儿不会好，诚实提示检查配置或换模型。 */
+  const BILLING_TEXT = /余额不足|欠费|insufficient_balance|insufficient_quota|payment[_\s-]*required|\b402\b/i
+  const BILLING_CODE = /^(?:INSUFFICIENT_BALANCE|INSUFFICIENT_QUOTA|PAYMENT_REQUIRED|BILLING_ERROR)$/i
+  /** 明确限流特征（用于与欠费/余额不足区分）。 */
+  const EXPLICIT_RATE_LIMIT_TEXT = /\b429\b|rate.?limit|频率限制|冷却|reset_at|routing_cooldown|限制器|无账号可转发/i
+  /** 限流 / 配额：等一会儿或换模型就能恢复，不是永久故障。 */
+  const RATE_LIMIT_TEXT = /\b429\b|rate.?limit|频率限制|(?<!insufficient_)quota|限额|额度|冷却|reset_at|routing_cooldown|overloaded|capacity|限制器|无账号可转发/i
+  const RATE_LIMIT_CODE = /^(?:RATE_LIMITED|RATE_LIMIT|TOO_MANY_REQUESTS|ROUTING_COOLDOWN)$/i
+  /** 上下文超窗（模型窗口不够，不是请求体字节过大）：提示用户下一条消息会重新开始。 */
+  const CONTEXT_WINDOW_TEXT = /context.?window|上下文.{0,6}(?:超|满|不够|溢出)|maximum\s+context|too\s+many\s+tokens|CONTEXT_WINDOW_EXCEEDED/i
 
   /**
    * 把回合失败归类成用户能懂的一类。
@@ -1252,23 +1263,41 @@ export function createModularCore({
    */
   function classifyTurnFailure(error) {
     const msg = String(error?.failure?.message || error?.message || error || '')
+    const code = String(error?.failure?.code || error?.code || '')
     const status = Number(error?.failure?.status || error?.status) || 0
-    if (MODERATION_TEXT.test(msg)) {
+    const isExplicitRateLimit = status === 429 || RATE_LIMIT_CODE.test(code) || EXPLICIT_RATE_LIMIT_TEXT.test(msg)
+    const isBilling = status === 402 || BILLING_CODE.test(code) || BILLING_TEXT.test(msg)
+    const isModeration = MODERATION_TEXT.test(msg)
+      || MODERATION_CODE.test(code)
+      || (status === 403 && !AUTH_FORBIDDEN_TEXT.test(msg) && !AUTH_FORBIDDEN_CODE.test(code) && !isBilling && !isExplicitRateLimit)
+    if (isModeration) {
       return {
         kind: 'moderation',
         text: '这条被模型服务端的内容审核拦了（不是我不理你，是上游直接拒了），换个说法再说一次？',
       }
     }
-    if (RATE_LIMIT_TEXT.test(msg) || status === 429) {
+    if (isBilling && !isExplicitRateLimit) {
+      return {
+        kind: 'billing',
+        text: '模型账号额度/余额不够了，找主人检查一下配置或换个模型吧。',
+      }
+    }
+    if (isExplicitRateLimit) {
       return {
         kind: 'rate-limit',
         text: '模型这会儿限流了，等一会儿再找我（或者换一个模型）。',
       }
     }
-    if (CONTEXT_WINDOW_TEXT.test(msg)) {
+    if (code === 'CONTEXT_WINDOW_EXCEEDED' || CONTEXT_WINDOW_TEXT.test(msg)) {
       return {
         kind: 'context-window',
         text: '会话攒得太长，模型的窗口装不下了。你发下一条消息时我会重新开始（旧对话还归档着）。',
+      }
+    }
+    if (RATE_LIMIT_TEXT.test(msg)) {
+      return {
+        kind: 'rate-limit',
+        text: '模型这会儿限流了，等一会儿再找我（或者换一个模型）。',
       }
     }
     return {
@@ -1280,8 +1309,9 @@ export function createModularCore({
   /**
    * 回合非 413 / 非超时 / 非 blocked 的失败：按类别发一条诚实的回执（限频）。
    *
-   * 只锁「同一聊天 5 分钟一次」：模型持续挂掉时用户连续发消息不会刷屏；
-   * 但换了新消息时效过期，回执会再发一次 —— 不能让「沉默」长期成为默认。
+   * 按 `${chatKey}::${kind}` 限频（同聊天同类别 5 分钟一次）：模型持续挂掉时不会刷屏，
+   * 且前一次普通网络抖动不会把 5 分钟内的内容审核 / 限流 / 超窗提示吞掉；
+   * 命中 `context-window` 时无论私聊还是群聊都登记待重置，确保下一条消息真正换新会话。
    * @param {string} chatKey 聊天键
    * @param {unknown} error 失败原因
    * @param {{notify?: boolean}} [opts] notify=false 时只记日志不发消息（试探/测试路径用）
@@ -1292,26 +1322,55 @@ export function createModularCore({
     const { kind, text } = classifyTurnFailure(error)
     const detail = String(error?.failure?.message || error?.message || error || '').replace(/\s+/g, ' ').slice(0, 160)
     log.warn(`回合失败（${kind}）：${key}${detail ? '：' + redact(detail) : ''}`)
+    // 上下文超窗（模型窗口不够）：无论私聊还是群聊，只要 key 非空即登记待重置，
+    // 兑现「下一条消息重新开始」的承诺（群聊虽不发提示也要能自愈，避免一直卡死）。
+    if (key && kind === 'context-window') contextResetChats.add(key)
     if (!notify || !key) return { kind, sent: false }
     // 主人私聊以外的群聊不发：群里一条失败回执等于当众解释技术故障，观感很差。
     // 私聊（含主人）才发 —— 那是「她的对话被掐了」，应该让人知道。
     if (!key.startsWith('private:')) return { kind, sent: false }
     const now = Date.now()
-    const last = Number(failureNoticedAt.get(key) || 0)
+    const rateKey = `${key}::${kind}`
+    const last = Number(failureNoticedAt.get(rateKey) || 0)
     if (last && now - last < FAILURE_NOTICE_WINDOW_MS) {
-      debug(`失败回执限频：${key} 距上次提示不足 ${Math.round(FAILURE_NOTICE_WINDOW_MS / 60000)} 分钟，只记日志`)
+      // 命中热 key 时刷新 LRU 顺序，避免活跃条目被误淘汰
+      failureNoticedAt.delete(rateKey)
+      failureNoticedAt.set(rateKey, last)
+      debug(`失败回执限频：${rateKey} 距上次提示不足 ${Math.round(FAILURE_NOTICE_WINDOW_MS / 60000)} 分钟，只记日志`)
       return { kind, sent: false }
     }
-    failureNoticedAt.set(key, now)
+    failureNoticedAt.delete(rateKey)
+    failureNoticedAt.set(rateKey, now)
     if (failureNoticedAt.size > 200) {
-      // 环形自愈：删掉最早的一条，避免聊天数无限增长
+      // LRU 自愈：删掉最久未访问的一条，避免 Map 无限增长
       const oldest = failureNoticedAt.keys().next().value
       if (oldest !== undefined) failureNoticedAt.delete(oldest)
     }
-    Promise.resolve(outbox.request({
-      chatKey: key, sourceModuleId: 'core',
-      segments: [{ type: 'text', data: { text } }],
-    })).catch((err) => debug(`失败回执没发出去：${err?.message || err}`))
+    const rollbackRate = () => {
+      if (failureNoticedAt.get(rateKey) === now) {
+        if (last) {
+          failureNoticedAt.delete(rateKey)
+          failureNoticedAt.set(rateKey, last)
+        } else {
+          failureNoticedAt.delete(rateKey)
+        }
+      }
+    }
+    try {
+      Promise.resolve(outbox.request({
+        chatKey: key, sourceModuleId: 'core',
+        segments: [{ type: 'text', data: { text } }],
+      })).then((res) => {
+        if (res && (res.ok === false || res.state === 'failed')) rollbackRate()
+      }, (err) => {
+        rollbackRate()
+        debug(`失败回执没发出去：${err?.message || err}`)
+      })
+    } catch (err) {
+      rollbackRate()
+      debug(`失败回执没发出去：${err?.message || err}`)
+      return { kind, sent: false }
+    }
     return { kind, sent: true }
   }
 
@@ -1326,6 +1385,7 @@ export function createModularCore({
     },
     execute: async (turn, io) => {
       const offeredMode = turnModes.get(turn.turnId) || null
+      let cleanupTurnListener = () => {}
       try {
       if (timedOutChats.delete(turn.chatKey)) resetChat(turn.chatKey)
       // 上一轮因 413 / 请求体过大失败：归档旧会话重建。旧历史每轮重放必然再 413，只有换会话能救。
@@ -1337,6 +1397,11 @@ export function createModularCore({
       if (archivedChats.delete(turn.chatKey)) {
         resetChat(turn.chatKey)
         log.info(`归档自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
+      }
+      // 上一轮因模型上下文超窗（context-window）失败：归档旧会话重建，兑现「下一条消息重新开始」。
+      if (contextResetChats.delete(turn.chatKey)) {
+        resetChat(turn.chatKey)
+        log.info(`上下文超窗自愈：${turn.chatKey} 的旧会话已归档，本轮用新会话回答`)
       }
       const chat = chatViewFor(turn.chatKey, io.members)
       const inGroup = chat.kind === 'group'
@@ -1536,6 +1601,7 @@ export function createModularCore({
       // 顺带消掉「上一轮的快照污染下一轮」这个跨回合泄漏。
       const turnReportHit = { hit: false }
       const cleanupListener = () => { try { off?.() } catch {} off = null }
+      cleanupTurnListener = cleanupListener
       const replyPromise = new Promise((resolve, reject) => {
         let lastTurn = null
         let lastText = ''
@@ -1571,15 +1637,26 @@ export function createModularCore({
           if (!completion) return
           cleanupListener()
           if (!completion.completed) {
+            let alreadyNotified = false
             // 413 / 请求体过大：旧会话的历史每轮重放、之后必然继续失败 —— 记标记换新会话自愈，
             // 而不是只「如实失败」后让这个聊天永久卡死（真机 2026-11-19：服务端按会话计的 64 MiB 上限）。
-            if (turnFailureLooksOversized(completion.failure)) handleOversizedTurn(turn.chatKey, completion.failure)
+            if (turnFailureLooksOversized(completion.failure)) {
+              handleOversizedTurn(turn.chatKey, completion.failure)
+              alreadyNotified = true
+            }
             // `blocked` = DSH 归档门在 pre-step 就把这一回合拒了（一个模型调用都没发生）。
             // 光记一条 warn 不够：映射还指着那个已归档会话，下一轮同样 blocked —— 必须换会话。
             // 这里只记标记，真正 resetChat 放在下一次进入 execute 时做（与超时/413 同款时序：
             // 此刻监听器还没走完，立刻归档容易和宿主自己的事件处理打架）。
-            if (completion.kind === 'blocked') handleArchivedTurn(turn.chatKey)
-            reject(new Error(`回合未正常结束：${completion.kind || '?'}`))
+            if (completion.kind === 'blocked') {
+              handleArchivedTurn(turn.chatKey)
+              alreadyNotified = true
+            }
+            const err = new Error(`回合未正常结束：${completion.kind || '?'}`)
+            err.kind = completion.kind
+            err.failure = completion.failure
+            err._turnFailureHandled = alreadyNotified
+            reject(err)
             return
           }
           resolve(completion.text)
@@ -1635,6 +1712,7 @@ export function createModularCore({
           reject(new Error('DSH 没有 session/event 流，无法取回复文本'))
         }
       })
+      replyPromise.catch(() => {})
       // 5.5 消息完整形状（真机报告 1：DSH agent-loop 的 isOwned(message) 读 message.source.kind，
       //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
       const admitted = await admitContent(content, {
@@ -1673,15 +1751,24 @@ export function createModularCore({
         steeringChats.delete(turn.chatKey)
         cleanupListener() // 失败路径同样摘监听（报告 §4.5「finally 清理监听」）
         stopTyping()
-        if (followupError.turnTimedOut) handleTurnTimeout(turn.chatKey, turnTimeoutMs)
-        // followup 先于 turn/end 拒绝时（stream 非 200 起步即 413）：错误本身可能带 LlmError.failure
-        //（HTTP status / code）。turn/end 路径之外唯一能拿到 status 的地方，同样要走自愈标记。
-        if (turnFailureLooksOversized(followupError?.failure || followupError)) handleOversizedTurn(turn.chatKey, followupError?.failure || followupError)
-        // 非 413 / 非超时的失败要回执：上游内容策略、限流、模型抖动过去全是静默的（QQ 侧一个字都没有）。
-        // 413 已由上面 handleOversizedTurn 提示、超时由 handleTurnTimeout 提示，这里只补其余类别，
-        // 且内部按类别分类 + 5 分钟限频，不会刷屏。
-        else if (!followupError.turnTimedOut) handleTurnFailure(turn.chatKey, followupError)
-        throw new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
+        if (followupError.turnTimedOut) {
+          handleTurnTimeout(turn.chatKey, turnTimeoutMs)
+        } else if (turnFailureLooksOversized(followupError?.failure || followupError)) {
+          // followup 先于 turn/end 拒绝时（stream 非 200 起步即 413）：错误本身可能带 LlmError.failure
+          //（HTTP status / code）。turn/end 路径之外唯一能拿到 status 的地方，同样要走自愈标记。
+          handleOversizedTurn(turn.chatKey, followupError?.failure || followupError)
+        } else if (followupError?.kind === 'blocked' || followupError?.failure?.kind === 'blocked') {
+          handleArchivedTurn(turn.chatKey)
+        } else {
+          // 非 413 / 非超时的失败要回执：上游内容策略、限流、模型抖动过去全是静默的（QQ 侧一个字都没有）。
+          // 413 已由上面 handleOversizedTurn 提示、超时由 handleTurnTimeout 提示，这里只补其余类别，
+          // 且内部按类别分类 + 5 分钟限频，不会刷屏。
+          handleTurnFailure(turn.chatKey, followupError)
+        }
+        const error = new Error(`DSH 回合执行失败：${followupError?.message || followupError}`)
+        error.cause = followupError
+        error._turnFailureHandled = true
+        throw error
       }
       followupDone = true
       if (!activeSteers) finishReply()
@@ -1696,19 +1783,22 @@ export function createModularCore({
         steeringChats.delete(turn.chatKey)
         cleanupListener() // turn/end 非 completed / 无事件流：摘除后如实失败（回合落 failed，槽释放）
         stopTyping()
-        // 这是**最常见的失败出口**：等待 replyPromise 期间 turn/end 落了 error
-        //（上游 403/429、模型抖动都在这里）。之前只有 followupError 与 execute 最外层
-        // catch 补了回执，漏了这里 —— 真机 16:10 的 403 就走这条路，用户仍然看到静默。
+        // 这是**最常见的失败出口**：等待 replyPromise 期间 turn/end 落了 error 或超时
+        //（上游 403/429、模型抖动、超窗都在这里）。
         //
-        // 但 **blocked 不能发**：那是宿主归档门在 pre-step 就拒了（一个模型调用都没发生），
-        // 属于「会话已归档 → 下一条消息自动换新会话」的自愈路径，本来就不该打扰用户
-        //（本轮的 handleArchivedTurn 已记标记 + 日志）。413 与超时同理各有专门回执。
+        // blocked（宿主归档门 pre-step 拒绝）和 413 已在 finishReply 内处理并标 _turnFailureHandled=true，
+        // 这里绝不重复发回执；超时必须恢复 handleTurnTimeout（发超时提示 + 登记换新会话）。
         const failureKind = String(error?.kind || error?.failure?.kind || '')
-        const alreadyNotified = error?.turnTimedOut
+        const alreadyNotified = Boolean(error?._turnFailureHandled)
           || failureKind === 'blocked'
           || /回合未正常结束：blocked/.test(String(error?.message || ''))
           || turnFailureLooksOversized(error?.failure || error)
-        if (!alreadyNotified) handleTurnFailure(turn.chatKey, error)
+        if (error?.turnTimedOut) {
+          handleTurnTimeout(turn.chatKey, turnTimeoutMs)
+        } else if (!alreadyNotified) {
+          handleTurnFailure(turn.chatKey, error)
+        }
+        if (error && typeof error === 'object') error._turnFailureHandled = true
         throw error
       }
 
@@ -1772,16 +1862,34 @@ export function createModularCore({
         return { state, via: 'reply-delivery', failedCount: failed, attempted: delivered?.attempted, delivered: delivered?.delivered }
       } catch (error) {
         log.warn(`回复发送失败：${error?.message || error}`)
-        // 这里的 error 来自「回合没正常结束」（turn/end kind=error）或投递抛错。
-        // 413/超时/blocked 各自已有专门处理与回执，其余（上游内容审核 403、限流 429、
-        // 模型抖动）过去完全静默 —— 补一条分类回执，让用户知道这轮没成而不是「她不理人」。
+        // 已成功发出部分气泡后再抛错（error.delivered > 0）：用户已经看到前面的回复，
+        // 不再补发「这轮没跑成」造成困惑；只有 0 气泡送达且尚未处理过的失败才发回执。
         try {
-          if (!error?.turnTimedOut && !turnFailureLooksOversized(error?.failure || error)) {
+          const partialDelivered = Number(error?.delivered) > 0
+          if (!partialDelivered && !error?._turnFailureHandled && !error?.turnTimedOut && !turnFailureLooksOversized(error?.failure || error)) {
             handleTurnFailure(turn.chatKey, error)
           }
         } catch { /* 回执失败绝不影响回合终态 */ }
+        if (error && typeof error === 'object') error._turnFailureHandled = true
         throw error
       }
+      } catch (error) {
+        cleanupTurnListener()
+        // 外层统一兜底：覆盖 sessionForChat / assembly.assemble / resolveAgent / !agent.followup / admitContent
+        // 等前置阶段的漏网异常；内部已处理过的错误已标 _turnFailureHandled=true，这里绝不重复发回执。
+        try {
+          if (!error?._turnFailureHandled) {
+            if (error?.turnTimedOut) {
+              handleTurnTimeout(turn.chatKey, Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000))
+            } else if (turnFailureLooksOversized(error?.failure || error)) {
+              handleOversizedTurn(turn.chatKey, error?.failure || error)
+            } else if (!(Number(error?.delivered) > 0)) {
+              handleTurnFailure(turn.chatKey, error)
+            }
+            if (error && typeof error === 'object') error._turnFailureHandled = true
+          }
+        } catch { /* 回执失败绝不影响回合终态 */ }
+        throw error
       } finally {
         releaseTurnMode(turn.chatKey, turn.turnId)
       }
@@ -2039,6 +2147,8 @@ export function createModularCore({
       if (oversizedChats.delete(chatKey)) resetChat(chatKey)
       // 与主链同款：上次被归档门拦成 blocked 也换新会话（主动任务共用同一份映射）。
       if (archivedChats.delete(chatKey)) resetChat(chatKey)
+      // 与主链同款：上次上下文超窗也换新会话（主动任务共用同一份映射）。
+      if (contextResetChats.delete(chatKey)) resetChat(chatKey)
       const { sessionId } = await sessionForChat(chatKey)
       const ctrl = ctxGet('sessionController')
       const resolved = await ctrl?.resolveAgent?.(sessionId)
@@ -2063,10 +2173,23 @@ export function createModularCore({
             const d = ev.data || {}
             cleanup()
             if (d.reason?.kind !== 'completed') {
+              const failure = d.reason?.error || d.reason?.failure || null
+              let handled = false
               // 与主链同款：413 / 请求体过大也要自愈（后台会话同样会攒图攒上下文）。
               // 主动任务没有人盯着看，notify=false：不往聊天里发提示（这轮本来就不投递）。
-              if (turnFailureLooksOversized(d.reason?.error || d.reason?.failure || null)) handleOversizedTurn(chatKey, d.reason?.error || d.reason?.failure, { notify: false })
-              reject(new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`))
+              if (turnFailureLooksOversized(failure)) {
+                handleOversizedTurn(chatKey, failure, { notify: false })
+                handled = true
+              }
+              if (d.reason?.kind === 'blocked') {
+                handleArchivedTurn(chatKey)
+                handled = true
+              }
+              const err = new Error(`主动回合未正常结束：${d.reason?.kind || '?'}`)
+              err.kind = d.reason?.kind
+              err.failure = failure
+              err._turnFailureHandled = handled
+              reject(err)
               return
             }
             resolve(lastTurn === d.turn ? String(lastText || '') : '')
@@ -2074,6 +2197,7 @@ export function createModularCore({
         })
         if (typeof off !== 'function') { cleanup(); reject(new Error('DSH 没有 session/event 流')) }
       })
+      result.catch(() => {})
       const message = { id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(text || '') }], source: { kind: 'qq-hub' } }
       const timeoutMs = Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000)
       let timer = null
@@ -2090,7 +2214,15 @@ export function createModularCore({
         return await Promise.race([result, timeout])
       } catch (error) {
         cleanup()
-        if (error.turnTimedOut) handleTurnTimeout(chatKey, timeoutMs, { notify: false })
+        if (error?.turnTimedOut) {
+          handleTurnTimeout(chatKey, timeoutMs, { notify: false })
+        } else if (!error?._turnFailureHandled && turnFailureLooksOversized(error?.failure || error)) {
+          handleOversizedTurn(chatKey, error?.failure || error, { notify: false })
+        } else if (!error?._turnFailureHandled && (error?.kind === 'blocked' || error?.failure?.kind === 'blocked')) {
+          handleArchivedTurn(chatKey)
+        } else if (!error?._turnFailureHandled && classifyTurnFailure(error).kind === 'context-window') {
+          if (chatKey) contextResetChats.add(String(chatKey))
+        }
         throw error
       } finally {
         if (timer) clearTimeout(timer)
@@ -2104,6 +2236,8 @@ export function createModularCore({
     }
     mountedTools.clear()
     lastInboundText.clear()
+    contextResetChats.clear()
+    failureNoticedAt.clear()
     await systemTurns.dispose()
     await registry.dispose()
     await controller.dispose()
@@ -2114,6 +2248,7 @@ export function createModularCore({
   /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
   function resetChat(chatKey) {
     const key = String(chatKey || '')
+    contextResetChats.delete(key)
     try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
