@@ -416,15 +416,25 @@ test('回合结束语义：turn/end 非 completed → 不发且监听器摘除�
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core, sent } = rawCore(dshRaw)
+  const { core, sent, calls } = rawCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1, message: [{ type: 'text', data: { text: '第一条' } }] }))
     await sleep(300)
-    assert.deepEqual(sent, [], '非 completed 不发（旧实现首个 assistant/message 就发）')
+    // 2026-11-27 起这条路径也会发一条「失败回执」：过去 turn/end kind=error 完全静默
+    //（真机 16:10 的上游 403 就走这里，用户看到的还是「她没理我」）。
+    // 原契约「不发失败的半截回复」保留并加强：发出去的只能是失败提示，绝不是回复内容。
+    assert.equal(sent.length, 1, '失败给一条回执')
+    assert.deepEqual(sent, ['send_private_msg'], '回执走私聊路径')
+    const notice = String(calls[0]?.params?.message?.[0]?.data?.text || calls[0]?.params?.message || '')
+    assert.doesNotMatch(notice, /失败前的话|第一条/, '绝不能把失败的半截回复发出去')
     assert.equal(dshRaw.listeners.size, 0, '失败路径监听器已摘除，不泄漏')
     await core.dispatchLegacyEvent(msgEv({ message_id: 2, message: [{ type: 'text', data: { text: '第二条' } }] }))
     await sleep(300)
-    assert.deepEqual(sent, ['send_private_msg'], '调度槽已释放：第二条正常回复')
+    // 第一条 = 失败回执，第二条 = 正常回复：调度槽确实释放了（第二条没被失败堵住）。
+    assert.equal(sent.length, 2, '失败回执 + 第二条正常回复')
+    assert.equal(sent[1], 'send_private_msg', '第二条正常发出（槽已释放）')
+    const reply2 = String(calls[1]?.params?.message?.[0]?.data?.text || '')
+    assert.match(reply2, /第二条回复/, '第二条拿到的是它自己的回复，不是失败回执')
   } finally { await core.dispose() }
 })
 
@@ -436,15 +446,23 @@ test('回合结束语义：followup rejected 被捕获——不 hang、监听器
       { type: 'turn/end', data: { reason: { kind: 'completed' } } },
     ],
   ] })
-  const { core, sent } = rawCore(dshRaw)
+  const { core, sent, calls } = rawCore(dshRaw)
   try {
     await core.dispatchLegacyEvent(msgEv({ message_id: 1, message: [{ type: 'text', data: { text: '触发拒绝' } }] }))
     await sleep(300)
-    assert.deepEqual(sent, [], 'followup 拒绝 → 零发送')
+    // 2026-11-27 起：失败**不再完全静默** —— 非 413 / 非超时的失败会发一条分类回执，
+    // 让用户知道「这轮没成，不是她不理人」（真机：上游 403 判成非编程话题，QQ 侧全程无响应）。
+    // 本用例原本断言 sent=[] 只为了证明「没把失败的半截回复发出去」，这条契约保留：
+    // 发送的不能是回复内容，只能是失败提示。
+    assert.equal(sent.length, 1, '失败会给一条回执（过去完全静默）')
+    assert.deepEqual(sent, ['send_private_msg'], '回执走私聊正常发送路径')
+    const noticeText = String(calls[0]?.params?.message?.[0]?.data?.text || calls[0]?.params?.message || '')
+    assert.doesNotMatch(noticeText, /恢复后的回复|触发拒绝/, '失败时绝不能把回复内容发出去')
     assert.equal(dshRaw.listeners.size, 0, 'followup 失败路径也摘监听（finally 清理）')
     await core.dispatchLegacyEvent(msgEv({ message_id: 2, message: [{ type: 'text', data: { text: '再试' } }] }))
     await sleep(300)
-    assert.deepEqual(sent, ['send_private_msg'], '回合没有永久 running，调度槽已恢复')
+    assert.equal(sent[sent.length - 1], 'send_private_msg', '第二条仍能正常发')
+    assert.ok(sent.length >= 2, '第二条确实发出去了（调度槽已恢复，没有被失败回执堵住）')
   } finally { await core.dispose() }
 })
 

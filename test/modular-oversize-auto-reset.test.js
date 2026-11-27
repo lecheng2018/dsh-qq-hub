@@ -128,7 +128,7 @@ test('413 自愈：服务端中文文案（无结构化字段）也命中 ——
   } finally { await core.dispose() }
 })
 
-test('413 自愈：普通错误（非 413）不换会话、不提示 —— 不误伤正常失败重试路径', async () => {
+test('413 自愈：普通错误（非 413）不换会话 —— 不误伤正常失败重试路径（但会给失败回执）', async () => {
   const dshRaw = scriptedFakeDsh({ script: [
     [{ type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT', status: 429, message: 'rate limit exceeded' } } } }],
     [
@@ -144,7 +144,12 @@ test('413 自愈：普通错误（非 413）不换会话、不提示 —— 不�
     await core.dispatchLegacyEvent(msgEv({ message_id: 2 }))
     await sleep(300)
     assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '第二个回合仍在同一会话')
-    assert.deepEqual(sent.filter((a) => a === 'send_private_msg').length, 1, '只发了正常回复，没有自愈提示')
+    // 2026-11-27 起：429 这类普通失败不再静默 —— 会发一条「模型限流了，等一会儿」的分类回执
+    //（真机：上游 403/429 过去在 QQ 侧一个字都没有，用户以为她不理人）。
+    // 但「不换会话」这条 413 自愈契约不变：429 该走重试，不该归档重建。
+    const sends = sent.filter((a) => a === 'send_private_msg').length
+    assert.equal(sends, 2, '429 回合给 1 条失败回执 + 第二个回合 1 条正常回复')
+    assert.equal(core.registry.peek('private:10000001')?.sessionId, 'sess-1', '仍然不换会话')
   } finally { await core.dispose() }
 })
 
