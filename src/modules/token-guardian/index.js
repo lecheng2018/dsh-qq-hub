@@ -14,7 +14,7 @@
 
 import { readJson, writeJson } from '../../core/store.js'
 import { resolveCharacterIdentity } from '../../persona/identity-context.js'
-import { buildSummaryPrompt, countPending, parseStructuredSummary, renderStructuredSummary, speakerLabel, threadLine } from './summary-format.js'
+import { buildSummaryPrompt, countPending, parseStructuredSummary, renderStructuredSummary, speakerLabel } from './summary-format.js'
 
 const ID = 'token-guardian'
 
@@ -93,24 +93,6 @@ export default {
 
     const persist = () => { try { writeJson(stateFile(), state) } catch (error) { api.log.warn('保存状态失败：', error.message) } }
     const persistSummary = () => { try { writeJson(summaryFile(), summaries) } catch (error) { api.log.warn('保存摘要失败：', error.message) } }
-
-    /**
-     * 这个聊天里「还挂着」的线索（说要洗澡、答应了什么、问了没答的问题）。
-     * 直接喂给压缩模型让它并进 pending —— 而不是指望模型从流水账里自己重新发现一遍。
-     * 账本由核心的 thread-ledger 维护（S1 规则 + S2 语义判定），这里只读。
-     * 任何异常都返回空数组：拿不到线索顶多少一条提示，绝不能让压缩失败。
-     */
-    function openThreadLines(chatId) {
-      try {
-        const ledger = api.core?.threads
-        if (!ledger || typeof ledger.list !== 'function' || !chatId) return []
-        const list = ledger.list({ chatKey: chatId, status: 'unresolved', limit: 8 }) || []
-        return list.map(threadLine).filter(Boolean)
-      } catch (error) {
-        api.log.debug(`${ID}：读挂起线索失败（不影响压缩）：${error.message}`)
-        return []
-      }
-    }
 
     /** 一次会话大概占多少 token：中文 1 字≈1.4 token（DeepSeek tokenizer 实测 1.3~1.5），
      * 旧口径 chars/1.2 会低估三成（上下文 80k 按成 60k，压缩该触发不触发，2026-11-05 复盘）。 */
@@ -254,7 +236,6 @@ export default {
         name: resolveCharacterIdentity(chatId, cfg).name,
         maxChars: cfg.summaryMaxChars,
         hasPrev: Boolean(summaries[chatId]?.text),
-        threadLines: openThreadLines(chatId),
       })
       // maxTokens 是「思考 + 正文」的总预算（pi-ai 把思考算进 output）。摘要正文
       // 上限 summaryMaxChars 字（约 ×1.4 token），再给思考留一份余量，否则思考吃掉

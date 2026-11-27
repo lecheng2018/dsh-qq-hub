@@ -33,7 +33,7 @@ export function buildPurposePrompt({
   lines.push(`现在是 ${localDateKey(now)} ${clockText(clock.getHours(), clock.getMinutes())}（周${week}）。没有人叫你，也不是在回复谁——这是你自己想找${owner}说话的一刻。`);
   lines.push('');
 
-  // 驱动状态不是情绪播报，只是告诉她此刻更容易被什么打动。
+  // 只保留方向倾向，不往提示词里硬塞由关键词猜出来的情绪播报（减少演戏感）。
   const driveQuery = normalizeDrives(drives);
   const topNeeds = PURPOSE_NEEDS
     .map((need) => ({ need, score: driveQuery[need] || 0 }))
@@ -41,15 +41,8 @@ export function buildPurposePrompt({
     .slice(0, 2)
     .filter((item) => item.score >= 0.25)
     .map((item) => NEED_LABELS[item.need] || item.need);
-  const emotionText = selected?.emotion ? (EMOTION_LABELS[selected.emotion] || '') : '';
-  const emotionPhrase = selected?.emotion === 'content'
-    ? '心里挺平静的'
-    : (emotionText ? `心里隐约有点${emotionText}` : '');
-  if (topNeeds.length || emotionPhrase) {
-    lines.push('【你此刻的状态】'
-      + (topNeeds.length ? `最近比较想要：${topNeeds.join('、')}。` : '')
-      + (emotionPhrase ? `${emotionPhrase}。` : '')
-      + '（不用直接说出来，它只是决定你此刻更想聊什么。）');
+  if (topNeeds.length) {
+    lines.push(`【最近更容易留意的方向】${topNeeds.join('、')}（只是参考，自然跟着下面的具体素材聊就行）。`);
     lines.push('');
   }
 
@@ -91,9 +84,6 @@ export function buildPurposePrompt({
     bits.push(NEED_LABELS[selected.need], ACTION_LABELS[selected.action]);
     if (Number.isFinite(selected.confidence)) bits.push(`置信${Math.round(selected.confidence * 100)}%`);
     lines.push(`【这次先冒出来的目标假设】${bits.filter(Boolean).join('/')}：${selected.text}`);
-    if (selected.emotionLabel) lines.push(selected.emotion === 'content'
-      ? '（说这句话时你心里挺平静的，不用直接说出来。）'
-      : `（说这句话时你心里有点${selected.emotionLabel}，不用直接说出来。）`);
     if (selected.evidence) lines.push(`【为什么是这件事】${selected.evidence}`);
     if (selected.goalOwner === 'member') {
       lines.push('（这是群友的目标，不是你的。你可以跟主人聊聊他们在玩什么，但不要写成「我也好想玩」。）');

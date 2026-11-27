@@ -23,11 +23,9 @@ import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
 import { createSystemTurns } from '../chat/system-turns.js'
 import { createTurnController } from '../chat/turn-controller.js'
-import { createContextAssembly, createThreadProvider, createAffectiveProvider, AFFECTIVE_PROVIDER_ID } from '../chat/context-assembly.js'
-import { isChatKey } from '../chat/chat-key.js'
+import { createContextAssembly } from '../chat/context-assembly.js'
 import { createOutbox } from '../chat/outbox.js'
 import { createReplyDelivery } from '../chat/reply-delivery.js'
-import { createThreadObserver } from '../chat/thread-wiring.js'
 import { createInteractionState } from '../chat/interaction-state.js'
 import { createOutbound } from '../chat/outbound.js'
 import { createOutboundFiles } from '../chat/outbound-files.js'
@@ -232,12 +230,6 @@ export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile, groupStateFile,
   memoryScore, isMuted, interceptInteraction, personaTextFor, onStats, noteMedia, promptVars, stickers, tts, buildTools, toolsGeneration, localApi, logChat, onResetChat, collectInboundStickers, availableModels, moduleHooks, markTurnAt, sharedOutbox, isSentMessage, inboundAudio, quotedMessages: sharedQuotedMessages, inboundImages: sharedInboundImages, inboundVision: sharedInboundVision,
-  // 挂起线索账本（US-004 产出）。线索 provider 只认 peek(chatKey, o) 这一个契约，
-  // 所以这里按依赖注入接：宿主把账本传进来，core 不 import 账本实现（零业务耦合）。
-  // 未传 = 不注册这两个 provider（优雅降级），不会因缺账本而启动失败。
-  threadLedger,
-  // US-019 S2 慢思考判定实现（可选注入，测试用假模型；生产走默认的 judgeThreads）。
-  threadJudge,
 }) {
   const audio = inboundAudio || createInboundAudio({ onebot, dsh, localApi, log, getConfig })
   const quotedMessages = sharedQuotedMessages || createQuotedMessages({ onebot, getConfig, isSentMessage, log })
@@ -809,29 +801,11 @@ export function createModularCore({
     throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
   }
 
-  // ---------- Context Assembly（模块上下文 + 人格 + 挂起线索） ----------
-  // 线索 provider 声明 scope='global' 但内部 perChat：宿主只建一个全局实例，
-  // 真正的聊天域由每次 assemble({ chatKey }) 带进来，并过 parseChatKey 校验。
+  // ---------- Context Assembly（模块上下文 + 人格） ----------
   // 注：不再把每分钟跳字的 createTimeScaleProvider 塞进 qq-hub-context 静态快照——
   // DSH runtimeContext.project() 会因内容变化每轮重印整坨 ~1.5KB <system-reminder>；
   // 而每轮消息头已有 nowLine()（精确钟点 + 距上一条间隔）与 DSH time-context，无需重复投喂。
-  // 优先级：persona(1000) > 线索(800) > 关系温度(780) > legacy(100)。
-  const threadProviders = threadLedger
-    ? [createThreadProvider({ ledger: threadLedger, perChat: true, includeDormant: true })]
-    : []
-  // US-015 · 关系温度：图谱模块算出的 tone 必须真的影响一句话。
-  // - 惰性现取（mods.use 每次问一次）：模块关掉/热重载/被替换都不会踩到旧导出；
-  // - perChat：作用域只来自本轮请求的 chatKey，群聊读群、私聊读私聊，物理上不可能串域；
-  // - resolveTone 抛错由 provider 的 isolate 策略兜住，绝不影响其他 provider。
-  const affectiveProvider = createAffectiveProvider({
-    perChat: true,
-    resolveTone: (chatKey) => {
-      const mod = mods?.use?.(AFFECTIVE_PROVIDER_ID)
-      if (!mod || typeof mod.toneFor !== 'function') return null
-      return mod.toneFor(chatKey)
-    },
-  })
-
+  // 优先级：persona(1000) > legacy(100)。
   const assembly = createContextAssembly({
     providers: [
       // 人设 fragment 必须跟 personaTextFor 同口径：专卡生效时卡已经通过 {{qq_hub_persona}} 进了
@@ -847,8 +821,6 @@ export function createModularCore({
           return personaText() || ''
         },
       }] : []),
-      ...threadProviders,
-      affectiveProvider,
       createLegacyContextAdapter({ mods, priority: 100 }),
     ],
   })
@@ -909,8 +881,6 @@ export function createModularCore({
     // 投递层不需要（也不该）自己持有跨回合状态。
     getConfig, log, hooks: moduleHooks, groups, stickers,
     interaction,
-    // US-019：线索账本注入回复链路，用来处理 <inner> 里的【顺承前情】与闭环信号
-    ...(threadLedger ? { threadLedger } : {}),
     ...outbound,
     logChat,
     onActivity: (event) => mods.emit?.('activity', event),
@@ -918,29 +888,6 @@ export function createModularCore({
     outbox: () => outbox,
     isCaptured: capture.isCaptured,
   })
-
-  // ---------- US-019 · 线索生产者（S1 规则层 + S2 慢思考层） ----------
-  //
-  // 接线位置说明（为什么在 modular-core 的轮末、而不是 reply-delivery 内部）：
-  //   1. **顺序**：新线索必须在本轮 applyThreadContinuation（reply-delivery 内）**之后**入账。
-  //      接在 reply-delivery 里会让同一轮的 advance() 把刚落地的 active 直接推成 extended
-  //      （生下来就漏一轮）。轮末是唯一同时满足「已投递」和「未推进」的位置。
-  //   2. **依赖**：S2 要 dsh（宿主模型）和 cfg，reply-delivery 这两样都没有、也不该有
-  //      （它是纯投递编排，注入模型会让它变成第二个决策点）。
-  //   3. **可测**：轮末调用点是 modular-core 的公开出口（simulateTurn/dispatch），
-  //      e2e 能直接打；藏在 delivery 里就只能靠 deliver 单测旁证。
-  // 默认只在私聊跑 S2（群里每人一句就一次模型调用，成本压不住；S1 规则层零成本照跑）。
-  const threadObserver = threadLedger
-    ? createThreadObserver({
-      dsh,
-      getConfig,
-      ledger: threadLedger,
-      log,
-      ...(threadJudge ? { judge: threadJudge } : {}),
-      // 裁剪节流跟着配置走（面板改完下一轮生效），默认 60 秒一次
-      pruneIntervalMs: () => Number(getConfig()?.threads?.pruneIntervalMs) || undefined,
-    })
-    : null
 
   // ---------- Turn Controller（执行 = 会话轮次 + 装配 + 投递） ----------
   /** 群聊上下文拼接（真机审计 1.3；legacy groupPrompt 的简化复刻）：
@@ -1266,50 +1213,6 @@ export function createModularCore({
   function handleArchivedTurn(chatKey) {
     archivedChats.add(chatKey)
     log.warn(`回合被宿主归档门拦下（blocked）：${chatKey} 的会话已归档，下一条消息将换新会话`)
-  }
-  // ---------- US-015 · 关系信号自动喂料 ----------
-  // 一轮回复**投递之后**才结算：关系信号是"这段对话怎么样"的结论，回复没发出去就不该记分。
-  // 三层防护，任何一层失效都只影响记分，绝不影响回复投递：
-  //   1. 调用点包 try/catch（feed 自己也不抛，这里是第二道）；
-  //   2. 模块关着 / 没导出 feed / 导出坏掉 → 静默跳过（只记 debug，不刷 warn）；
-  //   3. 非法 chatKey → 连模块都不问，直接返回（图谱层也会 fail-closed）。
-  // 冷却（同 chatKey 同 kind 10 分钟只算一次）由模块内部处理，core 不重复实现。
-  //
-  // 最近几轮的原始对话（只留文本，不落盘）：信号挖掘需要"多轮"与"对方已经拒绝过"这类跨轮证据，
-  // 而这些证据只能来自真实对话，不能拿模块上下文（记忆/人设）冒充。每个聊天域独立一条环形缓冲。
-  const RECENT_TURN_CAP = 6
-  const recentTurns = new Map() // chatKey -> ['对方：…', '我：…'] 交替
-  function noteRecentTurn(chatKey, userText, botText) {
-    const key = String(chatKey || '')
-    if (!key) return
-    const lines = recentTurns.get(key) || []
-    if (userText) lines.push(`对方：${userText}`)
-    if (botText) lines.push(`我：${botText}`)
-    recentTurns.set(key, lines.slice(-RECENT_TURN_CAP * 2))
-  }
-  function recentContextOf(chatKey) {
-    const lines = recentTurns.get(String(chatKey || ''))
-    return lines ? lines.join('\n') : ''
-  }
-
-  function feedAffectiveSignals({ chatKey, userText, botText, recentContext, now }) {
-    try {
-      if (!isChatKey(String(chatKey || ''))) {
-        debug(`关系信号跳过：非法 chatKey ${JSON.stringify(String(chatKey || ''))}`)
-        return null
-      }
-      const mod = mods?.use?.(AFFECTIVE_PROVIDER_ID)
-      if (!mod || typeof mod.feed !== 'function') return null // 模块关着 = 正常降级，不是错误
-      const out = mod.feed({ chatKey: String(chatKey), userText, botText, recentContext, now })
-      if (out?.applied?.length) {
-        debug(`关系信号 → ${chatKey}：` + out.applied.map((s) => `${s.kind}(${s.confidence})`).join('、'))
-      }
-      return out || null
-    } catch (error) {
-      // 绝不冒泡：记分失败不能把已经发出去的回复变成失败回合
-      debug(`关系信号喂料失败（不影响投递）：${error?.message || error}`)
-      return null
-    }
   }
 
   const controller = createTurnController({
@@ -1730,42 +1633,6 @@ export function createModularCore({
         if (inGroup && (delivered.state === 'sent' || delivered.state === 'partial')) {
           try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
         }
-        // 线索账本用投递层回报的实际条目，避免「线索看到的内容 ≠ 实际发出去的内容」。
-        const replyItems = Array.isArray(delivered.items) ? delivered.items : []
-        const effectiveReply = typeof delivered?.replyRaw === 'string' ? delivered.replyRaw : String(reply || '')
-        const effectiveInnerMeta = delivered?.innerMeta || null
-        // US-019 · 轮末挖线索：这一轮**已经投递完**（applyThreadContinuation 跑过）才入账。
-        // fire-and-forget：S2 是一次额外的小模型调用，绝不能让它在投递链路上等
-        // （等 = 用户已经看到回复了，可这一轮的 turn 还不算结束，调度槽被白占）。
-        // recordTurn 内部全 try/catch，账本容量满也只记日志；flush() 供测试与退出时收尾。
-        if (threadObserver) {
-          try {
-            const sentText = replyItems.flatMap((item) => (item.kind === 'mixed' ? item.parts : [item]))
-              .filter((item) => item.kind === 'text' || item.kind === 'voice')
-              .map((item) => item.value).join('|||')
-            threadObserver.recordTurn({
-              chatKey: turn.chatKey,
-              userText: textOfSegments(io.members.flatMap((m) => m.segments || [])),
-              replyRaw: effectiveReply,
-              innerMeta: effectiveInnerMeta,
-              replyText: sentText,
-              recentText: [String(participants.prevTextOf(String(sessionId)) || ''), textOfSegments(io.members.flatMap((m) => m.segments || []))].filter(Boolean).join('\n'),
-            }).catch(() => {})
-          } catch (error) {
-            log.warn(`线索生产接线失败：${error?.message || error}`)
-          }
-        }
-
-        // US-015 · 回复已投递，才结算这一轮的关系信号（失败只记 debug，绝不影响投递结果）。
-        // 文本口径 = 这一轮真正进模型的用户原话 + 她的回复；recentContext 是同一聊天域的最近几轮。
-        feedAffectiveSignals({
-          chatKey: turn.chatKey,
-          userText: turnUserText,
-          botText: effectiveReply,
-          recentContext: recentContextOf(turn.chatKey),
-          now: Date.now(),
-        })
-        noteRecentTurn(turn.chatKey, turnUserText, effectiveReply)
         // 如实上报（缺陷：轮次级谎报）。终态由投递层给出，这里不再自己反推：
         //   · sent    —— 可发条目全部拿到网关回执
         //   · partial —— 有气泡没拿到回执（已发出的不重发，避免重复说话）
@@ -2102,8 +1969,6 @@ export function createModularCore({
   }
 
   async function dispose() {
-    // 线索挖掘链先收尾（S2 的模型调用可能还在飞），否则测试进程会带着未完成的 promise 退出。
-    try { await threadObserver?.flush() } catch { /* 收尾失败不影响退出 */ }
     for (const mounted of mountedTools.values()) {
       for (const off of mounted.offs) { try { off?.() } catch {} }
     }
@@ -2118,7 +1983,6 @@ export function createModularCore({
   /** 重置当前 SessionRegistry 中的一个聊天；归档异步做，映射立即失效。 */
   function resetChat(chatKey) {
     const key = String(chatKey || '')
-    recentTurns.delete(key) // 会话重置 = 关系线索的上下文也重新开始（不让旧对话影响新会话的信号判定）
     try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
@@ -2408,17 +2272,11 @@ export function createModularCore({
     lastOwnerChatAt: () => presence.lastOwnerChatAt,
     lastBotToOwner: () => presence.lastBotToOwner,
     selfId: () => selfId,
-    // US-019 测试/排障出口：线索生产者（S1+S2）的观察器。没有账本时为 null。
-    threadObserver: threadObserver || null,
-    /** 等未完成的线索挖掘收尾（S2 是 fire-and-forget，测试不能靠 sleep 猜）。 */
-    flushThreads: () => (threadObserver ? threadObserver.flush() : Promise.resolve()),
   }
 
   return {
     services,
-    // 测试出口：装配主链本身。wiring 测试必须走**这里**而不是自己 new 一个
-    // createContextAssembly({providers:[...]})——后者绕过了 `threadLedger ? [...threadProviders] : []`
-    // 这个真实注册点，导致「摘掉 threadProviders 注册」的变异全绿（US-010 第二轮验收实测漏检）。
+    // 测试出口：装配主链本身。
     assemblyForTest: assembly,
     dispatchLegacyEvent,
     dispatchLegacyEventSettled,

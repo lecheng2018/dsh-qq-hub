@@ -100,7 +100,6 @@ const SIDE_EFFECT_PATHS = new Set([
   // 能直接触发它们：清空记忆分区、重置用量、安装组件、触发日记对外发布。
   // 逐条按「写持久状态 / 删数据 / 派生进程或下载 / 对外发布 / 触发计费」收进来
   // （与上面面板条目同一口径）；面板前端对这些全部走 POST，合法流程不受影响。
-  '/affective/bump',              // 写情感状态
   '/compact-now',                 // token-guardian 立即压缩（触发模型调用＝计费）
   '/token-guardian/compact-now',  // 同上（模块内注册路径）
   '/token-guardian/reset-usage',  // 重置用量

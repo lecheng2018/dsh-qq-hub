@@ -98,39 +98,6 @@ test('模型返回被截断的 JSON：同样回落纯文本', async () => {
   assert.ok(out.summaries()[chatId].text.includes('topics'), '半截 JSON 原样留着，至少不丢内容')
 })
 
-test('挂起线索账本里的未完事项会进压缩 prompt', async () => {
-  const seen = []
-  const threads = {
-    list: (o) => {
-      assert.equal(o.chatKey, 'group:1')
-      assert.equal(o.status, 'unresolved')
-      return [
-        { id: 't1', type: 'promise', summary: '明天把链接发他', status: 'active' },
-        { id: 't2', type: 'question_pending', summary: '光猫什么型号', status: 'active' },
-      ]
-    },
-    stats: () => ({}),
-  }
-  const { out, chatId } = await boot({
-    ask: async (opts) => { seen.push(opts); return STRUCTURED_JSON },
-    threads,
-  })
-  await out.compact(chatId, { chatId })
-  assert.match(seen[0].system, /并进 pending/)
-  assert.match(seen[0].system, /答应了某事：明天把链接发他/)
-  assert.match(seen[0].system, /问出去还没答：光猫什么型号/)
-})
-
-test('账本读不出来（抛错 / 没这接口）也不影响压缩', async () => {
-  const boom = { list: () => { throw new Error('账本炸了') }, stats: () => ({}) }
-  const { out, chatId } = await boot({ ask: async () => STRUCTURED_JSON, threads: boom })
-  const r = await out.compact(chatId, { chatId })
-  assert.equal(r.ok, true, '拿不到线索顶多少一条提示')
-
-  const noLedger = await boot({ ask: async () => STRUCTURED_JSON })
-  assert.equal((await noLedger.out.compact(noLedger.chatId, { chatId: noLedger.chatId })).ok, true)
-})
-
 test('压缩原文里说话人用真实群名片，她自己叫「你」', async () => {
   const seen = []
   const { out, chatId } = await boot({ ask: async (opts) => { seen.push(opts); return STRUCTURED_JSON } })

@@ -83,7 +83,7 @@ test('S04 · 模块写接口的 POST 正常放行（面板合法流程不受影�
 })
 
 test('S04 · 只读模块路由不受影响：GET 照常放行', () => {
-  for (const path of ['/memory-privacy/stats', '/memory-privacy/list', '/token-usage', '/voice/asr-status', '/affective/state']) {
+  for (const path of ['/memory-privacy/stats', '/memory-privacy/list', '/token-usage', '/voice/asr-status']) {
     const r = guard.check(req('GET', `/qq-hub/api${path}`))
     assert.equal(r.ok, true, `${path} 是只读路由，GET 应放行`)
   }
