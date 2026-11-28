@@ -61,6 +61,7 @@ import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
+import { executeGroupReaction } from './core/group-reaction-execution.js'
 import { createInboundRouter } from './core/inbound-router.js'
 import { createModelSync } from './core/model-sync.js'
 import { createTurnFailure, markPendingReset, takePendingReset } from './core/turn-failure.js'
@@ -800,11 +801,25 @@ export function createModularCore({
     },
     execute: async (turn, io) => {
       const offeredMode = groupGate.turnModeOf(turn.turnId)
+      // T2.2：参与声明与触发消息 id 在执行开始即捕获/冻结 —— 本回合执行期间不受面板配置
+      // 变更或插件热重载影响；reply 钩子与 group/result 共用同一份 triggerMessageIds。
+      const offeredParticipation = groupGate.turnParticipationOf(turn.turnId)
+      const triggerMessageIds = Object.freeze((io.members || []).map((m) => String(m?.messageId || '')).filter(Boolean))
       // #263 的外层兜底在失败时调它摘监听。S2 起监听器归执行器（成功 / 失败 / 取消 / 超时四条路径
       // 都在 runTurn 里摘干净），所以这里恒为空操作 —— 保留这处接线只为让 #263 那段兜底的结构
       // 与语义一字不变（不新增、也不删掉一层清理）。
       const cleanupTurnListener = () => {}
       try {
+      // T2.2：REACT 分支 —— 在 pendingReset / sessionForChat 之前短路：零模型调用、零装配、
+      // 零 typing、零新定时器。仅 群聊 + interject + 声明 react 时进入；其余保持原模型路径。
+      // 状态由 Shared Outbox 如实带回（sent/failed/unknown/cancelled/skipped），交 turn-controller 收尾。
+      if (String(turn.chatKey || '').startsWith('group:') && offeredMode === 'interject' && offeredParticipation?.level === 'react') {
+        const reaction = await executeGroupReaction({
+          turn, io, offeredMode, participation: offeredParticipation,
+          groups, outbox, log, now: Date.now(),
+        })
+        return { state: reaction.state, via: 'group-reaction', deliveryId: reaction.deliveryId, reason: reaction.reason }
+      }
       // 上一轮失败留下的待重置标记：统一取出（取出即清除，同一个理由只 reset 一次）。
       // 理由只决定要不要留原文案：413 与归档门各有一条既有 info（文案一字未改），超时原来不打日志。
       const pendingReset = takePendingReset(pendingResets, turn.chatKey)
