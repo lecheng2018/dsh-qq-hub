@@ -10,8 +10,6 @@
 
 /**
  * @param {object} o
- * @param {() => object} o.getConfig 每轮读最新配置
- * @param {object} o.log 日志
  * @param {object} o.registry 会话注册表（snapshot / peek / forget）
  * @param {(chat: object) => Promise<object|null>} o.resolveTarget 按聊天解析目标模型
  * @param {(agent: object, sessionId: string, target: object) => Promise<boolean>} o.applySessionModel
@@ -23,7 +21,7 @@
  * @param {(target: object) => string} o.modelKey 目标模型 → 比较键
  */
 export function createModelSync({
-  getConfig, log, registry, resolveTarget, applySessionModel, cleanupSession,
+  registry, resolveTarget, applySessionModel, cleanupSession,
   ctxGet, sessionPersonas, selectedModels, chatViewFor, modelKey,
 }) {
   async function syncAllModels() {

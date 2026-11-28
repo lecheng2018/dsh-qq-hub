@@ -524,14 +524,52 @@ export function foldChatInner(doc) {
   return folded
 }
 
-/** 样式只插一份，按 id 认。 */
+/**
+ * 样式只插一份，按 id 认；已有但内容过期就原地改写。
+ *
+ * 为什么要比对内容：插件热更 / 升级后宿主壳页可能一直开着，页面上还挂着旧版样式表，
+ * 新版 client.js 一见 id 存在就跳过，新加的类名（`.qqhub-mark` 之类）就会裸奔。
+ */
 function ensureStyle(doc) {
-  if (doc.getElementById(STYLE_ID) !== null) return
+  const existing = doc.getElementById?.(STYLE_ID) ?? null
+  if (existing !== null) {
+    if (existing.textContent !== STYLE_TEXT) existing.textContent = STYLE_TEXT
+    return
+  }
   const style = doc.createElement('style')
   style.id = STYLE_ID
   style.textContent = STYLE_TEXT
   doc.head.append(style)
 }
+
+/**
+ * 卸载时把**每一处**折叠都撤回：恢复锚点原文本、摘掉折叠行 / chip / 新建的 Text 节点，
+ * 并忘掉登记过的分组。只断开 MutationObserver 的话，聊天视图里会留下一堆点不开的
+ * 「思考」行（源节点还被 React 换走过），主人刷新页面才能散。
+ */
+function teardownAllGroups(doc) {
+  for (const root of doc.querySelectorAll?.('[data-chat-flow-kind]') ?? []) {
+    const groups = root[GROUPS_KEY]
+    if (groups) {
+      for (const group of [...groups]) {
+        try {
+          teardownGroup(group)
+        } catch (error) {
+          console.warn('[qq-hub] 撤回折叠组失败：', error)
+        }
+      }
+      groups.clear()
+    }
+    try {
+      pruneFolds(root)
+    } catch (error) {
+      console.warn('[qq-hub] 清理残留折叠行失败：', error)
+    }
+  }
+}
+
+/** 同时在册的折叠实例数：最后一个卸载时才摘样式，免得热更换新实例把自己的样式摘掉。 */
+let installedCount = 0
 
 /**
  * 装上折叠：启动扫一遍（历史消息）+ 之后按需扫（新回合、React 重渲染把节点写回来时自愈）。
@@ -572,10 +610,22 @@ export function installInnerFold({ doc = globalThis.document, delayMs = 400, obs
     observer.observe(doc.body, { childList: true, subtree: true, characterData: true })
   }
   run()
+  installedCount += 1
   return () => {
     disposed = true
     observer?.disconnect()
     if (timer !== null) clearTimeout(timer)
     timer = null
+    try {
+      teardownAllGroups(doc)
+    } catch (error) {
+      console.warn('[qq-hub] 卸载折叠清理失败：', error)
+    }
+    installedCount = Math.max(0, installedCount - 1)
+    if (installedCount > 0) return
+    const stale = doc.getElementById?.(STYLE_ID) ?? null
+    if (stale === null) return
+    if (typeof stale.remove === 'function') stale.remove()
+    else if (stale.parentNode && typeof stale.parentNode.removeChild === 'function') stale.parentNode.removeChild(stale)
   }
 }

@@ -931,7 +931,10 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     if (existsSync(dir)) return { ok: false, message: `modules/${id} 已经有了` }
     mkdirSync(dir, { recursive: true })
     const tpl = readFileSync(join(BUILTIN_DIR, '_template', 'index.mjs'), 'utf8')
-    writeFileSync(join(dir, 'index.mjs'), tpl.replaceAll('__TOOL__', id.replace(/-/g, '_')).replaceAll('__ID__', id).replaceAll('__NAME__', String(name || id).replace(/['\\\n]/g, '')), 'utf8')
+    // 模板里 __NAME__ 落在单引号字符串内：`'` 和 `\\` 会拆掉字面量，\r 与 U+2028/U+2029
+    // 同样是行终止符（写进 .mjs 后能被当换行），一并滤掉。
+    const safeName = String(name || id).replace(/[\r\n\u2028\u2029'\\]/g, '')
+    writeFileSync(join(dir, 'index.mjs'), tpl.replaceAll('__TOOL__', id.replace(/-/g, '_')).replaceAll('__ID__', id).replaceAll('__NAME__', safeName), 'utf8')
     installDocs()
     return { ok: true, dir, file: join(dir, 'index.mjs'), message: `建好了：${join(dir, 'index.mjs')}` }
   }

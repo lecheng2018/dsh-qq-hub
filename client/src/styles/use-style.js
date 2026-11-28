@@ -1,23 +1,19 @@
 import { useEffect } from '../core/react.js'
 import themeCss from './theme.css'
+import { mountStyleSheet, releaseStyleSheet } from './style-sheet.js'
 
 export const CSS = themeCss
 
-// 样式注入：不能只看「页面上有没有 qq-hub-css」——DSH 侧栏壳页在插件升级后可能一直开着，
-// 里面还挂着旧版的样式表，新 client.js 一看 id 已存在就跳过，结果新加的样式类
-// （如扩展页的 .ab-modgroup*，真机 1.4.6：分组头渲染成裸按钮）全部裸奔。
-// 对比内容：一样就复用，不一样就原地替换——升级不刷新页面也能自愈。
-export function useStyle() {
+// 样式注入：挂载/回收的细节在 ./style-sheet.js（那里与 React 无关，可被单测直接驱动）。
+// 这里只负责把这个副作用挂到组件生命周期上：
+// - 挂载时按 id 找样式表，内容不一样就原地替换（升级不刷新页面也能自愈，见 style-sheet.js 注释）；
+// - 卸载时释放一次持有；最后一个实例走了才把 <style> 从宿主 head 里摘掉，
+//   否则插件停用/切走后样式表会一直糊在 DSH 界面上。
+export function useStyle(doc = globalThis.document) {
   useEffect(() => {
-    const existing = document.getElementById('qq-hub-css')
-    if (existing) {
-      if (existing.textContent === CSS) return
-      existing.textContent = CSS
-      return
+    mountStyleSheet(doc, CSS)
+    return () => {
+      releaseStyleSheet(doc)
     }
-    const s = document.createElement('style')
-    s.id = 'qq-hub-css'
-    s.textContent = CSS
-    document.head.appendChild(s)
-  }, [])
+  }, [doc])
 }

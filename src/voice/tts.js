@@ -12,6 +12,42 @@ import { randomUUID } from 'node:crypto'
 import { dataDir } from '../core/store.js'
 import { UV_SOURCES } from './uv.js'
 
+// 单个音频响应的字节上限：合成服务的地址是主人自己填的，出错时回一坨 HTML、
+// 或者直接把整个模型仓库当音频吐回来都不奇怪。`arrayBuffer()` 是全量读取，
+// 一个 500MB 的响应就能把这个常驻进程撑爆；这里改成边读边计数，超限立刻中止。
+const MAX_AUDIO_BYTES = 30 * 1024 * 1024
+
+/**
+ * 读响应体，超过 maxBytes 立即中止。
+ *
+ * @param {Response} r fetch 响应
+ * @param {number} [maxBytes] 上限（默认 30MB）
+ * @returns {Promise<Buffer>}
+ */
+async function readAudioCapped(r, maxBytes = MAX_AUDIO_BYTES) {
+  const declared = Number(r.headers?.get?.('content-length') || 0)
+  if (declared > maxBytes) throw new Error(`音频太大（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+  if (!r.body || typeof r.body.getReader !== 'function') {
+    const all = Buffer.from(await r.arrayBuffer())
+    if (all.length > maxBytes) throw new Error(`音频太大（${Math.round(all.length / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+    return all
+  }
+  const reader = r.body.getReader()
+  const chunks = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      try { await reader.cancel() } catch (error) {}
+      throw new Error(`音频太大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB），已停止下载`)
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks)
+}
+
 // edge-tts 的私有 Python 环境，一键安装时自动创建。老安装沿用 C:\Aurabot\pyenv；新安装放在用户目录下
 const LEGACY_PYENV = 'C:\\Aurabot\\pyenv'
 export const PYENV_DIR = process.env.AURABOT_PYENV || (existsSync(LEGACY_PYENV) ? LEGACY_PYENV : join(homedir(), 'Aurabot', 'pyenv'))
@@ -199,7 +235,7 @@ async function windowsSynth(text) {
 async function fetchAudio(url, init, timeoutMs = 120000) {
   const r = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
   if (!r.ok) throw new Error(`HTTP ${r.status}：${(await r.text().catch(() => '')).slice(0, 120)}`)
-  const buf = Buffer.from(await r.arrayBuffer())
+  const buf = await readAudioCapped(r)
   if (buf.length < 400) throw new Error('返回的音频太短：' + buf.toString('utf8').slice(0, 120))
   return buf
 }
@@ -293,7 +329,7 @@ export async function httpSynth(text, c) {
   const r = await fetch(target, { method, headers, body, signal: AbortSignal.timeout(120000) })
   if (!r.ok) throw new Error(`HTTP ${r.status}：${(await r.text().catch(() => '')).slice(0, 160)}`)
 
-  let buf = Buffer.from(await r.arrayBuffer())
+  let buf = await readAudioCapped(r)
   const ctype = String(r.headers.get('content-type') || '')
   const looksJson = ctype.includes('json') || buf[0] === 0x7b
   if (looksJson) {
@@ -538,7 +574,7 @@ async function qwenDownloadAudio(audioUrl, { timeoutMs, baseUrl, audioOrigin }) 
       continue
     }
     if (!r.ok) throw new Error(`下载合成好的音频失败（HTTP ${r.status}）`)
-    return Buffer.from(await r.arrayBuffer())
+    return readAudioCapped(r)
   }
   throw new Error('音频下载重定向次数过多，已拒绝')
 }

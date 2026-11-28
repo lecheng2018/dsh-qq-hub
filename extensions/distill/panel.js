@@ -179,9 +179,15 @@ return function DistillPanel({ toast }) {
   const [triggering, setTriggering] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
 
+  // 请求序号：切群很快时，A 的慢回包会盖掉刚切到的 B（规则列表写着别的群的规则）。
+  // 三个互相独立的通道各记一个序号，只认最后一次请求。
+  const seqRef = React.useRef({ status: 0, rules: 0 })
+
   const loadStatus = async () => {
+    const seq = ++seqRef.current.status
     try {
       const res = await call('/status')
+      if (seq !== seqRef.current.status) return
       if (res && res.ok) {
         setGroups(res.list || [])
         if (!selectedGroup && res.list.length > 0) {
@@ -191,14 +197,16 @@ return function DistillPanel({ toast }) {
     } catch (e) {
       toast && toast('加载群状态失败', 'err')
     } finally {
-      setLoading(false)
+      if (seq === seqRef.current.status) setLoading(false)
     }
   }
 
   const loadRules = async (gid) => {
     if (!gid) return
+    const seq = ++seqRef.current.rules
     try {
       const res = await call('/rules?groupId=' + encodeURIComponent(gid))
+      if (seq !== seqRef.current.rules) return
       if (res && res.ok) {
         setActiveRules(res.activeRules || [])
         setCandidateRules(res.candidateRules || [])

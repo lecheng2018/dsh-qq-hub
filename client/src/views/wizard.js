@@ -1,7 +1,7 @@
 import { useState, Fragment, h } from '../core/react.js'
 import { Card, Row, Btn, Choices } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
-import { cx } from '../core/utils.js'
+import { cx, openExternal } from '../core/utils.js'
 import { get, post } from '../core/http.js'
 import { GatewayChoice, OneBotFields, SnowLumaAuth, Agreement } from './connect.js'
 
@@ -57,7 +57,7 @@ function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
             <div>
               <b>下载</b>
               <div className="ab-muted ab-small">下载 Windows 完整版，文件名类似 SnowLuma-v2.x.x-win-x64.zip（不带 lite）。</div>
-              <div style={{ marginTop: 6 }}><Btn small onClick={() => window.open(sl.downloadPage, '_blank')}>打开下载页 ↗</Btn></div>
+              <div style={{ marginTop: 6 }}><Btn small onClick={() => openExternal(sl.downloadPage)}>打开下载页 ↗</Btn></div>
             </div>
           </div>
           <div className={cx('ab-step', sl.installed && 'done')}>

@@ -1,7 +1,7 @@
 import { useState, useEffect, Fragment, h } from '../core/react.js'
 import { Card, Btn, Empty, More } from '../ui/primitives.js'
 import { navIcon } from '../ui/icons.js'
-import { cx } from '../core/utils.js'
+import { cx, copy } from '../core/utils.js'
 import { get, post } from '../core/http.js'
 
 function UpdateNotes({ st, toast }) {
@@ -29,7 +29,7 @@ function UpdateNotes({ st, toast }) {
           <div><b>有新版本 v{upd.latest}</b>（现在是 v{upd.current}）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。</div>
           <div className="ab-flex" style={{ marginTop: 6 }}>
             <code style={{ flex: '1 1 220px', minWidth: 0, fontSize: 11.5, wordBreak: 'break-all' }}>{upd.command}</code>
-            <Btn small onClick={() => { try { navigator.clipboard.writeText(upd.command); toast('复制好了', 'ok') } catch (e) { toast('复制失败，手动选中复制吧', 'err') } }}>复制</Btn>
+            <Btn small onClick={() => copy(upd.command, toast, '复制好了')}>复制</Btn>
           </div>
         </div>
       ) : null}

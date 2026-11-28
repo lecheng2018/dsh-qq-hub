@@ -86,7 +86,15 @@ test('isDocker 抗炸（review C3#1 三态）：非 Linux 平台确证 false；L
     existsSync: () => false,
     readFileSync: () => '0::/\n',
   })
-  assert.equal(v2clean.isDocker(), false, 'cgroup v2 读到且无容器标记 → 确证非容器')
+  // T4.4：cgroup v2 的裸 `0::/` 在容器内（私有 cgroup 命名空间）和宿主机上长得一模一样，
+  // 它证明不了「不在容器」——旧断言按 false 处理，把 Docker 里的运行误判成宿主机。
+  assert.equal(v2clean.isDocker(), null, 'cgroup v2 裸 `0::/` → 无结论（未知≠非容器）')
+  const v2hostPath = new EnvironmentDetector({
+    platform: 'linux',
+    existsSync: () => false,
+    readFileSync: () => '0::/system.slice/cron.service\n',
+  })
+  assert.equal(v2hostPath.isDocker(), false, 'cgroup v2 且路径是宿主机 cgroup 树 → 确证非容器')
   const v2docker = new EnvironmentDetector({
     platform: 'linux',
     existsSync: () => false,

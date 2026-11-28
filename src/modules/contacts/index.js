@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { defineTool, str, bool } from '../../tools/tools.js'
-import { profileToolVisible, profilePermits } from '../../chat/access.js'
+import { profileToolVisible, profilePermits, isOwner } from '../../chat/access.js'
 
 const PENDING_MAX = 50
 const ID_RE = /^\d{5,12}$/
@@ -130,7 +130,7 @@ export default {
 
     // 加群申请比好友申请更敏感：仅主人私聊（群里主人说话也不行），执行时再查一遍
     const guardedGroup = (chat, sessionId, run) => guarded('qqFriendRequest', chat, sessionId, async (args, cfg) => {
-      const ownerPrivate = chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
+      const ownerPrivate = chat.kind === 'private' && isOwner(cfg, chat.userId)
       if (!ownerPrivate || !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '只有主人私聊才能处理加群申请' }
       return run(args, cfg)
     })
@@ -180,7 +180,7 @@ export default {
         }),
       }))
       // 加群申请工具只挂在主人私聊（不随 'all' 档扩散到群/别人；执行时 guardedGroup 再查一遍）
-      const groupToolsVisible = chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '') && (cfg.profilePerms?.qqFriendRequest || 'owner') !== 'off'
+      const groupToolsVisible = chat.kind === 'private' && isOwner(cfg, chat.userId) && (cfg.profilePerms?.qqFriendRequest || 'owner') !== 'off'
       if (groupToolsVisible) {
         tools.push(defineTool({
           name: 'qq_list_group_requests',

@@ -66,6 +66,7 @@ function makeEnv () {
       () => {}, // useEffect
       (f) => f(), // useMemo
       (f) => f(), // useCallback
+      (init) => ({ current: init }), // useRef
       mk('Card'), mk('Btn'), mk('Row'), mk('Select'), mk('Seg'), mk('Empty'), mk('AvatarCard'), mk('Switch'),
       (...a) => a.filter(Boolean).join(' '), // cx
       (o, k, v) => { const c = { ...o }; c[k] = v; return c }, // setPath
@@ -82,7 +83,7 @@ function renderPersona () {
   const body = extractFn('Persona')
   assert.ok(body, 'client.js 里应该有 Persona 组件')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const Persona = factory(...env.args)
@@ -119,7 +120,7 @@ test('配置里有分流人设时也能渲染（空 map / 有内容的 map 都�
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const Persona = factory(...env.args)
@@ -135,7 +136,7 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
 
@@ -159,10 +160,13 @@ test('点「＋ 添加」真的会更新草稿（这是用户报的「点了没�
     state = next
     seen.push(next)
   }
+  // 按参数表顺序取值：h, useState, useEffect, useMemo, useCallback, useRef,
+  // Card…Switch（8 个占位组件）, cx, setPath(=realSetPath), get, post, toast, reload
+  const a = env.args
   const Persona = factory(
-    env.args[0], env.args[1], env.args[2], env.args[3], env.args[4],
-    env.args[5], env.args[6], env.args[7], env.args[8], env.args[9], env.args[10], env.args[11], env.args[12],
-    env.args[13], realSetPath, env.args[15], env.args[16], env.args[17], env.args[18]
+    a[0], a[1], a[2], a[3], a[4], a[5],
+    a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13],
+    a[14], realSetPath, a[16], a[17], a[18], a[19]
   )
   const draft = { persona: { current: 'dafeiyu', privateDefault: '', groupDefault: '', privates: {}, groups: {} } }
   const st = { personas: [{ id: 'dafeiyu', name: '大肥鱼', tags: [], chars: 1 }], config: draft }
@@ -195,7 +199,7 @@ test('draft 还是 null 时点添加不崩（配置没加载完）', () => {
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const Persona = factory(...env.args)
@@ -221,7 +225,7 @@ test('「按聊天换人设」用真实群/私聊做下拉，不再让人手打�
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const chats = [
@@ -282,7 +286,7 @@ test('一个候选都没有时，「＋ 添加」依然可点、且给出输入�
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const Persona = factory(...env.args)
@@ -318,7 +322,7 @@ test('点「＋ 添加」后必须真的多出一行（渲染读 draft 而不是
   const parts = [extractConst('PSEC_SUGGEST'), extractConst('PSEC_COLORS'), extractFn('splitPersona'), extractFn('PersonaAudit')].filter(Boolean)
   const body = extractFn('Persona')
   const env = makeEnv()
-  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+  const factory = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
     'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch', 'cx', 'setPath', 'get', 'post', 'toast', 'reload',
     'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
   const Persona = factory(...env.args)
@@ -378,11 +382,11 @@ test('手输群号：敲进去、失焦之后不能消失（用户报的「离�
     const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
     const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch']
     const comps = {}; names.forEach((n) => { comps[n] = mk(n) })
-    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
       'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
       'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
       'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
-    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(), (init) => ({ current: init }),
       comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
       (...a) => a.filter(Boolean).join(' '),
       (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },
@@ -500,11 +504,11 @@ test('手输清空已有群号时：退回占位行，绝不把原号码留住�
     const h = (type, props, ...kids) => ({ $$el: true, type: typeof type === 'string' ? type : (type && type.name) || 'fn', props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) })
     const mk = (n) => function (props, ...kids) { return { $$el: true, type: n, props: props || {}, children: kids.flat(Infinity).filter((x) => x !== null && x !== undefined && x !== false) } }
     const comps = {}; ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch'].forEach((n) => { comps[n] = mk(n) })
-    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback',
+    const fn = new Function('h', 'useState', 'useEffect', 'useMemo', 'useCallback', 'useRef',
       'Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'AvatarCard', 'Switch',
       'cx', 'setPath', 'getPath', 'clone', 'post', 'get', 'localStorage',
       'return (function(){' + parts.join('\n') + '\n' + body + '\nreturn Persona})()')
-    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(),
+    return fn(h, useStateImpl, () => {}, (f) => f(), (f) => f(), (init) => ({ current: init }),
       comps.Card, comps.Btn, comps.Row, comps.Select, comps.Seg, comps.Empty, comps.AvatarCard, comps.Switch,
       (...a) => a.filter(Boolean).join(' '),
       (o, path, v) => { const n = JSON.parse(JSON.stringify(o == null ? {} : o)); let c = n; const ks = path.split('.'); for (let i = 0; i < ks.length - 1; i++) c = c[ks[i]] = c[ks[i]] || {}; c[ks[ks.length - 1]] = v; return n },

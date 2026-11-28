@@ -18,7 +18,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync } from 'node:fs'
 
 import { createDshSessionAdapter } from '../chat/adapters/dsh-session.js'
-import { createOnebotOutboxAdapter, paramsFor } from '../chat/adapters/onebot-outbox.js'
+import { createOnebotOutboxAdapter } from '../chat/adapters/onebot-outbox.js'
 import { createLegacyContextAdapter } from '../chat/adapters/legacy-context.js'
 import { createSessionRegistry } from '../chat/session-registry.js'
 import { createSessionFileStore } from '../chat/session-store.js'
@@ -41,7 +41,6 @@ import { checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
 import { neutralizeInboundDsl } from '../chat/inbound.js'
-import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
 import { wantsVoice } from '../chat/reply.js'
@@ -348,11 +347,6 @@ export function createModularCore({
     const id = currentPersona(chatKey)
     return { id, hash: personaHash(id) }
   }
-  /** 会话里固化的那份 vs 现在该用的那份：id 或正文指纹任一不同就算过期。 */
-  const personaStale = (persona, sessionId, want) => !persona
-    || String(persona.sessionId || '') !== String(sessionId || '')
-    || String(persona.personaId || '') !== want.id
-    || String(persona.personaHash || '') !== want.hash
   const baseSessionStore = sessionStoreFile ? createSessionFileStore({ file: sessionStoreFile }) : null
   const sessionStore = baseSessionStore && {
     load() {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Fragment, h } from '../core/react.js'
+import { useState, useEffect, useRef, useCallback, Fragment, h } from '../core/react.js'
 import { Card, Btn, Empty, Switch, Select } from '../ui/primitives.js'
 import { get } from '../core/http.js'
 import { LogLine } from './overview.js'
@@ -8,7 +8,15 @@ function Logs() {
   const [level, setLevel] = useState('info')
   const [area, setArea] = useState('')
   const [auto, setAuto] = useState(true)
-  const load = useCallback(() => get('/logs?limit=400&level=' + level + '&area=' + area).then((r) => setItems(r.entries || [])), [level, area])
+  // 请求序号：切等级 / 切模块时前后两包会同时在路上，旧的那包回来更晚就会盖掉新的。
+  const seqRef = useRef(0)
+  const load = useCallback(() => {
+    const seq = ++seqRef.current
+    return get('/logs?limit=400&level=' + level + '&area=' + area).then((r) => {
+      if (seq !== seqRef.current) return
+      setItems(r.entries || [])
+    })
+  }, [level, area])
   useEffect(() => { load(); if (!auto) return; const t = setInterval(load, 3000); return () => clearInterval(t) }, [load, auto])
   return (
     <Card

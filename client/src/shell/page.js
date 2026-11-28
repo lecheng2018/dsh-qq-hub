@@ -43,6 +43,10 @@ function QQHubPage() {
   const [find, setFind] = useState(null)
   const rootRef = useRef(null)
   const toastTimer = useRef(null)
+  // 配置修订号：save() 自增，轮询回包对不上就丢（防旧轮询把刚保存的配置写回去）
+  const revRef = useRef(0)
+  // 卸载标志：轮询 / 定时器回调回来时组件可能已经没了，别再 setState
+  const aliveRef = useRef(true)
   const dirtyRef = useRef(false)
   const saveRef = useRef(null)
   const stJsonRef = useRef(null)
@@ -55,7 +59,11 @@ function QQHubPage() {
     toastTimer.current = setTimeout(() => setToastMsg(null), 3200)
   }
   const reload = useCallback(async () => {
+    // 发出前记下修订号：save() 会把它加一，于是「保存前发出、保存后才回来」的那一包
+    // 一定对不上号、直接丢弃。否则 5 秒轮询会用旧配置把刚保存的改动静默覆盖回去。
+    const rev = revRef.current
     const r = await get('/state')
+    if (!aliveRef.current || rev !== revRef.current) return
     if (!r || r.ok === false) { setErr(r && r.message ? r.message : '读不到插件状态'); return }
     setErr('')
     // 5 秒轮询绝大多数时候内容没变：直接跳过 setSt，省掉一次全页重渲染（点按掉帧的大头之一）。
@@ -66,7 +74,19 @@ function QQHubPage() {
     setSt(r)
     if (!dirtyRef.current) setDraft(clone(r.config))
   }, [])
-  useEffect(() => { reload(); const t = setInterval(reload, 5000); return () => clearInterval(t) }, [reload])
+  useEffect(() => {
+    aliveRef.current = true
+    reload()
+    const t = setInterval(reload, 5000)
+    return () => {
+      // 卸载：停轮询、置死标志，并把还在倒计时的 toast 计时器清掉 ——
+      // 那个 timer 到点会 setToastMsg，对已卸载组件 setState 是实打实的泄漏。
+      aliveRef.current = false
+      clearInterval(t)
+      clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+  }, [reload])
   const scrollTop = () => {
     const el = rootRef.current
     if (!el) return
@@ -94,6 +114,7 @@ function QQHubPage() {
   const setD = (d) => setDraft(d)
   const save = async (override) => {
     const body = override || draft
+    revRef.current += 1 // 让还在路上的轮询回包作废，别拿旧配置覆盖这次保存
     const r = await post('/save', body)
     if (r.ok === false) { toast(r.message || '保存失败', 'err'); return false }
     dirtyRef.current = false
