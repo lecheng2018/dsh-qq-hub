@@ -144,3 +144,47 @@ test('在途预算仍各记一次：interject 在途进冷却，release/prune �
   d = gate.decideGroupReplyFor({ chatKey: 'group:777', text: '第三句', userId: '555', nick: '甲' })
   assert.equal(d.mode, 'interject', `释放后恢复（实际：${d.reason}）`)
 })
+
+test('反例 A：先 noteTurnMode(must/engaged) 后 noteTurnParticipation(interject REACT) —— 绝不降级', () => {
+  const { gate } = mkGate()
+  const react = { level: 'react', sourceModuleId: 'mod-r', reaction: { messageId: '10001', emojiId: '66' } }
+  for (const mode of ['must', 'engaged']) {
+    const tid = `m1-${mode}`
+    gate.noteTurnMode('777', tid, mode)
+    assert.equal(gate.turnModeOf(tid), mode)
+    gate.noteTurnParticipation('777', tid, 'interject', react)
+    assert.equal(gate.turnModeOf(tid), mode, `回合模式必须保持 ${mode}`)
+    assert.deepEqual(
+      gate.turnParticipationOf(tid),
+      { level: 'full', sourceModuleId: '' },
+      '先 must/engaged 后 interject REACT 合流必须强制 FULL，绝不降级为 react',
+    )
+  }
+})
+
+test('反例 B：先 noteTurnParticipation(interject REACT) 后 noteTurnMode(must/engaged) —— 立即恢复 FULL', () => {
+  const { gate } = mkGate()
+  const react = { level: 'react', sourceModuleId: 'mod-r', reaction: { messageId: '10001', emojiId: '66' } }
+  for (const mode of ['must', 'engaged']) {
+    const tid = `m2-${mode}`
+    gate.noteTurnParticipation('777', tid, 'interject', react)
+    assert.deepEqual(gate.turnParticipationOf(tid), react, '前置：REACT 已入账')
+    gate.noteTurnMode('777', tid, mode)
+    assert.equal(gate.turnModeOf(tid), mode)
+    assert.deepEqual(
+      gate.turnParticipationOf(tid),
+      { level: 'full', sourceModuleId: '' },
+      '外部直接 noteTurnMode 升级 must/engaged 时必须立即清掉 REACT/TEXT_LITE',
+    )
+    assert.equal('reaction' in gate.turnParticipationOf(tid), false, '无 reaction 残留')
+  }
+})
+
+test('反例 B-2：engaged 同款，先 TEXT_LITE 后升级也清空（无 limits 残留）', () => {
+  const { gate } = mkGate()
+  const tid = 'm2-lite'
+  gate.noteTurnParticipation('777', tid, 'interject', { level: 'text_lite', sourceModuleId: 'mod-l', limits: { maxBubbles: 1, maxChars: 80 } })
+  gate.noteTurnMode('777', tid, 'engaged')
+  assert.deepEqual(gate.turnParticipationOf(tid), { level: 'full', sourceModuleId: '' })
+  assert.equal('limits' in gate.turnParticipationOf(tid), false)
+})

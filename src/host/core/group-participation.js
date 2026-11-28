@@ -36,6 +36,7 @@ export function normalizeParticipation(value, { msg, sourceModuleId } = {}) {
   if (!value) return null
   // truthy 但不是对象（如 'react'、数字）：按契约仍是接管（占用本次 claim），抛校验错误，
   // 调用方记警告并回退 FULL，绝不能当成「未接管」放走下一个监听器。
+  if (Array.isArray(value)) throw new ParticipationValidationError('参与声明不能是数组')
   if (typeof value !== 'object') throw new ParticipationValidationError(`参与声明必须是对象：${JSON.stringify(String(value)).slice(0, 60)}`)
   const level = value.level
   if (!PARTICIPATION_LEVELS.includes(level)) {
@@ -45,7 +46,7 @@ export function normalizeParticipation(value, { msg, sourceModuleId } = {}) {
   if (level === 'text_lite') {
     const limits = value.limits
     if (limits !== undefined && limits !== null) {
-      if (typeof limits !== 'object') throw new ParticipationValidationError('limits 必须是对象')
+      if (typeof limits !== 'object' || Array.isArray(limits)) throw new ParticipationValidationError('limits 必须是对象（数组无效）')
       const outLimits = {}
       if (limits.maxBubbles !== undefined) {
         if (!isFiniteInt(limits.maxBubbles, 1, 12)) throw new ParticipationValidationError(`maxBubbles 必须是 1~12 的有限整数：${JSON.stringify(limits.maxBubbles)}`)
@@ -61,11 +62,14 @@ export function normalizeParticipation(value, { msg, sourceModuleId } = {}) {
   }
   if (level === 'react') {
     const reaction = value.reaction
-    if (!reaction || typeof reaction !== 'object') throw new ParticipationValidationError('react 必须带 reaction 对象')
+    if (!reaction || typeof reaction !== 'object' || Array.isArray(reaction)) throw new ParticipationValidationError('react 必须带 reaction 对象（数组无效）')
     const messageId = String(reaction.messageId ?? '')
     if (!MESSAGE_ID_RE.test(messageId)) throw new ParticipationValidationError(`messageId 非法：${JSON.stringify(reaction.messageId ?? null)}`)
-    if (msg && messageId !== String(msg.messageId ?? '')) {
-      throw new ParticipationValidationError(`reaction 锚点不是当前消息：${messageId} ≠ ${String(msg.messageId ?? '')}`)
+    // 锚点校验不可跳过：缺 msg 或 msg.messageId 缺失时无从核对，一律拒绝（fail-closed），
+    // 绝不允许「没传 msg 就当锚点合法」放行一个指向不明旧消息的 REACT。
+    const currentMid = String(msg?.messageId ?? '')
+    if (!currentMid || messageId !== currentMid) {
+      throw new ParticipationValidationError(`reaction 锚点必须是当前消息：${messageId} ≠ ${currentMid || '(缺失)'}`)
     }
     const emojiId = String(reaction.emojiId ?? '')
     if (!EMOJI_ID_RE.test(emojiId)) throw new ParticipationValidationError(`emojiId 非法：${JSON.stringify(reaction.emojiId ?? null)}`)
@@ -77,10 +81,24 @@ export function normalizeParticipation(value, { msg, sourceModuleId } = {}) {
 const RANK = { full: 3, text_lite: 2, react: 1 }
 const forcedFull = () => ({ level: 'full', sourceModuleId: '' })
 const rankOf = (p) => (p && RANK[p.level]) || 0
-const copyOf = (p) => {
+
+/**
+ * 按级别白名单收敛一份声明：非法对象（缺字段 / 未知 level）退回缺省 FULL；
+ * 只保留该 level 允许的字段 —— full 不得带 limits／reaction，text_lite 不得带 reaction，
+ * react 不得带 limits。单侧为空与双路合并都必须经过这里，绝不原样直拷贝未校验输入。
+ */
+const sanitize = (p) => {
+  if (!p || !rankOf(p)) return forcedFull()
   const out = { level: p.level, sourceModuleId: String(p.sourceModuleId || '') }
-  if (p.limits) out.limits = { ...p.limits }
-  if (p.reaction) out.reaction = { ...p.reaction }
+  if (p.level === 'text_lite' && p.limits && typeof p.limits === 'object' && !Array.isArray(p.limits)) {
+    const limits = {}
+    if (Number.isInteger(p.limits.maxBubbles)) limits.maxBubbles = p.limits.maxBubbles
+    if (Number.isInteger(p.limits.maxChars)) limits.maxChars = p.limits.maxChars
+    if (Object.keys(limits).length) out.limits = limits
+  }
+  if (p.level === 'react' && p.reaction && typeof p.reaction === 'object' && !Array.isArray(p.reaction)) {
+    out.reaction = { messageId: String(p.reaction.messageId ?? ''), emojiId: String(p.reaction.emojiId ?? '') }
+  }
   return out
 }
 
@@ -95,11 +113,11 @@ export function mergeParticipation(previous, next, previousMode, nextMode) {
   // 任一成员模式升级为 must／engaged：整回合 FULL，清除 limits / reaction / sourceModuleId（永不降级）
   if ((previousMode && previousMode !== 'interject') || (nextMode && nextMode !== 'interject')) return forcedFull()
   if (!previous && !next) return forcedFull()
-  if (!previous) return copyOf(next)
-  if (!next) return copyOf(previous)
-  // 非白名单对象（防御：正常都先过 normalizeParticipation）按缺省 FULL 处理
-  const prev = rankOf(previous) ? previous : forcedFull()
-  const nxt = rankOf(next) ? next : forcedFull()
+  // 单侧为空同样必须走白名单收敛：不许绕过 rankOf 防御与字段裁剪直拷贝
+  if (!previous) return sanitize(next)
+  if (!next) return sanitize(previous)
+  const prev = sanitize(previous)
+  const nxt = sanitize(next)
   const pr = rankOf(prev)
   const nr = rankOf(nxt)
   const max = Math.max(pr, nr)
@@ -125,5 +143,6 @@ export function mergeParticipation(previous, next, previousMode, nextMode) {
     return out
   }
   // 只剩 REACT（多个 REACT）：只保留最新入站成员的锚点，sourceModuleId 与它一致，不连发多个
-  return copyOf(nxt)
+  //（nxt 已经过 sanitize 白名单收敛，是干净副本）
+  return nxt
 }

@@ -110,3 +110,37 @@ test('旧 claim：仍只返回 boolean，true/false 语义不变', async () => {
   assert.equal(miss, false)
   assert.equal(typeof miss, 'boolean')
 })
+test('claimResult：异步等待期间经 api.on 新注册的监听器不加入本轮（遍历注册快照）', async () => {
+  const lateCalls = []
+  // api.on 对 listeners 的数组做原地 push；claimResult 若直接 for-of 这个活数组，
+  // 等待期间插队的监听器会被本轮问到 —— 必须按提问瞬间的快照走完本轮。
+  const snapshotDef = {
+    id: 'gp-snapshot', name: '快照测试', version: '1.0.0', api: 1,
+    setup(api) {
+      api.on('group/participate', async () => {
+        api.on('group/participate', () => { lateCalls.push(1); return { level: 'react', late: true } })
+        return undefined // falsy：本轮继续往下问
+      })
+      return {}
+    },
+  }
+  const lone = createModules({
+    ctx: { effect: () => () => {}, on: () => () => {}, webServer: { register: () => () => {} }, get: () => null, logger: mkLogger() },
+    core: { hub: {}, onebot: {}, logger: mkLogger() },
+    getConfig: () => ({ modules: {} }),
+    setConfig: noop,
+    logger: mkLogger(),
+    version: '1.4.0',
+    builtins: [snapshotDef],
+  })
+  try {
+    await lone.boot()
+    const r = await lone.claimResult('group/participate', {}, {})
+    assert.equal(r, null, '本轮必须按快照走完：插队者不参与本轮')
+    assert.equal(lateCalls.length, 0, '等待期间经 api.on 注册的监听器不得在本轮被问到')
+    // 下一轮才轮到插队者（返回值来自注册记录 id，与上一监听器同 id 也证明它真的被问过）
+    const r2 = await lone.claimResult('group/participate', {}, {})
+    assert.deepEqual(r2, { id: 'gp-snapshot', value: { level: 'react', late: true } })
+    assert.equal(lateCalls.length, 1)
+  } finally { lone.dispose() }
+})

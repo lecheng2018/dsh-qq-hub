@@ -21,7 +21,10 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
   // 按 turnId 绑定群闸决策模式，替代旧版按 chatKey 单槽 pendingMode：
   // 连续排入多轮时，旧单槽会在前轮 delete 后让后轮兜底成 'must'，既在提示词里谎称「有人在叫你」，
   // 又在 deliver 后走 noteSpokeInGroup 重置 engaged 窗口导致无限续聊。
-  const MODE_PRIORITY = { engaged: 1, interject: 2, must: 3 }
+  // 模式优先级：must > engaged > interject（PR #283 评审修正）。
+  // must／engaged 永不降级是硬性不变式：后到的 interject 成员不得把已 engaged 的回合
+  // 覆盖成插话口径；反之 interject 回合被 engaged 成员合入时是升级（预算桶随之迁移）。
+  const MODE_PRIORITY = { must: 3, engaged: 2, interject: 1 }
   const turnModes = new Map() // turnId -> 'engaged' | 'interject' | 'must'
   const turnParticipation = new Map() // turnId -> 参与声明（normalize 后的白名单对象，见 core/group-participation.js）
   const inFlightEngaged = new Map() // gid -> Set<turnId>（已过闸未结账的 engaged 回合，防并发超卖）
@@ -53,6 +56,9 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     const prev = turnModes.get(turnId)
     const next = !prev || (MODE_PRIORITY[mode] || 0) > (MODE_PRIORITY[prev] || 0) ? mode : prev
     turnModes.set(turnId, next)
+    // 模式升级为 must／engaged 时立即恢复参与 FULL：任何已入账的 REACT／TEXT_LITE 都不得残留
+    //（外部直接调 noteTurnMode 升级时同样生效；must／engaged 永不降级）。
+    if (next !== 'interject' && turnParticipation.has(turnId)) turnParticipation.set(turnId, { level: 'full', sourceModuleId: '' })
     if (!id) return
     if (next === 'engaged') {
       let set = inFlightEngaged.get(id)
@@ -85,7 +91,9 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     let next = participation && typeof participation === 'object' ? participation : { level: 'full', sourceModuleId: '' }
     if (mode !== 'interject') next = { level: 'full', sourceModuleId: '' }
     const prev = turnParticipation.get(turnId)
-    turnParticipation.set(turnId, prev ? mergeParticipation(prev, next, prevMode, mode) : next)
+    // 无条件走合并（不许 prev 为空时短路直存）：prevMode 是 must／engaged 时，即便本回合
+    // 还没有参与入账，后来的 interject REACT／TEXT_LITE 也必须被压成 FULL（永不降级）。
+    turnParticipation.set(turnId, mergeParticipation(prev || null, next, prevMode, mode))
   }
   /** 这个回合的参与声明（full / text_lite / react 白名单对象），没有则返回 null。 */
   function turnParticipationOf(turnId) { return turnParticipation.get(turnId) || null }

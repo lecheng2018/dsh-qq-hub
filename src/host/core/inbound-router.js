@@ -179,31 +179,50 @@ export function createInboundRouter({
         // 返回 { handled: 'group-pass', reason } = 本轮不参与；null = 放行（判定出错也放行）。
         const fishBlocked = groupGate.fishGuardOf({ inbound, decision, cfg })
         if (fishBlocked) return fishBlocked
-        // 参与分级钩子与 group/decide 同一 info 形状；只在 interject 且宿主挂了钩子时调用。
-        const participationClaim = (decision.mode === 'interject' && typeof moduleHooks?.groupParticipate === 'function')
-          ? moduleHooks.groupParticipate(decision, {
-              msg: { ...parseMessageEvent(ev, ev.self_id), raw: ev },
-              policy: policyFor(cfg.group, cfg.group?.overrides, inbound.chatKey.slice(6)),
-              recentTexts: groups.buffer(inbound.chatKey.slice(6)).map((x) => x.text),
-              memScore: 0,
-            })
-          : null
+        // 模式先捕获：钩子不得改写宿主已认定的回合模式（钩子拿到的是 decision 浅拷贝）。
+        const mode = decision.mode
         const debugOffered = (turnId, participation) => {
           // 正向决策也留痕：否则只能看到后一条“不回”，容易误判成它绕闸门发了上一条回合。
           debug(`群闸 ${inbound.chatKey}：回 —— ${decision.reason}｜消息 ${inbound.messageId || '?'}｜回合 ${turnId}${participation ? `｜参与 ${participation.level}` : ''}`)
           return { handled: 'offered', turnId }
         }
+        // 参与分级钩子与 group/decide 同一 info 形状；只在 interject 且宿主挂了钩子时调用。
+        // 消息只解析一次（info.msg 与锚点复核共用同一份 parsedMsg）；decision 传浅拷贝，防插件改写。
+        const askParticipation = mode === 'interject' && typeof moduleHooks?.groupParticipate === 'function'
+        const parsedMsg = askParticipation ? parseMessageEvent(ev, ev.self_id) : null
+        const participationClaim = askParticipation
+          ? moduleHooks.groupParticipate({ ...decision }, {
+              msg: { ...parsedMsg, raw: ev },
+              policy: policyFor(cfg.group, cfg.group?.overrides, inbound.chatKey.slice(6)),
+              recentTexts: groups.buffer(inbound.chatKey.slice(6)).map((x) => x.text),
+              memScore: 0,
+            })
+          : null
+        // T1.4 第 6 条：本函数内所有记账统一走 noteTurnParticipation（预算账在其内部复用
+        // noteTurnMode，只记一次）——must／engaged 与无钩子路径同样记显式 FULL，
+        // 保证「先 interject(REACT) 后 must／engaged 合流」时 REACT/TEXT_LITE 无处残留。
+        const noteOffered = (offered, participation) => {
+          if (offered?.turnId && mode) groupGate.noteTurnParticipation(inbound.chatKey.slice(6), offered.turnId, mode, participation)
+        }
         if (participationClaim && typeof participationClaim.then === 'function') {
-          // 有监听器：异步问参与，拿到 turnId 后就地记 noteTurnParticipation（不按群暂存最后一份）。
+          // 有监听器（异步）：settle → offer → 就地记参与（不按群暂存最后一份）。
           return Promise.resolve(participationClaim).then((claimed) => {
-            const participation = settleParticipation(claimed, parseMessageEvent(ev, ev.self_id))
+            const participation = settleParticipation(claimed, parsedMsg)
             const offered = controller.offer(inbound)
-            if (offered?.turnId && decision.mode) groupGate.noteTurnParticipation(inbound.chatKey.slice(6), offered.turnId, decision.mode, participation)
+            noteOffered(offered, participation)
             return debugOffered(offered.turnId, participation)
           })
         }
+        if (participationClaim) {
+          // 防御：自定义同步钩子返回了同步声明 —— 同一条路径，只是不进 Promise。
+          const participation = settleParticipation(participationClaim, parsedMsg)
+          const offered = controller.offer(inbound)
+          noteOffered(offered, participation)
+          return debugOffered(offered.turnId, participation)
+        }
+        // 无钩子 / 无监听器 / must／engaged：同步 offer + 显式 FULL（无监听器时形状保持同步）。
         const offered = controller.offer(inbound)
-        if (offered?.turnId && decision.mode) groupGate.noteTurnMode(inbound.chatKey.slice(6), offered.turnId, decision.mode)
+        noteOffered(offered, { level: 'full', sourceModuleId: '' })
         return debugOffered(offered.turnId)
       }
       const applyHook = (decision) => {

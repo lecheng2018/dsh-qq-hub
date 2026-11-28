@@ -141,3 +141,37 @@ test('merge：首次记账（previous 为 null）原样接受 next；两侧都�
   assert.deepEqual(mergeParticipation(react('10001'), null, 'interject', null), react('10001'))
   assert.deepEqual(mergeParticipation(null, null, null, null), { level: 'full', sourceModuleId: '' })
 })
+
+test('normalize：react 锚点校验不因缺 msg 而跳过（缺 msg / msg.messageId 缺失都必须抛）', () => {
+  const ok = { level: 'react', reaction: { messageId: '10001', emojiId: '66' } }
+  invalid(() => normalizeParticipation(ok, {}), '没有 msg 也必须抛：锚点无从核对')
+  invalid(() => normalizeParticipation(ok, { msg: {} }), 'msg.messageId 缺失必须抛')
+  invalid(() => normalizeParticipation(ok, { msg: { messageId: '' } }), '空 messageId 必须抛')
+  // 对照：带正确锚点时仍放行
+  assert.deepEqual(normalizeParticipation(ok, { msg: { messageId: '10001' }, sourceModuleId: 'mod-r' }),
+    { level: 'react', sourceModuleId: 'mod-r', reaction: { messageId: '10001', emojiId: '66' } })
+})
+
+test('normalize：数组形态的声明 / limits / reaction 全部拒绝', () => {
+  invalid(() => normalizeParticipation([], {}))
+  invalid(() => normalizeParticipation({ level: 'text_lite', limits: [] }, {}))
+  invalid(() => normalizeParticipation({ level: 'react', reaction: [] }, { msg: { messageId: '10001' } }))
+})
+
+test('merge：单侧为空也走白名单收敛 —— bogus 退 FULL、full 剥离非法字段', () => {
+  assert.deepEqual(
+    mergeParticipation(null, { level: 'bogus', reaction: { messageId: '1', emojiId: '66' } }, null, 'interject'),
+    { level: 'full', sourceModuleId: '' },
+    '未知 level 必须退回干净 FULL',
+  )
+  assert.deepEqual(
+    mergeParticipation(null, { level: 'full', reaction: { messageId: '1', emojiId: '66' } }, null, 'interject'),
+    { level: 'full', sourceModuleId: '' },
+    'full 不允许携带 reaction：必须剥离',
+  )
+  assert.deepEqual(
+    mergeParticipation({ level: 'bogus' }, null, 'interject', null),
+    { level: 'full', sourceModuleId: '' },
+    '反方向单侧为空同样收敛',
+  )
+})

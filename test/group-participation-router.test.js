@@ -72,9 +72,10 @@ function mkRouter(mods, { withHook = true, fishGuard = { enabled: false }, warnB
   const turns = new Map()
   let seq = 0
   const offerCalls = []
+  const mergeTargets = new Map() // messageId(字符串) → turnId：模拟真实 turn-controller 的 merging 窗口
   const controller = {
     offer(inbound) {
-      const turnId = `t${++seq}`
+      const turnId = mergeTargets.get(String(inbound?.messageId || '')) || `t${++seq}`
       turns.set(turnId, { state: 'running' })
       offerCalls.push({ turnId, messageId: inbound?.messageId })
       return { turnId }
@@ -103,7 +104,7 @@ function mkRouter(mods, { withHook = true, fishGuard = { enabled: false }, warnB
     interceptInteraction: () => false, isMuted: () => false,
     noteMedia: noop, onStats: noop, logChat: noop, collectInboundStickers: () => 0,
   })
-  return { router, gate, groups, offerCalls }
+  return { router, gate, groups, offerCalls, mergeTargets }
 }
 
 let mid = 10000
@@ -130,7 +131,7 @@ test('fishGuard 拦截（真实缓冲）：participation 钩子零调用、offer
   assert.equal(offerCalls.length, 0, '拦截时不建回合')
 })
 
-test('must／engaged：participation 钩子零调用，回合照常建（无参与记录）', async () => {
+test('must／engaged：participation 钩子零调用，回合照常建（参与按 T1.4 第 6 条记 FULL）', async () => {
   gpCalls.length = 0
   gpBehavior = null
   const { router, gate, groups, offerCalls } = mkRouter(modsBooted)
@@ -139,7 +140,8 @@ test('must／engaged：participation 钩子零调用，回合照常建（无参�
   assert.equal(gpCalls.length, 0, 'must 不问参与')
   assert.equal(offerCalls.length, 1)
   assert.equal(gate.turnModeOf(r1.turnId), 'must')
-  assert.equal(gate.turnParticipationOf(r1.turnId), null, 'must 不记参与')
+  assert.deepEqual(gate.turnParticipationOf(r1.turnId), { level: 'full', sourceModuleId: '' },
+    'must 同步分支按 T1.4 第 6 条经 noteTurnParticipation 记 FULL（绝不残留 REACT/TEXT_LITE）')
   // engaged：先入场，再发普通消息
   groups.joinTopic('777', Date.now())
   const r2 = await router.dispatchLegacyEvent(groupEv())
@@ -147,7 +149,7 @@ test('must／engaged：participation 钩子零调用，回合照常建（无参�
   assert.equal(gpCalls.length, 0, 'engaged 不问参与')
   assert.equal(offerCalls.length, 2)
   assert.equal(gate.turnModeOf(r2.turnId), 'engaged')
-  assert.equal(gate.turnParticipationOf(r2.turnId), null)
+  assert.deepEqual(gate.turnParticipationOf(r2.turnId), { level: 'full', sourceModuleId: '' })
 })
 
 test('interject：钩子恰好一次，turnId 与 participation 绑定一致（真实模块 id 归因）', async () => {
@@ -227,7 +229,8 @@ test('无监听器（钩子在但事件无监听）：保持旧同步 offer 路�
   assert.deepEqual(r, { handled: 'offered', turnId: 't1' })
   assert.equal(offerCalls.length, 1)
   assert.equal(gate.turnModeOf('t1'), 'interject')
-  assert.equal(gate.turnParticipationOf('t1'), null, '旧路径不产生参与记录（与基线一致）')
+  assert.deepEqual(gate.turnParticipationOf('t1'), { level: 'full', sourceModuleId: '' },
+    '同步分支经 noteTurnParticipation 记显式 FULL（T1.4 第 6 条；此前断言 null 是旧实现的记录缺失）')
   assert.equal(gpCalls.length, 0)
 })
 
@@ -238,7 +241,7 @@ test('连钩子都没有（moduleHooks.groupParticipate 不存在）：同一条
   assert.equal(r instanceof Promise, false)
   assert.deepEqual(r, { handled: 'offered', turnId: 't1' })
   assert.equal(offerCalls.length, 1)
-  assert.equal(gate.turnParticipationOf('t1'), null)
+  assert.deepEqual(gate.turnParticipationOf('t1'), { level: 'full', sourceModuleId: '' })
   assert.equal(gpCalls.length, 0, '无钩子时不该有模块被调用')
 })
 
@@ -274,4 +277,102 @@ test('两个监听器：第一个 truthy 后第二个零调用，sourceModuleId 
       { level: 'react', sourceModuleId: 'gp-mod', reaction: { messageId: String(ev.message_id), emojiId: '66' } },
     )
   } finally { off() }
+})
+
+test('端到端合流 1：interject REACT 建 t1，后到的 @（must）合流进同一 t1 → 参与 FULL 无残留', async () => {
+  gpCalls.length = 0
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const ev1 = groupEv()
+  const { router, gate, offerCalls, mergeTargets } = mkRouter(modsBooted)
+  const r1 = await router.dispatchLegacyEvent(ev1)
+  assert.equal(r1.handled, 'offered')
+  assert.equal(offerCalls[0].turnId, 't1')
+  assert.equal(gate.turnModeOf('t1'), 'interject')
+  assert.equal(gate.turnParticipationOf('t1').level, 'react', '前置：REACT 已入账')
+  assert.equal(gpCalls.length, 1)
+
+  // 消息 2 被 @（must），合流进同一个 t1（真实 turn-controller merging 窗口）
+  const ev2 = atEv()
+  mergeTargets.set(String(ev2.message_id), 't1')
+  const r2 = await router.dispatchLegacyEvent(ev2)
+  assert.equal(r2.handled, 'offered')
+  assert.equal(r2.turnId, 't1', 'must 消息确实合流进 t1')
+  assert.equal(offerCalls.filter((c) => c.turnId === 't1').length, 2, '两条消息共用 t1')
+  assert.equal(gate.turnModeOf('t1'), 'must')
+  assert.deepEqual(
+    gate.turnParticipationOf('t1'),
+    { level: 'full', sourceModuleId: '' },
+    'must 成员合入后整回合恢复 FULL，无 reaction 残留',
+  )
+})
+
+test('端到端合流 2：interject REACT 建 t1，engaged 消息合流进同一 t1 → 参与 FULL', async () => {
+  gpCalls.length = 0
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const ev1 = groupEv()
+  const { router, gate, groups, offerCalls, mergeTargets } = mkRouter(modsBooted)
+  const r1 = await router.dispatchLegacyEvent(ev1)
+  assert.equal(gate.turnParticipationOf('t1').level, 'react')
+
+  // engaged 合流：先入场（engagedUntil 生效），再把第二条消息的 offer 指回 t1
+  groups.joinTopic('777', Date.now())
+  const ev2 = groupEv()
+  mergeTargets.set(String(ev2.message_id), 't1')
+  const r2 = await router.dispatchLegacyEvent(ev2)
+  assert.equal(r2.handled, 'offered')
+  assert.equal(r2.turnId, 't1', 'engaged 消息确实合流进 t1')
+  assert.equal(offerCalls.filter((c) => c.turnId === 't1').length, 2, '两条消息共用 t1')
+  assert.equal(gate.turnModeOf('t1'), 'engaged')
+  assert.deepEqual(
+    gate.turnParticipationOf('t1'),
+    { level: 'full', sourceModuleId: '' },
+    'engaged 成员合入后整回合恢复 FULL，无 reaction 残留',
+  )
+})
+
+test('端到端异步竞态合流 3：interject 的参与声明未决期间 must 先建 t1，REACT 后到不得覆盖', async () => {
+  gpCalls.length = 0
+  let releaseReact = null
+  gpBehavior = (d, info) => new Promise((resolve) => {
+    releaseReact = () => resolve({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  })
+  const ev1 = groupEv()
+  const { router, gate, offerCalls, mergeTargets } = mkRouter(modsBooted)
+  const p1 = router.dispatchLegacyEvent(ev1) // 消息 1：钩子返回未决 Promise，offer 尚未发生
+  assert.ok(p1 instanceof Promise)
+  assert.equal(offerCalls.length, 0, '参与未决时不建回合')
+
+  // 消息 2 被 @（must）同步 offer 建 t1
+  const ev2 = atEv()
+  const r2 = await router.dispatchLegacyEvent(ev2)
+  assert.equal(r2.turnId, 't1')
+  assert.equal(gate.turnModeOf('t1'), 'must')
+  assert.deepEqual(gate.turnParticipationOf('t1'), { level: 'full', sourceModuleId: '' })
+
+  // 消息 1 的声明 resolve 为 REACT，其 offer 合流进同一个 t1
+  mergeTargets.set(String(ev1.message_id), 't1')
+  releaseReact()
+  const r1 = await p1
+  assert.equal(r1.turnId, 't1', '消息 1 合流进 t1')
+  assert.equal(gate.turnModeOf('t1'), 'must', 'must 不被后到的 interject 覆盖')
+  assert.deepEqual(
+    gate.turnParticipationOf('t1'),
+    { level: 'full', sourceModuleId: '' },
+    '后到的 REACT 绝不能覆盖已恢复的 FULL',
+  )
+  assert.equal('reaction' in gate.turnParticipationOf('t1'), false)
+})
+
+test('钩子内改写 decision.mode 不得污染宿主记录（decision 以浅拷贝交给钩子）', async () => {
+  gpCalls.length = 0
+  gpBehavior = (d, info) => {
+    d.mode = 'must' // 恶意/意外改写：宿主必须不受影响
+    return { level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } }
+  }
+  const { router, gate, offerCalls } = mkRouter(modsBooted)
+  const r = await router.dispatchLegacyEvent(groupEv())
+  assert.equal(r.handled, 'offered')
+  assert.equal(offerCalls.length, 1)
+  assert.equal(gate.turnModeOf(r.turnId), 'interject', '宿主记录的模式仍是 interject')
+  assert.equal(gate.turnParticipationOf(r.turnId).level, 'react', '参与声明按 interject 语义原样入账')
 })

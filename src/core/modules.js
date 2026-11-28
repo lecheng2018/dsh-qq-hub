@@ -747,8 +747,10 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   function claimResult(event, ...args) {
     const list = listeners.get(event)
     if (!list || list.length === 0) return null
+    // 按「提问瞬间的快照」遍历：api.on 对监听数组做原地 push，若直接 for-of 活数组，
+    // 异步等待期间新注册的监听器会被本轮问到。本轮结束后注册的下一轮才生效。
     return (async () => {
-      for (const { id, fn } of list) {
+      for (const { id, fn } of [...list]) {
         try { const v = await fn(...args); if (v) return { id, value: v } } catch (error) {}
       }
       return null
