@@ -107,14 +107,16 @@ export function createHttpKit({ ctx, prefix, getConfig = () => ({}), isAuthorize
   // Host 白名单 + 同源校验（CSRF）+ 副作用路径方法约束；/open/* 保留联动密钥鉴权。
   // prefix 传给 guard 用于剥前缀匹配副作用路径表。
   const guard = createPanelGuard({ getConfig, log, prefix, isAuthorized })
-  const guardedAnswer = (res, req, fn) => answer(res, () => {
-    const g = guard.check(req, { registeredSideEffect: fn.__sideEffect, isModuleRoute: fn.__isModuleRoute })
+  // meta 必须由调用方直接透传：旧实现把 sideEffect 挂到新建的匿名箭头函数上，
+  // guard 读到的永远是 undefined（opts.sideEffect 等于白传，副作用路径可被 GET 触发）。
+  const guardedAnswer = (res, req, fn, meta = {}) => answer(res, () => {
+    const g = guard.check(req, meta)
     if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
     return fn()
   })
   const route = (path, handler, opts = {}) => {
-    if (opts.sideEffect !== undefined) handler.__sideEffect = opts.sideEffect
-    return ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: prefix + path, handler: (req, res) => guardedAnswer(res, req, () => handler(req, res)) }), `qq-hub: 路由 ${path}`)
+    const meta = { registeredSideEffect: opts.sideEffect, isModuleRoute: false }
+    return ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: prefix + path, handler: (req, res) => guardedAnswer(res, req, () => handler(req, res), meta) }), `qq-hub: 路由 ${path}`)
   }
   return { send, readBody, readRaw, query, answer, route, guard }
 }

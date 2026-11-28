@@ -45,6 +45,16 @@ const BUSY = (msg) => {
  *   vncStarter?: (opts: object) => Promise<object>, // 注入用（测试）
  * }} o
  */
+/**
+ * 状态轮询用的 VNC 视图：**绝不回传明文密码**（只在 POST /browser/vnc 的 start 响应里给一次）。
+ * 密码会进面板 DOM / 日志 / 代理响应体，长期躺在页面上没有任何必要。
+ * @param {{port:number,password:string,lan:boolean}|null} vnc
+ */
+export function vncPublicState (vnc) {
+  if (!vnc) return { running: false }
+  return { running: true, port: vnc.port, passwordSet: Boolean(vnc.password), lan: vnc.lan }
+}
+
 export function createBrowserService({ root, log, getConfig, policies = {}, vncStarter, deps = {} }) {
   // 依赖可注入：单测里不用真的装 Xvfb/Chrome，换成假的就能跑完控制流
   const ensureDisplayFn = deps.ensureDisplay || ensureDisplay
@@ -413,7 +423,7 @@ export function createBrowserService({ root, log, getConfig, policies = {}, vncS
       tabs: pool?.size?.() || 0,
       active,
       freeMB: memAvailableFn(),
-      vnc: vnc ? { running: true, port: vnc.port, password: vnc.password, lan: vnc.lan } : { running: false },
+      vnc: vncPublicState(vnc),
     }
   }
 

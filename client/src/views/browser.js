@@ -49,7 +49,7 @@ function InstallCard({ st, busy, onInstall, onRefresh, onOpen }) {
 }
 
 // 运行状态：谁在用、几个标签页、内存
-function LiveCard({ st, onShutdown, onVnc, busy }) {
+function LiveCard({ st, onShutdown, onVnc, busy, vncPassword }) {
   const live = st?.live
   if (!live) return null
   const running = live.state === 'ready'
@@ -85,7 +85,10 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
           {live.vnc?.running ? (
             <Row label="连接方式">
               <div className="ab-small">
-                <div>端口 <b>{live.vnc.port}</b>　密码 <b>{live.vnc.password}</b></div>
+                <div>
+                  端口 <b>{live.vnc.port}</b>　密码{' '}
+                  <b>{vncPassword || (live.vnc.passwordSet ? '已设置（开的时候显示过）' : '—')}</b>
+                </div>
                 <div className="ab-muted" style={{ marginTop: 4 }}>
                   {live.vnc.lan
                     ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。`
@@ -116,12 +119,16 @@ export function Browser({ draft, setDraft, toast }) {
     return () => clearInterval(t)
   }, [st?.job?.state])
 
+  // VNC 密码只在「开」的那一次响应里回来，状态轮询只给 passwordSet 标记
+  const [vncPassword, setVncPassword] = useState('')
+
   const act = async (path, body, okText) => {
     setBusy(true)
     try {
       const r = await post(path, body).catch(() => ({ ok: false, message: '请求失败' }))
       toast(r.message || (r.ok ? okText : '没成功'), r.ok ? 'ok' : 'err')
       await load()
+      return r
     } finally { setBusy(false) }
   }
 
@@ -138,7 +145,12 @@ export function Browser({ draft, setDraft, toast }) {
         st={st}
         busy={busy}
         onShutdown={() => act('/browser/shutdown', {}, '已关闭')}
-        onVnc={(action) => act('/browser/vnc', { action }, '好')}
+        vncPassword={vncPassword}
+        onVnc={async (action) => {
+          const r = await act('/browser/vnc', { action }, '好')
+          if (action === 'start' && r?.password) setVncPassword(r.password)
+          if (action === 'stop') setVncPassword('')
+        }}
       />
       <Card title="设置" desc="一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。">
         <Row label="总开关" hint="关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）">

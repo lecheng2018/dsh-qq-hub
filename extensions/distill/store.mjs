@@ -44,20 +44,53 @@ export function areRulesSimilar(r1, r2) {
   return commonSit.length >= 1 && commonStyle.length >= 1
 }
 
+/**
+ * 群号白名单：5–12 位数字。
+ * 规则库是按群号做 key 的字典，`__proto__` / `constructor` / `prototype` 之类的键
+ * 一旦进来就会污染原型链（Object.prototype.rules 被改写），必须在入口挡住。
+ */
+export function isSafeGroupId (id) {
+  const gid = String(id ?? '')
+  return /^\d{5,12}$/.test(gid)
+}
+
+/**
+ * 把磁盘上的规则库规整成「无原型字典」：
+ * 只保留合法群号，且每个群的结构固定成 `{ rules: [] }`，
+ * 这样 `data.groups[gid]` 永远不会命中原型链上的东西。
+ */
+export function normalizeGroups (parsed) {
+  const groups = Object.create(null)
+  const src = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.groups : null
+  if (src && typeof src === 'object' && !Array.isArray(src)) {
+    for (const gid of Object.keys(src)) {
+      if (!isSafeGroupId(gid)) continue
+      const bucket = src[gid] && typeof src[gid] === 'object' ? src[gid] : {}
+      groups[gid] = { rules: Array.isArray(bucket.rules) ? bucket.rules : [] }
+    }
+  }
+  return { groups }
+}
+
 export function createDistillStore(dataDir) {
   mkdirSync(dataDir, { recursive: true })
   const filePath = join(dataDir, 'distill-rules.json')
+  const requireGroupId = (groupId) => {
+    const gid = String(groupId ?? '')
+    if (!isSafeGroupId(gid)) throw new Error(`非法群号：${gid}`)
+    return gid
+  }
 
   function load() {
     try {
       if (existsSync(filePath)) {
         const text = readFileSync(filePath, 'utf8')
-        return JSON.parse(text)
+        return normalizeGroups(JSON.parse(text))
       }
     } catch (e) {
       console.warn('[distill] 读取规则库失败，使用默认空库:', e.message)
     }
-    return { groups: {} }
+    return { groups: Object.create(null) }
   }
 
   function save(data) {
@@ -70,11 +103,13 @@ export function createDistillStore(dataDir) {
 
   return {
     getRawRules(groupId) {
+      groupId = requireGroupId(groupId)
       const data = load()
-      return data.groups[groupId]?.rules || []
+      return Object.hasOwn(data.groups, groupId) ? (data.groups[groupId]?.rules || []) : []
     },
 
     getRules(groupId) {
+      groupId = requireGroupId(groupId)
       return this.getRawRules(groupId)
     },
 
@@ -82,6 +117,7 @@ export function createDistillStore(dataDir) {
      * 获取正式生效的规则：必须已锁定 或 频次 >= minCount
      */
     getActiveRules(groupId, minCount = 3) {
+      groupId = requireGroupId(groupId)
       const all = this.getRawRules(groupId)
       return all.filter(r => r.locked || (r.count || 1) >= minCount)
     },
@@ -90,6 +126,7 @@ export function createDistillStore(dataDir) {
      * 获取候选观察中的规则：未锁定 且 频次 < minCount
      */
     getCandidateRules(groupId, minCount = 3) {
+      groupId = requireGroupId(groupId)
       const all = this.getRawRules(groupId)
       return all.filter(r => !r.locked && (r.count || 1) < minCount)
     },
@@ -106,6 +143,7 @@ export function createDistillStore(dataDir) {
      * 3. 淘汰时优先保护锁定与高频规则
      */
     addRules(groupId, newRules, maxCapacity = 100) {
+      groupId = requireGroupId(groupId)
       const data = load()
       if (!data.groups[groupId]) {
         data.groups[groupId] = { rules: [] }
@@ -160,6 +198,7 @@ export function createDistillStore(dataDir) {
      * 聚类清洗现有规则：把已有的近义规则合并累加频次
      */
     consolidate(groupId) {
+      groupId = requireGroupId(groupId)
       const data = load()
       const rawList = data.groups[groupId]?.rules || []
       if (!rawList.length) return 0
@@ -187,6 +226,7 @@ export function createDistillStore(dataDir) {
      * 清理一次性偶发噪点（删除未锁定且频次 < minCount 的规则）
      */
     pruneNoise(groupId, minCount = 2) {
+      groupId = requireGroupId(groupId)
       const data = load()
       const list = data.groups[groupId]?.rules || []
       const before = list.length
@@ -200,6 +240,7 @@ export function createDistillStore(dataDir) {
      * 候选转正：手动将观察中的候选规则标记为正式生效（锁定）
      */
     promoteCandidate(groupId, ruleId, targetMinCount = 3) {
+      groupId = requireGroupId(groupId)
       const data = load()
       const rule = data.groups[groupId]?.rules?.find(r => r.id === ruleId)
       if (rule) {
@@ -212,6 +253,7 @@ export function createDistillStore(dataDir) {
     },
 
     toggleLock(groupId, ruleId) {
+      groupId = requireGroupId(groupId)
       const data = load()
       const rule = data.groups[groupId]?.rules?.find(r => r.id === ruleId)
       if (rule) {
@@ -223,6 +265,7 @@ export function createDistillStore(dataDir) {
     },
 
     deleteRule(groupId, ruleId) {
+      groupId = requireGroupId(groupId)
       const data = load()
       if (data.groups[groupId]) {
         data.groups[groupId].rules = data.groups[groupId].rules.filter(r => r.id !== ruleId)
@@ -231,6 +274,7 @@ export function createDistillStore(dataDir) {
     },
 
     addManualRule(groupId, { situation, style }) {
+      groupId = requireGroupId(groupId)
       const data = load()
       if (!data.groups[groupId]) data.groups[groupId] = { rules: [] }
       const now = Date.now()
@@ -247,6 +291,7 @@ export function createDistillStore(dataDir) {
     },
 
     clearRules(groupId) {
+      groupId = requireGroupId(groupId)
       const data = load()
       if (data.groups[groupId]) {
         data.groups[groupId].rules = []
@@ -255,6 +300,7 @@ export function createDistillStore(dataDir) {
     },
 
     recordRuleUsage(groupId, ruleIds) {
+      groupId = requireGroupId(groupId)
       if (!ruleIds || !ruleIds.length) return
       const data = load()
       const list = data.groups[groupId]?.rules

@@ -110,20 +110,55 @@ export function connectCdp(wsUrl, { WS = globalThis.WebSocket, timeoutMs = 10000
  * @param {{ onBlock?: (url: string, reason: string) => void }} [o]
  * @returns {Promise<() => Promise<void>>} 卸载函数
  */
+/** Fetch 域只拿到 URL，不区分 scheme：这几个是页面正常渲染要用的「无网络」协议。 */
+const SAFE_SCHEMES = new Set(['data:', 'blob:', 'about:'])
+
+/**
+ * 协议闸：只有 http(s) 与 data/blob/about 放行。
+ * ws:/wss:/file:/ftp:/... 一律拒绝 —— 旧实现只登记了 http/https 两个 pattern，
+ * 于是 `ws://127.0.0.1:9222/...`、`file:///etc/passwd` 这类请求根本不进 Fetch 域，
+ * 等于页面里的脚本可以绕开 safetyCheck 直接连本机 WebSocket 或读本地文件。
+ * @param {string} url
+ */
+export function schemeAllowed(url) {
+  let scheme = ''
+  try { scheme = new URL(String(url || '')).protocol.toLowerCase() } catch { return false }
+  return scheme === 'http:' || scheme === 'https:' || SAFE_SCHEMES.has(scheme)
+}
+
+/** WebSocket 回环：即使 scheme 被判为 ws，也要按安全过滤看主机名。 */
+export function isLoopbackWsUrl(url) {
+  try {
+    const u = new URL(String(url || ''))
+    if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return false
+    return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1' || u.hostname === '[::1]'
+  } catch { return false }
+}
+
 export async function installRequestGuard(cdp, policy, { onBlock } = {}) {
-  const patterns = [{ urlPattern: 'http://*' }, { urlPattern: 'https://*' }]
+  // '*' 才覆盖 ws/wss/file 等非 http(s) 请求；具体放行与否交给下面的协议闸
+  const patterns = [{ urlPattern: '*' }]
   await cdp.send('Fetch.enable', { patterns })
   const safety = policy.safetyCheck || policy.check
   const off = cdp.on('Fetch.requestPaused', (p) => {
     const url = p.request?.url || ''
+    const block = (reason) => {
+      try { onBlock?.(url, reason) } catch {}
+      cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }).catch(() => {})
+    }
+    if (!schemeAllowed(url)) return block(`不允许的协议：${url}`)
+    const scheme = new URL(url).protocol.toLowerCase()
+    if (SAFE_SCHEMES.has(scheme)) {
+      cdp.send('Fetch.continueRequest', { requestId: p.requestId }).catch(() => {})
+      return
+    }
     const isNav = p.resourceType === 'Document'
     const verdict = isNav ? policy.check(url) : safety(url)
     if (verdict.ok) {
       cdp.send('Fetch.continueRequest', { requestId: p.requestId }).catch(() => {})
       return
     }
-    try { onBlock?.(url, verdict.reason || '被拦下') } catch {}
-    cdp.send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }).catch(() => {})
+    block(verdict.reason || '被拦下')
   })
   return async () => {
     off()

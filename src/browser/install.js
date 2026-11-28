@@ -14,17 +14,38 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 
 const CHROME_URL = 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb'
+
+// 允许下载安装包的域名（每次重定向的每一跳都要落在这些域内，且必须 https）
+const TRUSTED_DOWNLOAD_HOSTS = ['dl.google.com', 'gvt1.com', 'googleusercontent.com']
+const DOWNLOAD_MAX_BYTES = 300 * 1024 * 1024
+const DOWNLOAD_MIN_BYTES = 1_000_000
+
+/** 下载地址是否属于受信任域（含重定向目标）。 */
+export function isTrustedDownloadUrl (url) {
+  let u
+  try { u = new URL(String(url || '')) } catch { return false }
+  if (u.protocol !== 'https:') return false
+  const host = String(u.hostname || '').toLowerCase().replace(/\.+$/, '')
+  if (!host) return false
+  return TRUSTED_DOWNLOAD_HOSTS.some((d) => host === d || host.endsWith('.' + d))
+}
 const MANIFEST = 'manifest.json'
 
 const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', ...opts })
 
 /** 命令在不在。 */
 export function hasCommand(name) {
-  return run('sh', ['-c', `command -v ${name} >/dev/null 2>&1`]).status === 0
+  // 名字只能作为位置参数（$1）传进 sh，绝不拼进脚本正文：
+  // 旧写法 `command -v ${name}` 遇到 `sh; echo INJECTED` 会真的执行注入命令。
+  const arg = String(name || '')
+  if (!arg) return false
+  return run('sh', ['-c', 'command -v -- "$1" >/dev/null 2>&1', '_', arg]).status === 0
 }
 
 /** 是不是真的 ELF 可执行文件（壳脚本不是）。 */
@@ -237,7 +258,11 @@ export async function installBrowser({ root, browser = 'auto', log, smoke = true
   if (wantChrome) {
     say('下载官方 Chrome…（约 150 MB；下不动会自动退回 Debian 的 chromium）')
     chromeDeb = await download(CHROME_URL, join(cacheDir(root), 'google-chrome.deb'), { log })
-    if (!chromeDeb) warn('官方 Chrome 没下下来，改用 Debian chromium')
+    if (!chromeDeb) {
+      warn('官方 Chrome 没下下来，改用 Debian chromium')
+      // 有条件时优先建议走发行版仓库（包有签名校验），比用户态解包更可信
+      say('提示：如果能用 root，更推荐 `sudo apt-get install -y google-chrome-stable`（走签名仓库）后在面板指定系统 Chrome。')
+    }
   }
   const useChromium = !chromeDeb
   if (useChromium) {
@@ -316,16 +341,53 @@ export async function installBrowser({ root, browser = 'auto', log, smoke = true
   return { ok: true, browser: elf, kind: manifest.kind, libDirs, manifest }
 }
 
-async function download(url, dest, { log } = {}) {
+async function download(url, dest, { log, sha256: expectSha } = {}) {
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(240_000) })
-    if (!r.ok) return ''
-    const buf = Buffer.from(await r.arrayBuffer())
-    if (buf.length < 1_000_000) { log?.warn?.(`${url} 只拿到 ${buf.length} 字节，当失败`); return '' }
-    writeFileSync(dest, buf)
+    // 逐跳校验：不用 redirect: 'follow'（那样中途跳到哪个域都看不到）
+    let current = String(url || '')
+    let res = null
+    for (let hop = 0; hop < 5; hop++) {
+      if (!isTrustedDownloadUrl(current)) {
+        log?.warn?.(`拒绝从不受信任的地址下载：${current}`)
+        return ''
+      }
+      const r = await fetch(current, { redirect: 'manual', signal: AbortSignal.timeout(240_000) })
+      if ([301, 302, 303, 307, 308].includes(r.status)) {
+        const loc = r.headers.get('location')
+        if (!loc) { log?.warn?.(`${current} 重定向没给目标`); return '' }
+        current = new URL(loc, current).toString()
+        continue
+      }
+      res = r
+      break
+    }
+    if (!res || !res.ok) return ''
+    const total = Number(res.headers.get('content-length') || 0)
+    if (total && total > DOWNLOAD_MAX_BYTES) { log?.warn?.(`文件太大（${total} 字节），不下载`); return '' }
+    // 流式写盘：arrayBuffer() 会把 150–300MB 整个读进内存（OOM 风险）
+    const hash = createHash('sha256')
+    let written = 0
+    const meter = new Transform({
+      transform (chunk, _enc, cb) {
+        written += chunk.length
+        if (written > DOWNLOAD_MAX_BYTES) return cb(new Error('文件超过 300MB 上限'))
+        hash.update(chunk)
+        cb(null, chunk)
+      },
+    })
+    await pipeline(Readable.fromWeb(res.body), meter, createWriteStream(dest))
+    if (written < DOWNLOAD_MIN_BYTES) { log?.warn?.(`${current} 只拿到 ${written} 字节，当失败`); return '' }
+    const digest = hash.digest('hex')
+    log?.info?.(`下载完成 ${dest}（${(written / 1048576).toFixed(1)}MB，sha256=${digest}）`)
+    if (expectSha && String(expectSha).toLowerCase() !== digest) {
+      log?.warn?.(`sha256 不符：期望 ${expectSha}，实际 ${digest}`)
+      try { unlinkSync(dest) } catch {}
+      return ''
+    }
     return dest
   } catch (error) {
     log?.debug?.(`下载失败 ${url}：${error.message}`)
+    try { unlinkSync(dest) } catch {}
     return ''
   }
 }

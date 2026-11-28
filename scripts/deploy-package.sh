@@ -53,8 +53,10 @@ cp "$SRC_ROOT/package-lock.json" "$WORK/staging/package-lock.json"
 
 # ---- 3) 校验 ----
 echo "== 校验…"
-SRC_VERSION=$(node -p "require('$SRC_ROOT/package.json').version")
-STG_VERSION=$(node -p "require('$WORK/staging/package.json').version")
+# 路径必须走 argv，绝不能拼进 -p 的脚本正文：目录名里一个单引号就能把整条命令改写成
+# 任意 JS（`/tmp/a');require('child_process').execSync('...');//`）。
+SRC_VERSION=$(node -p 'require(process.argv[1]).version' "$SRC_ROOT/package.json")
+STG_VERSION=$(node -p 'require(process.argv[1]).version' "$WORK/staging/package.json")
 [ "$SRC_VERSION" = "$STG_VERSION" ] || { echo "版本不一致：源 $SRC_VERSION / 包 $STG_VERSION" >&2; exit 1; }
 echo "   版本 $STG_VERSION ✔"
 
@@ -64,13 +66,14 @@ for entry in src/host.js src/host/modular-core.js src/core/modules.js; do
   [ -f "$WORK/staging/$entry" ] || { echo "包内缺关键文件：$entry" >&2; exit 1; }
   node --check "$WORK/staging/$entry" || { echo "语法检查失败：$entry" >&2; exit 1; }
 done
-node -e "JSON.parse(require('fs').readFileSync('$WORK/staging/package.json','utf8'))" \
+node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$WORK/staging/package.json" \
   || { echo "package.json 不是合法 JSON" >&2; exit 1; }
 echo "   关键入口语法 + package.json ✔"
 
 # 目标里已装过的依赖在 staging 也要有（防 package.json 改了依赖名而 lock 没跟上）
 if [ -d "$DST_ROOT/node_modules" ] && [ -d "$WORK/staging/node_modules" ]; then
-  missing=$(comm -13 <(ls "$WORK/staging/node_modules" | sort) <(ls "$DST_ROOT/node_modules" | sort) | head -3)
+  # head 提前关管道会让 comm 吃到 SIGPIPE；pipefail 下整条脚本会「莫名其妙」退出
+  missing=$(comm -13 <(ls "$WORK/staging/node_modules" | sort) <(ls "$DST_ROOT/node_modules" | sort) | head -3 || true)
   [ -z "$missing" ] || echo "   提示：目标目录有而新包没有的依赖（新包依赖变少了，属正常）：$missing"
 fi
 
@@ -81,6 +84,11 @@ if [ -d "$DST_ROOT" ]; then
   mv "$DST_ROOT" "$BACKUP"
 fi
 if mv "$WORK/staging" "$DST_ROOT"; then
+  # 保持原有属主：以 root 部署时 rename 出来的目录属主会变成 root，
+  # 之后普通用户跑 DSH 写不了自己的数据目录（备份目录里留着原始属主，照着改）
+  if [ -d "$BACKUP" ] && [ "$(id -u)" = "0" ]; then
+    chown -R --reference="$BACKUP" "$DST_ROOT" || echo "   提示：恢复属主失败（$DST_ROOT）" >&2
+  fi
   echo "== 完成：$DST_ROOT → $STG_VERSION"
   echo "   重启 DSH 生效；回滚：rm -rf '$DST_ROOT' && mv '$BACKUP' '$DST_ROOT'"
 else

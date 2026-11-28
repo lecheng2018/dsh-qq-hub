@@ -66,8 +66,11 @@ test('CSRF：跨站 Origin/无证据的 cross-site 拒绝；同源与无浏览�
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', origin: 'null' })).ok, false)
   // 无 Origin 但声明 cross-site → 拒
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'cross-site' })).ok, false)
-  // 无 Origin、same-site/none → 放行
-  assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'same-site' })).ok, true)
+  // 无 Origin、same-site → 拒（B2/T2.2：多子域场景下兄弟站点同样能改写；只认同源证据）
+  assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'same-site' })).ok, false)
+  // 无 Origin、same-origin / none → 放行
+  assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'same-origin' })).ok, true)
+  assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666', 'sec-fetch-site': 'none' })).ok, true)
   // 都没有（curl/脚本）→ 放行（CSRF 由浏览器发起，浏览器必留证据）
   assert.equal(guard.check(req('POST', { host: '127.0.0.1:5666' })).ok, true)
   // Host 白名单对 GET 依然兜底（rebinding 读也不行）

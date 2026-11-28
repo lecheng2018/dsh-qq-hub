@@ -64,11 +64,13 @@ const SIDE_EFFECT_PATHS = new Set([
   '/persona/delete',       // :35 deletePersona 删文件
   '/persona/use',          // :41 setConfig + 重置会话
   '/persona/polish',       // :60 askModel 外部计费调用（仅面板 POST 用）
+  '/persona/rebuild-stale',// :95 重建陈旧人格索引（写文件 + 可能调模型）
   // routes-purpose.js
   '/panel/purpose/run',    // :20 跑一轮目的引擎（可能真的发 QQ 消息）
   '/panel/purpose/config', // :27 setConfig
   // routes-modules.js
   '/memory/reload',
+  '/memory/import',        // 内置模块：导入外部记忆文件到持久库
   '/modules/reload',       // :17 重新加载并执行模块代码
   '/modules/create',       // :23 写模块目录
   '/modules/fork',         // :29 复制模块目录
@@ -132,6 +134,7 @@ const SIDE_EFFECT_PATHS = new Set([
   '/memory/import/commit',        // :183 批量导入写库
   '/memory/extract',              // :209 触发记忆提炼（模型计费）
   '/memory/reload',               // :128 重载档案
+  '/memory/import',               // 内置模块：导入外部记忆文件到持久库
   '/memory/vector/backfill',      // :159 批量 embed（外部计费调用）
   '/profiles/save',               // :166 写人物小档案
   '/profiles/rebuild',            // :171 按记忆重写小档案（模型计费）
@@ -220,8 +223,9 @@ export function createPanelGuard({ getConfig, log, prefix = DEFAULT_PREFIX, isAu
     }
     // 3. 改写型请求、模块自定义路由（/ext/*）或登记为副作用的路由，且没带 Origin：
     //    cross-site 证据（Sec-Fetch-Site）直接拒；两者都没有 = 非浏览器客户端（curl/脚本/测试）。
-    else if ((MUTATING.has(method) || isModuleRoute || path.startsWith('/ext/') || registeredSideEffect === true) && String(h['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
-      debug('面板 CSRF 拒绝：Sec-Fetch-Site=cross-site 且无 Origin')
+    //    same-site（多子域场景下可被兄弟站点改写）同样按跨站处理，只放行 same-origin/none/缺省。
+    else if ((MUTATING.has(method) || isModuleRoute || path.startsWith('/ext/') || registeredSideEffect === true) && ['cross-site', 'same-site'].includes(String(h['sec-fetch-site'] ?? '').toLowerCase())) {
+      debug(`面板 CSRF 拒绝：Sec-Fetch-Site=${String(h['sec-fetch-site'] || '')} 且无 Origin`)
       return { ok: false, code: 403, message: '跨站请求被拒绝（CSRF 防护）' }
     }
     // 4. 副作用路径只认提交方法：GET/HEAD/OPTIONS/TRACE 等非提交方法一律 405，不进 handler

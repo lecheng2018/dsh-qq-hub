@@ -165,8 +165,9 @@ export function createBridge({ ctx, getConfig, setConfig, hub, mods, log, versio
     if (!cfg.bridge.http || !cfg.bridge.token) return false
     const h = req.headers || {}
     const auth = String(h.authorization || h.Authorization || '')
-    let given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : String(h['x-qq-hub-token'] || '')
-    if (!given) try { given = new URL(req.url, 'http://x').searchParams.get('token') || '' } catch (error) {}
+    // 只认请求头：URL 里的 ?token= 会进代理日志、浏览器历史、Referer，
+    // 等于把联动密钥写在明处（旧逻辑还会优先读它）。
+    const given = auth.startsWith('Bearer ') ? auth.slice(7).trim() : String(h['x-qq-hub-token'] || '')
     const a = Buffer.from(given)
     const b = Buffer.from(cfg.bridge.token)
     return a.length === b.length && timingSafeEqual(a, b)

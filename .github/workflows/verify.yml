@@ -17,13 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
         # 2026-11-21：主测试从 22.13.0 提到 24，与开发机（24.22.3）对齐。
         # 起因：PR #201 在 22.13.0 上报 cancelledByParent、本地 24 全绿，
         # 判断成本被版本差异放大了。老版本的支持面由下面的 compatibility job 守住。
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -54,7 +54,7 @@ jobs:
         run: npm run benchmark -- --output artifacts/benchmark.json
 
       - name: Upload Benchmark Result
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-node-24
           path: artifacts/benchmark.json
@@ -74,10 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.13.0
           cache: npm

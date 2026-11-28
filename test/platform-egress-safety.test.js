@@ -61,7 +61,12 @@ test('空间评论：正常评论 → 计数、记记忆、真发', async () => 
 const PROFILE = SRC('../src/modules/profile/index.js')
 
 // B 站「被拦 / 试运行不计数」的行为级用例跟着实现搬到了商店模块（modules/bili/duty.test.mjs）。
-test('QQ 换头像：网址先过 assertPublicUrl 再交给网关', () => {
-  assert.match(PROFILE, /import \{ segmentBytes, assertPublicUrl \} from '\.\.\/\.\.\/core\/net\.js'/, '应引入 assertPublicUrl')
-  assert.match(PROFILE, /await assertPublicUrl\(src\.file\)/, '头像网址过 SSRF 校验')
+test('QQ 换头像：网址过 assertPublicUrl / fetchImage 后，只把字节交给网关', () => {
+  // T2.3：从「校验后把 URL 丢给网关」改成「插件侧下载校验 + 只交字节」，
+  // 结构锁随之要求同时引入 assertPublicUrl 与 fetchImage。
+  assert.match(PROFILE, /import \{[^}]*assertPublicUrl[^}]*\} from '\.\.\/\.\.\/core\/net\.js'/, '应引入 assertPublicUrl')
+  assert.match(PROFILE, /import \{[^}]*fetchImage[^}]*\} from '\.\.\/\.\.\/core\/net\.js'/, '应引入 fetchImage 在插件侧下载')
+  // SSRF 校验现在由 fetchImage 承担（内部 assertPublicUrl + 连接层 safeLookup 二次解析）
+  assert.match(PROFILE, /await fetchImage\(src\.file, \{[^}]*allowLocal: false/, '下载时禁本地地址（SSRF 校验）')
+  assert.doesNotMatch(PROFILE, /set_qq_avatar'\s*,\s*\{ file: src\.file/, '原始网址不能转交给网关')
 })

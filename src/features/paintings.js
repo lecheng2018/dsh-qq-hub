@@ -128,19 +128,21 @@ export function recentPaintings (chatId, limit = 10) {
 
 /**
  * 把「画作 #1 / 1 / 最新 / 刚才那张 / 完整文件名」解析成本机路径。
- * 只认这个聊天记过的编号；别名在没记过时退回目录里最新的一张（重启后也能用）。
+ * 默认**只认这个聊天记过的编号**：全局目录里最新的一张、或按文件名直取别的会话的画，
+ * 都必须显式打开 allowGlobalFallback（只有主人私聊的调用方才该打开）。
  * 不合法 / 不存在返回 null，不抛。
  */
-export function resolvePainting (chatId, ref) {
+export function resolvePainting (chatId, ref, { allowGlobalFallback = false } = {}) {
   const s = String(ref == null ? '' : ref).trim()
   if (!s) return null
-  const list = recent.get(String(chatId || '')) || []
+  const scoped = String(chatId || '')
+  const list = recent.get(scoped) || []
   let name = ''
   const alias = /^(latest|last|newest|最新|最近|上一张|刚才那张|刚画的|画作)$/i.test(s)
   const num = /^#?(\d{1,2})$/.exec(s)
   if (alias) {
     name = list.at(-1) || ''
-    if (!name) {
+    if (!name && allowGlobalFallback) {
       // 内存里没有（比如刚重启）：退回目录里最新的一张
       const latest = listPaintings({ limit: 1 }).items[0]
       name = latest ? latest.file : ''
@@ -149,8 +151,10 @@ export function resolvePainting (chatId, ref) {
     const i = Number(num[1])
     if (i >= 1 && i <= list.length) name = list[list.length - i]
   } else {
+    // 按文件名直取（是否跨会话由下面那句 scoped 判定兜底）
     name = safeName(s)
   }
+  if (name && !list.includes(name) && !allowGlobalFallback) return null
   if (!name) return null
   const full = paintingPath(name)
   if (!full) return null

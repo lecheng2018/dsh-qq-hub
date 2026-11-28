@@ -3,6 +3,10 @@ name: Pack Test Build
 # 官方打包通道：在 GitHub Actions 上把当前分支构建成 dsh-qq-hub 测试 tgz，
 # 发布为 prerelease（附 sha256），同时保留 workflow artifact 以便回查。
 # 与 Verify 的区别：不跑全量测试（测试是 PR 门禁的事），这里只负责可复现的打包与发布。
+#
+# 审计 T2.8：构建与发布拆成两个 job。构建阶段（npm ci / 生命周期脚本 / esbuild）
+# 只拿到 contents: read；写权限只存在于 publish job，它不做任何构建，只把已产出的
+# 产物交给 Release。所有第三方 action 固定到 40 位 commit SHA（与 release.yml 同一份）。
 
 on:
   workflow_dispatch:
@@ -17,15 +21,25 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  pack:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tgz: ${{ steps.pack.outputs.tgz }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # 构建阶段不推任何东西：别把 token 留在 .git/config 给 npm 生命周期脚本用
+          persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -56,6 +70,7 @@ jobs:
           NODE
 
       - name: npm pack
+        id: pack
         run: |
           OUT=$(npm pack 2>/dev/null)
           TGZ=$(echo "$OUT" | tail -n1)
@@ -64,12 +79,14 @@ jobs:
           fi
           echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
           sha256sum "$TGZ" | tee sha256.txt
-        id: pack
+          echo "sha256=$(cut -d' ' -f1 sha256.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Smoke check packaged host entrypoint
+        env:
+          TGZ: ${{ steps.pack.outputs.tgz }}
         run: |
           rm -rf /tmp/smoke && mkdir -p /tmp/smoke
-          tar -xzf "${{ steps.pack.outputs.tgz }}" -C /tmp/smoke
+          tar -xzf "$TGZ" -C /tmp/smoke
           node --input-type=module -e "const h = await import('file:///tmp/smoke/package/src/host.js'); if (typeof h.apply !== 'function') { console.error('apply missing'); process.exit(1) }; console.log('SMOKE OK')"
           node --input-type=module -e "
           import { readFileSync } from 'node:fs'
@@ -97,20 +114,40 @@ jobs:
             echo "- 安装/回退参照 README 与 docs/refactor/new-core-parity-ledger.md"
           } > notes.md
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ steps.pack.outputs.tgz }}
+          name: dsh-test-build
           path: |
-            ${{ steps.pack.outputs.tgz }}
+            *.tgz
             sha256.txt
+            notes.md
+          if-no-files-found: error
+
+  # ── 发布：唯一持有写权限的 job ──────────────────────────────────────────────
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dsh-test-build
 
       - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           TITLE: ${{ inputs.release_title }}
+          TGZ: ${{ needs.build.outputs.tgz }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
-          gh release create "$VERSION" "${{ steps.pack.outputs.tgz }}" sha256.txt \
+          # 版本号 / 文件名只经 env 进来；脚本里一律用双引号包住的变量，不做表达式插值
+          test -f "$TGZ"
+          echo "publishing $TGZ (sha256=$SHA256)"
+          gh release create "$VERSION" "$TGZ" sha256.txt \
             --prerelease \
             --target "$GITHUB_SHA" \
             --title "${TITLE:-dsh-qq-hub $VERSION (test build)}" \

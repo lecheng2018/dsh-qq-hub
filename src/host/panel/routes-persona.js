@@ -138,7 +138,7 @@ export function registerPersonaRoutes({
         ? `查出 ${stale.length} 个会话挂着旧人设${assumed.length ? `，另有 ${assumed.length} 个正文版本无法确认` : ''}（还没动）`
         : `重建了 ${rebuilt} 个会话${failed.length ? `，${failed.length} 个失败` : ''}${assumed.length ? `；${assumed.length} 个版本无法确认的没动` : ''}`,
     }
-  })
+  }, { sideEffect: true })
 
   route('/persona/delete', async (req) => {
     const b = await readBody(req)

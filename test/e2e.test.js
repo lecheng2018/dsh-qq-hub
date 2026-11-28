@@ -288,15 +288,18 @@ test('群管：群友要求禁言被拒绝，主人要求才执行', async () =>
   assert.equal(mock.sent('set_group_ban')[0].params.duration, 300)
 })
 
-test('群管：群友和主人的话合并成一轮时，主人的要求照样执行', async () => {
+test('群管：主人单独要求时照样执行（混轮里有群友发言必须拒绝，见 authz-scope-b2）', async () => {
+  // 两条消息会不会被并成同一轮取决于缓冲窗口，全量并发下不稳定；这里只锁
+  // 「主人单独说就执行」这一半，混合回合的拒绝语义在单测里直接调模块验证。
   const n = mock.sent('set_group_ban').length
-  mock.push(grp('555', '777', [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' 哈哈哈' } }]))
   mock.push(grp('555', OWNER, [{ type: 'at', data: { qq: BOT } }, { type: 'text', data: { text: ' 他太吵了 把999禁言' } }], 'xiaoming'))
   await until(() => mock.sent('set_group_ban').length === n + 1)
   assert.equal(fake.turns.at(-1).toolCalls[0].result.ok, true)
+  await sleep(300) // 收尾：别让这一轮残留到下一个用例
 })
 
 test('群管：她在群里只是普通成员时，主人要求也做不了，并说明原因', async () => {
+  await sleep(300) // 等上一轮的缓冲排空，避免混轮判定被串到本用例
   mock.state.roles['555'] = 'member'
   try {
     const n = mock.sent('set_group_ban').length
@@ -692,7 +695,7 @@ test('空间日记：手动写一篇（仅自己可见），配今天画的图�
   const r = result.json()
   assert.equal(r.ok, true, r.message)
   assert.equal(r.images, 1, '今天画了图，日记应该配一张')
-  const q = mock.sent('send_qzone_msg')[0]
+  const q = mock.sent('send_qzone_msg').at(-1) // 取本次调用发的那条（[0] 可能命中更早用例的说说）
   assert.equal(q.params.ugc_right, 64)
   assert.match(q.params.content, /白米饭/)
   assert.equal(q.params.images.length, 1, '说说带了一张图')
@@ -1029,10 +1032,28 @@ test('#6 改资料：默认仅主人私聊，昵称 / 签名 / 头像走 SnowLum
   c = await lastCall('改签名测试')
   assert.equal(c.result.ok, true)
   assert.deepEqual(mock.sent('set_self_longnick').at(-1).params, { longNick: '今天也要开心' })
-  mock.push(priv(OWNER, text('换头像测试')))
-  c = await lastCall('换头像测试')
-  assert.equal(c.result.ok, true)
-  assert.equal(mock.sent('set_qq_avatar').at(-1).params.file, 'https://example.com/a.png')
+  // T2.3：头像网址改为插件侧下载、只把 base64 交给网关（网关不再自己发请求）。
+  // 这里注入假 fetch 供下载用，断言「网关拿到的是字节、拿不到原始 URL」。
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, opts) => {
+    if (String(url) === 'https://example.com/a.png') {
+      return new Response(Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    }
+    return realFetch(url, opts)
+  }
+  try {
+    mock.push(priv(OWNER, text('换头像测试')))
+    c = await lastCall('换头像测试')
+    assert.equal(c.result.ok, true, c.result.message)
+    const sentAvatar = mock.sent('set_qq_avatar').at(-1)
+    assert.match(sentAvatar.params.file, /^(?:base64:\/\/|\/)/, '交给网关的是字节/本机临时文件')
+    assert.doesNotMatch(String(sentAvatar.params.file), /example\.com/, '原始网址绝不能转给网关')
+  } finally {
+    globalThis.fetch = realFetch
+  }
   const n = mock.sent('set_qq_avatar').length
   mock.push(priv(OWNER, text('本地头像测试')))
   c = await lastCall('本地头像测试')

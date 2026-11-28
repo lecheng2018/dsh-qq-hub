@@ -154,7 +154,9 @@ function shellCommands (text) {
 
 const WRAPPER_OPTS_WITH_ARG = {
   sudo: new Set(['-u', '-g', '-h', '-p', '-C', '-T', '-r', '-t', '--user', '--group', '--host', '--prompt']),
-  env: new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string']),
+  // -S / --split-string 会把一个字符串重新拆成 argv（等价于再执行一段命令），
+  // 必须在 commandWords 里展开后继续检查，不能当普通「带值选项」跳过。
+  env: new Set(['-u', '-C', '--unset', '--chdir']),
   command: new Set([]),
   nohup: new Set([]),
   timeout: new Set(['-k', '-s', '--kill-after', '--signal']),
@@ -172,7 +174,9 @@ const WRAPPER_OPTS_WITH_ARG = {
   taskset: new Set([]),
 }
 
-function commandWords (words) {
+function commandWords (input) {
+  // env -S 需要把 payload 拆回单词插进队列，所以这里用可重写的副本
+  let words = input.slice()
   let i = 0
   while (i < words.length) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) { i++; continue }
@@ -186,8 +190,20 @@ function commandWords (words) {
       if (option === '--') break
       // 单字符选项可合并写法（如 -0n5、-c0）：取首字符判断是否需要消费下一个参数。
       // 但「值已内联」的形式（-n1、-I{}、--user=root）不能再吞掉后面的词，否则会把真正的命令吃掉。
-      const flag = option.startsWith('--') ? option : option.slice(0, 2)
-      const inlineValue = option.includes('=') || (!option.startsWith('--') && option.length > 2)
+      const eq = option.indexOf('=')
+      const flag = option.startsWith('--')
+        ? (eq >= 0 ? option.slice(0, eq) : option)
+        : option.slice(0, 2)
+      // env -S "rm -rf /" / env --split-string="rm -rf /"：把 payload 拆回单词重新入队
+      if (name === 'env' && /^(?:-S|--split-string)$/i.test(flag)) {
+        const payload = eq >= 0 ? option.slice(eq + 1) : words[i++]
+        if (payload !== undefined) {
+          const parts = String(payload).split(/\s+/).filter(Boolean)
+          words = [...words.slice(0, i), ...parts, ...words.slice(i)]
+        }
+        continue
+      }
+      const inlineValue = eq >= 0 || (!option.startsWith('--') && option.length > 2)
       if (!inlineValue && (optsWithArg.has(option) || optsWithArg.has(flag))) i++
     }
     // timeout [opts] <duration> <cmd...>：跳掉必选的时长位置参数
@@ -196,11 +212,9 @@ function commandWords (words) {
     if (name === 'chrt' && i < words.length) i++
     // taskset [opts] <mask> <cmd...>：-c 是「指定 CPU」开关（taskset -c 0 中 0 是 CPU 掩码）
     if (name === 'taskset' && i < words.length) i++
-    // xargs [opts] <cmd...>：xargs 把后续 stdin 行也当命令执行，剥离后把剩余参数当作被执行命令继续检查
-    if (name === 'xargs') {
-      const rest = words.slice(i)
-      if (rest.length) return rest
-    }
+    // xargs [opts] <cmd...>：这里不能提前 return，否则 `xargs sudo rm -rf /` 只看到
+    // `sudo ...` 就被当成一条普通命令，后续的 env/timeout 等包装器不会被继续剥离。
+    // 剥掉 xargs 自身选项后让外层 while 继续处理下一层包装器即可。
   }
   return words.slice(i)
 }
@@ -397,6 +411,19 @@ function inspectCode (code, language, depth) {
   return null
 }
 
+const FIND_EXEC_OPTS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
+
+/** find 的搜索路径（跳过 -H/-L/-P 与首个 -option 之前的位置参数）。 */
+function findPaths (args) {
+  const paths = []
+  for (const arg of args) {
+    if (['-H', '-L', '-P'].includes(arg) && !paths.length) continue
+    if (arg.startsWith('-') || arg === '!' || arg === '(') break
+    paths.push(arg)
+  }
+  return paths
+}
+
 function inspectWords (input, depth) {
   if (depth > 12) return null
   const words = commandWords(input)
@@ -416,13 +443,26 @@ function inspectWords (input, depth) {
     return { label: '递归删除根目录/盘符' }
   }
   if (name === 'find' && args.includes('-delete')) {
-    const paths = []
-    for (const arg of args) {
-      if (['-H', '-L', '-P'].includes(arg) && !paths.length) continue
-      if (arg.startsWith('-') || arg === '!' || arg === '(') break
-      paths.push(arg)
+    if (findPaths(args).some(systemTarget)) return { label: '递归删除根目录/系统目录' }
+  }
+  if (name === 'find') {
+    // find -exec/-execdir/-ok/-okdir 后面到 ';' / '+' 之间是真正被执行的命令
+    const execIndex = args.findIndex((arg) => FIND_EXEC_OPTS.has(arg))
+    if (execIndex >= 0) {
+      const subWords = []
+      for (let i = execIndex + 1; i < args.length; i++) {
+        if (args[i] === ';' || args[i] === '+') break
+        subWords.push(args[i])
+      }
+      if (subWords.length) {
+        // find 会把命中路径填进 {}：用搜索路径近似替换，让 `find / -exec rm -rf {} +` 命中删除规则
+        const paths = findPaths(args)
+        const target = paths[0] || '{}'
+        const expanded = subWords.map((word) => word.split('{}').join(target))
+        const danger = inspectWords(expanded, depth + 1)
+        if (danger) return danger
+      }
     }
-    if (paths.some(systemTarget)) return { label: '递归删除根目录/系统目录' }
   }
   if (name === 'truncate') {
     let zeroSize = false
@@ -444,20 +484,48 @@ function inspectWords (input, depth) {
     if (script !== null) return inspectShell(script, depth + 1)
   }
   if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(name)) {
-    if (args.some((arg, i) => /^-(?:ep|ExecutionPolicy)$/i.test(arg) && /^(?:Bypass|Unrestricted)$/i.test(args[i + 1] || ''))) return { label: 'pwsh 绕过执行策略' }
-    if (args.some((arg, i) => /^-(?:w|WindowStyle)$/i.test(arg) && /^(?:hidden|1)$/i.test(args[i + 1] || ''))) return { label: 'pwsh 隐藏窗口执行' }
-    const encoded = args.findIndex((arg) => /^-(?:enc|EncodedCommand)$/i.test(arg))
-    if (encoded >= 0 && args[encoded + 1]) return { label: 'pwsh 编码命令执行' }
-    const index = args.findIndex((arg) => /^-(?:c|command)$/i.test(arg))
-    if (index >= 0) return inspectShell(args.slice(index + 1).join(' '), depth + 1)
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      const policy = PWSH_EXEC_POLICY.exec(arg)
+      if (policy) {
+        const value = policy[1] !== undefined ? policy[1] : (args[i + 1] || '')
+        if (/^(?:Bypass|Unrestricted)$/i.test(value)) return { label: 'pwsh 绕过执行策略' }
+      }
+      const window = PWSH_WINDOW_STYLE.exec(arg)
+      if (window) {
+        const value = window[1] !== undefined ? window[1] : (args[i + 1] || '')
+        if (/^(?:hidden|1)$/i.test(value)) return { label: 'pwsh 隐藏窗口执行' }
+      }
+      const encoded = PWSH_ENCODED.exec(arg)
+      if (encoded && (encoded[1] !== undefined || args[i + 1] !== undefined)) return { label: 'pwsh 编码命令执行' }
+      if (/^-(?:c|co|com|comm|comma|comman|command)$/i.test(arg)) {
+        return inspectShell(args.slice(i + 1).join(' '), depth + 1) || null
+      }
+    }
   }
-  if (/^python(?:\d+(?:\.\d+)*)?$/.test(name)) {
-    const index = args.indexOf('-c')
-    if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'python', depth + 1)
+  if (/^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/i.test(name)) {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (arg === '-c') {
+        if (args[i + 1] !== undefined) return inspectCode(args[i + 1], 'python', depth + 1)
+      } else if (/^-c./.test(arg)) {
+        // -c<code> 合并写法
+        return inspectCode(arg.slice(2), 'python', depth + 1)
+      }
+    }
   }
   if (/^node(?:\.exe)?$/i.test(name)) {
-    const index = args.findIndex((arg) => arg === '-e' || arg === '--eval' || arg === '-p' || arg === '--print')
-    if (index >= 0 && args[index + 1] !== undefined) return inspectCode(args[index + 1], 'node', depth + 1)
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      const eq = arg.indexOf('=')
+      if (eq > 0 && /^--(?:eval|print)$/i.test(arg.slice(0, eq))) {
+        // --eval=... / --print=... 内联等号写法
+        return inspectCode(arg.slice(eq + 1), 'node', depth + 1)
+      }
+      if (arg === '-e' || arg === '--eval' || arg === '-p' || arg === '--print') {
+        if (args[i + 1] !== undefined) return inspectCode(args[i + 1], 'node', depth + 1)
+      }
+    }
   }
   if (/^perl(?:\d+(?:\.\d+)*)?$/.test(name)) {
     const index = args.findIndex((arg) => /^-[^-]*[eE]$/.test(arg))
@@ -467,6 +535,14 @@ function inspectWords (input, depth) {
 }
 
 const SHELL_NAME = /^(?:ba|da|z|k|a)?sh$/i
+
+// 管道右侧只要是「能解释/执行文本」的程序就是执行位置（curl ... | python3 / node / pwsh）
+const PIPE_EXEC_NAME = /^(?:(?:ba|da|z|k|a)?sh|python(?:\d+(?:\.\d+)*)?(?:\.exe)?|node(?:\.exe)?|perl(?:\d+(?:\.\d+)*)?|ruby|pwsh(?:\.exe)?|powershell(?:\.exe)?|source|\.|xargs)$/i
+
+// PowerShell 缩写参数：-ep / -ExecutionPolicy[:|=]Bypass、-w:hidden、-ec <base64>
+const PWSH_EXEC_POLICY = /^-(?:ep|ex|exe|exec|execu|execut|executi|executio|execution|executionp|executionpo|executionpol|executionpoli|executionpolic|executionpolicy)(?:[:=](.*))?$/i
+const PWSH_WINDOW_STYLE = /^-(?:w|wi|win|wind|windo|window|windows|windowst|windowsty|windowstyl|windowstyle)(?:[:=](.*))?$/i
+const PWSH_ENCODED = /^-(?:e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)(?:[:=](.*))?$/i
 
 function producerRisk (input, depth) {
   const [executable = '', ...args] = commandWords(input)
@@ -517,16 +593,22 @@ function inspectShell (text, depth = 0, outputExecuted = false) {
     for (const sub of substitutions) {
       // Inspect the commands inside both substitution forms. A process
       // substitution supplies a file path, not command-substitution output.
-      const executed = !sub.processSubstitution && (
-        command[0]?.includes(sub.token)
-        || (shellScript !== null && tokenIsCommand(shellScript, sub.token, depth + 1))
-        || (evalScript !== null && tokenIsCommand(evalScript, sub.token, depth + 1))
-      )
+      let executed
+      if (sub.processSubstitution) {
+        // `bash <(curl ...)` / `source <(wget ...)` / `. <(base64 -d ...)`：
+        // 进程替换的结果在这里是「脚本文本」而不是文件路径，必须算作被执行
+        const takesScript = SHELL_NAME.test(name) || name === 'source' || name === '.'
+        executed = takesScript && command.slice(1).some((word) => word.includes(sub.token))
+      } else {
+        executed = command[0]?.includes(sub.token)
+          || (shellScript !== null && tokenIsCommand(shellScript, sub.token, depth + 1))
+          || (evalScript !== null && tokenIsCommand(evalScript, sub.token, depth + 1))
+      }
       const danger = inspectShell(sub.code, depth + 1, Boolean(executed))
       if (danger) return danger
     }
     if (redirects.some((target) => /^\/dev\/(?:sd|nvme|disk|vd|xvd|mmcblk|md|mapper\/)/.test(target))) return { label: '直接写磁盘' }
-    if (pipelineDanger && SHELL_NAME.test(name)) return pipelineDanger
+    if (pipelineDanger && PIPE_EXEC_NAME.test(name)) return pipelineDanger
     const prodDanger = (outputExecuted || operator === '|') ? producerRisk(words, depth) : null
     if (outputExecuted && prodDanger) return prodDanger
     if (operator === '|') {

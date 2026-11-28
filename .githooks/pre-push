@@ -25,11 +25,22 @@
 # 本文件原来只有 ②。2026-11-21 把 ① 合进来时保留了 ② 的原文与注释 ——
 # 直接覆盖会删掉产物同源这道防线，那修的是真实发生过的事故，不能丢。
 
-# 钩子本身不需要 stdin/stdout 交互，直接吃掉 push 传进来的 ref 信息。
+# 钩子本身不需要 stdout 交互，但 **stdin 必须只读一次**：
+# push 传进来的 ref 行是一条流，第一个 `while read` 循环会把它读干，
+# 于是后面那几道门禁的分支循环执行 0 次 —— 门禁看着在跑，实际什么都没扫。
 set -eu
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+
+REFS_TMP=$(mktemp "${TMPDIR:-/tmp}/qqhub-prepush-refs.XXXXXX")
+SELFTEST_TMP=$(mktemp "${TMPDIR:-/tmp}/qqhub-prepush-selftest.XXXXXX")
+trap 'rm -f "$REFS_TMP" "$SELFTEST_TMP"' EXIT INT TERM
+cat > "$REFS_TMP"
+if [ ! -s "$REFS_TMP" ]; then
+  echo "pre-push: 没收到 ref 行（stdin 为空），无法确定待推送范围，已拦下。" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # ① PII / 密钥门禁
@@ -38,13 +49,16 @@ cd "$root"
 # ② 找不到时回落到仓库自带的 scripts/pii-scan.mjs（零依赖，Node 即可，与 CI 同一份规则）。
 # 2026-11-23 之前找不到就直接「跳过」—— 结果这道门禁在开发机上从来没跑过，
 # 十几个真实群号/QQ 号就这样进了公开历史。
-PII_SCAN="${PII_SCAN:-/vol2/@appshare/Harness/.dsh/skills/pii-guard/scripts/pii_scan.py}"
-PII_SELFTEST="${PII_SELFTEST:-$(dirname "$PII_SCAN")/selftest.py}"
+# 审计 T2.9：默认只用**仓内**扫描器。旧默认值写死了开发机上的私有绝对路径，
+# 换台机器就静默走「找不到 → 跳过」，这道门禁等于不存在。
+PII_SCAN="${PII_SCAN:-}"
+PII_SELFTEST="${PII_SELFTEST:-}"
+[ -n "$PII_SELFTEST" ] || [ -z "$PII_SCAN" ] || PII_SELFTEST="$(dirname "$PII_SCAN")/selftest.py"
 PII_PYTHON="${PII_PYTHON:-python3}"
 PII_NODE="${PII_NODE:-node}"
 
 pii_kind=""
-if [ -f "$PII_SCAN" ]; then
+if [ -n "$PII_SCAN" ] && [ -f "$PII_SCAN" ]; then
   pii_kind=python
 elif [ -f "$root/scripts/pii-scan.mjs" ] && command -v "$PII_NODE" >/dev/null 2>&1; then
   pii_kind=node
@@ -70,11 +84,11 @@ pii_run() {
 if [ -n "$pii_kind" ]; then
   # 自检前置：扫描器本身坏了的时候，它会给出「干净」的假结论。
   if [ "${PII_SKIP_SELFTEST:-0}" != "1" ]; then
-    if ! pii_selftest >/tmp/pii-selftest.out 2>&1; then
+    if ! pii_selftest >"$SELFTEST_TMP" 2>&1; then
       echo "" >&2
       echo "pre-push: PII 扫描器自检未通过，已拦下这次 push。" >&2
       echo "  一个坏掉的扫描器会给出「干净」的假结论，所以这里宁可拦下。" >&2
-      sed 's/^/  /' /tmp/pii-selftest.out >&2
+      sed 's/^/  /' "$SELFTEST_TMP" >&2
       exit 1
     fi
   fi
@@ -97,15 +111,14 @@ if [ -n "$pii_kind" ]; then
           || git rev-parse --verify -q master 2>/dev/null)
       if [ -n "$base" ]; then
         mb=$(git merge-base "$base" "$local_sha" 2>/dev/null || echo "$base")
-        range="--range ${mb}..${local_sha}"
+        pii_run --range "$mb..$local_sha" || pii_fail=1
       else
-        range="--tree"
+        pii_run --tree || pii_fail=1
       fi
     else
-      range="--range ${remote_sha}..${local_sha}"
+      pii_run --range "$remote_sha..$local_sha" || pii_fail=1
     fi
-    if ! pii_run $range; then pii_fail=1; fi
-  done
+  done < "$REFS_TMP"
   if [ "$pii_fail" -ne 0 ]; then
     echo "" >&2
     echo "pre-push: 检测到疑似私人信息/密钥，已拦下这次 push。" >&2
@@ -114,7 +127,7 @@ if [ -n "$pii_kind" ]; then
     exit 1
   fi
 else
-  echo "pre-push: 未找到 PII 扫描器（$PII_SCAN 与 scripts/pii-scan.mjs 都不可用），跳过这一道。" >&2
+  echo "pre-push: 未找到 PII 扫描器（PII_SCAN 未设置或不存在，scripts/pii-scan.mjs 也不可用），跳过这一道。" >&2
 fi
 
 # ---------------------------------------------------------------------------
@@ -143,8 +156,8 @@ if [ "${PII_SKIP_NUMBERS:-0}" != "1" ]; then
     else
       nrange="${remote_sha}..${local_sha}"
     fi
-    if ! node scripts/check-numbers.mjs --range "$nrange"; then num_fail=1; fi
-  done
+    if ! "$PII_NODE" scripts/check-numbers.mjs --range "$nrange"; then num_fail=1; fi
+  done < "$REFS_TMP"
   if [ "$num_fail" -ne 0 ]; then
     echo "" >&2
     echo "pre-push: 新增内容里有 QQ 号 / 群号形状的数字，已拦下。" >&2

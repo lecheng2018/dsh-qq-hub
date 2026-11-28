@@ -143,10 +143,12 @@ function createEphemeralOutbox({ onebot, getConfig, log, ledgerFile }) {
       const chatKey = String(delivery.chatKey || '')
       const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
       const isPrivate = chatKey.startsWith('private:')
+      // 只有发给主人本人的私聊才豁免主人 QQ 号（非主人私聊必须照样拦）
+      const toOwner = Boolean(cfg.ownerQQ && chatKey === 'private:' + cfg.ownerQQ)
       return checkIdentityLeak(text, {
         surface: isPrivate ? '私聊消息' : '群消息',
         ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
+        allowIds: [ownGroup, ...(toOwner ? [cfg.ownerQQ] : [])].filter(Boolean),
         // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
         allowBareNumbers: isPrivate,
         mode: ig.mode === 'warn' ? 'warn' : 'block',
