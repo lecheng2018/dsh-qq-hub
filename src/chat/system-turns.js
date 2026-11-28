@@ -98,8 +98,10 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
         state.cleanup()
         reject(new Error('等太久了'))
       }, Math.max(1, Number(timeoutMs) || 180000))
-      // 审计 T3.9：系统回合超时定时器过去不带 unref，进程退出会被它硬顶住。
-      timer.unref?.()
+      // 注意：这里**不能** unref。系统回合唯一的落定路径就是这个超时定时器；
+      // unref 后若事件循环没有别的 ref 句柄（Node 22 的 test runner / CI 形态），
+      // Node 会判定事件循环已排空，await 永远等不到并被标 cancelledByParent。
+      // 退出问题由 dispose() 统一 clearTimeout 解决。
       Promise.resolve(agent.followup({ id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text: String(prompt || '') }], source: { kind: 'qq-hub' } }))
         .catch((error) => finish(reject, error))
     })
