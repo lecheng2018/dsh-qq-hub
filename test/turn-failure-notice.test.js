@@ -673,3 +673,74 @@ test('E2E：runPromptTurn 补齐 blocked 归档自愈与 followup 413 自愈（�
   assert.ok((workspaces.archived || []).includes('sess-2'))
   assert.deepEqual(sentTexts, [], '主动回合失败不往聊天里发提示')
 })
+
+// ---------- ⑤ 群聊遇到「模型通道整体挂了」→ 改投主人私聊 ----------
+//
+// 真机 2026-11-27 21:45~22:09：某个群连续 7 轮
+// 503「所有启用中的账号都被限制器拦下，无账号可转发」，QQ 侧零提示 ——
+// 主人只能翻后台日志才知道模型通道挂了。
+// 这不是某个群的内容问题，也不是偶发抖动，而是**需要主人动手**的故障
+//（查余额 / 调限制器 / 换模型），所以群聊不能沉默，改投主人私聊。
+
+const LIMITER_503 = '503: {"message":"所有启用中的账号都被限制器拦下（已跳过 1 个账号），无账号可转发：请检查余额读数与 Token 周期用量，或到账号设置的「限制器」里调整规则","type":"proxy_error"}'
+
+test('群聊 + 限制器 503 → 改投主人私聊，并写明是哪个聊天失败', (t) => {
+  const { core, sent } = makeCore(t)
+  const r = core.handleTurnFailure('group:777', new Error(LIMITER_503))
+  assert.equal(r.kind, 'rate-limit', '应归为 rate-limit（不是笼统的 error）')
+  assert.equal(r.sent, true, '群聊遇到模型通道故障不能沉默')
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].chatKey, 'private:10000001', '改投主人私聊，而不是发到群里') /* pii-scan:ignore */
+  const text = sent[0].segments[0].data.text
+  assert.match(text, /限流|等一会儿/, '文案要说清是模型侧限流')
+  assert.match(text, /group:777/, '要写明哪个聊天失败，否则主人不知道去看哪儿')
+})
+
+test('群聊 + 内容审核 403 → 仍然不发（群里报内容审核是噪音）', (t) => {
+  const { core, sent } = makeCore(t)
+  const mod = '403: {"code":"codearts_upstream","message":"抱歉，我无法提供关于您提问内容的建议。"}'
+  const r = core.handleTurnFailure('group:777', new Error(mod))
+  assert.equal(r.kind, 'moderation')
+  assert.equal(r.sent, false, '内容审核是单条消息的问题，不该打扰群或主人')
+  assert.equal(sent.length, 0)
+})
+
+test('群聊 + 普通错误 → 仍然不发（偶发抖动不打扰主人）', (t) => {
+  const { core, sent } = makeCore(t)
+  const r = core.handleTurnFailure('group:777', new Error('fetch failed'))
+  assert.equal(r.kind, 'error')
+  assert.equal(r.sent, false)
+  assert.equal(sent.length, 0)
+})
+
+test('网关级故障全局限频：多个群各失败一次，主人只收到一条', (t) => {
+  const { core, sent } = makeCore(t)
+  assert.equal(core.handleTurnFailure('group:111', new Error(LIMITER_503)).sent, true)
+  assert.equal(core.handleTurnFailure('group:222', new Error(LIMITER_503)).sent, false, '第二个群应被全局限频')
+  assert.equal(core.handleTurnFailure('group:333', new Error(LIMITER_503)).sent, false)
+  assert.equal(sent.length, 1, '主人不该被每个群各刷一条')
+})
+
+test('私聊限流不受网关全局限频影响（自己的对话被掐了该知道）', (t) => {
+  const { core, sent } = makeCore(t)
+  core.handleTurnFailure('group:111', new Error(LIMITER_503)) // 占用网关全局额度
+  const r = core.handleTurnFailure('private:10000002', new Error(LIMITER_503)) /* pii-scan:ignore */
+  assert.equal(r.sent, true, '另一个人的私聊仍应收到提示')
+  assert.equal(sent.length, 2)
+})
+
+test('分类读的是 err.failure.message（生产形状），不是只有「回合未正常结束」的外壳', (t) => {
+  const { core } = makeCore(t)
+  // 生产里 turn/end 的 reason.error 被挂到 err.failure 上（见 execute 的 reject 分支）；
+  // 若只读 err.message 就只剩「回合未正常结束：error」，永远分不出审核/限流 —— 这是真机踩过的坑。
+  const shell = new Error('回合未正常结束：error')
+  shell.failure = { message: LIMITER_503 }
+  assert.equal(core.classifyTurnFailure(shell).kind, 'rate-limit')
+
+  const shell2 = new Error('回合未正常结束：error')
+  shell2.failure = { message: '403: {"code":"codearts_upstream","message":"抱歉，我无法提供关于您提问内容的建议。"}' }
+  assert.equal(core.classifyTurnFailure(shell2).kind, 'moderation')
+
+  // 只有外壳（没有 failure）时退回 error，但绝不能崩
+  assert.equal(core.classifyTurnFailure(new Error('回合未正常结束：error')).kind, 'error')
+})
