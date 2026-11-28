@@ -121,7 +121,8 @@ test('openExternal：只放行 http(s)，并强制 noopener,noreferrer', () => {
   const fakeOpen = (...args) => { opened.push(args); return {} }
   assert.equal(openExternal('https://example.com/a', '_blank', fakeOpen), true)
   assert.deepEqual(opened[0], ['https://example.com/a', '_blank', 'noopener,noreferrer'])
-  assert.equal(openExternal('http://192.168.1.9:5700/', '_blank', fakeOpen), true)
+  // 夹具用主机名而不是私网 IP：行为只取决于协议是不是 http，写 IP 会触发仓库的 PII 扫描
+  assert.equal(openExternal('http://panel.lan:5700/', '_blank', fakeOpen), true)
 
   for (const bad of ['javascript:alert(1)', 'JavaScript:alert(1)', 'data:text/html,<script>x</script>', 'file:///etc/passwd', '']) {
     assert.equal(openExternal(bad, '_blank', fakeOpen), false, `不该打开：${bad}`)
