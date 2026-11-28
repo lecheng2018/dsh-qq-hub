@@ -440,7 +440,7 @@ export function apply(ctx) {
     path: PREFIX, // DSH 按「路径 = 前缀 或 以 前缀/ 开头」匹配，前缀本身不带结尾的 /
     handler: (req, res) => answer(res, () => {
       // 模块前缀路由与精确路由同一道防护（Host/CSRF、副作用方法约束；/open/* 保留联动密钥鉴权）。
-      const g = guard.check(req)
+      const g = guard.check(req, { isModuleRoute: true, registeredSideEffect: mods.routeSideEffect?.(new URL(req.url, 'http://x').pathname) })
       if (!g.ok) return send(res, g.code, { ok: false, message: g.message })
       let path = ''
       let qs = {}

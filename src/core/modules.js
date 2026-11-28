@@ -26,6 +26,11 @@ export const MIN_API_VERSION = 1
 const SRC = fileURLToPath(new URL('../', import.meta.url)) // 插件的 src/
 const BUILTIN_DIR = join(SRC, 'modules')
 const ID_RE = /^[a-z][a-z0-9-]{1,39}$/
+
+/** 模块 id 是否合法（小写字母开头，只能有小写字母、数字和 -，2~40 个字）。 */
+export function isValidModuleId(id) {
+  return ID_RE.test(String(id || ''))
+}
 const ENTRY = ['index.mjs', 'index.js']
 const DOC = 'API.md'
 const TYPES = 'qq-hub.d.ts'
@@ -334,11 +339,14 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         t.unref?.()
         return track(() => clearTimeout(t))
       },
-      route: (path, handler) => {
+      route: (path, handler, opts = {}) => {
         const full = '/qq-hub/api' + prefix + (String(path).startsWith('/') ? path : '/' + path)
         const cur = routes.get(full)
         if (cur && cur.id !== id && live.has(cur.id)) throw new Error(`接口 ${full} 已经被模块「${cur.id}」占了`)
-        routes.set(full, { id, handler: guard(`接口 ${path}`, handler) })
+        const guarded = guard(`接口 ${path}`, handler)
+        if (opts.sideEffect !== undefined) guarded.__sideEffect = opts.sideEffect
+        guarded.__isModuleRoute = true
+        routes.set(full, { id, handler: guarded, sideEffect: opts.sideEffect })
         return track(() => { if (routes.get(full)?.id === id) routes.delete(full) })
       },
       onDispose: (fn) => track(fn),
@@ -788,6 +796,11 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     return r.handler(req, res)
   }
 
+  /** 供 host.js 模块前缀路由查询：该路径是否登记为副作用路由。 */
+  function routeSideEffect(path) {
+    return routes.get(path)?.sideEffect
+  }
+
   // ---------- 面板 ----------
   // 审计 Q19：面板 /state 每 5 秒拉一次 /modules，status() 里又直接 scanUser()
   // 做一遍全量 readdir+statSync——而 sync() 每 3 秒已经扫过同一个目录，稳态下
@@ -959,6 +972,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     // 插件核心自己听事件（不属于任何模块，不会被撤掉）
     listen: (event, fn) => { const item = { id: '@core', fn }; listeners.set(event, [...(listeners.get(event) || []), item]); return () => listeners.set(event, (listeners.get(event) || []).filter((x) => x !== item)) }, contextFor, rules, commands, dshTools, builtinOff, handle,
     hasRoute: (path) => routes.has(path),
+    routeSideEffect,
     dir: userDir,
   }
 }
@@ -980,9 +994,13 @@ export function lazyProxy(get) {
 }
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v)
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 function deepMerge(base, over) {
   if (!isObj(over)) return over === undefined ? base : over
   const out = { ...(isObj(base) ? base : {}) }
-  for (const [k, v] of Object.entries(over)) out[k] = isObj(v) && isObj(out[k]) ? deepMerge(out[k], v) : v
+  for (const [k, v] of Object.entries(over)) {
+    if (FORBIDDEN_KEYS.has(k)) continue
+    out[k] = isObj(v) && isObj(out[k]) ? deepMerge(out[k], v) : v
+  }
   return out
 }

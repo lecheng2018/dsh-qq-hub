@@ -165,6 +165,11 @@ const WRAPPER_OPTS_WITH_ARG = {
   builtin: new Set([]),
   setsid: new Set([]),
   stdbuf: new Set(['-i', '-o', '-e', '--input', '--output', '--error']),
+  busybox: new Set([]),
+  xargs: new Set(['-I', '-n', '-P', '-d', '-L', '-s', '-a', '-E', '-J', '--max-args', '--max-procs', '--delimiter', '--max-lines', '--max-chars', '--arg-file', '--eof', '--replace']),
+  // chrt / taskset 的 -p / -c 是「纯开关」，优先级/掩码是位置参数，由下面统一跳一个位置参数处理。
+  chrt: new Set([]),
+  taskset: new Set([]),
 }
 
 function commandWords (words) {
@@ -179,10 +184,23 @@ function commandWords (words) {
     while (i < words.length && words[i].startsWith('-')) {
       const option = words[i++]
       if (option === '--') break
-      if (optsWithArg.has(option)) i++
+      // 单字符选项可合并写法（如 -0n5、-c0）：取首字符判断是否需要消费下一个参数。
+      // 但「值已内联」的形式（-n1、-I{}、--user=root）不能再吞掉后面的词，否则会把真正的命令吃掉。
+      const flag = option.startsWith('--') ? option : option.slice(0, 2)
+      const inlineValue = option.includes('=') || (!option.startsWith('--') && option.length > 2)
+      if (!inlineValue && (optsWithArg.has(option) || optsWithArg.has(flag))) i++
     }
     // timeout [opts] <duration> <cmd...>：跳掉必选的时长位置参数
     if (name === 'timeout' && i < words.length) i++
+    // chrt [opts] <prio> <cmd...>：-p 是「显示/设置调度策略」开关（chrt -p 1 中 1 是优先级）
+    if (name === 'chrt' && i < words.length) i++
+    // taskset [opts] <mask> <cmd...>：-c 是「指定 CPU」开关（taskset -c 0 中 0 是 CPU 掩码）
+    if (name === 'taskset' && i < words.length) i++
+    // xargs [opts] <cmd...>：xargs 把后续 stdin 行也当命令执行，剥离后把剩余参数当作被执行命令继续检查
+    if (name === 'xargs') {
+      const rest = words.slice(i)
+      if (rest.length) return rest
+    }
   }
   return words.slice(i)
 }

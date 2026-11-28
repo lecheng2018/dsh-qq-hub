@@ -5,26 +5,113 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
-function isPrivateIp(ip) {
-  if (!ip) return true
-  if (ip.includes(':')) {
-    const s = ip.toLowerCase()
-    if (s.startsWith('::ffff:')) {
-      const v4 = s.slice(7)
-      if (isIP(v4) === 4) return isPrivateIp(v4)
-    }
-    return s === '::1' || s.startsWith('fc') || s.startsWith('fd') ||
-      /^fe[89ab]/i.test(s) || s === '::' || s.startsWith('100::') || s.startsWith('2001:db8:')
+/** 把 IPv6 文本解析成 16 字节（支持 :: 压缩、末尾点分 IPv4、剥括号与 zone id）。 */
+export function parseIpv6ToBytes(ip) {
+  if (typeof ip !== 'string') return null
+  let s = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0]
+  if (!s) return null
+  // 末尾点分 IPv4：转成两个 16 位组
+  const v4Match = s.match(/(\d+\.\d+\.\d+\.\d+)$/)
+  let v4Tail = ''
+  if (v4Match) {
+    const parts = v4Match[1].split('.').map(Number)
+    if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null
+    v4Tail = ((parts[0] << 8 | parts[1]).toString(16) + ':' + (parts[2] << 8 | parts[3]).toString(16))
+    s = s.slice(0, s.length - v4Match[1].length) + v4Tail
   }
-  const parts = ip.split('.').map(Number)
+  if (!/^[0-9a-f:.]+$/.test(s)) return null
+  const doubleColon = s.indexOf('::')
+  let head = []
+  let tail = []
+  if (doubleColon >= 0) {
+    const headStr = s.slice(0, doubleColon)
+    const tailStr = s.slice(doubleColon + 2)
+    head = headStr ? headStr.split(':').filter(Boolean) : []
+    tail = tailStr ? tailStr.split(':').filter(Boolean) : []
+    const missing = 8 - head.length - tail.length
+    if (missing < 0) return null
+    for (let i = 0; i < missing; i++) head.push('0')
+  } else {
+    head = s.split(':')
+    if (head.length !== 8) return null
+  }
+  const groups = [...head, ...tail]
+  if (groups.length !== 8) return null
+  const bytes = new Uint8Array(16)
+  for (let i = 0; i < 8; i++) {
+    const g = groups[i]
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null
+    const n = parseInt(g, 16)
+    bytes[i * 2] = n >> 8
+    bytes[i * 2 + 1] = n & 0xff
+  }
+  return bytes
+}
+
+function isPrivateV4(ip) {
+  const parts = String(ip).split('.').map(Number)
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true
-  const [a, b, c] = parts
+  const [a, b] = parts
   return a === 0 || a === 10 || a === 127 ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 100 && b >= 64 && b <= 127) ||
     a >= 224
+}
+
+function isPrivateV6(bytes) {
+  const [b0, b1] = bytes
+  // ULA fc00::/7
+  if ((b0 & 0xfe) === 0xfc) return true
+  // 链路本地 fe80::/10
+  if (b0 === 0xfe && (b1 & 0xc0) === 0x80) return true
+  // 组播 ff00::/8
+  if (b0 === 0xff) return true
+  // ::/128 未指定
+  if (bytes.every((v) => v === 0)) return true
+  // ::1/128 回环
+  if (bytes.slice(0, 15).every((v) => v === 0) && bytes[15] === 1) return true
+  // ::ffff:0:0/96 IPv4-mapped
+  if (bytes.slice(0, 10).every((v) => v === 0) && bytes[10] === 0xff && bytes[11] === 0xff) {
+    return isPrivateV4([...bytes.slice(12)].join('.'))
+  }
+  // ::/96 IPv4-compatible（如 ::7f00:1）
+  if (bytes.slice(0, 12).every((v) => v === 0)) {
+    return isPrivateV4([...bytes.slice(12)].join('.'))
+  }
+  // 64:ff9b::/96 NAT64
+  if (bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b
+    && bytes.slice(4, 12).every((v) => v === 0)) {
+    return isPrivateV4([...bytes.slice(12)].join('.'))
+  }
+  // 64:ff9b:1::/48 NAT64 本地
+  if (bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b && bytes[4] === 0x00 && bytes[5] === 0x01) {
+    return isPrivateV4([...bytes.slice(12)].join('.'))
+  }
+  // 2002::/16 6to4（内嵌 IPv4 在 bytes[2..5]）
+  if (bytes[0] === 0x20 && bytes[1] === 0x02) {
+    return isPrivateV4([bytes[2], bytes[3], bytes[4], bytes[5]].join('.'))
+  }
+  // 100::/64 丢弃前缀（RFC 6666）
+  if (bytes[0] === 0x01 && bytes[1] === 0x00 && bytes.slice(2, 8).every((v) => v === 0)) return true
+  // 2001:db8::/32 文档段
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x0d && bytes[3] === 0xb8) return true
+  // 2001:2::/48 Benchmarking
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x02) return true
+  // 2001:10::/28 ORCHID
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x00 && (bytes[3] & 0xf0) === 0x10) return true
+  return false
+}
+
+export function isPrivateIp(ip) {
+  if (!ip) return true
+  if (String(ip).includes(':')) {
+    const bytes = parseIpv6ToBytes(ip)
+    if (!bytes) return true
+    return isPrivateV6(bytes)
+  }
+  return isPrivateV4(ip)
 }
 
 export async function assertPublicUrl(url) {
@@ -34,6 +121,16 @@ export async function assertPublicUrl(url) {
   if (host === 'localhost' || host.endsWith('.localhost')) throw new Error('不允许访问本机地址')
   const ips = isIP(host) ? [host] : (await lookup(host, { all: true })).map((x) => x.address)
   if (!ips.length || ips.some(isPrivateIp)) throw new Error('不允许访问内网地址')
+}
+
+/** 给 undici Agent 的 connect 选项：socket 连接前按目标主机名重新校验 IP（DNS rebinding 防护）。 */
+export function safeLookup(hostname, opts, cb) {
+  lookup(hostname, { all: true }, (err, addresses) => {
+    if (err) return cb(err)
+    const ips = (Array.isArray(addresses) ? addresses : [addresses]).map((x) => x.address)
+    if (!ips.length || ips.some(isPrivateIp)) return cb(new Error('不允许访问内网地址'))
+    cb(null, addresses)
+  })
 }
 
 /**
@@ -137,7 +234,14 @@ export async function fetchImage(src, o = {}) {
     let r = null
     while (redirects < 5) {
       await assertPublicUrl(currentUrl)
-      r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual' })
+      // 连接层二次校验：undici Agent 在 socket 建立前用 safeLookup 重新解析并拦截内网 IP，
+      // 阻断「assertPublicUrl 校验通过、fetch 实际连到另一 IP」的 DNS rebinding 绕过。
+      let dispatcher
+      try {
+        const { Agent } = await import('undici')
+        dispatcher = new Agent({ connect: { lookup: safeLookup } })
+      } catch { /* undici 不可用时退回仅 assertPublicUrl 预检 */ }
+      r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual', ...(dispatcher ? { dispatcher } : {}) })
       if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
         currentUrl = new URL(r.headers.get('location'), currentUrl).href
         redirects++

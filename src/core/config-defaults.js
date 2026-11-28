@@ -28,6 +28,8 @@ export function deepMerge(base, over) {
   if (!isObj(over)) return structuredClone(base)
   const out = structuredClone(base)
   for (const [k, v] of Object.entries(over)) {
+    // 原型污染防护：__proto__ / constructor / prototype 绝不参与合并（面板与配置文件都是不可信输入）
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
     if (isObj(v) && isObj(out[k])) out[k] = deepMerge(out[k], v)
     else if (v !== undefined) out[k] = v
   }

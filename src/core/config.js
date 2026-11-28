@@ -11,9 +11,24 @@ import { normalize } from './config-normalizers.js'
 
 function FILE() { return dataDir('config.json') }
 
+/**
+ * 原型污染防护（第一道门）：config.json 是磁盘上的不可信输入，读进来先整体剔掉原型键，
+ * 再交给迁移/归一化。深合并那一层（config-defaults 的 deepMerge）另有一道同样的过滤。
+ */
+function stripProtoKeys(value) {
+  if (!value || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map(stripProtoKeys)
+  const out = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
+    out[k] = stripProtoKeys(v)
+  }
+  return out
+}
+
 /** 读磁盘配置（老配置先做一次性迁移再归一化）。 */
 export function loadConfig() {
-  const raw = migrateRawOnLoad(readJson(FILE(), () => ({})) || {})
+  const raw = migrateRawOnLoad(stripProtoKeys(readJson(FILE(), () => ({}))) || {})
   return normalize(raw)
 }
 

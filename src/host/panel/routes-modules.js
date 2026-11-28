@@ -3,9 +3,9 @@
 // 模拟测试：不用上 QQ 就能试模块。发出去的消息只截下来给面板看，不真发
 // （模块直接调 api.onebot(...) 的操作不在此列，是真的会执行的）
 
-import { join } from 'node:path'
+import { join, resolve, relative, isAbsolute } from 'node:path'
 import { parseCommand } from '../../chat/commands.js'
-import { API_VERSION } from '../../core/modules.js'
+import { API_VERSION, isValidModuleId } from '../../core/modules.js'
 
 export function registerModulesRoutes({
   route, readBody, query, send,
@@ -49,7 +49,12 @@ export function registerModulesRoutes({
   route('/modules/prompt', async (req) => ({ ok: true, prompt: mods.promptFor(String(query(req).id || '')) }))
   route('/modules/open', async (req) => {
     const id = String(query(req).id || '')
-    return openFolder(id ? join(mods.dir(), id) : mods.dir())
+    if (id && !isValidModuleId(id)) return { ok: false, message: '模块 id 不对' }
+    const base = resolve(mods.dir())
+    const target = id ? resolve(base, id) : base
+    const rel = relative(base, target)
+    if (rel.startsWith('..') || isAbsolute(rel)) return { ok: false, message: '模块路径越界' }
+    return openFolder(target)
   })
   // 没有文字的（语音条、表情、图片）显示发送备注，比如「[语音·edge] 早呀」
   const sentLines = (sent) => sent.map((s) => ({ chatId: s.chatId, note: s.note, text: s.message.some((seg) => seg.type === 'text') ? s.message.map((seg) => (seg.type === 'text' ? seg.data.text : seg.type === 'reply' ? '' : `[${seg.type}]`)).join('') : s.note }))
