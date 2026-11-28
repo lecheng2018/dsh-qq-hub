@@ -67,7 +67,9 @@ export const styleModule = {
       const current = isGroup
         ? (memory.styleSourceOf?.(key)?.origin === 'manual' ? rawCurrent : [])
         : rawCurrent
-      const self = isGroup ? [] : memory.styleOf('self')
+      // T3.8：self 风格也要按当前会话人设取（同一个键在不同人设下是两份风格）。
+      // 不传 personaId 时 styleOf 会落到默认人设，等于把默认人设的口头禅灌进别人设的会话。
+      const self = isGroup ? [] : memory.styleOf('self', personaIdFor(chat, api.config()))
       if (!current.length && !self.length) return ''
       const learned = current.length ? `和${isGroup ? '这个群' : '对方'}聊久了，${current.join('；')}` : ''
       const own = self.length ? `你平时不知不觉会用的说法：${self.join('、')}` : ''

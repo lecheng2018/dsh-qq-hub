@@ -48,7 +48,8 @@ function setup({ bus = createWaterfallBus(), approvalOverride, initialService } 
     get root() {
       throw new Error('cannot get property "root" without inject')
     },
-    effect(fn) { effects.push(fn) },
+    // 过滤掉 createHostEffects 自带的卸载守卫，effect 计数只统计本体注册
+    effect(fn, label) { if (label !== 'qq-hub: effects 卸载守卫') effects.push(fn) },
     on: (event, fn, opts) => bus.on(event, fn, opts),
     get(name) { return name === 'approval' ? service : null },
   }

@@ -63,15 +63,18 @@ export function convertMarkdownTables(text) {
 export function protectCode(text) {
   const store = []      // 代码**内容**（不含围栏）
   const originals = []  // 原始片段（围栏块保留 ``` 行）
-  const mask = (code, original) => {
+  // T3.11 修补：围栏块的占位符带 F 前缀（\uFFF9F<n>\uFFFA），行内代码不带。
+  // 下游「带代码就不拆泡」只能对**围栏块**生效：以前分不清两者，只要聊天里有一个
+  // 行内反引号（`ls`）整段长回复就不拆泡，几百字挤成一条。
+  const mask = (code, original, fenced) => {
     store.push(code)
     originals.push(original)
-    return `\uFFF9${store.length - 1}\uFFFA`
+    return `\uFFF9${fenced ? 'F' : ''}${store.length - 1}\uFFFA`
   }
   const out = String(text ?? '')
-    .replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (full, lang, code) => mask(String(code).replace(/\n$/, ''), full))
-    .replace(/`([^`\n]+)`/g, (full, code) => mask(code, code))
-  const swap = (value, list) => String(value ?? '').replace(/\uFFF9(\d+)\uFFFA/g,
+    .replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (full, lang, code) => mask(String(code).replace(/\n$/, ''), full, true))
+    .replace(/`([^`\n]+)`/g, (full, code) => mask(code, code, false))
+  const swap = (value, list) => String(value ?? '').replace(/\uFFF9F?(\d+)\uFFFA/g,
     (m, i) => (Number(i) < list.length ? list[Number(i)] : m))
   return {
     text: out,
@@ -81,6 +84,8 @@ export function protectCode(text) {
     // 还原成「原文」：围栏行保留。文档分章/长度判定需要看到真正的代码块边界，
     // 否则代码里的 `# 注释` 会被当成章节标题、`---` 被当成分隔线，长文档被切碎。
     restoreFenced: (value) => swap(value, originals),
+    // 只问「有没有围栏代码块」（行内代码不算）。给分泡逻辑用。
+    hasFenced: (value) => /\uFFF9F\d+\uFFFA/.test(String(value ?? '')),
     size: store.length,
   }
 }

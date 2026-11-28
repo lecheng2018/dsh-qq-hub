@@ -16,6 +16,7 @@ import {
   fuseRrf,
   createScopeVectorFile,
   createVectorChannel,
+  isFatalEmbeddingError,
 } from '../src/features/memory-vector.js'
 import { writeTextAtomic, scopeToVecFilePath } from '../src/features/memory-files.js'
 import { writeJson } from '../src/core/store.js'
@@ -166,6 +167,43 @@ function fakeFetch(url, opt) {
 function itemsOf(list) {
   return list.map((x) => ({ tags: [], aboutName: '', entity: '', topic: '', ...x }))
 }
+
+test('T3.8 向量通道：401/402/403 与维度不符立刻打满退避并停排（不靠重试自愈）', async () => {
+  const memDir = join(dir, 'channel-401')
+  mkdirSync(memDir, { recursive: true })
+  let calls = 0
+  const unauthorized = () => {
+    calls += 1
+    return Promise.resolve({ ok: false, status: 401, text: async () => 'invalid api key' })
+  }
+  // 退避基数放大到 5s：不要让 queueScope 排的那次定时器在断言期间插一脚
+  const getConfig = () => ({ memory: { embeddings: { enabled: true, url: 'https://x', model: 'm', dim: 64, batch: 8, flushDebounceMs: 5000 } } })
+  const ch = createVectorChannel({ memoryDir: memDir, getConfig, log: { warn: () => {} }, fetchImpl: unauthorized })
+  ch.queueScope('private:10001', itemsOf([{ id: 'm1', text: '主人喜欢养猫', importance: 0.6 }]))
+  assert.equal(await ch.flush(), 0, '401 不该产出向量')
+  assert.equal(calls, 1)
+  assert.equal(ch.status().failing, 5, '401 必须一次就把重试计数打满')
+  await new Promise((r) => setTimeout(r, 80))
+  assert.equal(calls, 1, '停排之后不许再自动发请求')
+  ch.dispose()
+
+  assert.equal(isFatalEmbeddingError(Object.assign(new Error('HTTP 403 boom'), { status: 403 })), true)
+  assert.equal(isFatalEmbeddingError(Object.assign(new Error('HTTP 402 欠费'), { status: 402 })), true)
+  assert.equal(isFatalEmbeddingError(new Error('embeddings HTTP 500: boom')), false, '500 是暂时性故障，仍要退避重试')
+
+  // 维度不符：走真实 embedder，确认错误被认成「不可自愈」
+  const dimDir = join(dir, 'channel-dim')
+  mkdirSync(dimDir, { recursive: true })
+  const dimFetch = (url, opt) => Promise.resolve({
+    ok: true,
+    json: async () => ({ data: JSON.parse(opt.body).input.map(() => ({ embedding: [1, 0, 0] })) }),
+  })
+  const ch2 = createVectorChannel({ memoryDir: dimDir, getConfig, log: { warn: () => {} }, fetchImpl: dimFetch })
+  ch2.queueScope('private:10002', itemsOf([{ id: 'm2', text: '猫', importance: 0.6 }]))
+  assert.equal(await ch2.flush(), 0)
+  assert.equal(ch2.status().failing, 5, '维度不符同样一次打满')
+  ch2.dispose()
+})
 
 test('向量通道：入队 → flush 落盘 → searchScopes 语义召回 → 死条目对账摘除', async () => {
   const memDir = join(dir, 'channel1')

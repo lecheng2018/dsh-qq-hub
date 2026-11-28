@@ -91,20 +91,39 @@ export function createEmbedder(cfg, { fetchImpl = globalThis.fetch, log = consol
       })
       if (!res.ok) {
         const body = await (typeof res.text === 'function' ? res.text() : Promise.resolve('')).catch(() => '')
-        throw new Error(`embeddings HTTP ${res.status}${body ? `: ${String(body).slice(0, 160)}` : ''}`)
+        const error = new Error(`embeddings HTTP ${res.status}${body ? `: ${String(body).slice(0, 160)}` : ''}`)
+        // 带上状态码：401/403/402 不是「等一下就好」的故障，重试只会白烧额度/继续 401
+        error.status = Number(res.status) || 0
+        throw error
       }
       const data = await res.json()
       const rows = Array.isArray(data?.data) ? data.data : null
       if (!rows || rows.length !== chunk.length) throw new Error('embeddings 返回结构不符合预期')
       for (const row of rows) {
         const v = Float32Array.from(row.embedding || [])
-        if (v.length !== cfg.dim) throw new Error(`embedding 维度不符：期望 ${cfg.dim}，拿到 ${v.length}`)
+        if (v.length !== cfg.dim) {
+          // 维度不符是配置错（模型/dim 不匹配），重试一万次也不会变对 → 标记为不可自愈
+          const error = new Error(`embedding 维度不符：期望 ${cfg.dim}，拿到 ${v.length}`)
+          error.code = 'EMBED_DIM_MISMATCH'
+          throw error
+        }
         out.push(l2normalize(v))
       }
     }
     return out
   }
   return { embed, log }
+}
+
+/** 不可靠重试自愈的 embedding 失败：鉴权失败(401)、欠费(402)、无权限(403)、维度/模型配置不符。 */
+export function isFatalEmbeddingError(error) {
+  if (!error) return false
+  if (error.code === 'EMBED_DIM_MISMATCH') return true
+  const status = Number(error.status) || 0
+  if (status === 401 || status === 402 || status === 403) return true
+  const text = String(error.message || '')
+  // 错误被别的层包过（只剩消息）时也要认出来：403 的常见文案是 invalid api key / quota
+  return /\bHTTP (401|402|403)\b/.test(text) || /维度(不符|不匹配)/.test(text)
 }
 
 // ---------------- RRF 融合（纯函数，可单测） ----------------
@@ -294,6 +313,7 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     if (disposed || !cfg || !emb || flushing || !dirty.size) return 0
     flushing = true
     let embedded = 0
+    let fatalStop = false
     try {
       const batches = [...dirty]
       dirty.clear()
@@ -335,7 +355,9 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
           embedded += committed
         } catch (error) {
           if (disposed) break // 停用导致的失败不重排、不回填，也不再发请求
-          failStreak += 1 // 连续失败 → 下一次调度延迟按 2^n 退避（见 nextFlushDelayMs）
+          // 401/403/402/维度不符：直接打满重试上限立刻停排（否则要白等 5 轮指数退避 + 继续 401）
+          fatalStop = fatalStop || isFatalEmbeddingError(error)
+          failStreak = fatalStop ? MAX_AUTO_RETRIES : failStreak + 1 // 连续失败 → 下一次调度延迟按 2^n 退避（见 nextFlushDelayMs）
           warnOnce(`flush 失败（退回纯 BM25，稍后重试）：${error.message}`)
           // T3.8：回填必须尊重「失败期间又来了新快照」的事实。
           // queueScope 的语义是整作用域全量对账，新快照（尤其是 [] 删空）一旦入队，
@@ -350,7 +372,8 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
       }
     } finally {
       flushing = false
-      if (embedded > 0) failStreak = 0
+      // 本轮有成功批次才清零；不可自愈的致命错误即使前面侥幸成功过也不许清零（否则又开始无限重试）
+      if (embedded > 0 && !fatalStop) failStreak = 0
       // 审计 S13 附带：flush 飞行期间入队的 scope 会被上面的 flushing 卫语句
       // 直接 return 掉——dirty 里留着数据、却没有任何定时器再去碰它，要等
       // 下一次任意 save 才有机会 flush。连续两次 remove（第二次删空作用域）
@@ -474,7 +497,8 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
         vectors += file.load().size
       } catch {}
     }
-    return { enabled: true, model: cfg.model, dim: cfg.dim, scopes, vectors, pending: dirty.size }
+    // failing：连续失败计数（面板可观测；达到上限即自动停排，等下次 save/backfill 再试）
+    return { enabled: true, model: cfg.model, dim: cfg.dim, scopes, vectors, pending: dirty.size, failing: failStreak }
   }
 
   /** 关闭通道（同步且幂等）。置 disposed 后所有入口都不再发请求、不再写盘。 */

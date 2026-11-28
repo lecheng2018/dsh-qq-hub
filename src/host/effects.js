@@ -23,7 +23,16 @@ export function createHostEffects({
 
   // T3.6：插件被卸载（热重载）后，任何已经排上的 setTimeout 仍会醒来跑一次旧实例的闭包，
   // 于是旧实例又连回网关/新建会话（僵尸连接）。disposed 守卫让这些迟到回调空跑一次立刻退出。
+  // 卸载时置位：注册在 ctx.effect 上，热重载/停用后由宿主统一回收。
+  // 只声明不置位的 disposed 等于没有守卫 —— 旧实例的 setTimeout 醒来照样跑完闭包。
   let disposed = false
+  const dispose = () => { disposed = true }
+  try {
+    ctx.effect(() => () => { disposed = true }, 'qq-hub: effects 卸载守卫')
+  } catch (error) {
+    // ctx 没有 effect（单测/老宿主）时退化为手动 dispose()，不影响其余接线
+    log?.debug?.(`effects 卸载守卫注册失败：${error?.message || error}`)
+  }
   const safe = (fn, label) => () => {
     if (disposed) return
     Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message))
@@ -251,7 +260,7 @@ export function createHostEffects({
   }
 
   return {
-    safe, watchdog,
+    safe, watchdog, dispose,
     installApprovalFlow,
     setupUserQuestions,
     installSessionWatcher,

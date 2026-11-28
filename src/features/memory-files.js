@@ -648,10 +648,37 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         paths.add(doc.file)
         if (JSON.stringify(oldSnap?.entries) !== JSON.stringify(newEntries)) pending.push(doc)
       }
-      for (const doc of pending) commitScopeDocument(doc)
+      // T3.8：CAS 校验必须发生在**任何作用域落盘之前**。放到后面时，多作用域保存会先
+      // 把 A、B 两个 memory.md 改掉，再发现状态文件被外部改过 → 抛错、但磁盘已经是半新半旧。
       const currentStateRaw = existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : null
       if (currentStateRaw !== diskStateRaw) {
         throw new Error('记忆运行状态已在外部被修改，请先重载档案')
+      }
+      const committed = []
+      try {
+        for (const doc of pending) {
+          const backup = existsSync(doc.file) ? readFileSync(doc.file, 'utf8') : null
+          const prev = scopeSnapshots.has(doc.scope) ? scopeSnapshots.get(doc.scope) : null
+          commitScopeDocument(doc)
+          committed.push({ doc, backup, prev })
+        }
+      } catch (error) {
+        // 多作用域落盘中途抛错（ENOSPC/权限/并发删除）：把已写的作用域回滚到写入前的内容，
+        // 否则重启后会出现「A 有、B 没有」的碎片状态，且内存快照与磁盘不一致。
+        for (const { doc, backup, prev } of committed.reverse()) {
+          try {
+            if (backup === null) {
+              if (existsSync(doc.file)) unlinkSync(doc.file)
+              scopeSnapshots.delete(doc.scope)
+            } else {
+              writeTextAtomic(doc.file, backup)
+            }
+            if (prev) scopeSnapshots.set(doc.scope, prev)
+            else scopeSnapshots.delete(doc.scope)
+            rev++
+          } catch { /* 回滚失败不掩盖原始错误 */ }
+        }
+        throw error
       }
       commitState(nextState)
       return rev

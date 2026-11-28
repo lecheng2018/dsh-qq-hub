@@ -363,8 +363,9 @@ export function segmentBubbles(text, rules = {}) {
   const cap = Math.max(10, Math.round(Number(rules.maxChars) || 30))
   const minBubble = Math.max(6, Math.round(cap * (Number(rules.minBubbleRatio) || 0.4)))
   const rand = typeof rules.rand === 'function' ? rules.rand : Math.random
-  // 代码块（parseReply 阶段已换成占位符，stripMarkdown 里也可能还原成 ```）整段不拆。
-  if (t.includes('```') || /\uFFF9\d+\uFFFA/.test(t)) return [t]
+  // 围栏代码块（parseReply 阶段已换成 F 前缀占位符，stripMarkdown 里也可能还原成 ```）整段不拆。
+  // 行内代码不在此列：一个 `ls` 不该让整段几百字的闲聊挤成一条。
+  if (t.includes('```') || /\uFFF9F\d+\uFFFA/.test(t)) return [t]
   // 短清单/简报（≤360 字）整段发；超长报告不整坨糊脸，走后续分段/章节切分
   if (rules.keepReports !== false && t.length <= 360 && structuredReport(t)) return [t]
   // 段落（空行）是硬边界：一段一条，段内再按句子攒；
@@ -530,10 +531,10 @@ function pushText(items, s, rules = {}, meta = null) {
       return
     }
   }
-  // 短代码块整段发（代码块的围栏会被 stripMarkdown 去掉，所以在原文上判一次）
-  // T3.11：带代码的整段不该被碎句切分。代码此时可能已换成占位符，
-  // 所以除了字面 ``` 还要认占位符（否则「代码块整段发」会被切成两条）。
-  if (rules.keepReports !== false && (rawClean.includes('```') || /\uFFF9\d+\uFFFA/.test(rawClean)) && t.length <= 1200) {
+  // 短围栏代码块整段发（代码块的围栏会被 stripMarkdown 去掉，所以在原文上判一次）
+  // T3.11：带围栏代码的整段不该被碎句切分。代码此时可能已换成占位符，
+  // 所以除了字面 ``` 还要认 F 前缀占位符（行内代码的占位符不带 F，不该触发整段不拆）。
+  if (rules.keepReports !== false && (rawClean.includes('```') || /\uFFF9F\d+\uFFFA/.test(rawClean)) && t.length <= 1200) {
     items.push({ kind: 'text', value: t })
     return
   }

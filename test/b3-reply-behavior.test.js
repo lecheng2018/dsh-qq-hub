@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { stripMarkdown } from '../src/chat/reply-markdown.js'
+import { stripMarkdown, protectCode } from '../src/chat/reply-markdown.js'
 import { parseReply, capBubbles } from '../src/chat/reply-segment.js'
 import { expandMentions } from '../src/chat/mentions.js'
 import { extractAndStripInnerMonologue } from '../src/chat/reply-sanitize.js'
@@ -31,6 +31,38 @@ test('T3.11 代码块内容不被 Markdown 规则改写（下划线/星号/井�
   assert.match(out, /---/, '代码里的 --- 不能被换成分隔线')
   assert.match(out, /x_y_z/, '行内代码同样原样保留')
   assert.match(out, /a \* b \* c/, '行内代码里的星号原样保留')
+})
+
+test('T3.11 占位符分得清围栏块与行内代码：只有围栏块才整段不拆泡', () => {
+  const inline = protectCode('先 `ls` 一下再 `cat a.txt`')
+  assert.equal(inline.hasFenced(inline.text), false, '行内代码的占位符不许带 F 前缀')
+  assert.equal(inline.restore(inline.text), '先 ls 一下再 cat a.txt')
+  // 行内代码只去反引号（围栏行才需要保留），和 restore() 同结果
+  assert.equal(inline.restoreFenced(inline.text), '先 ls 一下再 cat a.txt')
+
+  const fenced = protectCode('看这段：\n```js\nconst a = 1\n```')
+  assert.equal(fenced.hasFenced(fenced.text), true, '围栏代码块的占位符必须带 F 前缀')
+  assert.equal(fenced.restore(fenced.text), '看这段：\nconst a = 1')
+  assert.equal(fenced.restoreFenced(fenced.text), '看这段：\n```js\nconst a = 1\n```')
+
+  // 混排时两种占位符互不干扰，下标也各自还原
+  const mixed = protectCode('行内 `x` 与块\n```\ny\n```')
+  assert.equal(mixed.hasFenced(mixed.text), true)
+  assert.equal(mixed.restore(mixed.text), '行内 x 与块\ny')
+  assert.equal(mixed.restoreFenced(mixed.text), '行内 x 与块\n```\ny\n```')
+})
+
+test('T3.11 只含一个行内反引号的普通长聊天必须照常拆泡；带围栏代码块才整段发', () => {
+  const chatty = '第一句先说今天跑了一遍。第二句是 `ls` 输出看着正常。第三句开始翻日志了。第四句发现是权限问题。第五句已经修好并复跑过。'
+  const r = parseReply(chatty, { maxChars: 20, maxBubbles: 6, keepReports: true })
+  assert.ok(r.items.length >= 4, `行内代码不该让整段闲聊挤成一条：${JSON.stringify(r.items.map((i) => i.value))}`)
+  assert.ok(r.items.every((i) => !/\uFFF9/.test(i.value)), '占位符必须全部还原')
+  assert.ok(r.items.some((i) => /ls/.test(i.value)))
+
+  const fenced = '先看说明第一句。第二句再说一点。\n```js\nconst a = 1\n```\n后面还有第三句补充。'
+  const rf = parseReply(fenced, { maxChars: 20, maxBubbles: 6, keepReports: true })
+  assert.equal(rf.items.length, 1, '围栏代码块仍然整段发（不拆泡）')
+  assert.match(rf.items[0].value, /const a = 1/)
 })
 
 test('T3.11 代码块里的 ||| 不是气泡分隔符', () => {

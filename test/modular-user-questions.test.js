@@ -16,7 +16,8 @@ function setup() {
     },
   }
   const ctx = {
-    effect(fn) { effects.push(fn) },
+    // 过滤掉 createHostEffects 自带的卸载守卫，effect 计数只统计本体注册
+    effect(fn, label) { if (label !== 'qq-hub: effects 卸载守卫') effects.push(fn) },
     get(name) { return name === 'userQuestions' ? service : null },
   }
   const questions = {
@@ -81,7 +82,8 @@ test('userQuestions：Cordis 4 优先通过 ctx.on("user-questions/request", ...
   const calls = []
   const ctx = {
     get root() { throw new Error('cannot get property "root" without inject') },
-    effect(fn) { effects.push(fn) },
+    // 过滤掉 createHostEffects 自带的卸载守卫，effect 计数只统计本体注册
+    effect(fn, label) { if (label !== 'qq-hub: effects 卸载守卫') effects.push(fn) },
     on(event, fn, opts) {
       assert.equal(event, 'user-questions/request')
       assert.equal(opts?.prepend, true)
@@ -133,7 +135,8 @@ test('userQuestions：无 ctx.on 时通过 ctx.inject(["userQuestions"], ...) �
     },
   }
   const ctx = {
-    effect(fn) { effects.push(fn) },
+    // 过滤掉 createHostEffects 自带的卸载守卫，effect 计数只统计本体注册
+    effect(fn, label) { if (label !== 'qq-hub: effects 卸载守卫') effects.push(fn) },
     inject(deps, cb) {
       assert.deepEqual(deps, ['userQuestions'])
       injectCb = cb

@@ -256,8 +256,13 @@ export default {
       }
       return out
     })
-    // T3.8：卸载时把总线里缓存的 store 引用清掉，避免热重载后仍指向旧主库实例
-    api.onDispose?.(() => { busCached = null })
+    // T3.8：卸载时把总线里缓存的 store 引用清掉，避免热重载后仍指向旧主库实例；
+    // 同时注销挂在主库上的作用域覆写闭包 —— 只清 busCached 会留下旧实例的 overrides 快照，
+    // 停用/改配置后「open」放行仍在生效（相当于隔离开关关不掉）。
+    api.onDispose?.(() => {
+      busCached = null
+      try { api.use('memory')?.registerScopeOverride?.(null) } catch (error) { api.log?.warn?.('注销作用域覆写失败：' + error?.message) }
+    })
     return { scopeOf, visibleScopes, isVisible }
   },
 }

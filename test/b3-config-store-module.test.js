@@ -104,6 +104,8 @@ test('T3.9 store.readJsonWithBackup 传了 validate 仍然拦截结构不符的�
 test('T3.9 异步 setup 期间 stop：恢复后不许残留定时器/路由，health 保持 disabled', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'b3-mod-'))
   const modDir = join(dir, 'modules', 'slow')
+  // 还原成「进来时的原值」而不是一律 delete：并发跑全量时别的用例可能已经设过它
+  const prevDataDir = process.env.AURABOT_DATA_DIR
   process.env.AURABOT_DATA_DIR = dir
   const probe = globalThis.__b3mod = { started: false, done: false, timers: [], routes: [], error: null }
   mkdirSync(modDir, { recursive: true })
@@ -153,7 +155,8 @@ export default {
     assert.equal(mods.health().slow.state, 'disabled', '旧实例 setup 报错不许把 health 改成 failed')
     mods.dispose()
   } finally {
-    delete process.env.AURABOT_DATA_DIR
+    if (prevDataDir === undefined) delete process.env.AURABOT_DATA_DIR
+    else process.env.AURABOT_DATA_DIR = prevDataDir
     delete globalThis.__b3mod
     rmSync(dir, { recursive: true, force: true })
   }

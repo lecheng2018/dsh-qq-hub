@@ -10,14 +10,15 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createMemoryIndexCache } from '../src/features/memory-index-cache.js'
 import { createVectorChannel } from '../src/features/memory-vector.js'
 import { normalizeFact, consolidate } from '../src/features/memory-dream.js'
-import { openMemoryFiles } from '../src/features/memory-files.js'
+import { openMemoryFiles, scopeToFilePath } from '../src/features/memory-files.js'
+import { createMemoryLearning } from '../src/features/memory-learning.js'
 
 const noopLog = { info() {}, warn() {}, error() {}, debug() {} }
 
@@ -111,6 +112,142 @@ test('T3.8 梦境整理：pinned=1 的条目被识别为已固定，不会在整
   const text = JSON.stringify(out)
   assert.match(text, /主人养了一只猫/)
   assert.match(text, /七群人设认为主人怕猫/, '不同人设的同主题事实不许被合成一条')
+})
+
+test('T3.8 梦境整理：轨道（selfView/perspective）与人设不同的同主题事实不许互相合并', () => {
+  // normalizeFact 必须保留轨道字段 —— 丢了就和普通事实同键了
+  const kept = normalizeFact({ id: 'k', text: '主人喜欢猫', personaId: 'group-seven', selfView: 1, perspective: 'self' })
+  assert.equal(kept.personaId, 'group-seven')
+  assert.equal(kept.selfView, true)
+  assert.equal(kept.perspective, 'self')
+  assert.equal(normalizeFact({ id: 'k2', text: '主人喜欢猫' }).selfView, false)
+
+  // 正文几乎逐字相同（旧 groupKey 必然合一），只有轨道/人设不同
+  const base = { scope: 'private:10001', entity: '主人', topic: '猫', text: '主人喜欢猫', at: 1000 }
+  const facts = [
+    { ...base, id: 't1', kind: 'fact', selfView: false, perspective: 'other' },
+    { ...base, id: 't2', kind: 'fact', selfView: true, perspective: 'self' },
+    { ...base, id: 't3', kind: 'fact', personaId: 'default' },
+    { ...base, id: 't4', kind: 'fact', personaId: 'group-seven' },
+  ]
+  const out = consolidate(facts, { maxItems: 50, windowDays: 3650, minWeight: 0 })
+  const ids = (out.facts || []).map((f) => f.id).sort()
+  assert.deepEqual(ids, ['t1', 't2', 't3', 't4'], `不同轨道/人设的同主题事实不许合并：${JSON.stringify(ids)}`)
+  assert.equal(out.merges.length, 0)
+  assert.equal(out.supersede.length, 0)
+
+  // 对照组：同轨道、同人设、同文本仍要合并（没有把去重能力一起关掉）
+  const dup = consolidate([
+    { ...base, id: 'd1', kind: 'fact', personaId: 'default' },
+    { ...base, id: 'd2', kind: 'fact', personaId: 'default' },
+  ], { maxItems: 50, windowDays: 3650, minWeight: 0 })
+  assert.equal((dup.facts || []).length, 1, '同轨道的重复条目仍然要合并')
+  assert.equal(dup.merges.length, 1)
+})
+
+test('T3.8 记忆学习：提炼批次状态与整理进度真的走 mutate（CAS 自愈），不再用裸 save() 覆盖并发写入', async () => {
+  let state = {
+    version: 1,
+    items: [],
+    profiles: {},
+    insights: {},
+    styles: {},
+    styleSources: {},
+    processed: {},
+    processedSources: {},
+    runs: {},
+    lastConsolidate: {},
+    extractionBatches: {
+      b1: { fingerprint: 'f', scope: 'private:10001', status: 'pending', added: 0, at: 1 },
+    },
+  }
+  let mutations = 0
+  let directSaves = 0
+  const learning = createMemoryLearning({
+    dsh: { get: () => null, llm: { async *stream() { yield { type: 'text-delta', text: '[]' } } } },
+    getConfig: () => ({ ownerQQ: '10001', model: { provider: 'p', model: 'm' }, memory: { enabled: true } }),
+    hub: {},
+    log: noopLog,
+    isActive: () => true,
+    createGenerationSignal: () => ({ signal: new AbortController().signal, isValid: () => true, cleanup: () => {} }),
+    generationOf: () => ({ signal: { signal: new AbortController().signal, isValid: () => true }, cleanup: () => {} }),
+    load: () => structuredClone(state),
+    save: () => { directSaves += 1 },
+    mutate: (fn) => { mutations += 1; const next = structuredClone(state); fn(next); state = next; return true },
+    health: () => ({ ok: true }),
+    relatedTo: () => [],
+    add: () => ({ ok: true }),
+    addMany: () => ({ ok: true, added: 0, updated: 0, skipped: 0 }),
+    revise: () => true,
+    supersede: () => ({ ok: true }),
+    invalidate: () => true,
+    invalidateMany: () => 0,
+    scopeFromChatId: (c) => String(c || ''),
+    listFor: () => [],
+    profileOf: () => null,
+    setDerivedProfile: () => true,
+    profileKeyOf: (qq, sc) => `${qq}@${sc}`,
+    insightsOf: () => [],
+    setDerivedInsights: () => {},
+    styleOf: () => [],
+    setDerivedStyle: () => {},
+    personKey: () => '',
+  })
+
+  const resolved = learning.api.resolveExtractionBatch('b1', 'done')
+  assert.equal(resolved.ok, true)
+  assert.equal(mutations, 1, '批次状态落盘必须走 mutate')
+  assert.equal(directSaves, 0, '不许再绕过 persist 直接 save()')
+  assert.equal(state.extractionBatches.b1.status, 'done')
+  assert.equal(state.extractionBatches.b1.recovery, 'manual-confirmed', '改动的确是这次事务写进去的')
+
+  // 读侧（extractionBatches）看到的是落盘后的新状态
+  assert.equal(learning.api.extractionBatches().b1.status, 'done')
+})
+
+test('T3.8 档案落盘：state.json 在提交作用域之前被外部改动 → 直接抛错，一个 memory.md 都不动', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'b3-cas-order-'))
+  try {
+    const statePath = join(dir, 'state.json')
+    let bumped = false
+    const log = {
+      info() {}, debug() {}, error() {},
+      // 第一次「外部变更合并」的 warn 正好是「第二个进程又改了一次 state.json」的时机：
+      // 用这个真实钩子制造「CAS 校验点落在提交作用域之后」时才会踩到的交错。
+      warn: () => {
+        if (bumped) return
+        bumped = true
+        const disk = JSON.parse(readFileSync(statePath, 'utf8'))
+        disk.runs = { ...(disk.runs || {}), '17:00': '2026-11-27' }
+        writeFileSync(statePath, JSON.stringify(disk, null, 2))
+      },
+    }
+    const store = openMemoryFiles(dir, { log })
+    const s0 = store.load()
+    s0.items.push({ id: 'm1', text: '私聊里的一条事实', scope: 'private:10001', at: 1000 })
+    s0.items.push({ id: 'm2', text: '群里的一条事实', scope: 'group:777', at: 1000 })
+    store.save(s0)
+    const p1 = join(dir, scopeToFilePath('private:10001'))
+    const p2 = join(dir, scopeToFilePath('group:777'))
+    const before1 = readFileSync(p1, 'utf8')
+    const before2 = readFileSync(p2, 'utf8')
+
+    // 外部第一次合法改动：触发 save() 里的合并 warn，warn 里再做第二次改动
+    const disk = JSON.parse(readFileSync(statePath, 'utf8'))
+    disk.runs = { ...(disk.runs || {}), '16:00': '2026-11-27' }
+    writeFileSync(statePath, JSON.stringify(disk, null, 2))
+
+    const s1 = store.load()
+    s1.items.push({ id: 'm3', text: '两个作用域都要落盘的新事实', scope: 'private:10001', at: 2000 })
+    s1.items.push({ id: 'm4', text: '两个作用域都要落盘的新事实', scope: 'group:777', at: 2000 })
+    assert.throws(() => store.save(s1), /已在外部被修改|重载/)
+    assert.equal(readFileSync(p1, 'utf8'), before1, 'CAS 校验失败时私聊档案不许被改一半')
+    assert.equal(readFileSync(p2, 'utf8'), before2, 'CAS 校验失败时群档案也不许被改一半')
+    assert.ok(!store.load().items.some((m) => m.id === 'm3'), '内存快照也不许提前吞下这次写入')
+    store.close?.()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('T3.8 档案落盘：不同人设的同一 QQ 档案不再共用 prof_<qq> ID', () => {

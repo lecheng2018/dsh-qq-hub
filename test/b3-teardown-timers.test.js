@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { createApprovalRegistry } from '../src/chat/approvals.js'
 import { createQuestionRegistry } from '../src/chat/questions.js'
 import { createModuleSendBridge } from '../src/host/module-send-bridge.js'
+import { createHostEffects } from '../src/host/effects.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const noopLog = { info() {}, warn() {}, debug() {}, error() {} }
@@ -56,6 +57,33 @@ test('T3.6 questions：进来就已 aborted → 立刻拒绝、不发卡', async
   assert.equal(delivered.length, 0, '已取消的提问不许再发卡')
 })
 
+test('T3.6 host effects：卸载守卫真的把 disposed 置位，迟到的 safe() 回调不再执行', async () => {
+  const cleanups = []
+  const effects = createHostEffects({
+    ctx: { effect: (fn, label) => { cleanups.push({ label, off: fn() }) } },
+    log: noopLog,
+    getConfig: () => ({}),
+  })
+  let ran = 0
+  effects.safe(() => { ran += 1 }, '测试旁路')()
+  await sleep(10)
+  assert.equal(ran, 1, '卸载前 safe() 必须正常执行')
+  const guard = cleanups.find((c) => c.label === 'qq-hub: effects 卸载守卫')
+  assert.ok(guard, '必须把卸载守卫注册到 ctx.effect 上')
+  guard.off()
+  effects.safe(() => { ran += 1 }, '测试旁路')()
+  await sleep(10)
+  assert.equal(ran, 1, '卸载后旧实例的迟到回调必须空跑一次就退出')
+
+  // 手动 dispose() 走同一条置位路径（单测/老宿主没有 ctx.effect 时的兜底）
+  const second = createHostEffects({ ctx: { effect: () => {} }, log: noopLog, getConfig: () => ({}) })
+  second.dispose()
+  let late = 0
+  second.safe(() => { late += 1 }, '测试旁路')()
+  await sleep(10)
+  assert.equal(late, 0, 'dispose() 之后 safe() 也不许再执行')
+})
+
 test('T3.6 静默时段被挡下的汇总必须挂上补发定时器（scheduled=true）', async () => {
   const sent = []
   const fakeNow = new Date('2026-11-28T02:00:00').getTime() // 落在静默时段 [1, 7] 内
@@ -75,6 +103,32 @@ test('T3.6 静默时段被挡下的汇总必须挂上补发定时器（scheduled
   assert.equal(sent.length, 0, '静默时段内不发送')
   bridge.dispose()
   assert.equal(bridge.pendingDigests().length, 0, '卸载后汇总缓冲必须清空')
+})
+
+test('T3.6 静音（剩余时长不可知）挡下的汇总挂轮询定时器，静音一解除就自动补发', async () => {
+  const sent = []
+  let muted = true
+  const bridge = createModuleSendBridge({
+    hub: { isBusy: () => false },
+    outbox: { request: async (req) => { sent.push(req); return { state: 'sent', gatewayMessageId: 'gw-1' } } },
+    log: noopLog,
+    isMuted: () => muted,
+    pushPolicy: { enabled: true, pacingMs: 0, digestEnabled: true, quietHours: null },
+    digestPollMs: 20,
+  })
+  const r = await bridge.sendText('private:10000001', '静音期间的播报', 'daily-report')
+  assert.equal(r.state, 'digested')
+  assert.equal(r.reason, 'muted')
+  assert.equal(bridge.pendingDigests()[0].scheduled, true, '静音挡下的汇总必须挂轮询定时器')
+  await sleep(60)
+  assert.equal(sent.length, 0, '静音没解除不许发')
+  assert.equal(bridge.pendingDigests().length, 1, '汇总要一直留在缓冲区等解除')
+  muted = false
+  await sleep(150)
+  assert.equal(sent.length, 1, '静音一解除就该自动补发')
+  assert.match(sent[0].segments[0].data.text, /静音期间的播报/)
+  assert.equal(bridge.pendingDigests().length, 0, '补发后缓冲区清空（轮询随之停止）')
+  bridge.dispose()
 })
 
 test('T3.6 模块发送桥 dispose 后已排的补发定时器不许再发（热重载不留僵尸定时器）', async () => {
