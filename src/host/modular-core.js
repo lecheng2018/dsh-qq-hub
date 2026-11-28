@@ -56,7 +56,7 @@ import { readJson, writeJson } from '../core/store.js'
 import { policyFor, decideGroupReply, isOfficialBotSender } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
 import { gateFromEnv } from '../chat/group-atmosphere-gate.js'
-import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
+
 import { nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
@@ -69,9 +69,10 @@ import { createSessionLifecycle } from './core/session-lifecycle.js'
 import { createPromptContext } from './core/prompt-context.js'
 import { createToolsMount } from './core/tools-mount.js'
 import {
-  hydrateForwards, mediaOfInbound, aclMsgFromInbound,
+  mediaOfInbound, aclMsgFromInbound,
   textOfSegments, emitActivity, segmentsToContent,
 } from './core/inbound-prep.js'
+import { createInboundHydration } from '../chat/inbound-hydration.js'
 
 /**
  * @param {object} o
@@ -175,11 +176,6 @@ export function createModularCore({
   const faces = createFaces({ onebot, log })
   const sentIds = new Set()
   let selfId = ''
-  const pairCalmUntil = new Map()
-  const pairCalmSweep = (now) => {
-    if (pairCalmUntil.size < 50) return
-    for (const [key, until] of pairCalmUntil) if (until < now - 3 * 3600_000) pairCalmUntil.delete(key)
-  }
   const systemSessionIds = new Set() // systemTurns 后台会话 id（不进 chatOfSession，但供人设解析免误报回落告警）
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   /** chatKey -> 'archived' | 'context-window' | 'oversized' | 'timedOut'（下一次进入该聊天的回合时统一归档重建） */
@@ -198,11 +194,11 @@ export function createModularCore({
 
   // 群闸决策与在途回合账归子模块（core/group-gate.js）：状态在那里，核心只注入取数函数。
   const groupGate = createGroupGate({
-    getConfig, debug, groups, memoryScore, atmosphereGate,
+    getConfig, log, debug, groups, memoryScore, atmosphereGate,
     // controller 在本函数后面才创建：与原闭包一致，取用时才读（延迟读取，不抓快照）
     getController: () => controller,
   })
-  const { decideGroupReplyFor, noteTurnMode, releaseTurnMode } = groupGate
+  const { decideGroupReplyFor, noteTurnMode, releaseTurnMode, fishGuardOf } = groupGate
 
   /** ChatKey + 首发言者 → legacy 兼容的 chat 视图（provider / 人设 / 模型判定共用）。 */
   function chatViewFor(chatKey, members) {
@@ -541,9 +537,13 @@ export function createModularCore({
     replyIdOf, quotedInfo, quoteNote,
   })
   const {
-    mountTools, hydrateInboundFiles, hydrateQuotes, trimToImageBudget, resetImageBudget,
+    mountTools, hydrateInboundFiles, trimToImageBudget, resetImageBudget,
     mountedTools, slowNoticeSent,
   } = toolsMount
+
+  // 入站水合链（合并转发 → 语音转写 → 入站文件 → 引用转述）归 chat/inbound-hydration.js：
+  // execute 与 steer 两条路共用同一份顺序。依赖全是活引用（onebot / audio / toolsMount）。
+  const { hydrateMembers } = createInboundHydration({ onebot, log, audio, toolsMount })
 
   const admitContent = async (content, context = {}) => {
     const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
@@ -817,16 +817,17 @@ export function createModularCore({
       let groupFedItems = null
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
-      const expanded = await hydrateForwards(io.members, onebot, log)
-      const heard = await audio.hydrateRecords(expanded)
-      const heardWithFiles = await hydrateInboundFiles(heard, turn.chatKey)
-      if (inGroup) {
-        for (const member of heard) {
-          const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
-          if (hit) hit.text = textOfSegments(member.segments)
-        }
-      }
-      const members = await hydrateQuotes(heardWithFiles, turn.chatKey)
+      // 四步水合（转发→语音→文件→引用）归 chat/inbound-hydration.js；群缓冲的「正文回填」
+      // 必须发生在文件水合**之前**（文件水合会把 file 段换成整份正文，进缓冲会撑爆上下文），
+      // 所以用 onHeard 拿到那个中间态，时序与拆分前逐行一致。
+      const members = await hydrateMembers(io.members, turn.chatKey, inGroup ? {
+        onHeard: (list) => {
+          for (const member of list) {
+            const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
+            if (hit) hit.text = textOfSegments(member.segments)
+          }
+        },
+      } : undefined)
       if (inGroup) {
         for (const member of members) {
           if (member?.quoteNote) {
@@ -896,10 +897,7 @@ export function createModularCore({
       io.onSteer(async (inbound) => {
         activeSteers++
         try {
-          const expandedSteer = await hydrateForwards([inbound], onebot, log)
-          const heardSteer = await audio.hydrateRecords(expandedSteer)
-          const filesSteer = await hydrateInboundFiles(heardSteer, turn.chatKey)
-          const quotedSteer = await hydrateQuotes(filesSteer, turn.chatKey)
+          const quotedSteer = await hydrateMembers([inbound], turn.chatKey)
           let steerContent = segmentsToContent(quotedSteer)
           const source = `【私聊】${neutralizeInboundDsl(String(inbound.sender?.nickname || inbound.sender?.userId || ''))}(${inbound.sender?.userId})：`
           const timeHead = nowLine(Date.now(), previousTurnAt)
@@ -1317,46 +1315,10 @@ export function createModularCore({
           gatedDebug(`gate:${inbound.chatKey}`, decision.reason, `群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
           return { handled: 'group-pass', reason: decision.reason }
         }
-        try {
-          const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
-          if (fg.enabled) {
-            const now = Date.now()
-            const gid = inbound.chatKey.slice(6)
-            const pairKey = `${gid}:${userId}`
-            // 鱼群保护需要「她↔对方」交替视角（缺陷：bot 自发不入缓冲 → pair/乒乓恒 0 空转）。
-            // 缓冲只收入站消息；把她最近发言时间（speakTimes，noteSpeak 已记）合成 self 条目
-            // 一并喂给 pair/密度判定。不写回缓冲，避免污染群提示词上下文。
-            const botQQ = String(getConfig().botQQ || '')
-            const selfMsgs = groups.speakTimes(gid, now).map((t) => ({ sender: '她', userId: botQQ, time: t, isSelf: true }))
-            const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, text: x.text, isSelf: x.self === true })), ...selfMsgs]
-              .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
-            if (userId !== String(getConfig().ownerQQ || '')) {
-              const calmUntil = pairCalmUntil.get(pairKey) || 0
-              if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
-              // 保留 fg.windowMs 窗口内完整发言序列（含其他群友，供 assessPairLoop 正确识别真人插话重置）
-              const pairMsgs = dedupConvo(fishMsgs.filter((x) => Number(x.time || 0) > now - fg.windowMs))
-              const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
-              if (loop.blocked) {
-                pairCalmSweep(now)
-                pairCalmUntil.set(pairKey, now + fg.pairCooldownMs)
-                const reason = `与 ${inbound.sender?.nickname || userId} 已互来回 ${loop.rounds} 轮，进入对聊冷却`
-                log.info(`群 ${gid}：${reason}`)
-                return { handled: 'group-pass', reason }
-              }
-            }
-            const direct = decision.mode === 'must'
-            const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid, groupName: groups.name(gid) })
-            if (density.blocked) {
-              const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
-              if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
-                const reason = fishGuardReasonText(density)
-                log.info(`群 ${gid}：${reason}${direct && callerIsFish ? '，叫她的也在鱼名单里，豁免不适用' : ''}，本轮不参与`)
-                return { handled: 'group-pass', reason }
-              }
-              debug(`群 ${gid}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
-            }
-          }
-        } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
+        // 鱼群保护（pair 乒乓 + 密度）：判定与状态归 core/group-gate.js。
+        // 返回 { handled: 'group-pass', reason } = 本轮不参与；null = 放行（判定出错也放行）。
+        const fishBlocked = fishGuardOf({ inbound, decision, cfg })
+        if (fishBlocked) return fishBlocked
         const offered = controller.offer(inbound)
         if (offered?.turnId && decision.mode) noteTurnMode(inbound.chatKey.slice(6), offered.turnId, decision.mode)
         // 正向决策也留痕：否则只能看到后一条“不回”，容易误判成它绕闸门发了上一条回合。

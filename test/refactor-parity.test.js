@@ -78,6 +78,8 @@ const TARGETS = [
       'src/host/core/tools-mount.js',
       'src/host/core/session-lifecycle.js',
       'src/chat/dsh-turn-runner.js',
+      // S3：入站水合链（合并转发/语音/文件/引用）从装配根搬出
+      'src/chat/inbound-hydration.js',
     ],
     track: [
       'outbox', 'agent', 'controller', 'registry', 'groups', 'activity', 'turnStickers', 'participants',

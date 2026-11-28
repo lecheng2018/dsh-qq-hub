@@ -39,9 +39,15 @@ test('乒乓阈值以下放行；真人穿插/两侧同连发都不算乒乓', (
   assert.equal(assessFishDensity(burst, { now, guard: guard() }).pingPong, 3, '自侧连发即断链，计数从尾部算 3')
 })
 
+// S3 起鱼群判定落 src/host/core/group-gate.js：装配根 + 子模块拼起来才是完整调用面
+// （与 test/clockline.test.js 的 SRC 拼接口径一致）。
+const CORE_SRC = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
+  + '\n' + readFileSync(new URL('../src/host/core/group-gate.js', import.meta.url), 'utf8')
+
 test('当前核心的「被叫到」豁免先看叫人的是不是鱼', () => {
-  const core = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
-  assert.match(core, /senderFish[^}]*\} from '\.\.\/chat\/fish-guard\.js'/)
+  const core = CORE_SRC
+  // 路径随搬动多一层 ../（group-gate.js 在 src/host/core/）：断言语义不变，只认「从 fish-guard 导入」
+  assert.match(core, /senderFish[^}]*\} from '(?:\.\.\/)+chat\/fish-guard\.js'/)
   assert.match(core, /const callerIsFish = senderFish\(\{ userId, sender: inbound\.sender\?\.nickname \}, fg\)/)
   assert.match(core, /direct && fg\.bypassDirectAddress && !callerIsFish/, '鱼叫人 → 豁免失效')
 })
@@ -65,7 +71,7 @@ test('pair 预算：名单里的鱼 2 个来回即停，陌生人 4 个来回才
 })
 
 test('当前核心用 pair 预算 + pair 冷却，主人豁免在 pair 检查前', () => {
-  const core = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
+  const core = CORE_SRC
   assert.match(core, /assessPairLoop\(pairMsgs, userId, \{ guard: fg \}\)/)
   assert.match(core, /userId !== String\(getConfig\(\)\.ownerQQ/, '主人完全不进 pair 判定')
   assert.match(core, /const calmUntil = pairCalmUntil\.get\(pairKey\) \|\| 0[\s\S]{0,80}if \(calmUntil > now\)/, '冷却期内直接不回（含 @）')
