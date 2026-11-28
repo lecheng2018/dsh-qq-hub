@@ -96,14 +96,22 @@ test('supersede：未传 status 时继承旧事实归因', () => {
 })
 
 // ---- ④ 去重合并归因 ----
-test('去重合并：传闻并入旧条目时传递归因，不洗成直接事实', () => {
+test('去重合并：传闻并入非 direct 条目时传递归因，但不反向降级已确认的 direct 记忆', () => {
   const { store } = makeStore()
-  store.add({ text: '小明喜欢喝可乐', about: '10002', scope: 'private:10001' }) // direct
+  // 非 direct（guess）被 hearsay 合并时，传递归因与 speaker
+  store.add({ text: '小明喜欢喝可乐', about: '10002', scope: 'private:10001', status: 'guess' })
   const r = store.add({ text: '小明喜欢喝可乐', about: '10002', scope: 'private:10001', speaker: '小红', status: 'hearsay' })
   assert.ok(r.updated, '相似条目应合并')
   const merged = store.listFor(['private:10001']).find((x) => x.id === r.updated)
-  assert.equal(merged.status, 'hearsay', '合并应带上 hearsay 标注（旧版洗成 direct）')
+  assert.equal(merged.status, 'hearsay', '非 direct 条目合并应带上 hearsay 标注')
   assert.equal(merged.speaker, '小红')
+
+  // 已确认的 direct 记忆不应被 guess / hearsay 反向降级
+  store.add({ text: '小红喜欢喝奶茶', about: '10003', scope: 'private:10001' }) // direct
+  const r2 = store.add({ text: '小红喜欢喝奶茶', about: '10003', scope: 'private:10001', speaker: '路人', status: 'hearsay' })
+  assert.ok(r2.updated)
+  const mergedDirect = store.listFor(['private:10001']).find((x) => x.id === r2.updated)
+  assert.equal(mergedDirect.status, undefined, '已确认的 direct 记忆不得被 hearsay 反向降级')
 })
 
 // ---- ⑤ recallHint 配置路径 ----

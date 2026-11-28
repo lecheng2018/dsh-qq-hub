@@ -27,26 +27,54 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
   /** 作用域配额淘汰 + 全库兜底上限淘汰；quiet=true 时不打单作用域日志。 */
   function evictIfNeeded(s, scope, { quiet = false } = {}) {
     let total = 0
+    const evictedItems = []
+    // 作用域配额淘汰：超额则裁掉超额部分（绝不淘汰 pinned，优先淘汰已失效墓碑）
     const quota = quotaForScope(scope)
     const inScope = s.items.reduce((n, m) => n + (String(m.scope || '') === String(scope) ? 1 : 0), 0)
     if (inScope > quota) {
-      const removed = evictScopeItems(s.items, scope, quota)
+      const removed = evictScopeItems(s.items, scope, quota, Date.now(), evictedItems)
       if (removed > 0) {
         total += removed
         if (!quiet) log?.info?.(`记忆库：${scope} 超出配额 ${quota} 条，淘汰了 ${removed} 条最不重要的`)
       }
     }
+    // 全库兜底上限：防极端情况（大量小作用域）无限涨（同样绝不淘汰 pinned，优先淘汰墓碑）
     if (s.items.length > TOTAL_CAP) {
-      const victims = s.items.slice().sort((a, b) => (Number(a.importance || 0.5) - Number(b.importance || 0.5)) || (Number(a.at || 0) - Number(b.at || 0)))
-        .slice(0, s.items.length - TOTAL_CAP).map((m) => m.id)
+      const eligible = s.items.filter((m) => !m.pinned)
+      const victims = eligible
+        .slice()
+        .sort((a, b) =>
+          ((Number(b.invalidAt) > 0 ? 1 : 0) - (Number(a.invalidAt) > 0 ? 1 : 0))
+          || (Number(a.importance ?? 0.5) - Number(b.importance ?? 0.5))
+          || ((b.source === 'auto' ? 1 : 0) - (a.source === 'auto' ? 1 : 0))
+          || (Number(a.at || 0) - Number(b.at || 0)))
+        .slice(0, s.items.length - TOTAL_CAP)
+        .map((m) => m.id)
       const kill = new Set(victims)
       let n = 0
       for (let i = s.items.length - 1; i >= 0; i--) {
-        if (kill.has(s.items[i].id)) { s.items.splice(i, 1); n++ }
+        if (kill.has(s.items[i].id)) {
+          const [gone] = s.items.splice(i, 1)
+          evictedItems.push(gone)
+          n++
+        }
       }
       if (n > 0) {
         total += n
         if (!quiet) log?.info?.(`记忆库：全库超过兜底上限 ${TOTAL_CAP} 条，淘汰 ${n} 条`)
+      }
+    }
+    // 被淘汰条目的派生缓存必须同步失效，否则小档案/切词缓存会一直引用已删除的记忆
+    if (evictedItems.length) {
+      const stalePairs = new Set()
+      for (const gone of evictedItems) {
+        if (!gone) continue
+        invalidateToken(gone.id)
+        if (!gone.about) continue
+        const pair = `${gone.about}@${gone.scope || ''}`
+        if (stalePairs.has(pair)) continue
+        stalePairs.add(pair)
+        staleProfilesIn(s, String(gone.about), String(gone.scope || ''))
       }
     }
     return total
@@ -146,18 +174,31 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
         && !contradicts(t, m.text, String(about || ''), String(m.about || ''), scopeGuess, String(m.scope || ''))
     })
     if (dup) {
-      if (t.length >= dup.text.length && t !== dup.text) {
-        dup.text = t
-        invalidateToken(dup.id)
-      }
+      const textReplaced = t.length >= dup.text.length && t !== dup.text
+      if (t.length >= dup.text.length) dup.text = t
+      // 正文被覆盖时必须让切词缓存失效，否则下一次去重还在用旧正文的切词
+      if (textReplaced) invalidateToken(dup.id)
       dup.at = Date.now()
       dup.importance = Math.max(Number(dup.importance) || 0, Number(importance) || 0)
       if (evidence) dup.evidence = String(evidence).slice(0, 200)
       if (entity) dup.entity = String(entity).slice(0, 30)
       if (topic) dup.topic = String(topic).slice(0, 20)
       if (pinned) dup.pinned = 1
-      if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
-      if (entryStatus === 'hearsay' || entryStatus === 'guess') dup.status = entryStatus
+      // 来源归因合并：绝不让 guess/hearsay 反向降级已确认的 direct 记忆；
+      // 仅当原条目非 direct，或正文被非降级事实覆盖时更新 status/speaker。
+      const dupIsDirect = !dup.status || dup.status === 'direct'
+      const incomingIsDowngrade = entryStatus === 'hearsay' || entryStatus === 'guess'
+      if (!dupIsDirect) {
+        if (incomingIsDowngrade) {
+          dup.status = entryStatus
+          if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
+        } else {
+          delete dup.status
+          if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
+        }
+      } else if (textReplaced && !incomingIsDowngrade) {
+        if (String(speaker || '').trim()) dup.speaker = String(speaker).trim().slice(0, 40)
+      }
       staleProfilesIn(s, String(dup.about || ''), String(dup.scope || ''))
       return { ok: true, message: '✓', updated: dup.id, deduped: true, scope: finalScope }
     }
@@ -314,7 +355,7 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
     if (!want.size) return []
     const since = Date.now() - hours * 3600_000
     return load().items
-      .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since && want.has(String(m.scope || '')))
+      .filter((m) => (m.source === 'event' || m.source === 'diary') && m.at >= since && want.has(String(m.scope || '')) && personaVisible(m, m.scope))
       .sort((a, b) => b.at - a.at)
       .slice(0, limit)
   }
@@ -364,6 +405,48 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
       s.rev = (s.rev || 0) + 1
       return true
     })
+  }
+
+  /**
+   * 批量标成过时（一次 load + 一次 save）：用于梦境巩固等批量立墓碑路径，避免循环内逐条全库落盘。
+   * 语义与 invalidate 一致：默认保护 pinned，仅 force=true 放行。
+   * @param {Array<{oldId?:string, id?:string, newId?:string, byId?:string}>} pairs
+   * @param {{force?: boolean}} [opts]
+   * @returns {number} 实际立墓碑条数
+   */
+  function invalidateMany(pairs, opts = {}) {
+    if (isClosed()) return 0
+    const list = Array.isArray(pairs) ? pairs : []
+    if (!list.length) return 0
+    const force = opts && typeof opts === 'object' ? opts.force === true : false
+    const applied = mutate((s, abort) => {
+      const byIdMap = new Map(s.items.map((x) => [String(x.id), x]))
+      const now = Date.now()
+      let count = 0
+      const stalePairs = new Set()
+      for (const pair of list) {
+        const id = String(pair?.oldId ?? pair?.id ?? '').trim()
+        const byId = String(pair?.newId ?? pair?.byId ?? '').trim()
+        if (!id) continue
+        const m = byIdMap.get(id)
+        if (!m || m.invalidAt) continue
+        if (m.pinned && !force) continue
+        m.invalidAt = now
+        if (byId) m.supersededBy = byId
+        count++
+        if (m.about) {
+          const pk = `${m.about}@${m.scope || ''}`
+          if (!stalePairs.has(pk)) {
+            stalePairs.add(pk)
+            staleProfilesIn(s, String(m.about), String(m.scope || ''))
+          }
+        }
+      }
+      if (!count) return abort(0)
+      s.rev = (s.rev || 0) + 1
+      return count
+    })
+    return applied || 0
   }
 
   function restore(id) {
@@ -421,30 +504,38 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
     const t = String(text || '')
     if (!t || !MISS_RE.test(t)) return 0
     const now = Date.now()
-    let touched = 0
     const recallLog = getRecalls()
     for (const entry of recallLog) {
       if (now - Number(entry.at || 0) > 90_000) continue
       if (chatId && entry.where && entry.where !== chatId) continue
-      for (const h of entry.hits || []) {
-        const changed = mutate((s, abort) => {
+      const hits = entry.hits || []
+      if (!hits.length) continue
+      // 一次事务内降权本次召回的全部命中条目，再统一落盘一次
+      const changed = mutate((s, abort) => {
+        let count = 0
+        const changes = []
+        for (const h of hits) {
           const it = s.items.find((x) => x.id === h.id)
-          if (!it) return abort(null)
+          if (!it) continue
           const before = Number(it.importance) || 0.5
           const after = Math.max(0.1, Math.round((before * 0.8) * 100) / 100)
-          if (after === before) return abort(null)
+          if (after === before) continue
           it.importance = after
-          s.rev = (s.rev || 0) + 1
-          return { text: it.text, before, after }
-        })
-        if (changed) {
-          log?.info?.(`召回纠错：「${String(changed.text).slice(0, 40)}」重要性 ${changed.before} → ${changed.after}（用户说记错了）`)
-          touched++
+          changes.push({ text: it.text, before, after })
+          count++
         }
+        if (!count) return abort(null)
+        s.rev = (s.rev || 0) + 1
+        return { touched: count, changes }
+      })
+      if (changed?.touched) {
+        for (const c of changed.changes) {
+          log?.info?.(`召回纠错：「${String(c.text).slice(0, 40)}」重要性 ${c.before} → ${c.after}（用户说记错了）`)
+        }
+        return changed.touched // 只纠最近一次召回
       }
-      if (touched) break
     }
-    return touched
+    return 0
   }
 
   function clearScope(chat) {
@@ -503,6 +594,7 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
     addEvent,
     supersede: supersedeWithLog,
     invalidate,
+    invalidateMany,
     recentEvents,
     recentEventsFor,
     update,

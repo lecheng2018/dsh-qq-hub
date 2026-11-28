@@ -46,7 +46,7 @@ export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
   load, save, health, relatedTo,
-  add, addMany, revise, supersede, invalidate, scopeFromChatId, listFor,
+  add, addMany, revise, supersede, invalidate, invalidateMany, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
   reflectImpl, styleImpl,
@@ -55,6 +55,7 @@ export function createMemoryLearning({
   const chatLogDays = () => sourceLog.listDays()
   const chatLogSnapshot = (day) => readChatLogSource(sourceLog, day)
   let batchRecoveryError = ''
+  let inMemoryRetry = null
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
   async function importCandidates(text) {
@@ -212,10 +213,8 @@ export function createMemoryLearning({
       const state = load()
       state.extractionBatches = { ...(state.extractionBatches || {}) }
       state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
-      try { save(state) } catch (error) {
-        batchRecoveryError = `提炼批次 ${batch.id} 无法记录运行状态，自动整理已暂停：${error.message}`
-        throw error
-      }
+      // start() 发生在提交任何事实之前：save() 失败不代表事实状态不一致，不得设置 batchRecoveryError 永久熔断
+      save(state)
     },
     fail: (batch, scope, error) => {
       const state = load()
@@ -260,7 +259,10 @@ export function createMemoryLearning({
 
   const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   function consolidate(o = {}) {
-    return extractor.consolidate(o)
+    return extractor.consolidate(o).then((r) => {
+      if (r?.ok) inMemoryRetry = null
+      return r
+    })
   }
 
   function learnSelfStyle(genSignal = null) {
@@ -310,30 +312,39 @@ export function createMemoryLearning({
       const out = dreamConsolidateFacts(facts, options)
       if (!out.ok) return out
 
-      // 墓碑落盘：已在库中的条目被合并/证伪时只立墓碑（invalidate），绝不凭空插入第三条副本造成膨胀
+      // 墓碑落盘：已在库中的条目被合并/证伪时只立墓碑（优先 invalidateMany 一次批量落盘），绝不凭空插入第三条副本造成膨胀
       let applied = 0
-      for (const tomb of (out.supersede || [])) {
+      const tombs = Array.isArray(out.supersede) ? out.supersede : []
+      if (tombs.length && typeof invalidateMany === 'function') {
         try {
-          if (typeof invalidate === 'function') {
-            if (invalidate(String(tomb.oldId), String(tomb.newId))) applied += 1
-          } else if (typeof supersede === 'function') {
-            const merged = (out.facts || []).find((f) => String(f.id) === String(tomb.newId))
-            if (merged) {
-              supersede({
-                oldId: String(tomb.oldId),
-                text: String(merged.text || ''),
-                about: String(merged.entity || ''),
-                tags: Array.isArray(merged.tags) ? merged.tags : [],
-                importance: Number(merged.importance) || 0.5,
-                entity: String(merged.entity || ''),
-                topic: String(merged.topic || ''),
-                source: 'dream',
-              })
-              applied += 1
-            }
-          }
+          applied = invalidateMany(tombs.map((tomb) => ({ oldId: String(tomb.oldId), newId: String(tomb.newId) })))
         } catch (error) {
-          log?.warn?.('梦境墓碑落盘失败（跳过该条，不删事实）：', error?.message || error)
+          log?.warn?.('梦境墓碑批量落盘失败（不删事实）：', error?.message || error)
+        }
+      } else {
+        for (const tomb of tombs) {
+          try {
+            if (typeof invalidate === 'function') {
+              if (invalidate(String(tomb.oldId), String(tomb.newId))) applied += 1
+            } else if (typeof supersede === 'function') {
+              const merged = (out.facts || []).find((f) => String(f.id) === String(tomb.newId))
+              if (merged) {
+                supersede({
+                  oldId: String(tomb.oldId),
+                  text: String(merged.text || ''),
+                  about: String(merged.entity || ''),
+                  tags: Array.isArray(merged.tags) ? merged.tags : [],
+                  importance: Number(merged.importance) || 0.5,
+                  entity: String(merged.entity || ''),
+                  topic: String(merged.topic || ''),
+                  source: 'dream',
+                })
+                applied += 1
+              }
+            }
+          } catch (error) {
+            log?.warn?.('梦境墓碑落盘失败（跳过该条，不删事实）：', error?.message || error)
+          }
         }
       }
 
@@ -342,6 +353,7 @@ export function createMemoryLearning({
         const byPerson = new Map()
         for (const exp of out.experiences) {
           const sc = String(exp.scope || 'global')
+          if (sc.startsWith('group:')) continue
           const key = sc.startsWith('private:') ? `qq:${sc.slice(8)}` : sc
           if (!byPerson.has(key)) byPerson.set(key, [])
           byPerson.get(key).push({
@@ -352,7 +364,7 @@ export function createMemoryLearning({
         }
         for (const [key, list] of byPerson) {
           try {
-            // 追加合并而非整桶覆盖（缺陷：梦境覆盖反思经验）：保留既有相处经验、按正文去重；
+            // 追加合并而非整桶覆盖（缺陷：梦境覆盖反思经验）：保留既有相处经验、按正文/标签去重；
             // name 传空不覆盖人名（旧版把 insightNames[key] 改成「梦境归纳」污染面板人名）。
             setDerivedInsights(key, list, '', { sourceFingerprint: 'dream-consolidate', merge: true })
           } catch (err) {
@@ -383,15 +395,23 @@ export function createMemoryLearning({
       return mins >= hh * 60 + mm && runs[t] !== today
     })
     if (!due.length) return
-    if (consolidationRetryBlocked(s.lastConsolidate?.retry, now.getTime())) return
+    const nowMs = now.getTime()
+    if (consolidationRetryBlocked(s.lastConsolidate?.retry, nowMs) || consolidationRetryBlocked(inMemoryRetry, nowMs)) return
     // 连今天到目前为止的聊天一起提炼；记着整理到第几行，下一次只处理新的
     const r = await consolidate({ includeToday: true })
     if (!isActive()) return
     if (r.ok) {
-      const s2 = load()
-      s2.runs = { ...(s2.runs || {}) }
-      for (const t of due) s2.runs[t] = today
-      save(s2)
+      inMemoryRetry = null
+      try {
+        const s2 = load()
+        s2.runs = { ...(s2.runs || {}) }
+        for (const t of due) s2.runs[t] = today
+        save(s2)
+      } catch (error) {
+        inMemoryRetry = nextConsolidationRetry(inMemoryRetry || s.lastConsolidate?.retry, Date.now(), error?.message || '保存每日整理进度失败')
+        log?.warn?.('保存每日整理完成状态失败（已启用内存退避）：', error?.message || error)
+        return
+      }
       // 提炼成功后接一次闲时梦境巩固（US-016）。失败不影响上面的成功记录：
       // 梦境只是把已存事实去重/证伪/归纳，是可重建的派生层。
       //
@@ -412,10 +432,28 @@ export function createMemoryLearning({
         log?.warn?.('梦境巩固异常（已忽略）：', error?.message || error)
       }
     } else if (r.message !== '正在整理中') {
-      const s2 = load()
-      const retry = nextConsolidationRetry(s2.lastConsolidate?.retry, Date.now(), r.message)
-      s2.lastConsolidate = { ...(s2.lastConsolidate || {}), retry }
-      save(s2)
+      const failNow = Date.now()
+      let s2 = null
+      try { s2 = load() } catch {}
+      const diskRetry = s2?.lastConsolidate?.retry
+      const pickActive = (a, b) => {
+        const va = a && !retryCycleExpired(a, failNow) ? a : null
+        const vb = b && !retryCycleExpired(b, failNow) ? b : null
+        if (!va) return vb
+        if (!vb) return va
+        return (Number(vb.attempts) || 0) > (Number(va.attempts) || 0) ? vb : va
+      }
+      const retry = nextConsolidationRetry(pickActive(diskRetry, inMemoryRetry), failNow, r.message)
+      // 先写内存退避：即使下方 save(s2) 失败，退避窗口与上限依然生效，切断每 60 秒无限重跑风暴
+      inMemoryRetry = retry
+      try {
+        if (s2) {
+          s2.lastConsolidate = { ...(s2.lastConsolidate || {}), retry }
+          save(s2)
+        }
+      } catch (saveError) {
+        log?.warn?.('保存每日整理退避状态失败（已启用内存退避）：', saveError?.message || saveError)
+      }
       if (retry.attempts >= CONSOLIDATION_MAX_ATTEMPTS) {
         log?.warn?.(`每日整理连续失败 ${retry.attempts} 次，自动重试已暂停；请修复后手动整理一次以解除`)
       }
@@ -454,6 +492,6 @@ export function createMemoryLearning({
       extractionBatches, resolveExtractionBatch,
       dreamConsolidate,
     },
-    reload: () => { batchRecoveryError = '' },
+    reload: () => { batchRecoveryError = ''; inMemoryRetry = null },
   }
 }

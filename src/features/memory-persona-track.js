@@ -17,7 +17,8 @@ export const SUBJECTIVE_KINDS = Object.freeze(['insight', 'style', 'profile'])
 
 const SUBJECTIVE_KIND_SET = new Set(SUBJECTIVE_KINDS)
 const PERSONA_ID_MAX_LENGTH = 64
-const PERSONA_ID_RE = /^[A-Za-z0-9_-]+$/
+// 与 src/persona/personas.js 的 safeId 对齐：支持 Unicode 字母（含中文）、数字、_、-
+const PERSONA_ID_RE = /^[\p{L}\p{N}_-]+$/u
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 

@@ -243,6 +243,8 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
     let insights = 0
     let days = 0
     let profiles = 0
+    let attemptedChats = 0
+    let succeededChats = 0
     const failedChats = []
     try {
       for (const day of consolidation.chatLogDays()) {
@@ -267,11 +269,13 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
         const failuresBefore = failedChats.length
         for (const [chatId, lines] of byChat) {
           if (!genSignal.isValid()) break
+          attemptedChats++
           try {
             const result = await extractLines(chatId, lines, genSignal)
             added += result.added || 0
             insights += result.insights ? 1 : 0
             if (!result.ok) throw new Error(result.message || '记忆提炼失败')
+            succeededChats++
           } catch (error) {
             failedChats.push({ day, chatId, error: error.message })
             log?.warn?.(`提炼 ${day} 聊天 ${chatId} 记忆失败:`, error.message)
@@ -288,6 +292,17 @@ export function createMemoryExtractor({ dsh, getConfig, relatedTo, commit, isAct
           consolidation.save(state)
           days++
         }
+      }
+      // 若全部聊天提炼失败且存在存储级错误或恢复错误，立即短路跳过 buildProfile 循环，
+      // 防止底层存储不可写时仍空烧最多 20 次人物档案 LLM 调用。
+      const hasStorageOrRecoveryError = Boolean(recoveryError?.())
+        || !consolidation.health().ok
+        || failedChats.some((f) => /记忆运行状态|外部被修改|记忆档案|记忆存储已关闭|主记忆库已关闭|恢复|自动整理已暂停|state\.json|ENOSPC|EACCES|EPERM|EBUSY|EROFS/i.test(String(f.error || '')))
+      if (attemptedChats > 0 && succeededChats === 0 && failedChats.length > 0 && hasStorageOrRecoveryError) {
+        const reason = recoveryError?.() || failedChats[0]?.error || '存储或恢复异常'
+        const message = `全部聊天提炼失败（${failedChats.length} 个聊天），因存在存储/恢复错误已跳过人物档案重建：${reason}`
+        log?.warn?.(message)
+        return { ok: false, added, insights, days, forgot: 0, blurred: 0, profiles: 0, failed: failedChats, message }
       }
       // 定时整理不再自动跑跨聊天的 learnSelfStyle，避免不同群/私聊口癖混成一个全局 self 桶串味
       // （显式调用 store.learnSelfStyle() 仍保留兼容，且内部已排除群聊来源）。

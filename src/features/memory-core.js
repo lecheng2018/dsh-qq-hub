@@ -21,14 +21,17 @@ export function quotaForScope(scope) {
   return SCOPE_QUOTAS.global
 }
 
-/** 超配额时淘汰：优先 auto 来源、低 importance、低 retention（老且不常想起）。返回淘汰条数。 */
-export function evictScopeItems(items, scope, quota, now = Date.now()) {
+/** 超配额时淘汰：绝不自动淘汰 pinned；优先已失效墓碑，其次低 importance、auto 来源、最老 at。返回淘汰条数。 */
+export function evictScopeItems(items, scope, quota, now = Date.now(), removedOut = null) {
   const inScope = items.filter((m) => m.scope === scope)
   if (inScope.length <= quota) return 0
-  const victims = inScope
+  const eligible = inScope.filter((m) => !m.pinned)
+  if (!eligible.length) return 0
+  const victims = eligible
     .slice()
     .sort((a, b) =>
-      (Number(a.importance || 0.5) - Number(b.importance || 0.5))
+      ((Number(b.invalidAt) > 0 ? 1 : 0) - (Number(a.invalidAt) > 0 ? 1 : 0))
+      || (Number(a.importance ?? 0.5) - Number(b.importance ?? 0.5))
       || ((b.source === 'auto' ? 1 : 0) - (a.source === 'auto' ? 1 : 0))
       || (Number(a.at || 0) - Number(b.at || 0)))
     .slice(0, inScope.length - quota)
@@ -36,7 +39,11 @@ export function evictScopeItems(items, scope, quota, now = Date.now()) {
   const kill = new Set(victims)
   let removed = 0
   for (let i = items.length - 1; i >= 0; i--) {
-    if (kill.has(items[i].id)) { items.splice(i, 1); removed++ }
+    if (kill.has(items[i].id)) {
+      const [gone] = items.splice(i, 1)
+      if (Array.isArray(removedOut)) removedOut.push(gone)
+      removed++
+    }
   }
   return removed
 }

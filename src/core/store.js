@@ -72,9 +72,11 @@ export function renameWithRetry(from, to, attempts = 4) {
   }
 }
 
+let tmpFileSeq = 0
+
 export function writeJson(file, value, { mode = 0o644, space = 2 } = {}) {
   ensureDir(dirname(file))
-  const tmp = `${file}.tmp-${process.pid}`
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++tmpFileSeq}`
   const fd = openSync(tmp, 'w', mode)
   // 部署现实（2026-11-14）：fnOS 面板环境 umask 077 会把 openSync 的 mode 参数砍成 0o600 ——
   // open 的 mode 只是上限，chmod 才是落定。没有这一步，运维放开组读后下一次写入又自动锁回去。
@@ -229,9 +231,11 @@ export function readJsonRequired(file, options = {}) {
   return result.value
 }
 
-export function writeJsonWithBackup(file, value, { validate, label = '状态文件', onError = warnState, mode = 0o644 } = {}) {
+export function writeJsonWithBackup(file, value, { validate, label = '状态文件', onError = warnState, mode = 0o644, requireBackup = false } = {}) {
   if (!validate(value)) throw new TypeError(`${label}结构不符合预期`)
-  for (const candidateFile of [file, `${file}.bak`]) {
+  const backupFile = `${file}.bak`
+  const candidates = requireBackup ? [file, backupFile] : [file]
+  for (const candidateFile of candidates) {
     const candidate = stateCandidate(candidateFile, validate)
     if (candidate.kind === 'io') throw candidate.error
     if (candidate.kind === 'invalid') {
@@ -240,7 +244,21 @@ export function writeJsonWithBackup(file, value, { validate, label = '状态文�
     }
   }
   writeJson(file, value, { mode })
-  writeJson(`${file}.bak`, value, { mode })
+  if (requireBackup) {
+    writeJson(backupFile, value, { mode })
+    return
+  }
+  // 主文件已提交后，.bak 检查/隔离/写入失败绝不阻断返回：避免主文件已变但调用方抛错导致内存 stateRaw 失步
+  try {
+    const backup = stateCandidate(backupFile, validate)
+    if (backup.kind === 'invalid') {
+      const archived = quarantineState(backupFile)
+      onError(new Error(`${label}：${backupFile} 损坏，原件已保留为 ${archived}（${backup.error.message}）`))
+    }
+    writeJson(backupFile, value, { mode })
+  } catch (error) {
+    onError(new Error(`${label}：备份 ${backupFile} 写入失败（主文件已提交）：${error.message}`))
+  }
 }
 
 export { existsSync }

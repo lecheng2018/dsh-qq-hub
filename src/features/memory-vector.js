@@ -73,17 +73,21 @@ export function cosine(a, b) {
 /** OpenAI 兼容 /embeddings 客户端。fetchImpl 参数只为测试注入；生产用全局 fetch。 */
 export function createEmbedder(cfg, { fetchImpl = globalThis.fetch, log = console } = {}) {
   if (!cfg) return null
-  async function embed(texts) {
+  async function embed(texts, { signal } = {}) {
     if (!texts || !texts.length) return []
     const clipped = texts.map((t) => Array.from(String(t || '').toWellFormed()).slice(0, cfg.maxChars).join(''))
     const out = []
     for (let i = 0; i < clipped.length; i += cfg.batch) {
       const chunk = clipped.slice(i, i + cfg.batch)
+      const timeoutSignal = AbortSignal.timeout(cfg.timeoutMs)
+      const reqSignal = signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeoutSignal]) : signal)
+        : timeoutSignal
       const res = await fetchImpl(cfg.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
         body: JSON.stringify({ model: cfg.model, input: chunk, encoding_format: 'float' }),
-        signal: AbortSignal.timeout(cfg.timeoutMs),
+        signal: reqSignal,
       })
       if (!res.ok) {
         const body = await (typeof res.text === 'function' ? res.text() : Promise.resolve('')).catch(() => '')
@@ -225,14 +229,17 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
   }
 
   // 以规范相对向量路径（scopeToVecFilePath）为键，消除 qq:<id> / private:<id> 等别名缓存分裂
-  const files = new Map() // vecRelPath -> createScopeVectorFile(...)
+  const files = new Map() // vecRelPath -> { dim, file }
   const fileByRel = (rel) => {
     const cfg = cfgOf()
     if (!cfg || !memoryDir || !rel) return null
-    if (!files.has(rel)) {
-      files.set(rel, createScopeVectorFile(join(memoryDir, rel), cfg.dim, { log }))
+    const cached = files.get(rel)
+    if (!cached || cached.dim !== cfg.dim) {
+      const file = createScopeVectorFile(join(memoryDir, rel), cfg.dim, { log })
+      files.set(rel, { dim: cfg.dim, file })
+      return file
     }
-    return files.get(rel)
+    return cached.file
   }
   const fileOf = (scope) => fileByRel(scopeToVecFilePath(scope))
 
@@ -344,17 +351,32 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     const cfg = cfgOf()
     const emb = cfg ? createEmbedder(cfg, { fetchImpl, log }) : null
     if (!cfg || !emb) return null
-    const key = sha16(String(text || ''))
+    const clipped = Array.from(String(text || '').toWellFormed()).slice(0, cfg.maxChars).join('')
+    const key = sha16(`${cfg.dim}:${cfg.model}:${clipped}`)
     const hit = qCache.get(key)
     if (hit && now() - hit.at < QUERY_CACHE_TTL) return hit.vec
-    const vec = await Promise.race([
-      emb.embed([String(text || '').slice(0, cfg.maxChars)]).then((v) => v && v[0]),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('embedQuery 兜底超时')), timeoutMs)),
-    ])
-    if (!vec) return null
-    qCache.set(key, { vec, at: now() })
-    if (qCache.size > QUERY_CACHE_MAX) qCache.delete(qCache.keys().next().value)
-    return vec
+    const ac = new AbortController()
+    let timer = null
+    try {
+      const timeoutPromise = new Promise((_, rej) => {
+        timer = setTimeout(() => {
+          const err = new Error('embedQuery 兜底超时')
+          ac.abort(err)
+          rej(err)
+        }, timeoutMs)
+        timer.unref?.()
+      })
+      const vec = await Promise.race([
+        emb.embed([clipped], { signal: ac.signal }).then((v) => v && v[0]),
+        timeoutPromise,
+      ])
+      if (!vec) return null
+      qCache.set(key, { vec, at: now() })
+      if (qCache.size > QUERY_CACHE_MAX) qCache.delete(qCache.keys().next().value)
+      return vec
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   /**
@@ -426,7 +448,8 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     let scopes = 0
     let vectors = 0
     for (const scope of files.keys()) {
-      const file = files.get(scope)
+      const entry = files.get(scope)
+      const file = entry?.file
       if (!file) continue
       try {
         scopes++

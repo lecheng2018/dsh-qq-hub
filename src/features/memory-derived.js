@@ -68,6 +68,13 @@ export function createMemoryDerived({ session, indexCache = {}, getConfig }) {
     })
   }
 
+  // 梦境共性归纳的固定 label：同一 label 视为同一条经验，覆盖更新而不是反复追加
+  const DREAM_LABEL_RE = /^关于「([^」]+)」的共性归纳/
+  const dreamLabelOf = (text) => {
+    const m = String(text || '').trim().match(DREAM_LABEL_RE)
+    return m ? m[1] : ''
+  }
+
   function setDerivedInsights(key, list, name, { sourceFingerprint, personaId, merge = false } = {}) {
     mutate((s) => {
       s.insights = s.insights || {}
@@ -81,15 +88,28 @@ export function createMemoryDerived({ session, indexCache = {}, getConfig }) {
         }
       })
       if (merge) {
-        const existing = Array.isArray(s.insights[key]) ? s.insights[key] : []
-        const seen = new Set(existing.map((it) => String(it.text || '').trim()))
-        const added = mapped.filter((it) => {
+        // 追加合并（梦境归纳用）：保留既有反思经验、按正文或同 label（关于「...」的共性归纳）去重覆盖更新，
+        // 避免条数变化（2条→3条）导致同类梦境经验反复追加。
+        const merged = (Array.isArray(s.insights[key]) ? s.insights[key] : []).slice()
+        const seen = new Set(merged.map((it) => String(it.text || '').trim()))
+        for (const it of mapped) {
           const t = String(it.text || '').trim()
-          if (!t || seen.has(t)) return false
+          if (!t) continue
+          const label = dreamLabelOf(t)
+          if (label) {
+            const idx = merged.findIndex((cur) => dreamLabelOf(cur.text) === label)
+            if (idx >= 0) {
+              seen.delete(String(merged[idx].text || '').trim())
+              merged[idx] = it
+              seen.add(t)
+              continue
+            }
+          }
+          if (seen.has(t)) continue
           seen.add(t)
-          return true
-        })
-        s.insights[key] = [...existing, ...added].slice(0, 8)
+          merged.push(it)
+        }
+        s.insights[key] = merged.slice(0, 8)
       } else {
         s.insights[key] = mapped
       }

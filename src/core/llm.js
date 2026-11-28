@@ -269,7 +269,7 @@ export async function withAbortTimeout(run, timeoutMs = 120_000, label = '模型
  * 没配 / 关着 / 调用失败都返回空串，绝不抛——调用方据此退回纯文字。
  * @returns {Promise<string>} 空串表示转述失败
  */
-export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
+export async function describeWithHelper (dsh, { images, cfg, hint, log, signal }) {
   const h = cfg && cfg.visionHelper
   if (!h || !h.enabled || !h.provider || !h.model) return ''
   if (!images || !images.length) return ''
@@ -293,14 +293,15 @@ export async function describeWithHelper (dsh, { images, cfg, hint, log }) {
       return ''
     }
     const messages = [{ role: 'user', id: randomUUID(), content, source: { kind: 'plugin', plugin: 'qq-hub' } }]
-    const out = await runStream(llm, {
+    const out = await withAbortTimeout((abortSignal) => runStream(llm, {
       provider: h.provider,
       model: h.model,
       system: DESCRIBE_SYSTEM,
       messages,
       maxTokens: 1200,
       temperature: 0.2,
-    })
+      signal: abortSignal,
+    }), 60_000, '辅助看图', signal)
     return describeText(out, h.maxChars)
   } catch (error) {
     // 辅助模型挂了不能拖垮主流程：记一条，退回纯文字
@@ -323,7 +324,7 @@ export async function textForBlindModel (dsh, o, target) {
   const usable = h && h.enabled && h.provider && h.model && !(h.provider === target.provider && h.model === target.model)
   const images = o.images || []
   if (usable && images.length) {
-    const description = await describeWithHelper(dsh, { images, cfg: o.cfg, hint: o.text, log: o.log })
+    const description = await describeWithHelper(dsh, { images, cfg: o.cfg, hint: o.text, log: o.log, signal: o.signal })
     if (description) return o.text + '\n' + wrapForMain(description, { count: images.length })
   }
   return o.text + '\n（对方发了图片，但你现在看不到，也读不到描述）'
@@ -375,7 +376,10 @@ export async function askModel (dsh, o) {
   // 先请辅助模型把画面转述成文字，再让主模型读文字。这样文字对话能力完全不受影响。
   // 注意：只在「明确不支持」时才走这条路；不知道（null）仍然先按原样发，交给下面的拒收自愈处理。
   const imgCount = (o.images || []).length
-  if (imgCount && (await canSeeImages(dsh, o.cfg)) === false) {
+  const canSee = imgCount
+    ? (o.provider && o.model ? await modelVision(dsh, t.provider, t.model) : await canSeeImages(dsh, o.cfg))
+    : null
+  if (imgCount && canSee === false) {
     content = [{ type: 'text', text: await textForBlindModel(dsh, o, t) }]
     base.messages = [{ ...messages[0], content }]
   }
@@ -386,8 +390,7 @@ export async function askModel (dsh, o) {
   for (let attempt = 0; ; attempt++) {
     try {
       const params = effort ? { ...base, reasoningEffort: effort } : { ...base }
-      if (o.signal) params.signal = o.signal
-      const out = await withAbortTimeout((signal) => runStream(llm, { ...params, signal: o.signal || signal }), 120000, '模型请求', o.signal)
+      const out = await withAbortTimeout((signal) => runStream(llm, { ...params, signal }), 120000, '模型请求', o.signal)
       // 推理模型偶发「只思考不答题」：流正常结束、usage 有输出 token，但正文 0 字
       //（思考把轮次吃满，正文一个字没写）。重试一次，并把「直接给结果」写进正文请求里压一压。
       if (!out && !retriedEmpty && !imgCount) {
