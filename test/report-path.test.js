@@ -58,7 +58,7 @@ test('第三层保留：没标记没工具但输出像报表，structuredReport 
   const report = '【5小时窗口】09:22 开 到 14:22 收 剩 35% 已烧 65%\n还剩 2.7 小时\n【周窗口】剩 93%'
   const out = texts(report)
   assert.equal(out.length, 1, '兜底还在')
-  const r = src('src/chat/reply.js')
+  const r = src('src/chat/reply-segment.js')
   assert.match(r, /function structuredReport/, '第三层没删')
 })
 
