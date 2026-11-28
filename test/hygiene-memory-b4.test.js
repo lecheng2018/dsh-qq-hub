@@ -213,10 +213,31 @@ test('quoted-messages：botQQ 没配时，空 user_id 不许判成「机器人�
 
 // ---------------- 媒体字节上限 ----------------
 
-/** 造一个总字节数超过 30MB 的响应（内容类型可控）。 */
+/**
+ * 造一个总字节数超过 30MB 的响应（内容类型可控）。
+ *
+ * 这里手写 ReadableStream 而不用 `Readable.toWeb(Readable.from(...))`：超限时生产代码会
+ * `reader.cancel()`，而 toWeb 适配器在「消费方取消」与「自己的泵」之间会对控制器二次
+ * close，Node 22 上会抛 `ERR_INVALID_STATE: Controller is already closed` 的
+ * uncaughtException —— 测试本身全 pass，但整个文件被判失败（CI compatibility job 就是
+ * 这么红的）。取消是正常路径，这里按规范把它当成幂等的 no-op。
+ */
 function oversizedResponse(contentType) {
-  const chunks = Array.from({ length: 9 }, () => new Uint8Array(4 * 1024 * 1024)) // 36MB
-  return new Response(Readable.toWeb(Readable.from(chunks)), { status: 200, headers: { 'content-type': contentType } })
+  const chunk = new Uint8Array(4 * 1024 * 1024)
+  const total = 9 // 9 × 4MB = 36MB，超过 30MB 上限
+  let sent = 0
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (sent >= total) {
+        controller.close()
+        return
+      }
+      sent += 1
+      controller.enqueue(chunk.slice())
+    },
+    cancel() {},
+  })
+  return new Response(stream, { status: 200, headers: { 'content-type': contentType } })
 }
 
 test('httpSynth：TTS 响应超过 30MB 立即中止，不把整坨读进内存', async () => {
