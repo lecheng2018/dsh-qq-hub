@@ -1255,6 +1255,9 @@ export function createModularCore({
     failureNoticedAt.clear()
     recentlyArchivedSessions.clear()
     sessionAdapter.clearTitles?.()
+    // 「正在输入」的 setInterval 是本插件自己起的，宿主/热重载都不会替你 clearInterval：
+    // 漏一次就每 15 秒继续往 QQ 报一次「对方正在输入…」，直到进程退出。
+    try { activity.dispose() } catch { /* 收尾失败不影响退出 */ }
     await systemTurns.dispose()
     await registry.dispose()
     await controller.dispose()

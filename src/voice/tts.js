@@ -26,7 +26,11 @@ const MAX_AUDIO_BYTES = 30 * 1024 * 1024
  */
 async function readAudioCapped(r, maxBytes = MAX_AUDIO_BYTES) {
   const declared = Number(r.headers?.get?.('content-length') || 0)
-  if (declared > maxBytes) throw new Error(`音频太大（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+  if (declared > maxBytes) {
+    // 声明就超了：连读都不读，但要把响应体放掉，否则这条连接一直挂在连接池里。
+    try { await r.body?.cancel?.() } catch { /* 释放失败不影响报错 */ }
+    throw new Error(`音频太大（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+  }
   if (!r.body || typeof r.body.getReader !== 'function') {
     const all = Buffer.from(await r.arrayBuffer())
     if (all.length > maxBytes) throw new Error(`音频太大（${Math.round(all.length / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
