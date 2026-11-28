@@ -230,7 +230,9 @@ export function normalizeFact(raw, index = 0) {
     about: str(source.about),
     at: num(source.at || source.ts || source.eventAt || source.time, 0),
     importance: Math.max(0, Math.min(1, num(source.importance, 0.5))),
-    pinned: source.pinned === true,
+    // T3.8：pinned 可能是 1 / '1' / 'true'（模型与外部导入都给过这种值）。
+    // 只认 === true 会让「已固定」的事实被当成普通条目，整理时直接被更高重要度的新条目覆盖。
+    pinned: source.pinned === true || Number(source.pinned) === 1 || String(source.pinned || '').toLowerCase() === 'true',
     source: str(source.source) || 'dream',
     sourceId: str(source.sourceId),
     evidence: str(source.evidence),

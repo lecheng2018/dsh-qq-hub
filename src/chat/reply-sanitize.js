@@ -185,7 +185,13 @@ export function extractAndStripInnerMonologue(text) {
       // 正常文本里的 <（比如 3<5）一律放行，不碰。
       const nextLt = source.indexOf('<', i + 1)
       const nextGt = source.indexOf('>', i + 1)
-      if (nextLt > i && nextGt > nextLt && /^<\/?[A-Za-z]+$/.test(source.slice(i, nextLt))) {
+      // T3.11：`Promise<Array<number>>` 里 `<Array` 后面紧跟 `<number`，旧规则只看
+      // 「片段像不像标签名」，于是跳过 `<Array` 去找 `<number` —— 把 `>>` 当成了内层
+      // 独白标记，泛型被吃掉一半。现在只有「下一个 `<` 真能解析成一个 inner 标签」、
+      // 且当前片段是 inner 的前缀时才跳过。
+      if (nextLt > i && nextGt > nextLt
+        && innerTagAt(source, nextLt)
+        && /^<\/?i(?:n(?:n(?:er?)?)?)?$/i.test(source.slice(i, nextLt))) {
         i = nextLt
         continue
       }

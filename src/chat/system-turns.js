@@ -7,11 +7,15 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
   let disposed = false
 
   async function sessionFor(key, title, noTools) {
+    if (disposed) throw new Error('系统回合服务已卸载')
     const hit = sessions.get(key)
     if (hit) return hit
     if (creating.has(key)) return creating.get(key)
     const pending = Promise.resolve(createSession({ key, title, noTools })).then((created) => {
       if (!created?.sessionId) throw new Error('DSH 创建系统会话未返回 sessionId')
+      // 审计 T3.9：createSession 可能耗时很久，期间模块被卸载（dispose 已清空 sessions）——
+      // 这里若继续写回 sessions，会留下一个「卸载后仍存活」的会话，后续 resetSessions 也收不到它。
+      if (disposed) throw new Error('系统回合服务已卸载')
       const entry = { sessionId: String(created.sessionId) }
       sessions.set(key, entry)
       return entry
@@ -21,11 +25,17 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
   }
 
   async function execute(key, title, prompt, { timeoutMs = 180000, noTools = false } = {}) {
+    if (disposed) throw new Error('系统回合服务已卸载')
     const { sessionId } = await sessionFor(key, title, noTools)
+    // 审计 T3.9：每个 await 之后都要复查 disposed —— 卸载后再继续只会给一个
+    // 已经没人收的会话挂监听/定时器（active 集合已清空，settle 永远不会被调用）。
+    if (disposed) throw new Error('系统回合服务已卸载')
     const resolved = await resolveAgent(sessionId)
+    if (disposed) throw new Error('系统回合服务已卸载')
     const agent = resolved?.agent
     if (!agent?.followup) throw new Error(`系统会话 ${sessionId} 没有 agent.followup`)
     await beforeTurn?.(agent, sessionId, { key, title, noTools })
+    if (disposed) throw new Error('系统回合服务已卸载')
 
     let off = null
     let timer = null
@@ -88,6 +98,8 @@ export function createSystemTurns({ createSession, resolveAgent, onEvent, archiv
         state.cleanup()
         reject(new Error('等太久了'))
       }, Math.max(1, Number(timeoutMs) || 180000))
+      // 审计 T3.9：系统回合超时定时器过去不带 unref，进程退出会被它硬顶住。
+      timer.unref?.()
       Promise.resolve(agent.followup({ id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text: String(prompt || '') }], source: { kind: 'qq-hub' } }))
         .catch((error) => finish(reject, error))
     })

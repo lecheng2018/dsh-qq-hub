@@ -13,7 +13,7 @@ import { createReranker } from './memory-rerank.js'
 import { randomUUID } from 'node:crypto'
 import { dataDir } from '../core/store.js'
 
-export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend, vectorFlushDebounceMs, vectorFetchImpl }) {
+export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, personaText, reflectionContext = true, styleContext = true, extend, vectorFlushDebounceMs, vectorFetchImpl, reflectImpl, styleImpl }) {
   // 1) 向量通道（在 session 之前创建，session.save 依赖 vec）
   const vec = createVectorChannel({
     memoryDir: dataDir('memory'),
@@ -81,8 +81,12 @@ export function createMemoryArchive({ dsh, getConfig, hub, chatLog = hub, log, p
   // 9) extend（learning 扩展）
   const learning = extend?.({
     dsh, getConfig, hub, chatLog, log, personaText,
+    // T3.7（#273 回归）：这两个注入必须原样透传到 learning，否则模块侧自定义的
+    // reflectImpl/styleImpl 被静默丢弃 → 每轮整理都白跑一次默认 LLM 反思/风格，
+    // 「反思模块」与 style 模块的定制实现形同不存在。
+    reflectImpl, styleImpl,
     isActive: () => session.isActive(), createGenerationSignal: session.createGenerationSignal, generationOf: session.generationOf,
-    load: session.load, save: session.save, health: () => session.health(), relatedTo: recall.relatedTo,
+    load: session.load, save: session.save, mutate: session.mutate, health: () => session.health(), relatedTo: recall.relatedTo,
     add: crud.add, addMany: crud.addMany, revise: crud.revise, supersede: crud.supersede, invalidate: crud.invalidate, invalidateMany: crud.invalidateMany, listFor: crud.listFor, scopeFromChatId: indexCache.scopeFromChatId,
     profileOf: derivedFinal.profileOf, setProfile: derivedFinal.setProfile, setDerivedProfile: derivedFinal.setDerivedProfile, profileKeyOf: derivedFinal.profileKeyOf,
     insightsOf: derivedFinal.insightsOf, setInsights: derivedFinal.setInsights, setDerivedInsights: derivedFinal.setDerivedInsights, styleOf: derivedFinal.styleOf, setStyle: derivedFinal.setStyle, setDerivedStyle: derivedFinal.setDerivedStyle, personKey: derivedFinal.personKey,

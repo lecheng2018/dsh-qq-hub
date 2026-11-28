@@ -151,7 +151,11 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
       liveEntry.steerHandler = handler
       while (liveEntry.pendingSteers.length) {
         const entry = liveEntry.pendingSteers.shift()
-        Promise.resolve().then(() => handler(entry.inbound)).then(entry.resolve, entry.reject)
+        try {
+          Promise.resolve(handler(entry.inbound)).then(entry.resolve, entry.reject)
+        } catch (error) {
+          entry.reject(error)
+        }
       }
     }
     const deliverSteer = (inbound) => new Promise((resolve, reject) => {
@@ -162,7 +166,14 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
       addSteerMember(turn, inbound)
       turn.steerCount++
       if (liveEntry.steerHandler) {
-        Promise.resolve().then(() => liveEntry.steerHandler(inbound)).then(resolve, reject)
+        // T3.2：必须**同步**进入 steerHandler——`activeSteers++` 要在本轮收尾判定之前生效。
+        // 改前用 Promise.resolve().then 把它推到下一微任务，turn/end 恰好在这之间到达时
+        // 收尾先跑（activeSteers 仍是 0）→ 回合已落定、steer 才进来 → 幽灵回合/静默丢追问。
+        try {
+          Promise.resolve(liveEntry.steerHandler(inbound)).then(resolve, reject)
+        } catch (error) {
+          reject(error)
+        }
       } else {
         liveEntry.pendingSteers.push({ inbound, resolve, reject }) // execute 还没注册：缓存，注册时按序补投
       }

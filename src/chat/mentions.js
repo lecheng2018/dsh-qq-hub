@@ -47,7 +47,12 @@ function longestName(rest, byName) {
   // 名字里可能带标点（「。Luna」），所以只按空白和 @ 截；最长匹配会把后面跟着的标点让出来
   const head = rest.match(/^[^\s@＠]{1,20}/)?.[0] || ''
   for (let n = head.length; n >= 1; n--) {
-    const qq = resolveMember(head.slice(0, n), byName)
+    const cand = head.slice(0, n)
+    // T3.11：`@12345.6` / `@12345-abc` 里的数字前缀会被 resolveMember 当成 QQ 号。
+    // 数字形式的候选后面紧跟 [A-Za-z0-9._+-] 时不算「说完了这个名字」，跳过。
+    const next = head[n] || ''
+    if (/^\d+$/.test(cand) && /[A-Za-z0-9._+-]/.test(next)) continue
+    const qq = resolveMember(cand, byName)
     if (qq) return { qq, len: n }
   }
   return null
@@ -78,6 +83,9 @@ export function expandMentions(segs, members, missed = []) {
         continue
       }
       if (s[i] === '@' || s[i] === '＠') {
+        // T3.11：邮箱/版本号里的 @ 不是提到人。前面紧贴 [A-Za-z0-9._+-] 时原样保留
+        // （`test@123456.com`、`node@20.11.0` 都不该变成 at 段）。
+        if (i > 0 && /[A-Za-z0-9._+-]/.test(s[i - 1])) { buf += s[i]; i += 1; continue }
         const hit = longestName(s.slice(i + 1), byName)
         if (hit) {
           pushText(buf); buf = ''

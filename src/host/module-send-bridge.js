@@ -36,7 +36,7 @@ function plainTextOfSegments(segments) {
 
 export function createModuleSendBridge({
   hub, outbox, log, unified = false,
-  getConfig, isMuted, isProactivelyMuted,
+  getConfig, isMuted, isProactivelyMuted, proactiveMuteState,
   now = () => Date.now(), sleep, pushPolicy,
 } = {}) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
@@ -202,6 +202,31 @@ export function createModuleSendBridge({
     return results
   }
 
+  /**
+   * T3.6：静默还剩多久（毫秒）。暂存汇总必须带一个补发定时器，
+   * 否则「静默时段挡下的播报」要等到模块下次发消息才可能被 flush——多半就永久躺在内存里。
+   * 静默时段按「下一个静默结束整点」算；临时静音按 remainingMs；不可知返回 0（不排定时器）。
+   */
+  function quietRemainingMs(chatKey, reason, policy) {
+    const at = now()
+    if (reason === 'quiet-hours' && policy.quietHours) {
+      const end = Number(policy.quietHours[1])
+      if (!Number.isFinite(end)) return 0
+      const target = new Date(at)
+      target.setMinutes(0, 0, 0)
+      target.setHours(end)
+      while (target.getTime() <= at) target.setDate(target.getDate() + 1)
+      return Math.max(60_000, Math.min(target.getTime() - at, 12 * 3600_000))
+    }
+    if (reason === 'proactive-muted') {
+      try {
+        const left = Number(proactiveMuteState?.(chatKey, at)?.remainingMs) || 0
+        if (left > 0) return Math.min(left + 1000, 6 * 3600_000)
+      } catch { /* 状态不可知 → 不排定时器 */ }
+    }
+    return 0
+  }
+
   async function runGoverned({ chatKey, sourceModuleId, segments, opts = {}, execute }) {
     const policy = resolvePolicy()
     if (!policy.enabled || isExempt(sourceModuleId, opts)) {
@@ -211,7 +236,8 @@ export function createModuleSendBridge({
     const qReason = quietReasonFor(chatKey, policy)
     if (qReason) {
       if (policy.digestEnabled && text) {
-        const count = stashDigest(chatKey, sourceModuleId, text, policy)
+        // T3.6：带上「静默结束还剩多久」，stashDigest 才会挂真正能补发的定时器
+        const count = stashDigest(chatKey, sourceModuleId, text, policy, { delayMs: quietRemainingMs(chatKey, qReason, policy) })
         debug(`模块「${sourceModuleId}」向 ${chatKey} 的主动推送因 ${qReason} 暂存待汇总（已攒 ${count} 条）`)
         return { message_id: null, state: 'digested', reason: qReason, deferred: true }
       }
@@ -353,6 +379,8 @@ export function createModuleSendBridge({
       chatKey: b.chatKey,
       sourceModuleId: b.sourceModuleId,
       count: b.items.length,
+      // T3.6：是否真的挂着补发定时器（静默挡下的汇总必须能自己醒来）
+      scheduled: Boolean(b.timer),
       items: b.items.map((it) => ({ ...it })),
     }))
   }

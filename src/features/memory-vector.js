@@ -268,12 +268,22 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     scheduleFlush()
   }
 
+  // T3.8：连续失败退避 —— 网关/额度故障时不要每 flushDebounceMs 就打一次 embedding。
+  const MAX_AUTO_RETRIES = 5
+  let failStreak = 0
+  function nextFlushDelayMs() {
+    const base = Math.max(0, Number(flushDebounceMs) || 0)
+    if (failStreak <= 0) return base
+    // 1 次失败 → 2×，2 次 → 4× …… 上限 5 分钟
+    return Math.min(Math.max(base, 1000) * Math.pow(2, Math.min(failStreak, 8)), 5 * 60_000)
+  }
+
   function scheduleFlush() {
     if (disposed || flushTimer) return
     flushTimer = setTimeout(() => {
       flushTimer = null
       flush().catch(() => {})
-    }, Math.max(0, Number(flushDebounceMs) || 0))
+    }, nextFlushDelayMs())
     flushTimer.unref?.()
   }
 
@@ -325,21 +335,29 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
           embedded += committed
         } catch (error) {
           if (disposed) break // 停用导致的失败不重排、不回填，也不再发请求
+          failStreak += 1 // 连续失败 → 下一次调度延迟按 2^n 退避（见 nextFlushDelayMs）
           warnOnce(`flush 失败（退回纯 BM25，稍后重试）：${error.message}`)
-          // 回填时也要保留「本次快照要求摘除」的语义：只回填存活条目，
-          // 这样下一次 flush 的对账仍会摘掉已死的向量。
-          const back = dirty.get(rel) || new Map()
-          for (const [id, key] of pend) if (!back.has(id)) back.set(id, key)
-          dirty.set(rel, back)
+          // T3.8：回填必须尊重「失败期间又来了新快照」的事实。
+          // queueScope 的语义是整作用域全量对账，新快照（尤其是 [] 删空）一旦入队，
+          // 旧的 pend 就已经作废 —— 若照旧回填，会把刚被删掉的 ID 复活进 dirty，
+          // 下一轮又把死向量重新写回磁盘。
+          if (!dirty.has(rel)) {
+            const back = new Map()
+            for (const [id, key] of pend) back.set(id, key)
+            dirty.set(rel, back)
+          }
         }
       }
     } finally {
       flushing = false
+      if (embedded > 0) failStreak = 0
       // 审计 S13 附带：flush 飞行期间入队的 scope 会被上面的 flushing 卫语句
       // 直接 return 掉——dirty 里留着数据、却没有任何定时器再去碰它，要等
       // 下一次任意 save 才有机会 flush。连续两次 remove（第二次删空作用域）
       // 正好踩中：空对账被吞，死向量残留。finally 里补一次调度兜底。
-      if (!disposed && dirty.size) scheduleFlush()
+      // T3.8：连续失败达到上限后停止自动重排（避免对 401/欠费/宕机无限重试），
+      // 但下一次 queueScope/backfill 仍会正常触发（failStreak 只在 flush 内累加）。
+      if (!disposed && dirty.size && failStreak < MAX_AUTO_RETRIES) scheduleFlush()
     }
     return embedded
   }
@@ -468,5 +486,12 @@ export function createVectorChannel({ memoryDir, getConfig, log = console, fetch
     files.clear()
   }
 
-  return { enabled, queueScope, flush, embedQuery, searchScopes, backfill, status, dispose }
+  return {
+    enabled, queueScope, flush, embedQuery, searchScopes, backfill, status, dispose,
+    // 观测/测试用：连续失败次数与下一次调度延迟（退避是否生效）
+    failStreak: () => failStreak,
+    nextFlushDelayMs: () => nextFlushDelayMs(),
+    hasFlushTimer: () => Boolean(flushTimer),
+    pendingIds: () => [...dirty.entries()].flatMap(([, m]) => [...m.keys()]),
+  }
 }

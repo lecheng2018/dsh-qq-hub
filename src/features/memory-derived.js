@@ -163,7 +163,9 @@ export function createMemoryDerived({ session, indexCache = {}, getConfig }) {
 
     const list = (load().styles || {})[key] || []
     return list
-      .filter((item) => derivedVisibleTo(item, active, { shareUnlabeled: isSelfStyleKey(key) }))
+      // T3.8：与 memory-persona-track 统一口径 —— 无 personaId 的历史风格条目归属默认人设，
+      // 其他会话人设不得继承（shareUnlabeled 曾按 'self' 键无条件放行，等于人设隔离失效）。
+      .filter((item) => derivedVisibleTo(item, active))
       .map((item) => (typeof item === 'object' && item !== null ? item.text || item.content || String(item) : String(item)))
   }
 
@@ -243,6 +245,8 @@ export function createMemoryDerived({ session, indexCache = {}, getConfig }) {
     if (!prof) return null
     const pid = normalizePersonaId(prof.personaId || prof.persona)
     if (pid && pid !== active) return null
+    // T3.8：没有任何人设标签的历史档案归属默认人设 —— 非默认人设不许继承
+    if (!pid && active !== DEFAULT_PERSONA_ID) return null
     if (prof.personaScope && normalizePersonaId(prof.personaScope) !== active) return null
     return prof
   }
@@ -253,7 +257,9 @@ export function createMemoryDerived({ session, indexCache = {}, getConfig }) {
       const key = profileKeyOf(qq, scope)
       const t = String(text || '').trim().slice(0, 200)
       const prev = s.profiles[key]
-      const pid = normalizePersonaId(personaId || prev?.personaId)
+      // T3.8：默认落「当前会话人设」，否则人设 B 的档案会以无标签条目写进去，
+      // 非默认人设读不到（等于白写），默认人设又凭空多出一条别人的档案。
+      const pid = normalizePersonaId(personaId || prev?.personaId) || activePersonaId(scope) || DEFAULT_PERSONA_ID
       if (t) s.profiles[key] = { qq: String(qq), scope: scope || 'global', text: t, name: name || prev?.name || '', at: Date.now(), origin: 'manual', ...(pid ? { personaId: pid } : {}) }
       else delete s.profiles[key]
       s.rev = (s.rev || 0) + 1

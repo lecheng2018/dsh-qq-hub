@@ -561,7 +561,9 @@ export function openMemoryFiles(memoryDir, { log = console } = {}) {
         const sc = p.scope || 'global'
         if (!byScope.has(sc)) byScope.set(sc, [])
         byScope.get(sc).push({
-          id: `prof_${p.qq || 'unknown'}`,
+          // T3.8：档案 ID 必须带人设分桶 —— 同一 QQ 在不同人设下的档案是两份独立记忆，
+          // 共用 `prof_<qq>` 会互相覆写（人设 B 的档案把默认人设那份顶掉）。
+          id: `prof_${String(p.personaId || p.persona || 'default').trim() || 'default'}_${p.qq || 'unknown'}`,
           kind: 'profile',
           about: p.qq,
           aboutName: p.name,

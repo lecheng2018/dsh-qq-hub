@@ -238,6 +238,9 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
       if (!p) return false
       const pid = String(p.personaId || p.persona || '').trim()
       if (pid && pid !== currentPersona) return false
+      // T3.8：与 profileOf / memory-persona-track 同口径 —— 无标签历史档案只属于默认人设，
+      // 否则别的会话人设会读到主人的人设档案（人设隔离在这里被绕开）。
+      if (!pid && currentPersona !== 'default') return false
       if (p.personaScope && String(p.personaScope).trim() !== currentPersona) return false
       return true
     }
@@ -361,6 +364,12 @@ export function createMemoryRecall({ getConfig, hub, chatLog, log, session, inde
   }
 
   function hintBody(hits, { chat, shown, backdrop, maxItems, maxChars, sessionId, allowFallback = true }) {
+    // T3.8：内部（system）回合不许注入任何记忆 —— 它没有「谁在说话」，注进去就成了
+    // 把别人的记忆喂给系统提示的通道（fail-closed）。
+    if (!chat || chat.kind === 'system') {
+      recordSessionRecalled(sessionId, [])
+      return backdrop
+    }
     if (!hits.length && allowFallback) {
       const fallback = (chat ? indexFor(chat).docs : [])
         .filter((d) => !d.it.invalidAt && !shown.has(d.it.id) && personaVisible(d.it, chat))

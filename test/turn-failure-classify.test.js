@@ -52,6 +52,11 @@ test('分类：本地等待超时 → timedOut，并带出时长', () => {
   const c = classifyFailureKind({ turnTimedOut: true, timedOutForMs: 600_000 })
   assert.equal(c.kind, 'timedOut')
   assert.equal(c.timedOutForMs, 600_000)
+  // T3.4：字段统一 —— TurnExecutionError 打的是 timedOut（不是 turnTimedOut），
+  // 只认旧字段会让超时退化成 error：用户收到「再跟我说一次」而不是「等太久了」。
+  const d = classifyFailureKind({ timedOut: true, timedOutForMs: 900_000 })
+  assert.equal(d.kind, 'timedOut')
+  assert.equal(d.timedOutForMs, 900_000)
   assert.equal(c.oversized, false)
   assert.equal(c.archived, false)
 })

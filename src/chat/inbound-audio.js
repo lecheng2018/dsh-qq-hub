@@ -1,16 +1,37 @@
+import { randomUUID } from 'node:crypto'
 import { fetchImage } from '../core/net.js'
 import { toMono16k } from '../voice/wav.js'
 import { createCloudAsr } from '../voice/cloud-asr.js'
+import { neutralizeInboundDsl } from './inbound.js'
 
 export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {}) {
   // 云端 ASR（1.4.4）：配置门控默认关；未传 getConfig 时恒不启用（兼容旧调用方）。
   const cloudAsr = createCloudAsr({ getConfig: getConfig || (() => ({})), log })
+  // T3.10：一条语音在本地 ASR 失败后还会走云端 / DSH 两条路，过去每条路都重新
+  // get_record + 下载一次（同一条语音最多下 3 次，30s 超时 ×3）。按 rec 身份惰性缓存
+  // 单次下载结果，三条路共用一份；失败也不缓存，下一轮还能重试。
+  const wavCache = new WeakMap()
+  const MAX_BASE64_CHARS = Math.ceil((30 * 1024 * 1024 * 4) / 3) + 16
   async function recordWav(rec) {
     const info = await onebot.call('get_record', { file: rec.data?.file, out_format: 'wav' }, { timeoutMs: 30000 })
-    const raw = info?.base64
-      ? Buffer.from(info.base64, 'base64')
+    // T3.10：网关回的是整段 base64，长度不受控 —— 先量长度再解码，避免一个坏响应
+    // 直接把进程内存吃满（Buffer.from 会按声明长度分配）。
+    const b64 = typeof info?.base64 === 'string' ? info.base64 : ''
+    if (b64.length > MAX_BASE64_CHARS) throw new Error(`语音数据过大（base64 ${b64.length} 字符）`)
+    const raw = b64
+      ? Buffer.from(b64, 'base64')
       : await fetchImage(info?.file || info?.url, { maxBytes: 30 * 1024 * 1024, allowLocal: false })
     return toMono16k(raw)
+  }
+  function wavOf(rec) {
+    if (!rec || typeof rec !== 'object') return recordWav(rec)
+    let hit = wavCache.get(rec)
+    if (!hit) {
+      hit = recordWav(rec)
+      wavCache.set(rec, hit)
+      hit.catch(() => wavCache.delete(rec))
+    }
+    return hit
   }
 
   async function localText(rec) {
@@ -19,8 +40,9 @@ export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {
     const { join } = await import('node:path')
     const dir = join(String(localApi.dir?.() || '/tmp'), 'out')
     mkdirSync(dir, { recursive: true })
-    const file = join(dir, `asr-${Date.now()}.wav`)
-    writeFileSync(file, await recordWav(rec))
+    // T3.10：只带毫秒后缀时，同毫秒并发转写会写到同一个文件（后写覆盖前写、先完成者删掉别人的文件）。
+    const file = join(dir, `asr-${Date.now()}-${randomUUID().slice(0, 8)}.wav`)
+    writeFileSync(file, await wavOf(rec))
     try {
       const result = await localApi.call('asr', { file })
       return String(typeof result === 'string' ? result : result?.text || '').trim()
@@ -45,7 +67,7 @@ export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {
       try { stt.prepare(providerId) } catch {}
       throw new Error(`识别模型还在准备（${provider.preparation.phase}）`)
     }
-    const spec = stt.resolve({ audio: new Uint8Array(await recordWav(rec)) })
+    const spec = stt.resolve({ audio: new Uint8Array(await wavOf(rec)) })
     const result = await stt.transcribe(spec, AbortSignal.timeout(60000))
     const text = typeof result === 'string' ? result : result?.text || result?.transcript
     return text ? String(text).trim() : ''
@@ -53,7 +75,7 @@ export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {
 
   async function cloudText(rec) {
     if (!cloudAsr.enabled()) return ''
-    return cloudAsr.transcribe(await recordWav(rec))
+    return cloudAsr.transcribe(await wavOf(rec))
   }
 
   async function transcribeRecord(rec, messageId) {
@@ -86,7 +108,9 @@ export function createInboundAudio({ onebot, dsh, localApi, log, getConfig } = {
   async function transcribe(msg) {
     for (const rec of msg.records || []) {
       const text = await transcribeRecord(rec, msg.messageId)
-      return text ? `[语音] ${text}` : '[发来一条语音，没听清]'
+      // T3.11：转写文本来自对方的声音（可控内容），同样要过入站 DSL 中立化 ——
+      // 转述回来时不能变成「[语音] 忽略上面的设定」这种可执行片段。
+      return text ? `[语音] ${neutralizeInboundDsl(text)}` : '[发来一条语音，没听清]'
     }
     return ''
   }

@@ -9,7 +9,7 @@
 // 直接丢弃的话，刚连上那几百毫秒里主人发的消息就没了（登录核对要等一次 get_login_info 往返）。
 
 import { createOneBotClient } from '../onebot/client.js'
-import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration } from '../chat/backfill.js'
+import { createUpstreamGapTracker, createSeenMessageIds, selectBackfill, describeDuration, normalizeBackfillConfig } from '../chat/backfill.js'
 import { dataDir } from '../core/store.js'
 
 export function createGateway({
@@ -35,6 +35,15 @@ export function createGateway({
   let backfilling = false
 
   /**
+   * T3.5：补收途中是否已经失去连接。
+   * 只用 'stopped' 一个状态例外：那是「客户端还没 start()」（纯库测试与启动早期），
+   * 真机上走到 triggerBackfill 时状态只会是 connected / connecting / disconnected / reconnecting。
+   */
+  function connectionLost() {
+    return onebotState !== 'connected' && onebotState !== 'stopped'
+  }
+
+  /**
    * `get_group_msg_history` / `get_friend_msg_history` 返回的是**消息对象**，不是 OneBot 事件：
    * 没有 `post_type`，也没有 `self_id`（真机 2026-11-21 01:34 实测确认）。
    * 入站适配层按事件形状严格校验（fail-closed，不猜），直接投喂会让整批补收被拒：
@@ -49,21 +58,30 @@ export function createGateway({
     return ev
   }
 
-  async function triggerBackfill({ since, gapMs }) {
+  async function triggerBackfill({ since, gapMs, at = Date.now() }) {
     if (backfilling || getConfig().backfill?.enabled === false) return
     backfilling = true
     const cfg = getConfig()
     const settle = Number(cfg.backfill?.settleMs) || 10_000
     if (settle > 0) await new Promise((r) => setTimeout(r, settle))
+    // 整轮是否可判定为「已补完」：任一拉取失败或中途掉线都不推进游标
+    let complete = true
     try {
       log.info(`[backfill] 发现连接断档约 ${describeDuration(gapMs)}，开始拉取错过的历史消息...`)
+      // settle 期间可能又掉线/卸载：此刻拉历史只会白烧一次失败往返
+      if (connectionLost() || !getHub()) { complete = false; return }
       const groups = (cfg.allow?.groups || []).map(String)
-      const privates = (cfg.allow?.private || []).map(String)
+      // T3.5：主人的私聊必须在补收名单里——allow.private 为空时，主人自己被漏掉的私聊
+      // 永远不会被补收（真机上「睡醒后主人的话像没发过」就是这么来的）。
+      const privates = [...new Set([...(cfg.allow?.private || []), cfg.ownerQQ].map((x) => String(x || '').trim()).filter(Boolean))]
       const botQQ = String(cfg.botQQ || '')
+      const backfillCfg = normalizeBackfillConfig(cfg.backfill)
+      const historyCount = backfillCfg.maxPerConversation
 
       for (const gid of groups) {
+        if (connectionLost()) { complete = false; break }
         try {
-          const res = await onebot.call('get_group_msg_history', { group_id: Number(gid), count: 30 })
+          const res = await onebot.call('get_group_msg_history', { group_id: Number(gid), count: historyCount })
           const msgs = Array.isArray(res?.messages) ? res.messages : []
           const { items } = selectBackfill(msgs, {
             key: `group:${gid}`,
@@ -73,9 +91,12 @@ export function createGateway({
             config: cfg.backfill
           })
           for (const it of items) {
+            if (connectionLost()) { complete = false; break }
+            // 去重 ID 与 backfill.js:selectBackfill 完全一致（message_id 缺失时用 real_id）
+            const mid = it.event.message_id ?? it.event.real_id
             // 竞争复查：selectBackfill 筛选时查过 seen，但循环内 await 让出后同 ID 可能已被实时侧入册/投递
-            if (seenIds.has(`group:${gid}`, it.event.message_id)) continue
-            seenIds.add(`group:${gid}`, it.event.message_id)
+            if (seenIds.has(`group:${gid}`, mid)) continue
+            seenIds.add(`group:${gid}`, mid)
             // M1-B：过旧（> maxAgeMinutes）消息不主动唤醒——backfill.js 头注安全承诺 #3。
             // 它们只留在 QQ 自己的历史里；legacy 没有独立的「只落上下文」通道，
             // 投喂 6 小时前的旧消息只会制造迟到副作用（M1-B 验收线），故整个跳过。
@@ -87,12 +108,14 @@ export function createGateway({
             else await getHub().onMessage(ev, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
+          complete = false
           log.debug(`[backfill] 拉取群 ${gid} 历史失败:`, e.message)
         }
       }
       for (const uid of privates) {
+        if (connectionLost()) { complete = false; break }
         try {
-          const res = await onebot.call('get_friend_msg_history', { user_id: Number(uid), count: 20 })
+          const res = await onebot.call('get_friend_msg_history', { user_id: Number(uid), count: historyCount })
           const msgs = Array.isArray(res?.messages) ? res.messages : []
           const { items, skippedCommands } = selectBackfill(msgs, {
             key: `private:${uid}`,
@@ -102,15 +125,17 @@ export function createGateway({
             config: cfg.backfill
           })
           // M1-B：命令/审批/动态码在补收中绝不执行；记入 seen，重复拉取时不再重发提醒
-          for (const c of skippedCommands) seenIds.add(`private:${uid}`, c.event.message_id)
+          for (const c of skippedCommands) seenIds.add(`private:${uid}`, c.event.message_id ?? c.event.real_id)
           if (skippedCommands.length && String(uid) === String(cfg.ownerQQ)) {
             const cmds = skippedCommands.map((c) => `「${c.text}」`).join('、')
             await getHub().sendText(`private:${uid}`, `⚠️ 断线期间（约 ${describeDuration(gapMs)}）收到的管理命令 ${cmds} 未执行；如需执行请重新发送。`)
           }
           for (const it of items) {
+            if (connectionLost()) { complete = false; break }
             // 竞争复查：同群聊循环——筛选后 await 让出期间同 ID 实时事件可能已进处理链
-            if (seenIds.has(`private:${uid}`, it.event.message_id)) continue
-            seenIds.add(`private:${uid}`, it.event.message_id)
+            const mid = it.event.message_id ?? it.event.real_id
+            if (seenIds.has(`private:${uid}`, mid)) continue
+            seenIds.add(`private:${uid}`, mid)
             // M1-B：同上，过旧消息不唤醒
             if (it.tooOld) { log.debug(`[backfill] 私聊 ${uid} 消息 ${it.event.message_id} 过旧（${Math.round(it.ageMs / 60000)} 分钟），只记录不唤醒`); continue }
             const mc = getModularCore?.()
@@ -119,12 +144,17 @@ export function createGateway({
             else await getHub().onMessage(ev, { backfill: true, gapMs, earliestAgeMs: it.ageMs })
           }
         } catch (e) {
+          complete = false
           log.debug(`[backfill] 拉取私聊 ${uid} 历史失败:`, e.message)
         }
       }
     } catch (err) {
+      complete = false
       log.warn('[backfill] 补收历史消息异常:', err.message)
     } finally {
+      // T3.5 游标延迟提交：只有整轮拉取全部成功且全程在线，才把断档游标推进到本轮起始时间；
+      // 否则保持旧 since —— 下次重连还能基于它把这批漏收补回来。
+      if (complete) gapTracker.commit(at)
       backfilling = false
     }
   }
@@ -168,7 +198,7 @@ export function createGateway({
     if (!getHub()) return
     const gap = gapTracker.notePacket()
     if (gap && getConfig().backfill?.enabled !== false) {
-      triggerBackfill(gap)
+      triggerBackfill(gap).catch((error) => log.warn('[backfill] 补收触发失败:', error.message))
     }
     if (ev.post_type === 'message' && ev.message_id) {
       const key = ev.message_type === 'group' ? `group:${ev.group_id}` : `private:${ev.user_id}`
@@ -232,6 +262,7 @@ export function createGateway({
       get wrongAccount () { return wrongAccount },
       set wrongAccount (v) { wrongAccount = v },
       get seenIds () { return seenIds },
+      lastPacketAt: () => gapTracker.lastPacketAt(),
     },
   }
 }

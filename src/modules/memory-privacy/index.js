@@ -26,6 +26,9 @@ export default {
   description: '移植自 dsh-qq：私聊里说的事只在私聊可见，群里怎么套也拿不到',
   panel: 'panel.js',
   tab: 'memory',
+  // T3.8：依赖主库（所有读写都走记忆总线，总线底下是 memory 模块）。
+  // 没有 requires 时模块可能在主库缺席的情况下被单独启动，api.use('memory') 永远拿不到。
+  requires: ['memory-store'],
   defaults: {
     enabled: true,
     /** 每次最多带上几条作用域记忆 */
@@ -51,7 +54,12 @@ export default {
     // 记忆总线：本模块里所有「记一条 / 翻记忆」都从这里走（1.3.48 起）。
     // 总线底下是主库，作用域口径就是本模块导出的那三个纯函数。
     // store 惰性解析：setup 时 memory 模块可能还没启动完，不能把 null 烧死在闭包里
-    const busStore = () => { try { return api.use('memory') || null } catch { return null } }
+    let busCached = null
+    const busStore = () => {
+      if (busCached) return busCached
+      try { busCached = api.use('memory') || null } catch { busCached = null }
+      return busCached
+    }
     const bus = { add: (o) => createMemoryBus({ store: busStore(), log: api.log }).add(o) }
 
     // 1.3.48：本模块自己的 scoped.json 平行库连同 add/load/save 全部删除。
@@ -248,6 +256,8 @@ export default {
       }
       return out
     })
+    // T3.8：卸载时把总线里缓存的 store 引用清掉，避免热重载后仍指向旧主库实例
+    api.onDispose?.(() => { busCached = null })
     return { scopeOf, visibleScopes, isVisible }
   },
 }

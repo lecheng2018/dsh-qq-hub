@@ -64,6 +64,13 @@ export function createMemoryIndexCache({ getConfig, load, getRev, derived, getKn
   let scopeOverrideFn = null
 
   function invalidate(scope = '') {
+    // T3.8：global 是「所有会话都可见」的那一份，任何 global 变更都必须整体失效；
+    // 只删 `scope:global` 会把各会话已建好的 chat 键留在缓存里（旧内容继续被召回）。
+    if (String(scope).trim() === 'global') {
+      cache.clear()
+      if (tokCache.size > 8000) tokCache.clear()
+      return
+    }
     if (scope) {
       // 缓存键可能是 `scope:x` 或 `chat:x|...`：两种都清，避免按 scope 失效漏掉 chat 键
       cache.delete(`scope:${scope}`)
@@ -81,11 +88,18 @@ export function createMemoryIndexCache({ getConfig, load, getRev, derived, getKn
   function invalidateMany(scopes = [], { tokenIds = null } = {}) {
     if (Array.isArray(scopes) && scopes.length) {
       for (const sc of scopes) {
+        if (String(sc).trim() === 'global') {
+          cache.clear() // global 被子作用域缓存引用，整体清最安全
+          continue
+        }
         if (sc) {
           cache.delete(String(sc))
           cache.delete(`scope:${sc}`)
+          // 失效范围要覆盖「override 后半段包含关系」：sc 为某个前缀作用域时，
+          // 形如 `chat:<sc>|...` 与 `scope:<sc>:*` 的键都要一起清，否则面板改完仍读到旧索引。
           for (const key of cache.keys()) {
-            if (String(key).startsWith(`chat:${sc}|`)) cache.delete(key)
+            const k = String(key)
+            if (k.startsWith(`chat:${sc}|`) || k === `chat:${sc}` || k.startsWith(`scope:${sc}:`) || k.startsWith(`${sc}:`)) cache.delete(key)
           }
         }
       }
@@ -114,10 +128,13 @@ export function createMemoryIndexCache({ getConfig, load, getRev, derived, getKn
    * 记忆作用域：私聊里记的只在那个私聊可见，群里记的只在那群可见，global 到处可见。
    */
   function scopeOfChat(chat) {
-    if (!chat || chat.kind === 'system') return 'global'
+    // T3.8 fail-closed：system / 未知 kind 绝不返回 'global' —— 返回 global 会让内部会话
+    // （系统回合、面板探针）看到所有人的记忆，也会让 clearScope 误清全局。
+    if (!chat) return 'private:unknown'
+    if (chat.kind === 'system') return 'private:unknown'
     if (chat.kind === 'private') return `private:${chat.userId}`
     if (chat.kind === 'group') return `group:${chat.groupId}`
-    return 'global'
+    return 'private:unknown'
   }
 
   /** 从 chatId 字符串（'private:123' / 'group:456'）反推作用域；推不出时返回空（fail-closed）。 */
@@ -139,8 +156,10 @@ export function createMemoryIndexCache({ getConfig, load, getRev, derived, getKn
   function scopeVisible(scope, chat) {
     const raw = String(scope || '').trim()
     if (!raw) return false
-    if (raw === 'global') return true
+    // T3.8：先判会话本身 —— system/未知会话一律不可见（连 global 也不给），
+    // 否则内部回合会把「全局记忆」当成自己的上下文。
     if (!chat || chat.kind === 'system') return false
+    if (raw === 'global') return true
     if (raw === scopeOfChat(chat)) return true
     if (scopeOverrideFn && scopeOverrideFn(raw, chat)) return true
     return false

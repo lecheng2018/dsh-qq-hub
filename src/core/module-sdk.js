@@ -34,6 +34,9 @@ export function planModules({ defs, enabledOf, runtime, prefer = {} }) {
   const providedBy = new Map()
   const loadedIds = new Set()
 
+  // —— 第一遍：逐条做与其它模块无关的准入判定（契约 / API / GUI / 开关 / 重复 ID）——
+  // 顺序保持不变：同一 id 只保留首现者，健康登记也按声明序写。
+  const eligible = []
   for (const raw of defs) {
     const id = String(raw?.id ?? '')
     let def
@@ -59,63 +62,122 @@ export function planModules({ defs, enabledOf, runtime, prefer = {} }) {
       health[id] = { state: 'disabled', reason: '配置关闭' }
       continue
     }
-    // 缺依赖：requires 的能力必须由「本次要装载」的其他模块提供
-    const missing = (def.requires || []).filter((cap) => {
-      for (const [otherId, caps] of providedBy) {
-        if (otherId !== id && caps.has(cap)) return false
-      }
-      return true
-    })
-    if (missing.length) {
-      skipped.push({ id, reason: `缺依赖能力：${missing.join(', ')}` })
-      health[id] = { state: 'disabled', reason: `缺依赖 ${missing.join(', ')}` }
-      continue
-    }
-    // 冲突：conflicts 列出的能力/模块 id 已被在载者占用
-    const conflict = (def.conflicts || []).find((cap) => {
-      for (const [otherId, caps] of providedBy) {
-        if (otherId !== id && (caps.has(cap) || otherId === cap)) return true
-      }
-      return false
-    })
-    if (conflict) {
-      skipped.push({ id, reason: `与已装载能力冲突：${conflict}` })
-      health[id] = { state: 'disabled', reason: `冲突 ${conflict}` }
-      continue
-    }
-    // 同能力替代实现：先到先得（声明序）；prefer 显式点名时，落选者在此被淘汰
-    const losesToPrefer = (def.provides || []).find((cap) => prefer[cap] && prefer[cap] !== id)
-    if (losesToPrefer) {
-      skipped.push({ id, reason: `能力 ${losesToPrefer} 已显式指定实现 ${prefer[losesToPrefer]}（prefer）` })
-      health[id] = { state: 'disabled', reason: `能力 ${losesToPrefer} 由 ${prefer[losesToPrefer]} 提供` }
-      continue
-    }
-    const dupCap = (def.provides || []).find((cap) => {
-      for (const [otherId, caps] of providedBy) {
-        if (otherId !== id && caps.has(cap)) {
-          return prefer[cap] ? prefer[cap] !== id : true
-        }
-      }
-      return false
-    })
-    if (dupCap) {
-      skipped.push({ id, reason: `能力 ${dupCap} 已有实现（替代实现冲突；可用 prefer 指定）` })
-      health[id] = { state: 'disabled', reason: `替代实现冲突 ${dupCap}` }
-      continue
-    }
-
     // 重复 ID：只保留先出现者进 load。若两个都进，modules.js 的 live.set 会用后装者
     // 覆盖同名条目，第一份的清理句柄就此丢失（监听器/定时器泄漏）。
     if (loadedIds.has(id)) {
       skipped.push({ id, reason: '重复模块 ID，保留先出现者' })
       continue
     }
-
-    load.push(def)
     loadedIds.add(id)
-    providedBy.set(id, new Set(def.provides || []))
-    health[id] = { state: 'enabled' }
+    eligible.push(def)
   }
+
+  const providesOf = (def) => new Set(def.provides || [])
+  const acceptedCap = () => {
+    const caps = new Set()
+    for (const caps2 of providedBy.values()) for (const cap of caps2) caps.add(cap)
+    return caps
+  }
+
+  /**
+   * 双向冲突判定。审计 T3.9：过去只看「已装载者是否占了本模块 conflicts」，
+   * 于是 A(conflicts: x) 声明在提供 x 的 B 之前时，B 照样被装进来 —— 冲突只生效一半。
+   */
+  const conflictWith = (def, accepted) => {
+    for (const other of accepted) {
+      if (other.id === def.id) continue
+      for (const cap of def.conflicts || []) {
+        if (cap === other.id || (other.provides || []).includes(cap)) return cap
+      }
+      for (const cap of other.conflicts || []) {
+        if (cap === def.id || (def.provides || []).includes(cap)) return cap
+      }
+    }
+    return null
+  }
+
+  /** 同能力替代实现：先到先得；prefer 显式点名时落选者在此淘汰。返回落选原因或 null。 */
+  const duplicateOf = (def) => {
+    for (const cap of def.provides || []) {
+      for (const other of load) {
+        if (other.id === def.id || !providesOf(other).has(cap)) continue
+        return prefer[cap] ? null : { kind: 'dup', cap, otherId: other.id }
+      }
+    }
+    // prefer 显式指定了别的实现：本模块即使先出现也要让位（与过去语义一致）
+    for (const cap of def.provides || []) {
+      if (prefer[cap] && prefer[cap] !== def.id) return { kind: 'prefer', cap }
+    }
+    return null
+  }
+
+  const accept = (def) => {
+    load.push(def)
+    providedBy.set(def.id, providesOf(def))
+    health[def.id] = { state: 'enabled' }
+  }
+
+  const reject = (def, kind, cap) => {
+    if (kind === 'conflict') {
+      skipped.push({ id: def.id, reason: `与已装载能力冲突：${cap}` })
+      health[def.id] = { state: 'disabled', reason: `冲突 ${cap}` }
+    } else if (kind === 'prefer') {
+      skipped.push({ id: def.id, reason: `能力 ${cap} 已显式指定实现 ${prefer[cap]}（prefer）` })
+      health[def.id] = { state: 'disabled', reason: `能力 ${cap} 由 ${prefer[cap]} 提供` }
+    } else {
+      skipped.push({ id: def.id, reason: `能力 ${cap} 已有实现（替代实现冲突；可用 prefer 指定）` })
+      health[def.id] = { state: 'disabled', reason: `替代实现冲突 ${cap}` }
+    }
+  }
+
+  // —— 第二遍：迭代不动点解析 requires ——
+  // 审计 T3.9：过去单趟按声明序，依赖方写在提供方之前就永远「缺依赖」，
+  // 与声明顺序强耦合（boot / sync / reload 的可用模块集合会随文件顺序漂移）。
+  let pending = eligible.slice()
+  for (;;) {
+    let progressed = false
+    const still = []
+    for (const def of pending) {
+      const conflict = conflictWith(def, load)
+      if (conflict) { reject(def, 'conflict', conflict); progressed = true; continue }
+      const dup = duplicateOf(def)
+      if (dup) { reject(def, dup.kind, dup.cap); progressed = true; continue }
+      const caps = acceptedCap()
+      const missing = (def.requires || []).filter((cap) => !caps.has(cap))
+      if (missing.length) { still.push(def); continue }
+      accept(def)
+      progressed = true
+    }
+    pending = still
+    if (!pending.length) break
+    if (progressed) continue
+    // 无可推进：可能是环形依赖（A 要 b-cap、B 要 a-cap）。整组一起装载的前提是
+    // 组内互相满足、且组内没有冲突/重名能力。
+    const groupCaps = new Set()
+    for (const def of pending) for (const cap of def.provides || []) groupCaps.add(cap)
+    const caps = acceptedCap()
+    const group = []
+    for (const def of pending) {
+      if ((def.requires || []).every((cap) => caps.has(cap) || groupCaps.has(cap))) group.push(def)
+    }
+    const ok = group.length > 0 && group.every((def) => !conflictWith(def, group.filter((x) => x !== def)))
+    if (ok) {
+      for (const def of group) {
+        if (!conflictWith(def, load) && !duplicateOf(def)) accept(def)
+      }
+      pending = pending.filter((def) => !load.includes(def))
+      if (!pending.length) break
+    }
+    // 剩下的确实无法满足：按声明序报缺依赖。
+    const finalCaps = acceptedCap()
+    for (const def of pending) {
+      const missing = (def.requires || []).filter((cap) => !finalCaps.has(cap))
+      skipped.push({ id: def.id, reason: `缺依赖能力：${missing.join(', ')}` })
+      health[def.id] = { state: 'disabled', reason: `缺依赖 ${missing.join(', ')}` }
+    }
+    break
+  }
+
   return { load, skipped, health }
 }
 

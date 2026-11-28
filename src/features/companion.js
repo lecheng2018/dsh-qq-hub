@@ -2,6 +2,7 @@
 
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { isSilence } from '../chat/reply.js'
+import { isAwakeAt } from '../core/day-window.js'
 
 // ---------------- 主动搭话 ----------------
 
@@ -33,13 +34,25 @@ export function greetingDue(cfg, state, now = Date.now(), lastOwnerAt = 0) {
   if (lastOwnerAt && now - lastOwnerAt < 10 * 60_000) return null
   const greeted = (state && state.greeted) || {}
   const win = 60 // 到点后一小时内有效
+  // T3.11：窗口可能跨午夜（23:30 的晚安，00:10 才轮询到）。用模 1440 的差值判断，
+  // 「今天的标记」也要按窗口起始那天算 —— 否则 00:10 会把标记写到新的一天，
+  // 昨晚刚说过晚安的人，凌晨又收到一条。
+  const inWindow = (target) => target !== null && ((mins - target + 1440) % 1440) < win
+  const dayOf = (target) => {
+    if (target !== null && mins < target) {
+      const back = new Date(now)
+      back.setDate(back.getDate() - 1)
+      return back.toDateString()
+    }
+    return today
+  }
   const mm = parse(morning)
-  if (mm !== null && mins >= mm && mins < mm + win && greeted.morning !== today) {
-    return { kind: 'morning', at: morning }
+  if (inWindow(mm) && greeted.morning !== dayOf(mm)) {
+    return { kind: 'morning', at: morning, day: dayOf(mm) }
   }
   const nn = parse(night)
-  if (nn !== null && mins >= nn && mins < nn + win && greeted.night !== today) {
-    return { kind: 'night', at: night }
+  if (inWindow(nn) && greeted.night !== dayOf(nn)) {
+    return { kind: 'night', at: night, day: dayOf(nn) }
   }
   return null
 }
@@ -48,6 +61,9 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
   const file = () => dataDir('speakup.json')
   const load = () => readJson(file(), () => ({ day: '', count: 0, nextAt: 0, last: 0 }))
   const save = (s) => writeJson(file(), s)
+  // T3.11：每分钟一次的 tick 无论有没有变化都会整份写盘（含 greeted/day），
+  // 深夜没人说话时也在空刷 SSD。只在状态真的变了才落盘。
+  let inFlight = null
 
   function schedule(s, cfg) {
     const min = cfg.minIntervalMinutes
@@ -92,28 +108,37 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
   async function tick() {
     const cfg = getConfig()
     const c = cfg.speakUp
+    // T3.11：没有主人 QQ 就没有「私聊」这个概念，后面拼 chatId 会拼出 private:undefined，
+    // 白烧一次模型调用还可能把状态写到错误的键上。
+    if (!cfg.ownerQQ) return
     if (!cfg.enabled || !c.enabled) return
+    // T3.11：单飞锁。tick 里有 await fire()（模型回合可能几十秒），每分钟定时器继续触发时
+    // 会并发再跑一遍：问候/追问/主动搭话各发一条，greeted 也会被两边互相覆盖。
+    if (inFlight) return
+    inFlight = true
+    try {
+      await tickInner(cfg, c)
+    } finally {
+      inFlight = null
+    }
+  }
+
+  async function tickInner(cfg, c) {
     if (isMuted?.(`private:${cfg.ownerQQ}`)) return // 主人在私聊里让她闭嘴了
     const s = load()
+    let dirty = false
     const today = new Date().toDateString()
-    if (s.day !== today) Object.assign(s, { day: today, count: 0 })
-    if (!s.nextAt) schedule(s, c)
+    if (s.day !== today) { Object.assign(s, { day: today, count: 0 }); dirty = true }
+    if (!s.nextAt) { schedule(s, c); dirty = true }
     const now = Date.now()
-    const h = new Date(now).getHours()
-    const awakeFrom = Number(c.awakeFrom) || 0
-    const awakeTo = Number(c.awakeTo ?? 24)
-    const awake = (awakeFrom === 0 && awakeTo >= 24) || (awakeFrom % 24) === (awakeTo % 24)
-      ? true
-      : awakeFrom < awakeTo
-        ? (h >= awakeFrom && h < awakeTo)
-        : (h >= awakeFrom || h < awakeTo)
+    const awake = isAwakeAt(now, c.awakeFrom ?? 0, c.awakeTo ?? 24)
     const idleOk = now - lastPrivateAt() > c.idleMinutes * 60_000
     // 早安 / 晚安：固定时间点，不参与「随机间隔」的抽签。
     // （参考 surfcore 的 greeting-schedule：用户反馈「早上八点的问候没成功」——因为它是纯随机的，
     //   醒来那一刻只有 1/N 的概率撞上。这里改成到点必发一次，且每天只发一次。）
     const greet = greetingDue(cfg, s, now, lastPrivateAt())
     if (awake && greet) {
-      s.greeted = { ...(s.greeted || {}), [greet.kind]: today }
+      s.greeted = { ...(s.greeted || {}), [greet.kind]: greet.day || today }
       save(s)
       await fire(greet.kind === 'morning' ? '早安' : '晚安', { greeting: greet.kind })
       return
@@ -123,7 +148,7 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
     const quiet = Date.now() - lb.at
     if (awake && c.nudge && lb.at > (hub.lastOwnerChatAt || 0) && lb.at !== s.nudgedFor && /[？?]|吗|呢|嘛|没$/.test(lb.text.trim()) && quiet > 15 * 60_000 && quiet < 40 * 60_000) {
       s.nudgedFor = lb.at
-      save(s)
+      save(s) // 追问标记必须先落盘（防重复），这个分支本身就是状态变更
       if (Math.random() < 0.5) await fire('追问', { nudge: true })
       return
     }
@@ -135,7 +160,7 @@ export function createSpeakUp({ getConfig, hub, log, isMuted }) {
       await fire()
       return
     }
-    save(s)
+    if (dirty) save(s)
   }
 
   return { tick, fire, state: load }

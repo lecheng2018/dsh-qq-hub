@@ -21,7 +21,13 @@ export function createHostEffects({
     try { return (typeof chatKeyOfSession === 'function' ? chatKeyOfSession(sid) : '') || '' } catch { return '' }
   }
 
-  const safe = (fn, label) => () => { Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message)) }
+  // T3.6：插件被卸载（热重载）后，任何已经排上的 setTimeout 仍会醒来跑一次旧实例的闭包，
+  // 于是旧实例又连回网关/新建会话（僵尸连接）。disposed 守卫让这些迟到回调空跑一次立刻退出。
+  let disposed = false
+  const safe = (fn, label) => () => {
+    if (disposed) return
+    Promise.resolve().then(fn).catch((error) => log.warn(`${label}出错：`, error.message))
+  }
 
   const resolveDisplayReason = (req) => {
     const dr = req?.displayReason
@@ -204,7 +210,12 @@ export function createHostEffects({
   }
   function installWatchdog() {
     ctx.effect(() => ctx.interval(safe(watchdog, '看门狗'), 30_000), 'qq-hub: 看门狗')
-    setTimeout(safe(watchdog, '看门狗'), 3000).unref?.()
+    // 首轮延迟启动也交给 ctx.effect：卸载时连定时器一起清掉，而不是等它自己醒来撞 disposed。
+    ctx.effect(() => {
+      const timer = setTimeout(safe(watchdog, '看门狗'), 3000)
+      timer.unref?.()
+      return () => clearTimeout(timer)
+    }, 'qq-hub: 看门狗首轮')
   }
 
   // ---------- 孤儿会话巡检 ----------
@@ -232,7 +243,11 @@ export function createHostEffects({
     const idle = Math.max(1, Number(cfg?.orphanSweep?.idleHours) || 6)
     log.info(`孤儿会话巡检：每 ${hours} 小时扫一次，闲置超过 ${idle} 小时的失联会话会静默归档`)
     ctx.effect(() => ctx.interval(safe(sweepOrphans, '孤儿会话巡检'), 30 * 60_000), 'qq-hub: 孤儿会话巡检')
-    setTimeout(safe(sweepOrphans, '孤儿会话巡检'), 5 * 60_000).unref?.()
+    ctx.effect(() => {
+      const timer = setTimeout(safe(sweepOrphans, '孤儿会话巡检'), 5 * 60_000)
+      timer.unref?.()
+      return () => clearTimeout(timer)
+    }, 'qq-hub: 孤儿会话巡检首轮')
   }
 
   return {

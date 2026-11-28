@@ -45,7 +45,7 @@ export function consolidationRetryBlocked(retry, now = Date.now()) {
 export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
-  load, save, health, relatedTo,
+  load, save, mutate, health, relatedTo,
   add, addMany, revise, supersede, invalidate, invalidateMany, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
@@ -56,6 +56,18 @@ export function createMemoryLearning({
   const chatLogSnapshot = (day) => readChatLogSource(sourceLog, day)
   let batchRecoveryError = ''
   let inMemoryRetry = null
+
+  /**
+   * T3.8：状态写入统一走 mutate()（CAS 自愈）——读到的版本已被别人改过就重试，
+   * 而不是用 load()+save() 把对方的改动覆盖掉。未注入 mutate（老调用方）时退回旧路径。
+   */
+  const persist = (apply) => {
+    if (typeof mutate === 'function') return mutate((s) => { apply(s); return true })
+    const s = load()
+    apply(s)
+    save(s)
+    return true
+  }
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
   async function importCandidates(text) {

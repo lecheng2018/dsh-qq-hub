@@ -540,6 +540,12 @@ export function createMemoryCrud({ getConfig, log, session, indexCache, derived,
 
   function clearScope(chat) {
     if (isClosed()) return { scope: '', items: 0, profile: 0, insights: 0, style: 0 }
+    // T3.8：内部（system）或身份不明的会话不许清分区 —— scopeOfChat 现在对它们返回
+    // `private:unknown`，若放任继续执行就会把「unknown 分区」当真实分区清理，
+    // 且面板/脚本传空 chat 时会误清一批记忆。
+    if (!chat || chat.kind === 'system' || !['private', 'group'].includes(chat.kind)) {
+      return { scope: '', items: 0, profile: 0, insights: 0, style: 0, refused: true }
+    }
     const scope = scopeOfChat(chat)
     const key = personKey(chat)
     const res = mutate((s) => {

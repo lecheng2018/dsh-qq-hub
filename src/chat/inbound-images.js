@@ -21,6 +21,11 @@ export function createInboundImages({ onebot, dsh, log } = {}) {
     const buf = await fetchImage(url, { maxBytes, timeoutMs: 15000 })
     if (!buf.length) throw new Error('下载到 0 字节')
     const mediaType = mimeOf(buf)
+    // 审计 T3.10：HTTP 200 也可能是 HTML/JSON 错误页（登录墙、风控页）。过去只查字节数，
+    // 错误页会被当成图片塞给模型（轻则整轮失败，重则把页面内容当「图」记进上下文）。
+    if (!String(mediaType || '').startsWith('image/')) {
+      throw new Error(`不是支持的图片类型（${buf.length} 字节，头 ${buf.slice(0, 12).toString('hex')}）`)
+    }
     return { data: buf.toString('base64'), mediaType }
   }
 

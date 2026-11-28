@@ -83,7 +83,9 @@ test('③ 跨日：换天后未分配 → 又回到 fail-open（新的一天重�
   assert.equal(ledger.isExhausted('private:10001', { dateKey: '2026-11-15' }), false)
   // 真正翻页后再分配，恢复配额
   ledger.resetDaily('2026-11-15')
-  assert.equal(ledger.hasAllocation('2026-11-15'), false, 'resetDaily 只清用量，不算分配过')
+  // T3.10：resetDaily 同时把 allocatedDay 推到新的一天 —— 否则「今天已分配」恒为 false，
+  // isExhausted 对新的一天一律 fail-open（限额等于不存在）。分配本身仍要重做。
+  assert.equal(ledger.hasAllocation('2026-11-15'), true, 'resetDaily 之后视为「已分配」（用量已清，额度待重算）')
   ledger.allocate([owner], undefined, { dateKey: '2026-11-15' })
   assert.equal(ledger.isExhausted('private:10001'), false)
   assert.equal(ledger.remaining('private:10001'), 30_000)

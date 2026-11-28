@@ -156,9 +156,15 @@ export function createTokenLedger(options = {}) {
 
   /** 跨日自动滚动：换日即清空当日用量，权重与分配沿用。 */
   function rollTo(day) {
-    if (day === dateKey) return
-    dateKey = day
+    const next = assertDateKey(day)
+    if (next === dateKey) return
+    dateKey = next
     used.clear()
+    // 审计 T3.10：allocatedDay 过去停在上一天，本意是「沿用昨天的权重」，但
+    // hasAllocation(今天) 会因此恒为 false → 只看分配日的预算判定直接 fail-open
+    // （isExhausted 永远 false，限额等于不存在）。权重本就在 limits 里不随日期走，
+    // 这里同步成新日期即可。
+    if (allocatedDay !== '') allocatedDay = next
   }
 
   function limitOf(chatKey) {
@@ -266,9 +272,11 @@ export function createTokenLedger(options = {}) {
 
   /** 跨日重置（也用于测试与运维手动翻页）。 */
   function resetDaily(day) {
-    assertDateKey(day)
-    dateKey = day
+    const next = assertDateKey(day)
+    dateKey = next
     used.clear()
+    // 审计 T3.10：手动重置也是「这天有分配」，不同步会让 hasAllocation 继续 false。
+    if (allocatedDay !== '') allocatedDay = next
     return snapshot()
   }
 
@@ -344,6 +352,10 @@ export function createTokenLedger(options = {}) {
       totalUsed += spent
     }
     const ownerBudget = Math.floor(budget * ownerShare)
+    // T3.10：allocated 必须按「真实今天」判（与 isExhausted 同口径）——dateKey 只在
+    // 写时前进，读的时候可能已经是昨天，直接拿它判会把「今天没分配」说成「分配过」。
+    // dateKey 字段本身仍吐账本记录的日期（运维/诊断要看的就是它有没有漂移）。
+    const day = currentDate()
     return {
       dateKey,
       budget,
@@ -352,7 +364,7 @@ export function createTokenLedger(options = {}) {
       ownerBudget,
       groupBudget: budget - ownerBudget,
       // 当天是否分配过。false 表示「账本还是空的」，此时 isExhausted 一律 fail-open。
-      allocated: hasAllocation(dateKey),
+      allocated: hasAllocation(day),
       totalLimit,
       totalUsed,
       totalRemaining: Math.max(0, totalLimit - totalUsed),
@@ -375,7 +387,9 @@ export function createTokenLedger(options = {}) {
     } catch {
       return false
     }
-    if (day !== dateKey) return false
+    // T3.10：用 currentDate() 判定「今天」，与 isExhausted/record 同一口径。
+    // 固定模式（pinned）下 currentDate() 就是 dateKey，行为不变。
+    if (day !== currentDate()) return false
     const nums = (obj) => {
       if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
       const out = new Map()
@@ -394,7 +408,9 @@ export function createTokenLedger(options = {}) {
     for (const [key, limit] of allocs) {
       limits.set(key, limit)
       // 恢复时无法还原原始角色，按额度推断等级（0 → none），只影响展示口径。
-      tiers.set(key, limit > 0 ? TIER_OWNER : TIER_NONE)
+      // T3.10：群聊必须回到 TIER_GROUP —— 否则重启后群里的消耗被记成主人消费，
+      // 面板两栏对不上、群预算永远显示零消耗。
+      tiers.set(key, limit > 0 ? (parseChatKey(key).kind === 'group' ? TIER_GROUP : TIER_OWNER) : TIER_NONE)
     }
     for (const [key, spent] of usages) used.set(key, spent)
     if (typeof raw.budget === 'number' && Number.isInteger(raw.budget) && raw.budget >= 0) budget = raw.budget

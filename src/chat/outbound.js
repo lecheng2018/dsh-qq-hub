@@ -158,6 +158,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
   async function sendMixed(chatId, parts, replyId, missed, userId) {
     const segs = []
     const used = []
+    const voiceReceipts = []
     for (const part of parts) {
       if (part.kind === 'text') {
         const prepared = await textSegments(chatId, part.value, missed)
@@ -169,7 +170,11 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
           segs.push({ type: 'image', data: { file: 'base64://' + buf.toString('base64') } })
         } catch (error) { log.warn('图片发不出去：', error.message) }
       } else if (part.kind === 'voice') {
-        await sendVoice(chatId, part.value, part.replyTo, undefined)
+        // T3.11：Voice 是**另一个请求**（record 段不能和文字段同包），过去把回执直接丢了：
+        // 整泡只有语音 + 表情时 segs 非空但语音没算进回执；整泡只有语音时直接 return null
+        // （上层记「未确认」，明明发出去了却报 failed）。这里把语音回执收进来。
+        const receipt = await sendVoice(chatId, part.value, part.replyTo, undefined)
+        if (receipt) voiceReceipts.push(receipt)
       } else if (part.kind === 'sticker') {
         const policy = stickers.policyFor?.(chatId) || getConfig().stickers
         if (!policy?.enabled) continue
@@ -178,9 +183,13 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
         if (seg) { segs.push(seg); used.push(item) }
       }
     }
-    if (!segs.length) return null
     const note = parts.map((part) => part.kind === 'text' ? part.value : `[${part.kind}]`).join(' ').slice(0, 60)
-    const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
+    const result = segs.length
+      ? await sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], note)
+      : null
+    // 语音条已经独立发出去、段包却发失败（或整泡只有语音）时，回执仍然要交上去：
+    // 「发出去了」和「没发出去」不能因为分包而互相掩盖。
+    if (!result && voiceReceipts.length) return voiceReceipts[0]
     // 整泡没发出去就不记表情使用/统计（与 sendSticker 同一口径，避免失败也计数）。
     if (result) for (const item of used) {
       await stickers.markUsed?.(item.md5, chatId)

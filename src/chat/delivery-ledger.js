@@ -186,29 +186,63 @@ export function createDeliveryLedger({
           try { quarantineCorruptFile(badFile) } catch (error) { onError(error) }
         }
       }
+      // —— 阶段一：先还原终态，不做任何崩溃恢复判定 ——
+      // 主快照进内存（保持原样），随后把 WAL 里的增量事件全部重放上去；
+      // 只有重放完成后才统一判定，否则「WAL 里 mark('sent') 的记录」会被主快照的
+      // sending/queued 状态误改成 unknown/cancelled（此前 crashedSending 会凭空 +1~+2）。
       for (const rec of loaded.value.deliveries) {
+        records.set(String(rec.deliveryId), rec)
+      }
+      const walEvents = wal.readEvents()
+      /** 崩溃备份场景下，WAL 是否明确证明这条「未发出」（有非 sent 的终态 mark） */
+      const confirmedUnsent = new Set()
+      for (const ev of walEvents) {
+        if (ev.op === 'enqueue' && ev.record?.deliveryId) {
+          const id = String(ev.record.deliveryId)
+          if (!records.has(id)) records.set(id, { ...ev.record })
+        } else if (ev.op === 'mark' && ev.deliveryId !== undefined) {
+          const id = String(ev.deliveryId)
+          const target = records.get(id)
+          if (target) Object.assign(target, ev.patch)
+          if (ev.patch?.state === 'cancelled' || ev.patch?.state === 'failed') confirmedUnsent.add(id)
+        }
+      }
+      // —— 阶段二：重放结束后的统一崩溃恢复判定（一次遍历） ——
+      const recoveryNow = Date.now()
+      for (const rec of records.values()) {
         if (rec.state === 'sending') {
           // 崩溃恢复红线：sending → unknown（副作用可能已发生），留审计原因，绝不重发
           rec.state = 'unknown'
-          rec.unknownAt = rec.unknownAt || Date.now()
+          rec.unknownAt = rec.unknownAt || recoveryNow
           rec.unknownReason = rec.unknownReason || 'crash-recovery: 落盘时处于 sending，副作用未知'
-          rec.recoveredAt = Date.now()
+          rec.recoveredAt = recoveryNow
           crashedSending++
           recovered = true
-        } else if (loaded.fromBackup && ['queued', 'failed', 'cancelled'].includes(rec.state)) {
+        } else if (rec.state === 'queued') {
+          const id = String(rec.deliveryId)
+          if (loaded.fromBackup && !confirmedUnsent.has(id)) {
+            // 主快照来自 .bak（可能落后）：WAL 也没证明「未发出」→ 只能按未知处理
+            rec.state = 'unknown'
+            rec.unknownAt = rec.unknownAt || recoveryNow
+            rec.unknownReason = rec.unknownReason || 'backup-recovery: 备份可能落后（原状态 queued），副作用未知'
+            rec.recoveredAt = recoveryNow
+            recovered = true
+          } else {
+            // 已登记但还没开始物理发送（含只存在于 WAL 的孤立 enqueue）：标 cancelled，不重发
+            rec.state = 'cancelled'
+            rec.cancelReason = 'crash-recovery: 崩溃前仍未出队，未恢复发送'
+            rec.recoveredAt = recoveryNow
+            recovered = true
+          }
+        } else if (loaded.fromBackup && ['failed', 'cancelled'].includes(rec.state)) {
           const previous = rec.state
           rec.state = 'unknown'
-          rec.unknownAt = rec.unknownAt || Date.now()
+          rec.unknownAt = rec.unknownAt || recoveryNow
           rec.unknownReason = `backup-recovery: 备份可能落后（原状态 ${previous}），副作用未知`
-          rec.recoveredAt = Date.now()
-          recovered = true
-        } else if (rec.state === 'queued') {
-          // 已登记但还没开始物理发送：标 cancelled，不恢复队列、不自动重发。
-          rec.state = 'cancelled'
-          rec.cancelReason = 'crash-recovery: 崩溃前仍未出队，未恢复发送'
-          rec.recoveredAt = Date.now()
+          rec.recoveredAt = recoveryNow
           recovered = true
         }
+        // sent：绝不写 unknownAt/unknownReason/recoveredAt（已发出就是已发出）
         if (rec.state === 'sent' || rec.state === 'cancelled') {
           const audit = auditSegments(rec.segments)
           if (rec.contentChars === undefined) rec.contentChars = audit.contentChars
@@ -218,31 +252,6 @@ export function createDeliveryLedger({
             if (audit.mediaStripped) rec.mediaStripped = true
             if (audit.textPreTruncated) rec.textPreTruncated = true
             recovered = true
-          }
-        }
-        records.set(String(rec.deliveryId), rec)
-      }
-      // 重放 WAL 中尚未压缩进主快照的增量事件（含崩溃恢复：WAL 里的 sending 同样要转 unknown）
-      for (const ev of wal.readEvents()) {
-        if (ev.op === 'enqueue' && ev.record?.deliveryId && !records.has(ev.record.deliveryId)) {
-          records.set(ev.record.deliveryId, ev.record)
-        } else if (ev.op === 'mark') {
-          const target = records.get(ev.deliveryId)
-          if (target) {
-            Object.assign(target, ev.patch)
-            if (target.state === 'sending') {
-              target.state = 'unknown'
-              target.unknownAt = target.unknownAt || Date.now()
-              target.unknownReason = target.unknownReason || 'crash-recovery: 落盘时处于 sending，副作用未知'
-              target.recoveredAt = Date.now()
-              crashedSending++
-              recovered = true
-            } else if (target.state === 'queued') {
-              target.state = 'cancelled'
-              target.cancelReason = 'crash-recovery: 崩溃前仍未出队，未恢复发送'
-              target.recoveredAt = Date.now()
-              recovered = true
-            }
           }
         }
       }
@@ -280,28 +289,35 @@ export function createDeliveryLedger({
         const trimmed = trimTerminalContent(rec, now)
         if (trimmed !== rec) records.set(id, trimmed)
       }
-      // 先压缩快照（如果需要），保证主 JSON 与当前内存一致
-      // critical 路径始终先写一次主快照（fail-closed 凭据），再追加 WAL；
-      // 非关键路径达到阈值或 forceCompact 时才压缩。
-      // requireBackup 跟着 critical 走：关键落盘要求主文件与 .bak 都写成，任一失败即抛（fail-closed）。
-      // 快照写紧凑 JSON（compact）且只在启动读到异常时做预检（precheck），避免每次全量双读。
       const compactOpts = { critical, compact: true, precheck: needsPrecheck }
-      if (forceCompact || wal.needsCompact() || critical) {
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, compactOpts)
-        needsPrecheck = false
-      }
-      // 再追加本次事件到 WAL
+      const snapshot = () => ({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] })
       if (walEvent) {
-        wal.append(walEvent, { critical })
-      } else if (critical) {
-        // 没有显式事件但要求关键落盘：直接全量压缩（fail-closed 路径）
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, compactOpts)
+        // 绝大多数情况（含 critical 的 enqueue / mark('sending')）：只追加单条事件。
+        // delivery-wal 对 critical: true 执行单行 fsyncSync —— 已经是 fail-closed，
+        // 不需要再全量重写主快照与 .bak（那既有双倍 I/O，又会与 WAL 形成两份真相）。
+        if (forceCompact || wal.needsCompact()) {
+          wal.compact(snapshot(), compactOpts)
+          needsPrecheck = false
+        } else {
+          wal.append(walEvent, { critical })
+        }
+      } else if (forceCompact || critical) {
+        wal.compact(snapshot(), compactOpts)
         needsPrecheck = false
       }
     } catch (error) {
       onError(error)
       if (critical) throw new Error(`台账落盘失败（fail-closed）：${error?.message || error}`, { cause: error })
     }
+  }
+
+  /**
+   * 把当前内存状态强制压成主快照（幂等）。优雅关闭时由 outbox.dispose() 调用：
+   * 平时只追加 WAL，主 JSON 可能暂时落后；flush 保证「关完再看文件」与内存一致。
+   */
+  function flush() {
+    if (!file) return
+    persist({ forceCompact: true })
   }
 
   /**
@@ -414,7 +430,7 @@ export function createDeliveryLedger({
     return { total: records.size, byState, crashedSending }
   }
 
-  return { enqueue, mark, get, queuedFor, unknowns, stats }
+  return { enqueue, mark, get, queuedFor, unknowns, stats, flush }
 }
 
 /** 生成投递 ID（调用方也可自带业务 ID；幂等键由调用方决定）。 */

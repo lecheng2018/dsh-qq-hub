@@ -56,6 +56,33 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
     try { onState?.(s, detail) } catch (error) {}
   }
 
+  /** 拒绝所有挂起的 WS 请求（连接被替换/关闭时用，绝不留在栈里等超时）。 */
+  function rejectPending(message) {
+    for (const [k, p] of pending) {
+      clearTimeout(p.t)
+      p.reject(new OneBotError(p.action, { message }))
+      pending.delete(k)
+    }
+  }
+
+  /**
+   * 摘掉一个旧 socket 的全部回调并关闭它。
+   * 审计 T3.3：过去 restart()/重连时旧 socket 的 onclose/onmessage 依然存活——旧连接的
+   * onclose 会把**新连接**的 pending 请求全部拒掉、把状态打回 disconnected 再触发一次重连，
+   * 于是同一个进程会出现多条 WS 与幽灵状态。摘干净后旧 socket 永远影响不到新连接。
+   */
+  function detachSocket(oldSock, reason = '连接已断开') {
+    if (!oldSock) return
+    try {
+      oldSock.onopen = null
+      oldSock.onmessage = null
+      oldSock.onclose = null
+      oldSock.onerror = null
+    } catch { /* 某些实现在只读属性上抛错，忽略 */ }
+    try { oldSock.close() } catch { /* 已关闭 */ }
+    rejectPending(reason)
+  }
+
   /** 走一次 HTTP 或 WS；网络层失败标成 transport，业务错误照原样抛。 */
   async function callOnce(action, params, timeoutMs) {
     const ep = endpoint()
@@ -141,15 +168,27 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
   }
 
   function callWs(action, params, timeoutMs) {
-    if (!ws || ws.readyState !== 1) return Promise.reject(new OneBotError(action, { message: '没连上 QQ 网关' }, { transport: true }))
+    const sock = ws
+    // 没连上 = 请求根本没出门 → 必须标 preSend，副作用动作才不会被误判成 unknown（账上也不会说谎）
+    if (!sock || sock.readyState !== 1) {
+      return Promise.reject(new OneBotError(action, { message: '没连上 QQ 网关' }, { transport: true, preSend: true }))
+    }
     const echo = `ab-${Date.now()}-${++echoSeq}`
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
         pending.delete(echo)
         reject(new OneBotError(action, { message: '超时' }))
       }, timeoutMs)
+      t.unref?.()
       pending.set(echo, { resolve, reject, t, action })
-      ws.send(JSON.stringify({ action, params, echo }))
+      try {
+        sock.send(JSON.stringify({ action, params, echo }))
+      } catch (err) {
+        // 同步抛错 = 这一帧没写进 socket，副作用确证没发生：立即清掉 pending 并按 preSend 报错。
+        clearTimeout(t)
+        pending.delete(echo)
+        reject(new OneBotError(action, { message: err?.message || '发送失败' }, { transport: true, preSend: true }))
+      }
     })
   }
 
@@ -172,8 +211,11 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
       schedule()
       return
     }
+    // 旧 socket（重连/重启）先摘干净：它的迟到回调不许影响新连接
+    if (ws && ws !== sock) detachSocket(ws, '连接已被新连接替换')
     ws = sock
     sock.onopen = () => {
+      if (ws !== sock) return
       backoff = RECONNECT_MIN
       lastMessageAt = Date.now()
       setState('connected')
@@ -188,6 +230,7 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
       pingTimer.unref?.()
     }
     sock.onmessage = (ev) => {
+      if (ws !== sock) return
       lastMessageAt = Date.now()
       let data
       try { data = JSON.parse(typeof ev.data === 'string' ? ev.data : Buffer.from(ev.data).toString('utf8')) } catch (error) { return }
@@ -204,6 +247,7 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
       }
     }
     sock.onclose = (ev) => {
+      if (ws !== sock) return
       clearInterval(pingTimer)
       if (ws === sock) ws = null
       for (const [k, p] of pending) {
@@ -216,7 +260,10 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
         schedule()
       }
     }
-    sock.onerror = () => {}
+    sock.onerror = (ev) => {
+      if (ws !== sock) return
+      log?.debug?.(`WS 连接错误：${ev?.message || ev?.error?.message || '未知'}`)
+    }
   }
 
   function schedule() {
@@ -240,8 +287,9 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
       clearTimeout(timer)
       clearInterval(pingTimer)
       setState('stopped')
-      try { ws?.close() } catch (error) {}
+      const old = ws
       ws = null
+      detachSocket(old, '连接已断开（客户端已停止）')
     },
     restart() {
       this.stop()
@@ -249,6 +297,10 @@ export function createOneBotClient({ endpoint, onEvent, onState, log, retryDelay
     },
     get state() {
       return state
+    },
+    /** 挂起中的 WS 请求数（排查泄漏用；测试用它断言「同步发送失败不留栈」）。 */
+    get pendingCount() {
+      return pending.size
     },
   }
 }

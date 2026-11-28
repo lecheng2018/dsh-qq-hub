@@ -4,6 +4,7 @@
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { isSilence, stripMarkdown } from '../chat/reply.js'
 import { guardOutbound } from '../chat/identity-guard.js'
+import { isAwakeAt } from '../core/day-window.js'
 
 const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 

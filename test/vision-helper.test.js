@@ -112,6 +112,10 @@ test('登记附件失败（EACCES）时，askModel 退回纯文字，绝不把�
   // 而不是硬发裸块；hub.js 的 admit() / describeWithHelper() 另有真实附件修复路径（fnos-fsync-patch.js）。
   clearVisionCache()
   const llm = makeLlm()
+  // T3.10：askModel 现在先判「这个模型能不能看图」再登记附件 —— 看不了图的模型直接
+  // 走转述，根本不碰附件服务。要验证 EACCES 兜底，主模型必须是一个**能看图**的模型
+  // （登记失败才是这条路径唯一会触发它的情况）。
+  llm.resolveModelInfo = async () => ({ inputModalities: ['text', 'image'] })
   const eacces = {
     admitPromptContent: async () => { throw new Error("EACCES: permission denied, open '/vol2/@appshare'") },
   }

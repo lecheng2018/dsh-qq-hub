@@ -84,7 +84,7 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
     const hasMediaOrPlaceholder = olderText.includes('（图片/表情）')
       || freshText.includes('（图片/表情）')
       || members.some((m) => (m?.segments ?? []).some((s) => s?.type === 'image' || s?.type === 'mface'))
-      || fresh.some((x) => Array.isArray(x.images) && x.images.length > 0)
+      || fresh.some((x) => Array.isArray(x.media) && x.media.length > 0)
     const hasQuoteRelay = olderText.includes('↳ 转述') || freshText.includes('↳ 转述')
     const tailHints = []
     if (hasMediaOrPlaceholder) {

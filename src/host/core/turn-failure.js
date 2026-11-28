@@ -132,7 +132,8 @@ export function classifyFailureKind(failure) {
   if (turnFailureLooksOversized(failure)) return { kind: 'oversized', oversized: true, archived: false, timedOutForMs: 0 }
   const kind = typeof failure === 'string' ? failure : String(failure?.kind || '')
   if (kind === 'blocked') return { kind: 'archived', oversized: false, archived: true, timedOutForMs: 0 }
-  if (failure && typeof failure === 'object' && failure.turnTimedOut === true) {
+  // T3.4：字段统一 —— TurnExecutionError 打的是 timedOut，历史链路打的是 turnTimedOut，两个都认。
+  if (failure && typeof failure === 'object' && Boolean(failure.timedOut || failure.turnTimedOut)) {
     return { kind: 'timedOut', oversized: false, archived: false, timedOutForMs: Number(failure.timedOutForMs ?? failure.timeoutMs) || 0 }
   }
   return { kind: 'other', oversized: false, archived: false, timedOutForMs: 0 }

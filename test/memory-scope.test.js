@@ -31,8 +31,10 @@ const OTHER   = { chatId: 'private:40004', kind: 'private', userId: '40004' }
 test('scopeOfChat：私聊/群/系统各自的作用域', () => {
   assert.equal(store.scopeOfChat(PRIVATE), 'private:20002')
   assert.equal(store.scopeOfChat(GROUP), 'group:30003')
-  assert.equal(store.scopeOfChat({ kind: 'system' }), 'global')
-  assert.equal(store.scopeOfChat(null), 'global')
+  // T3.8：系统/未知聊天不再映射到 global —— 否则系统回合能读到、也能写全体共享记忆。
+  // 私聊/群之外一律 fail-closed 到私聊作用域，global 只允许显式指定。
+  assert.equal(store.scopeOfChat({ kind: 'system' }), 'private:unknown')
+  assert.equal(store.scopeOfChat(null), 'private:unknown')
 })
 
 test('scopeVisible：私聊记忆在群里不可见，在别的私聊也不可见', () => {

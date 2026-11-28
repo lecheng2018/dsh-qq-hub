@@ -9,6 +9,7 @@
 // 现有的「主动搭话」模块（speakup，src/features/companion.js）保持默认实现不变，
 // 想换引擎的主人自己开关，迁移说明见 docs/PURPOSE_MODULE_API.md。
 
+import { existsSync } from 'node:fs'
 import { dataDir, readJson, writeJson, readJsonWithBackup, writeJsonWithBackup } from '../core/store.js'
 import { isSilence, sanitizeOutbound } from '../chat/reply.js'
 import { createCrucible, CRUCIBLE_SOURCES, CRUCIBLE_MAX_ENTRIES } from './engine/crucible.js'
@@ -112,7 +113,10 @@ export function deliveryOutcome(receipt) {
 
 export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, personaText, budgetExhausted, proactivelyMuted, crucible: injectedCrucible, crucibleIntervalMs = CRUCIBLE_INTERVAL_MS }) {
   // 她的自称统一问身份中枢（换卡即生效），本文件不再持有角色名常量。
-  const roleOf = (cfg = getConfig()) => characterName('', cfg)
+  // T3.11：目的引擎的输出只发给主人私聊，自称必须跟「主人在私聊里选中的人设」一致。
+  // 过去传空 chatKey → resolveCharacterIdentity 只能拿全局卡，主人给私聊单独指定的卡
+  // 在主动搭话里完全不生效（和她回消息时自称不一样）。
+  const roleOf = (cfg = getConfig()) => characterName(String(cfg.ownerQQ ? `private:${cfg.ownerQQ}` : ''), cfg)
   const memoryOf = () => { try { return memory?.() || null } catch { return null } }
   const chatIdOf = (cfg) => `private:${cfg.ownerQQ}`
   const lastPrivateAt = (cfg) => Math.max(hub?.lastOwnerChatAt || 0, hub?.lastBotToOwner?.at || 0)
@@ -422,21 +426,32 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     if (flag.nudgedFor === lb.at) return false
     if (!/[？?]|吗|呢|嘛|没$/.test(String(lb.text || '').trim())) return false
     if (!(quietMs > 15 * MINUTE && quietMs < 40 * MINUTE)) return false
-    writeJson(nudgeFile(), { nudgedFor: lb.at }) // 引擎状态文件会被 normalize 洗字段，追问标记单独存
-    if (Math.random() >= 0.5) return true
+    // T3.11：追问同样是一次模型回合，必须和 tick/手动 fire 共用同一把单飞锁。
+    // 过去 tick 只判 inFlight、不置锁就去 await nudge —— 面板「现在就来找我」可以
+    // 在同一时刻再开一枪，两条通路各发一条，还把 nudge 时间戳互相覆盖。
+    if (inFlight) return false
+    let releaseNudge
+    inFlight = new Promise((r) => { releaseNudge = r })
+    try {
+      writeJson(nudgeFile(), { nudgedFor: lb.at }) // 引擎状态文件会被 normalize 洗字段，追问标记单独存
+      if (Math.random() >= 0.5) return true
     const idle = Math.round(quietMs / MINUTE)
     const owner = cfg.ownerName || '主人'
     const prompt = `【系统提醒，不是${owner}说的话】你刚才跟${owner}说「${String(lb.text || '').slice(-60)}」，${owner}已经 ${idle} 分钟没回了。可以轻轻追一句（比如「人呢」「睡着啦？」，或者换个话题），别催、别抱怨；觉得${owner}在忙就只回 ${SILENCE}。这一轮不能用工具，直接输出那句话。`
-    try {
-      const raw = typeof hub.runPromptTurn === 'function'
-        ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
-        : await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
-      const text = cleanReply(raw, roleOf(cfg))
-      if (text) await hub.deliver(chatIdOf(cfg), text, { own: true })
-    } catch (error) {
-      log?.warn?.('目的：追问出错：', error?.message)
+      try {
+        const raw = typeof hub.runPromptTurn === 'function'
+          ? await hub.runPromptTurn(chatIdOf(cfg), prompt)
+          : await hub.runSystemTurn('purpose-nudge', 'QQ · 主动搭话（追问）', prompt, { timeoutMs: 120000, noTools: true })
+        const text = cleanReply(raw, roleOf(cfg))
+        if (text) await hub.deliver(chatIdOf(cfg), text, { own: true })
+      } catch (error) {
+        log?.warn?.('目的：追问出错：', error?.message)
+      }
+      return true
+    } finally {
+      inFlight = null
+      releaseNudge?.()
     }
-    return true
   }
 
   // ---------- 对外 ----------
@@ -549,8 +564,16 @@ export function createPurpose({ getConfig, hub, chatLog, log, isMuted, memory, p
     }
     const verdict = evaluatePurposeTick({ now, config, state, env })
     if (verdict.action !== 'run') {
-      if (verdict.reason !== 'waiting') markPurposeSkip(state, { now, reason: verdict.reason, nextFireAt: verdict.nextFireAt || state.nextFireAt })
-      saveState(state)
+      // T3.11：waiting 是「还没到点」，状态没有任何变化 —— 每分钟醒来都全量刷一次
+      // 状态文件（含 200 条 history）纯属白写盘，SSD 上一天能刷出几万次。
+      if (verdict.reason !== 'waiting') {
+        markPurposeSkip(state, { now, reason: verdict.reason, nextFireAt: verdict.nextFireAt || state.nextFireAt })
+        saveState(state)
+      } else if (!existsSync(stateFile())) {
+        // 首次 tick：初始化出来的 day / nextFireAt 得落一次盘（面板和运维都要能读到），
+        // 但仅此一次 —— 之后 waiting 期间不再空写。
+        saveState(state)
+      }
       return
     }
     await runOnce({ reason: '定时', config, state })

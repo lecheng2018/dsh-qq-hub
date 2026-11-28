@@ -86,6 +86,39 @@ const VERSION = PKG.version
 let TOOLS_GEN = 1
 const PREFIX = '/qq-hub/api'
 
+/**
+ * T3.4：取会话 preset（多层级回落）。
+ * DSH `0.2.3-alpha.2` 把 `agentPreset` 挪进了 `session.header.agentPreset`；只读旧字段会让
+ * 所有 QQ Hub 会话被当成「别人的网页会话」——分群人设映射失效、危险命令闸整条漏放。
+ * 顺序：header 优先，其次旧位置（兼容老 DSH），最后才是裸 scope。
+ * @param {object} scope 宿主上下文 / 执行请求（形如 { agent: { session: {...} }, session: {...} }）
+ * @returns {string} 取不到时空串
+ */
+export function agentPresetOf(scope) {
+  return String(
+    scope?.agent?.session?.header?.agentPreset
+    || scope?.session?.header?.agentPreset
+    || scope?.agent?.session?.agentPreset
+    || scope?.session?.agentPreset
+    || scope?.agentPreset
+    || '',
+  )
+}
+
+/**
+ * T3.4：构造「这个 DSH 会话是不是 QQ Hub 的」判定（危险命令闸与面板共用同一口径）。
+ * @param {{ chatOfSession?: (sessionId: string) => string, isSystemSession?: (sessionId: string) => boolean }} o
+ * @returns {(sessionId: string, exec: object) => boolean}
+ */
+export function makeIsQqSession({ chatOfSession, isSystemSession } = {}) {
+  return (sessionId, exec) => {
+    try { if (sessionId && chatOfSession?.(sessionId)) return true } catch { /* hub 未就绪时按下面的判定继续 */ }
+    if (agentPresetOf(exec).startsWith('qq-hub-')) return true
+    try { if (sessionId && isSystemSession?.(sessionId)) return true } catch { /* 系统会话查询失败 = 不是 */ }
+    return false
+  }
+}
+
 export function apply(ctx) {
   const logger = createLogger({ dsh: ctx })
   const log = logger.child('core')
@@ -167,7 +200,9 @@ export function apply(ctx) {
     // 过去一律打「映射缺失」告警，每天几十条全是噪音（真机 11-27：19 条/天，解开会话元数据
     // 确认全是 origin=subagent / agentPreset=standard）。只有 QQ Hub 自己的 preset
     // 才可能出现「本该有分群人设但没解析到」这种真问题，其余安静返回全局卡即可。
-    const preset = String(context?.agent?.session?.agentPreset || context?.session?.agentPreset || context?.agentPreset || '')
+    // T3.4：DSH 0.2.3-alpha.2 把 preset 挪进了 session.header.agentPreset（顶层与 session 两层都要认），
+    // 只读旧字段会让所有 QQ Hub 会话被当成「别人的会话」→ 分群人设映射整条失效。
+    const preset = agentPresetOf(context)
     const isQqHubSession = preset.startsWith('qq-hub-')
     try {
       if (sid && hub?.chatOfSession) {
@@ -495,6 +530,7 @@ export function apply(ctx) {
     getConfig,
     isMuted: (chatId) => mutes.muted(chatId),
     isProactivelyMuted: (chatId, t) => hub.isProactivelyMuted?.(chatId, t) === true,
+    proactiveMuteState: (chatId, t) => hub.proactiveMuteState?.(chatId, t) ?? null,
   }))
   // 共享浏览器：抖音 / 小红书 / 红果 / 贴吧这些要开网页的模块**共用**一套。
   // 一个进程 + 每模块一个标签页 + 任务串行：这台机器可用内存本来就不多，多开必炸。
@@ -527,13 +563,10 @@ export function apply(ctx) {
     log: logger.child('危险命令'),
     deliver: (chatId, text) => hub.sendText(chatId, text),
     chatOfSession: (sessionId) => { try { return hub.chatOfSession?.(sessionId) || '' } catch (error) { return '' } },
-    isQqSession: (sessionId, exec) => {
-      try { if (sessionId && hub.chatOfSession?.(sessionId)) return true } catch {}
-      const preset = String(exec?.agent?.session?.agentPreset || exec?.session?.agentPreset || exec?.agentPreset || '')
-      if (preset.startsWith('qq-hub-')) return true
-      try { if (sessionId && hub.isSystemSession?.(sessionId)) return true } catch {}
-      return false
-    },
+    isQqSession: makeIsQqSession({
+      chatOfSession: (sessionId) => hub.chatOfSession?.(sessionId),
+      isSystemSession: (sessionId) => hub.isSystemSession?.(sessionId),
+    }),
     ownerQQ: () => cfg.ownerQQ,
   })
   core.dangerGuard = dangerGuard
@@ -579,19 +612,23 @@ export function apply(ctx) {
   effects.installWatchdog()
   effects.installOrphanSweeper()
 
-  ctx.effect(() => () => {
+  ctx.effect(() => async () => {
     interactions.questions.dispose('插件卸载')
     interactions.approvals.clear('插件卸载')
     hub.disposeRecentMedia()
     try { core.hub.dispose?.() } catch {}
     mods.dispose()
-    // 共享浏览器：先让模块停完（上面的 mods.dispose），再关浏览器和虚拟屏。
-    // 必须 await —— 不等的话 Chrome/Xvfb 会变成孤儿进程一直占着内存。
-    try {
-      Promise.resolve(browser?.dispose?.()).catch((error) => log.warn('关闭共享浏览器出错：', error.message))
-    } catch (error) { log.warn('关闭共享浏览器出错：', error.message) }
-    try { Promise.resolve(market?.dispose?.()).catch((error) => log.warn('模块市场代理释放出错：', error.message)) } catch (error) { log.warn('模块市场代理释放出错：', error.message) }
-    try { Promise.resolve(modularCoreApi?.dispose?.()).catch((error) => log.warn('新核心卸载出错：', error.message)) } catch (error) { log.warn('新核心卸载出错：', error.message) }
+    // T3.6：卸载回调改为 async 并真正 await —— 逐个 `Promise.resolve(...).catch()` 只是把
+    // 失败吞掉，宿主不会等 Chrome/Xvfb/模块市场/新核心真正停完就去卸载插件，
+    // 热重载后这些子进程/代理就成了孤儿。allSettled 保证「都等」且「一个炸不影响其它」。
+    const results = await Promise.allSettled([
+      browser?.dispose?.(),
+      market?.dispose?.(),
+      modularCoreApi?.dispose?.(),
+    ])
+    for (const r of results) {
+      if (r.status === 'rejected') log.warn('卸载释放资源出错：', r.reason?.message || r.reason)
+    }
     onebot.stop()
     snowluma.dispose()
   }, 'qq-hub: 收尾')
