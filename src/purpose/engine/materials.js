@@ -25,7 +25,7 @@ function messageAt(msg) {
  * 把 QQ / B站 / 记忆卡 / 她自己的惦记 汇总成一份「最近素材」。
  * 这里只做选取和压缩，不下结论 —— 目的由模型在这些素材上提炼。
  */
-function enrichMaterial(item, roleName = '') {
+export function enrichMaterial(item, roleName = '') {
   const text = `${item?.title ?? ''} ${item?.text ?? ''} ${item?.quote ?? ''}`;
   return {
     ...item,

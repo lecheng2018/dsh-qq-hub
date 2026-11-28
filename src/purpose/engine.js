@@ -48,7 +48,7 @@ export {
 
 // 素材选取
 export {
-  collectMaterials,
+  collectMaterials, enrichMaterial,
 } from './engine/materials.js';
 
 // 文本相似度

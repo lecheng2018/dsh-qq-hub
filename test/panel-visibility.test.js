@@ -7,11 +7,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFakeDsh } from './helpers/fake-dsh.js'
 
-let fake, api
+let fake, api, prevDataDir, prevLegacyDir
 const NEW_MODS = ['token-billing', 'memory-privacy', 'complete-guard']  // security-lock / token-guardian 已移除
 
 before(async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'panel-vis-'))
+  prevDataDir = process.env.DSH_QQ_HUB_DATA_DIR
+  prevLegacyDir = process.env.AURABOT_DATA_DIR
+  process.env.DSH_QQ_HUB_DATA_DIR = dataDir
+  process.env.AURABOT_DATA_DIR = dataDir
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
     ownerQQ: '10000001', botQQ: '20000002', dataDir,
     snowluma: { autoStart: false, autoAttach: false, dir: join(dataDir, 'ns') },
@@ -26,7 +30,14 @@ before(async () => {
   await new Promise((r) => setTimeout(r, 1200))
 })
 
-after(() => { fake?.dispose(); setTimeout(() => process.exit(0), 100).unref() })
+after(() => {
+  fake?.dispose()
+  if (prevDataDir === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
+  else process.env.DSH_QQ_HUB_DATA_DIR = prevDataDir
+  if (prevLegacyDir === undefined) delete process.env.AURABOT_DATA_DIR
+  else process.env.AURABOT_DATA_DIR = prevLegacyDir
+  setTimeout(() => process.exit(0), 100).unref()
+})
 
 test('内置模块的设置项能透出去（否则面板渲染不出开关）', () => {
   const list = api.modules.status()

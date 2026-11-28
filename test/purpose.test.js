@@ -162,7 +162,9 @@ test('重启不补发：上次在途（pending）改判 interrupted，归零重�
   s.lastOutcome = 'pending'
   s.nextFireAt = Date.now() + 10 * MIN
   writeFileSync(stateFile(), JSON.stringify(s))
-  await p.tick() // 还没到点，但读取时应已改判
+  // 模拟进程重启后新建实例首次加载状态
+  const { p: restarted } = makePurpose(hub)
+  await restarted.tick() // 还没到点，但读取时应已改判
   const s2 = JSON.parse(readFileSync(stateFile(), 'utf8'))
   assert.equal(s2.lastOutcome, 'interrupted')
   assert.equal(hub.delivered.length, deliveredBefore, '不补发')

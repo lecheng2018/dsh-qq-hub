@@ -3,8 +3,14 @@
 // 协议：POST {baseUrl}/audio/transcriptions，multipart(file + model)，Bearer key。
 // 零运行时依赖：multipart 手拼，密钥绝不进日志。
 
-const DEFAULT_BASE = 'https://api.siliconflow.cn/v1'
-const DEFAULT_MODEL = 'FunAudioLLM/SenseVoiceSmall'
+const DEFAULT_BASE_BY_PROVIDER = {
+  siliconflow: 'https://api.siliconflow.cn/v1',
+  openai: 'https://api.openai.com/v1',
+}
+const DEFAULT_MODEL_BY_PROVIDER = {
+  siliconflow: 'FunAudioLLM/SenseVoiceSmall',
+  openai: 'whisper-1',
+}
 
 /** 面板设置（ext.voice.cloudAsr*）→ 归一配置；未开启/缺 key 返回 null。 */
 export function normalizeCloudAsrConfig(ext = {}) {
@@ -12,10 +18,11 @@ export function normalizeCloudAsrConfig(ext = {}) {
   if (e.cloudAsrEnabled !== true) return null
   const apiKey = String(e.cloudAsrApiKey || '').trim()
   if (!apiKey) return null
-  const baseUrl = String(e.cloudAsrBaseUrl || '').trim().replace(/\/+$/, '') || DEFAULT_BASE
-  if (!/^https?:\/\//i.test(baseUrl)) return null
   const provider = e.cloudAsrProvider === 'openai' ? 'openai' : 'siliconflow'
-  return { provider, baseUrl, apiKey, model: String(e.cloudAsrModel || '').trim() || DEFAULT_MODEL }
+  const baseUrl = String(e.cloudAsrBaseUrl || '').trim().replace(/\/+$/, '') || DEFAULT_BASE_BY_PROVIDER[provider]
+  if (!/^https?:\/\//i.test(baseUrl)) return null
+  const model = String(e.cloudAsrModel || '').trim() || DEFAULT_MODEL_BY_PROVIDER[provider]
+  return { provider, baseUrl, apiKey, model }
 }
 
 export function createCloudAsr({ getConfig, log = console, fetchImpl = globalThis.fetch } = {}) {
@@ -54,7 +61,15 @@ export function createCloudAsr({ getConfig, log = console, fetchImpl = globalThi
         body,
         signal: controller.signal,
       })
-      if (!res.ok) throw new Error(`cloud asr HTTP ${res.status}`)
+      if (!res.ok) {
+        let snippet = ''
+        try {
+          if (typeof res.text === 'function') {
+            snippet = String(await res.text() || '').replace(/\s+/g, ' ').trim().slice(0, 160)
+          }
+        } catch {}
+        throw new Error(snippet ? `cloud asr HTTP ${res.status}：${snippet}` : `cloud asr HTTP ${res.status}`)
+      }
       const data = await res.json()
       const text = String((data && (data.text || data.result)) || '').trim()
       lastError = ''

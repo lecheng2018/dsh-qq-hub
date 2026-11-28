@@ -2,12 +2,49 @@
 // 面板里的试听、语音识别自检也在这里。
 // 导出 speak(text) → { file, engine }：聊天中枢发语音时找它。替换这个模块就能换成任何你想要的念法。
 
+import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { characterName } from '../../persona/identity-context.js'
 import { textToSpeech, edgeInstalled, installEdge } from '../../voice/tts.js'
 import { toMono16k } from '../../voice/wav.js'
 import { createCloudAsr } from '../../voice/cloud-asr.js'
+import { findFfmpeg } from '../../core/img.js'
 import { fileOf } from '../../local/local.js'
+
+function isWavBuffer(buf) {
+  return buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE'
+}
+
+/** 把任意音频文件（WAV / MP3 / OGG）转成 16kHz 单声道 PCM16 WAV，供 ASR 自检使用。 */
+async function fileToMono16kWav(file, cfg) {
+  const buf = readFileSync(file)
+  if (isWavBuffer(buf)) return toMono16k(buf)
+  const ffmpeg = findFfmpeg(cfg?.bili?.ffmpegPath || '')
+  if (!ffmpeg) {
+    throw new Error('当前 TTS 生成的不是 WAV 格式，且未找到 ffmpeg，无法自动转为 16k WAV 供语音识别自检')
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpeg, ['-v', 'error', '-i', file, '-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1'], { windowsHide: true })
+    const chunks = []
+    let err = ''
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch {}
+      reject(new Error('ffmpeg 转 16k WAV 超时'))
+    }, 30000)
+    child.stdout.on('data', (d) => chunks.push(d))
+    child.stderr.on('data', (d) => { err += d })
+    child.on('error', (e) => { clearTimeout(timer); reject(new Error(`ffmpeg 启动失败：${e.message}`)) })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      const out = Buffer.concat(chunks)
+      if (code !== 0 || !isWavBuffer(out)) {
+        reject(new Error(`ffmpeg 转 16k WAV 失败：${err.trim().slice(0, 160) || `exit ${code}`}`))
+        return
+      }
+      resolve(out)
+    })
+  })
+}
 
 export default {
   id: 'voice',
@@ -84,17 +121,23 @@ export default {
       const text = await hub.localTranscribe(last.seg)
       return { ok: Boolean(text), heard: text, at: new Date(last.time * 1000).toLocaleString(), ms: Date.now() - t }
     })
-    // 自检「听语音」：Windows 语音念一句 → 转 16k 单声道 → DSH 自带识别 → 看能不能认回来
+    // 自检「听语音」：用当前可用的 TTS 引擎念一句 → 必要时转 16k 单声道 WAV → 云端或 DSH 识别
     api.route('/voice/asr-test', async (req) => {
       const b = await http.body(req)
-      // 云端 ASR 自检：TTS 念一句 → 16k 单声道 → 云端识别（provider=cloud 时）
+      const cfg = api.config()
+      const voiceCfg = cfg.voice || {}
+      const ttsOpt = voiceCfg.engine && voiceCfg.engine !== 'none'
+        ? voiceCfg
+        : { ...voiceCfg, engine: process.platform === 'win32' ? 'windows' : 'edge' }
+      // 云端 ASR 自检：TTS 念一句 → 16k 单声道 WAV → 云端识别（provider=cloud 时）
       if (b.provider === 'cloud') {
         if (!cloudAsr.enabled()) return { ok: false, message: '云端 ASR 未启用：在下面语音模块设置里填 API Key 并打开开关' }
         const text = String(b.text || '今天想吃白米饭')
         const t = Date.now()
         try {
-          const { file } = await textToSpeech(text, api.config().voice, api.log)
-          const heard = await cloudAsr.transcribe(toMono16k(readFileSync(file)))
+          const { file } = await textToSpeech(text, ttsOpt, api.log)
+          const wav = await fileToMono16kWav(file, cfg)
+          const heard = await cloudAsr.transcribe(wav)
           return { ok: Boolean(heard), said: text, heard, engine: 'cloud', ms: Date.now() - t }
         } catch (error) {
           return { ok: false, said: text, message: String(error.message || error), ms: Date.now() - t }
@@ -103,12 +146,17 @@ export default {
       const s0 = stt()
       if (!s0 || typeof s0.resolve !== 'function') return { ok: false, message: 'DSH 里没有开启语音识别（设置 → 插件 → 语音输入）' }
       const text = String(b.text || '今天想吃白米饭')
-      const { file } = await textToSpeech(text, { engine: 'windows' })
       const t = Date.now()
-      const spec = s0.resolve({ audio: new Uint8Array(toMono16k(readFileSync(file))) })
-      const r = await s0.transcribe(spec, AbortSignal.timeout(120000))
-      const heard = typeof r === 'string' ? r : r?.text || r?.transcript || JSON.stringify(r)
-      return { ok: Boolean(heard), said: text, heard, ms: Date.now() - t }
+      try {
+        const { file } = await textToSpeech(text, ttsOpt, api.log)
+        const wav = await fileToMono16kWav(file, cfg)
+        const spec = s0.resolve({ audio: new Uint8Array(wav) })
+        const r = await s0.transcribe(spec, AbortSignal.timeout(120000))
+        const heard = typeof r === 'string' ? r : r?.text || r?.transcript || JSON.stringify(r)
+        return { ok: Boolean(heard), said: text, heard, ms: Date.now() - t }
+      } catch (error) {
+        return { ok: false, said: text, message: String(error.message || error), ms: Date.now() - t }
+      }
     })
 
     return { speak, edgeInstalled }

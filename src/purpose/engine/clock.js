@@ -49,14 +49,20 @@ export function quietEndAfter(now, config = DEFAULT_PURPOSE_CONFIG) {
   return d.getTime();
 }
 
-/** 下一天的起点（安静结束优先；没设安静时段就取次日 00:05）。 */
+/** 下一天的起点（严格推进到次日醒来时刻，绝不落回同一自然日；没设安静时段就取次日 00:05）。 */
 export function nextDayStartAfter(now, config = DEFAULT_PURPOSE_CONFIG) {
+  const today = localDateKey(now);
   const start = parseClock(config.quietStart, '23:30');
   const end = parseClock(config.quietEnd, '08:30');
-  if (start.text !== end.text) return quietEndAfter(now, config);
   const d = new Date(now);
-  d.setHours(0, 5, 0, 0);
-  while (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  if (start.text !== end.text) {
+    d.setHours(end.hh, end.mm, 0, 0);
+  } else {
+    d.setHours(0, 5, 0, 0);
+  }
+  while (d.getTime() <= now || localDateKey(d.getTime()) === today) {
+    d.setDate(d.getDate() + 1);
+  }
   return d.getTime();
 }
 

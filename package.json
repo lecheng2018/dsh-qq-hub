@@ -16,7 +16,7 @@
     "build:client": "node scripts/build-client.mjs",
     "install:browser": "node scripts/install-browser.mjs",
     "prepack": "node scripts/build-client.mjs",
-    "test": "node scripts/build-client.mjs && node --test \"test/**/*.test.js\"",
+    "test": "node scripts/build-client.mjs && node --import ./test/helpers/isolate-env.mjs --test \"test/**/*.test.js\"",
     "test:extensions": "npm run --prefix extensions/tieba-reader test",
     "test:all": "npm test && npm run test:extensions",
     "lint": "eslint src scripts/*.mjs",
