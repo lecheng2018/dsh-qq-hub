@@ -61,7 +61,7 @@ export function renameWithRetry(from, to, attempts = 4) {
   }
 }
 
-export function writeJson(file, value, { mode = 0o644 } = {}) {
+export function writeJson(file, value, { mode = 0o644, space = 2 } = {}) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}`
   const fd = openSync(tmp, 'w', mode)
@@ -69,14 +69,19 @@ export function writeJson(file, value, { mode = 0o644 } = {}) {
   // open 的 mode 只是上限，chmod 才是落定。没有这一步，运维放开组读后下一次写入又自动锁回去。
   try { chmodSync(tmp, mode) } catch {}
   try {
-    writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8')
+    writeFileSync(fd, JSON.stringify(value, null, space), 'utf8')
     // rename 前 fsync：进程 kill -9 时不丢已确认写入的数据（tmp+rename 只保证不写半截，
     // 但页缓存没刷的话重启后 rename 的文件内容可能是旧的 —— P1-6 持久化窗口）
     fsyncSync(fd)
   } finally {
     closeSync(fd)
   }
-  renameWithRetry(tmp, file)
+  try {
+    renameWithRetry(tmp, file)
+  } catch (error) {
+    try { unlinkSync(tmp) } catch {}
+    throw error
+  }
 }
 
 let corruptFileSeq = 0
@@ -120,6 +125,10 @@ function quarantineState(file) {
   }
 }
 
+export function quarantineCorruptFile(file) {
+  return quarantineState(file)
+}
+
 const warnState = (error) => console.warn(error.message)
 const reportedEmptyStates = new Set()
 
@@ -150,6 +159,7 @@ export function readJsonWithBackup(file, { fallback, validate, label = '状态�
   }
 
   const details = []
+  const unquarantinedFiles = []
   let canRestore = primary.kind === 'missing'
   for (const [candidate, candidateFile] of [[primary, file], [backup, backupFile]]) {
     if (candidate.kind === 'invalid') {
@@ -158,6 +168,7 @@ export function readJsonWithBackup(file, { fallback, validate, label = '状态�
         details.push(`${candidateFile} 损坏，原件已保留为 ${archived}（${candidate.error.message}）`)
         if (candidateFile === file) canRestore = true
       } catch (error) {
+        unquarantinedFiles.push(candidateFile)
         details.push(`${candidateFile} 损坏且无法保留原件：${error.message}`)
       }
     } else if (candidate.kind === 'io') {
@@ -182,13 +193,23 @@ export function readJsonWithBackup(file, { fallback, validate, label = '状态�
     }
     const warning = new Error(`${label}：${details.join('；')}；备份可能不是最新状态`)
     onError(warning)
-    return { value: backup.value, error: null, fromBackup: true }
+    return {
+      value: backup.value,
+      error: null,
+      fromBackup: true,
+      ...(unquarantinedFiles.length ? { unquarantinedFiles } : {}),
+    }
   }
 
   const error = new Error(`${label}：${details.join('；')}；无可用备份，以空状态启动，历史状态可能缺失`)
   reportedEmptyStates.add(file)
   onError(error)
-  return { value: typeof fallback === 'function' ? fallback() : fallback, error }
+  return {
+    value: typeof fallback === 'function' ? fallback() : fallback,
+    error,
+    ...(primary.kind === 'io' ? { primaryIoError: primary.error } : {}),
+    ...(unquarantinedFiles.length ? { unquarantinedFiles } : {}),
+  }
 }
 
 export function readJsonRequired(file, options = {}) {
