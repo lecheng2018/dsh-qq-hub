@@ -134,7 +134,6 @@ const SIDE_EFFECT_PATHS = new Set([
   '/memory/import/commit',        // :183 批量导入写库
   '/memory/extract',              // :209 触发记忆提炼（模型计费）
   '/memory/reload',               // :128 重载档案
-  '/memory/import',               // 内置模块：导入外部记忆文件到持久库
   '/memory/vector/backfill',      // :159 批量 embed（外部计费调用）
   '/profiles/save',               // :166 写人物小档案
   '/profiles/rebuild',            // :171 按记忆重写小档案（模型计费）

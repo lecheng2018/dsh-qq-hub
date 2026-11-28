@@ -139,6 +139,9 @@ jobs:
       - name: Create prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          # publish job 刻意不 checkout（不把 .git 带进有写权限的 job），
+          # gh 拿不到仓库上下文，必须显式告诉它目标是哪个仓库。
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
           TITLE: ${{ inputs.release_title }}
           TGZ: ${{ needs.build.outputs.tgz }}

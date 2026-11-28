@@ -355,6 +355,8 @@ async function download(url, dest, { log, sha256: expectSha } = {}) {
       if ([301, 302, 303, 307, 308].includes(r.status)) {
         const loc = r.headers.get('location')
         if (!loc) { log?.warn?.(`${current} 重定向没给目标`); return '' }
+        // 丢弃这一跳的响应体（keep-alive 连接复用；不 cancel 会一直占着 socket）
+        try { await r.body?.cancel?.() } catch {}
         current = new URL(loc, current).toString()
         continue
       }

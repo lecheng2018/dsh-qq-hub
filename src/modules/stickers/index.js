@@ -77,7 +77,7 @@ export default {
             }
             if (!new_name && !(Array.isArray(tags) && tags.length)) return { ok: false, message: '要说改成什么' }
             // 改名/改标签与被删同一档保护：受保护来源只能由「全场都是主人」的回合改
-            if (PROTECTED_FROM.has(String(item.from || '')) && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说改才能改' }
+            if ((PROTECTED_FROM.has(String(item.from || '')) || String(item.from || '') === 'painting') && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '这张是主人加的（或你自己画的），主人说改才能改' }
             const r = await store.rename(item.md5, new_name ? String(new_name).trim().slice(0, 12) : undefined, Array.isArray(tags) && tags.length ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 5) : undefined)
             return r.ok
               ? { ok: true, message: `改好了：「${label}」→「${r.item.name}」${r.item.tags?.length ? '（' + r.item.tags.join('/') + '）' : ''}` }

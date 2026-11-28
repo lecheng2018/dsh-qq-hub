@@ -169,3 +169,47 @@ test('module runtime: 实时消息监听与缓冲累积', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('module runtime: /simulate 入口校验群号（与其它路由一致，非法群号直接拒）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'distill-sim-'))
+  try {
+    const routes = new Map()
+    let body = {}
+    const mockApi = {
+      dataDir: () => dir,
+      settings: () => ({ enabled: true, batchSize: 5, activeGroups: '123456' }),
+      config: () => ({ botQQ: '10001' }),
+      log: { info() {}, warn() {}, debug() {} },
+      on: () => {},
+      context: () => {},
+      route: (path, fn) => { routes.set(path, fn) },
+      later: (ms, fn) => setTimeout(fn, ms),
+      ask: async () => '[]',
+      core: { http: { body: async () => body } },
+    }
+    const mod = distillModule.setup(mockApi)
+    const simulate = routes.get('/simulate')
+    assert.equal(typeof simulate, 'function')
+
+    // 原型污染串 / 非数字 / 长度不对：都不能当 groupId 用
+    for (const groupId of ['__proto__', 'constructor', 'abc123', '123', '1234567890123']) {
+      body = { groupId, userText: '随便说点什么' }
+      const r = await simulate({})
+      assert.equal(r.ok, false, `非法群号不该放行：${groupId}`)
+      assert.match(r.message, /群号不合法/)
+    }
+
+    // 合法群号 + 空测试内容：同样拒
+    body = { groupId: '123456', userText: '   ' }
+    const empty = await simulate({})
+    assert.equal(empty.ok, false)
+
+    // 合法群号 + 有内容：正常进入匹配逻辑
+    body = { groupId: '123456', userText: '今天吃什么' }
+    const ok = await simulate({})
+    assert.notEqual(ok.ok, false, JSON.stringify(ok))
+    mod.dispose()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

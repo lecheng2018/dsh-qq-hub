@@ -194,11 +194,18 @@ function commandWords (input) {
       const flag = option.startsWith('--')
         ? (eq >= 0 ? option.slice(0, eq) : option)
         : option.slice(0, 2)
-      // env -S "rm -rf /" / env --split-string="rm -rf /"：把 payload 拆回单词重新入队
+      // env -S "rm -rf /" / env --split-string="rm -rf /" / env -S"rm -rf /"：
+      // 把 payload 按 shell 规则拆回单词重新入队（不能用 /\s+/ 硬拆，否则
+      // `env -S 'sh -c "rm -rf /"'` 会把引号原样留在词里，后续判定全漏）。
       if (name === 'env' && /^(?:-S|--split-string)$/i.test(flag)) {
-        const payload = eq >= 0 ? option.slice(eq + 1) : words[i++]
+        let payload
+        if (eq >= 0) payload = option.slice(eq + 1)
+        else if (!option.startsWith('--') && option.length > 2) payload = option.slice(2) // -S"..." 紧贴值
+        else payload = words[i++]
         if (payload !== undefined) {
-          const parts = String(payload).split(/\s+/).filter(Boolean)
+          // 复用文件内的 shell 分词：拿到的已经是去掉引号/转义的词组
+          const parts = []
+          for (const { words: group } of shellCommands(String(payload))) parts.push(...group)
           words = [...words.slice(0, i), ...parts, ...words.slice(i)]
         }
         continue
@@ -413,6 +420,11 @@ function inspectCode (code, language, depth) {
 
 const FIND_EXEC_OPTS = new Set(['-exec', '-execdir', '-ok', '-okdir'])
 
+// PowerShell 缩写参数：-ep / -ExecutionPolicy[:|=]Bypass、-w:hidden、-ec <base64>
+const PWSH_EXEC_POLICY = /^-(?:ep|ex|exe|exec|execu|execut|executi|executio|execution|executionp|executionpo|executionpol|executionpoli|executionpolic|executionpolicy)(?:[:=](.*))?$/i
+const PWSH_WINDOW_STYLE = /^-(?:w|wi|win|wind|windo|window|windows|windowst|windowsty|windowstyl|windowstyle)(?:[:=](.*))?$/i
+const PWSH_ENCODED = /^-(?:e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)(?:[:=](.*))?$/i
+
 /** find 的搜索路径（跳过 -H/-L/-P 与首个 -option 之前的位置参数）。 */
 function findPaths (args) {
   const paths = []
@@ -446,18 +458,20 @@ function inspectWords (input, depth) {
     if (findPaths(args).some(systemTarget)) return { label: '递归删除根目录/系统目录' }
   }
   if (name === 'find') {
-    // find -exec/-execdir/-ok/-okdir 后面到 ';' / '+' 之间是真正被执行的命令
-    const execIndex = args.findIndex((arg) => FIND_EXEC_OPTS.has(arg))
-    if (execIndex >= 0) {
+    // find -exec/-execdir/-ok/-okdir 后面到 ';' / '+' 之间是真正被执行的命令。
+    // 一条 find 可以有多个 -exec 子句（`find / -exec echo {} \\; -exec rm -rf {} +`），
+    // 也必须逐个搜索路径替换 {}（`find ./tmp / -exec rm -rf {} +` 第二个才是根）。
+    const findTargets = findPaths(args)
+    const replacements = findTargets.length ? findTargets : ['{}']
+    for (let e = 0; e < args.length; e++) {
+      if (!FIND_EXEC_OPTS.has(args[e])) continue
       const subWords = []
-      for (let i = execIndex + 1; i < args.length; i++) {
+      for (let i = e + 1; i < args.length; i++) {
         if (args[i] === ';' || args[i] === '+') break
         subWords.push(args[i])
       }
-      if (subWords.length) {
-        // find 会把命中路径填进 {}：用搜索路径近似替换，让 `find / -exec rm -rf {} +` 命中删除规则
-        const paths = findPaths(args)
-        const target = paths[0] || '{}'
+      if (!subWords.length) continue
+      for (const target of replacements) {
         const expanded = subWords.map((word) => word.split('{}').join(target))
         const danger = inspectWords(expanded, depth + 1)
         if (danger) return danger
@@ -539,10 +553,6 @@ const SHELL_NAME = /^(?:ba|da|z|k|a)?sh$/i
 // 管道右侧只要是「能解释/执行文本」的程序就是执行位置（curl ... | python3 / node / pwsh）
 const PIPE_EXEC_NAME = /^(?:(?:ba|da|z|k|a)?sh|python(?:\d+(?:\.\d+)*)?(?:\.exe)?|node(?:\.exe)?|perl(?:\d+(?:\.\d+)*)?|ruby|pwsh(?:\.exe)?|powershell(?:\.exe)?|source|\.|xargs)$/i
 
-// PowerShell 缩写参数：-ep / -ExecutionPolicy[:|=]Bypass、-w:hidden、-ec <base64>
-const PWSH_EXEC_POLICY = /^-(?:ep|ex|exe|exec|execu|execut|executi|executio|execution|executionp|executionpo|executionpol|executionpoli|executionpolic|executionpolicy)(?:[:=](.*))?$/i
-const PWSH_WINDOW_STYLE = /^-(?:w|wi|win|wind|windo|window|windows|windowst|windowsty|windowstyl|windowstyle)(?:[:=](.*))?$/i
-const PWSH_ENCODED = /^-(?:e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)(?:[:=](.*))?$/i
 
 function producerRisk (input, depth) {
   const [executable = '', ...args] = commandWords(input)
@@ -598,6 +608,7 @@ function inspectShell (text, depth = 0, outputExecuted = false) {
         // `bash <(curl ...)` / `source <(wget ...)` / `. <(base64 -d ...)`：
         // 进程替换的结果在这里是「脚本文本」而不是文件路径，必须算作被执行
         const takesScript = SHELL_NAME.test(name) || name === 'source' || name === '.'
+          || /^(?:python(?:\d+(?:\.\d+)*)?(?:\.exe)?|node(?:\.exe)?|perl(?:\d+(?:\.\d+)*)?|ruby)$/i.test(name)
         executed = takesScript && command.slice(1).some((word) => word.includes(sub.token))
       } else {
         executed = command[0]?.includes(sub.token)

@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { buildDistillPrompt } from './prompt.mjs'
 import { verifyAndCleanRules, safeParseJsonArray } from './verifier.mjs'
-import { createDistillStore } from './store.mjs'
+import { createDistillStore, isSafeGroupId } from './store.mjs'
 import { scanHistoryGroups, sampleGroupHistory } from './history-miner.mjs'
 
 export default {
@@ -322,7 +322,7 @@ export default {
     api.route('/simulate', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, userText } = body || {}
-      if (!groupId || !userText?.trim()) return { ok: false, message: '缺少 groupId 或测试内容' }
+      if (!isSafeGroupId(groupId) || !userText?.trim()) return { ok: false, message: '群号不合法（只接受 5–12 位数字），或测试内容为空' }
 
       const minCount = Number(api.settings().minPromotionCount) || 3
       const activeRules = store.getActiveRules(groupId, minCount)

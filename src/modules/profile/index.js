@@ -186,6 +186,12 @@ export default {
             // SSRF 防护（缺陷：换头像网址无 host 校验，且把 URL 原样丢给网关去拉）：
             // 先在插件侧用 fetchImage 下载（校验字面地址 + 连接层 safeLookup 二次解析，
             // 拒环回/内网/保留地址），把校验过的字节以 base64 交给网关，网关不再自己发请求。
+            // 试运行也要过一遍字面校验：否则「试运行」会变成探测内网地址是否可用的旁路。
+            try {
+              await assertPublicUrl(src.file)
+            } catch (error) {
+              return { ok: false, message: '这个头像网址不能用：' + error.message }
+            }
             if (c.dryRun) return { ok: true, message: `试运行：本来要把 QQ 头像换成：${src.file}` }
             let bytes
             try {
@@ -200,7 +206,11 @@ export default {
           const looksLikePath = /^[a-zA-Z]:[\\/]|^\/(?!\/)|^file:|^base64:/i.test(raw)
           const isPainting = !looksLikePath && (/^#?\d{1,2}$/.test(paintingRef) || /^画作$/i.test(paintingRef) || /\.(png|jpe?g|webp|gif)$/i.test(paintingRef))
           if (isPainting) {
-            const painting = resolvePainting(chatId, paintingRef)
+            // 主人私聊里「刚才画的」允许退回磁盘上最新一张（重启后内存列表会空）；
+            // 群聊/非主人不退回，避免拿到别的会话的画
+            const painting = resolvePainting(chatId, paintingRef, {
+              allowGlobalFallback: chat.kind === 'private' && isOwner(c, chat.userId),
+            })
             if (!painting) return { ok: false, message: `找不到画作 ${raw}（编号可能过期了，先让我画一张？）` }
             let buf
             try {
