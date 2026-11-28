@@ -62,6 +62,18 @@ export interface GroupDecision {
   reason?: string
 }
 
+/** 群参与级别：full 完整回复 / text_lite 仍调用模型、只收紧分条与群合包 / react 宿主代发表情回应 */
+export type GroupParticipationLevel = 'full' | 'text_lite' | 'react'
+
+/** `group/participate` 的接管声明（宿主只认这些白名单字段，其余一律忽略）。 */
+export interface GroupParticipation {
+  level: GroupParticipationLevel
+  /** 仅 text_lite：自动分条收紧目标（有限整数；最终只能比宿主现有规则更严格） */
+  limits?: { maxBubbles?: number; maxChars?: number }
+  /** 仅 react：表情回应锚点（messageId 必须等于当前这条 msg.messageId）与表情 id（1~10 位正整数） */
+  reaction?: { messageId: string; emojiId: string }
+}
+
 export interface ModelSelection { provider: string; model: string; reasoningEffort?: string }
 
 /** 工具生成函数拿到的「在哪儿」。 */
@@ -119,6 +131,15 @@ export interface Events {
   send: (message: Segment[], info: { chatId: ChatId; note: string; force: boolean }) => Segment[] | null | void | Promise<Segment[] | null | void>
   /** 群里这条消息她回不回：返回对象覆盖决定，比如 { reply: true, mode: 'must' }（返回 null 无效，等于不改） */
   'group/decide': (decision: GroupDecision, info: { msg: Message; policy: any; recentTexts: string[]; memScore: number }) => Partial<GroupDecision> | void | Promise<Partial<GroupDecision> | void>
+  /**
+   * 群参与分级（仅 interject 回合、鱼群保护放行后、建回合前被问一次）：返回声明即接管本回合。
+   * 多个模块按加载顺序问，第一个返回 truthy 的接管（后面的不再被问）；全不接管 = full，行为与没有这个事件时一致。
+   * 校验边界：maxBubbles 1~12、maxChars 10~500（有限整数，只能更严）；reaction.messageId 必须等于当前
+   * msg.messageId；emojiId 是 1~10 位正整数。truthy 但结构无效 = 仍占用本次接管，宿主记警告并按 full 处理。
+   * text_lite 不减少本次模型调用；react 由宿主经统一出口执行，插件不得自行发送表情。
+   * 执行行为后续批次才启用：当前声明只入账，不改变实际发出的内容。
+   */
+  'group/participate': (decision: GroupDecision, info: { msg: Message; policy: any; recentTexts: string[]; memScore: number }) => GroupParticipation | undefined | null | false | Promise<GroupParticipation | undefined | null | false>
   /** 交给她的内容（[{ type: 'text', text }, { type: 'image', ... }]）：返回新数组改写，null 这次不交给她 */
   prompt: (content: any[], info: { chat: Chat; sessionId: string; senderId?: string; prevText?: string; queryText?: string; steer?: boolean }) => any[] | null | void | Promise<any[] | null | void>
   /** 这个聊天用哪个模型（同步）：返回 { provider, model, reasoningEffort } */

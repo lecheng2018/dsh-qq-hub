@@ -11,6 +11,7 @@
 // getController 延迟取回 turn controller（它在本模块装配之后才创建，与原闭包语义一致）。
 
 import { resolveCharacterIdentity } from '../../persona/identity-context.js'
+import { mergeParticipation } from './group-participation.js'
 import { policyFor, topicRelevance, withRoleWakeWords, isOfficialBotSender } from '../../chat/group-policy.js'
 import { decideGroupReplyWithAtmosphere } from '../../chat/group-atmosphere-gate.js'
 import { isOwner } from '../../chat/access.js'
@@ -20,8 +21,12 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
   // 按 turnId 绑定群闸决策模式，替代旧版按 chatKey 单槽 pendingMode：
   // 连续排入多轮时，旧单槽会在前轮 delete 后让后轮兜底成 'must'，既在提示词里谎称「有人在叫你」，
   // 又在 deliver 后走 noteSpokeInGroup 重置 engaged 窗口导致无限续聊。
-  const MODE_PRIORITY = { engaged: 1, interject: 2, must: 3 }
+  // 模式优先级：must > engaged > interject（PR #283 评审修正）。
+  // must／engaged 永不降级是硬性不变式：后到的 interject 成员不得把已 engaged 的回合
+  // 覆盖成插话口径；反之 interject 回合被 engaged 成员合入时是升级（预算桶随之迁移）。
+  const MODE_PRIORITY = { must: 3, engaged: 2, interject: 1 }
   const turnModes = new Map() // turnId -> 'engaged' | 'interject' | 'must'
+  const turnParticipation = new Map() // turnId -> 参与声明（normalize 后的白名单对象，见 core/group-participation.js）
   const inFlightEngaged = new Map() // gid -> Set<turnId>（已过闸未结账的 engaged 回合，防并发超卖）
   const inFlightInterject = new Map() // gid -> Map<turnId, number>（已过闸未结账的 interject 时刻，防冷却期并发双插）
   function isTurnActive(turnId) {
@@ -33,14 +38,14 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     const eng = inFlightEngaged.get(id)
     if (eng) {
       for (const tid of eng) {
-        if (!isTurnActive(tid)) { eng.delete(tid); turnModes.delete(tid) }
+        if (!isTurnActive(tid)) { eng.delete(tid); turnModes.delete(tid); turnParticipation.delete(tid) }
       }
       if (!eng.size) inFlightEngaged.delete(id)
     }
     const inj = inFlightInterject.get(id)
     if (inj) {
       for (const tid of inj.keys()) {
-        if (!isTurnActive(tid)) { inj.delete(tid); turnModes.delete(tid) }
+        if (!isTurnActive(tid)) { inj.delete(tid); turnModes.delete(tid); turnParticipation.delete(tid) }
       }
       if (!inj.size) inFlightInterject.delete(id)
     }
@@ -51,6 +56,9 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     const prev = turnModes.get(turnId)
     const next = !prev || (MODE_PRIORITY[mode] || 0) > (MODE_PRIORITY[prev] || 0) ? mode : prev
     turnModes.set(turnId, next)
+    // 模式升级为 must／engaged 时立即恢复参与 FULL：任何已入账的 REACT／TEXT_LITE 都不得残留
+    //（外部直接调 noteTurnMode 升级时同样生效；must／engaged 永不降级）。
+    if (next !== 'interject' && turnParticipation.has(turnId)) turnParticipation.set(turnId, { level: 'full', sourceModuleId: '' })
     if (!id) return
     if (next === 'engaged') {
       let set = inFlightEngaged.get(id)
@@ -71,8 +79,26 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
       if (inj) { inj.delete(turnId); if (!inj.size) inFlightInterject.delete(id) }
     }
   }
+  /**
+   * 记一笔「回合 + 参与声明」：在途预算与 turnModes 的记账**原样复用** noteTurnMode（同一套账，只记一次），
+   * participation 按 turnId 另存一份，合流规则见 core/group-participation.js 的 mergeParticipation。
+   * mode 不是 interject（must／engaged）时保存值强制 FULL（must／engaged 永不降级）。
+   */
+  function noteTurnParticipation(gid, turnId, mode, participation, now = Date.now()) {
+    if (!turnId || !mode) return
+    const prevMode = turnModes.get(turnId) || null
+    noteTurnMode(gid, turnId, mode, now)
+    let next = participation && typeof participation === 'object' ? participation : { level: 'full', sourceModuleId: '' }
+    if (mode !== 'interject') next = { level: 'full', sourceModuleId: '' }
+    const prev = turnParticipation.get(turnId)
+    // 无条件走合并（不许 prev 为空时短路直存）：prevMode 是 must／engaged 时，即便本回合
+    // 还没有参与入账，后来的 interject REACT／TEXT_LITE 也必须被压成 FULL（永不降级）。
+    turnParticipation.set(turnId, mergeParticipation(prev || null, next, prevMode, mode))
+  }
+  /** 这个回合的参与声明（full / text_lite / react 白名单对象），没有则返回 null。 */
+  function turnParticipationOf(turnId) { return turnParticipation.get(turnId) || null }
   function releaseTurnMode(chatKey, turnId) {
-    if (turnId) turnModes.delete(turnId)
+    if (turnId) { turnModes.delete(turnId); turnParticipation.delete(turnId) }
     if (!String(chatKey || '').startsWith('group:')) return
     const id = String(chatKey).slice(6)
     const eng = inFlightEngaged.get(id)
@@ -194,5 +220,5 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     return null
   }
 
-  return { decideGroupReplyFor, noteTurnMode, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf, fishGuardOf }
+  return { decideGroupReplyFor, noteTurnMode, noteTurnParticipation, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf, turnParticipationOf, fishGuardOf }
 }

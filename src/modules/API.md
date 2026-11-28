@@ -268,6 +268,30 @@ export default {
 | `persona` | `text` | **她的人格**全文（同步）：返回新文字就换掉 |
 | `rules` | `text, kind` | **她的规则**全文（同步，kind 是 `private` / `social`） |
 
+**群参与分级**（`group/participate`）：
+
+群里的插话回合（且仅 `decision.mode === 'interject'`、鱼群保护放行之后、回合建立之前）会拿**同一份**
+`{ msg, policy, recentTexts, memScore }` 问一次所有模块。返回一个**接管声明**就接管这一回合：
+
+```js
+api.on('group/participate', (decision, { msg }) => {
+  if (!我关心这个群) return                      // 不接管：返回 undefined / null / false
+  return { level: 'react', reaction: { messageId: msg.messageId, emojiId: '66' } }  // 表情回应（宿主代发）
+  // return { level: 'text_lite', limits: { maxBubbles: 1, maxChars: 80 } }  // 仍调模型，只收紧分条
+  // return { level: 'full' }                                                // 显式完整回复
+})
+```
+
+规则：
+
+- 多个模块按加载顺序问，**第一个返回 truthy 的接管本回合**，后面的监听器不再被问；全部不接管 = `full`，行为和没有这个事件时完全一致。
+- 宿主只认白名单字段（`level` / `limits` / `reaction`），其余字段忽略；归因用的模块 id 由宿主按真实注册记录填，声明里自己写的无效。
+- 校验边界：`maxBubbles` 是 1~12 的有限整数、`maxChars` 是 10~500 的有限整数，最终只能比宿主现有规则**更严格**（不能放宽）；`reaction.messageId` 必须等于当前这条 `msg.messageId`；`emojiId` 是 1~10 位正整数。truthy 但结构无效 = 仍占用这次接管，宿主记一条警告并按 `full` 处理，不会转给下一个模块。
+- 合并：几条群消息合进同一回合时优先级 `full > text_lite > react`；任一成员升级成 `must`／`engaged` 时整个回合恢复 `full`。
+- `text_lite` **不减少**本次模型调用，只收紧自动分条与群合包。
+- `react` 由**宿主**通过统一发送出口执行，插件不得直接发送（也不得自行调 `api.onebot` 发表情）。
+- 执行行为**后续批次才启用**：当前批次声明只会入账，不改变实际发出的内容。
+
 例子：群里只在被 @ 时说话，私聊用另一个模型，所有回复末尾加个尾巴：
 
 ```js
