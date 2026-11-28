@@ -107,6 +107,54 @@ import { createInboundHydration } from '../chat/inbound-hydration.js'
  * @param {(chatKey: string, segments: Array, userId: string) => void} [o.noteMedia]
  *   最近发来的图/表情登记（「把刚才那张存下来」类工具依赖它，真机审计 1.11）
  */
+/**
+ * 临时 Outbox：内存（或指定文件）台账 + 直连 onebot 的出站实现。
+ *
+ * **仅供测试与降级路径**，生产必须注入 `sharedOutbox`（src/host.js 里的 SharedOutbox 是唯一
+ * 物理出口，带 egress 审计、跨模块排队与来源群记忆）。这里把原先藏在 `createModularCore`
+ * 里的隐式兜底提成显式函数：装配根自己不再悄悄造一个出口 —— 传了 `sharedOutbox` 就用它，
+ * 没传才走这里，且 src/host.js 那一侧有断言保证生产调用点绝不会漏传。
+ *
+ * @param {object} o
+ * @param {{ call: Function }} o.onebot
+ * @param {() => object} o.getConfig
+ * @param {object} o.log
+ * @param {string} [o.ledgerFile] 投递台账文件（提供则落盘；缺省内存台账）
+ */
+function createEphemeralOutbox({ onebot, getConfig, log, ledgerFile }) {
+  const ledger = ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
+  return createOutbox({
+    send: createOnebotOutboxAdapter({ onebot }).send,
+    ...(ledger ? { ledger } : {}),
+    // 出站白名单复核（与 legacy checkAllowed 同一判定；出队时执行，撤权在排队期间也生效）
+    authorize: async (delivery) => {
+      const cfg = getConfig()
+      return checkAllowed(cfg, aclMsgFromInbound({ chatKey: delivery.chatKey })).allowed
+    },
+    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）。truthy 语义与 legacy 一致。
+    enabled: () => Boolean(getConfig().enabled),
+    dryRun: () => Boolean(getConfig().dryRun),
+    // 身份泄露闸：唯一出站点扫受保护 QQ/群号（同 legacy sendSegments 语义）
+    guard: (delivery) => {
+      const cfg = getConfig()
+      const ig = cfg.security?.identityGuard || {}
+      if (ig.enabled === false) return { ok: true }
+      const text = textOfSegments(delivery.segments)
+      const chatKey = String(delivery.chatKey || '')
+      const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
+      const isPrivate = chatKey.startsWith('private:')
+      return checkIdentityLeak(text, {
+        surface: isPrivate ? '私聊消息' : '群消息',
+        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
+        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
+        // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
+        allowBareNumbers: isPrivate,
+        mode: ig.mode === 'warn' ? 'warn' : 'block',
+      })
+    },
+  })
+}
+
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile, groupStateFile,
@@ -438,37 +486,9 @@ export function createModularCore({
   })
 
   // ---------- Outbox（唯一物理出口；授权/全局闸/身份闸/台账持久化全在此接线） ----------
-  const ledger = !sharedOutbox && ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
-  const outbox = sharedOutbox || createOutbox({
-    send: createOnebotOutboxAdapter({ onebot }).send,
-    ...(ledger ? { ledger } : {}),
-    // 出站白名单复核（与 legacy checkAllowed 同一判定；出队时执行，撤权在排队期间也生效）
-    authorize: async (delivery) => {
-      const cfg = getConfig()
-      return checkAllowed(cfg, aclMsgFromInbound({ chatKey: delivery.chatKey })).allowed
-    },
-    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）。truthy 语义与 legacy 一致。
-    enabled: () => Boolean(getConfig().enabled),
-    dryRun: () => Boolean(getConfig().dryRun),
-    // 身份泄露闸：唯一出站点扫受保护 QQ/群号（同 legacy sendSegments 语义）
-    guard: (delivery) => {
-      const cfg = getConfig()
-      const ig = cfg.security?.identityGuard || {}
-      if (ig.enabled === false) return { ok: true }
-      const text = textOfSegments(delivery.segments)
-      const chatKey = String(delivery.chatKey || '')
-      const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
-      const isPrivate = chatKey.startsWith('private:')
-      return checkIdentityLeak(text, {
-        surface: isPrivate ? '私聊消息' : '群消息',
-        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
-        // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
-        allowBareNumbers: isPrivate,
-        mode: ig.mode === 'warn' ? 'warn' : 'block',
-      })
-    },
-  })
+  // 生产路径必须由 src/host.js 注入 SharedOutbox（唯一物理出口 + egress 审计）；这里只保留
+  // **显式**的临时 Outbox 给测试/降级用 —— 见 createEphemeralOutbox 的说明。
+  const outbox = sharedOutbox || createEphemeralOutbox({ onebot, getConfig, log, ledgerFile })
 
   const deliveryContext = new AsyncLocalStorage()
   // 同回合表情去重台账：工具直发 vs 正文 <sticker:…>（真机 2026-11-23 15:01 连发两张）。
