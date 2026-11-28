@@ -11,8 +11,8 @@ const noopLog = { info() {}, warn() {}, error() {}, debug() {}, child: () => noo
 function mkGate({ engagedMaxReplies = 3, cooldownSec = 90, controllerTurns = new Map() } = {}) {
   const groups = createGroupState()
   const cfg = {
-    ownerQQ: '10000001',
-    botQQ: '20000002',
+    ownerQQ: '10000001', /* pii-scan:ignore 占位假号 */
+    botQQ: '20000002', /* pii-scan:ignore 占位假号 */
     group: {
       interjectChance: 1, // 摇号必中：隔离概率变量
       cooldownSec,
