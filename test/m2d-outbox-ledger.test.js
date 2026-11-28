@@ -390,6 +390,8 @@ test('ledger：enqueue 只保留 2KB 审计摘要，真实消息仍完整发送'
     assert.equal(rec.contentChars, long.length)
     assert.equal(rec.contentTruncated, true)
     assert.equal(rec.segments[0].data.text.length, 2048)
+    // T3.1：正常路径只追加 WAL（主快照可能落后），断言落盘内容前先 flush
+    outbox.ledger.flush()
     const saved = JSON.parse(readFileSync(file, 'utf8'))
     const persisted = saved.deliveries.find((item) => item.deliveryId === result.deliveryId)
     assert.equal(persisted.contentChars, long.length)
@@ -561,6 +563,97 @@ test('ledger：含媒体的记录 7 天后正文照常衰减（S12 旗标拆分�
     assert.equal(byId.get('legacy-old-sent').segments[0].data.text.length, 240, '旧格式记录按旧语义豁免（原文 240）')
     // 元数据保留
     assert.equal(byId.get('m-old-sent').gatewayMessageId, 'gw-m')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+
+// —— T3.1（#274）：WAL 两阶段恢复 ——
+// 改前：主快照的 sending/queued 在**重放 WAL 之前**就被改成 unknown/cancelled，
+// 于是 WAL 里已经 mark('sent') 的记录会被覆写成 unknown（crashedSending 凭空 +1），
+// 而且同一记录在 WAL 重放里还会被**再判一次**（crashedSending 变 2）。
+test('T3.1 两阶段恢复：WAL 里已 sent 的记录重启后仍是 sent，不写 unknown 审计、crashedSending=0', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'b3-wal-sent-'))
+  const file = join(dir, 'deliveries.json')
+  try {
+    const book = createDeliveryLedger({ file })
+    book.enqueue({ deliveryId: 'd-sent', chatKey: 'private:1', segments: segs('发出去的消息') })
+    book.mark('d-sent', 'sending')
+    book.mark('d-sent', 'sent', { gatewayMessageId: 'gw-1001' })
+    // 不 compact —— 直接新建实例模拟进程重启（主快照此刻仍落后于 WAL）
+
+    const book2 = createDeliveryLedger({ file })
+    const rec = book2.get('d-sent')
+    assert.equal(rec.state, 'sent')
+    assert.equal(rec.gatewayMessageId, 'gw-1001')
+    assert.equal(rec.unknownAt, undefined)
+    assert.equal(rec.unknownReason, undefined)
+    assert.equal(rec.recoveredAt, undefined)
+    assert.equal(book2.stats().crashedSending, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('T3.1 两阶段恢复：只在 WAL 里的孤立 enqueue 恢复为 cancelled，不重发', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'b3-wal-orphan-'))
+  const file = join(dir, 'deliveries.json')
+  try {
+    const book = createDeliveryLedger({ file })
+    book.enqueue({ deliveryId: 'd-orphan', chatKey: 'private:1', segments: segs('还没发') })
+    assert.equal(book.queuedFor('private:1').length, 1)
+
+    const book2 = createDeliveryLedger({ file })
+    assert.equal(book2.get('d-orphan').state, 'cancelled')
+    assert.match(book2.get('d-orphan').cancelReason, /crash-recovery/)
+    assert.equal(book2.queuedFor('private:1').length, 0, '恢复后不得重新排队发送')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('T3.1 两阶段恢复：enqueue→sending 后崩溃，重启 unknown 且 crashedSending 恰好 1（不是 2）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'b3-wal-crash-'))
+  const file = join(dir, 'deliveries.json')
+  try {
+    const book = createDeliveryLedger({ file })
+    book.enqueue({ deliveryId: 'd-crash', chatKey: 'private:1', segments: segs('可能已发出') })
+    book.mark('d-crash', 'sending')
+
+    const book2 = createDeliveryLedger({ file })
+    const rec = book2.get('d-crash')
+    assert.equal(rec.state, 'unknown')
+    assert.ok(rec.unknownAt && rec.unknownReason && rec.recoveredAt)
+    assert.equal(book2.stats().crashedSending, 1, '同一条记录不许被主快照+WAL 各判一次')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('T3.1 persist：critical 迁移只追加 WAL，flush() 后才与主快照一致', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'b3-wal-append-'))
+  const file = join(dir, 'deliveries.json')
+  try {
+    const book = createDeliveryLedger({ file }) // 启动即 compact 一次空台账
+    book.enqueue({ deliveryId: 'd-append', chatKey: 'private:1', segments: segs('增量') })
+    book.mark('d-append', 'sending')
+    // 此刻主快照还是启动时那份（enqueue/sending 只在 WAL 里）——
+    // 这正是「不再双写全量快照 + .bak」的可观测证据。
+    const before = JSON.parse(readFileSync(file, 'utf8'))
+    assert.equal(before.deliveries.find((x) => x.deliveryId === 'd-append'), undefined)
+    // WAL 里确实有这两条事件
+    const walText = readFileSync(`${file}.wal.jsonl`, 'utf8')
+    assert.match(walText, /"op":"enqueue"/)
+    assert.match(walText, /"op":"mark"/)
+    // flush 后磁盘与内存一致
+    book.flush()
+    const after = JSON.parse(readFileSync(file, 'utf8'))
+    assert.equal(after.deliveries.find((x) => x.deliveryId === 'd-append').state, 'sending')
+    // 台账内容（含 WAL）被 compact 后不会重复：重启只看到一条记录
+    const book2 = createDeliveryLedger({ file })
+    assert.equal(book2.stats().total, 1)
+    assert.equal(book2.stats().crashedSending, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

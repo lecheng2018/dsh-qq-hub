@@ -87,9 +87,12 @@ test('可选流水和活动回调缺省时仍完成投递', async () => {
 
 test('扩展 hooks 可拦截正文和条目，拦截后不产生发送或流水', async () => {
   const { delivery, sent, logged } = fixture({ hooks: { reply: async () => null } })
-  await delivery.deliverNow('private:1', '不应发送')
+  const result = await delivery.deliverNow('private:1', '不应发送')
   assert.equal(sent.length, 0)
   assert.equal(logged.length, 0)
+  // T3.11：早退分支统一返回结构化结果（过去是 undefined，调用方分不清「拦下」和「没结果」）。
+  assert.equal(result.state, 'blocked')
+  assert.equal(result.delivered, 0)
 })
 
 test('同会话在媒体准备期间保留 Outbox 票，独立会话不排队', async () => {
@@ -307,7 +310,10 @@ test('同回合表情去重：整轮只剩重复表情时不空跑投递', async
   })
   const result = await delivery.deliverNow('group:7', '<sticker:无语>', { stickersSentThisTurn: () => new Set(['m-1']) })
   assert.deepEqual(sent, [], '本轮已经直发过这张，正文里再写不再发一遍')
-  assert.equal(result, undefined, '没有可发内容 → 不入投递流程')
+  // T3.11：不入投递流程也要给出明确结果（state='skipped'），而不是 undefined。
+  assert.equal(result.state, 'skipped', '没有可发内容 → 不入投递流程')
+  assert.equal(result.delivered, 0)
+  assert.deepEqual(result.items, [])
 })
 
 test('同回合表情去重：不是同一张（md5 不同）照常发', async () => {

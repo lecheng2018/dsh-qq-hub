@@ -85,11 +85,21 @@ export function createReplyDelivery({
   }
 
   async function deliverNow(chatId, text, opts = {}) {
+    // T3.11：早退分支统一返回结构化结果 —— 调用方（turn 记账/面板/测试）一律读
+    // { state, attempted, delivered, failedCount, items }，过去返回 undefined 时
+    // 会被当成「投递结果缺失」而报 sent，静默、被扩展模块拦下、重复表情都记成了「已发」。
+    // 注意：必须定义在函数体最开头 —— hooks.reply 早退分支会先用到它。
+    const skippedResult = (state, extra = {}) => ({
+      missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state, replyRaw: text, ...extra,
+    })
     const cfg = getConfig()
     if (hooks?.reply) {
       try {
         const next = await hooks.reply(text, { chatId, userText: opts.userText || '' })
-        if (next === null) return log.info(`${chatId}：扩展模块拦下了这次回复`)
+        if (next === null) {
+          log.info(`${chatId}：扩展模块拦下了这次回复`)
+          return skippedResult('blocked')
+        }
         if (typeof next === 'string') text = next
       } catch (error) {
         log.warn('扩展模块改写回复出错：', error.message)
@@ -195,7 +205,10 @@ export function createReplyDelivery({
     if (hooks?.items) {
       try {
         const next = await hooks.items(items, { chatId, text, userText: opts.userText || '' })
-        if (next === null) return log.info(`${chatId}：扩展模块拦下了这次回复`)
+        if (next === null) {
+          log.info(`${chatId}：扩展模块拦下了这次回复`)
+          return skippedResult('blocked')
+        }
         if (Array.isArray(next)) items = next
       } catch (error) {
         log.warn('扩展模块改写回复出错：', error.message)
@@ -214,7 +227,10 @@ export function createReplyDelivery({
       })
       if (items.length !== before) log.info(`${chatId}：本轮已经直发过这张表情，正文里重复的那张不再发`)
       // 整轮只剩这张重复表情：这轮本来就发过了，不再空跑一趟投递。
-      if (!items.length) return log.info(`${chatId}：重复表情摘掉后没有别的内容，这轮不再投递`)
+      if (!items.length) {
+        log.info(`${chatId}：重复表情摘掉后没有别的内容，这轮不再投递`)
+        return skippedResult('skipped')
+      }
     }
     if (needsGroupPacking && items.length > groupLimit) {
       const packed = items.slice()
@@ -236,9 +252,11 @@ export function createReplyDelivery({
       if (packed.length <= groupLimit) items = packed
       else {
         log.warn(`${chatId}：语音或戳一戳与其他内容交错，无法在 3 条内保留全部类型和顺序，沿用旧合并策略`)
-        const nonText = items.filter((item) => item.kind !== 'text' && item.kind !== 'voice').slice(-2)
+        // T3.11：这里过去硬编码 3 —— groupLimit 被配置成 1/2 时兜底合并反而**超出上限**
+        // （1 条非文字 + slots=2 → 3 条），配置形同虚设。规则与上面的合并段保持同一口径。
+        const nonText = items.filter((item) => item.kind !== 'text' && item.kind !== 'voice').slice(-groupLimit)
         const textItems = items.filter((item) => item.kind === 'text' || item.kind === 'voice')
-        const slots = Math.max(1, 3 - nonText.length)
+        const slots = Math.max(1, groupLimit - nonText.length)
         const merged = []
         for (let i = 0; i < textItems.length; i++) {
           const group = merged.length === slots - 1 ? textItems.slice(i) : [textItems[i]]

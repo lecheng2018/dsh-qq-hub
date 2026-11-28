@@ -276,6 +276,12 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       }
     }
     const track = (off) => { if (typeof off === 'function') rec.offs.push(off); return off }
+    // 审计 T3.9：setup 是异步的，模块可能在 await 期间被 stop/替换。此时 api 已经交到
+    // 旧实例手里，它再注册定时器/路由/监听就会成为「停止后仍然活着」的幽灵资源，
+    // 且 rec.offs 已经 flush 过，没有任何人再能清掉它们。注册入口统一拒绝。
+    const ensureLive = (what) => {
+      if (rec.disposed) throw new Error(`模块「${rec.def?.name || id}」已停止，不能再注册${what}`)
+    }
     // 内置模块用原来的路径；面板页在核心包里的模块（CORE_PANEL_IDS）商店装上来也沿用老路径；
     // 其余模块放在 /ext/模块id/ 下
     const prefix = routePrefixFor(id, builtinDefs.has(id))
@@ -320,6 +326,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         return () => remove(rec.commands, item)
       },
       on: (event, fn) => {
+        ensureLive('事件监听')
         const item = { id, fn: guard(`事件 ${event}`, fn) }
         const list = listeners.get(event) || []
         list.push(item)
@@ -330,16 +337,19 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       },
       emit: (event, ...args) => emit(event, ...args),
       every: (ms, fn, label = '定时任务') => {
+        ensureLive('定时任务')
         const t = setInterval(() => { Promise.resolve().then(fn).catch((error) => note(id, label, error)) }, Math.max(1000, Number(ms) || 60_000))
         t.unref?.()
         return track(() => clearInterval(t))
       },
       later: (ms, fn) => {
+        ensureLive('延时任务')
         const t = setTimeout(() => { Promise.resolve().then(fn).catch((error) => note(id, '延时任务', error)) }, Math.max(0, Number(ms) || 0))
         t.unref?.()
         return track(() => clearTimeout(t))
       },
       route: (path, handler, opts = {}) => {
+        ensureLive('接口路由')
         const full = '/qq-hub/api' + prefix + (String(path).startsWith('/') ? path : '/' + path)
         const cur = routes.get(full)
         if (cur && cur.id !== id && live.has(cur.id)) throw new Error(`接口 ${full} 已经被模块「${cur.id}」占了`)
@@ -425,7 +435,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   // ---------- 启动 / 停止 ----------
   async function start(def, source, extra = {}) {
     const id = def.id
-    const rec = { id, def, source, exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now(), ...extra }
+    const rec = { id, def, source, exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now(), disposed: false, ...extra }
     prepareStart(def)
     live.set(id, rec)
     errors.delete(id)
@@ -434,10 +444,21 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       const api = makeApi(id, source, rec)
       const r = def.setup(api)
       rec.exports = (r && typeof r.then === 'function' ? await r : r) ?? {}
+      // 审计 T3.9：setup 期间模块可能已经被 stop（或被新实例替换）。过去这里无条件
+      // health=enabled + emit('module/start')，把一个已经停掉的实例又宣告成可用；
+      // 残余的清理句柄（offs）也没人再执行。这里补一次终止清理，且不改 health。
+      if (rec.disposed || live.get(id) !== rec) {
+        for (const off of rec.offs.reverse()) { try { off() } catch (error) {} }
+        try { rec.exports?.dispose?.() } catch (error) {}
+        return null
+      }
       health.set(id, 'enabled')
       log.info(`模块「${def.name || id}」${source === 'user' ? '（自己写的）' : ''}已启动`)
       emit('module/start', id)
     } catch (error) {
+      // 已停掉 / 已被新实例替换的旧实例：它的 setup 报错（多为注册被 ensureLive 拒绝）
+      // 属于预期噪音，不该把 health 从 disabled 改成 failed，也不该误杀新实例。
+      if (rec.disposed || live.get(id) !== rec) return null
       stop(id, { quiet: true })
       errors.set(id, { message: String(error && error.message ? error.message : error).slice(0, 800), at: Date.now(), source })
       health.set(id, 'failed', String(error.message || error).slice(0, 200))
@@ -449,7 +470,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   /** 同步启动（内置模块的 setup 都是同步的，插件一加载就要能用）。 */
   function startSync(def) {
     const id = def.id
-    const rec = { id, def, source: 'builtin', exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now() }
+    const rec = { id, def, source: 'builtin', exports: null, offs: [], tools: [], contexts: [], rules: [], commands: [], dshTools: [], errors: [], startedAt: Date.now(), disposed: false }
     // 审计 Q08：同步路径也要做启动前处理（密码登记、默认值补齐），差异只允许是「不等 setup」。
     prepareStart(def)
     live.set(id, rec)
@@ -464,7 +485,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       // 收不到「内置模块已就绪」，只能靠探测。两条路径的事件契约应一致。
       emit('module/start', id)
     } catch (error) {
-      stop(id, { quiet: true })
+      if (live.get(id) === rec) stop(id, { quiet: true })
       errors.set(id, { message: String(error.message || error).slice(0, 800), at: Date.now(), source: 'builtin' })
       health.set(id, 'failed', String(error.message || error).slice(0, 200))
       log.error(`内置模块「${def.name || id}」启动失败：`, error.message)
@@ -496,6 +517,8 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
           }
         }
       }
+      // 审计 T3.9：先立墓碑，再清资源。异步 setup 醒来后靠这个标记判断「别再注册了」。
+      rec.disposed = true
       live.delete(id)
       health.set(id, 'disabled')
       generation++ // 模块被停掉/替换：工具清单或实例变了，下一轮重挂

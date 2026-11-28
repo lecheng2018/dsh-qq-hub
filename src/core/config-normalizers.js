@@ -24,7 +24,14 @@ export const num = (v, d, lo, hi) => {
 export const bool = (v, d) => (typeof v === 'boolean' ? v : d)
 export const qq = (v) => String(v ?? '').replace(/\D/g, '')
 export const qqList = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(/[\s,，;；]+/)).map(qq).filter(Boolean))]
-export const hhmm = (v, d) => (/^\d{1,2}:\d{2}$/.test(String(v)) ? String(v) : d)
+export const hhmm = (v, d) => {
+  const s = String(v ?? '')
+  if (!/^\d{1,2}:\d{2}$/.test(s)) return d
+  // 审计 T3.9：过去只校验「形状」，25:90 / 99:99 这类假时间会原样落盘，
+  // 挂上去的定时器永不触发（日记窗口、整理时刻、问候语全静默失效）。
+  const [hh, mm] = s.split(':').map(Number)
+  return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 ? s : d
+}
 export const strList = (v, sep = /[\s,，]+/) => (Array.isArray(v) ? v : String(v || '').split(sep)).map((s) => String(s).trim()).filter(Boolean)
 
 const absPath = (v) => {
@@ -386,6 +393,15 @@ function normalizeSocialAndDiary(c) {
   )].slice(0, 100)
 
   if (!isObj(c.speakUp)) c.speakUp = {}
+  // 审计 T3.9：enabled / awakeFrom / awakeTo / greeting 过去完全没有归一化，
+  // 面板传字符串或越界小时都能落盘（'false' 当真、25 点当醒着），主动搭话判定被带偏。
+  c.speakUp.enabled = bool(c.speakUp.enabled, DEFAULTS.speakUp.enabled)
+  c.speakUp.awakeFrom = Math.round(num(c.speakUp.awakeFrom, DEFAULTS.speakUp.awakeFrom, 0, 23))
+  c.speakUp.awakeTo = Math.round(num(c.speakUp.awakeTo, DEFAULTS.speakUp.awakeTo, 0, 23))
+  if (!isObj(c.speakUp.greeting)) c.speakUp.greeting = {}
+  c.speakUp.greeting.enabled = bool(c.speakUp.greeting.enabled, DEFAULTS.speakUp.greeting.enabled)
+  c.speakUp.greeting.morning = hhmm(c.speakUp.greeting.morning, DEFAULTS.speakUp.greeting.morning)
+  c.speakUp.greeting.night = hhmm(c.speakUp.greeting.night, DEFAULTS.speakUp.greeting.night)
   c.speakUp.idleMinutes = num(c.speakUp.idleMinutes, DEFAULTS.speakUp.idleMinutes, 5, 1440)
   c.speakUp.nudge = bool(c.speakUp.nudge, DEFAULTS.speakUp.nudge)
   c.speakUp.minIntervalMinutes = num(c.speakUp.minIntervalMinutes, DEFAULTS.speakUp.minIntervalMinutes, 5, 1440)
@@ -432,6 +448,27 @@ function normalizeBili(c) {
   b.model.model = String(b.model.model || '').trim()
   b.model.reasoningEffort = ['low', 'high', 'max', ''].includes(b.model.reasoningEffort) ? b.model.reasoningEffort : ''
   if (!b.model.provider || !b.model.model) b.model.provider = b.model.model = ''
+}
+
+/**
+ * 刷小黑盒归一化。
+ * 审计 T3.9：整个 heybox 域过去没有 normalizer，面板传来的字符串开关、越界数值、
+ * 空 Topic 都会原样落进配置 —— 定时任务按 msgPerRun='3' 之类的值算预算直接算错。
+ */
+function normalizeHeybox(c) {
+  if (!isObj(c.heybox)) c.heybox = {}
+  const h = c.heybox
+  h.enabled = bool(h.enabled, DEFAULTS.heybox.enabled)
+  h.autoBrowse = bool(h.autoBrowse, DEFAULTS.heybox.autoBrowse)
+  h.cookie = String(h.cookie || '').trim()
+  h.intervalHours = Math.round(num(h.intervalHours, DEFAULTS.heybox.intervalHours, 1, 48))
+  h.maxRunsPerDay = Math.round(num(h.maxRunsPerDay, DEFAULTS.heybox.maxRunsPerDay, 0, 24))
+  h.perRun = Math.round(num(h.perRun, DEFAULTS.heybox.perRun, 1, 10))
+  h.likeDaily = Math.round(num(h.likeDaily, DEFAULTS.heybox.likeDaily, 0, 100))
+  h.commentDaily = Math.round(num(h.commentDaily, DEFAULTS.heybox.commentDaily, 0, 30))
+  h.maxPostsPerDay = Math.round(num(h.maxPostsPerDay, DEFAULTS.heybox.maxPostsPerDay, 0, 10))
+  h.defaultTopic = Math.round(num(h.defaultTopic, DEFAULTS.heybox.defaultTopic, 1, 1e9))
+  h.postStyle = ['diary', 'news', 'mix'].includes(h.postStyle) ? h.postStyle : DEFAULTS.heybox.postStyle
 }
 
 function normalizeDouyin(c) {
@@ -578,6 +615,7 @@ export function normalize(raw) {
   normalizeSocialAndDiary(c)
   normalizeBili(c)
   normalizeDouyin(c)
+  normalizeHeybox(c)
   normalizeMemoryAndChatlog(c)
   normalizeModulesAndExt(c)
   normalizeMultiParser(c)
@@ -609,15 +647,23 @@ export function mergeFromPanel(current, incoming) {
   // 联动密钥只由插件生成，面板不能改
   if (!isObj(next.bridge)) next.bridge = {}
   next.bridge.token = current.bridge?.token || ''
-  // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开
-  if (incoming?.bili && (incoming.bili.sessdata || incoming.bili.biliJct)) {
+  // B 站：只改了其中一个值时，另一个保留；整串粘进来的会在 normalize 里拆开。
+  // 审计 T3.9：显式传 null 表示「清空」，但 splitBiliCookie 看到空 sessdata/biliJct
+  // 会从旧 cookie 里反解回来 → 面板清空凭证后旧 Cookie 复活。这里同时认 null，
+  // 并在面板没带新 cookie 时先把旧 cookie 抹掉（带了新 cookie 就以新的为准）。
+  if (incoming?.bili
+    && (incoming.bili.sessdata || incoming.bili.biliJct
+      || incoming.bili.sessdata === null || incoming.bili.biliJct === null)
+    && !incoming.bili.cookie) {
     if (!isObj(next.bili)) next.bili = {}
     next.bili.cookie = ''
   }
   // 按群单独设置：防局部 PATCH 抹掉其它群，同时保留群原有的内部字段（如 minRelevance）
   if (incoming?.group?.overrides !== undefined) {
     if (isObj(incoming.group.overrides)) {
-      const isFullGroupSubmit = incoming.group.interjectChance !== undefined || incoming.group.wakeWords !== undefined || incoming.enabled !== undefined
+      // 审计 T3.9：过去把顶层 incoming.enabled 也当成「整表提交」的信号，
+      // 而保存配置时 enabled 几乎总会带上 → 局部 PATCH 一个群就把其它群覆盖抹掉。
+      const isFullGroupSubmit = incoming.group.interjectChance !== undefined || incoming.group.wakeWords !== undefined
       const baseOverrides = isFullGroupSubmit ? {} : { ...(current.group?.overrides || {}) }
       const merged = { ...baseOverrides }
       for (const [rawGid, over] of Object.entries(incoming.group.overrides)) {

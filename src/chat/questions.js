@@ -221,6 +221,13 @@ export function createQuestionRegistry({ deliver, ownerQQ, timeoutMs = 300_000, 
         }
       }, timeoutMs)
 
+      // T3.6：进来就已 abort → 早退（不发卡、不挂 pending；否则主人会收到早已过期的提问卡）
+      if (req.signal?.aborted) {
+        clearTimeout(timer)
+        reject(new Error('提问已被中止'))
+        return
+      }
+
       // 如果外部 signal abort 了
       if (req.signal) {
         req.signal.addEventListener('abort', () => {

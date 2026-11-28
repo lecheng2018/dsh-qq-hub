@@ -1,7 +1,7 @@
 // 回复指令解析、气泡拆分/合并/上限裁剪、语气规则、语音识别与气泡间隔计算。
 
 import { sanitizeOutbound, isSilence } from './reply-sanitize.js'
-import { stripMarkdown } from './reply-markdown.js'
+import { protectCode, stripMarkdown } from './reply-markdown.js'
 import { isLongDocument, splitDocumentBySections } from './reply-document.js'
 
 const MAX_BUBBLES = 6
@@ -26,6 +26,11 @@ export function parseReply(text, rules = {}) {
     raw = (raw.slice(0, reportMatch.index) + raw.slice(reportMatch.index + reportMatch[0].length)).trim()
     if (isSilence(raw) && isSilence(reportBody)) return { silent: true, items: [] }
   }
+  // T3.11：切 ||| / 匹配 <voice>/<sticker>/<poke> 之前先把代码块换成占位符 ——
+  // 代码里出现的 ||| 不该被当成气泡边界，标签字样也不该被当成真的语音/表情。
+  // 最后的 restore 在返回前统一做（stripMarkdown 内部自己也 mask，二者互不干扰）。
+  const codeGuard = protectCode(raw)
+  raw = codeGuard.text
   const hardLimit = Math.max(1, Math.round(Number(rules.maxBubbles) || MAX_BUBBLES))
   // 她自己用 ||| 划出来的气泡数：这是**硬边界**，场景软顶（四态收尾礼让、群聊紧缩）只能压
   // 「自动切出来」的气泡，不能把她的边界粘回去。真机 2026-11-24 08:16：对方回短句 → 趋势
@@ -36,7 +41,9 @@ export function parseReply(text, rules = {}) {
     return part && !isSilence(part)
   }).length
   const items = []
-  const meta = { docSplit: false, hardLimit }
+  // 代码占位符的还原器：文档判定/分章要用「还原后的原文」（否则代码被换成令牌后
+  // 文本长度骤减，isLongDocument 的长度闸门会把长文档误判成闲聊，整篇挤成一条）。
+  const meta = { docSplit: false, hardLimit, restoreCode: codeGuard.restoreFenced }
   for (const bubble of raw.split('|||')) {
     const part = bubble.trim()
     if (!part) continue
@@ -100,6 +107,9 @@ export function parseReply(text, rules = {}) {
     } else {
       finalItems.push({ kind: 'text', value: reportBody })
     }
+  }
+  for (const it of finalItems) {
+    if (typeof it.value === 'string') it.value = codeGuard.restore(it.value)
   }
   return { silent: false, items: finalItems }
 }
@@ -173,22 +183,32 @@ export function capBubbles(items, max = MAX_BUBBLES) {
     const replyTo = slice.find((t) => t.replyTo)?.replyTo
     groups.push({
       value: slice.map((t) => t.value).join('\n\n'),
+      size,
       ...(replyTo ? { replyTo } : {}),
     })
     start += size
   }
-  // 按顺序把文字项换成合并后的组，媒体项（表情/语音/图片）位置不动；按组聚合 replyTo 避免错位或丢失
+  // 按「合并组首条文字项的原始下标」放回，中间穿插的表情/语音/图片位置不动。
+  // 审计 T3.11：旧实现用 gi 按**文字出现次数**前进，第 2 组会顶到第 2 条文字的位置 ——
+  // [文1, 文2, 表情, 文3] 被压成 2 组时，第 2 组（文3）被插到表情之前，顺序错乱。
   const out = []
-  let gi = 0
+  const groupAt = new Map()
+  let textIndex = 0
+  for (const group of groups) {
+    groupAt.set(textIndex, group)
+    textIndex += group.size
+  }
+  let ti = 0
   for (const it of items) {
     if (it.kind !== 'text') { out.push(it); continue }
-    if (gi < groups.length) {
-      const merged = { ...it, kind: 'text', value: groups[gi].value }
-      if (groups[gi].replyTo) merged.replyTo = groups[gi].replyTo
+    const group = groupAt.get(ti)
+    if (group) {
+      const merged = { ...it, kind: 'text', value: group.value }
+      if (group.replyTo) merged.replyTo = group.replyTo
       else delete merged.replyTo
       out.push(merged)
-      gi += 1
     }
+    ti += 1
   }
   return out
 }
@@ -343,7 +363,9 @@ export function segmentBubbles(text, rules = {}) {
   const cap = Math.max(10, Math.round(Number(rules.maxChars) || 30))
   const minBubble = Math.max(6, Math.round(cap * (Number(rules.minBubbleRatio) || 0.4)))
   const rand = typeof rules.rand === 'function' ? rules.rand : Math.random
-  if (t.includes('```')) return [t]
+  // 围栏代码块（parseReply 阶段已换成 F 前缀占位符，stripMarkdown 里也可能还原成 ```）整段不拆。
+  // 行内代码不在此列：一个 `ls` 不该让整段几百字的闲聊挤成一条。
+  if (t.includes('```') || /\uFFF9F\d+\uFFFA/.test(t)) return [t]
   // 短清单/简报（≤360 字）整段发；超长报告不整坨糊脸，走后续分段/章节切分
   if (rules.keepReports !== false && t.length <= 360 && structuredReport(t)) return [t]
   // 段落（空行）是硬边界：一段一条，段内再按句子攒；
@@ -500,16 +522,19 @@ function pushText(items, s, rules = {}, meta = null) {
     return
   }
   // 文档型长回复下沉到单气泡级：即使整轮回复带 ||| 或尾部 <sticker>，其中的超长文档泡也能按章节切分
-  if (rules.keepReports !== false && isLongDocument(rawClean)) {
-    const sections = splitDocumentBySections(rawClean, hardLimit)
+  const rawFull = typeof meta?.restoreCode === 'function' ? meta.restoreCode(rawClean) : rawClean
+  if (rules.keepReports !== false && isLongDocument(rawFull)) {
+    const sections = splitDocumentBySections(rawFull, hardLimit)
     if (sections.length) {
       if (meta) meta.docSplit = true
       for (const sec of sections) if (!isSilence(sec)) items.push({ kind: 'text', value: sec })
       return
     }
   }
-  // 短代码块整段发（代码块的围栏会被 stripMarkdown 去掉，所以在原文上判一次）
-  if (rules.keepReports !== false && rawClean.includes('```') && t.length <= 1200) {
+  // 短围栏代码块整段发（代码块的围栏会被 stripMarkdown 去掉，所以在原文上判一次）
+  // T3.11：带围栏代码的整段不该被碎句切分。代码此时可能已换成占位符，
+  // 所以除了字面 ``` 还要认 F 前缀占位符（行内代码的占位符不带 F，不该触发整段不拆）。
+  if (rules.keepReports !== false && (rawClean.includes('```') || /\uFFF9F\d+\uFFFA/.test(rawClean)) && t.length <= 1200) {
     items.push({ kind: 'text', value: t })
     return
   }

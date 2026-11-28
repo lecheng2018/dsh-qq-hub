@@ -271,6 +271,23 @@ test('回执：群聊不发（当众解释技术故障观感差），只发私�
   assert.match(sent[0].segments[0].data.text, /再跟我说一次/)
 })
 
+test('T3.4 群聊 billing 失败改投主人私聊；普通 error 仍保持静默', (t) => {
+  const { core, sent } = makeCore(t)
+  // 回归基线：普通的回合失败在群里依旧不发（当众解释技术故障是噪音）
+  assert.equal(core.handleTurnFailure('group:777', new Error('fetch failed')).sent, false)
+  assert.equal(sent.length, 0)
+  // 欠费/余额耗尽 = 网关级故障（不是某个群的问题，且必须主人动手）→ 必须能看见
+  const billing = core.handleTurnFailure('group:777', { failure: { status: 402, message: 'Payment Required' } })
+  assert.equal(billing.sent, true, 'billing 属于网关级故障，群里失败也要让主人知道')
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].chatKey, 'private:10000001' /* pii-scan:ignore */, '必须改投主人私聊')
+  assert.match(sent[0].segments[0].data.text, /余额|额度/)
+  // 网关级限频：别的群同时欠费不应再刷屏（按 kind 全局限频）
+  const again = core.handleTurnFailure('group:888', { failure: { status: 402, message: 'Payment Required' } })
+  assert.equal(again.sent, false)
+  assert.equal(sent.length, 1)
+})
+
 // ---------- ③ 限频 ----------
 
 test('回执：同聊天同类型 5 分钟内只发一次，跨类型不互相静音', (t) => {

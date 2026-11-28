@@ -54,8 +54,27 @@ export function createGroupQuota({ getConfig = () => ({}), now = Date.now, sleep
   function prune(gid, t) {
     const win = cfgOf().windowMs
     const list = (sent.get(gid) || []).filter((x) => t - x < win)
-    sent.set(gid, list)
+    // 审计 T3.10：空列表过去也留在 Map 里，大量一次性群只会把内存越撑越大。
+    if (list.length) sent.set(gid, list)
+    else sent.delete(gid)
     return list
+  }
+
+  /**
+   * 每群一条串行链。
+   *
+   * 审计 T3.10：配额检查、等待、doSend、记账过去各自独立执行 —— 同一群并发 5 条时，
+   * 5 条都先看到「窗口里还没满」然后一起发出去，每分钟硬顶被直接击穿（QQ 侧拒收，
+   * 消息真的丢）。按 gid 串起来后，后来者看到的一定是前者记完账的窗口。
+   */
+  const chains = new Map()
+  function serialized(gid, run) {
+    const prev = chains.get(gid) || Promise.resolve()
+    const task = prev.then(run, run)
+    const settled = task.then(() => {}, () => {})
+    chains.set(gid, settled)
+    settled.then(() => { if (chains.get(gid) === settled) chains.delete(gid) })
+    return task
   }
 
   /**
@@ -64,30 +83,38 @@ export function createGroupQuota({ getConfig = () => ({}), now = Date.now, sleep
    * @param {(payload?:any)=>Promise<any>} doSend 真正发送的函数（返回非空 = 成功）
    * @returns {Promise<{ok:boolean, result?:any, waitedMs:number, retries:number, error?:Error}>}
    */
-  async function send(groupId, doSend) {
-    const cfg = cfgOf()
+  function send(groupId, doSend) {
     const gid = String(groupId || '')
+    return serialized(gid, () => sendInner(gid, doSend))
+  }
+
+  async function sendInner(gid, doSend) {
+    const cfg = cfgOf()
     let waitedMs = 0
     let retries = 0
     if (cfg.enabled) {
-      // ① 预防：窗口内已经发到「上限 − 余量」就先等
+      // ① 预防：窗口内已经发到「上限 − 余量」就先等。
+      // 醒来必须**循环复查**：等待期间同群其它链（或别的客户端）可能又发了几条，
+      // 只查一次就发等于把窗口又打穿一遍。
       const limit = Math.max(1, cfg.perMinute - cfg.reserve)
-      const list = prune(gid, now())
-      if (list.length >= limit) {
+      for (let guard = 0; guard < 60; guard++) {
+        const list = prune(gid, now())
+        if (list.length < limit) break
         const wait = Math.max(0, cfg.windowMs - (now() - list[0]) + 250)
         // 允许 250ms 缓冲余量（最高 +500ms），避免同毫秒突发时 wait = windowMs + 250 越界跳过等待
-        if (wait > 0 && wait <= cfg.windowMs + 500) {
-          log?.info?.(`群 ${gid}：1 分钟内已发 ${list.length} 条（QQ 上限 ${cfg.perMinute}），等 ${Math.ceil(wait / 1000)}s 再发`)
-          await sleep(wait)
-          waitedMs += wait
-          prune(gid, now())
-        }
+        if (wait <= 0 || wait > cfg.windowMs + 500) break
+        log?.info?.(`群 ${gid}：1 分钟内已发 ${list.length} 条（QQ 上限 ${cfg.perMinute}），等 ${Math.ceil(wait / 1000)}s 再发`)
+        await sleep(wait)
+        waitedMs += wait
       }
     }
     for (;;) {
       try {
         const result = await doSend()
-        prune(gid, now()).push(now())
+        // prune 在窗口为空时会删掉 Map 条目并返回一个游离数组，直接 push 会丢记账。
+        const windowList = prune(gid, now())
+        windowList.push(now())
+        sent.set(gid, windowList)
         return { ok: true, result, waitedMs, retries }
       } catch (error) {
         // 投递结果不明（unknown）绝不自动重试，防止重复发言

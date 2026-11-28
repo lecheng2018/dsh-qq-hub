@@ -115,6 +115,9 @@ export function ensurePurposeDay(state, now = Date.now()) {
   if (state.day !== day) {
     state.day = day;
     state.countToday = 0;
+    // T3.11：attempts 是「今天连续失败/尝试」计数，跨天必须一起归零 ——
+    // 否则昨天攒到 20 的 attempts 会让今天第一次评估就按熔断/降级分支走。
+    state.attempts = 0;
   }
   return state;
 }

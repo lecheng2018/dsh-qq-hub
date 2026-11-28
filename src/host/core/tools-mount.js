@@ -117,10 +117,14 @@ export function createToolsMount({
     if (prev) for (const off of prev.offs) { try { off?.() } catch {} }
     const offs = []
     let mounted = 0 // 真正新挂上的工具数：restrict 的 disposer 不计入（否则日志「新挂 N」虚高）
-    try {
-      const off = agent.ctx?.tools?.restrict?.({ deny: denied })
-      if (typeof off === 'function') offs.push(off)
-    } catch (error) { debug(`联动工具屏蔽失败：${error?.message || error}`) }
+    if (denied.length > 0) {
+      // T3.6：deny 为空时不挂 restrict —— 一次多余的作用域层会让「已注册」判定进入
+      // 热重载 hack 分支；且多个 restrict 层叠加还会互相覆盖前面模块的屏蔽清单。
+      try {
+        const off = agent.ctx?.tools?.restrict?.({ deny: denied })
+        if (typeof off === 'function') offs.push(off)
+      } catch (error) { debug(`联动工具屏蔽失败：${error?.message || error}`) }
+    }
     let already = 0
     let failed = 0
     for (const tool of tools) {
@@ -155,20 +159,9 @@ export function createToolsMount({
       } catch (error) {
         const msg = String(error?.message || error)
         if (msg.includes('already registered')) {
-          try {
-            // 热重载保护：若会话作用域内残留同名工具，从作用域层强制移除旧登记项并重挂新实例
-            const scope = agent.ctx?._scope || agent.ctx
-            const layer = agent.ctx?.tools?.layers?.peek?.(scope)
-            if (layer?.tools?.data?.has?.(tool.name)) {
-              layer.tools.data.delete(tool.name)
-              const offRetry = agent.ctx?.tools?.register?.(registration)
-              if (typeof offRetry === 'function') {
-                offs.push(offRetry)
-                mounted++
-                continue
-              }
-            }
-          } catch {}
+          // T3.6：旧实现靠 `agent.ctx._scope` + `tools.layers.peek()` 私有结构硬删同名工具，
+          // DSH 0.2.x 已无这些字段 → 这段永远空转，还可能在别的宿主上写坏作用域。
+          // 统一按「已存在」跳过：真正的重挂由上面的 offs disposer 在下次挂载前释放。
           already++
         } else {
           failed++

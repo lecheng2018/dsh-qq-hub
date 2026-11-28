@@ -4,8 +4,20 @@
 
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
 import { createMemoryBus } from '../../features/memory-bus.js'
-import { currentPersonaText } from '../../persona/personas.js'
+import { currentPersonaText, personaIdFor } from '../../persona/personas.js'
 import { defineTool, str } from '../../tools/tools.js'
+
+/**
+ * T3.7：按会话解析人设文本（无 chat 时回落配置里的当前人设）。
+ * @param {object|null} chat 会话（{ kind: 'group', groupId } / { kind: 'private', userId }）
+ * @param {object} cfg 配置
+ * @returns {string}
+ */
+export function memoryPersonaText(chat, cfg) {
+  if (!chat) return currentPersonaText(cfg?.persona?.current)
+  const personaId = personaIdFor(chat, cfg)
+  return currentPersonaText(personaId || cfg?.persona?.current)
+}
 
 export default {
   id: 'memory',
@@ -49,7 +61,9 @@ export default {
     const { hub, http } = api.core
     const memory = createMemoryStore({
       dsh: api.dsh, getConfig: api.config, hub, chatLog: api.core.chatLog, log: api.log,
-      personaText: () => currentPersonaText(api.config().persona.current),
+      // T3.7：人设文本必须按**当前会话**解析（群 → 该群人设，私聊 → 当前人设）。
+      // 只读 config.persona.current 会让分群人设的反思/风格/整理全部按主 persona 落库。
+      personaText: (chat) => memoryPersonaText(chat, api.config()),
       reflectionContext: false,
       styleContext: false,
       reflectImpl: (chat, transcript, genSignal) => {

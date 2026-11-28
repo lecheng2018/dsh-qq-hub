@@ -109,7 +109,9 @@ function stateCandidate(file, validate) {
   try {
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
     const value = JSON.parse(text)
-    if (!validate(value)) throw new TypeError('JSON 状态结构不符合预期')
+    // 审计 T3.9：validate 是可选参数，过去无条件调用 —— 不传就 TypeError，
+    // 一份完全正常的 JSON 被当成损坏隔离，调用方只能拿到 fallback。
+    if (validate && !validate(value)) throw new TypeError('JSON 状态结构不符合预期')
     return { kind: 'valid', value }
   } catch (error) {
     return { kind: 'invalid', error }

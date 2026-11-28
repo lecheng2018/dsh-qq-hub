@@ -45,7 +45,7 @@ export function consolidationRetryBlocked(retry, now = Date.now()) {
 export function createMemoryLearning({
   dsh, getConfig, hub, chatLog = hub, log, personaText,
   isActive, createGenerationSignal, generationOf,
-  load, save, health, relatedTo,
+  load, save, mutate, health, relatedTo,
   add, addMany, revise, supersede, invalidate, invalidateMany, scopeFromChatId, listFor,
   profileOf, setDerivedProfile, profileKeyOf,
   insightsOf, setDerivedInsights, styleOf, setDerivedStyle, personKey,
@@ -56,6 +56,18 @@ export function createMemoryLearning({
   const chatLogSnapshot = (day) => readChatLogSource(sourceLog, day)
   let batchRecoveryError = ''
   let inMemoryRetry = null
+
+  /**
+   * T3.8：状态写入统一走 mutate()（CAS 自愈）——读到的版本已被别人改过就重试，
+   * 而不是用 load()+save() 把对方的改动覆盖掉。未注入 mutate（老调用方）时退回旧路径。
+   */
+  const persist = (apply) => {
+    if (typeof mutate === 'function') return mutate((s) => { apply(s); return true })
+    const s = load()
+    apply(s)
+    save(s)
+    return true
+  }
 
   /** 导入旧档案第一步：让模型从一大段文字里挑出值得记的，返回候选（不直接存）。 */
   async function importCandidates(text) {
@@ -210,33 +222,38 @@ export function createMemoryLearning({
   const batchState = {
     get: (id) => load().extractionBatches?.[id],
     start: (batch, scope) => {
-      const state = load()
-      state.extractionBatches = { ...(state.extractionBatches || {}) }
-      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
-      // start() 发生在提交任何事实之前：save() 失败不代表事实状态不一致，不得设置 batchRecoveryError 永久熔断
-      save(state)
+      // T3.8：统一走 persist（mutate CAS 自愈），别再用 load()+save() 覆盖别人的并发写入。
+      // start() 发生在提交任何事实之前：落盘失败不代表事实状态不一致，不得设置 batchRecoveryError 永久熔断
+      persist((state) => {
+        state.extractionBatches = { ...(state.extractionBatches || {}) }
+        state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'running', added: 0, at: Date.now() }
+      })
     },
     fail: (batch, scope, error) => {
-      const state = load()
-      state.extractionBatches = { ...(state.extractionBatches || {}) }
-      state.extractionBatches[batch.id] = {
-        fingerprint: batch.fingerprint,
-        scope,
-        status: error.factsCommitted ? 'pending' : 'failed',
-        added: Number(error.factsCommitted) || 0,
-        error: error.message,
-        at: Date.now(),
-      }
-      try { save(state) } catch (saveError) {
+      try {
+        persist((state) => {
+          state.extractionBatches = { ...(state.extractionBatches || {}) }
+          state.extractionBatches[batch.id] = {
+            fingerprint: batch.fingerprint,
+            scope,
+            status: error.factsCommitted ? 'pending' : 'failed',
+            added: Number(error.factsCommitted) || 0,
+            error: error.message,
+            at: Date.now(),
+          }
+        })
+      } catch (saveError) {
         batchRecoveryError = `提炼批次 ${batch.id} 无法记录失败状态，自动整理已暂停：${saveError.message}`
         throw saveError
       }
     },
     done: (batch, scope, added) => {
-      const state = load()
-      state.extractionBatches = { ...(state.extractionBatches || {}) }
-      state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'done', added, at: Date.now() }
-      try { save(state) } catch (error) {
+      try {
+        persist((state) => {
+          state.extractionBatches = { ...(state.extractionBatches || {}) }
+          state.extractionBatches[batch.id] = { fingerprint: batch.fingerprint, scope, status: 'done', added, at: Date.now() }
+        })
+      } catch (error) {
         batchRecoveryError = `提炼批次 ${batch.id} 已提交事实但进度未确认，自动整理已暂停：${error.message}`
         throw error
       }
@@ -306,6 +323,11 @@ export function createMemoryLearning({
           importance: Number(f.importance) || 0.5,
           tags: Array.isArray(f.tags) ? f.tags : [],
           pinned: Boolean(f.pinned),
+          // T3.8：轨道与归属透传给梦境整理，否则两个轨道的同主题事实会被合到一起
+          kind: String(f.kind || 'fact'),
+          personaId: String(f.personaId || ''),
+          selfView: f.selfView === true,
+          perspective: String(f.perspective || ''),
         }))
       if (!facts.length) return { ok: true, skipped: 'no-facts' }
 
@@ -338,6 +360,11 @@ export function createMemoryLearning({
                   entity: String(merged.entity || ''),
                   topic: String(merged.topic || ''),
                   source: 'dream',
+                  // T3.8：合并出的新条目继承被并条目的轨道与人设，别把 self 视角写回普通事实轨道
+                  kind: String(merged.kind || 'fact'),
+                  personaId: String(merged.personaId || ''),
+                  selfView: merged.selfView === true,
+                  perspective: String(merged.perspective || ''),
                 })
                 applied += 1
               }
@@ -403,10 +430,11 @@ export function createMemoryLearning({
     if (r.ok) {
       inMemoryRetry = null
       try {
-        const s2 = load()
-        s2.runs = { ...(s2.runs || {}) }
-        for (const t of due) s2.runs[t] = today
-        save(s2)
+        // T3.8：CAS 自愈式落盘 —— 整理进度与其它写入并发时不要互相覆盖
+        persist((s2) => {
+          s2.runs = { ...(s2.runs || {}) }
+          for (const t of due) s2.runs[t] = today
+        })
       } catch (error) {
         inMemoryRetry = nextConsolidationRetry(inMemoryRetry || s.lastConsolidate?.retry, Date.now(), error?.message || '保存每日整理进度失败')
         log?.warn?.('保存每日整理完成状态失败（已启用内存退避）：', error?.message || error)
@@ -448,8 +476,9 @@ export function createMemoryLearning({
       inMemoryRetry = retry
       try {
         if (s2) {
-          s2.lastConsolidate = { ...(s2.lastConsolidate || {}), retry }
-          save(s2)
+          persist((disk) => {
+            disk.lastConsolidate = { ...(disk.lastConsolidate || {}), retry }
+          })
         }
       } catch (saveError) {
         log?.warn?.('保存每日整理退避状态失败（已启用内存退避）：', saveError?.message || saveError)
@@ -480,8 +509,9 @@ export function createMemoryLearning({
       recovery: action === 'done' ? 'manual-confirmed' : 'manual-retry',
     }
     if (action === 'retry') next.error = `人工标记重试：${batch.error || '事实提交状态未确认'}`
-    state.extractionBatches = { ...(state.extractionBatches || {}), [String(id)]: next }
-    save(state)
+    persist((disk) => {
+      disk.extractionBatches = { ...(disk.extractionBatches || {}), [String(id)]: next }
+    })
     return { ok: true, batch: structuredClone(next) }
   }
 

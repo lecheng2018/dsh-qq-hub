@@ -20,6 +20,8 @@ const DEFAULT_BURST_WINDOW_MS = 60_000
 const DEFAULT_BURST_LIMIT = 4
 const DEFAULT_MAX_DIGEST_ITEMS = 20
 const MAX_DIGEST_CHARS = 1800
+// 静音/未知剩余时长的轮询间隔：静默挡下的汇总不能只挂在内存里等模块下次发消息
+const DEFAULT_DIGEST_POLL_MS = 60_000
 
 function inQuietHours(hour, range) {
   if (!Array.isArray(range) || range.length !== 2) return false
@@ -36,8 +38,8 @@ function plainTextOfSegments(segments) {
 
 export function createModuleSendBridge({
   hub, outbox, log, unified = false,
-  getConfig, isMuted, isProactivelyMuted,
-  now = () => Date.now(), sleep, pushPolicy,
+  getConfig, isMuted, isProactivelyMuted, proactiveMuteState,
+  now = () => Date.now(), sleep, pushPolicy, digestPollMs,
 } = {}) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   const warn = (m) => { try { log?.warn?.(m) } catch {} }
@@ -58,6 +60,7 @@ export function createModuleSendBridge({
   /** key -> { chatKey, sourceModuleId, items: Array<{ text: string, createdAt: number }>, timer } */
   const digestBuffers = new Map()
   let disposed = false
+  const pollMs = Math.max(10, Number(digestPollMs) || DEFAULT_DIGEST_POLL_MS)
 
   const isTestEnv = process.env.NODE_ENV === 'test'
     || Boolean(process.env.NODE_TEST_CONTEXT)
@@ -146,6 +149,19 @@ export function createModuleSendBridge({
     lastSentAt.set(key, currentNow)
   }
 
+  /** 给汇总缓冲挂补发/轮询定时器：已有定时器就复用，卸载后不再新建。 */
+  function armDigestTimer(buf, delayMs) {
+    if (disposed || buf.timer) return
+    const waitMs = Math.max(10, Number(delayMs) || pollMs)
+    buf.timer = setTimeout(() => {
+      buf.timer = null
+      if (disposed) return
+      flushDigest({ chatKey: buf.chatKey, sourceModuleId: buf.sourceModuleId })
+        .catch((err) => debug(`推送汇总补发失败（${buf.sourceModuleId}|${buf.chatKey}）：${err?.message || err}`))
+    }, waitMs)
+    buf.timer.unref?.()
+  }
+
   function stashDigest(chatKey, sourceModuleId, text, policy, { delayMs = 0 } = {}) {
     const key = `${sourceModuleId}|${chatKey}`
     let buf = digestBuffers.get(key)
@@ -157,13 +173,9 @@ export function createModuleSendBridge({
       buf.items.shift()
     }
     buf.items.push({ text, createdAt: now() })
-    if (delayMs > 0 && !buf.timer && !disposed) {
-      buf.timer = setTimeout(() => {
-        buf.timer = null
-        flushDigest({ chatKey, sourceModuleId }).catch((err) => debug(`推送汇总补发失败（${key}）：${err?.message || err}`))
-      }, Math.max(10, delayMs))
-      buf.timer.unref?.()
-    }
+    // 静音（isMuted）与「剩余时长不可知」的静默没有明确的解除时刻：挂一个短轮询定时器，
+    // 醒来先 flush（仍在静默就再排一轮），静音一解除就能自动补发；缓冲区空/卸载后自动停。
+    armDigestTimer(buf, delayMs > 0 ? delayMs : pollMs)
     return buf.items.length
   }
 
@@ -181,7 +193,11 @@ export function createModuleSendBridge({
       }
       if (!force) {
         const qReason = quietReasonFor(buf.chatKey, policy)
-        if (qReason) continue
+        if (qReason) {
+          // 还挡着：静默时段按结束整点续排；静音/未知时长按 pollMs 轮询，解除后自动补发
+          armDigestTimer(buf, quietRemainingMs(buf.chatKey, qReason, policy) || pollMs)
+          continue
+        }
       }
       if (buf.timer) { clearTimeout(buf.timer); buf.timer = null }
       const items = buf.items.splice(0)
@@ -202,6 +218,31 @@ export function createModuleSendBridge({
     return results
   }
 
+  /**
+   * T3.6：静默还剩多久（毫秒）。暂存汇总必须带一个补发定时器，
+   * 否则「静默时段挡下的播报」要等到模块下次发消息才可能被 flush——多半就永久躺在内存里。
+   * 静默时段按「下一个静默结束整点」算；临时静音按 remainingMs；不可知返回 0（不排定时器）。
+   */
+  function quietRemainingMs(chatKey, reason, policy) {
+    const at = now()
+    if (reason === 'quiet-hours' && policy.quietHours) {
+      const end = Number(policy.quietHours[1])
+      if (!Number.isFinite(end)) return 0
+      const target = new Date(at)
+      target.setMinutes(0, 0, 0)
+      target.setHours(end)
+      while (target.getTime() <= at) target.setDate(target.getDate() + 1)
+      return Math.max(60_000, Math.min(target.getTime() - at, 12 * 3600_000))
+    }
+    if (reason === 'proactive-muted') {
+      try {
+        const left = Number(proactiveMuteState?.(chatKey, at)?.remainingMs) || 0
+        if (left > 0) return Math.min(left + 1000, 6 * 3600_000)
+      } catch { /* 状态不可知 → 不排定时器 */ }
+    }
+    return 0
+  }
+
   async function runGoverned({ chatKey, sourceModuleId, segments, opts = {}, execute }) {
     const policy = resolvePolicy()
     if (!policy.enabled || isExempt(sourceModuleId, opts)) {
@@ -211,7 +252,8 @@ export function createModuleSendBridge({
     const qReason = quietReasonFor(chatKey, policy)
     if (qReason) {
       if (policy.digestEnabled && text) {
-        const count = stashDigest(chatKey, sourceModuleId, text, policy)
+        // T3.6：带上「静默结束还剩多久」，stashDigest 才会挂真正能补发的定时器
+        const count = stashDigest(chatKey, sourceModuleId, text, policy, { delayMs: quietRemainingMs(chatKey, qReason, policy) })
         debug(`模块「${sourceModuleId}」向 ${chatKey} 的主动推送因 ${qReason} 暂存待汇总（已攒 ${count} 条）`)
         return { message_id: null, state: 'digested', reason: qReason, deferred: true }
       }
@@ -353,6 +395,8 @@ export function createModuleSendBridge({
       chatKey: b.chatKey,
       sourceModuleId: b.sourceModuleId,
       count: b.items.length,
+      // T3.6：是否真的挂着补发定时器（静默挡下的汇总必须能自己醒来）
+      scheduled: Boolean(b.timer),
       items: b.items.map((it) => ({ ...it })),
     }))
   }

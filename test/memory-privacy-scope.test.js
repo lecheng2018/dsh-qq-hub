@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isVisible, scopeOf, visibleScopes } from '../src/modules/memory-privacy/index.js'
+import privacyModule from '../src/modules/memory-privacy/index.js'
 
 // memory-privacy 是独立于 features/memory.js 的一层作用域记忆库，
 // 它自己的 isVisible/scopeOf 也曾把「没有 scope」当成 global 放行，
@@ -66,4 +67,32 @@ test('autoScope 关掉时写进 global 是已知的降级行为（不是默认�
     assert.equal(isVisible({ text: 'x', scope: written }, chat), true,
       '写进 global 后任何聊天都看得到 —— 这就是关掉 autoScope 的代价')
   }
+})
+
+
+test('T3.8 停用/热重载：卸载回调必须把主库上的作用域覆写闭包注销成 null', async () => {
+  const overrides = []
+  const disposers = []
+  const fakeMemory = {
+    registerScopeOverride: (fn) => { overrides.push(fn) },
+    add: () => ({ ok: true }),
+    list: () => [],
+  }
+  const api = {
+    use: (id) => (id === 'memory' ? fakeMemory : null),
+    settings: () => ({ overrides: { 'private:10000001': 'open' } }),
+    config: () => ({ ownerQQ: '10000001' }),
+    route: () => {}, tool: () => {}, rule: () => {}, defineTool: (t) => t,
+    on: () => () => {},
+    log: { info() {}, warn() {}, debug() {} },
+    core: { http: { body: async () => ({}) } },
+    saveSettings: () => {},
+    onDispose: (fn) => { disposers.push(fn) },
+  }
+  await privacyModule.setup(api)
+  assert.equal(overrides.length, 1, 'setup 必须把覆写闭包注册进主库')
+  assert.equal(typeof overrides[0], 'function')
+  assert.ok(disposers.length >= 1, '必须注册卸载回调')
+  for (const fn of disposers) fn()
+  assert.equal(overrides.at(-1), null, '卸载后主库上的覆写必须清空（否则隔离开关关不掉）')
 })

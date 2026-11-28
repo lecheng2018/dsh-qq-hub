@@ -133,7 +133,7 @@ test('session store：无有效备份时空映射启动，告警并留存损坏�
   }
 })
 
-test('ledger：实际写入的备份包含关键 sending 状态，主文件损坏后不重放', () => {
+test('ledger：关键 sending 状态已进 WAL（fsync），主文件损坏后不重放', () => {
   const dir = tempDir('state-corruption-ledger-mirror-')
   const file = join(dir, 'deliveries.json')
   const warnings = []
@@ -141,7 +141,12 @@ test('ledger：实际写入的备份包含关键 sending 状态，主文件损�
     const ledger = createDeliveryLedger({ file, onError: (error) => warnings.push(error.message) })
     ledger.enqueue({ deliveryId: 'physical-send', chatKey: 'private:1', segments: [{ type: 'text', data: { text: 'hello' } }] })
     ledger.mark('physical-send', 'sending')
-    assert.equal(JSON.parse(readFileSync(`${file}.bak`, 'utf8')).deliveries[0].state, 'sending')
+    // T3.6 起台账改为 WAL 增量落盘：critical 的 mark('sending') 追加进 .wal.jsonl 并 fsync，
+    // 不再每次全量重写主快照与 .bak。安全契约不变 —— 崩溃后不能把它当成从未发送。
+    const walLines = readFileSync(`${file}.wal.jsonl`, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    const sendingEvent = walLines.find((event) => event.op === 'mark' && event.deliveryId === 'physical-send')
+    assert.equal(sendingEvent.patch.state, 'sending', 'sending 状态必须已落进 WAL')
+    assert.equal(sendingEvent.patch.attemptCount, 1)
     writeFileSync(file, '{broken-after-sending')
     const restarted = createDeliveryLedger({ file, onError: (error) => warnings.push(error.message) })
     assert.equal(restarted.get('physical-send').state, 'unknown')
@@ -154,14 +159,15 @@ test('ledger：实际写入的备份包含关键 sending 状态，主文件损�
   }
 })
 
-test('ledger：备份不可写时关键落盘 fail-closed，outbox 不触发物理发送', async () => {
+test('ledger：WAL 不可写时关键落盘 fail-closed，outbox 不触发物理发送', async () => {
   const dir = tempDir('state-corruption-ledger-closed-')
   const file = join(dir, 'deliveries.json')
   let sends = 0
   const errors = []
   try {
     writeFileSync(file, JSON.stringify({ version: 1, deliveries: [] }))
-    mkdirSync(`${file}.bak`)
+    // T3.6：关键落盘的 fail-closed 闸门在 WAL（.wal.jsonl），不再依赖 .bak 全量备份。
+    mkdirSync(`${file}.wal.jsonl`)
     const ledger = createDeliveryLedger({ file, onError: (error) => errors.push(error.message) })
     const outbox = createOutbox({ ledger, send: async () => { sends++; return { messageId: 'should-not-send' } } })
     await assert.rejects(() => outbox.request({ chatKey: 'private:1', deliveryId: 'blocked', segments: [{ type: 'text', data: { text: 'x' } }] }), /fail-closed/)
@@ -343,7 +349,7 @@ test('ledger 无可用备份时保留损坏原件，告警并保持空库不自�
 })
 
 
-test('ledger：sending 阶段备份落盘失败回滚状态，网关零调用', async () => {
+test('ledger：sending 阶段 WAL 落盘失败回滚状态，网关零调用', async () => {
   const dir = tempDir('state-corruption-ledger-sending-')
   const file = join(dir, 'deliveries.json')
   const warnings = []
@@ -353,8 +359,9 @@ test('ledger：sending 阶段备份落盘失败回滚状态，网关零调用', 
     const outbox = createOutbox({
       ledger,
       authorize: async () => {
-        renameSync(`${file}.bak`, `${file}.held`)
-        mkdirSync(`${file}.bak`)
+        // T3.6：把 WAL 换成目录，模拟 sending 阶段写盘失败（原测试换的是 .bak）。
+        renameSync(`${file}.wal.jsonl`, `${file}.held`)
+        mkdirSync(`${file}.wal.jsonl`)
         return true
       },
       send: async () => { sends++; return { messageId: 'should-not-send' } },

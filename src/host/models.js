@@ -47,7 +47,14 @@ export function createModelDirectory({ ctx }) {
   }
   // 最近一次查到的模型列表：按聊天选的模型已经不在 DSH 里了，就退回下一级（同步取，hub 每条消息都要用）
   let modelCache = null
-  setTimeout(() => { listModels().catch(() => {}) }, 3000).unref?.()
+  // T3.6：预热请求也要能随插件卸载取消 —— 热重载后旧实例不该继续往网关发探测请求
+  const prewarm = () => {
+    const timer = setTimeout(() => { listModels().catch(() => {}) }, 3000)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  }
+  if (typeof ctx?.effect === 'function') ctx.effect(prewarm, 'qq-hub: 模型列表预热')
+  else prewarm()
   return {
     listModels,
     get cache () { return modelCache },

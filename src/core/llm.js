@@ -344,6 +344,22 @@ export async function askModel (dsh, o) {
   if (!t.provider || !t.model) throw new Error('拿不到默认模型')
   let content = [{ type: 'text', text: o.text }]
   for (const img of o.images || []) content.push({ type: 'image', data: img.data, mediaType: img.mediaType, name: 'qq-hub-image' })
+
+  // 主模型看不了图（面板声明 off / 元数据说不支持 / 之前被真实拒收过）且配了辅助模型：
+  // 先请辅助模型把画面转述成文字，再让主模型读文字。这样文字对话能力完全不受影响。
+  // 注意：只在「明确不支持」时才走这条路；不知道（null）仍然先按原样发，交给下面的拒收自愈处理。
+  //
+  // 审计 T3.10：这个判断必须**在附件登记之前**做。过去先把图交给 admitPromptContent
+  // （可能超时/失败）再判断「其实这模型看不了图」，等于白等一次、还多一条
+  // onImageError 噪音告警。先判 canSee，看不了就直接换成文字，不碰附件服务。
+  const imgCount = (o.images || []).length
+  const canSee = imgCount
+    ? (o.provider && o.model ? await modelVision(dsh, t.provider, t.model) : await canSeeImages(dsh, o.cfg))
+    : null
+  if (imgCount && canSee === false) {
+    content = [{ type: 'text', text: await textForBlindModel(dsh, o, t) }]
+  }
+
   // 图片要先交给 DSH 的附件服务登记成附件块，模型适配层只认附件。
   // 登记失败（常见：工作区目录不可写 → EACCES）不该让整个后台任务炸掉——
   // 聊天主链路（hub.js admit）和工具配图（img.js）都是「降级成纯文字」，
@@ -372,21 +388,14 @@ export async function askModel (dsh, o) {
     maxTokens: o.maxTokens || 600,
     temperature: o.temperature ?? 0.3,
   }
-  // 主模型看不了图（面板声明 off / 元数据说不支持 / 之前被真实拒收过）且配了辅助模型：
-  // 先请辅助模型把画面转述成文字，再让主模型读文字。这样文字对话能力完全不受影响。
-  // 注意：只在「明确不支持」时才走这条路；不知道（null）仍然先按原样发，交给下面的拒收自愈处理。
-  const imgCount = (o.images || []).length
-  const canSee = imgCount
-    ? (o.provider && o.model ? await modelVision(dsh, t.provider, t.model) : await canSeeImages(dsh, o.cfg))
-    : null
-  if (imgCount && canSee === false) {
-    content = [{ type: 'text', text: await textForBlindModel(dsh, o, t) }]
-    base.messages = [{ ...messages[0], content }]
-  }
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
   const hasImage = content.length > 1
   let droppedImage = false
   let retriedEmpty = false
+  // 审计 T3.10：思考强度重试过去用 `attempt === 0` 判定 —— 一旦先发生了「图片被拒」
+  // 或别的重试把 attempt 推过 0，就再也没机会降思考强度；反过来，图片重试后回到
+  // attempt=0 的语义也不成立。改成独立布尔，各管各的。
+  let retriedEffort = false
   for (let attempt = 0; ; attempt++) {
     try {
       const params = effort ? { ...base, reasoningEffort: effort } : { ...base }
@@ -401,7 +410,8 @@ export async function askModel (dsh, o) {
       return out
     } catch (error) {
       // 能力探测没查到 / 模型临时不认 / 网关把 -low 拼进模型名报不可用：去掉思考强度再来一次
-      if (attempt === 0 && effort && (isUnsupportedEffort(error) || isEffortModelUnavailable(error, effort))) {
+      if (!retriedEffort && effort && (isUnsupportedEffort(error) || isEffortModelUnavailable(error, effort))) {
+        retriedEffort = true
         cacheReasoning(t.provider, t.model, null)
         effort = undefined
         continue

@@ -45,7 +45,9 @@ test('旧消息入口与模块化水合共用本地 ASR、网关和 DSH 的降�
   const hydrated = await audio.hydrateRecords([member])
   assert.equal(hydrated[0].segments[0].data.text, '[语音] 本地模型也听见了')
   assert.equal(member.segments[0].type, 'record', '冻结的输入不被原地修改')
-  assert.deepEqual(calls.map((call) => call[0]), ['fetch_ptt_text', 'get_record', 'dsh', 'fetch_ptt_text', 'get_record', 'dsh'])
+  // T3.10：同一条语音的 recordWav 结果按 rec 缓存 —— 本地 ASR 失败后走网关/DSH 时
+  // 不再重复 get_record + 下载（旧断言把这次重复当成「正确调用序列」锁死了）。
+  assert.deepEqual(calls.map((call) => call[0]), ['fetch_ptt_text', 'get_record', 'dsh', 'fetch_ptt_text', 'dsh'])
 })
 
 test('所有识别路径失败时保留诚实的语音占位', async () => {

@@ -71,8 +71,9 @@ function stubPngFetch(urls = [mediaUrl('y.png')]) {
     ? {
       ok: true,
       status: 200,
-      headers: { get: (k) => (String(k).toLowerCase() === 'content-length' ? '4' : null) },
-      body: { getReader: () => { let sent = false; return { read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array([137, 80, 78, 71]) })), cancel: () => {} } } },
+      // 完整的 12 字节 PNG 签名（mimeOf 要求 >= 12 字节才识型；4 字节会被判成 octet-stream）。
+      headers: { get: (k) => (String(k).toLowerCase() === 'content-length' ? '12' : null) },
+      body: { getReader: () => { let sent = false; return { read: async () => (sent ? { done: true } : (sent = true, { done: false, value: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]) })), cancel: () => {} } } },
     }
     : orig(url, opt)
   return () => { globalThis.fetch = orig }

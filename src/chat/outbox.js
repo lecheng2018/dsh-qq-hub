@@ -282,6 +282,8 @@ export function createOutbox({ send, ledger, authorize, dryRun, enabled, guard, 
     pending.clear()
     passMap.clear()
     chains.clear()
+    // 平时只追加 WAL，主快照可能落后；优雅关闭时压一次快照，保证磁盘与内存一致。
+    try { book.flush?.() } catch { /* 快照失败不影响卸载 */ }
   }
 
   /** 外部 legacy 媒体管线的发送补账：不重发、不参与队列。 */

@@ -276,10 +276,13 @@ export function createModularCore({
     return target
   }
   async function applySessionModel(agent, sessionId, target) {
+    // T3.4：DSH 0.2.3-alpha.2 起模型切换走 agent.model.select(target)；旧通道
+    // selectForNextRequest / session.append('model/selection') 作为回退保留（老宿主仍要能跑）。
     const ctrl = ctxGet('sessionController')
     const select = ctrl?.agents?.selectForNextRequest
     let result
-    if (typeof select === 'function') result = await select.call(ctrl.agents, agent, target)
+    if (typeof agent?.model?.select === 'function') result = await agent.model.select(target)
+    else if (typeof select === 'function') result = await select.call(ctrl.agents, agent, target)
     else if (typeof agent?.session?.append === 'function') result = await agent.session.append('model/selection', target)
     else return false
     if (result === false) return false
@@ -565,6 +568,14 @@ export function createModularCore({
 
   const admitContent = async (content, context = {}) => {
     const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
+    // T3.10：视觉判定要看「这一轮真正跑的会话模型」，不是配置里的默认模型 —— 与 4.5 步
+    // （applySessionModel）用同一个 resolveTarget 口径，否则两者会对不上：
+    // 切了会话模型却还按默认模型判图，该转述的没转述、不该发图的发了图。
+    let target = context.target || null
+    if (!target && context.chat) {
+      try { target = await resolveTarget(context.chat) } catch (error) { debug(`视觉判定取会话模型失败（用默认）：${error?.message || error}`) }
+    }
+    if (target) context.target = target
     return inboundVision.admit(trimmed, context)
   }
 
@@ -624,7 +635,8 @@ export function createModularCore({
    * 而是她所有回复都会失败、且**需要主人动手**（查余额 / 调限制器 / 换模型）。
    * 群聊里遇到这类失败不能沉默 —— 改投主人私聊（见 handleTurnFailure 的收件人选择）。
    */
-  const GATEWAY_LEVEL_KINDS = new Set(['rate-limit'])
+  // 群聊里「网关整体不可用」的失败改投主人私聊：限流等一会儿会好，欠费/余额耗尽则必须主人动手。
+  const GATEWAY_LEVEL_KINDS = new Set(['rate-limit', 'billing'])
   const failureNoticedAt = new Map() // `${chatKey}::${kind}` → 上次发失败回执的时间（LRU 顺序）
 
   /** 上游内容策略拦截：只认「被服务端判敏感/不让答」这类，绝不是功能坏了。 */
@@ -909,6 +921,9 @@ export function createModularCore({
       const agent = await turnRunner.resolveAgentFor(sessionId)
       mountTools(agent, turn.chatKey, sessionId) // 模块工具（qq_send_*、记忆、B站、群管…）
       let activeSteers = 0
+      // T3.2：本轮是否已结束（turn/end 或 cleanup）。水合/看图是异步的，期间旧回合可能已经
+      // 收尾落定；此时再 agent.steer 就是给 idle agent 发孤儿转向，追问会被静默吞掉。
+      const turnState = { isTurnEnded: () => false, canSteer: () => true }
       // 收尾函数：活跃 steer 全部落定后由这里驱动（即拆分前的 finishReply 变量，语义未变；
       // 真正的实现由 turnRunner 通过 collect.onFinish 交回来）。
       let finishReply = () => {}
@@ -935,8 +950,13 @@ export function createModularCore({
           rememberInboundText(turn.chatKey, steerQuery)
           const admittedSteer = await admitContent(steerContent, {
             nickname: inbound.sender?.nickname || inbound.sender?.userId,
-            hint: textOfSegments(inbound.segments), cfg: getConfig(), sessionId,
+            hint: textOfSegments(inbound.segments), cfg: getConfig(), sessionId, chat,
           })
+          // 水合/看图/预处理全部结束后再复查一次：旧回合若已结束，抛错让
+          // inbound-router 的 .catch(() => controller.offer(inbound)) 把它当新回合重跑。
+          if (turnState.isTurnEnded() || (agent.status && agent.status !== 'running')) {
+            throw new Error('turn-ended-before-steer')
+          }
           await agent.steer({ id: randomUUID(), role: 'user', content: admittedSteer, source: { kind: 'qq-hub' } })
         } finally {
           activeSteers--
@@ -1027,7 +1047,7 @@ export function createModularCore({
       //     只传 {content} 会在 turn/start 后 8ms 以 error 结束）。对齐 legacy hub.js:1902。
       const admitted = await admitContent(content, {
         nickname: chat.nickname || chat.userId,
-        hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(), sessionId,
+        hint: textOfSegments(io.members.flatMap((member) => member.segments || [])), cfg: getConfig(), sessionId, chat,
       })
       const message = { id: randomUUID(), role: 'user', content: admitted, source: { kind: 'qq-hub' } }
       // 「正在输入」对齐 legacy（hub.js:1903 起 / turn/end 停）：私聊、enabled/dryRun 门在 startTyping 内部；
@@ -1042,7 +1062,7 @@ export function createModularCore({
       // S2 行为改动（唯一一处）：把 io.signal 交给执行器 —— 取消请求到达时回合立刻以 AbortError
       // 落定（回合落 cancelled），迟到回复不再投递。拆分前这个信号「传了但没人读」。
       try {
-        const result = await turnRunner.runTurn({ sessionId, message, collect, signal: io.signal, agent })
+        const result = await turnRunner.runTurn({ sessionId, message, collect, signal: io.signal, agent, turnState })
         reply = result.text
         steeringChats.delete(turn.chatKey)
         stopTyping()
@@ -1153,7 +1173,7 @@ export function createModularCore({
         // 不再补发「这轮没跑成」造成困惑；只有 0 气泡送达且尚未处理过的失败才发回执。
         try {
           const partialDelivered = Number(error?.delivered) > 0
-          if (!partialDelivered && !error?._turnFailureHandled && !error?.turnTimedOut && !turnFailureLooksOversized(error?.failure || error)) {
+          if (!partialDelivered && !error?._turnFailureHandled && !(error?.timedOut || error?.turnTimedOut) && !turnFailureLooksOversized(error?.failure || error)) {
             handleTurnFailure(turn.chatKey, error)
           }
         } catch { /* 回执失败绝不影响回合终态 */ }
@@ -1166,7 +1186,7 @@ export function createModularCore({
         // 等前置阶段的漏网异常；内部已处理过的错误已标 _turnFailureHandled=true，这里绝不重复发回执。
         try {
           if (!error?._turnFailureHandled) {
-            if (error?.turnTimedOut) {
+            if (error?.timedOut || error?.turnTimedOut) {
               handleTurnTimeout(turn.chatKey, Math.max(1, Number(getConfig().turnTimeoutMs) || 600_000))
             } else if (turnFailureLooksOversized(error?.failure || error)) {
               handleOversizedTurn(turn.chatKey, error?.failure || error)

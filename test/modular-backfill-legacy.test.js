@@ -16,7 +16,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -88,6 +88,8 @@ let server, httpUrl, workDir
 const hubCalls = []   // { event, opts }
 const sentTexts = []  // { chatId, text }
 const realtimeDispatched = []
+const historyCalls = [] // { action, params }：补收实际发出的 OneBot 请求（T3.5 断言窗口/对象）
+let failHistory = false
 
 before(async () => {
   workDir = mkdtempSync(join(tmpdir(), 'backfill-lock-'))
@@ -97,6 +99,11 @@ before(async () => {
     req.on('end', () => {
       const action = req.url.replace(/^\//, '')
       res.setHeader('content-type', 'application/json')
+      try { historyCalls.push({ action, params: JSON.parse(body || '{}') }) } catch { historyCalls.push({ action, params: {} }) }
+      if (failHistory && /_msg_history$/.test(action)) {
+        res.end(JSON.stringify({ status: 'failed', retcode: 1200, data: null }))
+        return
+      }
       if (action === 'get_group_msg_history') {
         res.end(JSON.stringify({ status: 'ok', retcode: 0, data: { messages: historyFor('group') } }))
       } else if (action === 'get_friend_msg_history') {
@@ -266,10 +273,15 @@ test('gapTracker：断档超过阈值才触发，落盘恢复后仍记得上次�
   const gap = tracker.notePacket()
   assert.ok(gap && gap.gapMs > 60_000, '61s 间隔判为断档')
   assert.equal(gap.since, 1_030_000, 'since 指向上一包时间')
-  // 从盘上重建（模拟重启），lastPacketAt 恢复
+  // T3.5 游标延迟提交：断档被识别时**不**立刻落盘（否则补收全失败也丢断档），
+  // 必须先 commit() 才推进；这样「拉取失败 → 下次重连续补」才成立。
+  assert.equal(gap.at, t, '断档对象要带本轮时间戳，供补收成功后 commit')
   const t2 = 2_000_000
   const tracker2 = createUpstreamGapTracker({ file, gapMs: 60_000, now: () => t2 })
-  assert.equal(tracker2.lastPacketAt(), t, '重启后游标从盘上恢复')
+  assert.equal(tracker2.lastPacketAt(), 1_030_000, '未 commit 前重启仍停在旧游标（可续补）')
+  tracker.commit(gap.at)
+  const tracker3 = createUpstreamGapTracker({ file, gapMs: 60_000, now: () => t2 + 1 })
+  assert.equal(tracker3.lastPacketAt(), t, 'commit 后重启从新游标继续')
 })
 
 
@@ -338,4 +350,86 @@ test('接线回归：群历史补收同样补形状（group 键、self_id 一并
   assert.ok(delivered, '群补收消息应被投递')
   const inbound = legacyEventToNormalized(delivered.event, { selfId: delivered.event.self_id, source: 'backfill' })
   assert.equal(inbound.chatKey, 'group:900', '群聊成 group 键')
+})
+
+
+// ---------- T3.5：主人私聊补收 + 游标延迟提交 ----------
+
+test('T3.5 补收名单必须并入主人私聊（allow.private 为空时也要补到）', async () => {
+  failHistory = false
+  historyCalls.length = 0
+  historyFor = privateHistory
+  process.env.AURABOT_DATA_DIR = workDir
+  writeFileSync(join(workDir, 'upstream-seen.json'), JSON.stringify({ lastPacketAt: Date.now() - 300_000 }))
+  sentTexts.length = 0
+  const gw = createGateway({
+    getConfig: () => ({
+      botQQ: '555',
+      ownerQQ: '100',
+      // 关键：allow.private 是空的（只配了主人号）——改前主人自己的私聊永远不会被补收
+      allow: { groups: [], private: [] },
+      backfill: { enabled: true, gapMs: 60_000, settleMs: 10, maxAgeMinutes: 360, maxPerConversation: 7, lookbackMs: 60_000 },
+    }),
+    snowluma: { confirmLogin: async () => true },
+    endpoint: () => ({ httpUrl, wsUrl: '', httpToken: '', wsToken: '' }),
+    logger: { child: () => ({ info() {}, warn() {}, debug() {}, error() {} }) },
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+    getHub: () => ({ onMessage: async () => {}, sendText: async (chatId, text) => { sentTexts.push({ chatId, text }) } }),
+    getMods: () => null,
+    getModularCore: () => null,
+    getDangerGuard: () => null,
+    dispatch: () => {},
+  })
+  await gw.triggerBackfill({ since: NOW - 300_000, gapMs: 300_000 })
+
+  const friendCalls = historyCalls.filter((x) => x.action === 'get_friend_msg_history')
+  assert.equal(friendCalls.length, 1, '主人私聊必须被拉取')
+  assert.equal(Number(friendCalls[0].params.user_id), 100, '拉取对象是主人号')
+  assert.equal(Number(friendCalls[0].params.count), 7, 'count 走 maxPerConversation（不再硬编码 20）')
+  // 主人断线期间发的管理命令不执行，但必须提醒（否则主人以为发了）
+  const notice = sentTexts.find((x) => x.chatId === 'private:100')
+  assert.ok(notice, '命令被跳过时必须提醒主人')
+  assert.match(notice.text, /未执行/)
+})
+
+test('T3.5 游标延迟提交：补收失败不推进游标，成功后才推进', async () => {
+  historyFor = privateHistory
+  process.env.AURABOT_DATA_DIR = workDir
+  const seed = Date.now() - 300_000
+  const seenFile = join(workDir, 'upstream-seen.json')
+  const cfg = {
+    botQQ: '555',
+    ownerQQ: '100',
+    allow: { groups: [], private: ['100'] },
+    backfill: { enabled: true, gapMs: 60_000, settleMs: 10, maxAgeMinutes: 360, maxPerConversation: 50, lookbackMs: 60_000 },
+  }
+  const make = () => createGateway({
+    getConfig: () => cfg,
+    snowluma: { confirmLogin: async () => true },
+    endpoint: () => ({ httpUrl, wsUrl: '', httpToken: '', wsToken: '' }),
+    logger: { child: () => ({ info() {}, warn() {}, debug() {}, error() {} }) },
+    log: { info() {}, warn() {}, debug() {}, error() {} },
+    getHub: () => ({ onMessage: async () => {}, sendText: async () => {} }),
+    getMods: () => null,
+    getModularCore: () => null,
+    getDangerGuard: () => null,
+    dispatch: () => {},
+  })
+
+  // 第一轮：拉历史全部失败 → 游标必须保持旧值（保留可续补窗口）
+  failHistory = true
+  writeFileSync(seenFile, JSON.stringify({ lastPacketAt: seed }))
+  const gwFail = make()
+  await gwFail.triggerBackfill({ since: seed, gapMs: 300_000 })
+  const afterFail = JSON.parse(readFileSync(seenFile, 'utf8')).lastPacketAt
+  assert.equal(afterFail, seed, '补收失败不许推进游标（否则这段断档永久丢失）')
+
+  // 第二轮（重连）：同样的旧游标仍在 → 仍能拉回那批消息，成功后游标才推进
+  failHistory = false
+  historyCalls.length = 0
+  const gwOk = make()
+  await gwOk.triggerBackfill({ since: afterFail, gapMs: 300_000 })
+  assert.ok(historyCalls.some((x) => x.action === 'get_friend_msg_history'), '第二轮仍能基于旧 since 补收')
+  const afterOk = JSON.parse(readFileSync(seenFile, 'utf8')).lastPacketAt
+  assert.ok(afterOk > seed, '整轮成功后游标才推进到本轮时间')
 })

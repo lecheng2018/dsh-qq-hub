@@ -230,12 +230,19 @@ export function normalizeFact(raw, index = 0) {
     about: str(source.about),
     at: num(source.at || source.ts || source.eventAt || source.time, 0),
     importance: Math.max(0, Math.min(1, num(source.importance, 0.5))),
-    pinned: source.pinned === true,
+    // T3.8：pinned 可能是 1 / '1' / 'true'（模型与外部导入都给过这种值）。
+    // 只认 === true 会让「已固定」的事实被当成普通条目，整理时直接被更高重要度的新条目覆盖。
+    pinned: source.pinned === true || Number(source.pinned) === 1 || String(source.pinned || '').toLowerCase() === 'true',
     source: str(source.source) || 'dream',
     sourceId: str(source.sourceId),
     evidence: str(source.evidence),
     tags: Array.isArray(source.tags) ? [...new Set(source.tags.map((t) => str(t)).filter(Boolean))] : [],
     revision: num(source.revision, 0),
+    // T3.8：轨道与归属字段必须一起透传，否则梦境整理会把「同一个人的两套视角」
+    // 或「两个人设下的同主题事实」当成重复条目合并/证伪（见 groupKey）。
+    personaId: str(source.personaId || source.persona),
+    selfView: source.selfView === true || Number(source.selfView) === 1 || String(source.selfView || '').toLowerCase() === 'true',
+    perspective: str(source.perspective),
     // 显式槽位与显式矛盾指认（可选契约字段，只读透传）
     slot: str(source.slot),
     supersedes: str(source.supersedes),
@@ -244,7 +251,11 @@ export function normalizeFact(raw, index = 0) {
 }
 
 function groupKey(fact) {
-  return `${fact.scope}|${fact.entity}|${fact.topic}`
+  // T3.8：轨道（kind/selfView/perspective）与人设一起参与分组。
+  // 只按 scope|entity|topic 分组时，「她自己的视角」和「别人转述的同一件事」、
+  // 以及不同人设下的同一主题会被塞进同一簇，去重/证伪就会把另一条轨道的记忆吞掉。
+  const track = `${fact.kind || 'fact'}|${fact.selfView ? 'self' : 'other'}|${fact.perspective || ''}`
+  return `${fact.scope}|${fact.personaId || ''}|${track}|${fact.entity}|${fact.topic}`
 }
 
 /** 三态严格弱序比较器（负值 = a 优于 b，0 = 相等，正值 = b 优于 a）：pinned > 重要度高 > 时间新 > id 字典序。 */

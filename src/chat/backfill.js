@@ -69,13 +69,21 @@ export function createUpstreamGapTracker({ file = dataDir('upstream-seen.json'),
       last = t
       const gap = prev ? t - prev : 0
       if (gap > threshold) {
-        save(t)
-        return { since: prev, gapMs: gap }
+        // T3.5：发现断档时**不再**把持久化游标改成 now，而是钉在「断档前的最后一包」：
+        // 补收可能整轮失败（网关刚回暖、拉历史 502、settle 期间又掉线），提前推进游标会让
+        // 这段断档永久丢失。游标由补收成功后显式 commit() 推进（见 gateway.triggerBackfill）。
+        if (prev > 0) save(prev)
+        return { since: prev, gapMs: gap, at: t }
       }
       if (t - savedAt >= 60_000) save(t)
       return null
     },
     lastPacketAt: () => last,
+    /** 补收成功后才推进持久化游标；失败/断线保持旧 since，下次重连可续补。 */
+    commit(t = last) {
+      if (!Number.isFinite(Number(t)) || Number(t) <= 0) return
+      save(Number(t))
+    },
     reset(t = now()) {
       last = t
       save(t)

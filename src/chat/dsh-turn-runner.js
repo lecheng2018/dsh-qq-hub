@@ -170,7 +170,7 @@ export function createTurnRunner({
    *   模型挂到**同一份包装对象**上，不能二次 resolve —— 宿主每轮都返回新的包装对象）。
    * @returns {Promise<{text: string, completion: object}>} 回合文本与落定信息。
    */
-  async function runTurn({ sessionId, message, collect = {}, signal = null, agent: resolvedAgent = null } = {}) {
+  async function runTurn({ sessionId, message, collect = {}, signal = null, agent: resolvedAgent = null, turnState = null } = {}) {
     const strategy = strategyFor(collect)
     const agent = resolvedAgent || await resolveAgentFor(sessionId, [message])
     if (signal?.aborted) {
@@ -231,6 +231,17 @@ export function createTurnRunner({
 
     const replyPromise = new Promise((resolve, reject) => {
       let done = false
+      // T3.2：向调用方暴露「本轮还能不能 steer」。turn/end 收尾（finish）或 cleanup 后为 false：
+      // 调用方在异步水合/看图之后、真正调 agent.steer 之前必须复查，否则会把孤儿 steer
+      // 投给已经 idle 的 agent（用户追问静默丢失）。
+      if (turnState && typeof turnState === 'object') {
+        // 「已结束」= 收到 turn/end（completion 已置）或已 settle/cleanup（done）。
+        // 注意不能用 done 单判：collect.holdSettle 在活跃 steer 未落定时会故意压住收尾，
+        // 那一刻 turn/end 其实已经到了，再 steer 就是孤儿。
+        const ended = () => done || completion !== null
+        turnState.isTurnEnded = ended
+        turnState.canSteer = () => !ended()
+      }
       // 本轮 turn 号（turn/start 给出）：用来拒绝旧轮迟到的 assistant/message 与 turn/end 串台。
       let activeTurn = null
       let lastTurn = null

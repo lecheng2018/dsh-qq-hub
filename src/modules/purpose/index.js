@@ -9,6 +9,7 @@
 // 薄壳只做注册；引擎在 src/purpose/engine.js（纯函数），接线在 src/purpose/module.js。
 
 import { createPurpose } from '../../purpose/module.js'
+import { currentPersonaText, personaIdFor } from '../../persona/personas.js'
 
 export default {
   id: 'purpose',

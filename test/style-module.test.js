@@ -13,6 +13,39 @@ test('style 是依赖 memory-store 与 reflection 观察事件的独立可选模
   assert.equal(planModules({ defs: [styleModule], enabledOf: () => true, runtime: { gui: true } }).load.length, 0)
 })
 
+test('T3.8 style：注入上下文时 self 风格按当前会话人设取（不同人设不串味）', () => {
+  const styleCalls = []
+  const memory = {
+    insightsOf: () => [],
+    styles: () => ({}),
+    styleOf: (key, persona) => {
+      styleCalls.push({ key, persona })
+      if (key !== 'self') return []
+      // 默认人设有一句口头禅；七群人设是另一套
+      return persona === 'group-seven' ? ['七群才有的说法'] : ['默认人设的口头禅']
+    },
+    setDerivedStyle: () => {},
+  }
+  let contextFn = null
+  styleModule.setup({
+    use: () => memory,
+    dsh: { llm: { async *stream() { await new Promise(() => {}) } } },
+    config: () => ({
+      model: { provider: 'test', model: 'm' },
+      persona: { current: 'default', privates: { '10002': 'group-seven' } },
+      memory: {},
+    }),
+    log: { info() {}, warn() {} },
+    context: (fn) => { contextFn = fn },
+    on: () => {},
+  })
+  assert.equal(typeof contextFn, 'function')
+  const out = contextFn({ chat: { kind: 'private', userId: '10002' } })
+  assert.match(out, /七群才有的说法/, '必须用这个会话的人设取 self 风格')
+  assert.doesNotMatch(out, /默认人设的口头禅/)
+  assert.ok(styleCalls.some((c) => c.key === 'self' && c.persona === 'group-seven'), 'styleOf 要收到 personaId')
+})
+
 test('style 消费 reflection 观察并记录来源，dispose 中止自我学习且零回写', async () => {
   const writes = []
   const handlers = new Map()

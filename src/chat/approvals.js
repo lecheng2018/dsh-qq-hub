@@ -122,6 +122,14 @@ export function createApprovalRegistry({ deliver, ownerQQ, timeoutMs = 60_000, l
         }
       }, timeoutMs)
 
+      // T3.6：请求进来时就已 abort（回合已取消/超时）→ 立刻早退：不发卡、不挂 pending。
+      // 只靠下面的 abort 监听是无效的——事件早就错过了，卡片仍会发给主人并永久挂着。
+      if (req.signal?.aborted) {
+        clearTimeout(timer)
+        resolve('cancelled')
+        return
+      }
+
       // 监听 signal 中止
       if (req.signal) {
         req.signal.addEventListener('abort', () => {
