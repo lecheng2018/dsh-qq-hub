@@ -750,8 +750,11 @@ export function createStickerStore({ dsh, getConfig, onebot, log, captionFailThr
 
   /** 面板缩略图：优先用 ffmpeg / DSH 自带 sharp 缩到 256，失败就退回原图；并发去重 + 临时文件原子 rename。 */
   async function thumbFor(md5) {
-    const key = String(md5 || '')
-    if (!key) return null
+    // md5 来自面板 query，属不可信输入：先按 32 位 hex 规范化，绝不许拼进路径再读盘。
+    // 以前不校验直接 join(dir(), `thumb-${key}.jpg`) + readFileSync，传 '/../../secret'
+    // 就能读宿主机任意 .jpg（路径穿越）。
+    const key = String(md5 || '').trim().toLowerCase()
+    if (!/^[a-f0-9]{32}$/.test(key)) return null
     const thumb = join(dir(), `thumb-${key}.jpg`)
     if (existsSync(thumb)) {
       try { return { buf: readFileSync(thumb), mime: 'image/jpeg' } } catch {}

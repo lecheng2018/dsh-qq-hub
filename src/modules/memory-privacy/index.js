@@ -121,10 +121,12 @@ export default {
           const isOwnerPrivate = chat?.kind === 'private' && ownerQQ && String(chat?.userId) === ownerQQ
           let demotedToChatScope = false
           let finalScope
-          if (!scope || scope === 'auto') {
+          // 一律用规范化后的 scopeWanted 判定与落库：直接用原始 scope 会让
+          // 「 global 」这类带空白的串绕过下面的 global 降级检查，再被总线 trim 成 global。
+          if (!scopeWanted || scopeWanted === 'auto') {
             finalScope = api.settings().autoScope ? scopeOf(chat) : 'global'
           } else {
-            finalScope = scope
+            finalScope = scopeWanted
           }
           if (finalScope === 'global' && !isOwnerPrivate) {
             finalScope = scopeOf(chat)

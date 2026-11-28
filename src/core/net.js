@@ -1,6 +1,7 @@
 // 下载图片 / 语音：限大小、限协议、挡掉内网地址（防 SSRF）。也支持 base64:// 和本地文件。
 
 import { readFileSync, statSync } from 'node:fs'
+import { lookup as dnsLookup } from 'node:dns'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { fileURLToPath } from 'node:url'
@@ -66,6 +67,8 @@ function isPrivateV6(bytes) {
   if ((b0 & 0xfe) === 0xfc) return true
   // 链路本地 fe80::/10
   if (b0 === 0xfe && (b1 & 0xc0) === 0x80) return true
+  // 旧站本地 fec0::/10（RFC 3879 已废弃，实际仍可能出现在内网）
+  if (b0 === 0xfe && (b1 & 0xc0) === 0xc0) return true
   // 组播 ff00::/8
   if (b0 === 0xff) return true
   // ::/128 未指定
@@ -74,6 +77,11 @@ function isPrivateV6(bytes) {
   if (bytes.slice(0, 15).every((v) => v === 0) && bytes[15] === 1) return true
   // ::ffff:0:0/96 IPv4-mapped
   if (bytes.slice(0, 10).every((v) => v === 0) && bytes[10] === 0xff && bytes[11] === 0xff) {
+    return isPrivateV4([...bytes.slice(12)].join('.'))
+  }
+  // ::ffff:0:0:0/96 IPv4-translated（RFC 2765 SIIT，内嵌 IPv4 在末 4 字节）
+  if (bytes.slice(0, 8).every((v) => v === 0)
+    && bytes[8] === 0xff && bytes[9] === 0xff && bytes[10] === 0x00 && bytes[11] === 0x00) {
     return isPrivateV4([...bytes.slice(12)].join('.'))
   }
   // ::/96 IPv4-compatible（如 ::7f00:1）
@@ -101,6 +109,8 @@ function isPrivateV6(bytes) {
   if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x02) return true
   // 2001:10::/28 ORCHID
   if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x00 && (bytes[3] & 0xf0) === 0x10) return true
+  // 2001::/32 Teredo（内嵌 IPv4 但不足信，整段视为不可达内网）
+  if (bytes[0] === 0x20 && bytes[1] === 0x01 && bytes[2] === 0x00 && bytes[3] === 0x00) return true
   return false
 }
 
@@ -123,14 +133,49 @@ export async function assertPublicUrl(url) {
   if (!ips.length || ips.some(isPrivateIp)) throw new Error('不允许访问内网地址')
 }
 
-/** 给 undici Agent 的 connect 选项：socket 连接前按目标主机名重新校验 IP（DNS rebinding 防护）。 */
+/**
+ * 给 undici Agent 的 connect 选项：socket 连接前按目标主机名重新校验 IP（DNS rebinding 防护）。
+ *
+ * 注意必须用回调版 `node:dns` 的 lookup：Promise 版第三参数不是回调，
+ * 写错会让回调永远不执行，所有公网下载挂死到超时（#270 遗留 P0）。
+ * 兼容 `safeLookup(host, cb)` 与 `safeLookup(host, opts, cb)`，
+ * 并按 Node 约定在 `opts.all` 时回数组、否则回 `(address, family)`。
+ */
 export function safeLookup(hostname, opts, cb) {
-  lookup(hostname, { all: true }, (err, addresses) => {
-    if (err) return cb(err)
-    const ips = (Array.isArray(addresses) ? addresses : [addresses]).map((x) => x.address)
-    if (!ips.length || ips.some(isPrivateIp)) return cb(new Error('不允许访问内网地址'))
-    cb(null, addresses)
+  let options = opts
+  let callback = cb
+  if (typeof options === 'function') {
+    callback = options
+    options = {}
+  }
+  if (typeof callback !== 'function') return
+  dnsLookup(hostname, { all: true }, (err, addresses) => {
+    if (err) return callback(err)
+    const list = (Array.isArray(addresses) ? addresses : (addresses ? [addresses] : [])).filter(Boolean)
+    const ips = list.map((x) => x.address)
+    if (!ips.length || ips.some(isPrivateIp)) return callback(new Error('不允许访问内网地址'))
+    if (options && options.all) return callback(null, list)
+    callback(null, list[0].address, list[0].family)
   })
+}
+
+// 全局只建一个 undici Agent：连接池与定时器复用，避免每次请求/重定向泄漏。
+let safeDispatcherPromise = null
+
+/**
+ * 取复用的安全 dispatcher。undici 不可用时 fail-closed 抛错，
+ * 绝不静默退回不带 connect.lookup 的裸 fetch（否则 DNS rebinding 防线整体失效）。
+ */
+export function getSafeDispatcher() {
+  if (!safeDispatcherPromise) {
+    safeDispatcherPromise = import('undici')
+      .then(({ Agent }) => new Agent({ connect: { lookup: safeLookup } }))
+      .catch((err) => {
+        safeDispatcherPromise = null
+        throw err
+      })
+  }
+  return safeDispatcherPromise
 }
 
 /**
@@ -229,25 +274,22 @@ export async function fetchImage(src, o = {}) {
     return buf
   }
   if (/^https?:\/\//i.test(s)) {
+    // 连接层二次校验：undici Agent 在 socket 建立前用 safeLookup 重新解析并拦截内网 IP，
+    // 阻断「assertPublicUrl 校验通过、fetch 实际连到另一 IP」的 DNS rebinding 绕过。
+    // Agent 全模块复用一份；undici 不可用时 getSafeDispatcher() fail-closed 抛错。
+    const dispatcher = await getSafeDispatcher()
     let currentUrl = s
     let redirects = 0
     let r = null
-    while (redirects < 5) {
+    for (;;) {
       await assertPublicUrl(currentUrl)
-      // 连接层二次校验：undici Agent 在 socket 建立前用 safeLookup 重新解析并拦截内网 IP，
-      // 阻断「assertPublicUrl 校验通过、fetch 实际连到另一 IP」的 DNS rebinding 绕过。
-      let dispatcher
-      try {
-        const { Agent } = await import('undici')
-        dispatcher = new Agent({ connect: { lookup: safeLookup } })
-      } catch { /* undici 不可用时退回仅 assertPublicUrl 预检 */ }
-      r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual', ...(dispatcher ? { dispatcher } : {}) })
-      if (r.status >= 300 && r.status < 400 && r.headers.get('location')) {
-        currentUrl = new URL(r.headers.get('location'), currentUrl).href
-        redirects++
-      } else {
-        break
-      }
+      r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual', dispatcher })
+      if (!(r.status >= 300 && r.status < 400 && r.headers.get('location'))) break
+      // 丢弃的这一跳响应体必须 cancel，否则底层连接挂在池里不回收
+      try { await r.body?.cancel?.() } catch (e) {}
+      redirects++
+      if (redirects >= 5) throw new Error('重定向次数过多')
+      currentUrl = new URL(r.headers.get('location'), currentUrl).href
     }
     if (!r || !r.ok) throw new Error(`HTTP ${r ? r.status : 'unknown'}`)
     const len = Number(r.headers.get('content-length') || 0)

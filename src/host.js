@@ -20,11 +20,10 @@
 import { patchFnosFsync } from './core/fnos-fsync-patch.js'
 patchFnosFsync() // 自动应用 fnOS 祖先目录耐久性同步容错，避免图片登记附件抛 EACCES
 
-import { readFileSync, mkdirSync, existsSync, renameSync } from 'node:fs'
+import { readFileSync, existsSync, renameSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { spawn } from 'node:child_process'
 import { loadConfig, saveConfig } from './core/config.js'
 import { dataDir, readJson, writeJson } from './core/store.js'
 import { createLogger } from './core/logger.js'
@@ -54,7 +53,7 @@ import { BUILTINS } from './modules/index.js'
 import { createSharedOutbox } from './host/shared-outbox.js'
 import { createHubEgress } from './host/hub-egress.js'
 // 分层后的装配件
-import { createHttpKit } from './host/http.js'
+import { createHttpKit, openLocalFolder } from './host/http.js'
 import { createModelDirectory } from './host/models.js'
 import { createGateway } from './host/gateway.js'
 import { createModularCore } from './host/modular-core.js'
@@ -594,11 +593,8 @@ export function apply(ctx) {
   }, 'qq-hub: 收尾')
 
   // 「打开文件夹」面板按钮共用（本地脚本目录 / 模块目录）
-  const openFolder = (dir) => {
-    mkdirSync(dir, { recursive: true })
-    spawn('explorer.exe', [dir], { detached: true, stdio: 'ignore' }).unref()
-    return { ok: true, message: '打开了' }
-  }
+  // 跨平台 + 无桌面兜底 + spawn error 监听都在 host/http.js 的 openLocalFolder 里（P0：ENOENT 崩宿主）
+  const openFolder = (dir) => openLocalFolder(dir, { log })
 
   // ---------- 面板路由（按域注册，见 host/panel/routes-*.js；注册顺序与拆分前一致） ----------
   registerConfigRoutes({
