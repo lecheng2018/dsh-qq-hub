@@ -11,6 +11,7 @@
 // getController 延迟取回 turn controller（它在本模块装配之后才创建，与原闭包语义一致）。
 
 import { resolveCharacterIdentity } from '../../persona/identity-context.js'
+import { mergeParticipation } from './group-participation.js'
 import { policyFor, topicRelevance, withRoleWakeWords, isOfficialBotSender } from '../../chat/group-policy.js'
 import { decideGroupReplyWithAtmosphere } from '../../chat/group-atmosphere-gate.js'
 import { isOwner } from '../../chat/access.js'
@@ -22,6 +23,7 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
   // 又在 deliver 后走 noteSpokeInGroup 重置 engaged 窗口导致无限续聊。
   const MODE_PRIORITY = { engaged: 1, interject: 2, must: 3 }
   const turnModes = new Map() // turnId -> 'engaged' | 'interject' | 'must'
+  const turnParticipation = new Map() // turnId -> 参与声明（normalize 后的白名单对象，见 core/group-participation.js）
   const inFlightEngaged = new Map() // gid -> Set<turnId>（已过闸未结账的 engaged 回合，防并发超卖）
   const inFlightInterject = new Map() // gid -> Map<turnId, number>（已过闸未结账的 interject 时刻，防冷却期并发双插）
   function isTurnActive(turnId) {
@@ -33,14 +35,14 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     const eng = inFlightEngaged.get(id)
     if (eng) {
       for (const tid of eng) {
-        if (!isTurnActive(tid)) { eng.delete(tid); turnModes.delete(tid) }
+        if (!isTurnActive(tid)) { eng.delete(tid); turnModes.delete(tid); turnParticipation.delete(tid) }
       }
       if (!eng.size) inFlightEngaged.delete(id)
     }
     const inj = inFlightInterject.get(id)
     if (inj) {
       for (const tid of inj.keys()) {
-        if (!isTurnActive(tid)) { inj.delete(tid); turnModes.delete(tid) }
+        if (!isTurnActive(tid)) { inj.delete(tid); turnModes.delete(tid); turnParticipation.delete(tid) }
       }
       if (!inj.size) inFlightInterject.delete(id)
     }
@@ -71,8 +73,24 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
       if (inj) { inj.delete(turnId); if (!inj.size) inFlightInterject.delete(id) }
     }
   }
+  /**
+   * 记一笔「回合 + 参与声明」：在途预算与 turnModes 的记账**原样复用** noteTurnMode（同一套账，只记一次），
+   * participation 按 turnId 另存一份，合流规则见 core/group-participation.js 的 mergeParticipation。
+   * mode 不是 interject（must／engaged）时保存值强制 FULL（must／engaged 永不降级）。
+   */
+  function noteTurnParticipation(gid, turnId, mode, participation, now = Date.now()) {
+    if (!turnId || !mode) return
+    const prevMode = turnModes.get(turnId) || null
+    noteTurnMode(gid, turnId, mode, now)
+    let next = participation && typeof participation === 'object' ? participation : { level: 'full', sourceModuleId: '' }
+    if (mode !== 'interject') next = { level: 'full', sourceModuleId: '' }
+    const prev = turnParticipation.get(turnId)
+    turnParticipation.set(turnId, prev ? mergeParticipation(prev, next, prevMode, mode) : next)
+  }
+  /** 这个回合的参与声明（full / text_lite / react 白名单对象），没有则返回 null。 */
+  function turnParticipationOf(turnId) { return turnParticipation.get(turnId) || null }
   function releaseTurnMode(chatKey, turnId) {
-    if (turnId) turnModes.delete(turnId)
+    if (turnId) { turnModes.delete(turnId); turnParticipation.delete(turnId) }
     if (!String(chatKey || '').startsWith('group:')) return
     const id = String(chatKey).slice(6)
     const eng = inFlightEngaged.get(id)
@@ -194,5 +212,5 @@ export function createGroupGate({ getConfig, log, debug, groups, memoryScore, at
     return null
   }
 
-  return { decideGroupReplyFor, noteTurnMode, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf, fishGuardOf }
+  return { decideGroupReplyFor, noteTurnMode, noteTurnParticipation, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf, turnParticipationOf, fishGuardOf }
 }
