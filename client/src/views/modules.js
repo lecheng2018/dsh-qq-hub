@@ -44,7 +44,7 @@ function LocalApi({ draft, setDraft, toast }) {
           </div>
           <div className="ab-flex" style={{ flexWrap: 'wrap', gap: 6 }}>
             {x.exists ? null : <Btn small kind="primary" disabled={!!busy} onClick={() => act('/local/template', x.slot, 't')}>生成模板</Btn>}
-            <Btn small onClick={() => { navigator.clipboard.writeText(x.prompt); toast('复制好了，粘给 DSH，再把【】里那句换成你的情况', 'ok') }}>复制给 DSH 的话</Btn>
+            <Btn small onClick={() => copy(x.prompt, toast, '复制好了，粘给 DSH，再把【】里那句换成你的情况')}>复制给 DSH 的话</Btn>
             {x.exists && (x.slot === 'tts' || x.slot === 'image') ? <Btn small disabled={!!busy} onClick={() => act('/local/test', x.slot, 'x')}>{busy === x.slot + 'x' ? '正在试…' : '试一下'}</Btn> : null}
           </div>
           {x.slot === 'image' && img ? <img src={'data:image/png;base64,' + img} style={{ marginTop: 10, maxWidth: 240, borderRadius: 8 }} /> : null}
@@ -508,6 +508,10 @@ function ExtPanel({ m, settings, draftSettings, setSettings, toast, reload, draf
   const [err, setErr] = useState('')
   useEffect(() => {
     let alive = true
+    // 切到另一个模块时先把上一个模块留下的错误 / 组件清掉：
+    // 旧 err 挂着会让新模块直接显示「面板加载失败」（其实只是上一个的报错）。
+    setErr('')
+    setComp(null)
     fetch(API + '/modules/panel?id=' + encodeURIComponent(m.id) + '&t=' + Date.now(), { cache: 'no-store' })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error('读不到 panel.js'))))
       .then((src) => {

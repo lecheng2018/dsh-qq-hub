@@ -7,14 +7,18 @@
 // 新增控件时同步这张表，test/panel-tab-keys.test.js 会盯着。
 
 export const TAB_KEYS = {
-  connect: ['snowluma', 'botQQ', 'workspaceDir'],
+  // gateway 是「接哪个 QQ 网关」（snowluma / onebot）本身的开关，改它原来不出现未保存标记。
+  connect: ['gateway', 'snowluma', 'botQQ', 'workspaceDir'],
   access: ['ownerQQ', 'ownerName', 'ownerLevel', 'longTasks', 'profilePerms', 'allow'],
   // turnTimeoutMs 原来由裸 input 直接写路径，没登记（改了不出现「未保存」）。
   // 2026-11-24 换成 f.num 之后测试当场逮到，补进这张表。
   group: ['group', 'merge', 'reply', 'files', 'security', 'turnTimeoutMs'],
-  model: ['model', 'chatModels'],
+  // visionHelper：视觉判定用哪个模型（「看图」那一段的模型选择），漏登记同样会静默丢改动。
+  model: ['model', 'chatModels', 'visionHelper'],
   voice: ['voice'],
   stickers: ['stickers'],
+  // persona 页改的是整棵 persona 树（当前人格 / 按聊天指定 / 开场白……），原来整页都没登记。
+  persona: ['persona'],
   imagegen: ['imageGen'],
   diary: ['diary', 'qzoneSocial'],
   speakup: ['speakUp'],

@@ -2,7 +2,7 @@ import { useState, useEffect, Fragment, h } from '../core/react.js'
 import { Card, Row, Btn, Choices, More } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { get, post } from '../core/http.js'
-import { setPath, cx, timeAgo } from '../core/utils.js'
+import { setPath, cx, timeAgo, openExternal } from '../core/utils.js'
 
 function SnowLumaAuth({ running, toast, onChange }) {
   const [s, setS] = useState(null)
@@ -162,7 +162,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
               <div>
                 <b>下载 SnowLuma</b>
                 <div className="ab-muted ab-small">官方发布页下载 Windows 完整版（名字类似 SnowLuma-v2.x.x-win-x64.zip，不带 lite）。</div>
-                <div style={{ marginTop: 6 }}><Btn small onClick={() => window.open(sl.downloadPage, '_blank')}>打开下载页 ↗</Btn></div>
+                <div style={{ marginTop: 6 }}><Btn small onClick={() => openExternal(sl.downloadPage)}>打开下载页 ↗</Btn></div>
               </div>
             </div>
             <div className={cx('ab-step', sl.installed && 'done')}>
@@ -255,7 +255,7 @@ function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
             {f.text('snowluma.webuiPassword', { type: 'password', placeholder: draft.snowluma.webuiPasswordSet ? (draft.snowluma.passwordAuto ? '自动管理中（不改就留空）' : '已保存（不改就留空）') : '留空 = 自动' })}
           </Row>
           <Row label="SnowLuma 自己的控制台" hint="一般用不到，想看它的原始界面时用">
-            <Btn small disabled={!sl.running} onClick={() => window.open(sl.webui, '_blank')}>打开 ↗</Btn>
+            <Btn small disabled={!sl.running} onClick={() => { if (!openExternal(sl.webui)) toast('这个地址不是 http(s)，没敢打开', 'err') }}>打开 ↗</Btn>
           </Row>
           <Row label="随 DSH 自动启动 SnowLuma">{f.sw('snowluma.autoStart')}</Row>
           <Row label="自动接入机器人号" hint="断线后自动重新接入，只接机器人号">{f.sw('snowluma.autoAttach')}</Row>

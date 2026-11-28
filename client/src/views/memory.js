@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, h } from '../core/react.js'
+import { useState, useEffect, useRef, Fragment, h } from '../core/react.js'
 import { Card, Row, Btn, Select, Seg, Empty, ModOff } from '../ui/primitives.js'
 import { useField } from '../ui/form.js'
 import { setPath, timeAgo } from '../core/utils.js'
@@ -24,11 +24,42 @@ function Memory({ st, draft, setDraft, toast }) {
   const [vec, setVec] = useState(null)
   const [vecBusy, setVecBusy] = useState(false)
   const [rerank, setRerank] = useState(null)
-  const load = (query) => get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => { setMem(r.items || []); setStats(r.stats || null); setHealth(r.health || null) })
-  const loadVec = () => get('/memory/vector').then((r) => { setVec(r.status || { enabled: false }); setRerank(r.rerank || { enabled: false }) }).catch(() => { setVec({ enabled: false }); setRerank({ enabled: false }) })
+  // 搜索框每 250ms 打一次请求，前后两包会同时在路上：只认最后一包，
+  // 否则慢查询的回包会把刚敲的新关键词结果盖回旧的。
+  const loadSeq = useRef(0)
+  const vecSeq = useRef(0)
+  const load = (query) => {
+    const seq = ++loadSeq.current
+    return get('/memories?q=' + encodeURIComponent(query ?? q)).then((r) => {
+      if (seq !== loadSeq.current) return
+      setMem(r.items || [])
+      setStats(r.stats || null)
+      setHealth(r.health || null)
+    })
+  }
+  const loadVec = () => {
+    const seq = ++vecSeq.current
+    return get('/memory/vector').then((r) => {
+      if (seq !== vecSeq.current) return
+      setVec(r.status || { enabled: false })
+      setRerank(r.rerank || { enabled: false })
+    }).catch(() => {
+      if (seq !== vecSeq.current) return
+      setVec({ enabled: false })
+      setRerank({ enabled: false })
+    })
+  }
   const [styles, setStyles] = useState({})
   const [profileRev, setProfileRev] = useState(0)
-  const loadIns = () => get('/insights').then((r) => { setIns(r.items || []); setStyles(r.styles || {}) })
+  const insSeq = useRef(0)
+  const loadIns = () => {
+    const seq = ++insSeq.current
+    return get('/insights').then((r) => {
+      if (seq !== insSeq.current) return
+      setIns(r.items || [])
+      setStyles(r.styles || {})
+    })
+  }
   const times = draft.memory.consolidateTimes || []
   const setTime = (i, v) => { const t = times.slice(); t[i] = v; setDraft(setPath(draft, 'memory.consolidateTimes', t)) }
   const memOn = modOn(st, 'memory')

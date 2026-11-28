@@ -9,6 +9,46 @@ import { createCodexImage } from './codex-image.js'
 import { mimeOf } from '../chat/inbound.js'
 import { imageToolBlock } from '../core/img.js'
 import { imageSizeFor } from './image-shape.js'
+
+// 自定义生图接口的字节上限：`application/octet-stream` 打错成 `image/*`、或者对端
+// 直接把整个模型仓库吐回来，`arrayBuffer()` 会一次性读进内存把进程撑爆。
+// 边读边计数，超限立刻中止。
+const MAX_IMAGE_BYTES = 30 * 1024 * 1024
+
+/**
+ * 读响应体，超过 maxBytes 立即中止。
+ *
+ * @param {Response} r fetch 响应
+ * @param {number} [maxBytes] 上限（默认 30MB）
+ * @returns {Promise<Buffer>}
+ */
+async function readImageCapped(r, maxBytes = MAX_IMAGE_BYTES) {
+  const declared = Number(r.headers?.get?.('content-length') || 0)
+  if (declared > maxBytes) {
+    // 声明就超了：连读都不读，但要把响应体放掉，否则这条连接一直挂在连接池里。
+    try { await r.body?.cancel?.() } catch { /* 释放失败不影响报错 */ }
+    throw new Error(`图片太大（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+  }
+  if (!r.body || typeof r.body.getReader !== 'function') {
+    const all = Buffer.from(await r.arrayBuffer())
+    if (all.length > maxBytes) throw new Error(`图片太大（${Math.round(all.length / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`)
+    return all
+  }
+  const reader = r.body.getReader()
+  const chunks = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      try { await reader.cancel() } catch (error) {}
+      throw new Error(`图片太大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB），已停止下载`)
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks)
+}
 export { imageToolBlock }
 
 /** 把模板里的 {占位符} 替换掉；不认识的占位符原样留着。 */
@@ -164,7 +204,7 @@ export function createImageGen({ getConfig, log, local, fetchImpl, codexAuth }) 
     // 直接返回图片字节（pollinations 这类）
     if (type.startsWith('image/')) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      return Buffer.from(await r.arrayBuffer())
+      return readImageCapped(r)
     }
     const j = await r.json().catch(() => null)
     if (!r.ok) throw new Error((j && (j.error?.message || j.message)) || `HTTP ${r.status}`)

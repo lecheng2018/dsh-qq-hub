@@ -35,11 +35,19 @@ export function createGroupState({ storage, log } = {}) {
   // I/O 经 storage={read,write} 注入，本模块仍零 import、可纯内存单测；缺省 = 不持久化。
   const SAVE_DEBOUNCE_MS = 2000
   let saveTimer = null
-  const snapshot = () => ({
-    said: Object.fromEntries(said),
-    interjects: Object.fromEntries(interjects),
-    engaged: Object.fromEntries(engaged),
-  })
+  const snapshot = () => {
+    // 落盘前把过期的话题窗口丢掉：engaged 只在 until 之前有意义，留着就是
+    // 「进过一次话题的群永久占一条记录」。快照与内存一起瘦身。
+    const now = Date.now()
+    for (const [gid, rec] of engaged) {
+      if (!rec || !(Number(rec.until) > now)) engaged.delete(gid)
+    }
+    return {
+      said: Object.fromEntries(said),
+      interjects: Object.fromEntries(interjects),
+      engaged: Object.fromEntries(engaged),
+    }
+  }
   const save = () => {
     if (!storage?.write) return
     try { storage.write(snapshot()) } catch (error) { log?.warn?.('群刹车状态落盘失败：', error?.message || error) }

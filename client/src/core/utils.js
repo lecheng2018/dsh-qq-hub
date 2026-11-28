@@ -73,17 +73,89 @@ const timeAgo = (t) => {
   return new Date(t).toLocaleDateString()
 }
 
-// ---------------- 样式（只注入一次） ----------------
+// ---------------- 复制与外部链接 ----------------
 
-const copy = (text, toast, msg) => {
+// 外链只认 http(s)：别人给的 / 后端返回的地址一律先过这一关，
+// 挡住 `javascript:` / `data:` 这类能在宿主页面里执行或内嵌的协议。
+const HTTP_URL = /^https?:\/\//i
+const isSafeHttpUrl = (url) => HTTP_URL.test(String(url ?? ''))
+
+/**
+ * 打开外部链接：非 http(s) 直接拒绝，能打开时一律带 `noopener,noreferrer`
+ * （否则 window.open 出来的页面能通过 `window.opener` 反向操作宿主面板）。
+ *
+ * @param {string} url 目标地址
+ * @param {string} [name] 窗口名
+ * @param {Function} [open] 打开函数（默认 globalThis.open，单测可注入）
+ * @returns {boolean} 是否真的发起了打开
+ */
+const openExternal = (url, name = '_blank', open = globalThis.open) => {
+  const target = String(url ?? '')
+  if (!isSafeHttpUrl(target)) return false
+  if (typeof open !== 'function') return false
   try {
-    navigator.clipboard.writeText(text)
-    if (msg) toast(msg, 'ok')
+    return open.call(globalThis, target, name, 'noopener,noreferrer') !== null
   } catch (e) {
-    toast('复制失败，手动选中复制吧', 'err')
+    return false
   }
 }
 
+/**
+ * 局域网 http 下的兜底复制：`navigator.clipboard` 只在安全上下文（https / localhost）
+ * 存在，DSH 面板常常跑在 `http://192.168.x.x:port` 上，直接 `navigator.clipboard.writeText`
+ * 会抛 TypeError（旧实现整块包在 try 里，于是「复制给 DSH 的话」这类按钮点了直接报错）。
+ */
+const legacyCopy = (value) => {
+  const doc = globalThis.document
+  if (!doc || typeof doc.createElement !== 'function' || typeof doc.execCommand !== 'function') return false
+  let area = null
+  try {
+    area = doc.createElement('textarea')
+    area.value = value
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.top = '-1000px'
+    area.style.opacity = '0'
+    doc.body.appendChild(area)
+    if (typeof area.select === 'function') area.select()
+    return doc.execCommand('copy') === true
+  } catch (e) {
+    return false
+  } finally {
+    try { area?.parentNode?.removeChild(area) } catch (e) {}
+  }
+}
+
+/**
+ * 复制文本到剪贴板：先走 `navigator.clipboard`（安全上下文），不行再退回
+ * textarea + `document.execCommand('copy')`；**真的写进去了**才提示成功。
+ *
+ * @param {string} text 要复制的内容
+ * @param {Function} toast 提示函数
+ * @param {string} [msg] 成功提示语（不填就不提示）
+ * @returns {Promise<boolean>} 是否复制成功
+ */
+const copy = async (text, toast, msg) => {
+  const value = String(text ?? '')
+  let ok = false
+  try {
+    if (typeof navigator !== 'undefined' && navigator?.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(value)
+      ok = true
+    }
+  } catch (e) {
+    ok = false
+  }
+  if (!ok) ok = legacyCopy(value)
+  if (ok) {
+    if (msg) toast(msg, 'ok')
+    return true
+  }
+  toast('复制失败，手动选中复制吧', 'err')
+  return false
+}
+
 export {
-  clone, setPath, getPath, pct, cx, parsePct, parseNumText, commitNumText, pitchNum, pitchText, pitchLabel, timeAgo, copy
+  clone, setPath, getPath, pct, cx, parsePct, parseNumText, commitNumText, pitchNum, pitchText, pitchLabel, timeAgo,
+  copy, isSafeHttpUrl, openExternal
 }

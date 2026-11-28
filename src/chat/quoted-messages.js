@@ -96,14 +96,18 @@ export function createQuotedMessages({ onebot, getConfig, selfId, faceName, isSe
         stickers,
         media: [...images, ...stickers],
         records: (parsed.records || []).length,
-        isBot: uid === botId || Boolean(isSentMessage?.(id)),
+        isBot: Boolean(botId && uid === botId) || Boolean(isSentMessage?.(id)),
         at: Date.now(),
       }
     } catch (error) {
       log?.debug?.(`引用消息没拉到（${id}）：`, error.message)
     }
-    if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value)
-    cache.set(key, out)
+    // 只有拉成功的结果值得缓存：失败（onebot 超时 / 消息已撤回）以前也会被写进缓存，
+    // 于是这条引用在本进程活着的期间**永远**是「拉不到」，重试都没机会。
+    if (out.ok) {
+      if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value)
+      cache.set(key, out)
+    }
     return out
   }
 

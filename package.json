@@ -9,6 +9,8 @@
   "exports": {
     ".": "./src/host.js",
     "./client": "./client/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -19,7 +21,7 @@
     "test": "node scripts/build-client.mjs && node --import ./test/helpers/isolate-env.mjs --test \"test/**/*.test.js\"",
     "test:extensions": "npm run --prefix extensions/tieba-reader test",
     "test:all": "npm test && npm run test:extensions",
-    "lint": "eslint src scripts/*.mjs",
+    "lint": "eslint src scripts/*.mjs \"extensions/**/panel.js\"",
     "benchmark": "node scripts/benchmark-replay.mjs",
     "smoke:pack": "node scripts/smoke-pack.mjs",
     "pack:check": "npm pack --dry-run",
@@ -54,12 +56,20 @@
     "onebot"
   ],
   "files": [
-    "extensions",
     "src",
-    "scripts",
-    "client",
+    "extensions",
+    "!extensions/**/test/**",
+    "!extensions/**/fixtures/**",
+    "!extensions/**/*.test.mjs",
+    "!extensions/**/package-lock.json",
+    "client/client.js",
+    "locale/*.json",
+    "icon.svg",
     "personas",
     "assets",
+    "scripts/install-browser.mjs",
+    "scripts/fix-memory-scope.mjs",
+    "scripts/migrate-memory-markdown.js",
     "cordis.patch.yml",
     "README.md",
     "CONTRIBUTING.md",
@@ -77,7 +87,8 @@
   },
   "homepage": "https://github.com/lecheng2018/dsh-qq-hub",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.13.0",
+    "dsh": "^0.2.3-alpha.2"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

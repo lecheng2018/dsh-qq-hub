@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="QQ Hub">
+  <!-- QQ Hub 图标：一条圆滚滚的鲸鱼（「大肥鱼」），纯手绘矢量，无位图、无外部引用 -->
+  <defs>
+    <linearGradient id="hubBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ab5f2"/>
+      <stop offset="1" stop-color="#1b6fb5"/>
+    </linearGradient>
+    <linearGradient id="hubBelly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#cde9fb" stop-opacity="0.92"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="62" height="62" rx="15" fill="#0f2c45"/>
+  <path d="M9 38c0-9.4 7.9-17 17.6-17h14.2c3.4 0 6.2 2.6 6.2 5.9 0 3.2-2.8 5.8-6.2 5.8H28.4c-1.6 0-2.9 1.2-2.9 2.7s1.3 2.7 2.9 2.7h19.1c4.4 0 8 3.4 8 7.6 0 4.2-3.6 7.6-8 7.6H26.6C17 53.3 9 46.6 9 38Z"
+        fill="url(#hubBody)"/>
+  <path d="M18 44.5c3.6 4 9.2 6.4 15.4 6.4h15.3c1.2 0 2.3-.3 3.2-.8-1.3 2.5-4 4.2-7.2 4.2H26.6c-3.5 0-6.4-1.9-8.6-4.5v-5.3Z"
+        fill="url(#hubBelly)"/>
+  <circle cx="27.5" cy="30.5" r="2.6" fill="#0f2c45"/>
+  <circle cx="28.4" cy="29.6" r="0.8" fill="#ffffff"/>
+  <path d="M12 22c2.4-3.6 5.6-6 9.4-7.2-1.4 3.2-1.6 6.2-.6 9.1-2.9.9-6.2.7-8.8-1.9Z"
+        fill="#5ab5f2" opacity="0.85"/>
+  <path d="M46 20.5c3.1-1 6.1-.6 8.6 1.1-2.4 1.9-3.7 4.3-3.9 7.1-2.3-1.3-4.4-3.6-4.7-8.2Z"
+        fill="#5ab5f2" opacity="0.6"/>
+</svg>

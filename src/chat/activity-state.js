@@ -58,6 +58,17 @@ export function createActivityState({ onTypingPing } = {}) {
       stopTyping(key)
     },
 
+    /**
+     * 收尾：停掉所有「正在输入」计时器并清空内存。
+     * 这些 setInterval 是插件自己的（宿主 dispose / 插件重载都不会替你 clearInterval），
+     * 漏一个就每 15 秒继续往 QQ 报一次「对方正在输入…」，直到进程退出。
+     */
+    dispose () {
+      for (const t of typing.values()) clearInterval(t)
+      typing.clear()
+      busy.clear()
+    },
+
     /** 排查/测试用。 */
     size () {
       return { busy: busy.size, typing: typing.size }

@@ -203,7 +203,9 @@ export function createQzone({ getConfig, onebot, hub, chatLog, log, onDiary, pic
           }
         } catch (error) { log.warn('日记配图没挑成：', error.message) }
       }
-      if (images.length) log.info(`日记配图：${images[0]}`)
+      // 只记体积，不记内容：img 是 `base64://` 开头的一整张图，直接打进日志
+      // 会让日志文件一次涨几百 KB（也可能把私人图片内容写进可分享的日志）。
+      if (images.length) log.info(`日记配图：已装载 1 张（${Math.round(images[0].length / 1024)} KB base64）`)
       let r = await post(text, { visibility, images })
       // 配图发不出去（比如空间不认这张图）不能把整篇日记憋回去：退回只发文字，日记照发
       if (!r.ok && images.length) {

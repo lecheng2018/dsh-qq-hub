@@ -9,9 +9,8 @@ export const LEVELS = ['full', 'social', 'chat']
  * @returns {{allowed: boolean, reason: string}}
  */
 export function checkAllowed(cfg, msg) {
-  const owner = String(cfg.ownerQQ || '')
   if (msg.kind === 'private') {
-    if (msg.userId === owner) return { allowed: true, reason: '主人' }
+    if (isOwner(cfg, msg.userId)) return { allowed: true, reason: '主人' }
     const list = (cfg.allow?.private || []).map(String)
     return list.includes(msg.userId)
       ? { allowed: true, reason: '私聊白名单' }
@@ -25,8 +24,7 @@ export function checkAllowed(cfg, msg) {
 
 /** 这个会话用哪一档权限。群聊永远不超过 social。 */
 export function levelFor(cfg, chat) {
-  const owner = String(cfg.ownerQQ || '')
-  if (chat.kind === 'private' && chat.userId === owner) {
+  if (chat.kind === 'private' && isOwner(cfg, chat.userId)) {
     return LEVELS.includes(cfg.ownerLevel) ? cfg.ownerLevel : 'full'
   }
   return 'social'
@@ -38,9 +36,17 @@ export function presetFor(level, cfg) {
   return cfg && cfg.longTasks ? 'qq-hub-private-long' : 'qq-hub-private'
 }
 
-/** 只有主人能做的事（群管、写文件……）。 */
+/**
+ * 只有主人能做的事（群管、写文件……）。
+ *
+ * 两边都必须非空：面板没填 ownerQQ 时它是空串，而某些适配器/系统事件给的 userId 也是空串，
+ * 旧实现 `String(userId||'') === String(cfg.ownerQQ||'')` 会把「谁都不是」判成主人
+ * （空串 === 空串），于是没配置主人 QQ 的部署里任何空 userId 的会话都拿到 full 档。
+ */
 export function isOwner(cfg, userId) {
-  return String(userId || '') !== '' && String(userId) === String(cfg.ownerQQ || '')
+  const id = String(userId ?? '')
+  const owner = String(cfg?.ownerQQ ?? '')
+  return id !== '' && owner !== '' && id === owner
 }
 
 /** 改资料类操作（改昵称 / 签名 / 头像、改 B 站签名），以及处理好友申请、改白名单的三档权限。 */
@@ -64,7 +70,7 @@ export function profileToolVisible(cfg, key, chat) {
   // 她在后台会话里说「这轮会话里这些工具都没有挂上来」，只能空手回话）。
   if (chat.kind === 'system') return p !== 'off'
   if (p === 'all') return chat.kind === 'private' || chat.kind === 'group'
-  if (p === 'owner') return chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
+  if (p === 'owner') return chat.kind === 'private' && isOwner(cfg, chat.userId)
   return false
 }
 

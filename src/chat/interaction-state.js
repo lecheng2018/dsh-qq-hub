@@ -12,6 +12,9 @@
 
 const POKE_THROTTLE_MS = 20_000
 const ASIDE_KEEP = 5 // 别处代发的话，一次最多替她记几条
+// 常驻进程会见到越来越多的 chatId（群被拉进来又退掉、私聊来一个人就多一个 key）。
+// 这些表全部「chatId → 小状态」，没有上限就是稳稳的泄漏：上限内按最近使用淘汰。
+const MAX_CHATS = 500
 
 export function createInteractionState() {
   // chatId → Set(这一轮用过的小黄脸名字)，用于「别固化」去重
@@ -24,6 +27,31 @@ export function createInteractionState() {
   const pokeAt = new Map()
   // chatId → [{ at, text }]  别处安排她在这里发的话，下次这个聊天交给她时补进上下文
   const saidElsewhere = new Map()
+  // chatId → 最近访问序号（LRU 淘汰用）
+  const touched = new Map()
+  let clock = 0
+
+  /**
+   * 记一次访问并做 LRU 淘汰：超过 MAX_CHATS 个聊天时，把最久没动过的那几个
+   * 的状态整组丢掉（重新出现时会当新聊天处理，只是丢一次小黄脸去重等小状态）。
+   */
+  function touch (id) {
+    const key = String(id || '')
+    if (!key) return key
+    touched.set(key, ++clock)
+    if (touched.size > MAX_CHATS) {
+      const doomed = [...touched.entries()].sort((a, b) => a[1] - b[1]).slice(0, touched.size - MAX_CHATS)
+      for (const [gone] of doomed) {
+        touched.delete(gone)
+        facePool.delete(gone)
+        lastPoker.delete(gone)
+        lastSpeaker.delete(gone)
+        pokeAt.delete(gone)
+        saidElsewhere.delete(gone)
+      }
+    }
+    return key
+  }
 
   return {
     /** 上一次发到这个人/群时用过哪些小黄脸（去重用）。没有就空集合。 */
@@ -33,7 +61,7 @@ export function createInteractionState() {
     /** 记下这一条用了哪些小黄脸，下一条不许再撞。 */
     rememberFaces (chatId, names) {
       if (!chatId) return
-      facePool.set(chatId, new Set(names || []))
+      facePool.set(touch(chatId), new Set(names || []))
     },
 
     /** 戳回去戳谁：群里优先最近戳她的人，没人戳过就这段最后说话的人；私聊直接戳对方。 */
@@ -45,11 +73,11 @@ export function createInteractionState() {
     },
     /** 记下「谁戳了她」（无论这次是否触发回复——戳回去要用）。 */
     rememberPoker (chatId, uid) {
-      if (chatId && uid) lastPoker.set(String(chatId), String(uid))
+      if (chatId && uid) lastPoker.set(touch(chatId), String(uid))
     },
     /** 记下群里这段最后说话的人。 */
     rememberSpeaker (chatId, uid) {
-      if (chatId && uid) lastSpeaker.set(String(chatId), String(uid))
+      if (chatId && uid) lastSpeaker.set(touch(chatId), String(uid))
     },
 
     /**
@@ -60,7 +88,7 @@ export function createInteractionState() {
       const id = String(chatId || '')
       if (!id) return false
       if (now - (pokeAt.get(id) || 0) < POKE_THROTTLE_MS) return false
-      pokeAt.set(id, now)
+      pokeAt.set(touch(id), now)
       return true
     },
 
@@ -69,6 +97,7 @@ export function createInteractionState() {
       const id = String(chatId || '')
       const t = String(text || '').slice(0, 300)
       if (!id || !t) return
+      touch(id)
       saidElsewhere.set(id, [...(saidElsewhere.get(id) || []), { at: now, text: t }].slice(-ASIDE_KEEP))
     },
     /** 取出并清空「别处替她说过的话」。 */

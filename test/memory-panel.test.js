@@ -13,11 +13,11 @@ function render({ health = null, reloading = false, personaTab = 'profiles', ins
   let slot = 0
   const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter((x) => x != null && x !== false) })
   const names = ['Card', 'Btn', 'Row', 'Select', 'Seg', 'Empty', 'ProfilesList', 'InsightRow', 'StyleEditor', 'OwnerMigrate', 'MemoryRow', 'RecallLog', 'MemoryImport', 'ModOff', 'ExtPage']
-  const factory = new Function('h', 'useState', 'useEffect', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Memory`)
+  const factory = new Function('h', 'useState', 'useEffect', 'useRef', 'useField', 'modOn', 'get', 'post', 'setPath', 'timeAgo', ...names, `${body}; return Memory`)
   const Memory = factory(h, (initial) => {
     const i = slot++
     return [i < states.length ? states[i] : initial, (value) => updates.push({ slot: i, value })]
-  }, () => {}, () => ({ sw: () => null, range: () => null }), (_, name) => name === 'memory',
+  }, () => {}, (init) => ({ current: init }), () => ({ sw: () => null, range: () => null }), (_, name) => name === 'memory',
   async (path) => { requests.push(path); return path === '/insights' ? { items: [], styles: {} } : { items: [], stats: {}, health: { ok: true } } },
   post, () => {}, () => '', ...names)
   const draft = { memory: {} }

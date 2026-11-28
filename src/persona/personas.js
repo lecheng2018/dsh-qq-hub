@@ -46,6 +46,9 @@ export function listPersonas() {
   for (const n of readdirSync(dir())) {
     if (!n.endsWith('.md')) continue
     const id = n.slice(0, -3)
+    // 目录里可能有人手工放进去 `../../../etc/passwd.md` 之类的名字（或出现被截断的
+    // 非法 id）：只认「读出来还能原样写回去」的那些，免得面板列出一条点开就报错的卡。
+    if (safeId(id) !== id) continue
     try {
       const p = parsePersona(id, readFileSync(join(dir(), n), 'utf8'))
       out.push({ id, name: p.name, tags: p.tags, chars: p.body.length })
@@ -66,14 +69,25 @@ export function savePersona(id, { name, tags, body }) {
   if (!sid) throw new Error('人格 id 只能包含字母、数字、中文、- 和 _')
   if (!String(body || '').trim()) throw new Error('人格内容不能是空的')
   mkdirSync(dir(), { recursive: true })
-  const head = `---\nname: ${String(name || sid).replace(/\n/g, ' ')}\ntags: [${(tags || []).join(', ')}]\n---\n\n`
+  // 卡片头是 YAML：name 里的 `\r` 与 tags 里的 `]` / 换行都会把 `tags: [...]` 提前掐断，
+  // 读回来时整行失效（面板里表现为「标签没了」）。先在写入侧洗干净。
+  const safeName = String(name || sid).replace(/[\r\n]+/g, ' ').trim() || sid
+  const tagList = (Array.isArray(tags) ? tags : String(tags ?? '').split(/[,，]/))
+    .map((t) => String(t ?? '').replace(/[\r\n\]]+/g, ' ').trim())
+    .filter(Boolean)
+  const head = `---\nname: ${safeName}\ntags: [${tagList.join(', ')}]\n---\n\n`
   writeFileSync(join(dir(), `${sid}.md`), head + String(body).trim() + '\n', 'utf8')
+  // 指纹缓存按 mtime+size 做键：同一毫秒内改字又改回同样长度时键不变，会拿到旧指纹，
+  // 于是「改了卡但守卫认为没变」。写盘成功即失效。
+  hashCache.delete(sid)
   return readPersona(sid)
 }
 
 export function deletePersona(id) {
-  const f = join(dir(), `${safeId(id)}.md`)
+  const sid = safeId(id)
+  const f = join(dir(), `${sid}.md`)
   if (existsSync(f)) unlinkSync(f)
+  hashCache.delete(sid)
 }
 
 /**

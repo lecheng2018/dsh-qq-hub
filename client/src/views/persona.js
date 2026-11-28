@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, h } from '../core/react.js'
+import { useState, useEffect, useRef, Fragment, h } from '../core/react.js'
 import { Card, Row, Btn, Select, Seg, Empty } from '../ui/primitives.js'
 import { navIcon } from '../ui/icons.js'
 import { setPath, cx } from '../core/utils.js'
@@ -162,8 +162,15 @@ function Persona({ st, draft, setDraft, toast, reload }) {
   const [dirty, setDirty] = useState(false)
   const [pending, setPending] = useState({}) // 节的 k → { text, view: 'new' | 'old' } AI 润色还没选定的
   const [whole, setWhole] = useState(() => { try { return localStorage.getItem('qq-hub.persona.whole') === '1' } catch (e) { return false } })
+  // 请求序号 + 当前选中 ID：人格列表点得快时，A 的慢回包会盖掉刚选中的 B
+  // （页面上写着 B 的名字、里面却是 A 的正文）。只认最后一次请求。
+  const loadSeq = useRef(0)
+  const selRef = useRef(sel)
+  selRef.current = sel
   const load = async (id) => {
+    const seq = ++loadSeq.current
     const r = await get('/persona/get?id=' + encodeURIComponent(id))
+    if (seq !== loadSeq.current || id !== selRef.current) return
     if (r.ok) { setEdit({ id: r.persona.id, name: r.persona.name, tags: (r.persona.tags || []).join('，'), secs: splitPersona(r.persona.body) }); setDirty(false); setPending({}) }
   }
   useEffect(() => { load(sel) }, [sel])
@@ -175,25 +182,33 @@ function Persona({ st, draft, setDraft, toast, reload }) {
     toast(r.message || (r.ok ? '保存好了' : '没保存成功'))
     if (r.ok) { setDirty(false); refresh() }
   }
-  const patch = (p) => { setEdit({ ...edit, ...p }); setDirty(true) }
+  // 函数式更新：润色/保存这些 await 之后的写入不能基于发起时的旧 edit，
+  // 否则回包晚到就会把期间用户敲进去的文字盖掉。
+  const patch = (p) => { setEdit((prev) => (prev ? { ...prev, ...p } : prev)); setDirty(true) }
   const setSecs = (secs) => patch({ secs })
-  const updSec = (k, p) => setSecs(edit.secs.map((s) => (s.k === k ? { ...s, ...p } : s)))
+  const updSec = (k, p) => {
+    setEdit((prev) => (prev ? { ...prev, secs: prev.secs.map((s) => (s.k === k ? { ...s, ...p } : s)) } : prev))
+    setDirty(true)
+  }
   const moveSec = (i, d) => { const n = edit.secs.slice(); const [x] = n.splice(i, 1); n.splice(i + d, 0, x); setSecs(n) }
   const delSec = (s) => { if (s.text.trim() && !confirm('删掉「' + (s.title || '未命名') + '」这一节？')) return; setSecs(edit.secs.filter((x) => x.k !== s.k)) }
   const addSec = (title) => setSecs([...edit.secs, psec(title, '')])
+  // 润色请求同样排队：连点两节的「润色」时，先发的慢回包不许盖掉后发的。
+  const polishSeq = useRef(0)
   const polish = async (s) => {
+    const seq = ++polishSeq.current
     const r = await post('/persona/polish', { name: edit.name, title: s.title === null ? '' : s.title, text: s.text, others: edit.secs.filter((x) => x.k !== s.k).map((x) => (x.title === null ? '开场' : x.title)) })
+    if (seq !== polishSeq.current) return
     if (!r.ok) { toast(r.message || '润色没成功', 'err'); return }
     if (!s.text.trim()) { updSec(s.k, { text: r.text }); toast('写好了，不满意就接着改', 'ok'); return }
-    setPending({ ...pending, [s.k]: { text: r.text, view: 'new' } })
+    setPending((prev) => ({ ...prev, [s.k]: { text: r.text, view: 'new' } }))
   }
   const pick = (s, view) => {
-    const next = { ...pending }
-    delete next[s.k]
-    setPending(next)
-    if (view === 'new') updSec(s.k, { text: pending[s.k].text })
+    const chosen = pending[s.k]
+    setPending((prev) => { const next = { ...prev }; delete next[s.k]; return next })
+    if (view === 'new' && chosen) updSec(s.k, { text: chosen.text })
   }
-  const flip = (s) => setPending({ ...pending, [s.k]: { ...pending[s.k], view: pending[s.k].view === 'new' ? 'old' : 'new' } })
+  const flip = (s) => setPending((prev) => (prev[s.k] ? { ...prev, [s.k]: { ...prev[s.k], view: prev[s.k].view === 'new' ? 'old' : 'new' } } : prev))
   const setMode = (w) => { if (w && waiting) { toast('先把 AI 润色的那几节选定一版', 'err'); return } setWhole(w); try { localStorage.setItem('qq-hub.persona.whole', w ? '1' : '0') } catch (e) {} }
   const titles = edit ? edit.secs.map((s) => s.title) : []
   const suggest = PSEC_SUGGEST.filter((t) => !titles.includes(t))

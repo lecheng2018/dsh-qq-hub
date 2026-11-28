@@ -8,6 +8,34 @@
 import os from 'node:os'
 import fs from 'node:fs'
 
+/**
+ * 从 `/proc/self/cgroup` 的内容判断「在不在容器里」——纯函数，单测直接喂文本。
+ *
+ * 契约是三态的：`true` 在容器里 / `false` 不在 / `null` 这份内容什么都证明不了。
+ *
+ * 为什么必须有三态：cgroup v2 在容器内（私有 cgroup 命名空间）读出来常常就是一行
+ * `0::/`，和宿主机上的输出一模一样。旧实现把「读到了 cgroup 但没有容器标记」判成
+ * `false`，于是 Docker 里跑的实例会以为自己在宿主机上（进而走宿主机的路径/端口假设）。
+ *
+ * @param {string} raw cgroup 文件内容
+ * @returns {boolean|null} true=容器证据 / false=宿主机证据 / null=无结论
+ */
+export function cgroupVerdict(raw) {
+  const text = String(raw ?? '')
+  if (!text.trim()) return null
+  // v1 与 v2 的容器标记：命中即正向证据
+  if (/docker|containerd|kubepods|libpod|lxc/i.test(text)) return true
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean)
+  const isV2 = lines.length > 0 && lines.every((line) => line.startsWith('0::'))
+  if (isV2) {
+    // v2 只有一条 `0::<path>`：path 为根（`0::/`）时容器内外同形，不构成任何结论
+    const path = lines[0].slice(3).trim()
+    return path === '' || path === '/' ? null : false
+  }
+  // v1 分层里没有任何容器标记：路径是宿主机的 cgroup 树，可以按非容器处理
+  return false
+}
+
 export class EnvironmentDetector {
   /**
    * @param {object} [deps] 可注入依赖，全部缺省为宿主真实探测
@@ -68,10 +96,11 @@ export class EnvironmentDetector {
     }
     try {
       const cgroup = this.readFileSync(this.cgroupPath, 'utf8')
-      anyReliableSignal = true
-      // cgroup v1 带 docker/containerd/kubepods 段；v2 常只剩 `0::/`——内容无标记时
-      // 只能证明「读到了 cgroup」，不能证明不在容器，交由下面的 unknown 判定
-      positiveEvidence = /docker|containerd|kubepods|libpod/i.test(cgroup)
+      const verdict = cgroupVerdict(cgroup)
+      // verdict === null：这份内容不构成证据（典型是 cgroup v2 的裸 `0::/`），
+      // 不能当成「不在容器」——原来那样会把 Docker 里的运行误判成宿主机。
+      anyReliableSignal = verdict !== null
+      positiveEvidence = verdict === true
     } catch {
       // 无 cgroup 可读（macOS/Windows 正常缺，Linux 挂载异常也缺）：不构成否定证据
     }
