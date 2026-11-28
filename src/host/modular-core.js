@@ -805,6 +805,9 @@ export function createModularCore({
       // 变更或插件热重载影响；reply 钩子与 group/result 共用同一份 triggerMessageIds。
       const offeredParticipation = groupGate.turnParticipationOf(turn.turnId)
       const triggerMessageIds = Object.freeze((io.members || []).map((m) => String(m?.messageId || '')).filter(Boolean))
+      // T2.5：execute 作用域的终态账。默认值只在「execute 没跑完就异常退出」时兜底；
+      // 每个正常/提前返回都会先写明确终态，catch 映射不覆盖已明确写出的值。
+      let terminalResult = { state: 'skipped', reason: 'execute-not-completed' }
       // #263 的外层兜底在失败时调它摘监听。S2 起监听器归执行器（成功 / 失败 / 取消 / 超时四条路径
       // 都在 runTurn 里摘干净），所以这里恒为空操作 —— 保留这处接线只为让 #263 那段兜底的结构
       // 与语义一字不变（不新增、也不删掉一层清理）。
@@ -818,6 +821,8 @@ export function createModularCore({
           turn, io, offeredMode, participation: offeredParticipation,
           groups, outbox, log, now: Date.now(),
         })
+        // T2.5：REACT 采用 Outbox 返回的真实 state / deliveryId / reason
+        terminalResult = { state: reaction.state, reason: reaction.reason || '', deliveryId: reaction.deliveryId || '' }
         return { state: reaction.state, via: 'group-reaction', deliveryId: reaction.deliveryId, reason: reaction.reason }
       }
       // 上一轮失败留下的待重置标记：统一取出（取出即清除，同一个理由只 reset 一次）。
@@ -837,6 +842,7 @@ export function createModularCore({
       // 排队期间前序回合已选 [沉默] 退场或话题窗口已过期：纯 engaged 续聊不再浪费模型调用、也不复活话题。
       if (inGroup && offeredMode === 'engaged' && !(groups.engagedUntil(chat.groupId) > Date.now())) {
         debug(`群 ${chat.groupId}：排队中的续聊回合 ${turn.turnId} 已退场/过期，跳过执行`)
+        terminalResult = { state: 'skipped', reason: 'engaged-expired' }
         return null
       }
       const { sessionId } = await sessionForChat(turn.chatKey)
@@ -917,7 +923,10 @@ export function createModularCore({
         const next = await moduleHooks.prompt(content, {
           chat, sessionId, senderId: chat.userId, prevText: prevPromptText, queryText: promptQuery,
         })
-        if (next == null) return null
+        if (next == null) {
+          terminalResult = { state: 'skipped', reason: 'prompt-blocked' }
+          return null
+        }
         content = next
       }
       rememberInboundText(turn.chatKey, promptQuery)
@@ -1113,7 +1122,10 @@ export function createModularCore({
       // 过去两处各跑一次（本函数 + reply-delivery.deliverNow），有状态或非幂等的扩展会重复
       // 执行；而且第一次解析出的 replyItems 只喂给了线索账本，线索看到的内容可能不是实际
       // 发出的内容。现在唯一的执行点就是 deliver()，它把「实际发出的条目」作为 items 交回来。
-      if (!reply) return null
+      if (!reply) {
+        terminalResult = { state: 'skipped', reason: 'empty-reply' }
+        return null
+      }
       // 群聊 interject/engaged 发前滞后漂移复核：生成期间若群里又刷了很多新消息，
       // 防止没有引用的回复变成「穿越发言」；中等漂移（2~5 条）自动补挂引用指向触发消息。
       if (inGroup && (turnMode === 'interject' || turnMode === 'engaged')) {
@@ -1126,6 +1138,7 @@ export function createModularCore({
         const hasExplicitReply = /<reply[:：]\s*[^<>|\n]{1,40}?>|\[reply[:：]\s*[^\]\[|\n]{1,40}?\]/.test(reply)
         if (drift >= 6 && !hasExplicitReply) {
           log.info(`${turn.chatKey}：生成期间群里已新增 ${drift} 条消息且回复未带引用，放弃发送以免穿越发言`)
+          terminalResult = { state: 'skipped', reason: 'reply-drift' }
           return null
         }
         if (drift >= 2 && !hasExplicitReply && !autoReply && groupTriggerReply) {
@@ -1160,8 +1173,18 @@ export function createModularCore({
           turnStickers.clear(turn.chatKey)
         }
         // 她选择沉默 / 模块拦下：与旧的 parsed.silent、next==null 语义一致，整轮不投递。
-        if (!delivered) return null
-        if (delivered.state === 'silent') return null
+        // T2.5：结构化早退映射到 group/result 终态 —— blocked / silent / skipped 绝不记成 sent。
+        if (!delivered) {
+          terminalResult = { state: 'skipped', reason: 'delivery-skipped' }
+          return null
+        }
+        if (delivered.state === 'silent') {
+          terminalResult = { state: 'skipped', reason: 'model-silent' }
+          return null
+        }
+        if (delivered.state === 'blocked') terminalResult = { state: 'skipped', reason: 'reply-blocked' }
+        else if (delivered.state === 'skipped') terminalResult = { state: 'skipped', reason: 'delivery-skipped' }
+        else terminalResult = { state: delivered.state, reason: '' } // sent / partial / failed：保留投递层真实终态
         // 插话配额只跟随「真的说出去了」（审计 Q06）：全失败/零尝试不再计一次插话。
         if (inGroup && (delivered.state === 'sent' || delivered.state === 'partial')) {
           try { if (turnMode === 'interject') groups.noteInterject(chat.groupId) } catch {}
@@ -1210,9 +1233,37 @@ export function createModularCore({
             if (error && typeof error === 'object') error._turnFailureHandled = true
           }
         } catch { /* 回执失败绝不影响回合终态 */ }
+        // T2.5：catch 映射（AbortError→cancelled、unknown→unknown、delivered>0→partial、其余→failed）。
+        // 只兜「还没跑到任何明确返回」的异常，绝不覆盖已写出的 terminalResult。
+        if (terminalResult.reason === 'execute-not-completed') {
+          if (error?.name === 'AbortError' || error?.kind === 'cancelled') terminalResult = { state: 'cancelled', reason: 'turn-cancelled' }
+          else if (error?.unknown === true) terminalResult = { state: 'unknown', reason: 'turn-unknown' }
+          else if (Number(error?.delivered) > 0) terminalResult = { state: 'partial', reason: 'reply-partial-error' }
+          else terminalResult = { state: 'failed', reason: 'turn-failed' }
+        }
         throw error
       } finally {
-        releaseTurnMode(turn.chatKey, turn.turnId)
+        // T2.5：group/result 只对**进入 execute** 的群 turn 发出，最多一次（merging/pending 未执行
+        // 即取消根本不会进 execute；事件不落盘，重启无从重放）。reason 用稳定短代码。
+        if (String(turn.chatKey || '').startsWith('group:')) {
+          const result = {
+            turnId: turn.turnId,
+            chatId: turn.chatKey,
+            topicMode: offeredMode || null,
+            participation: offeredParticipation?.level === 'text_lite' || offeredParticipation?.level === 'react' ? offeredParticipation.level : 'full',
+            triggerMessageIds: [...triggerMessageIds],
+            state: terminalResult.state,
+            sourceModuleId: offeredParticipation?.sourceModuleId || '',
+            // 文本多气泡不伪造单一 deliveryId（置空串）；REACT 用 Outbox 的真实 deliveryId
+            deliveryId: terminalResult.deliveryId || '',
+            reason: terminalResult.reason || '',
+            at: Date.now(),
+          }
+          try { moduleHooks.groupResult?.(result) } catch { /* 监听者异常绝不影响回合终态 */ }
+          finally { releaseTurnMode(turn.chatKey, turn.turnId) }
+        } else {
+          releaseTurnMode(turn.chatKey, turn.turnId)
+        }
       }
     },
   })

@@ -254,7 +254,7 @@ export default {
 |---|---|---|
 | `message` | `msg` | 收到一条**她会处理的**消息（白名单内、不是主人命令、总开关开着、没闭嘴）。**群里每一条都会来，在「回不回」的决定之前**——所以没人 @ 她的消息你也能接管。**返回 true = 你接管了**，她不再处理；返回 false 或不返回 = 不管；多个模块按加载顺序问，第一个返回 true 的接管 |
 | `poke` | 原始戳一戳事件 | 有人戳她。返回 true = 你接管了 |
-| `reply` | `text, { chatId, userText }` | 她要发一段话之前。**返回新文字 = 改写**；返回 `null` = 这次不发；不返回 = 不改 |
+| `reply` | `text, info` | 她要发一段话之前。**返回新文字 = 改写**；返回 `null` = 这次不发；不返回 = 不改。`info` 是 `{ chatId, userText, turnId, topicMode, participation, triggerMessageIds }`（回合身份由宿主显式传递；`participation` 是 `'full' \| 'text_lite'` 字符串） |
 
 **改她怎么想、怎么说**（下面这些都是「改写」：返回新值就换掉，返回 `null` 就拦下，不返回就不改；多个模块按顺序一个接一个改）：
 
@@ -262,7 +262,7 @@ export default {
 |---|---|---|
 | `group/decide` | `decision, { msg, policy, recentTexts, memScore }` | 群里这条消息（没被 `message` 接管的）她**回不回、怎么回**。返回 `null` 在这里无效（等于不改）。`decision` 是 `{ reply, mode, reason }`，mode 是 `must`（被叫到）/ `engaged`（正在参与话题）/ `interject`（插话）。返回 `{ reply: true, mode: 'must' }` 就让她必回，`{ reply: false }` 就让她不理。想整套换掉插话策略就在这里写 |
 | `prompt` | `content, { chat, sessionId, senderId, prevText, queryText, steer }` | **交给她的内容**：`[{ type: 'text', text }, { type: 'image', … }]`。可以加背景信息、改格式、去掉图片；返回 `null` 这次不交给她 |
-| `reply/items` | `items, { chatId, text, userText }` | 她的回复**拆好之后**（哪条发语音、配不配表情都已经决定了）：每条 `{ kind: 'text' \| 'voice' \| 'sticker' \| 'poke' \| 'image', value, replyTo }`。可以改顺序、全部变语音、去掉表情、加图片 |
+| `reply/items` | `items, info` | 她的回复**拆好之后**（哪条发语音、配不配表情都已经决定了）：每条 `{ kind: 'text' \| 'voice' \| 'sticker' \| 'poke' \| 'image', value, replyTo }`。可以改顺序、全部变语音、去掉表情、加图片。`info` 含 `text` 与 `reply` 同一份回合身份字段（`turnId` / `topicMode` / `participation` / `triggerMessageIds`，两个钩子拿到的是同一份） |
 | `send` | `message, { chatId, note, force }` | **最终发给 QQ 的消息段**（OneBot 格式）。所有发出去的消息都经过这里：她的回复、命令回复、模块发的。加签名、过滤词、抄送到别处都在这里 |
 | `model` | `selection, chat` | **这个聊天用哪个模型**（同步，不能 async）：返回 `{ provider, model, reasoningEffort }`。比如群里用便宜的、私聊用好的。`selection` 是面板选的（没选时是 DSH 默认，拿不到时是 `null`），主人在面板里「按聊天选模型」设过的话，已经按那个聊天算好了；模块在它之后还可以再改。换了之后从这个聊天的下一条消息起生效 |
 | `persona` | `text` | **她的人格**全文（同步）：返回新文字就换掉 |
@@ -288,9 +288,9 @@ api.on('group/participate', (decision, { msg }) => {
 - 宿主只认白名单字段（`level` / `limits` / `reaction`），其余字段忽略；归因用的模块 id 由宿主按真实注册记录填，声明里自己写的无效。
 - 校验边界：`maxBubbles` 是 1~12 的有限整数、`maxChars` 是 10~500 的有限整数，最终只能比宿主现有规则**更严格**（不能放宽）；`reaction.messageId` 必须等于当前这条 `msg.messageId`；`emojiId` 是 1~10 位正整数。truthy 但结构无效 = 仍占用这次接管，宿主记一条警告并按 `full` 处理，不会转给下一个模块。
 - 合并：几条群消息合进同一回合时优先级 `full > text_lite > react`；任一成员升级成 `must`／`engaged` 时整个回合恢复 `full`。
-- `text_lite` **不减少**本次模型调用，只收紧自动分条与群合包。
-- `react` 由**宿主**通过统一发送出口执行，插件不得直接发送（也不得自行调 `api.onebot` 发表情）。
-- 执行行为**后续批次才启用**：当前批次声明只会入账，不改变实际发出的内容。
+- `text_lite` **不减少**本次模型调用，只收紧自动分条与群合包（`maxBubbles` / `maxChars` 都只能比现有规则更严）。
+- `react` 由**宿主**通过统一发送出口（Shared Outbox）执行 `set_msg_emoji_like`，插件不得直接发送（也不得自行调 `api.onebot` 发表情）。锚点漂移、试运行、撤权、重复回合都会如实跳过或取消；`unknown` 绝不自动重试、绝不补发文本。
+- REACT 的 `sent` 只表示**网关接受了调用**，不等于所有 QQ 客户端视觉已显示。终态反馈消费 `group/result` 事件（见下）。
 
 例子：群里只在被 @ 时说话，私聊用另一个模型，所有回复末尾加个尾巴：
 
@@ -309,6 +309,7 @@ api.on('reply/items', (items) => [...items, { kind: 'text', value: '—— 大�
 | `onebot/state` | `'connected'` 等 | QQ 网关连上 / 断开 |
 | `config` | `新配置, 旧配置` | 配置改了 |
 | `module/start` / `module/stop` | 模块 id | 有模块启动 / 停下 |
+| `group/result` | `result` | **群回合终态**（只读反馈）：每个进入执行的群回合最多一次，`{ turnId, chatId, topicMode, participation, triggerMessageIds, state, sourceModuleId, deliveryId, reason, at }`。`state` 是 `sent / partial / failed / unknown / cancelled / skipped`；`deliveryId` 仅 REACT 有值（Outbox 台账真实 id，文本多气泡是空串）；`reason` 是稳定短代码（`reply-blocked` / `model-silent` / `delivery-skipped` / `engaged-expired` / `prompt-blocked` / `empty-reply` / `reply-drift` / `duplicate-suppressed` 等）。不落盘、重启不重放；监听者抛错不影响回合本身 |
 | 你自己 `api.emit` 的 | 随你 | 模块之间互相通知 |
 
 `msg` 长这样（`text` 是纯文字：@ 她的那段去掉了，@ 别人的写成「@昵称」，图片 / 表情 / 文件写成「[图片]」这类占位；引用的那条消息的文字**不在**里面，要的话用 `replyId` 去 `api.onebot('get_msg', { message_id })` 拿）：

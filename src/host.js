@@ -325,6 +325,7 @@ export function apply(ctx) {
     deniedTools: () => bridge?.deniedTools() || [],
     groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
     groupParticipate: (decision, info) => mods.claimResult('group/participate', decision, info),
+    groupResult: (result) => mods.emit('group/result', result),
     prompt: (content, info) => mods.filter('prompt', content, info),
     items: (items, info) => mods.filter('reply/items', items, info),
     send: hubSendHook,
