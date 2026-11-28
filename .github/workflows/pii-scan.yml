@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # 需要完整历史：--range 要能算出 PR 相对基线分支的新增行与提交信息
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
 
@@ -36,14 +36,23 @@ jobs:
       - name: Scan Whole Tree
         run: node scripts/pii-scan.mjs --tree
 
+      # 审计 T2.8：事件上下文（分支名 / commit SHA）全部经 env 注入。
+      # 直接把 `${{ github.base_ref }}` 插进 bash 双引号里，等于把不可信字符串喂给 shell
+      # （分支名可以带 `$(...)` 一类字符）。
       - name: Determine Incoming Range
         id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "spec=origin/${{ github.base_ref }}..HEAD" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "spec=origin/$BASE_REF..HEAD" >> "$GITHUB_OUTPUT"
           else
-            echo "spec=${{ github.event.before }}..HEAD" >> "$GITHUB_OUTPUT"
+            echo "spec=$BEFORE..HEAD" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Scan Incoming Commits (diff + messages)
-        run: node scripts/pii-scan.mjs git --range "${{ steps.range.outputs.spec }}"
+        env:
+          RANGE_SPEC: ${{ steps.range.outputs.spec }}
+        run: node scripts/pii-scan.mjs git --range "$RANGE_SPEC"

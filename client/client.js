@@ -2153,7 +2153,7 @@ function InstallCard({ st, busy, onInstall, onRefresh, onOpen }) {
     !failed2 && st.missing ? /* @__PURE__ */ h("div", { className: "ab-muted ab-small", style: { marginTop: 6 } }, st.missing) : null
   );
 }
-function LiveCard({ st, onShutdown, onVnc, busy }) {
+function LiveCard({ st, onShutdown, onVnc, busy, vncPassword }) {
   const live = st?.live;
   if (!live) return null;
   const running = live.state === "ready";
@@ -2165,7 +2165,7 @@ function LiveCard({ st, onShutdown, onVnc, busy }) {
       right: running ? /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: onShutdown, disabled: busy }, "立刻关掉") : null
     },
     /* @__PURE__ */ h("div", { className: "ab-kv" }, /* @__PURE__ */ h("span", null, "状态"), /* @__PURE__ */ h("span", null, running ? "运行中" : "休眠"), live.browser ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("span", null, "内核"), /* @__PURE__ */ h("span", { className: "ab-small ab-muted", style: { wordBreak: "break-all" } }, live.browser)) : null, running ? /* @__PURE__ */ h(Fragment, null, /* @__PURE__ */ h("span", null, "显示"), /* @__PURE__ */ h("span", null, live.displayOwned ? `虚拟屏 ${live.display}（无桌面）` : live.display || "系统显示"), /* @__PURE__ */ h("span", null, "标签页"), /* @__PURE__ */ h("span", null, live.tabs, " 个"), /* @__PURE__ */ h("span", null, "正在用"), /* @__PURE__ */ h("span", null, live.active.length ? live.active.join("、") : /* @__PURE__ */ h("span", { className: "ab-muted" }, "没人用"))) : null, /* @__PURE__ */ h("span", null, "可用内存"), /* @__PURE__ */ h("span", { className: live.freeMB >= 0 && live.freeMB < 600 ? "ab-warn" : "" }, live.freeMB >= 0 ? fmtMB(live.freeMB) : "未知")),
-    live.displayOwned ? /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h(Row, { label: "看画面", hint: "虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => onVnc("start"), disabled: busy || live.vnc?.running }, "开 VNC"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => onVnc("stop"), disabled: busy || !live.vnc?.running }, "关")), live.vnc?.running ? /* @__PURE__ */ h(Row, { label: "连接方式" }, /* @__PURE__ */ h("div", { className: "ab-small" }, /* @__PURE__ */ h("div", null, "端口 ", /* @__PURE__ */ h("b", null, live.vnc.port), "　密码 ", /* @__PURE__ */ h("b", null, live.vnc.password)), /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 4 } }, live.vnc.lan ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。` : `只允许本机连：先做隧道 ssh -L ${live.vnc.port}:127.0.0.1:${live.vnc.port} 用户@NAS，再连 127.0.0.1:${live.vnc.port}。`))) : null) : null
+    live.displayOwned ? /* @__PURE__ */ h("div", { style: { marginTop: 10 } }, /* @__PURE__ */ h(Row, { label: "看画面", hint: "虚拟屏没人看得见。要完成短信/人机验证，只能用 VNC 连过来自己点" }, /* @__PURE__ */ h(Btn, { small: true, onClick: () => onVnc("start"), disabled: busy || live.vnc?.running }, "开 VNC"), /* @__PURE__ */ h(Btn, { small: true, kind: "ghost", onClick: () => onVnc("stop"), disabled: busy || !live.vnc?.running }, "关")), live.vnc?.running ? /* @__PURE__ */ h(Row, { label: "连接方式" }, /* @__PURE__ */ h("div", { className: "ab-small" }, /* @__PURE__ */ h("div", null, "端口 ", /* @__PURE__ */ h("b", null, live.vnc.port), "　密码", " ", /* @__PURE__ */ h("b", null, vncPassword || (live.vnc.passwordSet ? "已设置（开的时候显示过）" : "—"))), /* @__PURE__ */ h("div", { className: "ab-muted", style: { marginTop: 4 } }, live.vnc.lan ? `用 VNC 客户端连「NAS地址:${live.vnc.port}」。开给局域网了，验完记得关。` : `只允许本机连：先做隧道 ssh -L ${live.vnc.port}:127.0.0.1:${live.vnc.port} 用户@NAS，再连 127.0.0.1:${live.vnc.port}。`))) : null) : null
   );
 }
 function Browser({ draft, setDraft, toast }) {
@@ -2184,12 +2184,14 @@ function Browser({ draft, setDraft, toast }) {
     const t = setInterval(load, 3e3);
     return () => clearInterval(t);
   }, [st?.job?.state]);
+  const [vncPassword, setVncPassword] = useState("");
   const act = async (path, body, okText) => {
     setBusy(true);
     try {
       const r = await post(path, body).catch(() => ({ ok: false, message: "请求失败" }));
       toast(r.message || (r.ok ? okText : "没成功"), r.ok ? "ok" : "err");
       await load();
+      return r;
     } finally {
       setBusy(false);
     }
@@ -2209,7 +2211,12 @@ function Browser({ draft, setDraft, toast }) {
       st,
       busy,
       onShutdown: () => act("/browser/shutdown", {}, "已关闭"),
-      onVnc: (action) => act("/browser/vnc", { action }, "好")
+      vncPassword,
+      onVnc: async (action) => {
+        const r = await act("/browser/vnc", { action }, "好");
+        if (action === "start" && r?.password) setVncPassword(r.password);
+        if (action === "stop") setVncPassword("");
+      }
     }
   ), /* @__PURE__ */ h(Card, { title: "设置", desc: "一个浏览器进程给所有网页类模块共用：内存有限，多开必炸。" }, /* @__PURE__ */ h(Row, { label: "总开关", hint: "关掉之后所有要用网页的模块都停（不影响 B站、米家这些纯网络的）" }, f.sw("browser.enabled")), /* @__PURE__ */ h(Row, { label: "浏览器路径", hint: "留空 = 用装好的那份；也可以填系统里已有的 Chrome / Edge 完整路径" }, f.text("browser.chromePath", { size: "wide", placeholder: "留空自动找" })), /* @__PURE__ */ h(Row, { label: "同时用几个", hint: "默认 2。机器内存小就调到 1，超了会立刻报忙而不是排队" }, f.num("browser.maxConcurrent", { min: 1, max: 4, fallback: 2 })), /* @__PURE__ */ h(Row, { label: "没人用多久就关", hint: "默认 10 分钟。0 = 一直开着（不推荐，会一直占内存）" }, f.num("browser.idleMinutes", { min: 0, max: 240, fallback: 10 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "分钟")), /* @__PURE__ */ h(Row, { label: "内存低于多少就不开", hint: "默认 600 MB。可用内存不够时不启动，免得把整机拖垮" }, f.num("browser.minFreeMB", { min: 0, max: 8192, fallback: 600 }), /* @__PURE__ */ h("span", { className: "ab-muted" }, "MB")), /* @__PURE__ */ h(Row, { label: "无头模式", hint: "默认关。抖音、小红书会拦无头浏览器，开了可能刷不出内容" }, f.sw("browser.headless")), /* @__PURE__ */ h(Row, { label: "优先官方 Chrome", hint: "开着装 Chrome（视频编解码更全）；关着装 Debian 的 chromium（走 apt 源更快）" }, f.sw("browser.chrome")), /* @__PURE__ */ h(Row, { label: "VNC 开给局域网", hint: "默认关：VNC 只绑本机，跨机器看要先做 SSH 隧道。打开后局域网能直接连（有随机密码），但浏览器等于敞开，验完记得关" }, f.sw("browser.vncLan"))));
 }

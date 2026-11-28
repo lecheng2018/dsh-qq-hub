@@ -10,6 +10,11 @@ import { isPrivateIp } from '../core/net.js'
 
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/
 
+/** 主机名规范化：统一小写、去 IPv6 方括号、剥掉末尾所有点（`localhost.` / `foo.localhost..` 等价于 `localhost`）。 */
+export function normalizeHost(host) {
+  return String(host || '').replace(/^\[|\]$/g, '').replace(/\.+$/, '').toLowerCase()
+}
+
 /** 是不是字面 IP（v4 或 v6）。字面 IP 一律拒：没法按域名白名单管，且极易指向内网。 */
 export function isLiteralIp(host) {
   const h = String(host || '').replace(/^\[|\]$/g, '')
@@ -21,7 +26,9 @@ export function isLiteralIp(host) {
  * @param {string} host
  */
 export function isPrivateHost(host) {
-  const h = String(host || '').replace(/^\[|\]$/g, '').toLowerCase()
+  // 尾点（FQDN 绝对形式）必须剥掉：`localhost.` 是合法写法的环回地址，
+  // 不剥就有 `isPrivateHost('localhost.') === false` 的绕过（同 `foo.localhost..`）。
+  const h = normalizeHost(host)
   if (!h) return true
   if (h === 'localhost' || h.endsWith('.localhost')) return true
   // 只有字面 IP 才走私网判定；域名交给白名单（否则 isPrivateIp 会把「不是 IP」当畸形值一律判内网）
@@ -31,7 +38,7 @@ export function isPrivateHost(host) {
 
 /** 域名尾段匹配：`douyin.com` 放行 `www.douyin.com`，但不放行 `evil-douyin.com`。 */
 export function hostMatches(host, domains) {
-  const h = String(host || '').toLowerCase()
+  const h = normalizeHost(host)
   return (domains || []).some((d) => {
     const want = String(d || '').toLowerCase()
     return want && (h === want || h.endsWith('.' + want))
@@ -52,7 +59,7 @@ export function safetyCheck(url) {
     return { ok: false, reason: '网址格式不对' }
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, reason: `不允许 ${u.protocol} 协议` }
-  const host = u.hostname.toLowerCase()
+  const host = normalizeHost(u.hostname)
   if (!host) return { ok: false, reason: '网址没有主机名' }
   if (isPrivateHost(host)) return { ok: false, reason: `不允许访问本机或内网地址：${host}` }
   if (isLiteralIp(host)) return { ok: false, reason: `不允许用 IP 访问：${host}` }

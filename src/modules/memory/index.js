@@ -185,7 +185,7 @@ export default {
     api.route('/memory/import', async (req) => {
       const b = await http.body(req)
       try { return { ok: true, list: await memory.importCandidates(String(b.text || '').slice(0, 30000)) } } catch (error) { return { ok: false, message: error.message, list: [] } }
-    })
+    }, { sideEffect: true })
     api.route('/memory/import/commit', async (req) => {
       const b = await http.body(req)
       const n = memory.importCommit(b.items || [], { scope: b.scope === 'global' ? 'global' : 'private' })

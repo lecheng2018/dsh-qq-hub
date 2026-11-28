@@ -103,7 +103,7 @@ test('stickers：PROTECTED_FROM 含 qq 与 tool，群友发言时禁止通过 qq
       config: () => cfg,
       log: { info() {}, warn() {}, debug() {} },
       core: {
-        hub: { turnHasOwner: () => ownerSpeaking, sendSticker: async () => true },
+        hub: { turnHasOwner: () => ownerSpeaking, turnSendersAllOwner: () => ownerSpeaking, sendSticker: async () => true },
         onebot: { call: async () => ({}) },
         http: { body: async () => ({}), query: () => ({}), send() {}, raw: async () => Buffer.alloc(0) },
       },

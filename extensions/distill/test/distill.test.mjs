@@ -98,19 +98,19 @@ test('history-miner: 正确扫描群聊并采样过滤', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'chatlog-test-'))
   try {
     const fakeLog = [
-      JSON.stringify({ t: 1000, chatId: 'group:999', who: '群友1', uid: '111', text: '群里今天真热闹' }),
-      JSON.stringify({ t: 2000, chatId: 'group:999', who: '大肥鱼', uid: '222', text: '大家好呀' }), // Bot -> 应过滤
-      JSON.stringify({ t: 3000, chatId: 'group:999', who: '群友2', uid: '333', text: '[图片]' }), // 纯表情 -> 应过滤
-      JSON.stringify({ t: 4000, chatId: 'group:999', who: '群友1', uid: '111', text: '确实好活' }),
+      JSON.stringify({ t: 1000, chatId: 'group:999001', who: '群友1', uid: '111', text: '群里今天真热闹' }),
+      JSON.stringify({ t: 2000, chatId: 'group:999001', who: '大肥鱼', uid: '222', text: '大家好呀' }), // Bot -> 应过滤
+      JSON.stringify({ t: 3000, chatId: 'group:999001', who: '群友2', uid: '333', text: '[图片]' }), // 纯表情 -> 应过滤
+      JSON.stringify({ t: 4000, chatId: 'group:999001', who: '群友1', uid: '111', text: '确实好活' }),
       JSON.stringify({ t: 5000, chatId: 'group:888', who: '群友3', uid: '444', text: '另一个群的消息' }),
     ].join('\n')
     writeFileSync(join(dir, '2026-11-16.jsonl'), fakeLog)
 
     const groups = scanHistoryGroups(dir)
     assert.equal(groups.length, 2)
-    assert.equal(groups.find(g => g.groupId === '999').totalCount, 4)
+    assert.equal(groups.find(g => g.groupId === '999001').totalCount, 4)
 
-    const samples = sampleGroupHistory(dir, '999', { days: 1, sampleSize: 10, botQQ: '222' })
+    const samples = sampleGroupHistory(dir, '999001', { days: 1, sampleSize: 10, botQQ: '222' })
     assert.equal(samples.length, 2)
     assert.equal(samples[0].text, '群里今天真热闹')
     assert.equal(samples[1].text, '确实好活')
@@ -128,7 +128,7 @@ test('module runtime: 实时消息监听与缓冲累积', async () => {
 
     const mockApi = {
       dataDir: () => dir,
-      settings: () => ({ enabled: true, batchSize: 5, activeGroups: '123' }),
+      settings: () => ({ enabled: true, batchSize: 5, activeGroups: '123456' }),
       config: () => ({ botQQ: '10001' }),
       log: { info() {}, warn() {}, debug() {} },
       on: (event, fn) => { listeners.set(event, fn) },
@@ -147,23 +147,67 @@ test('module runtime: 实时消息监听与缓冲累积', async () => {
     assert.equal(r1, false)
 
     // 2. 测试 Bot 自身发言 -> 被忽略
-    const r2 = await onMessage({ kind: 'group', groupId: '123', userId: '10001', text: '我是Bot' })
+    const r2 = await onMessage({ kind: 'group', groupId: '123456', userId: '10001', text: '我是Bot' })
     assert.equal(r2, false)
 
     // 3. 测试未生效群 -> 被忽略
-    const r3 = await onMessage({ kind: 'group', groupId: '456', userId: '888', text: '其他群发言' })
+    const r3 = await onMessage({ kind: 'group', groupId: '456789', userId: '888', text: '其他群发言' })
     assert.equal(r3, false)
 
     // 4. 测试合法群友发言 -> 正常接收并进入缓存
-    const r4 = await onMessage({ kind: 'group', groupId: '123', userId: '888', nickname: '群友A', text: '第一句' })
+    const r4 = await onMessage({ kind: 'group', groupId: '123456', userId: '888', nickname: '群友A', text: '第一句' })
     assert.equal(r4, false)
 
     const statusHandler = routes.get('/status')
     const status = await statusHandler()
-    const groupStat = status.list.find(g => g.groupId === '123')
+    const groupStat = status.list.find(g => g.groupId === '123456')
     assert.ok(groupStat)
     assert.equal(groupStat.bufferCount, 1)
 
+    mod.dispose()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('module runtime: /simulate 入口校验群号（与其它路由一致，非法群号直接拒）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'distill-sim-'))
+  try {
+    const routes = new Map()
+    let body = {}
+    const mockApi = {
+      dataDir: () => dir,
+      settings: () => ({ enabled: true, batchSize: 5, activeGroups: '123456' }),
+      config: () => ({ botQQ: '10001' }),
+      log: { info() {}, warn() {}, debug() {} },
+      on: () => {},
+      context: () => {},
+      route: (path, fn) => { routes.set(path, fn) },
+      later: (ms, fn) => setTimeout(fn, ms),
+      ask: async () => '[]',
+      core: { http: { body: async () => body } },
+    }
+    const mod = distillModule.setup(mockApi)
+    const simulate = routes.get('/simulate')
+    assert.equal(typeof simulate, 'function')
+
+    // 原型污染串 / 非数字 / 长度不对：都不能当 groupId 用
+    for (const groupId of ['__proto__', 'constructor', 'abc123', '123', '1234567890123']) {
+      body = { groupId, userText: '随便说点什么' }
+      const r = await simulate({})
+      assert.equal(r.ok, false, `非法群号不该放行：${groupId}`)
+      assert.match(r.message, /群号不合法/)
+    }
+
+    // 合法群号 + 空测试内容：同样拒
+    body = { groupId: '123456', userText: '   ' }
+    const empty = await simulate({})
+    assert.equal(empty.ok, false)
+
+    // 合法群号 + 有内容：正常进入匹配逻辑
+    body = { groupId: '123456', userText: '今天吃什么' }
+    const ok = await simulate({})
+    assert.notEqual(ok.ok, false, JSON.stringify(ok))
     mod.dispose()
   } finally {
     rmSync(dir, { recursive: true, force: true })

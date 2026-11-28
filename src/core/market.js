@@ -19,7 +19,7 @@ import { inflateRawSync, crc32 } from 'node:zlib'
 import { pathToFileURL } from 'node:url'
 import { API_VERSION, checkDef, userDir } from './modules.js'
 import { dataDir } from './store.js'
-import { assertPublicUrl } from './net.js'
+import { assertPublicUrl, getSafeDispatcher } from './net.js'
 
 export const REGISTRY_URL = 'https://raw.githubusercontent.com/lecheng2018/dsh-qq-hub-mods/registry/index.json'
 // 多源 failover（比上游强一档）：raw → jsdelivr CDN；config.modules.market.indexUrls / env 可追加覆盖
@@ -135,7 +135,9 @@ export function createMarket({ mods, getConfig, setConfig, log, version, alive =
     const proxy = String(marketCfg().httpProxy || '')
     if (!proxy) {
       if (proxyAgent) { const old = proxyAgent; proxyAgent = null; proxyAgentFor = ''; await old.close() }
-      return fetcher(url, options)
+      // 直连分支同样挂统一 safeLookup Agent：validateUrl 只校验字面地址，
+      // 真正的 socket 解析在 fetch 里发生，不二次校验就有 DNS rebinding 的 TOCTOU 窗口。
+      return fetcher(url, { ...options, dispatcher: await getSafeDispatcher() })
     }
     if (proxyAgentFor !== proxy) {
       if (proxyAgent) await proxyAgent.close()

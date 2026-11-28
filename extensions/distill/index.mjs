@@ -2,7 +2,7 @@
 import { resolve } from 'node:path'
 import { buildDistillPrompt } from './prompt.mjs'
 import { verifyAndCleanRules, safeParseJsonArray } from './verifier.mjs'
-import { createDistillStore } from './store.mjs'
+import { createDistillStore, isSafeGroupId } from './store.mjs'
 import { scanHistoryGroups, sampleGroupHistory } from './history-miner.mjs'
 
 export default {
@@ -202,12 +202,12 @@ export default {
         return (b.activeCount * 1000 + b.historyCount) - (a.activeCount * 1000 + a.historyCount)
       })
       return { ok: true, list, settings: api.settings() }
-    })
+    }, { sideEffect: false })
 
     api.route('/rules', async (req) => {
       const q = api.core?.http?.query ? api.core.http.query(req) : {}
       const gid = q.groupId || new URL(req.url, 'http://localhost').searchParams.get('groupId')
-      if (!gid) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(gid)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
       const minCount = Number(api.settings().minPromotionCount) || 3
       const activeRules = store.getActiveRules(gid, minCount)
       const candidateRules = store.getCandidateRules(gid, minCount)
@@ -218,70 +218,70 @@ export default {
         minCount,
         totalCount: activeRules.length + candidateRules.length,
       }
-    })
+    }, { sideEffect: false })
 
     api.route('/promote', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
+      if (!isSafeGroupId(groupId) || !ruleId) return { ok: false, message: '群号或规则 id 不合法' }
       const minCount = Number(api.settings().minPromotionCount) || 3
       const success = store.promoteCandidate(groupId, ruleId, minCount)
       return { ok: success }
-    })
+    }, { sideEffect: true })
 
     api.route('/prune-noise', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(groupId)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
       const minCount = Number(api.settings().minPromotionCount) || 3
       const pruned = store.pruneNoise(groupId, 2)
       return { ok: true, pruned, message: `已清理 ${pruned} 条单次出现的偶发噪点` }
-    })
+    }, { sideEffect: true })
 
     api.route('/consolidate', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(groupId)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
       const reduced = store.consolidate(groupId)
       return { ok: true, reduced, message: `近义规则聚类完成，精简了 ${reduced} 条重复规则` }
-    })
+    }, { sideEffect: true })
 
     api.route('/toggle-lock', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
+      if (!isSafeGroupId(groupId) || !ruleId) return { ok: false, message: '群号或规则 id 不合法' }
       const locked = store.toggleLock(groupId, ruleId)
       return { ok: true, locked }
-    })
+    }, { sideEffect: true })
 
     api.route('/delete-rule', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, ruleId } = body || {}
-      if (!groupId || !ruleId) return { ok: false, message: '参数不足' }
+      if (!isSafeGroupId(groupId) || !ruleId) return { ok: false, message: '群号或规则 id 不合法' }
       store.deleteRule(groupId, ruleId)
       return { ok: true }
-    })
+    }, { sideEffect: true })
 
     api.route('/add-manual', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, situation, style } = body || {}
-      if (!groupId || !situation || !style) return { ok: false, message: '情境和风格均不能为空' }
+      if (!isSafeGroupId(groupId) || !situation || !style) return { ok: false, message: '群号不合法，或情境/风格为空' }
       store.addManualRule(groupId, { situation, style })
       return { ok: true }
-    })
+    }, { sideEffect: true })
 
     api.route('/clear-all', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(groupId)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
       store.clearRules(groupId)
       return { ok: true }
-    })
+    }, { sideEffect: true })
 
     api.route('/trigger-now', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(groupId)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
       const buf = buffers.get(groupId) || []
       if (buf.length < 2) {
         return { ok: false, message: `当前实时消息缓存仅 ${buf.length} 条，不足以提炼（建议等待群友发言或使用上方「从历史聊天提炼」）` }
@@ -289,12 +289,12 @@ export default {
       const lines = buf.splice(0, buf.length)
       const count = await runDistillLines(groupId, lines)
       return { ok: true, message: `已提炼 ${lines.length} 条实时发言，获得 ${count} 条新规则` }
-    })
+    }, { sideEffect: true })
 
     api.route('/distill-history', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, days = 3, sampleSize = 35 } = body || {}
-      if (!groupId) return { ok: false, message: '缺少 groupId' }
+      if (!isSafeGroupId(groupId)) return { ok: false, message: '群号不合法（只接受 5–12 位数字）' }
 
       const botQQ = api.config?.()?.botQQ || ''
       const lines = sampleGroupHistory(chatLogDir, groupId, {
@@ -316,13 +316,13 @@ export default {
         sampleCount: lines.length,
         extractedCount: count,
       }
-    })
+    }, { sideEffect: true })
 
     // 模拟测试回复效果接口（沙盒验证）
     api.route('/simulate', async (req) => {
       const body = await (api.core?.http?.body ? api.core.http.body(req) : {})
       const { groupId, userText } = body || {}
-      if (!groupId || !userText?.trim()) return { ok: false, message: '缺少 groupId 或测试内容' }
+      if (!isSafeGroupId(groupId) || !userText?.trim()) return { ok: false, message: '群号不合法（只接受 5–12 位数字），或测试内容为空' }
 
       const minCount = Number(api.settings().minPromotionCount) || 3
       const activeRules = store.getActiveRules(groupId, minCount)
@@ -352,7 +352,7 @@ export default {
         stylePrompt,
         reply: reply || '（模型未输出文字）',
       }
-    })
+    }, { sideEffect: true })
 
     return {
       getGroupRules: (gid) => store.getActiveRules(gid),

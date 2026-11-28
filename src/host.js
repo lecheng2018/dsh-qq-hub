@@ -28,6 +28,7 @@ import { loadConfig, saveConfig } from './core/config.js'
 import { dataDir, readJson, writeJson } from './core/store.js'
 import { createLogger } from './core/logger.js'
 import { registerSecret } from './core/redact.js'
+import { collectSecretValues } from './core/config-secrets.js'
 import { createSnowLumaManager } from './snowluma/manager.js'
 import { createChatLog, createChatLogApi } from './chat/chat-log.js'
 import { createQuestionRegistry } from './chat/questions.js'
@@ -99,7 +100,10 @@ export function apply(ctx) {
   const chatLogStore = createChatLog({ getConfig, log: logger.child('chat-log') })
   const chatLog = createChatLogApi(chatLogStore)
   ctx.effect(() => chatLogStore.startRetention(), 'qq-hub: 聊天流水保留清理')
-  const secrets = () => { for (const k of ['webuiPassword', 'httpToken', 'wsToken']) registerSecret(cfg.snowluma[k]); registerSecret(cfg.imageGen.apiKey); registerSecret(cfg.bridge.token) }
+  // 遍历**全部已登记敏感路径**（TTS/ASR/向量/精排/各平台 Cookie/模块动态注册的 secret）：
+  // 旧写法只登记了 5 个字段，导致 voice.qwenApiKey、ext.memory.vectorApiKey 等
+  // 照样以明文出现在日志与错误信息里（redact 找不到它们）。
+  const secrets = () => { for (const val of collectSecretValues(cfg)) registerSecret(val) }
   const setConfig = (next) => {
     const before = cfg
     cfg = saveConfig(next)

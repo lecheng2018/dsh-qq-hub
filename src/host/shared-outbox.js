@@ -81,10 +81,13 @@ export function createSharedOutbox({ onebot, getConfig, log, ledgerFile, current
       const text = textForGuard(delivery)
       const chatKey = String(delivery.chatKey || '')
       const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
+      // 只有「发给主人自己的那个私聊」才豁免主人 QQ 号；
+      // 旧写法只要 chatKey 以 private: 开头就豁免，等于把主人号写进了任意私聊的白名单。
+      const toOwner = Boolean(cfg.ownerQQ && chatKey === 'private:' + cfg.ownerQQ)
       const result = checkIdentityLeak(text, {
         surface: chatKey.startsWith('group:') ? '群消息' : '私聊消息',
         ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-        allowIds: [ownGroup, ...(chatKey.startsWith('private:') ? [cfg.ownerQQ] : [])].filter(Boolean),
+        allowIds: [ownGroup, ...(toOwner ? [cfg.ownerQQ] : [])].filter(Boolean),
         allowBareNumbers: !chatKey.startsWith('group:'),
         mode: ig.mode === 'warn' ? 'warn' : 'block',
       })

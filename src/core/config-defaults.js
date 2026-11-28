@@ -24,14 +24,40 @@ export const deepFreeze = (o) => {
 
 export const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v)
 
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * 数组元素同样要清洗：`[{ "__proto__": { "polluted": true } }]` 走 `out[k] = v` 这条路
+ * 会把带污染键的对象原样挂进配置（数组分支以前完全没过滤）。
+ */
+function sanitizeValue(v) {
+  if (Array.isArray(v)) return v.map(sanitizeValue)
+  if (isObj(v)) {
+    const out = {}
+    for (const [k, val] of Object.entries(v)) {
+      if (FORBIDDEN_KEYS.has(k)) continue
+      out[k] = sanitizeValue(val)
+    }
+    return out
+  }
+  return v
+}
+
 export function deepMerge(base, over) {
   if (!isObj(over)) return structuredClone(base)
   const out = structuredClone(base)
   for (const [k, v] of Object.entries(over)) {
     // 原型污染防护：__proto__ / constructor / prototype 绝不参与合并（面板与配置文件都是不可信输入）
-    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue
-    if (isObj(v) && isObj(out[k])) out[k] = deepMerge(out[k], v)
-    else if (v !== undefined) out[k] = v
+    if (FORBIDDEN_KEYS.has(k)) continue
+    if (isObj(v)) {
+      // 动态新增的子对象也必须递归走一遍：否则 `ext.a = {"__proto__": {...}}`
+      // 只被剥掉第一层，且会把不可信输入的可变引用直接挂进配置
+      out[k] = deepMerge(isObj(out[k]) ? out[k] : {}, v)
+    } else if (Array.isArray(v)) {
+      out[k] = sanitizeValue(v)
+    } else if (v !== undefined) {
+      out[k] = v
+    }
   }
   return out
 }

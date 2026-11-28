@@ -78,6 +78,20 @@ export const getAt = (obj, path) => {
   return p ? p[path.at(-1)] : undefined
 }
 
+/**
+ * 取出配置里**全部已登记敏感路径**上的非空字符串值（供 redact 注册）。
+ * 只认 allSecrets()：静态 SECRETS + 模块 registerSecretField 动态登记，
+ * 新增的云端凭据（TTS/ASR/向量/精排/Cookie）不需要再单独改调用方。
+ */
+export function collectSecretValues (cfg) {
+  const out = []
+  for (const path of allSecrets()) {
+    const val = getAt(cfg, path)
+    if (typeof val === 'string' && val) out.push(val)
+  }
+  return out
+}
+
 // 这些密钥在面板里显示结尾几位（「已保存（结尾 …a1b2）」），方便认出存的是哪一份；完整值不回传
 export const HINTED = [['bili', 'sessdata'], ['bili', 'biliJct']]
 

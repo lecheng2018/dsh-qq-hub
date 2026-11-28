@@ -33,10 +33,17 @@ export default {
         },
         required: ['action'],
         execute: async ({ action, group_id, user_id, minutes, text }) => {
-          // 这一轮里主人说过话才行；群里别人顺带插话不影响，但谁都不能拿群管对付主人
-          if (!hub.turnHasOwner(sessionId)) return { ok: false, message: '只有主人能让我做群管操作' }
+          // 这一轮说话的人必须**全是**主人：turnHasOwner 只要求「主人说过话」，
+          // 群里主人闲聊 + 别人顺带要求就能借主人的场次越权（混合回合提权）。
+          if (!hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '只有主人能让我做群管操作' }
           const cfg = api.config()
-          const gid = Number(group_id || (chat.kind === 'group' ? chat.groupId : 0))
+          const askedGid = group_id === undefined || group_id === null || String(group_id).trim() === '' ? 0 : Number(group_id)
+          let gid = askedGid
+          if (chat.kind === 'group') {
+            // 群聊上下文只能操作当前群：跨群等于绕到别的群做管理动作
+            if (askedGid && askedGid !== Number(chat.groupId)) return { ok: false, message: '在群里只能操作当前这个群，不能跨群操作' }
+            gid = Number(chat.groupId)
+          }
           if (!gid) return { ok: false, message: '不知道是哪个群' }
           if (!cfg.allow.groups.includes(String(gid))) return { ok: false, message: '这个群不在白名单里' }
           const uid = Number(user_id || 0)
@@ -45,9 +52,15 @@ export default {
           const role = await groupRoles.get(gid, { fresh: true })
           if (role && !groupRoles.canManage(role)) return { ok: false, message: '我在这个群只是普通成员，没有管理权限' }
           if (role === 'admin' && action === 'title') return { ok: false, message: '改专属头衔要群主才行，我只是管理员' }
+          if ((action === 'title' || action === 'notice') && !String(text || '').trim()) return { ok: false, message: action === 'title' ? '要改成什么头衔？' : '公告内容不能是空的' }
           if (cfg.dryRun) return { ok: true, message: `试运行：本来要对群 ${gid} 做 ${action}` }
           switch (action) {
-            case 'ban': await onebot.call('set_group_ban', { group_id: gid, user_id: uid, duration: Math.max(1, Number(minutes) || 10) * 60 }); break
+            case 'ban': {
+              // 合法钳制：防 Infinity / 负数 / 超过 30 天（43200 分钟）
+              const mins = Math.min(43200, Math.max(1, Math.round(Number(minutes) || 10)))
+              await onebot.call('set_group_ban', { group_id: gid, user_id: uid, duration: mins * 60 })
+              break
+            }
             case 'unban': await onebot.call('set_group_ban', { group_id: gid, user_id: uid, duration: 0 }); break
             case 'kick': await onebot.call('set_group_kick', { group_id: gid, user_id: uid, reject_add_request: false }); break
             case 'title': await onebot.call('set_group_special_title', { group_id: gid, user_id: uid, special_title: String(text || '') }); break

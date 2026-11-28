@@ -106,7 +106,10 @@ test('S4：模块 route() 可声明 sideEffect，并透传给 host 前缀路由'
   assert.match(modules, /guarded\.__isModuleRoute = true/, '模块路由标记')
   assert.match(modules, /function routeSideEffect\(path\)/, '导出查询函数')
   const http = src('src/host/http.js')
-  assert.match(http, /registeredSideEffect: fn\.__sideEffect, isModuleRoute: fn\.__isModuleRoute/, '精确路由透传')
+  // S4 二次审计（B2/T2.2）：旧实现把标记挂到新建的匿名箭头函数上，guard 永远读到 undefined；
+  // 现在改为在 route() 里组 meta 并直接透传，读写行为由 test/panel-side-effect-b2.test.js 真跑覆盖。
+  assert.match(http, /const meta = \{ registeredSideEffect: opts\.sideEffect, isModuleRoute: false \}/, '精确路由把标记收进 meta')
+  assert.match(http, /const g = guard\.check\(req, meta\)/, 'meta 直接透传给 guard')
   const host = src('src/host.js')
   assert.match(host, /isModuleRoute: true, registeredSideEffect: mods\.routeSideEffect/, '前缀路由透传')
 })

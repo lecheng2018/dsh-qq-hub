@@ -156,24 +156,24 @@ export default {
       const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format((dependencies.now || Date.now)());
       const counters = state.day === today ? {} : { runs: 0, views: 0, shares: 0 };
       return { ok: true, busy, ...state, ...counters, browser: browser.status?.() || {}, cookieSet: Boolean(api.settings().cookie), bars: barNames(api.settings().bars), browseMode: barNames(api.settings().bars).length ? 'bars' : 'home' };
-    });
-    api.route('/login', async () => browser.openLogin ? browser.openLogin() : { ok: false, message: '当前读取组件不支持登录窗口。' });
-    api.route('/share', async () => run({ manual: true }));
+    }, { sideEffect: false })
+    api.route('/login', async () => browser.openLogin ? browser.openLogin() : { ok: false, message: '当前读取组件不支持登录窗口。' }, { sideEffect: true });
+    api.route('/share', async () => run({ manual: true }), { sideEffect: true });
     api.route('/logout', async () => {
       if (browser.status?.().loginPending || busy) return { ok: false, message: '请先关闭登录窗口并等待当前浏览任务结束。' };
       api.setConfig({ ext: { 'tieba-reader': { cookie: '' } } });
       return { ok: true, ...await browser('https://tieba.baidu.com/', 'logout') };
-    });
+    }, { sideEffect: true })
     api.route('/account', async () => {
       if (browser.status?.().loginPending) return { ok: false, loggedIn: null, message: '正在等待登录或验证，确认成功后窗口会自动关闭；也可手动关闭后检查。' };
       const result = await tieba.account(); browser.recordAccount?.(result); return result;
-    });
+    }, { sideEffect: false })
     api.route('/preview', async (req) => {
       if (api.settings().enabled === false) return blocked('贴吧功能已关闭');
       if (browser.status?.().loginPending) return { ok: false, message: '请先关闭登录窗口保存会话，再试刷列表。' };
       const b = await api.core.http.body(req); const bar = clean(b.bar) || barNames(api.settings().bars)[0];
       return b.home === true || !bar ? tieba.home() : tieba.browse(bar);
-    });
+    }, { sideEffect: false })
     const enabledRead = method => async (...args) => {
       if (api.settings().enabled === false || disposed) return blocked('贴吧功能已关闭');
       const result = await tieba[method](...args);

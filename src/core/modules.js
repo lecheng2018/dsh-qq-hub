@@ -995,12 +995,28 @@ export function lazyProxy(get) {
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v)
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+function sanitizeTree(v) {
+  if (Array.isArray(v)) return v.map(sanitizeTree)
+  if (isObj(v)) {
+    const out = {}
+    for (const [k, val] of Object.entries(v)) {
+      if (FORBIDDEN_KEYS.has(k)) continue
+      out[k] = sanitizeTree(val)
+    }
+    return out
+  }
+  return v
+}
+
 function deepMerge(base, over) {
   if (!isObj(over)) return over === undefined ? base : over
   const out = { ...(isObj(base) ? base : {}) }
   for (const [k, v] of Object.entries(over)) {
     if (FORBIDDEN_KEYS.has(k)) continue
-    out[k] = isObj(v) && isObj(out[k]) ? deepMerge(out[k], v) : v
+    // 新增的动态子对象也要递归清洗，数组元素同理（防 `{"ext":{"a":{"__proto__":…}}}`）
+    if (isObj(v)) out[k] = deepMerge(isObj(out[k]) ? out[k] : {}, v)
+    else if (Array.isArray(v)) out[k] = sanitizeTree(v)
+    else out[k] = v
   }
   return out
 }

@@ -67,13 +67,17 @@ export default {
             }
             const item = found.item
             const label = item.name || item.md5.slice(0, 8)
+            // 保护判定收紧到「这一轮说话的人全是主人」：群里主人随口一句 + 别人在场时
+            // 旧写法 turnHasOwner=true 就能让混合回合改/删主人亲手加的表情。
             if (del) {
-              // 主人亲手加/导入的表情（含 manual/panel/qq/tool/pack），主人开口才删
-              if (PROTECTED_FROM.has(String(item.from || '')) && !hub.turnHasOwner(sessionId)) return { ok: false, message: '这张是主人加的，主人说删才删' }
+              // 主人亲手加/导入的表情（含 manual/panel/qq/tool/pack）与自己画的图，主人开口才删
+              if ((PROTECTED_FROM.has(String(item.from || '')) || String(item.from || '') === 'painting') && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '这张是主人加的（或你自己画的），主人说删才删' }
               const r = await store.remove(item.md5)
               return r.ok ? { ok: true, message: `删掉了「${label}」` } : { ok: false, message: r.reason || '没删成' }
             }
             if (!new_name && !(Array.isArray(tags) && tags.length)) return { ok: false, message: '要说改成什么' }
+            // 改名/改标签与被删同一档保护：受保护来源只能由「全场都是主人」的回合改
+            if ((PROTECTED_FROM.has(String(item.from || '')) || String(item.from || '') === 'painting') && !hub.turnSendersAllOwner(sessionId)) return { ok: false, message: '这张是主人加的（或你自己画的），主人说改才能改' }
             const r = await store.rename(item.md5, new_name ? String(new_name).trim().slice(0, 12) : undefined, Array.isArray(tags) && tags.length ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 5) : undefined)
             return r.ok
               ? { ok: true, message: `改好了：「${label}」→「${r.item.name}」${r.item.tags?.length ? '（' + r.item.tags.join('/') + '）' : ''}` }
@@ -95,8 +99,17 @@ export default {
         required: [],
         execute: async ({ index, name, tags, painting }) => {
           // 收自己的画：不受「只听主人的」限制（这是她自己画的，不是别人的表情）
+          const isOwnerPrivate = level === 'full' && chat.kind === 'private'
           if (painting) {
-            const p = resolvePainting(current, painting)
+            // 非主人私聊不能借「收表情」把别的会话画的图捞出来：
+            // ① 只听主人模式下混合回合直接拒；② 解析只用本会话记录过的编号
+            if (!isOwnerPrivate) {
+              const pol = stickerPolicy()
+              if ((pol.collectMode || 'auto') === 'owner' && !hub.turnSendersAllOwner(sessionId)) {
+                return { ok: false, message: '现在是「只听主人的」模式：这一轮有别人在，得主人让我收才行' }
+              }
+            }
+            const p = resolvePainting(current, painting, { allowGlobalFallback: isOwnerPrivate })
             if (!p) return { ok: false, message: `找不到画作 ${painting}（可能是编号过期了，先让我画一张？）` }
             let buf
             try {
@@ -111,7 +124,8 @@ export default {
             })
             if (!r.ok) return { ok: false, message: r.reason || '没存成' }
             if (r.existed) return { ok: true, message: `库里已经有这张了（叫「${r.item.name || '未命名'}」）` }
-            return { ok: true, message: `收进库了：「${r.item.name || '未命名'}」（${p.prompt ? '画的是' + p.prompt : '自己画的'}）` }
+            // 非主人私聊不回显画作的 prompt（prompt 可能带着主人私聊里的私密内容）
+            return { ok: true, message: `收进库了：「${r.item.name || '未命名'}」（${p.prompt && isOwnerPrivate ? '画的是' + p.prompt : '自己画的'}）` }
           }
           const pol = stickerPolicy()
           if (!pol.collect) return { ok: false, message: '偷表情关着' }
