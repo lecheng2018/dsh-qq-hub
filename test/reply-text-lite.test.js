@@ -166,3 +166,20 @@ test('引用与非文本 segment：text_lite 群合包不截坏 replyTo 与 stic
   assert.equal(textPart.replyTo, '2', 'replyTo 没有被截坏（合并后仍指向编号 2）')
   assert.ok(stickerPart, '非文本 segment（表情）没有被丢弃')
 })
+
+test('纵深防御：topicMode must / engaged + participationLevel text_lite → 不收紧（must/engaged 永不降级）', async () => {
+  for (const topicMode of ['must', 'engaged']) {
+    const { delivery, sent } = fixture()
+    await delivery.deliverNow('group:30001', '一|||二|||三', {
+      participationLevel: 'text_lite', textLiteLimits: { maxBubbles: 1, maxChars: 80 }, topicMode,
+    })
+    assert.equal(sent.length, 3, `${topicMode} 回合即使误传 text_lite opts 也不收紧`)
+  }
+  // 对外口径一致：hookInfo.participation 在 must/engaged 下也是 'full'
+  let seen = null
+  const { delivery } = fixture({ hooks: { items: (items, info) => { seen = { ...info }; return undefined } } })
+  await delivery.deliverNow('group:30001', '一', {
+    participationLevel: 'text_lite', textLiteLimits: { maxBubbles: 1 }, topicMode: 'engaged',
+  })
+  assert.equal(seen.participation, 'full', 'must/engaged 对外 participation 恒为 full')
+})

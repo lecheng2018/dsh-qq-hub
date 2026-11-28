@@ -19,6 +19,10 @@ let replyBehavior = null     // api.on('reply') 返回值（null = 拦下）
 let promptThrow = null       // prompt 钩子抛错注入
 let modelReply = '嗯'        // 模型回复文本
 let modelReject = null       // 模型轮次拒绝注入
+let modelHold = false        // 模型轮次挂起（由测试手动放行，构造生成期漂移）
+const holdResolvers = []
+let promptNull = false       // prompt 钩子返回 null（prompt-blocked）
+let emitThrowsForOut = false // mods.emit 对 kind:'out' 抛错（构造 error.delivered>0 的 catch partial）
 let modelHang = false        // 模型轮次挂起（真实取消路径用）
 const gpModule = {
   id: 'gp-mod', name: '参与测试', version: '1.0.0', api: 1,
@@ -63,6 +67,15 @@ function mkDsh() {
       prompts.push((msg.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n'))
       if (modelReject) return Promise.reject(modelReject())
       if (modelHang) return new Promise(() => {}) // 挂起：等待 io.signal abort（真实取消路径）
+      if (modelHold) {
+        // 可控挂起：漂移消息进缓冲后放行 —— 放行时必须补发 assistant/message + turn/end，
+        // 否则 runTurn 等不到回合结束事件会一直挂到超时。
+        return new Promise((resolve) => holdResolvers.push(() => {
+          for (const fn of [...listeners]) fn(session, { type: 'assistant/message', data: { turn: n, message: { content: [{ type: 'text', text: modelReply }] } } })
+          for (const fn of [...listeners]) fn(session, { type: 'turn/end', data: { turn: n, reason: { kind: 'completed' } } })
+          resolve()
+        }))
+      }
       for (const fn of [...listeners]) fn(session, { type: 'assistant/message', data: { turn: n, message: { content: [{ type: 'text', text: modelReply }] } } })
       for (const fn of [...listeners]) fn(session, { type: 'turn/end', data: { turn: n, reason: { kind: 'completed' } } })
       return Promise.resolve()
@@ -100,15 +113,24 @@ function makeCore(dsh, onebotImpl, cfgOver = {}) {
     ...cfgOver,
   }
   let callNo = 0
-  return createModularCore({
+  const modsStub = {
+    contextFor: async () => '',
+    commands: () => [],
+    use: () => null,
+    // 可选抛错（构造 error.delivered>0 的 catch partial 路径：reply-delivery 的
+    // onActivity 不在 try 里，抛错会带 delivered 进 execute 的 catch 映射）
+    emit: (name, payload) => { if (emitThrowsForOut && name === 'activity' && payload?.kind === 'out') throw new Error('activity boom') },
+  }
+  const core = createModularCore({
     dsh: dsh.ctx,
     onebot: { call: async (action, params) => { callNo++; return onebotImpl({ action, params, callNo }) } },
-    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    mods: modsStub,
     getConfig: () => cfg, logger: noopLog, log: noopLog,
     moduleHooks: {
       groupParticipate: (decision, info) => mods.claimResult('group/participate', decision, info),
       reply: (text, info) => mods.filter('reply', text, info),
       prompt: (content, info) => {
+        if (promptNull) return null
         if (promptThrow) throw promptThrow()
         return mods.filter('prompt', content, info)
       },
@@ -116,6 +138,8 @@ function makeCore(dsh, onebotImpl, cfgOver = {}) {
       groupResult: (result) => { events.push(result); mods.emit('group/result', result) },
     },
   })
+  core.__cfg = cfg // 测试钩子：出队时动态复核（dryRun/enabled/ACL）需要在线翻转配置
+  return core
 }
 
 let mid = 10000
@@ -143,6 +167,10 @@ const clearAll = () => {
   modelReply = '嗯'
   modelReject = null
   modelHang = false
+  modelHold = false
+  holdResolvers.length = 0
+  promptNull = false
+  emitThrowsForOut = false
   throwerArmed = false
 }
 
@@ -305,7 +333,7 @@ test('cancelled / unknown 映射；监听者抛错不影响 turn outcome 且 gro
   assert.equal(r1.result.state, 'cancelled', 'dryRun → Outbox cancelled')
   assert.equal(events.length, 1)
   assert.equal(events[0].state, 'cancelled')
-  assert.equal(events[0].reason, 'dryRun', 'Outbox 真实 reason 透传')
+  assert.equal(events[0].reason, 'outbox-dry-run', 'Outbox reason 已归一化为稳定短代码（评审 1.1）')
   const r2 = await core2.dispatchLegacyEventSettled(groupEv())
   assert.equal(r2.result.state, 'cancelled')
   assert.equal(events.length, 2, '第二条 interject 没被在途冷却拦下 → groupGate 已释放')
@@ -352,4 +380,145 @@ test('重启不重放：dispose 后新实例只发新事件，历史事件不复
   await sleep(120)
   assert.equal(events.length, 2, '静置后也没有任何重放')
   await core2.dispose()
+})
+
+test('merging 窗口内取消（execute 之前）→ 零 group/result 事件，不伪造结果', async () => {
+  clearAll()
+  const dsh = mkDsh()
+  const core = makeCore(dsh, () => ({ message_id: 1 }))
+  const r = await core.dispatchLegacyEvent(groupEv()) // offer 建回合，进入 merging 窗口（300ms）
+  assert.equal(r.handled, 'offered')
+  core.controller.cancel(r.turnId) // execute 尚未开始
+  const outcome = await core.controller.waitForTurn(r.turnId)
+  assert.equal(outcome.state, 'cancelled', '回合如实落 cancelled')
+  await sleep(80)
+  assert.equal(events.length, 0, '未进入 execute 的取消绝不伪造 group/result')
+  assert.equal(dsh.prompts.length, 0, '模型路径零调用')
+  await core.dispose()
+})
+
+test('REACT reason 归一化：Outbox 自由文本 / 中文长句绝不透传进 group/result.reason', async () => {
+  // failed：OneBot 抛长报错正文（含群号与内部路径）
+  clearAll()
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const dsh = mkDsh()
+  const core = makeCore(dsh, ({ action }) => {
+    if (action === 'set_msg_emoji_like') throw new Error('result=299 err=机器人不在群 30001 里 path=/set_msg_emoji_like internal=/var/lib/napcat/cache')
+    return { message_id: 1 }
+  })
+  const r1 = await core.dispatchLegacyEventSettled(groupEv())
+  assert.equal(r1.result.state, 'failed')
+  assert.equal(events[0].state, 'failed')
+  assert.equal(events[0].reason, 'react-failed')
+  assert.doesNotMatch(events[0].reason, /result=299|napcat|30001/)
+  await core.dispose()
+
+  // unknown：OneBot 抛 unknown:true
+  clearAll()
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const dsh2 = mkDsh()
+  const core2 = makeCore(dsh2, ({ action }) => {
+    if (action === 'set_msg_emoji_like') throw Object.assign(new Error('发送调用异常中断'), { unknown: true })
+    return { message_id: 1 }
+  })
+  await core2.dispatchLegacyEventSettled(groupEv())
+  assert.equal(events[0].state, 'unknown')
+  assert.equal(events[0].reason, 'react-unknown')
+  assert.doesNotMatch(events[0].reason, /异常中断/)
+  await core2.dispose()
+
+  // disabled：出队时总开关关闭 → '总开关关闭' → outbox-disabled
+  clearAll()
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const dsh3 = mkDsh()
+  const core3 = makeCore(dsh3, () => ({ message_id: 1 }))
+  await core3.dispatchLegacyEvent(groupEv()) // 先等路由完成（offer 已建、REACT 已入队）
+  core3.__cfg.enabled = false // 出队时动态复核：REACT 请求仍在 FIFO 中，出队前撤闸生效
+  await sleep(400) // 越过合流窗口，等 execute / Outbox 出队落定
+  assert.equal(events[0].state, 'cancelled')
+  assert.equal(events[0].reason, 'outbox-disabled')
+  assert.doesNotMatch(events[0].reason, /总开关/)
+  await core3.dispose()
+
+  // ACL：出队时授权复核拒绝 → 'authorize 拒绝' → outbox-unauthorized
+  clearAll()
+  gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
+  const dsh4 = mkDsh()
+  const core4 = makeCore(dsh4, () => ({ message_id: 1 }))
+  await core4.dispatchLegacyEvent(groupEv()) // 入站已过闸、offer 已建
+  core4.__cfg.allow.groups = [] // 出队时撤权（撤权在排队期间也生效）
+  await sleep(400)
+  assert.equal(events[0].state, 'cancelled')
+  assert.equal(events[0].reason, 'outbox-unauthorized')
+  assert.doesNotMatch(events[0].reason, /authorize 拒绝|拒绝/)
+  await core4.dispose()
+})
+
+test('早退映射：prompt-blocked / empty-reply / reply-drift / engaged-expired', async () => {
+  clearAll()
+  const dsh = mkDsh()
+  const core = makeCore(dsh, () => ({ message_id: 1 }))
+  // prompt-blocked：prompt 钩子返回 null
+  promptNull = true
+  await core.dispatchLegacyEventSettled(atEv())
+  assert.equal(events[0].state, 'skipped')
+  assert.equal(events[0].reason, 'prompt-blocked')
+  promptNull = false
+  // empty-reply：模型空文本
+  modelReply = ''
+  await core.dispatchLegacyEventSettled(atEv())
+  assert.equal(events[1].state, 'skipped')
+  assert.equal(events[1].reason, 'empty-reply')
+  modelReply = '嗯' // 空回复用例后恢复正常回复（drift 断言需要非空文本）
+  modelHold = true
+  const r = await core.dispatchLegacyEvent(groupEv())
+  // 等回合越过合流窗口进入执行、followup 已被挂起（否则释放会落在空数组上，回合永挂）
+  for (let i = 0; i < 100 && holdResolvers.length === 0; i++) await sleep(20)
+  assert.ok(holdResolvers.length > 0, 'followup 已进入可控挂起')
+  const imageEv = () => ({
+    post_type: 'message', message_type: 'group', sub_type: 'normal', group_id: Number(GID),
+    self_id: 20002, user_id: 666, message_id: ++mid, time: Math.floor(Date.now() / 1000),
+    sender: { user_id: 666, nickname: '乙' },
+    message: [{ type: 'image', data: { file: 'http://example.invalid/p.jpg' } }],
+  })
+  for (let i = 0; i < 6; i++) await core.dispatchLegacyEvent(imageEv())
+  for (const resolve of holdResolvers.splice(0)) resolve()
+  await core.controller.waitForTurn(r.turnId)
+  assert.equal(events[2].state, 'skipped')
+  assert.equal(events[2].reason, 'reply-drift', '生成期 6 条漂移 → 放弃发送，事件如实记 skipped')
+  await core.dispose()
+
+  // engaged-expired：engagedMaxMs 200 —— @ 回复入场后，engaged 回合在执行前过期
+  clearAll()
+  const dsh2 = mkDsh()
+  const core2 = makeCore(dsh2, () => ({ message_id: 1 }), {
+    group: {
+      interjectChance: 1, cooldownSec: 0, minRecentMessages: 1, activeWindowSec: 300,
+      minRelevance: 0, interests: [], engagedMaxReplies: 3, engagedMaxMs: 200,
+      burstMax: 100, burstWindowSec: 120, maxPerHour: 100, quietHours: [],
+      fishGuard: { enabled: false },
+    },
+  })
+  await core2.dispatchLegacyEventSettled(atEv()) // noteSpokeInGroup → engaged 窗口 200ms
+  assert.equal(events[0].state, 'sent', '@ 回复正常送达并入场')
+  await sleep(40)
+  const r2 = await core2.dispatchLegacyEvent(groupEv()) // 窗口内 → engaged 决策 → offer
+  assert.ok(r2.turnId)
+  await core2.controller.waitForTurn(r2.turnId) // 执行前窗口已过期
+  assert.equal(events[1].state, 'skipped')
+  assert.equal(events[1].reason, 'engaged-expired')
+  await core2.dispose()
+})
+
+test('catch partial 映射：投递部分成功后 onActivity 抛错（error.delivered > 0）→ partial', async () => {
+  clearAll()
+  emitThrowsForOut = true
+  modelReply = '一|||二'
+  const dsh = mkDsh()
+  const core = makeCore(dsh, () => ({ message_id: 1 }))
+  await assert.rejects(() => core.dispatchLegacyEventSettled(atEv()))
+  assert.equal(events.length, 1)
+  assert.equal(events[0].state, 'partial', 'error.delivered > 0 → partial（不得谎报 failed/unknown）')
+  assert.equal(events[0].reason, 'reply-partial-error')
+  await core.dispose()
 })

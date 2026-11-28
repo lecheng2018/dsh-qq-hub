@@ -61,7 +61,7 @@ import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
-import { executeGroupReaction } from './core/group-reaction-execution.js'
+import { executeGroupReaction, normalizeReactionResultReason } from './core/group-reaction-execution.js'
 import { createInboundRouter } from './core/inbound-router.js'
 import { createModelSync } from './core/model-sync.js'
 import { createTurnFailure, markPendingReset, takePendingReset } from './core/turn-failure.js'
@@ -808,6 +808,9 @@ export function createModularCore({
       // T2.5：execute 作用域的终态账。默认值只在「execute 没跑完就异常退出」时兜底；
       // 每个正常/提前返回都会先写明确终态，catch 映射不覆盖已明确写出的值。
       let terminalResult = { state: 'skipped', reason: 'execute-not-completed' }
+      // 回合模式提升到顶层：group/result 的 topicMode 与 deliver 同口径（REACT 短路路径
+      // 不经过 groupPromptContent，此时以 offeredMode 为准）。
+      let turnMode = null
       // #263 的外层兜底在失败时调它摘监听。S2 起监听器归执行器（成功 / 失败 / 取消 / 超时四条路径
       // 都在 runTurn 里摘干净），所以这里恒为空操作 —— 保留这处接线只为让 #263 那段兜底的结构
       // 与语义一字不变（不新增、也不删掉一层清理）。
@@ -821,8 +824,13 @@ export function createModularCore({
           turn, io, offeredMode, participation: offeredParticipation,
           groups, outbox, log, now: Date.now(),
         })
-        // T2.5：REACT 采用 Outbox 返回的真实 state / deliveryId / reason
-        terminalResult = { state: reaction.state, reason: reaction.reason || '', deliveryId: reaction.deliveryId || '' }
+        // T2.5：REACT 采用 Outbox 返回的真实 state / deliveryId；reason 经归一化收敛为
+        // 稳定短代码（Outbox 的 error.message / 中文长句绝不透传进 group/result）。
+        terminalResult = {
+          state: reaction.state,
+          reason: normalizeReactionResultReason(reaction.state, reaction.reason),
+          deliveryId: reaction.deliveryId || '',
+        }
         return { state: reaction.state, via: 'group-reaction', deliveryId: reaction.deliveryId, reason: reaction.reason }
       }
       // 上一轮失败留下的待重置标记：统一取出（取出即清除，同一个理由只 reset 一次）。
@@ -853,7 +861,6 @@ export function createModularCore({
       // 回合说话人登记（speakersOf 的数据源；群聊记忆检索要用）
       try { participants.note(String(sessionId), (io.members || []).map((m) => String(m?.sender?.userId || '')).filter(Boolean), { chatId: turn.chatKey, queryText }) } catch {}
       // 3. 构造会话消息：群聊带整段缓冲上下文（真机审计 1.3），私聊用触发段本体
-      let turnMode = null
       let autoReply = null
       let groupTriggerReply = null
       let groupFreshLast = null
@@ -1153,10 +1160,11 @@ export function createModularCore({
           delivered = await replyDelivery.deliver(turn.chatKey, reply, {
             own: true,
             topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
-            // T2.3 / T2.4：回合身份与参与级别显式传给投递层（text_lite 只收紧分条；钩子拿到同一份身份）
+            // T2.3 / T2.4：回合身份与参与级别显式传给投递层（text_lite 只收紧分条；钩子拿到同一份身份）。
+            // 纵深守卫：must / engaged 永不降级 —— 仅 group + interject + text_lite 声明才传 text_lite。
             turnId: turn.turnId,
-            participationLevel: offeredParticipation?.level === 'text_lite' ? 'text_lite' : 'full',
-            textLiteLimits: offeredParticipation?.level === 'text_lite' ? (offeredParticipation.limits || undefined) : undefined,
+            participationLevel: (inGroup && offeredMode === 'interject' && offeredParticipation?.level === 'text_lite') ? 'text_lite' : 'full',
+            textLiteLimits: (inGroup && offeredMode === 'interject' && offeredParticipation?.level === 'text_lite') ? (offeredParticipation.limits || undefined) : undefined,
             triggerMessageIds,
             userText: turnUserText,
             wantVoice: wantsVoice(turnUserText),
@@ -1246,11 +1254,16 @@ export function createModularCore({
         // T2.5：group/result 只对**进入 execute** 的群 turn 发出，最多一次（merging/pending 未执行
         // 即取消根本不会进 execute；事件不落盘，重启无从重放）。reason 用稳定短代码。
         if (String(turn.chatKey || '').startsWith('group:')) {
+          // topicMode 与 deliver 同口径（offeredMode 优先，兜 turnMode，恒为 must/engaged/interject）；
+          // participation 与之一致：非 interject 回合恒为 full（must/engaged 永不降级）。
+          const eventTopicMode = offeredMode || turnMode || 'must'
           const result = {
             turnId: turn.turnId,
             chatId: turn.chatKey,
-            topicMode: offeredMode || null,
-            participation: offeredParticipation?.level === 'text_lite' || offeredParticipation?.level === 'react' ? offeredParticipation.level : 'full',
+            topicMode: eventTopicMode,
+            participation: eventTopicMode === 'interject' && (offeredParticipation?.level === 'text_lite' || offeredParticipation?.level === 'react')
+              ? offeredParticipation.level
+              : 'full',
             triggerMessageIds: [...triggerMessageIds],
             state: terminalResult.state,
             sourceModuleId: offeredParticipation?.sourceModuleId || '',

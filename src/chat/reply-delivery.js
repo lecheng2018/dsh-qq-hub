@@ -94,18 +94,25 @@ export function createReplyDelivery({
       missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state, replyRaw: text, ...extra,
     })
     const cfg = getConfig()
+    const inGroup = chatId.startsWith('group:')
     // T2.4：reply / reply/items 两个钩子共用同一份回合身份字段。
     // participation 是字符串级别（'full' | 'text_lite'），不把内部可变对象暴露给插件；
-    // triggerMessageIds 传独立冻结拷贝，防跨群混淆或钩子篡改。旧调用方未传新 opts 时
-    // turnId / topicMode 为 undefined、participation 恒为 'full'，旧监听器行为零变化。
-    const hookInfo = {
+    // triggerMessageIds 传独立冻结拷贝，防跨群混淆或钩子篡改；整个 info 对象也冻结 ——
+    // reply 监听器篡改 info.turnId / info.participation 不可能污染 reply/items 监听器。
+    // 纵深守卫（must / engaged 永不降级）：非群聊或 must / engaged 时对外也只报 'full'。
+    // 旧调用方未传新 opts 时 turnId / topicMode 为 undefined、participation 恒为 'full'。
+    const textLiteApplies = inGroup
+      && opts.participationLevel === 'text_lite'
+      && opts.topicMode !== 'must'
+      && opts.topicMode !== 'engaged'
+    const hookInfo = Object.freeze({
       chatId,
       userText: opts.userText || '',
       turnId: opts.turnId,
       topicMode: opts.topicMode,
-      participation: opts.participationLevel === 'text_lite' ? 'text_lite' : 'full',
+      participation: textLiteApplies ? 'text_lite' : 'full',
       triggerMessageIds: Object.freeze(Array.isArray(opts.triggerMessageIds) ? [...opts.triggerMessageIds] : []),
-    }
+    })
     if (hooks?.reply) {
       try {
         const next = await hooks.reply(text, hookInfo)
@@ -119,7 +126,6 @@ export function createReplyDelivery({
       }
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
-    const inGroup = chatId.startsWith('group:')
     // T2.3：text_lite 时会被收紧后的新对象替换，所以用 let（其余路径行为不变）
     let rules = replyRules(cfg, inGroup, random)
     // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
@@ -133,7 +139,7 @@ export function createReplyDelivery({
     // T2.3 · TEXT_LITE：群聊 + 参与级别 text_lite 时收紧自动分条 / 群合包目标（只收紧不放宽）。
     // 位置关键：在 replyRules 之后（否则被重算覆盖）、parseReply 与 groupLimit 之前（群合包
     // 读到的就是收紧后的 rules.maxBubbles）。must / engaged / 私聊零影响。
-    if (inGroup && opts.participationLevel === 'text_lite') {
+    if (textLiteApplies) {
       rules = applyTextLiteRules(rules, opts.textLiteLimits)
     }
     // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
@@ -224,7 +230,7 @@ export function createReplyDelivery({
     }
     if (hooks?.items) {
       try {
-        const next = await hooks.items(items, { ...hookInfo, text })
+        const next = await hooks.items(items, Object.freeze({ ...hookInfo, text }))
         if (next === null) {
           log.info(`${chatId}：扩展模块拦下了这次回复`)
           return skippedResult('blocked')

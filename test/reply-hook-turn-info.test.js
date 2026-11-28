@@ -118,3 +118,34 @@ test('不存在跨聊天混淆：两个聊天的回合身份各自独立', async
   assert.deepEqual(byChat.get('group:30002'), { turnId: 'turn-B', ids: ['20002'] })
   assert.ok(byChat.get('group:30001').turnId !== byChat.get('group:30002').turnId)
 })
+
+test('info 对象已冻结：reply 钩子篡改 turnId / participation / triggerMessageIds 不可能污染 items 钩子', async () => {
+  const blocked = []
+  const itemsSeen = []
+  const { delivery, sent } = fixture({
+    replyHook: (text, info) => {
+      // 冻结对象在严格模式（ESM）下赋值即抛 TypeError —— 逐一尝试并记录
+      for (const [key, value] of [['turnId', 'hacked'], ['topicMode', 'hacked'], ['participation', 'react'], ['userText', 'hacked']]) {
+        try { info[key] = value; blocked.push(`${key}:未冻结`) } catch (e) { blocked.push(`${key}:frozen`) }
+      }
+      try { info.triggerMessageIds.push('hacked'); blocked.push('ids:未冻结') } catch (e) { blocked.push('ids:frozen') }
+      return undefined
+    },
+    itemsHook: (items, info) => { itemsSeen.push({ ...info, idsFrozen: Object.isFrozen(info.triggerMessageIds) }); return undefined },
+  })
+  await delivery.deliverNow('group:30001', '在呢', {
+    turnId: 'turn-9', topicMode: 'interject', participationLevel: 'text_lite',
+    triggerMessageIds: ['10001', '10002'], userText: '你在吗',
+  })
+  assert.deepEqual(
+    blocked,
+    ['turnId:frozen', 'topicMode:frozen', 'participation:frozen', 'userText:frozen', 'ids:frozen'],
+    'info 与 triggerMessageIds 都必须只读',
+  )
+  assert.equal(itemsSeen.length, 1)
+  assert.equal(itemsSeen[0].turnId, 'turn-9', 'items 收到的仍是原始回合身份')
+  assert.equal(itemsSeen[0].participation, 'text_lite')
+  assert.deepEqual(itemsSeen[0].triggerMessageIds, ['10001', '10002'], 'triggerMessageIds 未被篡改')
+  assert.equal(itemsSeen[0].idsFrozen, true, 'items 钩子拿到的也是冻结数组')
+  assert.deepEqual(sent.map((s) => s.text), ['在呢'])
+})

@@ -133,7 +133,7 @@ export interface ReplyHookInfo {
 export interface GroupResult {
   turnId: string
   chatId: ChatId
-  topicMode: 'must' | 'engaged' | 'interject' | null
+  topicMode: 'must' | 'engaged' | 'interject'
   participation: 'full' | 'text_lite' | 'react'
   triggerMessageIds: string[]
   state: 'sent' | 'partial' | 'failed' | 'unknown' | 'cancelled' | 'skipped'

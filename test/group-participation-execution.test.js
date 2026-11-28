@@ -64,7 +64,7 @@ function mkDsh() {
   return { ctx, prompts, createCalls: () => createCalls }
 }
 
-function makeCore(dsh, onebotCalls) {
+function makeCore(dsh, onebotCalls, { contextForCalls = null } = {}) {
   const cfg = {
     enabled: true, dryRun: false, botQQ: '20002', ownerQQ: '10001', ownerName: '主人',
     allow: { private: ['10001'], groups: [GID] }, longTasks: false,
@@ -82,7 +82,7 @@ function makeCore(dsh, onebotCalls) {
   return createModularCore({
     dsh: dsh.ctx,
     onebot: { call: async (action, params) => { onebotCalls.push({ action, params }); return { message_id: 1 } } },
-    mods: { contextFor: async () => '', commands: () => [], use: () => null },
+    mods: { contextFor: async () => { if (contextForCalls) contextForCalls.push(1); return '' }, commands: () => [], use: () => null },
     getConfig: () => cfg, logger: noopLog, log: noopLog,
     moduleHooks: { groupParticipate: (decision, info) => mods.claimResult('group/participate', decision, info) },
   })
@@ -125,7 +125,8 @@ test('REACT：零模型路径（session/assemble/runTurn/typing 全零），网�
   gpBehavior = (d, info) => ({ level: 'react', reaction: { messageId: String(info.msg.messageId), emojiId: '66' } })
   const dsh = mkDsh()
   const onebotCalls = []
-  core = makeCore(dsh, onebotCalls)
+  const contextForCalls = []
+  core = makeCore(dsh, onebotCalls, { contextForCalls })
   const ev = groupEv()
   const r = await core.dispatchLegacyEventSettled(ev)
   // 回合仍创建、进入 running、最终落定（waitForTurn 拿到成功 outcome）
@@ -136,6 +137,14 @@ test('REACT：零模型路径（session/assemble/runTurn/typing 全零），网�
   assert.equal(r.result.deliveryId, `group-react:${r.turnId}`)
   assert.equal(dsh.createCalls(), 0, 'sessionForChat 零调用（REACT 不建会话）')
   assert.equal(dsh.prompts.length, 0, 'runTurn / 模型零调用')
+  assert.equal(contextForCalls.length, 0, 'assembly.assemble 零调用（contextFor 是装配的 fragment 提供者）')
+  // typing 零调用：整个流程的 onebot 动作只有 set_msg_emoji_like（无 set_input_status 等）
+  assert.deepEqual(onebotCalls.map((c) => c.action), ['set_msg_emoji_like'])
+  // 回合落定后 memberEventIds 保留（「这一轮由哪几条消息组成」的诊断依据）
+  const turnView = core.controller.getTurn(r.turnId)
+  assert.ok(turnView, '终态回合仍可查询')
+  assert.equal(turnView.memberEventIds.length, 1, 'memberEventIds 保留')
+  assert.ok(String(turnView.memberEventIds[0]).endsWith(':' + String(ev.message_id)), `memberEventIds 保留（${turnView.memberEventIds[0]}）`)
   // 网关恰好一次：固定 set_msg_emoji_like
   const reactCalls = onebotCalls.filter((c) => c.action === 'set_msg_emoji_like')
   assert.equal(reactCalls.length, 1)
@@ -201,6 +210,34 @@ test('合流升级反例：interject 的 REACT 声明未决期间 must 先建回
   assert.equal(dsh.prompts.length, 1, '模型恰好一次')
   assert.match(dsh.prompts[0], /普通群消息/, '消息 1（合入成员）在上下文里')
   assert.match(dsh.prompts[0], /来聊聊/, '消息 2（触发成员）在上下文里')
+  assert.equal(onebotCalls.filter((c) => c.action === 'set_msg_emoji_like').length, 0, 'REACT 零执行')
+  await core.dispose()
+  core = null
+})
+
+test('合流升级反例（同级 interject）：消息 1 声明 REACT、消息 2 声明 FULL → FULL 胜出，REACT 零执行', async () => {
+  gpCalls.length = 0
+  const behaviorByMid = new Map()
+  gpBehavior = (d, info) => behaviorByMid.get(String(info.msg.messageId)) || undefined
+  const dsh = mkDsh()
+  const onebotCalls = []
+  core = makeCore(dsh, onebotCalls)
+  // 消息 1：interject + REACT 声明（offer 即建回合并进入合并窗口）
+  const ev1 = groupEv()
+  behaviorByMid.set(String(ev1.message_id), { level: 'react', reaction: { messageId: String(ev1.message_id), emojiId: '66' } })
+  const r1 = await core.dispatchLegacyEvent(ev1)
+  assert.equal(r1.handled, 'offered')
+  assert.ok(r1.turnId)
+  // 消息 2：同为 interject 但声明 FULL —— 在合并窗口内合流进同一回合
+  const ev2 = groupEv()
+  behaviorByMid.set(String(ev2.message_id), { level: 'full' })
+  const r2 = await core.dispatchLegacyEvent(ev2)
+  assert.equal(r2.turnId, r1.turnId, '消息 2 合流进同一回合')
+  // FULL > REACT：整回合 FULL → REACT 零执行，模型路径恰好一次
+  const outcome = await core.controller.waitForTurn(r1.turnId)
+  assert.equal(outcome.state, 'succeeded')
+  assert.equal(outcome.value.via, 'reply-delivery')
+  assert.equal(dsh.prompts.length, 1, '模型恰好一次')
   assert.equal(onebotCalls.filter((c) => c.action === 'set_msg_emoji_like').length, 0, 'REACT 零执行')
   await core.dispose()
   core = null

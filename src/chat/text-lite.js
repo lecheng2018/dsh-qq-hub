@@ -17,15 +17,16 @@ const isPosInt = (v) => Number.isInteger(v) && v >= 1
 export function applyTextLiteRules(rules, limits) {
   const out = { ...(rules || {}) }
   if (!limits || typeof limits !== 'object' || Array.isArray(limits)) return out
-  // maxBubbles：与现有硬顶取最小正整数（硬顶语义与面板配置一致）
+  // maxBubbles：与现有硬顶取最小正整数（硬顶语义与面板配置一致）。
+  // 现有值必须是非负有限数值才参与取小，非整数先取整 —— 防止 1.5 这类规则被意外放宽。
   const maxBubbles = limits.maxBubbles
   if (isPosInt(maxBubbles)) {
     const cur = Number(out.maxBubbles)
-    out.maxBubbles = isPosInt(cur) ? Math.min(cur, maxBubbles) : maxBubbles
+    out.maxBubbles = Number.isFinite(cur) && cur >= 1 ? Math.min(Math.round(cur), maxBubbles) : maxBubbles
     // softMaxBubbles：原值有效则三者取最小（= min(原软顶, 收紧后的硬顶)）；不存在时用收紧后的 maxBubbles。
     // bubbleLimit 的口径是「软顶只压自动切出来的气泡，显式 ||| 至少放出自己那条（仍受硬顶约束）」。
     const soft = Number(out.softMaxBubbles)
-    out.softMaxBubbles = isPosInt(soft) ? Math.min(soft, out.maxBubbles) : out.maxBubbles
+    out.softMaxBubbles = Number.isFinite(soft) && soft >= 1 ? Math.min(Math.round(soft), out.maxBubbles) : out.maxBubbles
   }
   // maxChars：与现有规则取最小值 —— 只是自动分条目标收紧，绝不意味着对总输出做硬截断。
   const maxChars = limits.maxChars

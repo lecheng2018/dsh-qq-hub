@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executeGroupReaction } from '../src/host/core/group-reaction-execution.js'
+import { executeGroupReaction, normalizeReactionResultReason } from '../src/host/core/group-reaction-execution.js'
 import { createOutbox } from '../src/chat/outbox.js'
 import { createDeliveryLedger } from '../src/chat/delivery-ledger.js'
 import { createGroupState } from '../src/chat/group-state.js'
@@ -234,4 +234,63 @@ test('重启恢复：真实台账 WAL，sending → unknown，重入零第二次
   assert.equal(calls.length, 0, '重启后重入零第二次网关请求')
   assert.equal(ledger2.get('group-react:r1').attemptCount, 1, 'attemptCount 不增加')
   assert.equal(groups.speakTimes(GID).length, 0)
+})
+
+test('outbox.request 抛 unknown:true 异常：unknown + 本回合成员标 fed（副作用未知抑制重复）+ 零成功预算', async () => {
+  const groups = mkGroups()
+  // 包装 outbox：request 直接抛 unknown 异常（模拟执行器外层未捕获的请求层异常）
+  const calls = []
+  const real = mkOutbox(() => ({}))
+  const outbox = {
+    ledger: real.outbox.ledger,
+    request: async (req) => {
+      calls.push(req)
+      throw Object.assign(new Error('发送调用异常中断'), { unknown: true })
+    },
+  }
+  const r = await executeGroupReaction({ turn: mkTurn('t1'), io: mkIo(), offeredMode: 'interject', participation: react(), groups, outbox, log: null, now: Date.now() })
+  assert.deepEqual(r, { state: 'unknown', deliveryId: 'group-react:t1', reason: 'react-unknown' })
+  assert.equal(calls.length, 1, '零重试')
+  // 异常 unknown 路径也必须标 fed（副作用未知 → 成员按已处理抑制下一轮重复）
+  const buf = groups.buffer(GID)
+  assert.equal(buf.find((x) => x.mid === MID_A).fed, true)
+  assert.equal(buf.find((x) => x.mid === MID_B).fed, true)
+  assert.equal(Boolean(buf.find((x) => x.mid === '99999').fed), false, '旧消息不误标')
+  assert.equal(groups.speakTimes(GID).length, 0, 'unknown 零成功预算')
+  assert.equal(groups.interjectTimes(GID).length, 0)
+})
+
+test('turn.turnId 为空 / 缺失：cancelled / react-missing-turn-id，零 Outbox 调用', async () => {
+  const groups = mkGroups()
+  const { outbox, calls } = mkOutbox(() => ({}))
+  const r1 = await executeGroupReaction({ turn: { turnId: '', chatKey: CHAT }, io: mkIo(), offeredMode: 'interject', participation: react(), groups, outbox, log: null, now: Date.now() })
+  assert.deepEqual(r1, { state: 'cancelled', deliveryId: 'group-react:', reason: 'react-missing-turn-id' })
+  const r2 = await executeGroupReaction({ turn: { chatKey: CHAT }, io: mkIo(), offeredMode: 'interject', participation: react(), groups, outbox, log: null, now: Date.now() })
+  assert.equal(r2.reason, 'react-missing-turn-id')
+  const r3 = await executeGroupReaction({ turn: { turnId: '   ', chatKey: CHAT }, io: mkIo(), offeredMode: 'interject', participation: react(), groups, outbox, log: null, now: Date.now() })
+  assert.equal(r3.reason, 'react-missing-turn-id', '纯空白 turnId 同样拒绝（防重键碰撞）')
+  assert.equal(calls.length, 0, '全部零网关调用')
+})
+
+test('normalizeReactionResultReason：reason 归一化为稳定短代码（Outbox 自由文本绝不透传）', () => {
+  // 空串 / 白名单 / react-* 短代码原样保留
+  assert.equal(normalizeReactionResultReason('sent', ''), '')
+  assert.equal(normalizeReactionResultReason('sent', 'duplicate-suppressed'), 'duplicate-suppressed')
+  assert.equal(normalizeReactionResultReason('unknown', 'duplicate-in-flight'), 'duplicate-in-flight')
+  assert.equal(normalizeReactionResultReason('skipped', 'react-anchor-missing'), 'react-anchor-missing')
+  assert.equal(normalizeReactionResultReason('skipped', 'react-drift'), 'react-drift')
+  // Outbox 取消原因映射
+  assert.equal(normalizeReactionResultReason('cancelled', 'dryRun'), 'outbox-dry-run')
+  assert.equal(normalizeReactionResultReason('cancelled', '总开关关闭'), 'outbox-disabled')
+  assert.equal(normalizeReactionResultReason('cancelled', 'authorize 拒绝'), 'outbox-unauthorized')
+  assert.equal(normalizeReactionResultReason('cancelled', '身份泄露闸'), 'outbox-identity-guard')
+  assert.equal(normalizeReactionResultReason('cancelled', '排队期间台账已变更（取消 / 重复请求）'), 'outbox-cancelled')
+  // 其余自由文本 / 异常正文按 state 兜底
+  assert.equal(normalizeReactionResultReason('failed', 'result=299 err=机器人不在群 30001 里 path=/x'), 'react-failed')
+  assert.equal(normalizeReactionResultReason('unknown', '发送调用异常中断'), 'react-unknown')
+  assert.equal(normalizeReactionResultReason('cancelled', '随便什么长文本'), 'react-cancelled')
+  assert.equal(normalizeReactionResultReason('skipped', '随便什么'), 'react-skipped')
+  assert.equal(normalizeReactionResultReason('sent', '多余的自由文本'), '', 'sent 恒为空串')
+  // 未知 state 兜底
+  assert.equal(normalizeReactionResultReason('mystery', '自由文本'), 'react-cancelled')
 })
