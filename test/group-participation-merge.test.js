@@ -55,7 +55,7 @@ test('normalize：REACT 校验锚点与 emoji；跨消息 messageId / 非数字 
     invalid(() => normalizeParticipation({ level: 'react', reaction: { messageId: '10001', emojiId: bad } }, { msg: MSG }))
   }
   // emojiId 超长（>10 位）/ 前导零
-  invalid(() => normalizeParticipation({ level: 'react', reaction: { messageId: '10001', emojiId: '12345678901' } }, { msg: MSG }))
+  invalid(() => normalizeParticipation({ level: 'react', reaction: { messageId: '10001', emojiId: '12345678901' } }, { msg: MSG })) // emojiId 上界反例（11 位假数据） pii-scan:ignore
   invalid(() => normalizeParticipation({ level: 'react', reaction: { messageId: '10001', emojiId: '066' } }, { msg: MSG }))
   // 缺 reaction / 未知 level
   invalid(() => normalizeParticipation({ level: 'react' }, { msg: MSG }))

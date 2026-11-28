@@ -60,8 +60,8 @@ after(() => {
 function mkRouter(mods, { withHook = true, fishGuard = { enabled: false }, warnBox: wb = warnBox } = {}) {
   const groups = createGroupState()
   const cfg = {
-    enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001',
-    allow: { private: ['10000001'], groups: ['777'] },
+    enabled: true, dryRun: false, botQQ: '20000002', ownerQQ: '10000001', /* pii-scan:ignore 占位假号 */
+    allow: { private: ['10000001'], groups: ['777'] }, /* pii-scan:ignore 占位假号 */
     group: {
       interjectChance: 1, cooldownSec: 0, minRecentMessages: 1, activeWindowSec: 300,
       minRelevance: 0, interests: [], engagedMaxReplies: 3, engagedMaxMs: 600_000,
@@ -109,12 +109,12 @@ function mkRouter(mods, { withHook = true, fishGuard = { enabled: false }, warnB
 let mid = 10000
 const groupEv = (over = {}) => ({
   post_type: 'message', message_type: 'group', sub_type: 'normal', group_id: 777,
-  self_id: 20000002, user_id: 555, message_id: ++mid, time: Math.floor(Date.now() / 1000),
+  self_id: 20000002, user_id: 555, message_id: ++mid, time: Math.floor(Date.now() / 1000), /* pii-scan:ignore 占位假号 */
   sender: { user_id: 555, nickname: '甲' },
   message: [{ type: 'text', data: { text: '普通群消息' } }],
   ...over,
 })
-const atEv = () => groupEv({ message: [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: '你好呀' } }] })
+const atEv = () => groupEv({ message: [{ type: 'at', data: { qq: 20000002 } }, { type: 'text', data: { text: '你好呀' } }] }) /* pii-scan:ignore 占位假号 */
 
 test('fishGuard 拦截（真实缓冲）：participation 钩子零调用、offer 零调用', async () => {
   gpCalls.length = 0
