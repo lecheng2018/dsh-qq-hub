@@ -8,26 +8,28 @@
 // dryRun/enabled/身份闸/白名单在 outbox 出队时统一执行——flag 开时 legacy 出口从此
 // 有 deliveryId、有台账、可试运行、过泄露闸；flag 关时本模块根本不接线（egressRef.current=null）。
 
+const ALLOWED_EGRESS_RE = /^(?:(?:send|upload)_|group_poke$|friend_poke$|forward_friend_single_msg$|forward_group_single_msg$|set_msg_emoji_like$)/
+
 export function createHubEgress({ outbox, log }) {
   const debug = (m) => { try { log?.debug?.(m) } catch {} }
   return {
     outbox,
     /**
      * @param {object} req
-     * @param {string} req.action OneBot 动作（send_·_msg / upload_·_file / send_poke / send_qzone_msg / forward…）
+     * @param {string} req.action OneBot 动作（send_·_msg / upload_·_file / send_poke / group_poke / friend_poke / forward_·_single_msg / set_msg_emoji_like / send_qzone_msg…）
      * @param {object} req.params 完整 RPC 参数（wire 形状由 hub 保证=legacy 等价）
      * @param {object} [req.opts] RPC 选项（timeoutMs/retries：legacy 语义透传）
      * @param {string} req.chatKey 目标会话（台账/闸/授权用）
-     * @param {'required'|'optional'} [req.receipt] 回执要求（msg 类 required；upload/poke/qzone optional）
+     * @param {'required'|'optional'} [req.receipt] 回执要求（msg 类 required；upload/poke/qzone/emoji_like optional）
      * @param {string} [req.note] 台账备注
      * @param {string} [req.sourceModuleId]
      * @param {boolean} [req.force] 收窄后的 force：只豁免「总开关关闭」（/on 自救通道）；
      *   不豁免 dryRun，也不豁免身份闸（台账照记）
      */
     async deliver(req) {
-      // 安全网：egress 只承载发信类动作（set_/delete_/handle_ 等管理操作若混进来被
+      // 安全网：egress 只承载发信/互动类出站动作（delete_/handle_/set_group_* 等管理操作若混进来被
       // receipt:'optional' 当成 sent 记账=风险洗白）。fail-closed 拒执行。
-      if (!/^(send|upload)_/.test(String(req.action || ''))) {
+      if (!ALLOWED_EGRESS_RE.test(String(req.action || ''))) {
         throw new TypeError(`egress 拒绝非发信动作：${req.action}（管理操作请直接 onebot.call）`)
       }
       const segments = Array.isArray(req.params?.message) ? req.params.message : []

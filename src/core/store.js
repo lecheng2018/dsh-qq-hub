@@ -74,7 +74,7 @@ export function renameWithRetry(from, to, attempts = 4) {
 
 let tmpFileSeq = 0
 
-export function writeJson(file, value, { mode = 0o644, space = 2 } = {}) {
+export function writeJson(file, value, { mode = 0o644, space = 2, compact = false } = {}) {
   ensureDir(dirname(file))
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++tmpFileSeq}`
   const fd = openSync(tmp, 'w', mode)
@@ -82,7 +82,7 @@ export function writeJson(file, value, { mode = 0o644, space = 2 } = {}) {
   // open 的 mode 只是上限，chmod 才是落定。没有这一步，运维放开组读后下一次写入又自动锁回去。
   try { chmodSync(tmp, mode) } catch {}
   try {
-    writeFileSync(fd, JSON.stringify(value, null, space), 'utf8')
+    writeFileSync(fd, compact ? JSON.stringify(value) : JSON.stringify(value, null, space), 'utf8')
     // rename 前 fsync：进程 kill -9 时不丢已确认写入的数据（tmp+rename 只保证不写半截，
     // 但页缓存没刷的话重启后 rename 的文件内容可能是旧的 —— P1-6 持久化窗口）
     fsyncSync(fd)
@@ -231,31 +231,36 @@ export function readJsonRequired(file, options = {}) {
   return result.value
 }
 
-export function writeJsonWithBackup(file, value, { validate, label = '状态文件', onError = warnState, mode = 0o644, requireBackup = false } = {}) {
-  if (!validate(value)) throw new TypeError(`${label}结构不符合预期`)
+export function writeJsonWithBackup(file, value, { validate, label = '状态文件', onError = warnState, mode = 0o644, requireBackup = false, compact = false, precheck = true } = {}) {
+  if (validate && !validate(value)) throw new TypeError(`${label}结构不符合预期`)
   const backupFile = `${file}.bak`
+  // 关键落盘（requireBackup）永远要预检，哪怕调用方为省一次全量读传了 precheck=false：
+  // 没有可信的 .bak 就不该发生物理副作用。
   const candidates = requireBackup ? [file, backupFile] : [file]
-  for (const candidateFile of candidates) {
-    const candidate = stateCandidate(candidateFile, validate)
-    if (candidate.kind === 'io') throw candidate.error
-    if (candidate.kind === 'invalid') {
-      const archived = quarantineState(candidateFile)
-      onError(new Error(`${label}：${candidateFile} 损坏，原件已保留为 ${archived}（${candidate.error.message}）`))
+  if (precheck || requireBackup) {
+    for (const candidateFile of candidates) {
+      const candidate = stateCandidate(candidateFile, validate)
+      if (candidate.kind === 'io') throw candidate.error
+      if (candidate.kind === 'invalid') {
+        const archived = quarantineState(candidateFile)
+        onError(new Error(`${label}：${candidateFile} 损坏，原件已保留为 ${archived}（${candidate.error.message}）`))
+      }
     }
   }
-  writeJson(file, value, { mode })
+  writeJson(file, value, { mode, compact })
   if (requireBackup) {
-    writeJson(backupFile, value, { mode })
+    writeJson(backupFile, value, { mode, compact })
     return
   }
   // 主文件已提交后，.bak 检查/隔离/写入失败绝不阻断返回：避免主文件已变但调用方抛错导致内存 stateRaw 失步
   try {
+    // 覆盖前先隔离损坏的旧 .bak：它是「上一份状态」的唯一样本，直接盖掉会丢掉取证依据
     const backup = stateCandidate(backupFile, validate)
     if (backup.kind === 'invalid') {
       const archived = quarantineState(backupFile)
       onError(new Error(`${label}：${backupFile} 损坏，原件已保留为 ${archived}（${backup.error.message}）`))
     }
-    writeJson(backupFile, value, { mode })
+    writeJson(backupFile, value, { mode, compact })
   } catch (error) {
     onError(new Error(`${label}：备份 ${backupFile} 写入失败（主文件已提交）：${error.message}`))
   }

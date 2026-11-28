@@ -344,26 +344,27 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
       onDispose: (fn) => track(fn),
       // ---- 常用操作的捷径（都是 core 里的东西包了一层）----
       send: (chatId, text) => core.hub.deliver(String(chatId), String(text ?? '')),
-      sendText: (chatId, text) => core.hub.sendText(String(chatId), String(text ?? '')),
+      sendText: (chatId, text, opts) => core.hub.sendText(String(chatId), String(text ?? ''), id, opts),
       // 回某一条消息：群里以「引用回复」发出，私聊直接发
       reply: (msg, text) => core.hub.reply
         ? core.hub.reply(msg, String(text ?? ''), id)
         : core.hub.sendText(String(msg.chatId), String(text ?? ''), msg.kind === 'group' ? msg.messageId : undefined),
       isOwner: (userId) => String(userId) === String(getConfig().ownerQQ),
-      sendImage: (chatId, src, ...rest) => core.hub.sendImage(String(chatId), src, rest[0], rest[1], { allowLocal: true, ...rest[2] }),
-      sendSegments: (chatId, segs, note) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`),
+      sendImage: (chatId, src, ...rest) => core.hub.sendImage(String(chatId), src, rest[0], rest[1], { allowLocal: true, ...rest[2], sourceModuleId: rest[2]?.sourceModuleId || id }),
+      sendSegments: (chatId, segs, note, opts) => core.hub.sendSegments(String(chatId), segs, note || `[${id}]`, { ...opts, sourceModuleId: opts?.sourceModuleId || id }),
       // 发任意文件（文档 / 压缩包 / 音频 / 视频……）：本机绝对路径，或网关能取到的网址 / base64://
-      sendFile: (chatId, file, name) => core.hub.sendFile(String(chatId), file, name),
+      sendFile: (chatId, file, name, opts) => core.hub.sendFile(String(chatId), file, name, { ...opts, sourceModuleId: opts?.sourceModuleId || id }),
       // 工作区目录：要发出去的文件必须放在这（或面板里加过的目录）里，否则会被拦
       // 模块想把下载的东西发给别人，就下到 api.workspaceDir('子目录') 下面
       workspaceDir: (...parts) => join(workspaceDirOf(getConfig()), ...parts),
       // 把一个音频文件当语音条发出去（不走念文字）
-      sendVoiceFile: (chatId, file, note) => core.hub.sendVoiceFile(String(chatId), file, note || `[${id}] 语音`),
+      sendVoiceFile: (chatId, file, note, opts) => core.hub.sendVoiceFile(String(chatId), file, note || `[${id}] 语音`, { ...opts, sourceModuleId: opts?.sourceModuleId || id }),
+      sendVoice: (chatId, text, ...rest) => core.hub.sendVoice?.(String(chatId), String(text ?? ''), rest[0], rest[1], { ...rest[2], sourceModuleId: rest[2]?.sourceModuleId || id }),
       ask: (opts) => core.ask(typeof opts === 'string' ? { text: opts } : opts),
       think: (prompt, opts = {}) => core.hub.runSystemTurn(`ext-${id}`, opts.title || def.name || id, String(prompt), opts),
-      // PR-1（ADR-0002）：发信类动作（send|upload）转走 hub.deliverRaw——开旗态进统一 Outbox
-      // （台账/dryRun/泄露闸对模块直调生效）；管理/查询类保持原直连语义不变。
-      onebot: (action, params, opts) => (/^(send|upload)_/.test(String(action)) && typeof core.hub.deliverRaw === 'function')
+      // PR-1（ADR-0002）：发信类动作（send|upload|poke|forward|emoji_like）转走 hub.deliverRaw——进统一 Outbox
+      // （台账/dryRun/enabled/泄露闸对模块直调生效）；管理/查询类保持原直连语义不变。
+      onebot: (action, params, opts) => (/^(send|upload)_|^(group_poke|friend_poke|forward_friend_single_msg|forward_group_single_msg|set_msg_emoji_like)$/.test(String(action)) && typeof core.hub.deliverRaw === 'function')
         ? core.hub.deliverRaw({ action, params, opts, sourceModuleId: id })
         : core.onebot.call(action, params, opts),
       dshTool: (tool) => { rec.dshTools.push(tool); core.bridge?.refresh(); return () => { remove(rec.dshTools, tool); core.bridge?.refresh() } },

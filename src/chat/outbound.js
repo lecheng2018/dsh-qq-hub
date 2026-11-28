@@ -39,7 +39,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     return { body, segs }
   }
 
-  async function sendSegments(chatId, message, note, { force = false, onResult } = {}) {
+  async function sendSegments(chatId, message, note, { force = false, onResult, sourceModuleId } = {}) {
     if (hooks?.send) {
       const ctx = deliveryContext?.getStore()
       if (ctx) ctx.inSendHook = true
@@ -56,7 +56,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     const captured = captureOnly?.(chatId, message, note)
     if (captured) return captured
     try {
-      const result = await outbox.request({ chatKey: chatId, sourceModuleId: 'core', segments: message, note, force, _outboxTicket: deliveryContext?.getStore()?.ticket })
+      const result = await outbox.request({ chatKey: chatId, sourceModuleId: sourceModuleId || 'core', segments: message, note, force, _outboxTicket: deliveryContext?.getStore()?.ticket })
       if (result?.state !== 'sent') {
         onResult?.({ ok: false, unknown: result?.state === 'unknown', error: result?.reason ? new Error(result.reason) : undefined })
         return null
@@ -72,13 +72,13 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     }
   }
 
-  async function sendText(chatId, text, replyId, missed, userId) {
+  async function sendText(chatId, text, replyId, missed, userId, opts = {}) {
     const { body, segs } = await textSegments(chatId, text, missed)
     if (!segs.length) return null
-    return sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], (replyId ? '[引用] ' : '') + body.slice(0, 60))
+    return sendSegments(chatId, [...quote(replyId), ...mention(userId, segs), ...segs], (replyId ? '[引用] ' : '') + body.slice(0, 60), { sourceModuleId: opts?.sourceModuleId })
   }
 
-  async function sendVoice(chatId, text, replyId, userId) {
+  async function sendVoice(chatId, text, replyId, userId, opts = {}) {
     let outcome = null
     try {
       const spoken = speakableText(text)
@@ -86,7 +86,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
       const { file, engine } = await tts.speak(spoken)
       const b64 = readFileSync(file).toString('base64')
       if (replyId || userId) log.debug(`语音条不能带引用/@（QQ 限制），单独发：${chatId}`)
-      const result = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`, { onResult: (value) => { outcome = value } })
+      const result = await sendSegments(chatId, [{ type: 'record', data: { file: 'base64://' + b64 } }], `[语音·${engine}] ${text.slice(0, 40)}`, { sourceModuleId: opts?.sourceModuleId, onResult: (value) => { outcome = value } })
       if (result || getConfig().dryRun || !getConfig().enabled) onStats?.('voice')
       if (!result && getConfig().enabled && !getConfig().dryRun) {
         const error = new Error('网关没接受语音')
@@ -103,12 +103,12 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
       // 降级文字真发出去了就按实发记账（缺陷：语音降级文字不进流水）：旧版无论降级成败
       // 都 return false，上层把这条计为未确认、降级文字也不进聊天流水。现返回降级文字的回执
       // （拿到才算送达），降级也没发出去才 return false。unknown 路径上面已 return，不降级。
-      const fallback = await sendText(chatId, text, replyId, undefined, userId)
+      const fallback = await sendText(chatId, text, replyId, undefined, userId, opts)
       return fallback || false
     }
   }
 
-  async function sendSticker(chatId, query, replyId, userId) {
+  async function sendSticker(chatId, query, replyId, userId, opts = {}) {
     const policy = stickers.policyFor?.(chatId) || getConfig().stickers
     if (!policy?.enabled) return false
     const item = query && typeof query === 'object' ? query : stickers.match(query)
@@ -118,7 +118,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
     // 如实记账（缺陷：sticker 谎报成功）：过去丢掉 sendSegments 的返回值、无条件 return true，
     // 于是网关拒收/状态未知时上层仍按「已送达」计，markUsed/onStats 也照记。现在拿到回执
     // 才算成功（与 sendText/sendImage 同口径返回回执），失败 return false 且不记使用/统计。
-    const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`)
+    const result = await sendSegments(chatId, [...quote(replyId), ...mention(userId), seg], `[表情] ${item.name || item.md5.slice(0, 8)}`, { sourceModuleId: opts?.sourceModuleId })
     if (!result) return false
     await stickers.markUsed?.(item.md5, chatId)
     // 本回合台账：正文里再写 <sticker:同一张> 时投递层据此去重（见 chat/turn-stickers.js）。
@@ -148,7 +148,7 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
       const allowLocal = opts?.allowLocal === true
       if (!allowLocal && !modelImageSrcAllowed(String(src))) throw new Error('模型回复里的图片只支持 http(s) 或 base64 地址')
       const buf = await fetchImage(src, { maxBytes: 10 * 1024 * 1024, allowLocal })
-      return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${String(src).slice(-40)}`)
+      return sendSegments(chatId, [...quote(replyId), ...mention(userId), { type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[图片] ${String(src).slice(-40)}`, { sourceModuleId: opts?.sourceModuleId })
     } catch (error) {
       log.warn('图片发不出去：', error.message)
       return null

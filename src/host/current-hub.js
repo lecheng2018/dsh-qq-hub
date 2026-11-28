@@ -35,6 +35,7 @@ export function createCurrentHub({
     markTurnAt: modular.markTurnAt,
     chatOfSession: modular.chatKeyOfSession,
     isSystemSession: modular.isSystemSession,
+    isArchivingSession: modular.isArchivingSession,
     resetChat: modular.resetChat,
     // 人设变更后按「新旧预期人设」逐聊天比对并重置：面板切卡/改默认人设统一走这一条，
     // 不再靠 sessions() 视图里的 personaId 猜（那只是建会话那一刻的快照，改了默认值不会动）。
@@ -67,9 +68,15 @@ export function createCurrentHub({
     chatLogOf: (day) => chatLog?.readDay?.(day) || [],
     chatLogDays: () => chatLog?.listDays?.() || [],
     deliverRaw: (args = {}) => {
-      const chatKey = args.chatKey || (args.params?.group_id ? `group:${args.params.group_id}` : args.params?.user_id ? `private:${args.params.user_id}` : '')
+      const action = String(args.action || '')
+      const ownerQQ = (() => { try { return String(getConfig?.()?.ownerQQ || '') } catch { return '' } })()
+      const chatKey = args.chatKey || args.opts?.chatKey
+        || (args.params?.group_id ? `group:${args.params.group_id}`
+          : args.params?.user_id ? `private:${args.params.user_id}`
+            : (action === 'set_msg_emoji_like' && ownerQQ ? `private:${ownerQQ}` : ''))
       if (!chatKey) throw new Error('deliverRaw 缺 chatKey，拒绝无会话域发送')
-      return egress.deliver({ ...args, chatKey, receipt: args.receipt || 'required', sourceModuleId: args.sourceModuleId || 'module' })
+      const optionalReceipt = /^(?:upload_|send_poke$|send_qzone_msg$|group_poke$|friend_poke$|forward_friend_single_msg$|forward_group_single_msg$|set_msg_emoji_like$)/.test(action)
+      return egress.deliver({ ...args, chatKey, receipt: args.receipt || (optionalReceipt ? 'optional' : 'required'), sourceModuleId: args.sourceModuleId || 'module' })
     },
     get lastChatAt() { return services.lastChatAt() },
     get lastOwnerChatAt() { return services.lastOwnerChatAt() },

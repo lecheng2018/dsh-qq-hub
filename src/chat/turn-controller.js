@@ -89,7 +89,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
     if (runningByChat.get(turn.chatKey) === turn.turnId) runningByChat.delete(turn.chatKey)
     // steer 等待者：回合结束，全部按结果唤醒（失败/取消→reject 同错误）
     if (l) {
-      for (const s of l.pendingSteers) cancelled || error ? s.reject(error || new Error('回合已取消')) : s.resolve()
+      for (const s of l.pendingSteers.splice(0)) cancelled || error ? s.reject(error || new Error('回合已取消')) : s.resolve()
     }
     // 审计 Q05：终态回合不再保留整包入站数据。
     // members 里是结构化的原始事件（含媒体块），只对 merging/running 有用；
@@ -141,17 +141,17 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
       if (w.timer) { clearTimeout(w.timer); w.timer = null }
     }
     setTurnState(turn, 'pending')
-    const liveEntry = { steerHandler: null, pendingSteers: [], buffered: [], closed: false }
+    const liveEntry = { steerHandler: null, pendingSteers: [], closed: false }
     live.set(turn.turnId, liveEntry)
     const abort = new AbortController()
     turn.cancelSignal = abort.signal
-    /** 注册转向处理器；注册前已到达的转向输入按序补投递（busy steer 语义）。 */
+    /** 注册转向处理器；注册前已到达的转向输入按序补投递（busy steer 语义），并精确绑定对应 Promise。 */
     const registerSteer = (handler) => {
       if (typeof handler !== 'function') throw new TypeError('onSteer 需要一个 handler 函数')
       liveEntry.steerHandler = handler
-      while (liveEntry.buffered.length) {
-        const item = liveEntry.buffered.shift()
-        Promise.resolve().then(() => handler(item)).then(item.resolve, item.reject)
+      while (liveEntry.pendingSteers.length) {
+        const entry = liveEntry.pendingSteers.shift()
+        Promise.resolve().then(() => handler(entry.inbound)).then(entry.resolve, entry.reject)
       }
     }
     const deliverSteer = (inbound) => new Promise((resolve, reject) => {
@@ -164,8 +164,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
       if (liveEntry.steerHandler) {
         Promise.resolve().then(() => liveEntry.steerHandler(inbound)).then(resolve, reject)
       } else {
-        liveEntry.pendingSteers.push({ resolve, reject })
-        liveEntry.buffered.push(inbound) // execute 还没注册：缓存，注册时补投
+        liveEntry.pendingSteers.push({ inbound, resolve, reject }) // execute 还没注册：缓存，注册时按序补投
       }
     })
     const io = {
@@ -183,7 +182,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
         const l = live.get(turn.turnId)
         if (l) {
           l.closed = true
-          for (const s of l.pendingSteers) s.reject(new Error('回合已取消'))
+          for (const s of l.pendingSteers.splice(0)) s.reject(new Error('回合已取消'))
           live.delete(turn.turnId)
         }
         return null
@@ -203,7 +202,21 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
     const pending = scheduler.submit(turn.chatKey, job)
     pending.then(
       (value) => completeTurn(turn, { state: turn.state, value }),
-      (error) => completeTurn(turn, { state: turn.state, error }),
+      (error) => {
+        if (!isTerminal(turn)) {
+          turn.error = String(error?.message || error)
+          const l = live.get(turn.turnId)
+          if (l) {
+            l.closed = true
+            for (const s of l.pendingSteers.splice(0)) s.reject(error)
+          }
+          try { setTurnState(turn, 'failed') } catch {}
+          live.delete(turn.turnId)
+          turn.members = undefined
+          pruneFinishedTurns()
+        }
+        completeTurn(turn, { state: turn.state, error })
+      },
     )
     return pending
   }
@@ -228,7 +241,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
    */
   function offer(inbound) {
     if (disposed) throw new Error('controller 已卸载')
-    parseChatKey(inbound.chatKey)
+    const parsed = parseChatKey(inbound.chatKey)
     const chatKey = inbound.chatKey
 
     // running 态有回合 → steer（转向）；无 merging 窗 → steer 挂起等待在飞回合消费
@@ -254,7 +267,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
       }
     }
 
-    const turn = createTurn({ chatKey, memberEventId: inbound.eventId, createdAt: null })
+    const turn = createTurn({ chatKey, kind: parsed.kind, memberEventId: inbound.eventId, createdAt: null })
     turn.members[0] = inbound
     turn._completion = { promise: null, resolve: null }
     turn._completion.promise = new Promise((resolve) => { turn._completion.resolve = resolve })
@@ -381,7 +394,7 @@ export function createTurnController({ execute, merge = {}, log, maxQueue = 50, 
     windows.clear()
     for (const [turnId, l] of live) {
       l.closed = true
-      for (const s of l.pendingSteers) s.reject(new Error('controller 已卸载（steer 等待唤醒）'))
+      for (const s of l.pendingSteers.splice(0)) s.reject(new Error('controller 已卸载（steer 等待唤醒）'))
       const turn = turns.get(turnId)
       if (turn && turn.state === 'pending') {
         // 被 dispose 清出队列的排队回合：scheduler.dispose 会 reject 它的 job，但 job 在

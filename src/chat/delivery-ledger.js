@@ -9,13 +9,14 @@
 //   - 状态机与 ADR 六态一致：queued/sending/sent/failed/unknown/cancelled。
 
 import { createHash } from 'node:crypto'
-import { readJsonWithBackup, writeJsonWithBackup, quarantineCorruptFile } from '../core/store.js'
+import { readJsonWithBackup, quarantineCorruptFile } from '../core/store.js'
 import { createWalWriter } from './delivery-wal.js'
 import { assertDelivery, CONTRACT_VERSION } from '../kernel/modular-contracts.js'
 
 const LEDGER_VERSION = 1
 const STATES = new Set(['queued', 'sending', 'sent', 'failed', 'unknown', 'cancelled'])
 const CONTENT_RETENTION_MS = 7 * 86400_000
+const ANOMALY_RETENTION_MS = 14 * 86400_000
 const CONTENT_KEEP_CHARS = 200
 const ENQUEUE_CONTENT_KEEP_CHARS = 2048
 const DEFAULT_MAX_RECORDS = 2000
@@ -113,25 +114,61 @@ let seq = 0
  * @param {string} [o.file] 台账文件路径（缺省 = 纯内存）
  * @param {(error: Error) => void} [o.onError] 持久化错误出口
  */
-export function createDeliveryLedger({ file, onError = (error) => console.warn(error.message), maxRecords = DEFAULT_MAX_RECORDS, wal: walOpts } = {}) {
+export function createDeliveryLedger({
+  file,
+  onError = (error) => console.warn(error.message),
+  maxRecords = DEFAULT_MAX_RECORDS,
+  hardMaxRecords,
+  anomalyRetentionMs = ANOMALY_RETENTION_MS,
+  wal: walOpts,
+} = {}) {
   const options = { validate: validLedgerDocument, label: '投递台账', onError }
   /** deliveryId -> record */
   const records = new Map()
   const limit = Math.max(1, Math.floor(Number(maxRecords) || DEFAULT_MAX_RECORDS))
+  const hardLimit = Math.max(limit, Math.floor(Number(hardMaxRecords) || limit * 2))
+  const anomalyTtlMs = Math.max(1, Number(anomalyRetentionMs) || ANOMALY_RETENTION_MS)
   let crashedSending = 0
   let recovered = false
   const wal = file ? createWalWriter(file, { onError, validate: validLedgerDocument, label: '投递台账', ...walOpts }) : null
   // 启动时若主文件已损坏且无法隔离（无法 rename 走），readJsonWithBackup 会读出备份但留下 unquarantinedFiles。
   // 此时禁止任何后续写入覆盖原件（fail-closed），与既有 state-corruption 契约一致。
   let writeBlocked = false
+  // 启动加载时已由 readJsonWithBackup 做过全量损坏校验与隔离；正常运行时跳过每次 persist 前的
+  // 双重全量 readFileSync + JSON.parse 预检。仅在启动读到异常/备份恢复尚未完成首次落盘时保留预检。
+  let needsPrecheck = false
 
-  function prune() {
+  function prune(now = Date.now()) {
     let removed = 0
-    while (records.size > limit) {
-      const oldest = [...records.values()].find((rec) => rec.state === 'sent' || rec.state === 'cancelled')
-      if (!oldest) break
-      records.delete(oldest.deliveryId)
-      removed++
+    // 1) 常规裁剪：超过 maxRecords 时优先淘汰最旧的 sent / cancelled（Map 插入序即时间序）
+    if (records.size > limit) {
+      for (const [id, rec] of records) {
+        if (records.size <= limit) break
+        if (rec.state === 'sent' || rec.state === 'cancelled') {
+          records.delete(id)
+          removed++
+        }
+      }
+    }
+    // 2) 超期异常裁剪：超期（默认 >14 天）的 failed / unknown 不再无限滞留
+    const anomalyCutoff = now - anomalyTtlMs
+    for (const [id, rec] of records) {
+      if (rec.state !== 'failed' && rec.state !== 'unknown') continue
+      const ts = Number(rec.unknownAt || rec.createdAt)
+      if (Number.isFinite(ts) && ts > 0 && ts < anomalyCutoff) {
+        records.delete(id)
+        removed++
+      }
+    }
+    // 3) 兜底硬上限：若 failed / unknown 堆积导致总数仍超过 hardLimit，按最老淘汰（永不删 queued/sending）
+    if (records.size > hardLimit) {
+      for (const [id, rec] of records) {
+        if (records.size <= hardLimit) break
+        if (rec.state === 'failed' || rec.state === 'unknown') {
+          records.delete(id)
+          removed++
+        }
+      }
     }
     return removed
   }
@@ -139,6 +176,7 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
   if (file) {
     try {
       const loaded = readJsonWithBackup(file, { ...options, fallback: () => ({ version: LEDGER_VERSION, deliveries: [] }), repairPrimary: false })
+      if (loaded.fromBackup || loaded.error) needsPrecheck = true
       if (loaded.fromBackup) recovered = true
       if (loaded.unquarantinedFiles?.length) {
         writeBlocked = true
@@ -246,15 +284,19 @@ export function createDeliveryLedger({ file, onError = (error) => console.warn(e
       // critical 路径始终先写一次主快照（fail-closed 凭据），再追加 WAL；
       // 非关键路径达到阈值或 forceCompact 时才压缩。
       // requireBackup 跟着 critical 走：关键落盘要求主文件与 .bak 都写成，任一失败即抛（fail-closed）。
+      // 快照写紧凑 JSON（compact）且只在启动读到异常时做预检（precheck），避免每次全量双读。
+      const compactOpts = { critical, compact: true, precheck: needsPrecheck }
       if (forceCompact || wal.needsCompact() || critical) {
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, { critical })
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, compactOpts)
+        needsPrecheck = false
       }
       // 再追加本次事件到 WAL
       if (walEvent) {
         wal.append(walEvent, { critical })
       } else if (critical) {
         // 没有显式事件但要求关键落盘：直接全量压缩（fail-closed 路径）
-        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, { critical })
+        wal.compact({ version: LEDGER_VERSION, savedAt: now, deliveries: [...records.values()] }, compactOpts)
+        needsPrecheck = false
       }
     } catch (error) {
       onError(error)

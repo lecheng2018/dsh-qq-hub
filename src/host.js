@@ -183,7 +183,7 @@ export function apply(ctx) {
           } else {
             notePersonaFallback(sid, `按 ${chatKey} 没选出人设卡`)
           }
-        } else if (isQqHubSession && !hub?.isSystemSession?.(sid)) {
+        } else if (isQqHubSession && !hub?.isSystemSession?.(sid) && !hub?.isArchivingSession?.(sid)) {
           // 只有 QQ Hub 自己的会话才可能「本该有」分群人设；非 QQ 会话反查不到是常态，不告警。
           notePersonaFallback(sid, '反查不到它属于哪个聊天（会话映射缺失）')
         }
@@ -479,8 +479,16 @@ export function apply(ctx) {
     personas: { list: listPersonas, read: readPersona, current: () => currentPersonaText(cfg.persona.current) },
     getConfig, setConfig,
   }
-  // 模块只获得当前服务的冻结发送桥，所有媒体共用 Shared Outbox。
-  core.hub = Object.freeze(createModuleSendBridge({ hub, outbox: modularCoreApi.outbox, log: logger.child('模块出站'), unified: true }))
+  // 模块只获得当前服务的冻结发送桥，所有媒体共用 Shared Outbox，并接入非 core 主动推送治理。
+  core.hub = Object.freeze(createModuleSendBridge({
+    hub,
+    outbox: modularCoreApi.outbox,
+    log: logger.child('模块出站'),
+    unified: true,
+    getConfig,
+    isMuted: (chatId) => mutes.muted(chatId),
+    isProactivelyMuted: (chatId, t) => hub.isProactivelyMuted?.(chatId, t) === true,
+  }))
   // 共享浏览器：抖音 / 小红书 / 红果 / 贴吧这些要开网页的模块**共用**一套。
   // 一个进程 + 每模块一个标签页 + 任务串行：这台机器可用内存本来就不多，多开必炸。
   // 这里只创建对象，**不启动任何进程**；模块真的 acquire() 时才拉起 Xvfb 和浏览器。
@@ -568,6 +576,7 @@ export function apply(ctx) {
     interactions.questions.dispose('插件卸载')
     interactions.approvals.clear('插件卸载')
     hub.disposeRecentMedia()
+    try { core.hub.dispose?.() } catch {}
     mods.dispose()
     // 共享浏览器：先让模块停完（上面的 mods.dispose），再关浏览器和虚拟屏。
     // 必须 await —— 不等的话 Chrome/Xvfb 会变成孤儿进程一直占着内存。

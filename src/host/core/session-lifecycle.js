@@ -22,6 +22,7 @@ export function createSessionLifecycle({
   sessionPersonas, lastInboundText, sessionTurns, activeChatBySessionId,
   ctxBoxes, ctxBound, ctxFallback, ctxFallbackDone, personaBound,
   mountedTools, slowNoticeSent, selectedModels, pendingResets,
+  recentlyArchivedSessions, sessionAdapter,
 }) {
   function cleanupSession(sessionId) {
     const sid = String(sessionId || '')
@@ -39,6 +40,7 @@ export function createSessionLifecycle({
     selectedModels.delete(sid)
     slowNoticeSent.delete(sid)
     sessionTurns.delete(sid)
+    sessionAdapter?.forgetTitle?.(sid)
     resetImageBudget(sid) // 换会话 = 图片额度跟着归零（新会话历史里没有旧图）
     for (const key of personaBound) if (key === sid || key.startsWith(`${sid}::`)) personaBound.delete(key)
   }
@@ -53,6 +55,13 @@ export function createSessionLifecycle({
     try { onResetChat?.(key) } catch {}
     const entry = registry.peek?.(key)
     if (!entry?.sessionId) return false
+    // 短时免误报：archiveSession 是异步的，归档落地前宿主若再次求值人设变量，
+    // 不把即将归档的旧会话当「映射缺失」告警。
+    if (recentlyArchivedSessions) {
+      const now = Date.now()
+      for (const [k, exp] of recentlyArchivedSessions) { if (exp <= now) recentlyArchivedSessions.delete(k) }
+      recentlyArchivedSessions.set(String(entry.sessionId), now + 60_000)
+    }
     try {
       const reg = ctxGet('workspaceRegistry') ?? dsh?.workspaceRegistry
       Promise.resolve(reg?.archiveSession?.(entry.sessionId, { stopActivity: true })).catch(() => {})
@@ -209,7 +218,9 @@ export function createSessionLifecycle({
         if (row.origin === 'subagent' || row.parentSessionId) { result.skipped++; continue }
         // cwd 缺失时不猜：宁可漏扫，也不把别的工作区的会话当成 QQ 孤儿
         if (!inScope(row.cwd)) { result.skipped++; continue }
-        if (Number(row.updatedAt) > cutoff) { result.skipped++; continue }
+        // updatedAt 缺失/非法（NaN / <=0）同样跳过：绝不让 NaN > cutoff === false 绕过闲置保护误归档
+        const updatedAt = Number(row.updatedAt)
+        if (!Number.isFinite(updatedAt) || updatedAt <= 0 || updatedAt > cutoff) { result.skipped++; continue }
         if (result.archived >= maxPerPass) break
         try {
           await reg.archiveSession(sid, { stopActivity: true })
@@ -221,7 +232,7 @@ export function createSessionLifecycle({
           log?.debug?.(`孤儿会话巡检归档失败（${sid}）：${error?.message || error}`)
         }
       }
-      if (result.archived) log.info(`孤儿会话巡检：归档了 ${result.archived} 个历史残留会话（闲置超过 ${idleHours} 小时）`)
+      if (result.archived) log.info(`孤儿会话巡检：本轮归档 ${result.archived} 个（闲置超过 ${idleHours} 小时，扫描 ${result.scanned}，跳过 ${result.skipped}）`)
     } catch (error) {
       log?.debug?.(`孤儿会话巡检失败：${error?.message || error}`)
     }
@@ -250,11 +261,16 @@ export function createSessionLifecycle({
     for (const [chatKey, entry] of Object.entries(snap)) {
       if (entry && String(entry.sessionId) === sid) return chatKey
     }
-    // 兼容带/不带 session- 前缀两种写法
-    const bare = sid.startsWith('session-') ? sid.slice(8) : sid
+    // 兼容带/不带 session- 前缀两种写法：要求剥前缀后长度 >= 8 且严格全等（防 bare === '' 恒命中首条）
+    const stripPrefix = (s) => (s.startsWith('session-') ? s.slice(8) : s)
+    const bare = stripPrefix(sid)
+    if (bare.length < 8) return ''
     for (const [chatKey, entry] of Object.entries(snap)) {
       const v = String(entry?.sessionId || '')
-      if (v === sid || v.endsWith(bare)) return chatKey
+      if (v === sid || stripPrefix(v) === bare) return chatKey
+    }
+    for (const [k, chatKey] of activeChatBySessionId) {
+      if (stripPrefix(k) === bare) return chatKey
     }
     return ''
   }
@@ -349,6 +365,16 @@ export function createSessionLifecycle({
     throw new Error(`人设变化过快，无法创建稳定会话：${chatKey}`)
   }
 
+  /** 该会话是否处于「刚被 resetChat 归档、归档尚未落地」的短时窗口（人设变量求值时免误报）。 */
+  function isArchivingSession(sessionId) {
+    if (!recentlyArchivedSessions) return false
+    const key = String(sessionId || '')
+    const exp = recentlyArchivedSessions.get(key)
+    if (!exp) return false
+    if (exp <= Date.now()) { recentlyArchivedSessions.delete(key); return false }
+    return true
+  }
+
   return {
     cleanupSession,
     resetChat,
@@ -357,6 +383,7 @@ export function createSessionLifecycle({
     sweepOrphanSessions,
     knownChats,
     chatKeyOfSession,
+    isArchivingSession,
     sessionForChat,
     isSessionArchived,
     sessionRetired,
