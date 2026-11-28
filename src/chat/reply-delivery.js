@@ -4,6 +4,7 @@ import { parseReply, bubbleDelay, replyRules } from './reply.js'
 import { updateClosureState } from './conversation-closure.js'
 import { calculateTypingCadence, typingWaitAfter, typingCadenceEnabled } from './reply-cadence.js'
 import { policyFor, resolveEngagedBudget } from './group-policy.js'
+import { applyTextLiteRules } from './text-lite.js'
 
 // AC-2 的字面要求：律动计算从投递模块表面也能直接取到。
 // 真身仍然只有一份，定义在 reply-cadence.js（纯函数，便于单测与复用），这里只是 re-export。
@@ -107,7 +108,8 @@ export function createReplyDelivery({
     }
     // 分条规则跟着配置走：她自己断的句优先，字数只当兜底（群里与私聊上限可以不同）
     const inGroup = chatId.startsWith('group:')
-    const rules = replyRules(cfg, inGroup, random)
+    // T2.3：text_lite 时会被收紧后的新对象替换，所以用 let（其余路径行为不变）
+    let rules = replyRules(cfg, inGroup, random)
     // 报告兜底（1.3.48 第二层）：这一轮确实调过「内容型工具」（RSS、B 站、小黑盒这类查资料的），
     // 但她忘了写 <report> 标记 → 整轮按报告处理，不被拆碎。记忆型工具（recall_memory 等）不算。
     //
@@ -116,6 +118,12 @@ export function createReplyDelivery({
     // 而投递发生在 turn/end 之后 —— 这条兜底从未生效过，还留下了
     // 「上一轮的标记污染下一轮」的跨回合泄漏。删掉，只留一条通路。
     if (opts.forceReport) rules.forceReport = true
+    // T2.3 · TEXT_LITE：群聊 + 参与级别 text_lite 时收紧自动分条 / 群合包目标（只收紧不放宽）。
+    // 位置关键：在 replyRules 之后（否则被重算覆盖）、parseReply 与 groupLimit 之前（群合包
+    // 读到的就是收紧后的 rules.maxBubbles）。must / engaged / 私聊零影响。
+    if (inGroup && opts.participationLevel === 'text_lite') {
+      rules = applyTextLiteRules(rules, opts.textLiteLimits)
+    }
     // 群上限不超过配置上限时，由群合并统一限制；避免解析时跨媒体合并文字并丢掉引用。
     // US-006 · 四态收尾：只收紧不放宽 —— 但收紧的是**自动切出来**的气泡数。
     // 她自己写的 ||| 是硬边界：软顶写进 softMaxBubbles（parseReply 里再与显式条数取大），

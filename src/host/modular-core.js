@@ -1140,6 +1140,11 @@ export function createModularCore({
           delivered = await replyDelivery.deliver(turn.chatKey, reply, {
             own: true,
             topicMode: turnMode || undefined, // 续聊不刷新话题窗口的分派依据（见 reply-delivery）
+            // T2.3 / T2.4：回合身份与参与级别显式传给投递层（text_lite 只收紧分条；钩子拿到同一份身份）
+            turnId: turn.turnId,
+            participationLevel: offeredParticipation?.level === 'text_lite' ? 'text_lite' : 'full',
+            textLiteLimits: offeredParticipation?.level === 'text_lite' ? (offeredParticipation.limits || undefined) : undefined,
+            triggerMessageIds,
             userText: turnUserText,
             wantVoice: wantsVoice(turnUserText),
             autoReply,
