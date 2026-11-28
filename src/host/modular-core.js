@@ -17,7 +17,6 @@ import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdirSync } from 'node:fs'
 
-import { legacyEventToNormalized } from '../chat/adapters/legacy-inbound.js'
 import { createDshSessionAdapter } from '../chat/adapters/dsh-session.js'
 import { createOnebotOutboxAdapter, paramsFor } from '../chat/adapters/onebot-outbox.js'
 import { createLegacyContextAdapter } from '../chat/adapters/legacy-context.js'
@@ -38,10 +37,10 @@ import { createPresence } from '../chat/presence.js'
 import { createCapture } from '../chat/capture.js'
 import { createFaces } from '../chat/faces.js'
 import { createDeliveryLedger } from '../chat/delivery-ledger.js'
-import { isOwner, checkAllowed, levelFor, presetFor } from '../chat/access.js'
+import { checkAllowed, levelFor, presetFor } from '../chat/access.js'
 import { createActivityState } from '../chat/activity-state.js'
 import { checkIdentityLeak } from '../chat/identity-guard.js'
-import { parseMessageEvent, neutralizeInboundDsl } from '../chat/inbound.js'
+import { neutralizeInboundDsl } from '../chat/inbound.js'
 import { parseCommand } from '../chat/commands.js'
 import { createInboundImages } from '../chat/inbound-images.js'
 import { createInboundVision } from '../chat/inbound-vision.js'
@@ -53,10 +52,9 @@ import { personaIdFor, personaHash } from '../persona/personas.js'
 import { workspaceDirForChat, WORKSPACE_TITLE } from '../chat/workspace.js'
 import { createGroupState } from '../chat/group-state.js'
 import { readJson, writeJson } from '../core/store.js'
-import { policyFor, decideGroupReply, isOfficialBotSender } from '../chat/group-policy.js'
 import { createRepeatGate } from '../core/repeat-gate.js'
 import { gateFromEnv } from '../chat/group-atmosphere-gate.js'
-import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../chat/fish-guard.js'
+
 import { nowLine } from '../chat/clockline.js'
 import { backfillNoticeBlock } from '../chat/backfill.js'
 import { isBackfill } from '../chat/normalized-inbound.js'
@@ -64,14 +62,14 @@ import { createInboundAudio } from '../chat/inbound-audio.js'
 import { createQuotedMessages } from '../chat/quoted-messages.js'
 import { createRatelimitMiddleware, ratelimitOptionsFromEnv } from '../kernel/mw-ratelimit.js'
 import { createGroupGate } from './core/group-gate.js'
+import { createInboundRouter } from './core/inbound-router.js'
+import { createModelSync } from './core/model-sync.js'
 import { createTurnFailure, markPendingReset, takePendingReset } from './core/turn-failure.js'
 import { createSessionLifecycle } from './core/session-lifecycle.js'
 import { createPromptContext } from './core/prompt-context.js'
 import { createToolsMount } from './core/tools-mount.js'
-import {
-  hydrateForwards, mediaOfInbound, aclMsgFromInbound,
-  textOfSegments, emitActivity, segmentsToContent,
-} from './core/inbound-prep.js'
+import { aclMsgFromInbound, textOfSegments, segmentsToContent } from './core/inbound-prep.js'
+import { createInboundHydration } from '../chat/inbound-hydration.js'
 
 /**
  * @param {object} o
@@ -109,6 +107,54 @@ import {
  * @param {(chatKey: string, segments: Array, userId: string) => void} [o.noteMedia]
  *   最近发来的图/表情登记（「把刚才那张存下来」类工具依赖它，真机审计 1.11）
  */
+/**
+ * 临时 Outbox：内存（或指定文件）台账 + 直连 onebot 的出站实现。
+ *
+ * **仅供测试与降级路径**，生产必须注入 `sharedOutbox`（src/host.js 里的 SharedOutbox 是唯一
+ * 物理出口，带 egress 审计、跨模块排队与来源群记忆）。这里把原先藏在 `createModularCore`
+ * 里的隐式兜底提成显式函数：装配根自己不再悄悄造一个出口 —— 传了 `sharedOutbox` 就用它，
+ * 没传才走这里，且 src/host.js 那一侧有断言保证生产调用点绝不会漏传。
+ *
+ * @param {object} o
+ * @param {{ call: Function }} o.onebot
+ * @param {() => object} o.getConfig
+ * @param {object} o.log
+ * @param {string} [o.ledgerFile] 投递台账文件（提供则落盘；缺省内存台账）
+ */
+function createEphemeralOutbox({ onebot, getConfig, log, ledgerFile }) {
+  const ledger = ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
+  return createOutbox({
+    send: createOnebotOutboxAdapter({ onebot }).send,
+    ...(ledger ? { ledger } : {}),
+    // 出站白名单复核（与 legacy checkAllowed 同一判定；出队时执行，撤权在排队期间也生效）
+    authorize: async (delivery) => {
+      const cfg = getConfig()
+      return checkAllowed(cfg, aclMsgFromInbound({ chatKey: delivery.chatKey })).allowed
+    },
+    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）。truthy 语义与 legacy 一致。
+    enabled: () => Boolean(getConfig().enabled),
+    dryRun: () => Boolean(getConfig().dryRun),
+    // 身份泄露闸：唯一出站点扫受保护 QQ/群号（同 legacy sendSegments 语义）
+    guard: (delivery) => {
+      const cfg = getConfig()
+      const ig = cfg.security?.identityGuard || {}
+      if (ig.enabled === false) return { ok: true }
+      const text = textOfSegments(delivery.segments)
+      const chatKey = String(delivery.chatKey || '')
+      const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
+      const isPrivate = chatKey.startsWith('private:')
+      return checkIdentityLeak(text, {
+        surface: isPrivate ? '私聊消息' : '群消息',
+        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
+        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
+        // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
+        allowBareNumbers: isPrivate,
+        mode: ig.mode === 'warn' ? 'warn' : 'block',
+      })
+    },
+  })
+}
+
 export function createModularCore({
   dsh, onebot, mods, getConfig, logger, log,
   personaText, runCommand, ledgerFile, sessionStoreFile, groupStateFile,
@@ -174,12 +220,6 @@ export function createModularCore({
 
   const faces = createFaces({ onebot, log })
   const sentIds = new Set()
-  let selfId = ''
-  const pairCalmUntil = new Map()
-  const pairCalmSweep = (now) => {
-    if (pairCalmUntil.size < 50) return
-    for (const [key, until] of pairCalmUntil) if (until < now - 3 * 3600_000) pairCalmUntil.delete(key)
-  }
   const systemSessionIds = new Set() // systemTurns 后台会话 id（不进 chatOfSession，但供人设解析免误报回落告警）
   const steeringChats = new Set() // 只在 DSH 生成期接受 steer；出站期的新消息排下一轮
   /** chatKey -> 'archived' | 'context-window' | 'oversized' | 'timedOut'（下一次进入该聊天的回合时统一归档重建） */
@@ -198,11 +238,11 @@ export function createModularCore({
 
   // 群闸决策与在途回合账归子模块（core/group-gate.js）：状态在那里，核心只注入取数函数。
   const groupGate = createGroupGate({
-    getConfig, debug, groups, memoryScore, atmosphereGate,
+    getConfig, log, debug, groups, memoryScore, atmosphereGate,
     // controller 在本函数后面才创建：与原闭包一致，取用时才读（延迟读取，不抓快照）
     getController: () => controller,
   })
-  const { decideGroupReplyFor, noteTurnMode, releaseTurnMode } = groupGate
+  const { decideGroupReplyFor, noteTurnMode, releaseTurnMode, fishGuardOf } = groupGate
 
   /** ChatKey + 首发言者 → legacy 兼容的 chat 视图（provider / 人设 / 模型判定共用）。 */
   function chatViewFor(chatKey, members) {
@@ -446,37 +486,9 @@ export function createModularCore({
   })
 
   // ---------- Outbox（唯一物理出口；授权/全局闸/身份闸/台账持久化全在此接线） ----------
-  const ledger = !sharedOutbox && ledgerFile ? createDeliveryLedger({ file: ledgerFile, onError: (e) => log.warn('投递台账落盘异常：', e.message) }) : undefined
-  const outbox = sharedOutbox || createOutbox({
-    send: createOnebotOutboxAdapter({ onebot }).send,
-    ...(ledger ? { ledger } : {}),
-    // 出站白名单复核（与 legacy checkAllowed 同一判定；出队时执行，撤权在排队期间也生效）
-    authorize: async (delivery) => {
-      const cfg = getConfig()
-      return checkAllowed(cfg, aclMsgFromInbound({ chatKey: delivery.chatKey })).allowed
-    },
-    // 全局 enabled/dryRun：出队时动态读（面板随时可改；不依赖入口快照）。truthy 语义与 legacy 一致。
-    enabled: () => Boolean(getConfig().enabled),
-    dryRun: () => Boolean(getConfig().dryRun),
-    // 身份泄露闸：唯一出站点扫受保护 QQ/群号（同 legacy sendSegments 语义）
-    guard: (delivery) => {
-      const cfg = getConfig()
-      const ig = cfg.security?.identityGuard || {}
-      if (ig.enabled === false) return { ok: true }
-      const text = textOfSegments(delivery.segments)
-      const chatKey = String(delivery.chatKey || '')
-      const ownGroup = chatKey.startsWith('group:') ? chatKey.slice(6) : ''
-      const isPrivate = chatKey.startsWith('private:')
-      return checkIdentityLeak(text, {
-        surface: isPrivate ? '私聊消息' : '群消息',
-        ids: [cfg.ownerQQ, cfg.botQQ].filter(Boolean),
-        allowIds: [ownGroup, ...(isPrivate ? [cfg.ownerQQ] : [])].filter(Boolean),
-        // 私聊只对「已知账号」与「QQ/群号+数字」把关；裸长数字不拦（技术文档/端口/ID 会误伤整篇报告）
-        allowBareNumbers: isPrivate,
-        mode: ig.mode === 'warn' ? 'warn' : 'block',
-      })
-    },
-  })
+  // 生产路径必须由 src/host.js 注入 SharedOutbox（唯一物理出口 + egress 审计）；这里只保留
+  // **显式**的临时 Outbox 给测试/降级用 —— 见 createEphemeralOutbox 的说明。
+  const outbox = sharedOutbox || createEphemeralOutbox({ onebot, getConfig, log, ledgerFile })
 
   const deliveryContext = new AsyncLocalStorage()
   // 同回合表情去重台账：工具直发 vs 正文 <sticker:…>（真机 2026-11-23 15:01 连发两张）。
@@ -541,9 +553,13 @@ export function createModularCore({
     replyIdOf, quotedInfo, quoteNote,
   })
   const {
-    mountTools, hydrateInboundFiles, hydrateQuotes, trimToImageBudget, resetImageBudget,
+    mountTools, hydrateInboundFiles, trimToImageBudget, resetImageBudget,
     mountedTools, slowNoticeSent,
   } = toolsMount
+
+  // 入站水合链（合并转发 → 语音转写 → 入站文件 → 引用转述）归 chat/inbound-hydration.js：
+  // execute 与 steer 两条路共用同一份顺序。依赖全是活引用（onebot / audio / toolsMount）。
+  const { hydrateMembers } = createInboundHydration({ onebot, log, audio, toolsMount })
 
   const admitContent = async (content, context = {}) => {
     const { content: trimmed } = trimToImageBudget(content, context.sessionId && String(context.sessionId), context.cfg || getConfig())
@@ -817,16 +833,17 @@ export function createModularCore({
       let groupFedItems = null
       let content
       // 真机审计 1.4：先把语音段转成文字，再拼内容（群/私聊两条路都受益）
-      const expanded = await hydrateForwards(io.members, onebot, log)
-      const heard = await audio.hydrateRecords(expanded)
-      const heardWithFiles = await hydrateInboundFiles(heard, turn.chatKey)
-      if (inGroup) {
-        for (const member of heard) {
-          const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
-          if (hit) hit.text = textOfSegments(member.segments)
-        }
-      }
-      const members = await hydrateQuotes(heardWithFiles, turn.chatKey)
+      // 四步水合（转发→语音→文件→引用）归 chat/inbound-hydration.js；群缓冲的「正文回填」
+      // 必须发生在文件水合**之前**（文件水合会把 file 段换成整份正文，进缓冲会撑爆上下文），
+      // 所以用 onHeard 拿到那个中间态，时序与拆分前逐行一致。
+      const members = await hydrateMembers(io.members, turn.chatKey, inGroup ? {
+        onHeard: (list) => {
+          for (const member of list) {
+            const hit = groups.buffer(chat.groupId).findLast((x) => x.mid && x.mid === String(member.messageId || ''))
+            if (hit) hit.text = textOfSegments(member.segments)
+          }
+        },
+      } : undefined)
       if (inGroup) {
         for (const member of members) {
           if (member?.quoteNote) {
@@ -896,10 +913,7 @@ export function createModularCore({
       io.onSteer(async (inbound) => {
         activeSteers++
         try {
-          const expandedSteer = await hydrateForwards([inbound], onebot, log)
-          const heardSteer = await audio.hydrateRecords(expandedSteer)
-          const filesSteer = await hydrateInboundFiles(heardSteer, turn.chatKey)
-          const quotedSteer = await hydrateQuotes(filesSteer, turn.chatKey)
+          const quotedSteer = await hydrateMembers([inbound], turn.chatKey)
           let steerContent = segmentsToContent(quotedSteer)
           const source = `【私聊】${neutralizeInboundDsl(String(inbound.sender?.nickname || inbound.sender?.userId || ''))}(${inbound.sender?.userId})：`
           const timeHead = nowLine(Date.now(), previousTurnAt)
@@ -1167,256 +1181,21 @@ export function createModularCore({
     },
   })
 
-  /** 聊天域消息入口（host dispatchEvent 的旗开分支）。 */
-  async function dispatchLegacyEvent(ev) {
-    selfId = String(ev.self_id || selfId || getConfig().botQQ || '')
-    const cfg = getConfig()
-    // 命令闸（M4-2）：主人斜杠命令先截，回复经 outbox（同 legacy：命令不进合流，总开关关着也处理）
-    if (runCommand && ev.post_type === 'message') {
-      const view = parseMessageEvent(ev, ev.self_id)
-      const cmd = parseCommand(view.text, mods.commands())
-      if (cmd && isOwner(cfg, view.userId)) {
-        const reply = await runCommand(cmd, { ...view, chatId: view.chatId, nickname: cfg.ownerName || '主人', text: view.text })
-        if (reply) {
-          await outbox.request({
-            chatKey: view.chatId,
-            sourceModuleId: 'core',
-            segments: [{ type: 'text', data: { text: String(reply) } }],
-            force: true,
-          })
-          return { handled: 'command' }
-        }
-      }
-    }
-    const { inbound } = safeAdapt(ev, 'realtime')
-    if (!inbound) return { handled: 'skipped' }
-    return routeInbound(inbound, ev, 'realtime')
-  }
-
-  /** 兼容旧 hub.onMessage 的等待契约；网关实时分发仍使用上面的异步入口。 */
-  async function dispatchLegacyEventSettled(ev) {
-    const routed = await dispatchLegacyEvent(ev)
-    if (!routed?.turnId) return routed
-    const outcome = await controller.waitForTurn(routed.turnId)
-    if (outcome?.error) throw outcome.error
-    return { ...routed, result: outcome?.value }
-  }
-
-  /**
-   * 入站主链（realtime/backfill 共用），顺序逐项对齐 legacy hub.onMessage：
-   * ACL → 旁路指令 → 总开关 → 静音 → 群缓冲 → activity 计数 → 群回复闸 → offer。
-   * （真机审计 1.9/1.10/§1：enabled=false 和静音必须**入口就拦**——不进回合不烧 token；
-   *  activity 在闸之前发：相关模块的计数不受「要不要回」影响。）
-   */
-  function routeInbound(inbound, ev, source) {
-    const isPoke = (inbound?.segments || []).some((s) => s?.type === 'poke')
-    if (isPoke) {
-      const self = String(ev.self_id || getConfig().botQQ || '')
-      const poker = String(inbound.sender?.userId || '')
-      if (String(ev.target_id || '') !== self || !poker || poker === self) return { handled: 'skipped' }
-    }
-    const hook = isPoke ? moduleHooks?.poke : moduleHooks?.message
-    const continueInbound = () => {
-      if (!isPoke) return routeInboundCore(inbound, ev, source)
-      try { interaction.rememberPoker(inbound.chatKey, String(inbound.sender?.userId || '')) } catch {}
-      try { if (!interaction.claimPoke(inbound.chatKey)) return { handled: 'poke-throttled' } } catch {}
-      const poke = inbound.segments.find((s) => s?.type === 'poke')
-      const action = String(poke?.data?.action || '')
-      const suffix = String(poke?.data?.suffix || '')
-      return routeInboundCore({
-        ...inbound,
-        segments: [
-          { type: 'at', data: { qq: String(ev.self_id || getConfig().botQQ || '') } },
-          { type: 'text', data: { text: ` [戳了戳你${action ? `：${action}${suffix}` : ''}]` } },
-        ],
-      }, ev, source)
-    }
-    if (typeof hook !== 'function') return continueInbound()
-    const input = isPoke ? ev : { ...parseMessageEvent(ev, ev.self_id), raw: ev }
-    return Promise.resolve(hook(input)).then((claimed) => claimed ? { handled: 'module' } : continueInbound())
-  }
-
-  function routeInboundCore(inbound, ev, source) {
-    const cfg = getConfig()
-    // 入站 ACL：白名单外会话 offer 前即拒（绝不让未授权消息驱动 DSH）
-    const acl = checkAllowed(cfg, aclMsgFromInbound(inbound))
-    if (!acl.allowed) {
-      gatedDebug(`acl:${inbound.chatKey}`, `deny|${acl.reason}`, `入站 ACL 拒绝：${inbound.chatKey}（${acl.reason}）`)
-      return { handled: 'acl-denied', reason: acl.reason }
-    }
-    presence.noteIncoming(inbound.chatKey, String(inbound?.sender?.userId || ''), cfg)
-    // 临时会话（SnowLuma 能力补齐）：ACL 放行的私聊若来自群临时会话，记住来源群，
-    // 回复经 outbox 时带 group_id 才能送进临时会话。
-    // 若收到普通好友私聊（sub_type === 'friend'），清除旧的临时会话来源群，避免继续带旧 group_id。
-    if (String(inbound.chatKey || '').startsWith('private:')) {
-      if (ev?.sub_type === 'group') {
-        const sg = String(ev?.sender?.group_id ?? '')
-        if (/^\d+$/.test(sg) && Number(sg) > 0) outbox.notePrivateSource(inbound?.sender?.userId, sg)
-      } else if (ev?.sub_type === 'friend') {
-        outbox.clearPrivateSource?.(inbound?.sender?.userId)
-      }
-    }
-    // 旁路指令（审批批复 / 等待中的交互提问回答）：命中即消费，不进回合
-    if (typeof interceptInteraction === 'function') {
-      const text = textOfSegments(inbound.segments)
-      const userId = String(inbound?.sender?.userId ?? '')
-      try {
-        if (interceptInteraction({ text, userId, chatId: inbound.chatKey })) {
-          debug(`旁路指令消费：${inbound.chatKey}`)
-          return { handled: 'interaction' }
-        }
-      } catch (error) { debug(`旁路指令判定出错（照常走回合）：${error.message}`) }
-    }
-    // 白名单内的媒体先暂存；总开关只阻止回合，不影响「刚才那张图」的后续读取。
-    try { noteMedia?.(inbound.chatKey, inbound.segments, String(inbound?.sender?.userId || '')) } catch {}
-    // 总开关 / 静音：入口拦（关了开关就不跑回合，不再只靠出站闸兜底）
-    if (!cfg.enabled) {
-      log.info(`总开关关着，收到 ${inbound.chatKey} 的消息但不处理：${textOfSegments(inbound.segments).slice(0, 30)}`)
-      return { handled: 'disabled' }
-    }
-    if (typeof isMuted === 'function') {
-      let muted = false
-      try { muted = !!isMuted(inbound.chatKey) } catch {}
-      if (muted) return { handled: 'muted' }
-    }
-    if (!rateAllowed(inbound)) {
-      debug(`入站限流：${inbound.chatKey} 用户 ${String(inbound?.sender?.userId || '')} 消息未进入回合`)
-      return { handled: 'ratelimited' }
-    }
-    const inGroup = inbound.chatKey.startsWith('group:')
-    const text = textOfSegments(inbound.segments)
-    const userId = String(inbound?.sender?.userId ?? '')
-    const nick = String(inbound?.sender?.nickname || '')
-    const officialBot = isOfficialBotSender(userId, nick)
-    // 群缓冲（legacy 同款：群里的每条消息都记，给上下文和「群里在不在聊」用；ACL 后、闸前）
-    let mentioned = false
-    let buffered = null
-    if (inGroup) {
-      try {
-        mentioned = !!parseMessageEvent(ev, ev.self_id).mentioned
-      } catch {}
-      const self = String(ev.self_id || getConfig().botQQ || '')
-      mentioned = mentioned || inbound.segments.some((s) => s?.type === 'at' && String(s.data?.qq || '') === self)
-      const gid = inbound.chatKey.slice(6)
-      buffered = groups.appendMessage(gid, { t: Date.now(), uid: userId, nick, text, self: userId === self, officialBot, at: mentioned, mid: String(inbound.messageId || ''), direct: mentioned, replyId: replyIdOf(inbound), media: mediaOfInbound(inbound) })
-      try { interaction.rememberSpeaker(inbound.chatKey, userId) } catch {}
-    }
-    const fromOwner = isOwner(cfg, userId)
-    // 真机审计 1.11：入站面板统计
-    try { onStats?.('received') } catch {}
-    // 聊天流水（legacy hub.js 在 onMessage 里逐条记）：记忆整理/日记都从它取料
-    try { logChat?.(inbound.chatKey, String(inbound?.sender?.nickname || ''), textOfSegments(inbound.segments), userId) } catch {}
-    try {
-      const count = collectInboundStickers?.(inbound.chatKey, inbound.segments, userId)
-      if (typeof count === 'number') stickerPicks.set(inbound, count)
-    } catch {}
-    if (inGroup) {
-      const offerWithDecision = (decision) => {
-        emitActivity(mods, inbound, { direct: mentioned || decision.mode === 'must', owner: fromOwner })
-        if (!decision.reply) {
-          gatedDebug(`gate:${inbound.chatKey}`, decision.reason, `群闸 ${inbound.chatKey}：不回 —— ${decision.reason}`)
-          return { handled: 'group-pass', reason: decision.reason }
-        }
-        try {
-          const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
-          if (fg.enabled) {
-            const now = Date.now()
-            const gid = inbound.chatKey.slice(6)
-            const pairKey = `${gid}:${userId}`
-            // 鱼群保护需要「她↔对方」交替视角（缺陷：bot 自发不入缓冲 → pair/乒乓恒 0 空转）。
-            // 缓冲只收入站消息；把她最近发言时间（speakTimes，noteSpeak 已记）合成 self 条目
-            // 一并喂给 pair/密度判定。不写回缓冲，避免污染群提示词上下文。
-            const botQQ = String(getConfig().botQQ || '')
-            const selfMsgs = groups.speakTimes(gid, now).map((t) => ({ sender: '她', userId: botQQ, time: t, isSelf: true }))
-            const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, text: x.text, isSelf: x.self === true })), ...selfMsgs]
-              .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
-            if (userId !== String(getConfig().ownerQQ || '')) {
-              const calmUntil = pairCalmUntil.get(pairKey) || 0
-              if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
-              // 保留 fg.windowMs 窗口内完整发言序列（含其他群友，供 assessPairLoop 正确识别真人插话重置）
-              const pairMsgs = dedupConvo(fishMsgs.filter((x) => Number(x.time || 0) > now - fg.windowMs))
-              const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
-              if (loop.blocked) {
-                pairCalmSweep(now)
-                pairCalmUntil.set(pairKey, now + fg.pairCooldownMs)
-                const reason = `与 ${inbound.sender?.nickname || userId} 已互来回 ${loop.rounds} 轮，进入对聊冷却`
-                log.info(`群 ${gid}：${reason}`)
-                return { handled: 'group-pass', reason }
-              }
-            }
-            const direct = decision.mode === 'must'
-            const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid, groupName: groups.name(gid) })
-            if (density.blocked) {
-              const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
-              if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
-                const reason = fishGuardReasonText(density)
-                log.info(`群 ${gid}：${reason}${direct && callerIsFish ? '，叫她的也在鱼名单里，豁免不适用' : ''}，本轮不参与`)
-                return { handled: 'group-pass', reason }
-              }
-              debug(`群 ${gid}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
-            }
-          }
-        } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
-        const offered = controller.offer(inbound)
-        if (offered?.turnId && decision.mode) noteTurnMode(inbound.chatKey.slice(6), offered.turnId, decision.mode)
-        // 正向决策也留痕：否则只能看到后一条“不回”，容易误判成它绕闸门发了上一条回合。
-        debug(`群闸 ${inbound.chatKey}：回 —— ${decision.reason}｜消息 ${inbound.messageId || '?'}｜回合 ${offered.turnId}`)
-        return { handled: 'offered', turnId: offered.turnId }
-      }
-      const applyHook = (decision) => {
-        if (typeof moduleHooks?.groupDecide !== 'function') return offerWithDecision(decision)
-        const msg = { ...parseMessageEvent(ev, ev.self_id), raw: ev }
-        const policy = policyFor(cfg.group, cfg.group?.overrides, inbound.chatKey.slice(6))
-        return Promise.resolve(moduleHooks.groupDecide(decision, {
-          msg, policy, recentTexts: groups.buffer(inbound.chatKey.slice(6)).map((x) => x.text), memScore: 0,
-        })).then((next) => offerWithDecision(next || decision))
-      }
-      const replyId = replyIdOf(inbound)
-      if (replyId) {
-        return quotedInfo(replyId, inbound.chatKey).then((quoted) => {
-          const repliedToBot = Boolean(quoted?.ok && quoted.isBot)
-          if (buffered) {
-            if (repliedToBot) buffered.direct = true
-            if (quoted) buffered.quoteNote = quoteNote(quoted)
-          }
-          return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, nick, repliedToBot }))
-        })
-      }
-      return applyHook(decideGroupReplyFor({ chatKey: inbound.chatKey, text, mentioned, userId, nick }))
-    }
-    emitActivity(mods, inbound, { direct: true, owner: fromOwner })
-    const running = controller.runningTurnOf(inbound.chatKey)
-    if (running && steeringChats.has(inbound.chatKey)) {
-      controller.steer(running, inbound).catch((error) => {
-        debug(`私聊插话失败，转为下一轮：${error?.message || error}`)
-        controller.offer(inbound)
-      })
-      return { handled: 'steered', turnId: running }
-    }
-    const offered = controller.offer(inbound)
-    return { handled: 'offered', turnId: offered.turnId }
-  }
-
-  function safeAdapt(ev, source) {
-    try {
-      const inbound = legacyEventToNormalized(ev, { selfId: ev.self_id, source })
-      return { inbound, view: ev }
-    } catch (error) {
-      debug(`事件无法成键/不支持：${error.message}`)
-      return { inbound: null, view: null }
-    }
-  }
-
-  /** 补收入口（M4-4）：补收事件带原始时间，source=backfill（M1-B 语义同款）。与实时同一条主链（ACL/闸/静音/群闸）。 */
-  function dispatchBackfill(ev, meta = {}) {
-    const { inbound } = safeAdapt(ev, 'backfill')
-    if (!inbound) return { handled: 'skipped' }
-    backfillMeta.set(inbound, {
-      gapMs: Number(meta.gapMs) || 120_000,
-      earliestAgeMs: Number(meta.earliestAgeMs) || 0,
-    })
-    return routeInbound(inbound, ev, 'backfill')
-  }
+  // ---------- 入站路由层（core/inbound-router.js） ----------
+  // 入站主链（ACL → 旁路 → 开关 → 静音 → 群缓冲 → 群闸 → offer）、legacy 兼容入口、
+  // 补收入口全部归子模块。依赖一律是活引用：controller / outbox / groups / interaction /
+  // presence 是同一份对象，stickerPicks / steeringChats / backfillMeta 是同一份 WeakMap/Set
+  //（execute 主链与它读写同一份 —— 拆的是实现，不是状态）。
+  const inboundRouter = createInboundRouter({
+    getConfig, log, debug, gatedDebug,
+    mods, moduleHooks, runCommand,
+    controller, outbox, groups, groupGate,
+    interaction, presence,
+    stickerPicks, steeringChats, backfillMeta,
+    replyIdOf, quotedInfo, quoteNote, rateAllowed,
+    interceptInteraction, isMuted, noteMedia, onStats, logChat, collectInboundStickers,
+  })
+  const { dispatchLegacyEvent, dispatchLegacyEventSettled, dispatchBackfill, selfId: selfIdOf } = inboundRouter
 
   /** 主动任务共用一个 QQ/DSH 会话，只生成文本，不在这里自动投递（调用方仍走统一 Outbox）。 */
   async function runPromptTurn(chatKey, text) {
@@ -1467,43 +1246,14 @@ export function createModularCore({
     try { groups.dispose?.() } catch { /* 群刹车状态收尾失败不影响退出 */ }
   }
 
-  async function syncAllModels() {
-    let applied = 0
-    let skipped = 0
-    let failed = 0
-    let dropped = 0
-    const detail = []
-    for (const [chatId, entry] of Object.entries(registry.snapshot())) {
-      const sessionId = String(entry?.sessionId || '')
-      if (!sessionId) { skipped++; continue }
-      let want = ''
-      try {
-        const target = await resolveTarget(chatViewFor(chatId))
-        want = modelKey(target)
-        if (!want || selectedModels.get(sessionId) === want) { skipped++; continue }
-        const ctrl = ctxGet('sessionController')
-        if (!ctrl?.resolveAgent) throw new Error('DSH 没有 sessionController.resolveAgent')
-        const resolved = await ctrl.resolveAgent(sessionId)
-        if (!resolved?.agent) throw new Error(resolved?.error?.message || resolved?.error?.code || 'no session')
-        if (registry.peek(chatId)?.sessionId !== sessionId) { skipped++; continue }
-        if (!await applySessionModel(resolved.agent, sessionId, target)) throw new Error('会话模型选择不可用')
-        applied++
-        detail.push({ chatId, want, ok: true })
-      } catch (error) {
-        failed++
-        const item = { chatId, ...(want ? { want } : {}), ok: false, error: String(error?.message || error) }
-        if (/not[ -]found|不存在|已归档|no session/i.test(item.error) && registry.peek(chatId)?.sessionId === sessionId) {
-          cleanupSession(sessionId)
-          sessionPersonas.delete(chatId)
-          registry.forget(chatId)
-          item.dropped = true
-          dropped++
-        }
-        detail.push(item)
-      }
-    }
-    return { applied, skipped, failed, dropped, detail }
-  }
+  // ---------- 模型同步（core/model-sync.js） ----------
+  // 把面板选定的模型立刻应用到所有已有会话；失效会话连映射带人设账一起清。
+  // registry / selectedModels / sessionPersonas 都是活引用（与回合主链同一份）。
+  const modelSync = createModelSync({
+    getConfig, log, registry, resolveTarget, applySessionModel, cleanupSession,
+    ctxGet, sessionPersonas, selectedModels, chatViewFor, modelKey,
+  })
+  const { syncAllModels } = modelSync
 
   const services = {
     deliver: (chatId, text, opts) => replyDelivery.deliver(chatId, text, opts),
@@ -1547,7 +1297,7 @@ export function createModularCore({
     lastChatAt: () => presence.lastChatAt,
     lastOwnerChatAt: () => presence.lastOwnerChatAt,
     lastBotToOwner: () => presence.lastBotToOwner,
-    selfId: () => selfId,
+    selfId: selfIdOf,
   }
 
   return {

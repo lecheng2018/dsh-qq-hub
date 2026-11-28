@@ -9,7 +9,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
+// S5 起 syncAllModels 落 core/model-sync.js：装配根 + 子模块拼起来才是完整调用面。
 const CORE = readFileSync(join(ROOT, 'src/host/modular-core.js'), 'utf8')
+  + '\n' + readFileSync(join(ROOT, 'src/host/core/model-sync.js'), 'utf8')
 // host.js 分层拆分后：/save 的模型联动在 panel/routes-config.js，/models/apply 路由在 panel/routes-misc.js
 const HOST = readFileSync(join(ROOT, 'src/host/panel/routes-config.js'), 'utf8')
 const MODELS = readFileSync(join(ROOT, 'src/host/panel/routes-misc.js'), 'utf8')

@@ -14,8 +14,9 @@ import { resolveCharacterIdentity } from '../../persona/identity-context.js'
 import { policyFor, topicRelevance, withRoleWakeWords, isOfficialBotSender } from '../../chat/group-policy.js'
 import { decideGroupReplyWithAtmosphere } from '../../chat/group-atmosphere-gate.js'
 import { isOwner } from '../../chat/access.js'
+import { assessFishDensity, assessPairLoop, dedupConvo, fishGuardReasonText, normalizeFishGuard, senderFish } from '../../chat/fish-guard.js'
 
-export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosphereGate, getController }) {
+export function createGroupGate({ getConfig, log, debug, groups, memoryScore, atmosphereGate, getController }) {
   // 按 turnId 绑定群闸决策模式，替代旧版按 chatKey 单槽 pendingMode：
   // 连续排入多轮时，旧单槽会在前轮 delete 后让后轮兜底成 'must'，既在提示词里谎称「有人在叫你」，
   // 又在 deliver 后走 noteSpokeInGroup 重置 engaged 窗口导致无限续聊。
@@ -133,5 +134,65 @@ export function createGroupGate({ getConfig, debug, groups, memoryScore, atmosph
   /** 这个回合在闸门里被判成什么模式（核心读它决定提示词口吻与续聊分派）。 */
   function turnModeOf(turnId) { return turnModes.get(turnId) || null }
 
-  return { decideGroupReplyFor, noteTurnMode, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf }
+  // ---------- 鱼群 / 滞后复核（从 modular-core.js 原样搬出；闭包 groups/getConfig/log 已是注入活引用） ----------
+  // 对聊冷却账：`gid:uid` → 冷却截止时刻。只服务这儿，随判定一起搬进来。
+  const pairCalmUntil = new Map()
+  const pairCalmSweep = (now) => {
+    if (pairCalmUntil.size < 50) return
+    for (const [key, until] of pairCalmUntil) if (until < now - 3 * 3600_000) pairCalmUntil.delete(key)
+  }
+
+  /**
+   * 鱼群保护判定：返回 `{ handled: 'group-pass', reason }` 表示本轮不参与；返回 null 表示放行。
+   *
+   * 决策依据与拆分前逐行一致（pair 乒乓 + 密度两段）：缓冲只收入站消息，把她最近的发言
+   * （speakTimes，noteSpeak 已记）合成 self 条目一并喂给 pair/密度判定，不写回缓冲。
+   * 判定自身出错只记 debug 并放行 —— 鱼群保护是旁路，绝不因为判定异常而吞掉正常回合。
+   */
+  function fishGuardOf({ inbound, decision, cfg }) {
+    try {
+      const fg = normalizeFishGuard(cfg.group?.fishGuard || {})
+      if (fg.enabled) {
+        const now = Date.now()
+        const gid = inbound.chatKey.slice(6)
+        const userId = String(inbound?.sender?.userId ?? '')
+        const pairKey = `${gid}:${userId}`
+        // 鱼群保护需要「她↔对方」交替视角（缺陷：bot 自发不入缓冲 → pair/乒乓恒 0 空转）。
+        // 缓冲只收入站消息；把她最近发言时间（speakTimes，noteSpeak 已记）合成 self 条目
+        // 一并喂给 pair/密度判定。不写回缓冲，避免污染群提示词上下文。
+        const botQQ = String(getConfig().botQQ || '')
+        const selfMsgs = groups.speakTimes(gid, now).map((t) => ({ sender: '她', userId: botQQ, time: t, isSelf: true }))
+        const fishMsgs = [...groups.buffer(gid).map((x) => ({ sender: x.nick, userId: x.uid, time: x.t, text: x.text, isSelf: x.self === true })), ...selfMsgs]
+          .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
+        if (userId !== String(getConfig().ownerQQ || '')) {
+          const calmUntil = pairCalmUntil.get(pairKey) || 0
+          if (calmUntil > now) return { handled: 'group-pass', reason: '对聊冷却中' }
+          // 保留 fg.windowMs 窗口内完整发言序列（含其他群友，供 assessPairLoop 正确识别真人插话重置）
+          const pairMsgs = dedupConvo(fishMsgs.filter((x) => Number(x.time || 0) > now - fg.windowMs))
+          const loop = assessPairLoop(pairMsgs, userId, { guard: fg })
+          if (loop.blocked) {
+            pairCalmSweep(now)
+            pairCalmUntil.set(pairKey, now + fg.pairCooldownMs)
+            const reason = `与 ${inbound.sender?.nickname || userId} 已互来回 ${loop.rounds} 轮，进入对聊冷却`
+            log.info(`群 ${gid}：${reason}`)
+            return { handled: 'group-pass', reason }
+          }
+        }
+        const direct = decision.mode === 'must'
+        const density = assessFishDensity(fishMsgs, { now, guard: fg, groupId: gid, groupName: groups.name(gid) })
+        if (density.blocked) {
+          const callerIsFish = senderFish({ userId, sender: inbound.sender?.nickname }, fg)
+          if (!(direct && fg.bypassDirectAddress && !callerIsFish)) {
+            const reason = fishGuardReasonText(density)
+            log.info(`群 ${gid}：${reason}${direct && callerIsFish ? '，叫她的也在鱼名单里，豁免不适用' : ''}，本轮不参与`)
+            return { handled: 'group-pass', reason }
+          }
+          debug(`群 ${gid}：${fishGuardReasonText(density)}，但被直接叫到 → 只回一句`)
+        }
+      }
+    } catch (error) { debug(`鱼群保护判定出错：${error.message}`) }
+    return null
+  }
+
+  return { decideGroupReplyFor, noteTurnMode, releaseTurnMode, pruneInFlightGroup, isTurnActive, turnModeOf, fishGuardOf }
 }

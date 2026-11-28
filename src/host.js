@@ -343,6 +343,10 @@ export function apply(ctx) {
     return Date.now() - entry.at <= stickerTtl && Number.isInteger(i) && i >= 0 ? entry.segs[i] || null : null
   }
 
+  // 装配根不再自带兜底 Outbox：生产路径必须注入 SharedOutbox（唯一物理出口 + egress 审计）。
+  // 临时 Outbox（createEphemeralOutbox）只留给测试/降级，绝不能让生产悄悄绕过 egress。
+  if (!sharedOutbox) throw new Error('createModularCore 必须注入 sharedOutbox（唯一物理出口）')
+
   const modularCoreApi = createModularCore({
         dsh: ctx,
         onebot,

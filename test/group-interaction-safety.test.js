@@ -75,7 +75,9 @@ test('鱼群 pair：含 self 交替条目时能数出对聊轮数（修复后判
 })
 
 test('鱼群接线：modular-core 用 speakTimes 合成 self 条目喂 pair/密度判定', () => {
+  // S3 起鱼群判定落 core/group-gate.js：装配根 + 子模块拼起来才是完整调用面。
   const src = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
+    + '\n' + readFileSync(new URL('../src/host/core/group-gate.js', import.meta.url), 'utf8')
   assert.match(src, /groups\.speakTimes\(gid, now\)\.map/, '应从 speakTimes 合成 self 条目')
   assert.match(src, /isSelf: true/, 'self 条目标记 isSelf')
   assert.match(src, /assessPairLoop\(pairMsgs, userId/, 'pair 判定用合并后的消息')

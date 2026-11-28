@@ -7,49 +7,11 @@
 // 依赖只有 chat/inbound.js 与 chat/reply.js 的纯函数；mods 之类的活对象一律由
 // 调用方当参数传进来（emitActivity），模块自己不持有任何跨轮状态。
 
-import { parseMessageEvent, cardText, neutralizeInboundDsl } from '../../chat/inbound.js'
+import { cardText, neutralizeInboundDsl } from '../../chat/inbound.js'
 import { parseReply } from '../../chat/reply.js'
 
-/** 合并转发水合：展开真实消息正文，限制条数和总长度；失败保留原段，不伪称已读。 */
-export async function hydrateForwards(members, onebot, log) {
-  const out = []
-  for (const member of Array.isArray(members) ? members : []) {
-    const segments = Array.isArray(member?.segments) ? member.segments : []
-    if (!segments.some((s) => s?.type === 'forward')) { out.push(member); continue }
-    const next = []
-    for (const segment of segments) {
-      if (segment?.type !== 'forward') { next.push(segment); continue }
-      const id = String(segment.data?.id ?? segment.data?.res_id ?? segment.data?.forward_id ?? '')
-      if (!id) { next.push(segment); continue }
-      try {
-        const raw = await onebot.call('get_forward_msg', { id }, { timeoutMs: 10000, retries: 0 })
-        const rows = []
-        let used = 0
-        for (const item of (raw?.messages || []).slice(0, 50)) {
-          const sender = item?.sender || {}
-          const parsed = parseMessageEvent({
-            message_type: 'private',
-            user_id: item?.user_id ?? sender.user_id,
-            sender,
-            message: item?.message ?? item?.raw_message ?? '',
-          }, '')
-          const name = String(sender.card || sender.nickname || parsed.userId || '某人')
-          const line = `${name}：${parsed.text || '（媒体/非文字消息）'}`
-          if (used + line.length > 6000) break
-          rows.push(line)
-          used += line.length
-        }
-        if (!rows.length) throw new Error('转发内容为空')
-        next.push({ type: 'text', data: { text: `[合并转发的聊天记录（${rows.length} 条）]\n${rows.map((line) => `  ${line}`).join('\n')}\n[转发结束]` } })
-      } catch (error) {
-        log?.debug?.(`合并转发读取失败（保留原段）：${error?.message || error}`)
-        next.push(segment)
-      }
-    }
-    out.push({ ...member, segments: next })
-  }
-  return out
-}
+// 合并转发水合（hydrateForwards）随入站水合链一起搬到 chat/inbound-hydration.js：
+// 它与「语音转写 → 文件读取 → 引用转述」是同一个顺序契约，放在一处才不会漂。
 
 /** 这段文本里有没有「人话」：只有 `<sticker:…>` / `<poke>` / `![](…)` 这类控制标记时返回 ''。
  *
