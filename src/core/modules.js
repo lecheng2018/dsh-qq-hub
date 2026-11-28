@@ -741,6 +741,19 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
     }
     return false
   }
+  /** 依次问每个模块，第一个返回真值的接管，并带回真实注册模块 id（群参与分级用）。
+   *  和 claim 的区别：返回 { id, value } 而不是 boolean，id 永远取注册记录，不信值里自报的字段。
+   *  事件没有任何监听器时同步返回 null（调用方好保留旧的同步路径），有监听器才返回 Promise。 */
+  function claimResult(event, ...args) {
+    const list = listeners.get(event)
+    if (!list || list.length === 0) return null
+    return (async () => {
+      for (const { id, fn } of list) {
+        try { const v = await fn(...args); if (v) return { id, value: v } } catch (error) {}
+      }
+      return null
+    })()
+  }
   /** 依次让每个模块改写一个值（发回复前用）：返回 undefined 不改，null 拦下。 */
   async function filter(event, value, ...args) {
     let v = value
@@ -991,7 +1004,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   return {
     boot, sync, reload, stop, dispose, status, create, fork, promptFor, panelSource,
     use: exportsOf, has: (id) => live.has(id), running: (id) => live.get(id)?.source || null, generation: () => generation,
-    emit, claim, filter, filterSync, buildTools,
+    emit, claim, claimResult, filter, filterSync, buildTools,
     /** M2-F：模块健康快照（enabled/disabled/degraded/failed + 原因）。 */
     health: () => health.snapshot(),
     healthCounts: () => health.counts(),
