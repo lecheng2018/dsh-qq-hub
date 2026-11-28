@@ -22,15 +22,30 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
         if (hit) hit.quoteNote = m.quoteNote
       }
     }
-    const fresh = buf.filter((x) => !x.fed).slice(-20)
-    const older = buf.filter((x) => x.fed).slice(-4)
-    // fed 不在这里标（缺陷：群缓冲静默丢消息）。旧版 `for (const x of buf) x.fed = true`
-    // 有两个丢消息口子：① 一次把整段 buf 标 fed，突发超过 20 条时**未选中**的新消息也被
-    // 标 fed，永远进不了上下文；② 标在 followup 之前，回合若在模型消费前失败，这些消息
-    // 已 fed，下轮不再喂。现只把**选中的 fresh** 作为 fedItems 返回，由 execute 在拿到回复
-    // （模型确实消费了这段输入）后才标 fed；失败路径不标 → 下轮重新作为 fresh 喂入。
+    const rawFresh = buf.filter((x) => !x.fed).slice(-20)
+    const baseOlder = buf.filter((x) => x.fed).slice(-4)
+    // fed 不在这里标（缺陷：群缓冲静默丢消息）。现只把选中的 rawFresh 作为 fedItems 返回，
+    // 由 execute 在拿到回复后才标 fed；失败路径不标 → 下轮重新作为 fresh 喂入。
     const mode = modeOverride || 'must'
     const nowAt = Date.now()
+    const triggerMemberIds = new Set((members || []).map((m) => String(m?.messageId || '')).filter(Boolean))
+    // 对 interject/engaged 回合按 5 分钟时效窗口切分当前话题，防止很久以前的 unfed 旧话
+    // 与刚说的触发消息平权编号导致模型跑去接陈年旧话。
+    const FRESH_TOPIC_WINDOW_MS = 5 * 60_000
+    let fresh = rawFresh
+    let older = baseOlder
+    if ((mode === 'interject' || mode === 'engaged') && rawFresh.length > 1) {
+      const recentFresh = rawFresh.filter((x) => (nowAt - Number(x.t || 0) <= FRESH_TOPIC_WINDOW_MS) || triggerMemberIds.has(String(x.mid || '')))
+      const staleFresh = rawFresh.filter((x) => !recentFresh.includes(x))
+      if (recentFresh.length) {
+        fresh = recentFresh
+        older = [...baseOlder, ...staleFresh].slice(-4)
+      } else {
+        fresh = rawFresh.slice(-1)
+        older = [...baseOlder, ...rawFresh.slice(0, -1)].slice(-4)
+      }
+    }
+    const triggerItem = fresh.findLast?.((x) => triggerMemberIds.has(String(x.mid || ''))) || fresh.at(-1) || null
     const ownerQQ = String(getConfig().ownerQQ || '')
     // 昵称也是不可信原文：群昵称可被改成 `<inner>…</inner>`，它会拼进 `昵称(uid)：正文`
   // 前缀里，绕过「只中和 segments[].data.text」的全部 4 层。所以这里过一遍中和。
@@ -41,9 +56,10 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
     // 前情引用**挂在发言人那一块的下方**，用 `↳ 转述` 明确标出「这是别人的话」：
     //   ① 不脱出成提示词末尾的孤立段落（那会造成编号错位，见 2026-11-16 事故）；
     //   ② 也不挤进同一行（那会让模型把转述内容当成发言人自己说的，见 2026-11-20 事故）。
-    const block = (x) => {
+    const block = (x, markTrigger = false) => {
       const text = neutralizeInboundDsl(x.text)
-      const head = `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${text || (x.quoteNote ? '（本条没有正文，只在转述下面这条）' : '（图片/表情）')}`
+      const tag = markTrigger ? '（← 触发本轮）' : ''
+      const head = `${whoOf(x)}${x.at ? '@了你' : ''}${agoLabel(x.t, nowAt)}：${text || (x.quoteNote ? '（本条没有正文，只在转述下面这条）' : '（图片/表情）')}${tag}`
       if (!x.quoteNote) return head
       return `${head}\n    ${neutralizeInboundDsl(x.quoteNote)}`
     }
@@ -52,15 +68,16 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
       : mode === 'engaged' ? '（你刚才在参与这个话题。想接着聊就接着说，话题和你没关系了或没什么可说的就只回 [沉默]）'
       : '（有人在叫你，看完这一段再回）'
     const refs = {}
+    const markMode = mode === 'interject' || mode === 'engaged'
     const numbered = fresh.map((x, i) => {
       // nick 一并存进引用表：模型可以直接写 <reply:昵称> / <reply:QQ号> 而不必算编号
       // （行内有「↳转述」时按名字引用真正说话的人，比数编号不容易挂错人）。
       if (x.mid && x.mid !== '0') refs[i + 1] = { mid: x.mid, uid: x.uid, nick: safeNick(x.nick || x.uid), ...(ownerQQ && String(x.uid) === ownerQQ ? { owner: true } : {}) }
-      return `[${i + 1}] ${block(x)}`
+      return `[${i + 1}] ${block(x, markMode && x === triggerItem)}`
     })
     groups.setRefs(gid, refs)
     const timeHead = nowLine(nowAt, previousTurnAt, { what: '上一段消息' })
-    const olderText = older.length ? older.map(block).join('\n') : ''
+    const olderText = older.length ? older.map((x) => block(x, false)).join('\n') : ''
     const freshText = numbered.join('\n')
     // 群聊完整协议（整体来回 / ↳ 转述 / <reply:> / <at:>）已一次性放进 L0 协议层，
     // 每轮群消息不再重复粘贴 686 字说明书；仅在当轮真的出现图片占位或转述时附 1 行按需提醒。
@@ -106,7 +123,6 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
     }
     // 同一段群里、没单独触发回复的消息也带图：随缓冲条目一起交给模型，最多 4 张。
     // 取完即清，下一段 older 背景里不会把同一张图反复投喂。
-    const triggerMemberIds = new Set(members.map((m) => String(m?.messageId || '')).filter(Boolean))
     for (const x of fresh) {
       // 触发轮自己的图已在上面从 members 拼过，别按 URL 再补一份。
       if (!triggerMemberIds.has(String(x.mid || ''))) for (const block of x.media || []) addMedia(block)
@@ -116,9 +132,14 @@ export function createPromptContext({ getConfig, groups, groupNames }) {
     const directSenders = new Set(direct.map((x) => x.uid))
     const target = directSenders.size === 1 ? direct.at(-1) : null
     const autoReply = target ? { mid: target.mid, uid: target.uid } : null
+    const triggerReply = triggerItem && triggerItem.mid && triggerItem.mid !== '0'
+      ? { mid: triggerItem.mid, uid: triggerItem.uid }
+      : null
+    const freshLast = fresh.at(-1) || null
+    const freshLastAt = Number(freshLast?.t) || nowAt
     const query = fresh.map((x) => x.text).filter(Boolean).join('\n')
     const speakers = [...new Set(fresh.map((x) => String(x.uid)).filter(Boolean))]
-    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, query, speakers, fedItems: fresh }
+    return { blocks: [{ type: 'text', text: head }, ...extras], mode, autoReply, triggerReply, freshLast, freshLastAt, query, speakers, fedItems: rawFresh }
   }
 
   return { groupPromptContent }

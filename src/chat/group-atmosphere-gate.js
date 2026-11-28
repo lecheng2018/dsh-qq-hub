@@ -15,7 +15,7 @@
 //
 // 纯函数、无 IO（开关由调用方把 env 传进来），同样的输入永远得到同样的决策。
 
-import { DEFAULT_GROUP_POLICY, burstCount, decideGroupReply } from './group-policy.js'
+import { burstCount, decideGroupReply } from './group-policy.js'
 import { DEFAULT_TENSION_LIMIT, evaluate } from './group-atmosphere.js'
 
 /** 灰度开关的环境变量名。未设置 = 关闭 = legacy 行为。 */
@@ -78,19 +78,22 @@ function windowOf(p, options) {
 export function decideGroupReplyWithAtmosphere(p, options = {}) {
   const params = p && typeof p === 'object' ? p : {}
   const gate = normalizeGate(options?.gate)
-  const base = decideGroupReply(params)
   // 开关关着：直接把既有判定原样交出去，一个字段都不动（legacy 行为逐字节一致）。
-  if (!gate.enabled) return base
+  if (!gate.enabled) return decideGroupReply(params)
+
+  // 先评氛围张力再走 decideGroupReply：若张力已超阈值，传给 decideGroupReply 的 rand 置为确定性桩，
+  // 避免在将被张力拦截的情况下无谓消耗调用方的随机序列，同时仍完整保留第 1 步（刹车）与第 2 步（must）优先级。
+  const now = Number.isFinite(params.now) ? params.now : Date.now()
+  const atmosphere = evaluate(windowOf(params, options), { now, tensionLimit: gate.tensionLimit })
+  const overTension = atmosphere.tension > gate.tensionLimit
+  const base = decideGroupReply(overTension ? { ...params, rand: () => 0 } : params)
   // 第 2 步已经判成 must（被 @ / 被引用 / 被叫到名字）：无视张力，必须回复。
   if (base.mode === 'must') return base
   // 第 1 步或第 4 步已经拒绝（burst 溢出 / 静默时段 / 冷却 / 每小时上限 / 相关度不够）：
   // 既有刹车先说话，张力不必再看，reason 也保持既有文案。
   if (!base.reply) return base
 
-  const pol = params.policy || DEFAULT_GROUP_POLICY
-  const now = Number.isFinite(params.now) ? params.now : Date.now()
-  const atmosphere = evaluate(windowOf(params, options), { now, tensionLimit: gate.tensionLimit })
-  if (atmosphere.tension > gate.tensionLimit) {
+  if (overTension) {
     return {
       reply: false,
       mode: 'none',

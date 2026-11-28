@@ -120,8 +120,11 @@ export function isCommandLike(text) {
   const t = String(text ?? '').trim()
   if (!t) return false
   if (t.startsWith('/') || t.startsWith('／')) return true
-  if (/^\d{4,8}$/.test(t)) return true // 纯数字不当命令补执行（防误触发，历史 TOTP 口令也靠这条挡）
-  if (/^(?:#?\d{1,6}\s*)?(通过|同意|允许|放行|批准|拒绝|驳回|取消|不行|拦下|pass|yes|no|y|n|ok|deny)(?:\s*#?\d{1,6})?\s*[。.!！]?$/i.test(t)) return true
+  // 纯数字不当命令补执行（防误触发，历史动态码也靠这条挡），放行常见年份（1900~2099）避免普通数字被误拦
+  if (/^\d{4,8}$/.test(t) && !/^(?:19|20)\d{2}$/.test(t)) return true
+  // 审批指令：裸「ok」是高频日常口语，仅带编号（如「ok #1」「#1 ok」）时才视作审批放行命令
+  if (/^(?:#?\d{1,6}\s*)?(通过|同意|允许|放行|批准|拒绝|驳回|取消|不行|拦下|pass|yes|no|y|n|deny)(?:\s*#?\d{1,6})?\s*[。.!！]?$/i.test(t)) return true
+  if (/^(?:(?:#?\d{1,6}\s+ok)|(?:ok\s+#?\d{1,6}))\s*[。.!！]?$/i.test(t)) return true
   return false
 }
 
@@ -143,10 +146,13 @@ export function selectBackfill(messages, { key, since, now = Date.now(), selfId,
   const uniq = new Set()
 
   for (const m of Array.isArray(messages) ? messages : []) {
-    const t = Number(m?.time) * 1000
-    if (!Number.isFinite(t) || t < from || t > now + 60_000) continue
-    const self = selfId ?? m?.self_id
-    if (self != null && String(m?.user_id ?? m?.sender?.user_id ?? '') === String(self)) continue // 过滤自己发的
+    const rawTime = Number(m?.time)
+    if (!Number.isFinite(rawTime) || rawTime <= 0) continue
+    // 兼容秒级（10 位）与毫秒级（13 位）时间戳
+    const t = rawTime >= 1e11 ? rawTime : rawTime * 1000
+    if (t < from || t > now + 60_000) continue
+    const self = selfId || m?.self_id
+    if (self && String(m?.user_id ?? m?.sender?.user_id ?? '') === String(self)) continue // 过滤自己发的
     const id = m?.message_id ?? m?.real_id
     if (id != null && (uniq.has(String(id)) || seen?.has(key, id))) continue
     if (id != null) uniq.add(String(id))

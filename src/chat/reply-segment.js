@@ -1,4 +1,4 @@
-// 回复指令解析、气泡拆分/合并/上限裁剪、行分割、语气规则、语音识别与气泡间隔计算。
+// 回复指令解析、气泡拆分/合并/上限裁剪、语气规则、语音识别与气泡间隔计算。
 
 import { sanitizeOutbound, isSilence } from './reply-sanitize.js'
 import { stripMarkdown } from './reply-markdown.js'
@@ -17,25 +17,16 @@ export function parseReply(text, rules = {}) {
   // 报告标记（1.3.48）：<report>…</report> 里的内容是「给主人看的数据」。
   // 摘出来当**一条**整段气泡（在 ||| 拆分之前摘，标记里的空行不能当气泡边界）；
   // 标记外的部分照常走 ||| 分条（开场白归聊天）。模型偶尔忘了闭合：从开标记到结尾都算报告。
+  let reportRaw = ''
   let reportBody = ''
   const reportMatch = raw.match(/<report>([\s\S]*?)<\/report>/) || raw.match(/<report>([^]*)$/)
   if (reportMatch) {
-    reportBody = stripMarkdown(reportMatch[1])
+    reportRaw = reportMatch[1].trim()
+    reportBody = stripMarkdown(reportRaw)
     raw = (raw.slice(0, reportMatch.index) + raw.slice(reportMatch.index + reportMatch[0].length)).trim()
     if (isSilence(raw) && isSilence(reportBody)) return { silent: true, items: [] }
   }
-  // 文档型长回复（含 Markdown 表格 / 分割线 / 多级章节标题，且未用 ||| 聊天分条）：
-  // 直接按完整章节分成干净大段，绕过聊天切碎机与 capBubbles 暴力拼组，
-  // 避免表头/表体被劈开、或下一章标题被缝进上一条气泡尾巴（真机 2026-11-27 00:02）。
-  const hasMarkupTags = /<(?:poke|reply:|voice|sticker:)|!\[[^\]]*\]\(/.test(raw)
-  if (!reportBody && !rules.forceReport && rules.keepReports !== false && !raw.includes('|||') && !hasMarkupTags && isLongDocument(raw)) {
-    // 文档型长回复使用硬顶 maxBubbles，不受四态收尾礼让 softMaxBubbles 压成 1 条巨块
-    const hardLimit = Math.max(1, Math.round(Number(rules.maxBubbles) || MAX_BUBBLES))
-    const sections = splitDocumentBySections(raw, hardLimit)
-    if (sections.length) {
-      return { silent: false, items: sections.map((value) => ({ kind: 'text', value })) }
-    }
-  }
+  const hardLimit = Math.max(1, Math.round(Number(rules.maxBubbles) || MAX_BUBBLES))
   // 她自己用 ||| 划出来的气泡数：这是**硬边界**，场景软顶（四态收尾礼让、群聊紧缩）只能压
   // 「自动切出来」的气泡，不能把她的边界粘回去。真机 2026-11-24 08:16：对方回短句 → 趋势
   // 向下 → 礼让 maxBubbles=1 → 她写的三条被 capBubbles 合成一条带换行的长消息，QQ 上看起来
@@ -45,45 +36,48 @@ export function parseReply(text, rules = {}) {
     return part && !isSilence(part)
   }).length
   const items = []
-  let replyTo = '' // 等着挂到下一条气泡上的「引用回复」编号
-  const attach = (from) => {
-    if (replyTo && items.length > from) {
-      items[from].replyTo = replyTo
-      replyTo = ''
-    }
-  }
+  const meta = { docSplit: false, hardLimit }
   for (const bubble of raw.split('|||')) {
     const part = bubble.trim()
     if (!part) continue
+    // 每个 ||| 气泡内独立维护 replyTo，避免跨气泡泄漏到下一条无关气泡。
+    let replyTo = ''
+    const attach = (from) => {
+      if (replyTo && items.length > from) {
+        items[from].replyTo = replyTo
+        replyTo = ''
+      }
+    }
     // 依次切出 reply / voice / sticker / markdown 图片，其余是文字
-    // <reply:…> 的取值可以是编号、昵称或 QQ 号（`<reply:1>` / `<reply:初恋>` / `<reply:900000014>`）； pii-scan:ignore
+    // 兼容 <reply:…>、<reply：…>（全角冒号）、[reply:…]、[reply：…] 及 <reply:[3]>（方括号包裹编号）；
     // 具体能不能对上人由投递层查 refs 决定——对不上就当没写引用、照常发（见 reply-delivery）。
-    const re = /<poke\s*\/?>|<reply:\s*([^<>|\n]{1,40}?)\s*>|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
+    const re = /<poke\s*\/?>|<reply[:：]\s*([^<>|\n]{1,40}?)\s*>|\[reply[:：]\s*([^\]\[|\n]{1,40}?)\s*\]|<voice>([\s\S]*?)<\/voice>|<sticker:([^>]+?)>(?:\s*<\/sticker>)?|!\[[^\]]*\]\(\s*([^)\s]+)\s*\)/g
     let last = 0
     let m
     while ((m = re.exec(part)) !== null) {
       let from = items.length
-      pushText(items, part.slice(last, m.index), rules)
+      pushText(items, part.slice(last, m.index), rules, meta)
       attach(from)
       from = items.length
       if (m[0].startsWith('<poke')) {
         if (!items.some((i) => i.kind === 'poke')) items.push({ kind: 'poke', value: '' })
-      } else if (m[1] !== undefined) {
-        replyTo = m[1]
-      } else if (m[2] !== undefined) {
-        const v = stripMarkdown(m[2])
-        if (v) items.push({ kind: 'voice', value: v })
+      } else if (m[1] !== undefined || m[2] !== undefined) {
+        const rawRef = (m[1] ?? m[2] ?? '').trim()
+        replyTo = rawRef.replace(/^\[([^[\]]+)\]$/, '$1').trim()
       } else if (m[3] !== undefined) {
-        const v = m[3].trim()
-        if (v) items.push({ kind: 'sticker', value: v })
+        const v = stripMarkdown(m[3])
+        if (v) items.push({ kind: 'voice', value: v })
       } else if (m[4] !== undefined) {
-        items.push({ kind: 'image', value: m[4] })
+        const v = m[4].trim()
+        if (v) items.push({ kind: 'sticker', value: v })
+      } else if (m[5] !== undefined) {
+        items.push({ kind: 'image', value: m[5] })
       }
       attach(from)
       last = re.lastIndex
     }
     const from = items.length
-    pushText(items, part.slice(last), rules)
+    pushText(items, part.slice(last), rules, meta)
     attach(from)
   }
   // 一轮最多引用一次，多的去掉（大多数时候正常发就好）
@@ -94,12 +88,55 @@ export function parseReply(text, rules = {}) {
     quoted = true
   }
   if (items.length === 0 && !reportBody) return { silent: true, items: [] }
-  const finalItems = capBubbles(items, bubbleLimit(rules, explicitBubbles))
-  // 报告气泡放最后（她一般先说一句人话，再给数据），不参与条数上限——数据报告不该被截断
-  if (reportBody) finalItems.push({ kind: 'text', value: reportBody })
+  // 文档型长回复已按章节切分时使用硬顶 hardLimit，不受四态收尾礼让 softMaxBubbles 压成 1 条巨块
+  const limit = meta.docSplit ? hardLimit : bubbleLimit(rules, explicitBubbles)
+  const finalItems = capBubbles(items, limit)
+  // 报告气泡放最后（她一般先说一句人话，再给数据）：≤500 字整段保留，超过 500 字按章节分页避免整坨糊脸
+  if (reportBody) {
+    if (reportBody.length > 500) {
+      for (const sec of paginateLongText(reportRaw, reportBody, hardLimit)) {
+        finalItems.push({ kind: 'text', value: sec })
+      }
+    } else {
+      finalItems.push({ kind: 'text', value: reportBody })
+    }
+  }
   return { silent: false, items: finalItems }
 }
-
+/** 超长报告/长文分页兜底：优先按章节切；无章节无空行的纯长段再按句子均匀分页，避免整坨糊脸。 */
+function paginateLongText(rawText, strippedText, maxBubbles = MAX_BUBBLES) {
+  const limit = Math.max(1, Math.round(Number(maxBubbles) || MAX_BUBBLES))
+  const sections = splitDocumentBySections(rawText || strippedText, limit)
+  if (sections.length > 1) return sections
+  const single = sections[0] || strippedText
+  if (!single || single.length <= 500 || limit <= 1) return single ? [single] : []
+  // 单段纯文字无标题/无空行且 > 500 字：按完整句子攒成 ≤420 字的段
+  const pieces = sentencePieces(single).map((p) => p.trim()).filter(Boolean)
+  const pages = []
+  let buf = ''
+  for (const piece of pieces) {
+    if (buf && (buf + piece).length > 420) {
+      pages.push(buf)
+      buf = piece
+    } else {
+      buf += piece
+    }
+  }
+  if (buf) pages.push(buf)
+  while (pages.length > limit && pages.length > 1) {
+    let bestIdx = 0
+    let bestLen = Infinity
+    for (let i = 0; i < pages.length - 1; i += 1) {
+      const pairLen = pages[i].length + pages[i + 1].length
+      if (pairLen < bestLen) {
+        bestLen = pairLen
+        bestIdx = i
+      }
+    }
+    pages.splice(bestIdx, 2, `${pages[bestIdx]}\n\n${pages[bestIdx + 1]}`)
+  }
+  return pages.length ? pages : [single]
+}
 /**
  * 这一轮最多几条文字气泡。
  *
@@ -117,7 +154,6 @@ export function bubbleLimit(rules = {}, explicitBubbles = 1) {
   const explicit = Math.max(1, Math.round(Number(explicitBubbles) || 1))
   return Math.min(hard, Math.max(1, Math.max(soft, explicit)))
 }
-
 /**
  * 文字气泡超过上限时，**均匀分组**，不是把剩下的全塞进最后一条。
  * 老做法（tail.join('\n')）会得到「4 条极短 + 1 坨巨块」，线上实测最难看的就是这个
@@ -133,19 +169,32 @@ export function capBubbles(items, max = MAX_BUBBLES) {
     const remain = texts.length - start
     const left = limit - g
     const size = Math.ceil(remain / left)
-    groups.push(texts.slice(start, start + size).map((t) => t.value).join('\n'))
+    const slice = texts.slice(start, start + size)
+    const replyTo = slice.find((t) => t.replyTo)?.replyTo
+    groups.push({
+      value: slice.map((t) => t.value).join('\n\n'),
+      ...(replyTo ? { replyTo } : {}),
+    })
     start += size
   }
-  // 按顺序把文字项换成合并后的组，媒体项（表情/语音/图片）位置不动
+  // 按顺序把文字项换成合并后的组，媒体项（表情/语音/图片）位置不动；按组聚合 replyTo 避免错位或丢失
   const out = []
   let gi = 0
   for (const it of items) {
     if (it.kind !== 'text') { out.push(it); continue }
-    if (gi < groups.length) { out.push({ ...it, kind: 'text', value: groups[gi] }); gi += 1 }
+    if (gi < groups.length) {
+      const merged = { ...it, kind: 'text', value: groups[gi].value }
+      if (groups[gi].replyTo) merged.replyTo = groups[gi].replyTo
+      else delete merged.replyTo
+      out.push(merged)
+      gi += 1
+    }
   }
   return out
 }
-
+const SENTENCE_END_CHARS = '。！？!?…；;'
+const CLOSING_WRAP_CHARS = '”」』）)]】'
+const isPunctOnly = (s) => /^[\s\p{P}~～]+$/u.test(String(s || ''))
 /**
  * 一轮回复怎么分条。调研过同类项目的做法（AstrBot / MaiMBot，见 docs/回复分条.md）：
  *
@@ -170,8 +219,9 @@ export function segmentUnits(text) {
   const units = []
   let buf = ''
   let quote = 0
-  const quoteOpen = '“「『\''
-  const quoteClose = '”」』\''
+  // 仅统计中文成对开闭引号；ASCII 单引号 ' 在英文缩写（don't / it's）中单次出现，绝不能参与深度计数
+  const quoteOpen = '“「『'
+  const quoteClose = '”」』'
   for (let i = 0; i < guarded.length; i += 1) {
     const ch = guarded[i]
     if (quoteOpen.includes(ch)) quote += 1
@@ -188,12 +238,22 @@ export function segmentUnits(text) {
       continue
     }
     buf += ch
-    const sentenceEnd = '。！？!?…；;'.includes(ch)
-    if (!sentenceEnd) continue
+    if (!SENTENCE_END_CHARS.includes(ch)) continue
     if (quote > 0) continue // 引号里的句号不是句子边界
-    const next = guarded[i + 1] || ''
-    if ('：:'.includes(next)) continue // 「注意：」后面还有内容
-    if (/[0-9]/.test(buf[buf.length - 2] || '') && /[0-9]/.test(next)) continue // 1.5 这类
+    // 吞并连续句末标点（…… / ！！ / ？？ / ？！），不把连续省略号或感叹号劈成单字碎片
+    let j = i
+    while (j + 1 < guarded.length && SENTENCE_END_CHARS.includes(guarded[j + 1])) j += 1
+    const afterPunct = guarded[j + 1] || ''
+    if ('：:'.includes(afterPunct)) continue // 「注意：」后面还有内容
+    if (/[0-9]/.test(buf[buf.length - 2] || '') && /[0-9]/.test(afterPunct)) continue // 1.5 这类
+    while (i < j) { i += 1; buf += guarded[i] }
+    // 一并吞并紧随句末标点之后的闭合引号/括号（”」』）)]】）
+    while (i + 1 < guarded.length && CLOSING_WRAP_CHARS.includes(guarded[i + 1])) {
+      i += 1
+      const c = guarded[i]
+      if (quoteClose.includes(c) && quote > 0) quote -= 1
+      buf += c
+    }
     units.push({ text: buf.trim(), brk: 'punct' })
     buf = ''
   }
@@ -217,20 +277,33 @@ export function segmentUnits(text) {
   }
   return units.map((u) => ({ ...u, text: u.text.replace(/~~Z(\d+)Z~~/g, (_, i) => tags[Number(i)] || '') }))
 }
-
 /**
  * 把句子片攒成气泡：攒够 minBubble 才考虑断开，断不断带随机（真人不是机械切）。
  * 换行边界比句末标点更容易断（0.7 vs 0.4），因为换行本来就是排版意图。
  */
 export function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
+  const valid = (units || []).filter((u) => u && u.text)
   const out = []
   let cur = ''
   let brk = ''
-  for (const u of units) {
-    if (!u.text) continue
+  for (let idx = 0; idx < valid.length; idx += 1) {
+    const u = valid[idx]
+    const isLast = idx === valid.length - 1
     if (!cur) { cur = u.text; brk = u.brk; continue }
-    if (brk === 'hard') { out.push(cur); cur = u.text; brk = u.brk; continue }
+    // 纯标点/空白单元绝不独立成泡，强制回并前一条气泡
+    if (isPunctOnly(u.text)) {
+      cur += u.text
+      brk = u.brk
+      continue
+    }
     const joiner = brk === 'soft' ? '\n' : ''
+    // 极短尾段（<=2 字且在末尾，非硬换行分行）强制回并前一条气泡
+    if (isLast && brk !== 'hard' && Array.from(u.text).length <= 2) {
+      cur += joiner + u.text
+      brk = u.brk
+      continue
+    }
+    if (brk === 'hard' && !isPunctOnly(cur)) { out.push(cur); cur = u.text; brk = u.brk; continue }
     const merged = cur + joiner + u.text
     const closeProb = brk === 'soft' ? 0.45 : 0.4
     const long = merged.length > cap
@@ -243,9 +316,14 @@ export function mergeUnits(units, { cap, minBubble, rand = Math.random }) {
     brk = u.brk
   }
   if (cur) out.push(cur)
+  // 收尾兜底：确保末条不是纯标点
+  while (out.length > 1 && isPunctOnly(out[out.length - 1])) {
+    const tail = out.pop()
+    out[out.length - 1] += tail
+  }
   return out
 }
-
+/** 一整轮文字 → 若干气泡（字符串数组）。pushText 用它。 */
 /** 真正的「报表」才整段发：两个以上【小标题】，或者一整片短条目的编号清单。
  *  以前只要看到编号列表就整段发，结果她发一段带路径的技术说明，499 字挤成一条巨块，
  *  在 QQ 里像贴文档（2026-11-05 实测）。 */
@@ -259,8 +337,6 @@ function structuredReport(t) {
   const avg = lines.reduce((n, x) => n + x.length, 0) / lines.length
   return avg <= 40
 }
-
-/** 一整轮文字 → 若干气泡（字符串数组）。pushText 用它。 */
 export function segmentBubbles(text, rules = {}) {
   const t = String(text || '').trim()
   if (!t) return []
@@ -268,9 +344,8 @@ export function segmentBubbles(text, rules = {}) {
   const minBubble = Math.max(6, Math.round(cap * (Number(rules.minBubbleRatio) || 0.4)))
   const rand = typeof rules.rand === 'function' ? rules.rand : Math.random
   if (t.includes('```')) return [t]
-  // 清单/汇报/指标整段发（拆开对应关系就散了）。判整段，不按段落判，
-  // 否则「【结论】…」和下面的编号列表会被切成两条。
-  if (rules.keepReports !== false && t.length <= 1200 && structuredReport(t)) return [t]
+  // 短清单/简报（≤360 字）整段发；超长报告不整坨糊脸，走后续分段/章节切分
+  if (rules.keepReports !== false && t.length <= 360 && structuredReport(t)) return [t]
   // 段落（空行）是硬边界：一段一条，段内再按句子攒；
   // 孤立单行编号标题（如模型自己在「### 1. 标题」后多敲了空行）自动并入下一段正文，不单独成条。
   const rawParagraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
@@ -304,7 +379,10 @@ export function segmentBubbles(text, rules = {}) {
   }
   return bubbles.length ? bubbles : [t]
 }
-
+/**
+ * 一段文字拆成几条气泡：真人打字是一行一条发出去的。
+ * 有代码块、或者是长篇内容（比如帮主人查东西的结果）就整段发，不拆。
+ */
 /** 把一个长气泡按句读硬拆成短条（群友不写长句）。仅在普通聊天路径使用；整段发（代码块/长文）不走这里。 */
 function splitLongLine(line, maxChars = 30) {
   const s = String(line || '').trim()
@@ -363,82 +441,6 @@ function splitLongLine(line, maxChars = 30) {
   // ④ 还原标签（不删结尾逗号：既然不在逗号处断，就不会有半句）
   return out.map((t) => (canGuard ? t.replace(/~~X(\d+)X~~/g, (_, i) => tags[Number(i)] ?? '') : t))
 }
-
-/**
- * 一段文字拆成几条气泡：真人打字是一行一条发出去的。
- * 有代码块、或者是长篇内容（比如帮主人查东西的结果）就整段发，不拆。
- */
-export function splitLines(text) {
-  const t = String(text || '').trim()
-  if (!t) return []
-  if (t.includes('```')) return [t]
-  // 像列表 / 步骤的多行内容（一大半以数字或符号开头）整段发 —— 每一项都是一个
-  // 完整信息块，拆开反而破坏对应关系；后面超长时再按条目分页，不在条目内部截断。
-  const lines = t.split(/\n+/).map((s) => s.trim()).filter(Boolean)
-  if (lines.length <= 1) {
-    // 单行（或单段无换行）：超 240 才按句号兜底切，绝不截半句
-    if (t.length <= 240) return [t]
-    return listPages([t], t)
-  }
-  const listy = lines.filter((l) => /^(\d+[.、)]|[-*•·])/.test(l)).length
-  if (listy >= Math.ceil(lines.length / 2)) return listPages(lines, t)
-  // 按语义块拆：优先空行（段落边界），其次单行；一行一行发是真人打字的样子，
-  // 但一整句被字符上限拦腰切断不是 —— 上限只在块本身超长时兜底。
-  // 注意保留空行信息：先按空行切大段，大段内部再按单行。
-  const paragraphs = t.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean)
-  const blocks = []
-  for (const p of paragraphs) {
-    const pLines = p.split(/\n+/).map((s) => s.trim()).filter(Boolean)
-    // 单行段落直接成块；多行段落整块保留（段落是完整语义）
-    // 多行段落里如果每行都是短句（≤30 字，真人打字的样子），仍按行一条条发；
-    // 只有长行组成的段落才整块保留（段落是完整语义，拆了破坏对应关系）
-    if (pLines.length > 1 && pLines.every((l) => l.length <= 30)) {
-      for (const l of pLines) blocks.push(l)
-    } else blocks.push(pLines.join('\n'))
-  }
-  const out = []
-  for (const b of blocks) {
-    // 块不超长就整块发（可以是多行的一条消息）；超长才退回按行拆
-    if (b.length <= 240) { out.push(b); continue }
-    for (const line of b.split('\n')) {
-      if (line.length <= 240) { out.push(line); continue }
-      // 单行也超长：按句号兜底切成完整句，不在半句中间截断
-      let seg = ''
-      for (const piece of sentencePieces(line)) {
-        if (seg && (seg + piece).length > 240) { out.push(seg); seg = piece }
-        else seg += piece
-      }
-      if (seg) out.push(seg)
-    }
-  }
-  return out
-}
-
-/** 列表内容的分页：以「条目」为单位凑页，每页 ≤240 字，绝不把一条内容切成两半。
- * 普通聊天不需要它（真人消息短），这是给 RSS 摘要 / 检测汇报这类「模型一次吐出
- * 十条福利」的场景用的 —— 以前一刀切会把第 5 条福利拦腰截断。 */
-function listPages(lines, full) {
-  const pages = []
-  let buf = ''
-  for (const l of lines) {
-    if (l.length > 240) {
-      // 单条就超长：按句号切成完整句块单独成页（仍然不在条目内部截断语义句）
-      if (buf) { pages.push(buf); buf = '' }
-      let seg = ''
-      for (const piece of sentencePieces(l)) {
-        if (seg && (seg + piece).length > 240) { pages.push(seg); seg = piece }
-        else seg += piece
-      }
-      if (seg) pages.push(seg)
-      continue
-    }
-    if (buf && (buf + '\n' + l).length > 240) { pages.push(buf); buf = l }
-    else buf = buf ? buf + '\n' + l : l
-  }
-  if (buf) pages.push(buf)
-  return pages
-}
-
 /** 句号兜底切分的公共实现：先按句号类标点切；某段本身还超长（英文长句/URL/无标点堆栈）
  * 再按逗号；连逗号都没有（纯英文一整句）就按空格硬切 —— 撑爆气泡比切开更难看。
  * 之前只有句号一层，英文长句整段原样发出去。
@@ -452,7 +454,9 @@ function sentencePieces(line) {
     return '~~Y' + (tags.length - 1) + 'Y~~'
   })
   const isUrlTok = (t) => /^~~Y\d+Y~~$/.test(t.trim())
-  for (const piece of guarded.split(/(?<=[。！？!?；;])/)) {
+  // 与 segmentUnits 同口径：连续句末标点（……/！！/？？）及紧随闭合引号/括号整体吞并，不劈成单字单元
+  const rawPieces = guarded.match(/[^。！？!?…；;]*[。！？!?…；;]+[”」』）)\]\】]*|[^。！？!?…；;]+/g) || []
+  for (const piece of rawPieces) {
     if (piece.length <= 240) { out.push(piece); continue }
     let buf = ''
     for (const seg of piece.split(/(?<=[，,、])/)) {
@@ -478,21 +482,34 @@ function sentencePieces(line) {
   const restored = out.map((p) => p.replace(/~~Y(\d+)Y~~/g, (_, i) => tags[Number(i)] || ''))
   return restored
 }
-
-function pushText(items, s, rules = {}) {
-  const t = stripMarkdown(String(s || '').replace(/<\/?reply[^>]*>/g, '')) // 写坏的引用标签直接去掉
+function pushText(items, s, rules = {}, meta = null) {
+  const rawClean = String(s || '').replace(/<\/?reply[^>]*>|\[\/?reply[^\]]*\]/gi, '').trim() // 写坏的引用标签直接去掉
+  if (!rawClean) return
+  const t = stripMarkdown(rawClean)
   if (!t || isSilence(t)) return
-  // 报告路径（1.3.48）：<report> 包住的整段内容（含代码块/长文）只洗 Markdown、不切段。
-  // 里面的编号列表、空行排版保留 —— 「查一下/拉一下」就该整条排版返回，不是被切成碎片。
-  // 注意 stripMarkdown 会给编号列表补空行，那属于显示排版；整段发必须在切段之前决定，
-  // 所以这里跳过 segmentBubbles（段落边界对报告没意义），也不再过 capBubbles（报告不打断）。
+  const hardLimit = Math.max(1, Math.round(Number(meta?.hardLimit ?? rules.maxBubbles) || MAX_BUBBLES))
+  // 报告路径（1.3.48）：≤500 字整段保留排版；超过 500 字按章节分页，避免整坨糊脸。
   if (rules.forceReport) {
+    if (t.length > 500) {
+      const sections = paginateLongText(rawClean, t, hardLimit)
+      if (meta) meta.docSplit = true
+      for (const sec of sections) if (!isSilence(sec)) items.push({ kind: 'text', value: sec })
+      return
+    }
     items.push({ kind: 'text', value: t })
     return
   }
-  // 清单/汇报（多段小标题、编号列表、代码块）：整段发。这类内容拆开就散了。
-  // 代码块的围栏会被 stripMarkdown 去掉，所以要在原文上判一次。
-  if (rules.keepReports !== false && String(s || '').includes('```') && t.length <= 1200) {
+  // 文档型长回复下沉到单气泡级：即使整轮回复带 ||| 或尾部 <sticker>，其中的超长文档泡也能按章节切分
+  if (rules.keepReports !== false && isLongDocument(rawClean)) {
+    const sections = splitDocumentBySections(rawClean, hardLimit)
+    if (sections.length) {
+      if (meta) meta.docSplit = true
+      for (const sec of sections) if (!isSilence(sec)) items.push({ kind: 'text', value: sec })
+      return
+    }
+  }
+  // 短代码块整段发（代码块的围栏会被 stripMarkdown 去掉，所以在原文上判一次）
+  if (rules.keepReports !== false && rawClean.includes('```') && t.length <= 1200) {
     items.push({ kind: 'text', value: t })
     return
   }
@@ -500,7 +517,6 @@ function pushText(items, s, rules = {}) {
     if (!isSilence(piece)) items.push({ kind: 'text', value: piece })
   }
 }
-
 /** 面板上的分条规则 → parseReply 的参数。群聊与私聊可以有不同上限。 */
 export function replyRules(cfg, inGroup, rand) {
   const r = (cfg && cfg.reply) || {}
@@ -520,14 +536,12 @@ export function replyRules(cfg, inGroup, rand) {
     ...(typeof rand === 'function' ? { rand } : {}),
   }
 }
-
 /** 对方是不是明确要她发语音（「用语音说」「发个语音」「语音回我」……）。 */
 export function wantsVoice(text) {
   const t = String(text || '')
   if (t.includes('不要语音') || t.includes('别发语音')) return false
   return /(用|发|来|给我|录)[^，。？！\n]{0,4}语音|语音[^，。？！\n]{0,4}(说|发|讲|回|念|唱)/.test(t)
 }
-
 /**
  * 发下一条之前停多久（毫秒）：按「打字速度」算——下一条越长停越久，再加一点随机抖动。
  * @param {string} [next] 下一条要发的内容

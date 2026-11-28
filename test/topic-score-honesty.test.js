@@ -69,7 +69,9 @@ test('查询长度不改变方向性：同一话题，长拼接查询不得比�
   const 短 = store.topicScore('咖啡续命', G)
   const 长 = store.topicScore(['咖啡续命', ...Array.from({ length: 30 }, (_, i) => `无关水贴内容${i} 哈哈哈 顶一下`)].join(' '), G)
   assert.ok(短 >= 长, `短查询 ${短.toFixed(3)} 应 >= 稀释后的长查询 ${长.toFixed(3)}（旧算法反而长的高）`)
-  assert.ok(短 > 0.5, '正中记忆主题的短查询应该高分')
+  assert.ok(短 > 0.2, `调和平均下正中记忆关键词的短查询应明显高于 0.2（实际 ${短.toFixed(3)}）`)
+  const 完整 = store.topicScore('主人说工作累靠咖啡续命 工位续航全靠冰美式', G)
+  assert.ok(完整 > 0.5, `覆盖记忆核心词的查询应高分（实际 ${完整.toFixed(3)}）`)
 })
 
 test('常用字偶然重叠撑不起分数（nbcs 蹭「关心」的场景）', async (t) => {

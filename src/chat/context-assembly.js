@@ -24,7 +24,8 @@ import { parseChatKey } from './chat-key.js'
  *   provide: (req: {chatKey: string, sessionId?: string}) => (string | {content: string, sessionId?: string, scope?: string})}>} o.providers
  */
 export function createContextAssembly({ providers = [] } = {}) {
-  const registered = providers.map((p, index) => normalizeProvider(p, index))
+  let nextOrder = 0
+  const registered = providers.map((p) => normalizeProvider(p, nextOrder++))
 
   function normalizeProvider(p, index) {
     if (!p || typeof p !== 'object') throw new TypeError('provider 必须是对象')
@@ -43,15 +44,17 @@ export function createContextAssembly({ providers = [] } = {}) {
     }
   }
 
-  /** 注册（模块启停/热重载时由装载层调用）。 */
+  /** 注册（模块启停/热重载时由装载层调用）。使用单调递增序号，注销句柄按对象引用精确卸载。 */
   function register(provider) {
-    const norm = normalizeProvider(provider, registered.length)
+    const norm = normalizeProvider(provider, nextOrder++)
     registered.push(norm)
-    return () => unregister(norm.moduleId)
+    return () => unregister(norm)
   }
 
-  function unregister(moduleId) {
-    const i = registered.findIndex((p) => p.moduleId === moduleId)
+  function unregister(target) {
+    const i = typeof target === 'object' && target !== null
+      ? registered.indexOf(target)
+      : registered.findIndex((p) => p.moduleId === target)
     if (i >= 0) registered.splice(i, 1)
   }
 
@@ -73,11 +76,29 @@ export function createContextAssembly({ providers = [] } = {}) {
     // 稳定顺序：priority 降序，同优先级按注册序
     const ordered = [...eligible].sort((a, b) => (b.priority - a.priority) || (a.order - b.order))
 
+    // 并发拉取各 provider 后再按既定优先级顺序汇总，缩短首字节延迟且保持缓存序稳定
+    const settled = await Promise.allSettled(
+      ordered.map((p) => Promise.resolve().then(() => p.provide({ chatKey, sessionId, chat: req?.chat }))),
+    )
+
     const fragments = []
     const errors = []
-    for (const p of ordered) {
+    for (let i = 0; i < ordered.length; i += 1) {
+      const p = ordered[i]
+      const res = settled[i]
+      if (res.status === 'rejected') {
+        const error = res.reason
+        errors.push({ moduleId: p.moduleId, message: String(error?.message || error) })
+        if (p.onError === 'fail-closed') {
+          throw Object.assign(new Error(`context provider ${p.moduleId} fail-closed：${error?.message || error}`), {
+            moduleId: p.moduleId,
+            cause: error,
+          })
+        }
+        continue
+      }
       try {
-        const raw = await p.provide({ chatKey, sessionId, chat: req?.chat }) // chat 视图透传（legacy provider 契约吃 chat 对象）
+        const raw = res.value
         const content = typeof raw === 'string' ? raw : String(raw?.content ?? '')
         if (!content) continue // 空贡献不产出 fragment（不占装配位）
         const frag = {
@@ -180,7 +201,7 @@ export function createTimeScaleProvider({ scope, resolveLastAt, now = Date.now, 
     if (resolved !== chatKey) return ''
     if (typeof resolveLastAt !== 'function') return '' // 没有时间源就不编造时间
     const lastAt = resolveLastAt(resolved)
-    if (typeof lastAt !== 'number' || !Number.isFinite(lastAt) || lastAt < 0) return ''
+    if (typeof lastAt !== 'number' || !Number.isFinite(lastAt) || lastAt <= 0) return ''
     const when = typeof now === 'function' ? now() : now
     const elapsed = Math.max(0, Number(when) - lastAt)
     return `[时空标尺：距上一轮对话 ${formatElapsedMs(elapsed)}（${formatGapHint(elapsed)}）]`

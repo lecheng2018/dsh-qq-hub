@@ -12,7 +12,7 @@
 
 const BUFFER_KEEP = 40
 const WINDOW_MS = 3600_000 // 她说话/插话的时间序列只看最近 1 小时
-const ENGAGE_MS = 3 * 60_000 // 说了话算加入话题，持续 3 分钟
+const ENGAGE_MS = 6 * 60_000 // 与 DEFAULT_GROUP_POLICY.engagedMaxMs 统一：默认 6 分钟
 
 export function createGroupState({ storage, log } = {}) {
   const buf = new Map() // groupId → [{ t, uid, nick, text, at, mid, direct, replyId, media?, quote?, fed?, ... }]
@@ -75,17 +75,18 @@ export function createGroupState({ storage, log } = {}) {
     } catch (error) { log?.warn?.('群刹车状态恢复失败（按空状态启动）：', error?.message || error) }
   }
 
-  const joinTopicOf = (gid, now) => {
+  const joinTopicOf = (gid, now, ttlMs = ENGAGE_MS) => {
+    const dur = Number.isFinite(Number(ttlMs)) && Number(ttlMs) > 0 ? Number(ttlMs) : ENGAGE_MS
     // 说话者走到这里 = 她「重新入场」了（摇号命中，或被人直接搭话）。
-    // 硬重置窗口/入场时刻/连聊条数：继续对话的死循环由 engaged 分叉负责（见 noteEngagedReply），
-    // 这里不再可能被续聊路径摸到 —— 窗口活着时闸门锁死 engaged，摇不到 interject。
-    engaged.set(String(gid), { until: now + ENGAGE_MS, since: now, replies: 0 })
+    // 硬重置窗口/入场时刻/连聊条数：继续对话的死循环由 engaged 分叉负责（见 noteEngagedReply）。
+    engaged.set(String(gid), { until: now + dur, since: now, replies: 0 })
     scheduleSave()
   }
   const recent = (map, gid, now) => {
-    const list = (map.get(String(gid)) || []).filter((t) => now - t < WINDOW_MS)
-    if (!list.length) return []
-    map.set(String(gid), list) // 顺手清掉过期项，别让数组无限长
+    const id = String(gid)
+    const list = (map.get(id) || []).filter((t) => now - t < WINDOW_MS)
+    if (!list.length) { map.delete(id); return [] }
+    map.set(id, list) // 顺手清掉过期项，别让数组无限长
     return list
   }
 
@@ -131,9 +132,9 @@ export function createGroupState({ storage, log } = {}) {
     engagedSince (gid) {
       return engaged.get(String(gid))?.since || 0
     },
-    /** 加入话题（默认 3 分钟）。已在话题里则不续期（见 joinTopicOf）。 */
-    joinTopic (gid, now = Date.now()) {
-      joinTopicOf(gid, now)
+    /** 加入话题（默认 ENGAGE_MS，可传入群级 engagedMaxMs）。已在话题里则不续期（见 joinTopicOf）。 */
+    joinTopic (gid, now = Date.now(), ttlMs = ENGAGE_MS) {
+      joinTopicOf(gid, now, ttlMs)
     },
     leaveTopic (gid) {
       engaged.delete(String(gid))
@@ -143,8 +144,8 @@ export function createGroupState({ storage, log } = {}) {
      * 在群里说了话 = 重新入场（硬重置窗口/条数）。
      * 只服务 must/interject 两类发言；engaged 续聊走 noteEngagedReply，不碰这里。
      */
-    noteSpokeInGroup (gid, now = Date.now()) {
-      joinTopicOf(gid, now)
+    noteSpokeInGroup (gid, now = Date.now(), ttlMs = ENGAGE_MS) {
+      joinTopicOf(gid, now, ttlMs)
     },
     /** 记一次「靠起劲状态接着说」：条数进预算，但**不**延长窗口、不重置入场时刻。 */
     noteEngagedReply (gid, now = Date.now()) {

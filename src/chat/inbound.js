@@ -161,7 +161,7 @@ export function parseMessageEvent(event, selfId, { faceName } = {}) {
         texts.push(String(d.text ?? ''))
         break
       case 'at':
-        if (String(d.qq) === self || d.qq === 'all') mentioned = mentioned || String(d.qq) === self
+        if (String(d.qq) === self) mentioned = true
         else texts.push(`@${d.name || d.qq} `)
         break
       case 'reply':

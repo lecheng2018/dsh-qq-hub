@@ -33,8 +33,42 @@ export const DEFAULT_GROUP_POLICY = {
   engagedMaxMs: 6 * 60_000,
 }
 
+function parseNonNegNumber(v, fallback) {
+  if (v === '' || v === null || v === undefined || typeof v === 'boolean') return fallback
+  if (typeof v === 'string' && !v.trim()) return fallback
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+/** 严格解析连聊预算（空串/null/undefined/boolean 回落默认，不再被 Number() 强转成 0）。 */
+export function resolveEngagedBudget(policy) {
+  const pol = policy || DEFAULT_GROUP_POLICY
+  return {
+    maxReplies: Math.round(parseNonNegNumber(pol.engagedMaxReplies, DEFAULT_GROUP_POLICY.engagedMaxReplies)),
+    maxMs: Math.round(parseNonNegNumber(pol.engagedMaxMs, DEFAULT_GROUP_POLICY.engagedMaxMs)),
+  }
+}
+
+// QQ 官方系统机器人号段（Q群管家等，公开官号段）
+const OFFICIAL_BOT_MIN_ID = 2_854_196_300
+const OFFICIAL_BOT_MAX_ID = 2_854_196_399
+const OFFICIAL_BOT_NICKS = new Set(['Q群管家', '群管家'])
+
+/** 识别 QQ 官方系统机器人（如 Q群管家）：不计入群活跃度/相关度，也不触发非 @ 主动插话。 */
+export function isOfficialBotSender(uid, nick = '') {
+  const id = String(uid ?? '').trim()
+  if (/^\d+$/.test(id)) {
+    const n = Number(id)
+    if (n >= OFFICIAL_BOT_MIN_ID && n <= OFFICIAL_BOT_MAX_ID) return true
+  }
+  const name = String(nick ?? '').trim()
+  return Boolean(name && OFFICIAL_BOT_NICKS.has(name))
+}
+
 /**
  * 群里最近在聊的内容和她有多相关（0~1）。
+ * 最新 1~2 条消息本身需具备基础相关度；更早的消息仅做大幅衰减加权，
+ * 防止 4 分钟前的旧关键词让完全无关的新消息蹭分通过。
  * @param {string[]} recentTexts 最近几条群消息
  * @param {string[]} interests 她感兴趣的话题词
  * @param {number} [memoryScore] 记忆库对这段话题的命中强度（0~1，可选）
@@ -42,16 +76,26 @@ export const DEFAULT_GROUP_POLICY = {
 export function topicRelevance(recentTexts, interests, memoryScore = 0) {
   const hasInterests = Array.isArray(interests) && interests.length > 0
   const mem = Math.max(0, Math.min(1, Number(memoryScore) || 0))
-  const txt = (recentTexts || []).join(' ')
-  let hits = 0
+  const list = Array.isArray(recentTexts) ? recentTexts.map((x) => String(x || '')) : []
+  const tailTxt = list.slice(-2).join(' ')
+  const olderTxt = list.slice(0, -2).join(' ')
+  let tailHits = 0
+  let olderOnlyHits = 0
   if (hasInterests) {
-    for (const w of interests) if (w && txt.includes(w)) hits++
+    for (const w of interests) {
+      if (!w) continue
+      if (tailTxt.includes(w)) tailHits += 1
+      else if (olderTxt.includes(w)) olderOnlyHits += 1
+    }
   }
   // 未配置任何感兴趣话题且无特定记忆加分时：没有定义话题词表约束，不把日常闲聊判为 0
   // （避免与默认门槛 0.35 构成死锁扼杀所有群插话）；返回基础相关度 0.35，让基础概率生效。
   // 配置了话题词时（哪怕只有一个词未命中）仍严格走下方计算，不放水。
   if (!hasInterests && mem <= 0) return 0.35
-  return Math.min(1, hits * 0.3 + mem * 0.5)
+  const interestScore = tailHits > 0
+    ? tailHits * 0.3 + olderOnlyHits * 0.1
+    : Math.min(0.2, olderOnlyHits * 0.08)
+  return Math.min(1, interestScore + mem * 0.5)
 }
 
 /**
@@ -65,11 +109,18 @@ export function withRoleWakeWords(policy, identity) {
   return policy || DEFAULT_GROUP_POLICY
 }
 
-/** 合并全局策略和单群覆盖。 */
+/** 合并全局策略和单群覆盖（忽略覆盖里的 undefined/null/空串，防止把默认冲成 0）。 */
 export function policyFor(global, overrides, groupId) {
   const g = { ...DEFAULT_GROUP_POLICY, ...(global || {}) }
   const o = overrides && overrides[String(groupId)]
-  return o ? { ...g, ...o } : g
+  if (!o || typeof o !== 'object') return g
+  const clean = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined || v === null) continue
+    if (typeof v === 'string' && !v.trim()) continue
+    clean[k] = v
+  }
+  return { ...g, ...clean }
 }
 
 /**
@@ -161,6 +212,8 @@ export function decideGroupReply(p) {
   if (!text.trim() && !p.mentioned && !p.repliedToBot) return { reply: false, mode: 'none', reason: '空文本/纯媒体不主动插话' }
   if (p.mentioned) return { reply: true, mode: 'must', reason: '被 @' }
   if (p.repliedToBot) return { reply: true, mode: 'must', reason: '引用了她的消息' }
+  // QQ 官方系统机器人（如 Q群管家）：不触发非 @ 唤醒词与主动插话
+  if (p.fromOfficialBot) return { reply: false, mode: 'none', reason: 'QQ 官方系统机器人不主动插话' }
   const hit = (pol.wakeWords || []).find((w) => w && text.includes(w))
   if (hit) return { reply: true, mode: 'must', reason: `叫到了「${hit}」` }
   const rel = typeof p.relevance === 'number' ? p.relevance : 1
@@ -179,21 +232,17 @@ export function decideGroupReply(p) {
   // 已经加入了这个话题：接着聊（每段看完再回，不受冷却限制）——
   // 但**有预算**：连聊条数与入场时长双双是硬顶，到顶就离场；
   // 而且上面那道令牌桶也管着它（连聊不是免费额度）。
-  // 没有这些顶时，engaged 是自我续期的死循环：她每回一条都刷新「刚加入」，
-  // 群里消息间隔只要小于窗口长度，她就永远在「起劲」，1% 摇号只管进门不管出去。
-  if (p.engagedUntil && p.now < p.engagedUntil && rel >= minRel) {
-    // 0 必须真的等于 0：以前写 `Number(x) || 默认值`，配 0 会被兜回 3，永远关不掉这条通道。
-    const rawCap = Number(pol.engagedMaxReplies)
-    const cap = Number.isFinite(rawCap) && rawCap >= 0 ? rawCap : DEFAULT_GROUP_POLICY.engagedMaxReplies
-    const rawMs = Number(pol.engagedMaxMs)
-    const maxMs = Number.isFinite(rawMs) && rawMs >= 0 ? rawMs : DEFAULT_GROUP_POLICY.engagedMaxMs
+  // 当 engagedMaxReplies === 0 或 engagedMaxMs === 0 时直接关闭连聊通道，不进入 engaged 分支，
+  // 避免打印「已连着接了 0 条」并在窗口内死锁常规插话摇号。
+  const { maxReplies: cap, maxMs } = resolveEngagedBudget(pol)
+  if (cap > 0 && maxMs > 0 && p.engagedUntil && p.now < p.engagedUntil && rel >= minRel) {
     const used = Number(p.engagedReplies) || 0
     if (used >= cap) {
-      return { reply: false, mode: 'none', reason: `这个话题已连着接了 ${used} 条，先退一步（再想聊要重新摇号）` }
+      return { reply: false, mode: 'none', leaveTopic: true, reason: `这个话题已连着接了 ${used} 条，先退一步（再想聊要重新摇号）` }
     }
     const since = Number(p.engagedSince) || 0
     if (since && p.now - since >= maxMs) {
-      return { reply: false, mode: 'none', reason: '这场聊得够久了，先退出来' }
+      return { reply: false, mode: 'none', leaveTopic: true, reason: '这场聊得够久了，先退出来' }
     }
     return { reply: true, mode: 'engaged', reason: `正聊得起劲，接着说（相关度 ${rel.toFixed(2)}）` }
   }

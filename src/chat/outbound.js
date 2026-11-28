@@ -41,12 +41,16 @@ export function createOutbound({ getConfig, log, onebot, outbox, groups, sticker
 
   async function sendSegments(chatId, message, note, { force = false, onResult } = {}) {
     if (hooks?.send) {
+      const ctx = deliveryContext?.getStore()
+      if (ctx) ctx.inSendHook = true
       try {
         const next = await hooks.send(message, { chatId, note, force })
         if (next === null) return null
         if (Array.isArray(next)) message = next
       } catch (error) {
         log.warn('扩展模块改写发送内容出错：', error.message)
+      } finally {
+        if (ctx) ctx.inSendHook = false
       }
     }
     const captured = captureOnly?.(chatId, message, note)

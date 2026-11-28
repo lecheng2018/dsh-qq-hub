@@ -21,22 +21,34 @@
  *   ids = 受保护 ID（主人/别人的 QQ 号、B站 mid 等）；allowIds = 允许出现（比如这个群自己的群号）
  * @returns {Array<{kind:string,label:string,value:string,index:number}>}
  */
+const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"'）)\]】》>，。！？；;]+/gi
+
+/** 判断 8 位数字串是否为合法 YYYYMMDD 日期（1900~2099）。 */
+function isValidDate8(v) {
+  if (!/^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(v)) return false
+  const y = Number(v.slice(0, 4))
+  const m = Number(v.slice(4, 6))
+  const d = Number(v.slice(6, 8))
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+
 export function findIdentityLeaks(text, { ids = [], allowIds = [], allowBareNumbers = false } = {}) {
   const raw = String(text ?? '')
   if (!raw.trim()) return []
   const allow = new Set([...allowIds].map((x) => String(x ?? '').trim()).filter(Boolean))
   const hits = []
   const seen = new Set()
-  // 1) 已知 ID 精确命中：这些号码本来就只在配置/对齐表里，不该出现在公开文本里
+  // 1) 已知 ID 精确命中：补数字边界避免 4~5 位已知 ID 误命中更长数字串的中间子串
   for (const value of ids ?? []) {
     const id = String(value ?? '').trim()
     if (!/^\d{4,15}$/.test(id) || seen.has(id) || allow.has(id)) continue
     seen.add(id)
-    const index = raw.indexOf(id)
-    if (index >= 0) hits.push({ kind: 'known-id', label: '账号标识', value: id, index })
+    const m = new RegExp(`(?<!\\d)${id}(?!\\d)`).exec(raw)
+    if (m) hits.push({ kind: 'known-id', label: '账号标识', value: id, index: m.index })
   }
-  // 2) 明确的「QQ / 群号 + 数字」：即使不在名单里，也是在往外递联系方式
-  const explicit = /(?:QQ|qq|Q群|q群|群号|群\s*号|加群|企鹅号)\s*[：:=是为]?\s*(\d{5,12})/g
+  // 2) 明确的「QQ / QQ号 / 群号 + 数字」：即使不在名单里，也是在往外递联系方式
+  const explicit = /(?:qq\s*号?|q群\s*号?|群\s*号|加群|企鹅号)\s*[：:=是为]?\s*(\d{5,12})/gi
   let match
   while ((match = explicit.exec(raw)) !== null) {
     const v = match[1]
@@ -45,18 +57,18 @@ export function findIdentityLeaks(text, { ids = [], allowIds = [], allowBareNumb
     hits.push({ kind: 'qq-context', label: 'QQ/群号', value: v, index: match.index })
   }
 
-  // 3) 裸的 5~12 位连续数字：QQ 号/群号最常见的形态（「333444555 加进白名单了」）。
-  // 只认**独立成词**的长数字串，长度 ≥8（QQ 号/群号现在普遍 9~11 位；5~7 位更像数量/楼层，误伤代价高）。
-  // 误伤代价：把播放量/楼层当成号码会拦掉正常内容——所以要求长度 ≥5 且前后不接数字/小数点。
-  // 私聊放宽（真机实测）：给主人自己的私聊里，8~12 位裸数字多半是技术文档里的端口/版本/ID，
-  // 拦掉会把整篇报告吞了。私聊只对「已知账号」和「QQ/群号 + 数字」这两种明确形态把关。
+  // 3) 裸的 8~12 位连续数字：QQ 号/群号最常见的形态（「333444555 加进白名单了」）。 pii-scan:ignore
+  // 检测前先屏蔽 URL 区间（等长空格占位，保持索引对齐），避免文章/视频/订单 URL 里的长数字 ID 误报；
+  // 同时放行合法 YYYYMMDD 日期、常见 10 位 Unix 时间戳（15~19 亿段）、整千万数字（如 10000000）。 pii-scan:ignore
+  const bareText = allowBareNumbers ? '' : raw.replace(URL_RE, (m) => ' '.repeat(m.length))
   const bare = allowBareNumbers ? null : /(?<![\d.])(\d{8,12})(?![\d.]|\.\d)/g
-  while (bare && (match = bare.exec(raw)) !== null) {
+  while (bare && (match = bare.exec(bareText)) !== null) {
     const v = match[1]
     if (allow.has(v) || seen.has('bare:' + v)) continue
-    // 年份（19xx / 20xx）和全 0 开头不当作号码
-    if (/^(19|20)\d{2}$/.test(v)) continue
     if (/^0/.test(v)) continue
+    if (isValidDate8(v)) continue
+    if (/^1[5-9]\d{8}$/.test(v)) continue // 常见 10 位 Unix 秒级时间戳（2017~2033）
+    if (/^[1-9]\d*0{7,}$/.test(v)) continue // 整千万量级数字（10000000 / 50000000 / 100000000 等） pii-scan:ignore
     seen.add('bare:' + v)
     hits.push({ kind: 'bare-number', label: '疑似账号', value: v, index: match.index + match[0].indexOf(v) })
   }
@@ -66,7 +78,8 @@ export function findIdentityLeaks(text, { ids = [], allowIds = [], allowBareNumb
 /** 把命中的 ID 打码后再拼进错误信息：错误信息本身也可能被贴进日志/给模型看。 */
 export function maskLeakValue(value) {
   const s = String(value ?? '')
-  if (!/^\d{5,}$/.test(s)) return s
+  if (!/^\d{4,}$/.test(s)) return s
+  if (s.length === 4) return `${s.slice(0, 1)}**${s.slice(-1)}`
   if (s.length <= 6) return `${s.slice(0, 1)}****${s.slice(-1)}`
   return `${s.slice(0, 3)}****${s.slice(-3)}`
 }

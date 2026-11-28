@@ -17,11 +17,15 @@
 // 本文件只做判定；冷却计时、落盘、真正拦下发送由 hub.js 负责。
 
 // 群聊流水去重复注入：同一 (uid,text) 第三次出现起视为会话轮次重发，只留前两次。
+// 兼容 l.uid ?? l.userId；空文本消息不参与文本去重（避免无 text 的事件全部撞成 "|" 被裁剩 2 条）。
 export function dedupConvo (lines, keepTimes = 2) {
   const seen = new Map()
   const out = []
   for (const l of lines || []) {
-    const key = `${String((l && l.uid) || '')}|${String((l && l.text) || '').slice(0, 80)}`
+    const txt = String((l && l.text) || '').trim()
+    if (!txt) { out.push(l); continue }
+    const uid = String((l && (l.uid ?? l.userId)) ?? '')
+    const key = `${uid}|${txt.slice(0, 80)}`
     const n = (seen.get(key) || 0) + 1
     seen.set(key, n)
     if (n <= keepTimes) out.push(l)
@@ -79,10 +83,21 @@ const cleanList = (v, max = 50) => {
   return [...new Set(list.map((x) => String(x ?? '').trim()).filter(Boolean))].slice(0, max)
 }
 
+const NORMALIZED_META = Symbol('fishGuardMeta')
+
 export function normalizeFishGuard(raw = {}) {
+  if (raw && typeof raw === 'object' && raw[NORMALIZED_META]) return raw
   const src = raw && typeof raw === 'object' ? raw : {}
   const windowMs = clampInt(src.windowMs, DEFAULT_FISH_GUARD.windowMs, 60_000, 24 * 3600_000)
-  return {
+  const namePrefixes = cleanList(src.namePrefixes ?? DEFAULT_FISH_GUARD.namePrefixes)
+  const nameContains = cleanList(src.nameContains ?? DEFAULT_FISH_GUARD.nameContains)
+  const nameSuffixes = cleanList(src.nameSuffixes).length ? cleanList(src.nameSuffixes) : [...DEFAULT_FISH_GUARD.nameSuffixes]
+  const groupNameKeywords = cleanList(src.groupNameKeywords ?? DEFAULT_FISH_GUARD.groupNameKeywords)
+  const exemptNames = cleanList(src.exemptNames, 200)
+  const exemptIds = cleanList(src.exemptIds, 200).filter((x) => /^\d{4,15}$/.test(x))
+  const fishIds = cleanList(src.fishIds, 200).filter((x) => /^\d{4,15}$/.test(x))
+  const groupNestIds = cleanList(src.groupNestIds, 200).filter((x) => /^\d{4,15}$/.test(x))
+  const out = {
     ...DEFAULT_FISH_GUARD,
     ...src,
     enabled: asBool(src.enabled, DEFAULT_FISH_GUARD.enabled),
@@ -100,17 +115,29 @@ export function normalizeFishGuard(raw = {}) {
     minSample: clampInt(src.minSample, DEFAULT_FISH_GUARD.minSample, 2, 200),
     minFishSendersForRatio: clampInt(src.minFishSendersForRatio, DEFAULT_FISH_GUARD.minFishSendersForRatio, 1, 20),
     groupNestMaxFish: clampInt(src.groupNestMaxFish, DEFAULT_FISH_GUARD.groupNestMaxFish, 2, 20),
-    groupNestIds: cleanList(src.groupNestIds, 200).filter((x) => /^\d{4,15}$/.test(x)),
-    namePrefixes: cleanList(src.namePrefixes ?? DEFAULT_FISH_GUARD.namePrefixes),
-    nameContains: cleanList(src.nameContains ?? DEFAULT_FISH_GUARD.nameContains),
+    groupNestIds,
+    namePrefixes,
+    nameContains,
     // 空数组 = 用默认（面板里留空不该等于「谁都不算同类」）
-    nameSuffixes: cleanList(src.nameSuffixes).length ? cleanList(src.nameSuffixes) : [...DEFAULT_FISH_GUARD.nameSuffixes],
-    groupNameKeywords: cleanList(src.groupNameKeywords ?? DEFAULT_FISH_GUARD.groupNameKeywords),
-    exemptNames: cleanList(src.exemptNames, 200),
-    exemptIds: cleanList(src.exemptIds, 200).filter((x) => /^\d{4,15}$/.test(x)),
-    fishIds: cleanList(src.fishIds, 200).filter((x) => /^\d{4,15}$/.test(x)),
+    nameSuffixes,
+    groupNameKeywords,
+    exemptNames,
+    exemptIds,
+    fishIds,
     bypassDirectAddress: asBool(src.bypassDirectAddress, DEFAULT_FISH_GUARD.bypassDirectAddress),
   }
+  const meta = {
+    exemptNames: new Set(exemptNames.map(normalizeName).filter(Boolean)),
+    namePrefixes: namePrefixes.map(normalizeName).filter(Boolean),
+    nameContains: nameContains.map(normalizeName).filter(Boolean),
+    nameSuffixes: nameSuffixes.map(normalizeName).filter(Boolean),
+    groupNameKeywords: groupNameKeywords.map(normalizeName).filter(Boolean),
+    exemptIds: new Set(exemptIds),
+    fishIds: new Set(fishIds),
+    groupNestIds: new Set(groupNestIds),
+  }
+  Object.defineProperty(out, NORMALIZED_META, { value: meta, enumerable: false })
+  return out
 }
 
 /** 名字归一化：去零宽字符、尾部数字/装饰符、emoji，小写。同类 bot 常带 2 / _2 / ✨。 */
@@ -126,41 +153,31 @@ function normalizeName(value) {
 
 export function isFishName(name, guard = DEFAULT_FISH_GUARD) {
   const cfg = normalizeFishGuard(guard)
+  const meta = cfg[NORMALIZED_META]
   const n = normalizeName(name)
   if (!n) return false
-  if (cfg.exemptNames.some((x) => normalizeName(x) === n)) return false
-  const hit = (kw) => {
-    const k = normalizeName(kw)
-    return k && n.includes(k)
-  }
-  const prefix = cfg.namePrefixes.some((kw) => {
-    const k = normalizeName(kw)
-    return k && n.startsWith(k)
-  })
-  const contains = cfg.nameContains.some(hit)
-  const suffix = cfg.nameSuffixes.some((kw) => {
-    const k = normalizeName(kw)
-    return k && n.endsWith(k)
-  })
-  return prefix || contains || suffix
+  if (meta.exemptNames.has(n)) return false
+  if (meta.namePrefixes.some((k) => n.startsWith(k))) return true
+  if (meta.nameContains.some((k) => n.includes(k))) return true
+  return meta.nameSuffixes.some((k) => n.endsWith(k))
 }
 
 export function isFishGroupName(name, guard = DEFAULT_FISH_GUARD) {
   const cfg = normalizeFishGuard(guard)
+  const meta = cfg[NORMALIZED_META]
   const n = normalizeName(name)
   if (!n) return false
   // 群名用「包含」而不是「结尾」：鱼窝群常叫「摸鱼后援会」「摸鱼肥鱼窝」
-  return cfg.groupNameKeywords.some((kw) => {
-    const k = normalizeName(kw)
-    return k && n.includes(k)
-  })
+  return meta.groupNameKeywords.some((k) => n.includes(k))
 }
 
-export function senderFish(msg, cfg) {
+export function senderFish(msg, guard = DEFAULT_FISH_GUARD) {
   if (!msg || msg.isSelf || msg.isOwner) return false
-  const uid = msg.userId != null ? String(msg.userId) : ''
-  if (uid && cfg.exemptIds.includes(uid)) return false
-  if (uid && cfg.fishIds.includes(uid)) return true
+  const cfg = normalizeFishGuard(guard)
+  const meta = cfg[NORMALIZED_META]
+  const uid = msg.userId != null ? String(msg.userId) : (msg.uid != null ? String(msg.uid) : '')
+  if (uid && meta.exemptIds.has(uid)) return false
+  if (uid && meta.fishIds.has(uid)) return true
   return msg.fish === true || isFishName(msg.sender, cfg)
 }
 
@@ -205,7 +222,7 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
         if (!fishUid) fishUid = uid
         else if (uid !== fishUid) break // 掺进第二只鱼就不算对聊泉，交给别的规则
       }
-      if (prev && prev === kind) break  // 同侧连发（自言自语/连发）不是乒乓
+      if (prev && prev === kind) continue // 同侧多气泡连发跳过，不打断乒乓交替计数
       pingPong += 1
       prev = kind
     }
@@ -257,17 +274,24 @@ export function assessFishDensity(messages, { now = Date.now(), guard = DEFAULT_
  * @param {{guard:object}} opts
  * @returns {{pairs:number, isFish:boolean, blocked:boolean, untilRound:number}}
  */
-export function assessPairLoop (recentAll, uid, { guard = DEFAULT_FISH_GUARD } = {}) {
+export function assessPairLoop (recentAll, uid, { guard = DEFAULT_FISH_GUARD, sender = '' } = {}) {
   const cfg = normalizeFishGuard(guard)
+  const meta = cfg[NORMALIZED_META]
   const want = String(uid ?? '')
-  const isFish = cfg.fishIds.includes(want)
+  const list = Array.isArray(recentAll) ? recentAll : []
+  const peerMsg = list.findLast?.((m) => m && !m.isSelf && String(m.userId ?? m.uid ?? '') === want) || null
+  const peerName = sender || peerMsg?.sender || peerMsg?.nick || ''
+  const isFish = Boolean(
+    !meta.exemptIds.has(want)
+    && (meta.fishIds.has(want) || peerMsg?.fish === true || (peerName && isFishName(peerName, cfg))),
+  )
   // 从尾部向前数交替 run（self↔want 两个角色）
   let pairs = 0
   let prev = ''
-  for (let i = recentAll.length - 1; i >= 0; i -= 1) {
-    const m = recentAll[i]
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i]
     if (!m) continue
-    const who = m.isSelf ? 'self' : (String(m.userId ?? '') === want ? 'peer' : 'other')
+    const who = m.isSelf ? 'self' : (String(m.userId ?? m.uid ?? '') === want ? 'peer' : 'other')
     if (who === 'other') break
     if (prev === who) continue // 同一方连发不算新轮
     if (prev !== '') pairs += 1
