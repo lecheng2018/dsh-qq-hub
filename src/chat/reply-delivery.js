@@ -94,9 +94,21 @@ export function createReplyDelivery({
       missedAt: [], attempted: 0, delivered: 0, failedCount: 0, items: [], state, replyRaw: text, ...extra,
     })
     const cfg = getConfig()
+    // T2.4：reply / reply/items 两个钩子共用同一份回合身份字段。
+    // participation 是字符串级别（'full' | 'text_lite'），不把内部可变对象暴露给插件；
+    // triggerMessageIds 传独立冻结拷贝，防跨群混淆或钩子篡改。旧调用方未传新 opts 时
+    // turnId / topicMode 为 undefined、participation 恒为 'full'，旧监听器行为零变化。
+    const hookInfo = {
+      chatId,
+      userText: opts.userText || '',
+      turnId: opts.turnId,
+      topicMode: opts.topicMode,
+      participation: opts.participationLevel === 'text_lite' ? 'text_lite' : 'full',
+      triggerMessageIds: Object.freeze(Array.isArray(opts.triggerMessageIds) ? [...opts.triggerMessageIds] : []),
+    }
     if (hooks?.reply) {
       try {
-        const next = await hooks.reply(text, { chatId, userText: opts.userText || '' })
+        const next = await hooks.reply(text, hookInfo)
         if (next === null) {
           log.info(`${chatId}：扩展模块拦下了这次回复`)
           return skippedResult('blocked')
@@ -212,7 +224,7 @@ export function createReplyDelivery({
     }
     if (hooks?.items) {
       try {
-        const next = await hooks.items(items, { chatId, text, userText: opts.userText || '' })
+        const next = await hooks.items(items, { ...hookInfo, text })
         if (next === null) {
           log.info(`${chatId}：扩展模块拦下了这次回复`)
           return skippedResult('blocked')
