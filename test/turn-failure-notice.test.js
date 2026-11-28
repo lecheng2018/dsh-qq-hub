@@ -347,14 +347,28 @@ test('回执：空 chatKey 不发也不抛', (t) => {
 // 这是为了防止本次踩过的坑重演：2026-11-27 首次实现时只补了 followupError 与
 // execute 最外层 catch，**漏掉了「等待 replyPromise 时 turn/end 落 error」这个最常见出口**，
 // 结果真机 16:10 的上游 403 依然完全静默，用户反馈「失败了还是静默」。
-// 这条守卫把所有 `throw error` / `throw new Error(...回合...)` 的失败出口列出来，
-// 要求每个出口附近（同一段 catch / 前 12 行内）出现 handleTurnFailure、handleTurnTimeout
-// 或 handleOversizedTurn 三者之一 —— 三者都对应「已经通知用户」。
+//
+// S2 起事件机搬进了 src/chat/dsh-turn-runner.js（聊天主链与主动回合共用），失败抛点因此分成两处：
+//   ① 装配根 modular-core.js 里的 throw（原有扫描，一字未放宽：同样的出口正则、同样的前 12 行窗口、
+//      同样的三个通知器）；
+//   ② 执行器 dsh-turn-runner.js —— **它是唯一允许「抛错但自己不发回执」的地方**（提示与归档重建
+//      留在调用点，时序与拆分前一致）。所以改成要求它每个失败出口都带分类字段
+//      （kind / timedOut / oversized / archived），并且只允许「分类过的 TurnExecutionError / 取消 /
+//      rethrow / 装配期 TypeError」四类出口；
+//   ③ 装配根里每一处 `turnRunner.runTurn(` 的 catch 都必须出现通知器（把 ② 的分类真正兑现成通知）。
+//
+// 唯一豁免：取消（AbortError / kind === 'cancelled'）。取消是用户或宿主的主动中止 —— 回合落
+// cancelled、零投递，也不该发「失败回执」（test/dsh-turn-runner.test.js 的取消集成用例锁住零投递）。
+// 豁免要求窗口里**真的写着**取消判定，不是靠注释文字放行。
 test('静态守卫：所有回合失败出口都必须有回执（超时 / 413 / 分类回执任一）', async () => {
   const { readFileSync } = await import('node:fs')
   const src = readFileSync(new URL('../src/host/modular-core.js', import.meta.url), 'utf8')
   const lines = src.split('\n')
 
+  const NOTIFIERS = /handleTurnFailure|handleTurnTimeout|handleOversizedTurn/
+  const CANCEL_GUARD = /name === 'AbortError'|kind === 'cancelled'/
+
+  // ① 装配根：原有的失败出口扫描（正则与窗口都没改）
   // 只找「回合执行」范围内的失败抛出点（turn.chatKey 存在 = 这一轮属于某个聊天）
   const throwIdx = []
   lines.forEach((line, i) => {
@@ -362,14 +376,61 @@ test('静态守卫：所有回合失败出口都必须有回执（超时 / 413 /
   })
   assert.ok(throwIdx.length >= 3, `至少应有 3 个失败出口，实际找到 ${throwIdx.length} 个（守卫本身要能工作）`)
 
-  const NOTIFIERS = /handleTurnFailure|handleTurnTimeout|handleOversizedTurn/
   const missing = []
   for (const i of throwIdx) {
     // 往前看 12 行（覆盖整个 catch 块直到 throw），必须出现任一通知器
     const window = lines.slice(Math.max(0, i - 12), i + 1).join('\n')
-    if (!NOTIFIERS.test(window)) missing.push(`${i + 1}: ${lines[i].trim()}`)
+    if (NOTIFIERS.test(window)) continue
+    // 取消不是故障：窗口里真的写着取消判定才放行
+    if (CANCEL_GUARD.test(window)) continue
+    missing.push(`${i + 1}: ${lines[i].trim()}`)
   }
   assert.deepEqual(missing, [], `这些失败出口没有通知用户（会静默）：\n${missing.join('\n')}`)
+
+  // ② 执行器：每个失败出口都带分类字段，调用点才有的可判
+  const runnerSrc = readFileSync(new URL('../src/chat/dsh-turn-runner.js', import.meta.url), 'utf8')
+  const runnerLines = runnerSrc.split('\n')
+  const CLASSIFIED = /kind:|timedOut:|oversized:|archived:/
+
+  const ctorIdx = []
+  runnerLines.forEach((line, i) => { if (/new TurnExecutionError\(/.test(line)) ctorIdx.push(i) })
+  assert.ok(ctorIdx.length >= 6, `执行器至少应有 6 个 TurnExecutionError 出口，实际 ${ctorIdx.length} 个（守卫本身要能工作）`)
+  const unclassified = []
+  for (const i of ctorIdx) {
+    // 元信息可能折行（timeout / incomplete / followup 三处都是 `{` 换行），往后看 7 行足够覆盖
+    const window = runnerLines.slice(i, i + 7).join('\n')
+    if (!CLASSIFIED.test(window)) unclassified.push(`${i + 1}: ${runnerLines[i].trim()}`)
+  }
+  assert.deepEqual(unclassified, [], `这些执行器失败出口没有分类字段（调用点无法判断要不要通知）：\n${unclassified.join('\n')}`)
+
+  // ②b 执行器只允许这四类出口：分类过的 TurnExecutionError / 取消 / rethrow / 装配期 TypeError。
+  // 注意要认 `if (…) throw …` 这种前置条件写法（S2 的取消判定就是），所以取 throw/reject 之后
+  // 那个**表达式**来判，而不是判行首。
+  const RUNNER_EXIT_OK = /^(new TurnExecutionError\(|cancelledError\(\)|new TypeError\(|error\b|followupError\b)/
+  const strayExits = []
+  runnerLines.forEach((line, i) => {
+    const code = line.trim()
+    if (!code || code.startsWith('//') || code.startsWith('*') || code.startsWith('/*')) return
+    const hit = /\bthrow\s+(.*)$/.exec(code) || /\breject\((.*)$/.exec(code)
+    if (!hit) return
+    if (RUNNER_EXIT_OK.test(hit[1])) return
+    strayExits.push(`${i + 1}: ${code}`)
+  })
+  assert.deepEqual(strayExits, [], `执行器里出现了没有分类的失败出口：\n${strayExits.join('\n')}`)
+
+  // ③ 调用点：每一处 turnRunner.runTurn( 的 catch 都必须通知
+  const callIdx = []
+  lines.forEach((line, i) => { if (/turnRunner\.runTurn\(/.test(line)) callIdx.push(i) })
+  assert.ok(callIdx.length >= 2, `两条链都应调用执行器（execute + runPromptTurn），实际 ${callIdx.length} 处`)
+  const unnotified = []
+  for (const i of callIdx) {
+    const tail = lines.slice(i, i + 80)
+    const catchAt = tail.findIndex((line) => /\}\s*catch\s*\(/.test(line))
+    assert.notEqual(catchAt, -1, `${i + 1} 处的 runTurn 没有 catch —— 失败会静默`)
+    const window = tail.slice(catchAt, catchAt + 20).join('\n')
+    if (!NOTIFIERS.test(window)) unnotified.push(`${i + 1}: ${lines[i].trim()}`)
+  }
+  assert.deepEqual(unnotified, [], `这些 runTurn 调用点的 catch 没有通知用户（会静默）：\n${unnotified.join('\n')}`)
 })
 
 // ---------- ⑤ 端到端回归：真实事件流（dispatchLegacyEvent + turn/end） ----------
