@@ -117,16 +117,45 @@ export interface Logger {
   error(...a: any[]): void
 }
 
+/** 回合身份（reply / reply/items 钩子共用同一份；turnId/topicMode 由宿主显式传递，绝不按群猜）。 */
+export interface ReplyHookInfo {
+  chatId: ChatId
+  userText: string
+  turnId?: string
+  topicMode?: 'must' | 'engaged' | 'interject'
+  /** 字符串级别：'full' | 'text_lite'（REACT 不进入 reply 管线）；旧调用方缺省为 'full' */
+  participation: 'full' | 'text_lite'
+  /** 触发本回合的消息 id（冻结拷贝，只读） */
+  triggerMessageIds: string[]
+}
+
+/** 群回合终态事件（只读反馈）：每个进入执行的群回合最多一次；不落盘、不重放。 */
+export interface GroupResult {
+  turnId: string
+  chatId: ChatId
+  topicMode: 'must' | 'engaged' | 'interject'
+  participation: 'full' | 'text_lite' | 'react'
+  triggerMessageIds: string[]
+  state: 'sent' | 'partial' | 'failed' | 'unknown' | 'cancelled' | 'skipped'
+  /** 参与声明的真实接管模块 id（由宿主填，插件不得伪造） */
+  sourceModuleId: string
+  /** 仅 REACT 有值（Outbox 台账真实 id）；文本多气泡不伪造单一 deliveryId（空串） */
+  deliveryId: string
+  /** 稳定短代码（如 reply-blocked / model-silent / engaged-expired / duplicate-suppressed） */
+  reason: string
+  at: number
+}
+
 export type Off = () => void
 
 /** 事件 → 监听函数的样子。返回值的意义见 API.md「事件」。 */
 export interface Events {
   /** 返回 true = 接管这条消息，她不再处理 */
   message: (msg: Message) => boolean | void | Promise<boolean | void>
-  /** 她要说的整段话：返回新文字改写，null 不发 */
-  reply: (text: string, info: { chatId: ChatId; userText: string }) => string | null | void | Promise<string | null | void>
-  /** 拆好的每一条（已经决定了哪条发语音、配不配表情）：返回新数组改写，null 不发 */
-  'reply/items': (items: ReplyItem[], info: { chatId: ChatId; text: string; userText: string }) => ReplyItem[] | null | void | Promise<ReplyItem[] | null | void>
+  /** 她要说的整段话：返回新文字改写，null 不发。info 含回合身份（见 ReplyHookInfo） */
+  reply: (text: string, info: ReplyHookInfo) => string | null | void | Promise<string | null | void>
+  /** 拆好的每一条（已经决定了哪条发语音、配不配表情）：返回新数组改写，null 不发。info 含回合身份 */
+  'reply/items': (items: ReplyItem[], info: ReplyHookInfo & { text: string }) => ReplyItem[] | null | void | Promise<ReplyItem[] | null | void>
   /** 最终发给 QQ 的消息段（所有发送都经过这里，包括命令回复、模块发的）：返回新数组改写，null 不发 */
   send: (message: Segment[], info: { chatId: ChatId; note: string; force: boolean }) => Segment[] | null | void | Promise<Segment[] | null | void>
   /** 群里这条消息她回不回：返回对象覆盖决定，比如 { reply: true, mode: 'must' }（返回 null 无效，等于不改） */
@@ -136,10 +165,17 @@ export interface Events {
    * 多个模块按加载顺序问，第一个返回 truthy 的接管（后面的不再被问）；全不接管 = full，行为与没有这个事件时一致。
    * 校验边界：maxBubbles 1~12、maxChars 10~500（有限整数，只能更严）；reaction.messageId 必须等于当前
    * msg.messageId；emojiId 是 1~10 位正整数。truthy 但结构无效 = 仍占用本次接管，宿主记警告并按 full 处理。
-   * text_lite 不减少本次模型调用；react 由宿主经统一出口执行，插件不得自行发送表情。
-   * 执行行为后续批次才启用：当前声明只入账，不改变实际发出的内容。
+   * text_lite 不减少本次模型调用（只收紧分条与群合包）；react 由宿主经 Shared Outbox 执行
+   * set_msg_emoji_like，插件不得自行发送表情。REACT 的 sent 只表示网关接受了调用，
+   * 不代表所有客户端视觉已显示。终态反馈见 group/result 事件。
    */
   'group/participate': (decision: GroupDecision, info: { msg: Message; policy: any; recentTexts: string[]; memScore: number }) => GroupParticipation | undefined | null | false | Promise<GroupParticipation | undefined | null | false>
+  /**
+   * 群回合终态（只读反馈，不接管）：每个进入执行的群回合**最多一次**；merging/pending 未执行
+   * 即取消不发；不落盘、重启不重放。监听者抛错不影响回合终态。reason 是稳定短代码，
+   * 不含异常堆栈、完整回复或聊天正文。
+   */
+  'group/result': (result: GroupResult) => void
   /** 交给她的内容（[{ type: 'text', text }, { type: 'image', ... }]）：返回新数组改写，null 这次不交给她 */
   prompt: (content: any[], info: { chat: Chat; sessionId: string; senderId?: string; prevText?: string; queryText?: string; steer?: boolean }) => any[] | null | void | Promise<any[] | null | void>
   /** 这个聊天用哪个模型（同步）：返回 { provider, model, reasoningEffort } */
