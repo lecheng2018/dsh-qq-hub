@@ -22,7 +22,7 @@ const STATS = {
 
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 
-function mount({ resetReply = { ok: true }, withToast = true } = {}) {
+function mount({ resetReply = { ok: true }, withToast = true, rejectReset = false } = {}) {
   // 与 panel.js 的 useState 顺序一一对应：d / busy / confirming
   const state = [STATS, false, false]
   let slot = 0
@@ -46,6 +46,7 @@ function mount({ resetReply = { ok: true }, withToast = true } = {}) {
   const call = async (path, body) => {
     calls.push([path, body])
     if (path === '/token-usage') return STATS
+    if (path === '/token-usage/reset' && rejectReset) throw new Error('boom')
     return resetReply
   }
   const Panel = new Function('React', 'h', 'ui', 'call', SRC)(React, h, ui, call)
@@ -107,4 +108,21 @@ test('T1.5 宿主没传 props.toast 时也不崩（默认空实现）', async ()
   await tick()
   await tick()
   assert.equal(env.state[2], false, '无 toast 也要正常复位确认态')
+})
+
+test('T1.5 重置接口 reject：err 提示 + 复位确认态（.catch 分支也锁进单测）', async () => {
+  const env = mount({ withToast: true, rejectReset: true })
+  let tree = env.render()
+  env.button(tree, '重置今天用量').props.onClick()
+  tree = env.render()
+  assert.ok(env.button(tree, '确认清零今天用量'), '第一次点击应进入确认态')
+
+  env.button(tree, '确认清零今天用量').props.onClick()
+  await tick()
+  await tick()
+
+  assert.deepEqual(env.toasts, [['重置失败，看日志', 'err']], '抛错必须走 err 提示，不能静默')
+  assert.equal(env.state[2], false, '抛错也必须 setConfirming(false)')
+  assert.equal(env.state[1], false, 'finally 里要把 busy 复位')
+  assert.ok(env.button(env.render(), '重置今天用量'), '确认态应已复位')
 })

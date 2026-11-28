@@ -111,3 +111,39 @@ test('T1.1 fetchImage：重定向丢弃响应体 cancel、5 跳后抛「重定�
     globalThis.fetch = originalFetch
   }
 })
+
+test('T1.1 safeLookup 按 options.family 过滤（不回错协议族）', async () => {
+  const v4 = await callLookup('1.1.1.1', { family: 4, all: true })
+  assert.equal(v4.args[0], null)
+  assert.deepEqual(v4.args[1].map((x) => x.family), [4], 'family=4 只回 v4')
+
+  const single = await callLookup('1.1.1.1', { family: 4 })
+  assert.equal(single.args[1], '1.1.1.1')
+  assert.equal(single.args[2], 4)
+
+  const v6 = await callLookup('1.1.1.1', { family: 6 })
+  assert.match(v6.args[0]?.message || '', /IPv6/, '只要 v6 时不能把 v4 结果回过去')
+})
+
+test('T1.1 fetchImage：非 2xx 与超限响应都先 cancel 体再抛（不拖住单例连接池）', async () => {
+  const originalFetch = globalThis.fetch
+  let canceled = 0
+  const resp = (status, headers = {}) => ({
+    status,
+    ok: status >= 200 && status < 300,
+    headers: new Headers(headers),
+    body: { cancel: async () => { canceled += 1 } },
+  })
+  try {
+    globalThis.fetch = async () => resp(404)
+    await assert.rejects(() => fetchImage('http://1.1.1.1/x'), /HTTP 404/)
+    assert.equal(canceled, 1, '非 2xx 响应体必须 cancel')
+
+    canceled = 0
+    globalThis.fetch = async () => resp(200, { 'content-length': String(50 * 1024 * 1024) })
+    await assert.rejects(() => fetchImage('http://1.1.1.1/x', { maxBytes: 1024 }), /太大了/)
+    assert.equal(canceled, 1, '声明超限的响应体也必须 cancel')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

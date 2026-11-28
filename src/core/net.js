@@ -154,8 +154,15 @@ export function safeLookup(hostname, opts, cb) {
     const list = (Array.isArray(addresses) ? addresses : (addresses ? [addresses] : [])).filter(Boolean)
     const ips = list.map((x) => x.address)
     if (!ips.length || ips.some(isPrivateIp)) return callback(new Error('不允许访问内网地址'))
-    if (options && options.all) return callback(null, list)
-    callback(null, list[0].address, list[0].family)
+    // 调用方（undici / net.connect）可能显式指定 family 4/6：先按校验过的全量列表判安全，
+    // 再按协议族过滤，避免把 AAAA 结果回给只想要 v4 的连接（反之亦然）。
+    const family = Number(options?.family)
+    const usable = (family === 4 || family === 6)
+      ? list.filter((x) => Number(x.family) === family)
+      : list
+    if (!usable.length) return callback(new Error(`没有可用的 IPv${family} 地址`))
+    if (options && options.all) return callback(null, usable)
+    callback(null, usable[0].address, usable[0].family)
   })
 }
 
@@ -286,14 +293,21 @@ export async function fetchImage(src, o = {}) {
       r = await fetch(currentUrl, { signal: AbortSignal.timeout(o.timeoutMs ?? 20000), redirect: 'manual', dispatcher })
       if (!(r.status >= 300 && r.status < 400 && r.headers.get('location'))) break
       // 丢弃的这一跳响应体必须 cancel，否则底层连接挂在池里不回收
-      try { await r.body?.cancel?.() } catch (e) {}
+      try { await r.body?.cancel?.() } catch { /* 丢弃的这一跳：cancel 失败不影响后续 */ }
       redirects++
       if (redirects >= 5) throw new Error('重定向次数过多')
       currentUrl = new URL(r.headers.get('location'), currentUrl).href
     }
-    if (!r || !r.ok) throw new Error(`HTTP ${r ? r.status : 'unknown'}`)
+    if (!r || !r.ok) {
+      // 复用同一个单例 Agent 时，未消费的非 2xx 响应体会拖住连接池里的那条连接
+      try { await r?.body?.cancel?.() } catch { /* 已经要抛 HTTP 错，cancel 失败不影响结果 */ }
+      throw new Error(`HTTP ${r ? r.status : 'unknown'}`)
+    }
     const len = Number(r.headers.get('content-length') || 0)
-    if (len > maxBytes) throw new Error('太大了')
+    if (len > maxBytes) {
+      try { await r.body?.cancel?.() } catch { /* 已经要抛「太大了」，cancel 失败不影响结果 */ }
+      throw new Error('太大了')
+    }
     const reader = r.body.getReader()
     const chunks = []
     let total = 0
