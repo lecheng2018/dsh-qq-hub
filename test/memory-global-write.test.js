@@ -147,3 +147,58 @@ test('S08 · remember_scoped 只接受 auto/global：任意作用域串一律拒
   assert.equal(g.ok, true)
   assert.equal(added.at(-1).scope, 'global')
 })
+
+test('S08 · 带首尾空白的 scope 不得绕过 global 降级（「 global 」/「\tglobal\n」）', async () => {
+  // 缺口（P0）：白名单用 trim 后的 scopeWanted 判定，落库却回退用未 trim 的原始 scope，
+  // 于是 `scope: " global "` 通过了「只能是 auto/global」的校验，却因为
+  // `finalScope !== 'global'` 跳过降级检查，最后被记忆总线 trim 成 global 写进跨会话可见区。
+  const mod = (await import('../src/modules/memory-privacy/index.js')).default
+  const added = []
+  const fakeMemory = {
+    add(entry) { added.push(entry); return { ok: true, id: 'x' } },
+    list: () => [],
+  }
+  const builders = []
+  const api = {
+    use: () => fakeMemory,
+    settings: () => ({ autoScope: true }),
+    config: () => ({ ownerQQ: '10001' }),
+    route: () => {},
+    tool: (builder) => { builders.push(builder); return () => {} },
+    rule: () => {},
+    defineTool: (t) => t,
+    on: () => () => {},
+    log,
+    core: { http: { body: async () => ({}) } },
+    saveSettings: () => {},
+  }
+  await mod.setup(api)
+  const call = (chat, args) => builders[0]({ chat }).execute(args, { chat })
+
+  const groupChat = { kind: 'group', groupId: '10001', chatId: 'group:10001', userId: '20002' }
+  const strangerPrivate = { kind: 'private', chatId: 'private:20002', userId: '20002' }
+
+  for (const padded of [' global ', '\tglobal\n']) {
+    const r = await call(groupChat, { text: '诱导写入', scope: padded })
+    assert.equal(r.ok, true, `${JSON.stringify(padded)} 应被接受但降级`)
+    assert.equal(r.demoted, true, `${JSON.stringify(padded)} 必须如实降级`)
+    assert.equal(added.at(-1).scope, 'group:10001', `${JSON.stringify(padded)} 落库不得是 global`)
+    assert.equal(added.at(-1).scope, added.at(-1).scope.trim(), '落库 scope 不得带首尾空白')
+
+    const r2 = await call(strangerPrivate, { text: '诱导写入', scope: padded })
+    assert.equal(r2.demoted, true)
+    assert.equal(added.at(-1).scope, 'private:20002')
+  }
+
+  // 空白包裹的 auto 仍按 auto 解析为本会话作用域，不报错也不降级
+  const auto = await call(groupChat, { text: '正常的', scope: ' auto ' })
+  assert.equal(auto.ok, true)
+  assert.ok(!auto.demoted)
+  assert.equal(added.at(-1).scope, 'group:10001')
+
+  // 主人私聊用带空白的 global 仍应写成 global（不能因为规范化把合法写入也降级）
+  const owner = await call({ kind: 'private', chatId: 'private:10001', userId: '10001' }, { text: '她的设定', scope: ' global ' })
+  assert.equal(owner.ok, true)
+  assert.ok(!owner.demoted)
+  assert.equal(added.at(-1).scope, 'global')
+})

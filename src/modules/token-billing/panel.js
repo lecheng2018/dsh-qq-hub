@@ -18,6 +18,8 @@ function bar(used, limit) {
 
 return function TokenBillingPanel(props) {
   const { Card, Btn, Empty } = ui
+  // props.toast 可能不存在（老面板宿主只传 4 个参数）：裸调 toast 会 ReferenceError 打崩整个组件。
+  const toast = typeof props?.toast === 'function' ? props.toast : () => {}
   const [d, setD] = useState(null)
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -34,8 +36,17 @@ return function TokenBillingPanel(props) {
   const reset = () => {
     setBusy(true)
     call('/token-usage/reset', {})
-      .then((r) => { toast(r?.ok === false ? (r.message || '没重置成') : '今天的用量已清零'); load() })
-      .catch(() => toast('重置失败，看日志'))
+      .then((r) => {
+        const ok = r?.ok !== false
+        toast(ok ? '今天的用量已清零' : (r?.message || '没重置成'), ok ? 'ok' : 'err')
+        // 无论成功还是被拒，都要退出确认态，否则「确认清零」按钮会一直卡在界面上
+        setConfirming(false)
+        load()
+      })
+      .catch(() => {
+        toast('重置失败，看日志', 'err')
+        setConfirming(false)
+      })
       .finally(() => setBusy(false))
   }
 

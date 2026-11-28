@@ -3,8 +3,47 @@
 // host.js 只保留「装配」，请求应答的小件都从这里出：send 统一应答头、readBody/readRaw
 // 读请求体、query 解析查询串、answer 兜住 handler 抛错、route 把登记包进 ctx.effect。
 
+import { mkdirSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+
 import { redact } from '../core/redact.js'
 import { createPanelGuard } from './panel/guard.js'
+
+/**
+ * 打开系统文件管理器到某个目录（面板「打开文件夹」按钮共用）。
+ *
+ * P0：spawn 的 'error' 事件**必须**有监听者。Linux/fnOS 上没有 explorer.exe，
+ * 无监听的 ENOENT 会以未捕获异常直接打崩整个 DSH 宿主进程。
+ * 无桌面会话（没有 DISPLAY / WAYLAND_DISPLAY）时干脆不 spawn，只回报目录路径。
+ *
+ * @param {string} dir 目标目录（不存在会自动建）
+ * @param {{platform?:string, env?:object, spawnFn?:Function, log?:object}} [o]
+ * @returns {{ok:boolean, headless?:boolean, dir?:string, message:string}}
+ */
+export function openLocalFolder(dir, { platform = process.platform, env = process.env, spawnFn = spawn, log } = {}) {
+  const target = String(dir)
+  mkdirSync(target, { recursive: true })
+  if (platform === 'linux' && !env?.DISPLAY && !env?.WAYLAND_DISPLAY) {
+    return { ok: true, headless: true, dir: target, message: `目录路径：${target}（当前为无桌面 Linux 环境，请直接访问该路径）` }
+  }
+  const [cmd, args] = platform === 'win32'
+    ? ['explorer.exe', [target]]
+    : platform === 'darwin'
+      ? ['open', [target]]
+      : ['xdg-open', [target]]
+  try {
+    const child = spawnFn(cmd, args, { detached: true, stdio: 'ignore' })
+    // 必须挂 error 监听：没有它，子进程不存在时的 ENOENT 会冒到 process 上直接崩宿主。
+    child?.on?.('error', (err) => {
+      log?.warn?.(`打开文件夹失败（${cmd}）：${err?.message || err}。目录路径：${target}`)
+    })
+    child?.unref?.()
+  } catch (error) {
+    log?.warn?.(`打开文件夹失败（${cmd}）：${error?.message || error}。目录路径：${target}`)
+    return { ok: true, headless: true, dir: target, message: `目录路径：${target}` }
+  }
+  return { ok: true, message: '打开了' }
+}
 
 /**
  * @param {object} o

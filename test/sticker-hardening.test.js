@@ -1,7 +1,7 @@
 // 表情包加固回归：并发写入、容量上限、确定性匹配、pending、按群策略、图包。
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -200,4 +200,40 @@ test('缩略图：有 ffmpeg/sharp 就缩，没有就退回原图', async () => 
   const thumb = await store.thumbFor(r.item.md5)
   assert.ok(thumb && thumb.buf.length > 0)
   assert.match(thumb.mime, /^image\//)
+})
+
+test('缩略图路径穿越：md5 必须是 32 位 hex，任何路径串都不读盘', async () => {
+  // 缺口（P0）：thumbFor 过去直接 `join(dir(), `thumb-${key}.jpg`)` + readFileSync，
+  // key 未校验 —— 传 '/../secret' 就会读到数据目录外的任意 .jpg。
+  // 这里在外层真放一张 secret.jpg，用真实调用证明「改前能读到、改后返回 null」。
+  const outer = mkdtempSync(join(tmpdir(), 'qqhub-sticker-trav-'))
+  const data = join(outer, 'data')
+  mkdirSync(data, { recursive: true })
+  writeFileSync(join(outer, 'secret.jpg'), png(71))
+  // 这个 env 会被 store 工厂在创建时读取；用完必须恢复，否则后续在该文件追加用例时互相污染
+  const prevDataDir = process.env.DSH_QQ_HUB_DATA_DIR
+  process.env.DSH_QQ_HUB_DATA_DIR = data
+  try {
+    const cfg = { dryRun: true, stickers: { enabled: true, collect: true, caption: false } }
+    const store = createStickerStore({ dsh: {}, getConfig: () => cfg, onebot: { call: async () => ({}) }, log })
+
+    for (const bad of ['/../secret', '/../../secret', '../secret', 'abc/def', 'secret', '..', 'thumb', '/etc/passwd', '']) {
+      assert.equal(await store.thumbFor(bad), null, `${JSON.stringify(bad)} 不得读到盘上文件`)
+    }
+    // 32 位但非法的（带 g / 太短 / 太长）同样拒绝
+    for (const bad of ['g'.repeat(32), 'a'.repeat(31), 'a'.repeat(33)]) {
+      assert.equal(await store.thumbFor(bad), null)
+    }
+
+    // 合法 md5 仍正常出图；大写规范化后同样命中（面板/工具传大写也不该坏）
+    const ok = await store.addFromBuffer(png(72), { name: '正常缩略图', toQQ: false })
+    assert.equal(ok.ok, true)
+    const thumb = await store.thumbFor(ok.item.md5)
+    assert.ok(thumb && thumb.buf.length > 0, '合法 md5 必须能出缩略图')
+    const upper = await store.thumbFor(ok.item.md5.toUpperCase())
+    assert.ok(upper && upper.buf.length > 0, '大写 md5 规范化后仍应命中')
+  } finally {
+    if (prevDataDir === undefined) delete process.env.DSH_QQ_HUB_DATA_DIR
+    else process.env.DSH_QQ_HUB_DATA_DIR = prevDataDir
+  }
 })
